@@ -426,6 +426,7 @@ fn from_pr_marker_stamps_the_diff_cache_entry() {
 
 fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
     SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: format!("channel:{label}"),
         label: label.to_owned(),
         label_qualifier: None,

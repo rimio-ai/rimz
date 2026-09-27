@@ -77,6 +77,7 @@ fn row_snapshot_at(
     let pane_id = PaneId::from_parts(crate::MuxName::Tmux, "%1");
     let mut snap = snapshot(ws);
     snap.worktree_groups = vec![SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
@@ -156,6 +157,7 @@ fn snapshot_in_group(
         ),
     };
     let group = SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: key.to_owned(),
         label: key.to_owned(),
         label_qualifier: None,

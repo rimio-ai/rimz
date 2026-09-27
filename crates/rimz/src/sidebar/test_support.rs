@@ -166,6 +166,7 @@ pub(crate) fn worktree_group(
     rows: Vec<crate::store::snapshot::SidebarRow>,
 ) -> SidebarWorktreeGroup {
     SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: path.display().to_string(),
         label: "wt".to_owned(),
         label_qualifier: None,

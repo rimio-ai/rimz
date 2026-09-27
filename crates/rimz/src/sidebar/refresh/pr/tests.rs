@@ -4,6 +4,103 @@ use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 mod signal_transitions;
 
 #[test]
+fn stack_attachment_is_shared_and_carries_on_failure() {
+    for cli in [ForgeCli::Gh, ForgeCli::Tea] {
+        let mut own = target("/repo/own", "own");
+        own.forge_cli = cli;
+        let terminal = target("/repo/closed", "closed");
+        let group = repo_group(vec![own.clone(), terminal.clone()]);
+        let raw = r#"[{"index":"522","state":"open","head":"lower","base":"develop"},{"index":"530","state":"open","head":"own","base":"lower"},{"index":"500","state":"open","head":"develop","base":"main"}]"#;
+        let closed = terminal.pr_link(WorktreePrState::Closed, 500, None, None);
+        let (open, states) = match cli {
+            ForgeCli::Tea => (
+                forge::parse_tea_open_prs(raw).unwrap(),
+                assign_states(
+                    &group.targets,
+                    &forge::parse_tea_pr_list_links(raw).unwrap(),
+                    &BTreeMap::from([(terminal.path.clone(), closed)]),
+                )
+                .states,
+            ),
+            ForgeCli::Gh => {
+                let response = forge::parse_github_bulk_response(true, r#"{"data":{"repository":{"open":{"nodes":[{"number":522,"headRefName":"lower","baseRefName":"develop","isCrossRepository":false},{"number":530,"headRefName":"own","baseRefName":"lower","isCrossRepository":false},{"number":500,"headRefName":"develop","baseRefName":"main","isCrossRepository":false}]},"pr0":{"nodes":[{"number":530,"state":"OPEN"}]},"pr1":{"nodes":[{"number":500,"state":"CLOSED"}]}}}}"#, 2, 0).unwrap();
+                let open = response.open.clone().unwrap_or_default();
+                let plan = GhQueryPlan {
+                    query: String::new(),
+                    include_open: true,
+                    pr_targets: vec![0, 1],
+                    oids: Vec::new(),
+                };
+                (open, project_github_group(&group, &[(plan, response)]).0)
+            }
+        };
+        let mut result = RepoGroupProbe {
+            open: Some(open),
+            repo_key: own.repo_key.clone(),
+            targets: group.targets.clone(),
+            states,
+            branch_ci: BTreeMap::new(),
+            ok: true,
+        };
+        let mut diff = DiffStatsCache::default();
+        diff.entries.insert(
+            own.path.clone(),
+            DiffStatsCacheEntry {
+                trunk: Some("origin/develop".to_owned()),
+                ..Default::default()
+            },
+        );
+        attach_stacks(&mut result, &diff);
+        assert_eq!(
+            result.states[&own.path]
+                .stack
+                .below
+                .iter()
+                .map(|p| p.number)
+                .collect::<Vec<_>>(),
+            [522]
+        );
+        assert_eq!(
+            result.states[&own.path].stack.below[0].url,
+            own.remote.pr_web_url(522)
+        );
+        assert!(result.states[&terminal.path].stack.is_empty());
+        let mut failed =
+            failed_repo_group_probe(&own.repo_key, &group, &result.states, &BTreeMap::new());
+        attach_stacks(&mut failed, &diff);
+        assert_eq!(
+            failed.states[&own.path].stack,
+            result.states[&own.path].stack
+        );
+        result.states.get_mut(&own.path).unwrap().state = WorktreePrState::Merged;
+        attach_stacks(&mut result, &diff);
+        assert!(result.states[&own.path].stack.is_empty());
+    }
+}
+
+#[test]
+fn stack_cache_loads_legacy_and_omits_empty_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pr-state.json");
+    std::fs::write(
+        &path,
+        r#"{"states":{"/repo/a":{"state":"open","number":91}}}"#,
+    )
+    .unwrap();
+    let mut cache = read_pr_state_cache(&path);
+    let link = cache.states.remove("/repo/a").unwrap();
+    assert!(link.stack.is_empty());
+    assert!(serde_json::to_value(&link).unwrap().get("stack").is_none());
+    let mut link = link;
+    link.stack.below.push(crate::store::snapshot::StackPr {
+        number: 90,
+        url: None,
+    });
+    let loaded: PrLink = serde_json::from_value(serde_json::to_value(&link).unwrap()).unwrap();
+    assert_eq!(loaded.stack.below[0].number, 90);
+}
+
+#[test]
 fn failure_ttl_escalates_to_success_ttl_cap() {
     assert_eq!(pr_state_failure_ttl(0, PR_STATE_TTL), PR_STATE_RETRY_TTL);
     assert_eq!(pr_state_failure_ttl(1, PR_STATE_TTL), PR_STATE_RETRY_TTL);
@@ -90,6 +187,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/merged-terminal".to_owned(),
         PrLink {
+            stack: Default::default(),
             branch: Some("merged-terminal".to_owned()),
             incarnation: None,
             state: WorktreePrState::Merged,
@@ -102,6 +200,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/merged-no-ci".to_owned(),
         PrLink {
+            stack: Default::default(),
             branch: Some("merged-no-ci".to_owned()),
             incarnation: None,
             state: WorktreePrState::Merged,
@@ -114,6 +213,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/merged-pending".to_owned(),
         PrLink {
+            stack: Default::default(),
             branch: Some("merged-pending".to_owned()),
             incarnation: None,
             state: WorktreePrState::Merged,
@@ -126,6 +226,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/merged-legacy".to_owned(),
         PrLink {
+            stack: Default::default(),
             branch: Some("merged-legacy".to_owned()),
             incarnation: None,
             state: WorktreePrState::Merged,
@@ -138,6 +239,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/transition".to_owned(),
         PrLink {
+            stack: Default::default(),
             branch: Some("transition".to_owned()),
             incarnation: None,
             state: WorktreePrState::Open,
@@ -150,6 +252,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     prior.insert(
         "/repo/closed".to_owned(),
         PrLink {
+            stack: Default::default(),
             branch: Some("closed".to_owned()),
             incarnation: None,
             state: WorktreePrState::Closed,
@@ -165,6 +268,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     assert_eq!(
         assigned.states.get("/repo/open"),
         Some(&PrLink {
+            stack: Default::default(),
             branch: Some("open".to_owned()),
             incarnation: None,
             state: WorktreePrState::Open,
@@ -177,6 +281,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     assert_eq!(
         assigned.states.get("/repo/merged-terminal"),
         Some(&PrLink {
+            stack: Default::default(),
             branch: Some("merged-terminal".to_owned()),
             incarnation: None,
             state: WorktreePrState::Merged,
@@ -189,6 +294,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     assert_eq!(
         assigned.states.get("/repo/merged-no-ci"),
         Some(&PrLink {
+            stack: Default::default(),
             branch: Some("merged-no-ci".to_owned()),
             incarnation: None,
             state: WorktreePrState::Merged,
@@ -201,6 +307,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
     assert_eq!(
         assigned.states.get("/repo/closed"),
         Some(&PrLink {
+            stack: Default::default(),
             branch: Some("closed".to_owned()),
             incarnation: None,
             state: WorktreePrState::Closed,
@@ -236,6 +343,7 @@ fn tea_assign_states_re_resolves_mismatched_and_legacy_branch_links() {
         (
             "/repo/matching".to_owned(),
             PrLink {
+                stack: Default::default(),
                 branch: Some("feature".to_owned()),
                 incarnation: None,
                 state: WorktreePrState::Closed,
@@ -248,6 +356,7 @@ fn tea_assign_states_re_resolves_mismatched_and_legacy_branch_links() {
         (
             "/repo/mismatched".to_owned(),
             PrLink {
+                stack: Default::default(),
                 branch: Some("old-feature".to_owned()),
                 incarnation: None,
                 state: WorktreePrState::Closed,
@@ -260,6 +369,7 @@ fn tea_assign_states_re_resolves_mismatched_and_legacy_branch_links() {
         (
             "/repo/legacy".to_owned(),
             PrLink {
+                stack: Default::default(),
                 branch: None,
                 incarnation: None,
                 state: WorktreePrState::Closed,
@@ -309,6 +419,7 @@ fn prior_links_do_not_cross_managed_worktree_incarnations() {
         (
             current.path.clone(),
             PrLink {
+                stack: Default::default(),
                 branch: Some("feature".to_owned()),
                 incarnation: Some(prior_incarnation),
                 state: WorktreePrState::Merged,
@@ -321,6 +432,7 @@ fn prior_links_do_not_cross_managed_worktree_incarnations() {
         (
             legacy.path.clone(),
             PrLink {
+                stack: Default::default(),
                 branch: Some("feature".to_owned()),
                 incarnation: None,
                 state: WorktreePrState::Closed,
@@ -372,6 +484,7 @@ fn trunk_targets_never_attach_pr_links() {
     let prior = BTreeMap::from([(
         trunk.path.clone(),
         PrLink {
+            stack: Default::default(),
             branch: Some("main".to_owned()),
             incarnation: None,
             state: WorktreePrState::Open,
@@ -413,7 +526,7 @@ fn github_query_plans_dedupe_heads_and_skip_trunk_pr_aliases() {
     assert_eq!(plans.len(), 1, "one plan means one gh invocation");
     assert_eq!(plans[0].pr_targets, [0, 1]);
     assert_eq!(plans[0].oids, ["shared", "trunk"]);
-    assert_eq!(plans[0].query.matches("pullRequests(").count(), 2);
+    assert_eq!(plans[0].query.matches("pullRequests(").count(), 3);
     assert_eq!(plans[0].query.matches(": object(").count(), 2);
     assert!(!plans[0].query.contains(r#"headRefName: "main""#));
 }
@@ -439,15 +552,21 @@ fn github_query_plans_chunk_at_the_alias_bound() {
     assert_eq!(
         plans
             .iter()
-            .map(|plan| plan.pr_targets.len() + plan.oids.len())
+            .map(|plan| plan.pr_targets.len() + plan.oids.len() + usize::from(plan.include_open))
             .sum::<usize>(),
-        target_count * 2
+        target_count * 2 + 1
     );
-    assert!(
-        plans
-            .iter()
-            .all(|plan| plan.pr_targets.len() + plan.oids.len() <= GH_BULK_MAX_ALIASES)
-    );
+    assert!(plans.iter().all(|plan| plan.pr_targets.len()
+        + plan.oids.len()
+        + usize::from(plan.include_open)
+        <= GH_BULK_MAX_ALIASES));
+    assert!(plans[0].include_open);
+    assert!(!plans[1].include_open);
+    let mut trunk = target("/repo/main", "main");
+    trunk.trunk = true;
+    let trunk_plans = plan_github_queries(&repo_group(vec![trunk]));
+    assert!(!trunk_plans[0].include_open);
+    assert!(!trunk_plans[0].query.contains("open:"));
 }
 
 #[test]
@@ -470,6 +589,7 @@ fn github_projection_refreshes_pr_and_branch_verdicts_from_one_response() {
     assert_eq!(plans.len(), 1);
     let plan = plans.remove(0);
     let response = forge::GhBulkResponse {
+        open: None,
         prs: vec![
             Some(forge::GhBulkPr {
                 number: 10,
@@ -573,6 +693,7 @@ fn github_projection_rejects_terminal_prs_from_an_old_incarnation() {
     let mut plans = plan_github_queries(&group);
     let plan = plans.remove(0);
     let response = forge::GhBulkResponse {
+        open: None,
         prs: vec![
             Some(forge::GhBulkPr {
                 number: 10,
@@ -628,6 +749,7 @@ fn github_group_failure_carries_complete_prior_truth() {
     let prior = BTreeMap::from([(
         "/repo/merged".to_owned(),
         PrLink {
+            stack: Default::default(),
             branch: Some("merged".to_owned()),
             incarnation: None,
             state: WorktreePrState::Merged,
@@ -872,6 +994,7 @@ fn pending_ci_keeps_repo_on_hot_ttl() {
         cache.states.insert(
             needed[0].clone(),
             PrLink {
+                stack: Default::default(),
                 branch: Some("a".to_owned()),
                 incarnation: None,
                 state,
@@ -1009,6 +1132,7 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
     cache.states.insert(
         "/repo/a".to_owned(),
         PrLink {
+            stack: Default::default(),
             branch: Some("a".to_owned()),
             incarnation: None,
             state: WorktreePrState::Open,

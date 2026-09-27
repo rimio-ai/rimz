@@ -633,6 +633,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
     pr.states.insert(
         wt.clone(),
         crate::forge::pr_state::PrLink {
+            stack: Default::default(),
             branch: Some("feature".to_owned()),
             incarnation: None,
             state: crate::store::snapshot::WorktreePrState::Open,

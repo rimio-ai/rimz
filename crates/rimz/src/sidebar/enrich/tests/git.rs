@@ -4,6 +4,65 @@
 use super::*;
 
 #[test]
+fn pr_stack_projection_matches_cache_and_clears_stale_groups() {
+    let (dir, runtime, mut snapshot) = runtime();
+    let worktree = dir.path().join("feature");
+    std::fs::create_dir_all(&worktree).unwrap();
+    snapshot.worktree_groups = vec![worktree_group(&worktree, Vec::new())];
+    let path = worktree.display().to_string();
+    let stack = crate::store::snapshot::PrStack {
+        below: vec![crate::store::snapshot::StackPr {
+            number: 522,
+            url: Some("https://github.com/org/repo/pull/522".to_owned()),
+        }],
+        above: Vec::new(),
+    };
+    let mut cache = crate::forge::pr_state::PrStateCache::default();
+    cache.states.insert(
+        path.clone(),
+        PrLink {
+            stack: stack.clone(),
+            branch: Some("feature".to_owned()),
+            incarnation: None,
+            state: WorktreePrState::Open,
+            number: Some(530),
+            url: None,
+            ci: None,
+            merge_sha: None,
+        },
+    );
+    let mut cached = snapshot.clone();
+    project_pr_state_map(
+        &mut snapshot,
+        &cache.states,
+        &cache.branch_ci,
+        &DiffStatsCache::default(),
+    );
+    assert_eq!(snapshot.worktree_groups[0].pr_stack, stack);
+    atomic::write_temp_then_rename_cache(&runtime.pr_state_path(), &cache).unwrap();
+    project_cached_pr_states(&mut cached, &runtime, &DiffStatsCache::default());
+    assert_eq!(cached.worktree_groups[0].pr_stack, stack);
+    project_pr_state_map(
+        &mut snapshot,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &DiffStatsCache::default(),
+    );
+    assert!(snapshot.worktree_groups[0].pr_stack.is_empty());
+    let mut diff = DiffStatsCache::default();
+    diff.entries.insert(
+        path,
+        DiffStatsCacheEntry {
+            branch: Some("main".to_owned()),
+            trunk: Some("origin/main".to_owned()),
+            ..Default::default()
+        },
+    );
+    project_pr_state_map(&mut cached, &cache.states, &cache.branch_ci, &diff);
+    assert!(cached.worktree_groups[0].pr_stack.is_empty());
+}
+
+#[test]
 fn pr_state_projection_uses_the_given_map() {
     let dir = tempfile::tempdir().unwrap();
     let worktree = dir.path().join("feature");
@@ -24,6 +83,7 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            stack: Default::default(),
             branch: None,
             incarnation: None,
             state: crate::store::snapshot::WorktreePrState::Closed,
@@ -53,6 +113,7 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            stack: Default::default(),
             branch: None,
             incarnation: None,
             state: crate::store::snapshot::WorktreePrState::Open,
@@ -76,6 +137,7 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            stack: Default::default(),
             branch: None,
             incarnation: None,
             state: crate::store::snapshot::WorktreePrState::Merged,
@@ -120,6 +182,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            stack: Default::default(),
             branch: None,
             incarnation: None,
             state: crate::store::snapshot::WorktreePrState::Merged,
@@ -144,6 +207,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            stack: Default::default(),
             branch: None,
             incarnation: None,
             state: crate::store::snapshot::WorktreePrState::Merged,
@@ -183,6 +247,7 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
         states.insert(
             path.display().to_string(),
             PrLink {
+                stack: Default::default(),
                 branch: Some(branch.to_owned()),
                 incarnation: None,
                 state: crate::store::snapshot::WorktreePrState::Merged,

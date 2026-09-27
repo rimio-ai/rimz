@@ -1,5 +1,108 @@
 use super::*;
 
+fn open_pr(number: u64, head: &str, base: &str) -> OpenPr {
+    OpenPr {
+        number,
+        head: head.to_owned(),
+        base: base.to_owned(),
+    }
+}
+
+#[test]
+fn stack_walks_both_directions_and_stops_at_forks() {
+    let mut open = vec![open_pr(522, "lower", "main"), open_pr(530, "own", "lower")];
+    let stack = pr_stack(530, &open, |b| b == "main", 8);
+    assert_eq!(
+        stack.below.iter().map(|p| p.number).collect::<Vec<_>>(),
+        [522]
+    );
+    assert!(stack.above.is_empty());
+    open.push(open_pr(540, "upper", "own"));
+    let stack = pr_stack(530, &open, |b| b == "main", 8);
+    assert_eq!(stack.below[0].number, 522);
+    assert_eq!(stack.above[0][0].number, 540);
+    open.extend([open_pr(550, "beyond", "upper"), open_pr(541, "fork", "own")]);
+    open.reverse();
+    let stack = pr_stack(530, &open, |b| b == "main", 8);
+    assert_eq!(stack.above.len(), 1);
+    assert_eq!(
+        stack.above[0].iter().map(|p| p.number).collect::<Vec<_>>(),
+        [540, 541]
+    );
+}
+
+#[test]
+fn stack_stops_at_trunk_missing_anchor_cycles_and_depth() {
+    let open = vec![
+        open_pr(1, "develop", "main"),
+        open_pr(2, "own", "develop"),
+        open_pr(3, "top", "own"),
+    ];
+    assert!(pr_stack(99, &open, |_| false, 8).is_empty());
+    let stack = pr_stack(2, &open, |b| b == "develop", 8);
+    assert!(stack.below.is_empty());
+    assert_eq!(stack.above[0][0].number, 3);
+    assert!(pr_stack(2, &open, |_| false, 0).is_empty());
+    assert_eq!(
+        pr_stack(3, &open, |_| false, 1)
+            .below
+            .iter()
+            .map(|p| p.number)
+            .collect::<Vec<_>>(),
+        [2]
+    );
+    assert_eq!(pr_stack(1, &open, |_| false, 1).above.len(), 1);
+    let cycle = vec![open_pr(1, "a", "b"), open_pr(2, "b", "a")];
+    let stack = pr_stack(1, &cycle, |_| false, 8);
+    assert_eq!(
+        stack.below.iter().map(|p| p.number).collect::<Vec<_>>(),
+        [2]
+    );
+    assert!(stack.above.is_empty());
+}
+
+#[test]
+fn stack_chooses_highest_duplicate_head_and_orders_bottom_first() {
+    let open = vec![
+        open_pr(1, "bottom", "main"),
+        open_pr(2, "lower", "bottom"),
+        open_pr(4, "lower", "bottom"),
+        open_pr(5, "own", "lower"),
+    ];
+    assert_eq!(
+        pr_stack(5, &open, |b| b == "main", 8)
+            .below
+            .iter()
+            .map(|p| p.number)
+            .collect::<Vec<_>>(),
+        [1, 4]
+    );
+}
+
+#[test]
+fn github_stack_open_alias_is_required_and_excludes_forks() {
+    let query = github_bulk_query(true, "org/repo", &[], &[]);
+    assert!(query.contains("open: pullRequests(first: 100"));
+    assert!(query.contains("headRefName baseRefName isCrossRepository"));
+    let raw = r#"{"data":{"repository":{"open":{"nodes":[{"number":1,"headRefName":"a","baseRefName":"main","isCrossRepository":false},{"number":2,"headRefName":"b","baseRefName":"a","isCrossRepository":true}]}}}}"#;
+    assert_eq!(
+        parse_github_bulk_response(true, raw, 0, 0).unwrap().open,
+        Some(vec![open_pr(1, "a", "main")])
+    );
+    assert!(parse_github_bulk_response(true, r#"{"data":{"repository":{}}}"#, 0, 0).is_err());
+}
+
+#[test]
+fn tea_stack_open_set_tolerates_base_objects_and_excludes_forks() {
+    let raw = r#"[{"index":"1","state":"open","head":"a","base":"main"},{"index":"2","state":"open","head":"b","base":{"ref":"a"}},{"index":"3","state":"open","head":"me:feature","base":"b"}]"#;
+    assert_eq!(
+        parse_tea_open_prs(raw).unwrap(),
+        [open_pr(1, "a", "main"), open_pr(2, "b", "a")]
+    );
+    assert_eq!(parse_tea_pr_list_links(raw).unwrap()["feature"].number, 3);
+    assert!(tea_pr_list_args("open", None).contains(&"index,state,head,base,created"));
+}
+
 #[test]
 fn parses_bare_number_without_forge() {
     assert_eq!(
@@ -380,6 +483,7 @@ fn builds_checks_web_urls() {
 #[test]
 fn builds_github_bulk_query_with_ordered_escaped_aliases() {
     let query = github_bulk_query(
+        false,
         "org/repo",
         &["feature", "quote\"branch"],
         &["head-one", "head\"two"],
@@ -399,7 +503,7 @@ fn builds_github_bulk_query_with_ordered_escaped_aliases() {
 
 #[test]
 fn parses_github_bulk_prs_and_commits_by_alias() {
-    let response = parse_github_bulk_response(
+    let response = parse_github_bulk_response(false,
         r#"{
             "data": {
                 "repository": {
@@ -497,23 +601,32 @@ fn github_rollup_state_mapping_is_aggregate_only() {
 
 #[test]
 fn rejects_incomplete_or_error_github_bulk_responses() {
-    assert!(parse_github_bulk_response("{", 0, 0).is_err());
+    assert!(parse_github_bulk_response(false, "{", 0, 0).is_err());
     assert!(
         parse_github_bulk_response(
+            false,
             r#"{"errors":[{"message":"rate limited"}],"data":{"repository":{"pr0":{"nodes":[]}}}}"#,
             1,
             0,
         )
         .is_err()
     );
-    assert!(parse_github_bulk_response(r#"{"data":{"repository":null}}"#, 0, 0).is_err());
+    assert!(parse_github_bulk_response(false, r#"{"data":{"repository":null}}"#, 0, 0).is_err());
     assert!(
-        parse_github_bulk_response(r#"{"data":{"repository":{"pr0":{"nodes":[]}}}}"#, 2, 0)
+        parse_github_bulk_response(
+            false,
+            r#"{"data":{"repository":{"pr0":{"nodes":[]}}}}"#,
+            2,
+            0
+        )
+        .is_err()
+    );
+    assert!(
+        parse_github_bulk_response(false, r#"{"data":{"repository":{"sha0":null}}}"#, 0, 2)
             .is_err()
     );
-    assert!(parse_github_bulk_response(r#"{"data":{"repository":{"sha0":null}}}"#, 0, 2).is_err());
     assert!(
-        parse_github_bulk_response(r#"{"data":{"repository":{"sha0":null}}}"#, 0, 1)
+        parse_github_bulk_response(false, r#"{"data":{"repository":{"sha0":null}}}"#, 0, 1)
             .unwrap()
             .commits[0]
             .is_none()

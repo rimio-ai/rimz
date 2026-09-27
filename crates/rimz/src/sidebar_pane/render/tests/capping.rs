@@ -1012,6 +1012,7 @@ fn group(
     rows: Vec<crate::store::snapshot::SidebarRow>,
 ) -> crate::store::snapshot::SidebarWorktreeGroup {
     crate::store::snapshot::SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,

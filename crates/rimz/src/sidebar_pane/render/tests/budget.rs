@@ -184,6 +184,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         now,
         worktree_groups: (0..groups)
             .map(|group| SidebarWorktreeGroup {
+                pr_stack: Default::default(),
                 key: format!("/repo/wt{group}"),
                 label: format!("feature-{group}"),
                 label_qualifier: None,

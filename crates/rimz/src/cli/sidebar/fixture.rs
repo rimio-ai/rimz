@@ -120,6 +120,7 @@ impl Default for WorktreeGroupSpec {
 
 fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
     SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: spec.key.to_owned(),
         label: spec.label.to_owned(),
         label_qualifier: None,
