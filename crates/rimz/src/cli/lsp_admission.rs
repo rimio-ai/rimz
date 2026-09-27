@@ -43,6 +43,9 @@ pub(super) fn admit(checkout: &Path, machine: &rimz::config::MachineConfig) -> R
     let mut shown = Vec::new();
     loop {
         let result = admission::admit_launch(&request, &mut queue)?;
+        for message in result.ignored_untrusted {
+            writeln!(super::render::err(), "rimz: {message}")?;
+        }
         for message in result.startup_refused {
             writeln!(super::render::err(), "rimz: {message}; agents use grep")?;
         }

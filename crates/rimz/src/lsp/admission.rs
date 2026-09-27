@@ -85,6 +85,7 @@ pub struct Wait {
 
 #[derive(Default)]
 pub struct Admitted {
+    pub ignored_untrusted: Vec<String>,
     pub startup_refused: Vec<String>,
     pub admitted: Vec<registry::Entry>,
     pub wait_for_required: Vec<Wait>,
@@ -442,82 +443,61 @@ fn committed_growth(estimate: u64, rss: u64) -> u64 {
 
 /// One bounded admission pass. The CLI prints outcomes and polls required waits every five seconds.
 pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Result<Admitted> {
-    idle_timeout(request.policy)?;
-    if let Some(server) = request.untrusted_servers.first() {
-        return Err(LspErr::Configuration(format!(
-            "project config declares language server {server} but the project is not trusted; run rimz trust"
-        )));
-    }
-    if request.policy.reserve_percent > 100 || request.policy.kill_floor_percent > 100 {
-        return Err(LspErr::Configuration(
-            "lsp percentages must be between 0 and 100".into(),
-        ));
-    }
     let root = std::fs::canonicalize(request.root)?;
-    let parse_size =
-        |raw: &str| crate::utils::size::parse_byte_size(raw).map_err(LspErr::Configuration);
-    let minimum = parse_size(&request.policy.reserve_min)?;
+    let mut result = Admitted::default();
+    for server in request.untrusted_servers {
+        if queue.startup_refused.insert(format!("untrusted:{server}")) {
+            let message = format!(
+                "project config declares language server {server}: project entry ignored until trusted; run rimz trust"
+            );
+            record_refusal(&root, server, &message);
+            result.ignored_untrusted.push(message);
+        }
+    }
+    let minimum = match validate_policy(request.policy) {
+        Ok(minimum) => minimum,
+        Err(LspErr::Configuration(message)) => {
+            if request.servers.values().any(|config| {
+                config.policy == LspPolicy::Required
+                    && config
+                        .root_markers
+                        .iter()
+                        .any(|marker| root.join(marker).exists())
+            }) {
+                return Err(LspErr::Configuration(message));
+            }
+            if queue.startup_refused.insert("policy:".into()) {
+                record_refusal(&root, "[lsp]", &message);
+                result.startup_refused.push(message);
+            }
+            queue.ticket = None;
+            return Ok(result);
+        }
+        Err(error) => return Err(error),
+    };
     let mut matched = Vec::new();
     for (server, config) in request.servers {
-        registry::directory(&root, server)?;
-        if config.root_markers.is_empty()
-            || config.extensions.is_empty()
-            || config.command.first().is_none_or(String::is_empty)
-        {
-            return Err(LspErr::Configuration(format!(
-                "language server {server} needs command, extensions, and root-markers"
-            )));
-        }
-        for marker in &config.root_markers {
-            if Path::new(marker)
-                .components()
-                .any(|component| !matches!(component, std::path::Component::Normal(_)))
-            {
-                return Err(LspErr::Configuration(format!(
-                    "language server {server}: root-markers must be relative to the checkout"
-                )));
-            }
-        }
-        if !config
-            .root_markers
-            .iter()
-            .any(|marker| root.join(marker).exists())
-        {
+        if queue.startup_refused.contains(&format!("server:{server}")) {
             continue;
         }
-        if config
-            .init_options
-            .as_ref()
-            .is_some_and(|options| !options.is_object())
-        {
-            return Err(LspErr::Configuration(format!(
-                "language server {server}: init-options must be a table"
-            )));
-        }
-        if which::which_in(&config.command[0], std::env::var_os("PATH"), &root).is_err() {
-            return Err(LspErr::Configuration(format!(
-                "language server {server}: {} not found on PATH; install it or remove [lsp.servers.{server}]",
-                config.command[0]
-            )));
-        }
+        let (estimate, wait_timeout) = match validate_server(&root, server, config) {
+            Ok(Some(validated)) => validated,
+            Ok(None) => continue,
+            Err(LspErr::Configuration(message)) if config.policy == LspPolicy::Optional => {
+                queue.startup_refused.insert(format!("server:{server}"));
+                record_refusal(&root, server, &message);
+                result.startup_refused.push(message);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let hash = history::settings_hash(config);
-        let estimate = history::estimate(
-            request.project,
-            server,
-            &hash,
-            parse_size(&config.memory_estimate)?,
-        );
-        matched.push((
-            server,
-            config,
-            hash,
-            estimate,
-            parse_timeout(&config.wait_timeout)?,
-        ));
+        let estimate = history::estimate(request.project, server, &hash, estimate);
+        matched.push((server, config, hash, estimate, wait_timeout));
     }
     if matched.is_empty() {
         queue.ticket = None;
-        return Ok(Admitted::default());
+        return Ok(result);
     }
     let _lock = registry::lock()?;
     let mut entries = registry::sweep_locked()?;
@@ -532,11 +512,7 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
         .fold(0_u64, |need, (_, _, _, estimate, _)| {
             need.saturating_add(*estimate)
         });
-    let mut result = Admitted::default();
     for (server, config, settings_hash, estimate_bytes, wait_timeout) in matched {
-        if queue.startup_refused.contains(server) {
-            continue;
-        }
         if let Some(entry) = entries
             .iter()
             .find(|entry| entry.root == root && entry.server == *server)
@@ -613,7 +589,7 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             &mut result,
         )?
         else {
-            queue.startup_refused.insert(server.clone());
+            queue.startup_refused.insert(format!("server:{server}"));
             continue;
         };
         entries.push(entry.clone());
@@ -623,6 +599,79 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
         queue.ticket = None;
     }
     Ok(result)
+}
+
+fn validate_policy(policy: &crate::config::LspConfig) -> Result<u64> {
+    idle_timeout(policy)?;
+    if policy.reserve_percent > 100 || policy.kill_floor_percent > 100 {
+        return Err(LspErr::Configuration(
+            "lsp percentages must be between 0 and 100".into(),
+        ));
+    }
+    crate::utils::size::parse_byte_size(&policy.reserve_min).map_err(LspErr::Configuration)
+}
+
+fn validate_server(
+    root: &Path,
+    server: &str,
+    config: &crate::config::LspServerConfig,
+) -> Result<Option<(u64, Duration)>> {
+    registry::directory(root, server)?;
+    if config.root_markers.is_empty()
+        || config.extensions.is_empty()
+        || config.command.first().is_none_or(String::is_empty)
+    {
+        return Err(LspErr::Configuration(format!(
+            "language server {server} needs command, extensions, and root-markers"
+        )));
+    }
+    for marker in &config.root_markers {
+        if Path::new(marker)
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(LspErr::Configuration(format!(
+                "language server {server}: root-markers must be relative to the checkout"
+            )));
+        }
+    }
+    if !config
+        .root_markers
+        .iter()
+        .any(|marker| root.join(marker).exists())
+    {
+        return Ok(None);
+    }
+    if config
+        .init_options
+        .as_ref()
+        .is_some_and(|options| !options.is_object())
+    {
+        return Err(LspErr::Configuration(format!(
+            "language server {server}: init-options must be a table"
+        )));
+    }
+    if which::which_in(&config.command[0], std::env::var_os("PATH"), root).is_err() {
+        return Err(LspErr::Configuration(format!(
+            "language server {server}: {} not found on PATH; install it or remove [lsp.servers.{server}]",
+            config.command[0]
+        )));
+    }
+    Ok(Some((
+        crate::utils::size::parse_byte_size(&config.memory_estimate)
+            .map_err(LspErr::Configuration)?,
+        parse_timeout(&config.wait_timeout)?,
+    )))
+}
+
+fn record_refusal(root: &Path, server: &str, message: &str) {
+    crate::diag::lsp::append(&crate::diag::lsp::Record {
+        at: jiff::Timestamp::now(),
+        root: root.to_owned(),
+        server: server.to_owned(),
+        event: "refused".into(),
+        details: serde_json::json!({"reason": message}),
+    });
 }
 
 fn await_startup(
@@ -652,13 +701,7 @@ fn await_startup(
     if policy == LspPolicy::Required {
         return Err(LspErr::Configuration(message));
     }
-    crate::diag::lsp::append(&crate::diag::lsp::Record {
-        at: jiff::Timestamp::now(),
-        root: root.to_owned(),
-        server: server.to_owned(),
-        event: "refused".into(),
-        details: serde_json::json!({"reason": message}),
-    });
+    record_refusal(root, server, &message);
     result.startup_refused.push(message);
     Ok(None)
 }
