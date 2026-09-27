@@ -41,7 +41,7 @@ fn fixed_line_ansi_renderer_emits_one_reset_terminated_line_per_frame_row() {
     let snapshot = snapshot_with(Vec::new());
 
     let mut ansi = Vec::new();
-    render_fixed_line_ansi(&mut ansi, &snapshot, None, 16, 5).unwrap();
+    render_fixed_line_ansi(&mut ansi, &snapshot, 16, 5).unwrap();
 
     let lines = ansi.iter().filter(|byte| **byte == b'\n').count();
     assert_eq!(lines, 5, "one serialized line per fixed terminal row");

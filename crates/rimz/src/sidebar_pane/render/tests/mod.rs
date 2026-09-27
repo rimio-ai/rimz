@@ -188,7 +188,7 @@ fn snapshot_to_bytes_with_alert_and_ui(
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
     Backend::clear_region(terminal.backend_mut(), ClearType::All).unwrap();
     let mut ui = fixed_theme_ui(snapshot, ui);
-    draw_to_terminal_with_ui(&mut terminal, snapshot, alert, &mut ui).unwrap();
+    draw_to_terminal(&mut terminal, snapshot, alert, &mut ui).unwrap();
     drop(terminal);
     bytes
 }

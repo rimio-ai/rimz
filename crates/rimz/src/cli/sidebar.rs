@@ -803,7 +803,7 @@ fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
     let write = if command.expand {
         rimz::sidebar_pane::render::render_expanded_line_ansi(&mut out, &snapshot, width)
     } else {
-        rimz::sidebar_pane::render::render_fixed_line_ansi(&mut out, &snapshot, None, width, height)
+        rimz::sidebar_pane::render::render_fixed_line_ansi(&mut out, &snapshot, width, height)
     };
     render::finish(write.and_then(|()| out.flush()))
 }
@@ -1047,7 +1047,7 @@ fn fixture(
         return rimz::sidebar_pane::app::serve_fixture(snapshot, refresh_ms)
             .context("serving sidebar fixture");
     }
-    rimz::sidebar_pane::render::render_fixed_line_ansi(io::stdout(), &snapshot, None, width, height)
+    rimz::sidebar_pane::render::render_fixed_line_ansi(io::stdout(), &snapshot, width, height)
         .context("rendering sidebar fixture")
 }
 

@@ -1,16 +1,11 @@
 //! Ratatui rendering for the sidebar snapshot model.
 //!
-//! `draw_with_ui` is the entry point a Ratatui frame calls; `render_fixed` is the
+//! `draw_to_terminal` is the live entry point; `render_fixed` is the
 //! offscreen variant used by the vt100-backed snapshot tests. Section
 //! composition lives in `sections`; vocabulary labels in `labels`;
 //! pure formatting helpers in `fmt`.
 //!
-//! Every entry point takes an optional [`Alert`] alongside the snapshot. The
-//! alert is the sticky health line pinned to the bottom of the sidebar: while
-//! the refresh loop is unhealthy it shows the reason and elapsed time, and
-//! after recovery it lingers as a dismissable "last alert" notice. This is the
-//! reload-recovery contract documented in
-//! [`docs/internals/sidebar/sidebar.md`](../../docs/internals/sidebar/sidebar.md).
+//! `draw_to_terminal` takes an optional `Alert` alongside the snapshot. The alert is the sticky health line pinned to the bottom of the sidebar: while the refresh loop is unhealthy it shows the reason and elapsed time, and after recovery it lingers as a dismissable "last alert" notice. The fixed renders carry no alert. This is the reload-recovery contract documented in [`docs/internals/sidebar/sidebar.md`](../../docs/internals/sidebar/sidebar.md).
 
 mod animation;
 mod ansi;
@@ -77,15 +72,6 @@ fn age_heat_amount_for_test(age_secs: i64) -> f32 {
     debug_assert!(age_secs > first_quarter);
     let heat_span = crate::agents::ATTENTION_AGE_CEILING_SECS - first_quarter;
     ((age_secs - first_quarter) as f32 / heat_span as f32).min(1.0)
-}
-
-pub fn draw_with_ui(
-    frame: &mut Frame<'_>,
-    snapshot: &SidebarSnapshot,
-    alert: Option<&Alert>,
-    ui: &mut UiState,
-) {
-    draw_into(frame, snapshot, alert, ui, frame.area());
 }
 
 fn draw_into(
@@ -584,29 +570,20 @@ pub(in crate::sidebar_pane) fn animation_interval(
     None
 }
 
-pub fn draw_to_terminal<B: Backend>(
-    terminal: &mut Terminal<B>,
-    snapshot: &SidebarSnapshot,
-    alert: Option<&Alert>,
-) -> Result<(), B::Error> {
-    draw_to_terminal_with_ui(terminal, snapshot, alert, &mut UiState::default())
-}
-
-pub fn draw_to_terminal_with_ui<B: Backend>(
+pub(in crate::sidebar_pane) fn draw_to_terminal<B: Backend>(
     terminal: &mut Terminal<B>,
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &mut UiState,
 ) -> Result<(), B::Error> {
     terminal
-        .draw(|frame| draw_with_ui(frame, snapshot, alert, ui))
+        .draw(|frame| draw_into(frame, snapshot, alert, ui, frame.area()))
         .map(|_| ())
 }
 
 pub fn render_fixed<W: Write>(
     writer: W,
     snapshot: &SidebarSnapshot,
-    alert: Option<&Alert>,
     width: u16,
     height: u16,
 ) -> io::Result<()> {
@@ -614,21 +591,25 @@ pub fn render_fixed<W: Write>(
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
     Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
-    draw_to_terminal(&mut terminal, snapshot, alert)?;
+    draw_to_terminal(&mut terminal, snapshot, None, &mut UiState::default())?;
     Ok(())
 }
 
 pub fn render_fixed_line_ansi<W: Write>(
     mut writer: W,
     snapshot: &SidebarSnapshot,
-    alert: Option<&Alert>,
     width: u16,
     height: u16,
 ) -> io::Result<()> {
     let backend = TestBackend::new(width, height);
     let mut terminal = infallible(Terminal::new(backend));
     infallible(terminal.clear());
-    infallible(draw_to_terminal(&mut terminal, snapshot, alert));
+    infallible(draw_to_terminal(
+        &mut terminal,
+        snapshot,
+        None,
+        &mut UiState::default(),
+    ));
     write_buffer_line_ansi(&mut writer, terminal.backend().buffer())
 }
 
@@ -670,12 +651,7 @@ pub fn render_expanded_line_ansi<W: Write>(
     let backend = TestBackend::new(width, height);
     let mut terminal = infallible(Terminal::new(backend));
     infallible(terminal.clear());
-    infallible(draw_to_terminal_with_ui(
-        &mut terminal,
-        &snapshot,
-        None,
-        &mut ui,
-    ));
+    infallible(draw_to_terminal(&mut terminal, &snapshot, None, &mut ui));
     write_buffer_line_ansi(&mut writer, terminal.backend().buffer())
 }
 

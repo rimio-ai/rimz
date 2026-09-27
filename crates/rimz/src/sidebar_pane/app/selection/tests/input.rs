@@ -141,7 +141,7 @@ fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stay
     set_delegation_open(&mut ui, &snapshot, row_id.clone(), true);
     toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 64)).unwrap();
-    render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
     assert!(ui.delegation_history.contains_key(&row_id));
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -156,12 +156,12 @@ fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stay
             .any(|line| line.to_string().contains("old-child")),
         "stale history is inert before pruning"
     );
-    render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
     assert!(!ui.delegation_history.contains_key(&row_id));
     assert_eq!(ui.delegation_overrides.get(&row_id), Some(&true));
     toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
     snapshot.worktree_groups[0].rows.remove(0);
-    render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    render::draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
     assert!(!ui.delegation_history.contains_key(&row_id));
     assert!(!ui.delegation_overrides.contains_key(&row_id));
 }
