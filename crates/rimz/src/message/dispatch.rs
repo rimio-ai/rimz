@@ -34,12 +34,6 @@ pub struct WhenRequest {
     pub expression: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReplyRequest {
-    pub join: ReplyJoin,
-    pub caller_identity: Option<(AgentKind, String)>,
-}
-
 #[derive(Clone, Debug)]
 pub enum DispatchMode {
     Interrupt,
@@ -86,7 +80,7 @@ pub struct DispatchRequest {
     pub sender: MessageSender,
     pub automated: bool,
     pub allow_fanout: bool,
-    pub reply: Option<ReplyRequest>,
+    pub reply: Option<ReplyJoin>,
     pub mux: Option<MuxName>,
     pub enter: bool,
     pub force: bool,
@@ -299,10 +293,9 @@ pub fn dispatch(
     }
 
     let mode = prepare_mode(&request, &resolution, &targets, &pending)?;
-    let reply_join = request.reply.as_ref().map(|reply| reply.join);
     let reply_preparation = request
         .reply
-        .map(|reply| {
+        .map(|_| {
             ReplyPreparation::new(
                 store,
                 &snapshot,
@@ -310,7 +303,10 @@ pub fn dispatch(
                     agent: target.agent.as_ref(),
                     label: target.label(&snapshot),
                 }),
-                reply.caller_identity,
+                request
+                    .caller
+                    .as_ref()
+                    .and_then(|caller| Some((caller.kind.clone(), caller.name.clone()?))),
             )
         })
         .transpose()?;
@@ -331,14 +327,8 @@ pub fn dispatch(
     };
     let (outcomes, compacted) = dispatch_targets(&state, &targets, &text, &mode)?;
     let reply = reply_preparation
-        .map(|preparation| {
-            // Preparation exists only when the same request supplied a join mode.
-            preparation.attach(
-                &outcomes,
-                mode.kind,
-                reply_join.expect("reply preparation carries join mode"),
-            )
-        })
+        .zip(request.reply)
+        .map(|(preparation, join)| preparation.attach(&outcomes, mode.kind, join))
         .transpose()?;
     Ok(DispatchResult {
         outcomes,

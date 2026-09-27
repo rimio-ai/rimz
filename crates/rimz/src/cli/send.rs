@@ -230,13 +230,6 @@ pub(crate) fn resolve_caller(
     Ok(rimz::harness::ancestry::CallerIdentity::from_process_ancestry(&projection.agents))
 }
 
-pub(crate) fn caller_identity(
-    caller: Option<&rimz::harness::ancestry::CallerIdentity>,
-) -> Option<(rimz::ids::AgentKind, String)> {
-    let caller = caller?;
-    Some((caller.kind.clone(), caller.name.clone()?))
-}
-
 pub(crate) fn reply_wait(wait: Option<Option<Duration>>, agent_caller: bool) -> ReplyWait {
     match wait {
         None => ReplyWait::Off,
