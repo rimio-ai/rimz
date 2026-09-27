@@ -2,6 +2,34 @@ use super::*;
 use crate::agents::credits::AccountUsageReportable;
 
 #[test]
+fn usage_credentials_and_birth_key_share_one_secret_choice() {
+    for (refresh, kind, secret) in [
+        (Some(" refresh "), "refresh-token", "refresh"),
+        (None, "access-token", "access"),
+        (Some("   "), "access-token", "access"),
+    ] {
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": " access ",
+                "refreshToken": refresh,
+                "expiresAt": 4102444800000_i64,
+                "scopes": ["user:profile"]
+            }
+        }))
+        .unwrap();
+        let expected = account_key(kind, secret);
+        assert_eq!(parse_credentials(&bytes).unwrap().account_key, expected);
+        assert_eq!(parse_account_key(&bytes).unwrap(), expected);
+    }
+}
+
+#[test]
+fn user_agent_without_a_supplied_version_keeps_the_cli_product_shape() {
+    let ua = claude_code_user_agent(None);
+    assert!(ua.starts_with("claude-cli/") && ua.ends_with(" (external, cli)"));
+}
+
+#[test]
 fn named_login_env_reads_account_credentials_under_the_named_home() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
