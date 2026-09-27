@@ -1,6 +1,7 @@
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
+use crate::agents::payload::non_empty_trimmed;
 use crate::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
 use crate::pane::keys::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
@@ -222,7 +223,7 @@ fn answer_note(question: &str, annotations: &Map<String, Value>) -> Option<Strin
         .get(question)?
         .get("notes")
         .and_then(Value::as_str)
-        .and_then(|notes| non_empty(Some(notes)))
+        .and_then(non_empty_trimmed)
 }
 
 fn object_answer_field(value: &Value, key: &str) -> Option<String> {
@@ -261,16 +262,11 @@ fn answer_value_text(value: &Value) -> Option<String> {
 
 fn value_text(value: &Value) -> Option<String> {
     match value {
-        Value::String(text) => non_empty(Some(text)),
+        Value::String(text) => non_empty_trimmed(text),
         Value::Number(number) => Some(number.to_string()),
         Value::Bool(value) => Some(value.to_string()),
         _ => None,
     }
-}
-
-fn non_empty(text: Option<&str>) -> Option<String> {
-    let text = text?.trim();
-    (!text.is_empty()).then(|| text.to_owned())
 }
 
 fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
