@@ -24,7 +24,7 @@ use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 use crate::store::snapshot::{SidebarRow, SidebarWorktreeKind};
 
 use super::CostRolls;
-pub(super) use super::layout::{pin_right, spans_width, trim_spans_to_width};
+use super::layout::{pin_right, spans_width, trim_spans_to_width};
 use super::theme::{Component, Theme};
 
 mod agent_card;
@@ -166,7 +166,7 @@ impl Tier {
 /// cell — blank for chrome and resting worktrees, the resting lane `▎`/`🮇` for
 /// the selected worktree, the bold `▌`/`▐` accent for the selected card itself.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Gutter {
+enum Gutter {
     /// No marker — chrome and non-selected worktrees.
     Blank,
     /// The selected worktree's resting lane spine (`▎`/`🮇`, the dim selection tone).

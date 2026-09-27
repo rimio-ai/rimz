@@ -15,13 +15,13 @@ use super::{CostRolls, FrameInteractions, ScrollbarFade, TallyAnim};
 pub(in crate::sidebar_pane) use crate::mux::focus_anchor::{FrozenOrder, FrozenRow};
 
 #[derive(Clone, Debug, Default)]
-pub struct UiState {
-    pub selected_index: usize,
-    pub help_visible: bool,
+pub(in crate::sidebar_pane) struct UiState {
+    pub(in crate::sidebar_pane) selected_index: usize,
+    pub(in crate::sidebar_pane) help_visible: bool,
     /// Wall-clock animation frame counter, advanced by the serve loop's
     /// animation tick. The renderer derives the running-agent spin frame from
     /// it; freshness gating (per row) keeps a quiet agent frozen.
-    pub animation_phase: u64,
+    pub(in crate::sidebar_pane) animation_phase: u64,
     pub(in crate::sidebar_pane) theme_cache: Option<(ThemeConfig, Rc<Theme>)>,
     /// The cockpit spend's count-up state — one stepped roll for today's `$`.
     /// Folded forward on each data refresh (`TallyAnim::observe`) and read by the
@@ -46,7 +46,7 @@ pub struct UiState {
     /// derived `baseline_pane` and any live `browse`. Keying on the pane means
     /// a status-churn reorder re-anchors the highlight to the same pane
     /// instead of sliding it onto a neighbour.
-    pub selected_pane: Option<PaneId>,
+    pub(in crate::sidebar_pane) selected_pane: Option<PaneId>,
     /// The hold-last derived baseline: the session focus register from the last
     /// frame that named a rendered row. Selection is *derived* — recomputed from
     /// the queried mux state every fold, so it advances on a `Some` derivation
@@ -274,10 +274,10 @@ pub(in crate::sidebar_pane) struct OrderHold {
 /// `Some(t)` once it healed — a recovered alert lingers as a dismissable
 /// "last alert" notice rather than vanishing the instant a fetch succeeds.
 #[derive(Clone, Debug)]
-pub struct Alert {
-    pub reason: String,
-    pub since: Timestamp,
-    pub recovered_at: Option<Timestamp>,
+pub(in crate::sidebar_pane) struct Alert {
+    pub(in crate::sidebar_pane) reason: String,
+    pub(in crate::sidebar_pane) since: Timestamp,
+    pub(in crate::sidebar_pane) recovered_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -286,7 +286,7 @@ pub(in crate::sidebar_pane) struct GateNotice {
 }
 
 impl Alert {
-    pub fn active(reason: impl Into<String>, since: Timestamp) -> Self {
+    pub(in crate::sidebar_pane) fn active(reason: impl Into<String>, since: Timestamp) -> Self {
         Self {
             reason: reason.into(),
             since,
