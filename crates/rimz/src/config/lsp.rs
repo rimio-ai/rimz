@@ -58,6 +58,12 @@ pub enum LspServerKind {
 }
 
 impl LspServerConfig {
+    pub fn matches_root(&self, root: &std::path::Path) -> bool {
+        self.root_markers
+            .iter()
+            .any(|marker| root.join(marker).exists())
+    }
+
     pub(crate) fn resolved_kind(&self) -> LspServerKind {
         self.kind.unwrap_or_else(|| {
             self.command
