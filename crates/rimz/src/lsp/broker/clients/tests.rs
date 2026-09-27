@@ -615,6 +615,7 @@ fn non_rust_servers_omit_only_experimental_capabilities() {
     expected.as_object_mut().unwrap().remove("experimental");
     for kind in [
         crate::config::LspServerKind::Pyright,
+        crate::config::LspServerKind::Ty,
         crate::config::LspServerKind::Basedpyright,
         crate::config::LspServerKind::Ruff,
         crate::config::LspServerKind::Generic,

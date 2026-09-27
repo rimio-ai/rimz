@@ -53,6 +53,7 @@ pub enum LspServerKind {
     Pyright,
     Basedpyright,
     Ruff,
+    Ty,
     Generic,
 }
 
@@ -61,15 +62,17 @@ impl LspServerConfig {
         self.kind.unwrap_or_else(|| {
             self.command
                 .iter()
-                .find_map(
-                    |token| match std::path::Path::new(token).file_name()?.to_str()? {
+                .find_map(|token| {
+                    let basename = std::path::Path::new(token).file_name()?.to_str()?;
+                    match basename.split_once('@').map_or(basename, |(name, _)| name) {
                         "rust-analyzer" => Some(LspServerKind::RustAnalyzer),
                         "pyright-langserver" => Some(LspServerKind::Pyright),
                         "basedpyright-langserver" => Some(LspServerKind::Basedpyright),
                         "ruff" => Some(LspServerKind::Ruff),
+                        "ty" => Some(LspServerKind::Ty),
                         _ => None,
-                    },
-                )
+                    }
+                })
                 .unwrap_or(LspServerKind::Generic)
         })
     }
@@ -82,6 +85,7 @@ impl std::fmt::Display for LspServerKind {
             Self::Pyright => "pyright",
             Self::Basedpyright => "basedpyright",
             Self::Ruff => "ruff",
+            Self::Ty => "ty",
             Self::Generic => "generic",
         })
     }
@@ -95,6 +99,16 @@ mod tests {
     #[test]
     fn server_kind_resolves_explicit_then_command_tokens() {
         for (command, expected) in [
+            (vec!["ty", "server"], LspServerKind::Ty),
+            (vec!["/opt/bin/ty", "server"], LspServerKind::Ty),
+            (vec!["uvx", "ty", "server"], LspServerKind::Ty),
+            (vec!["uv", "run", "ty", "server"], LspServerKind::Ty),
+            (vec!["uvx", "ty@0.0.84", "server"], LspServerKind::Ty),
+            (
+                vec!["uvx", "--from", "ty==0.0.84", "ty", "server"],
+                LspServerKind::Ty,
+            ),
+            (vec!["uvx", "ruff@0.6.0", "server"], LspServerKind::Ruff),
             (vec!["rust-analyzer"], LspServerKind::RustAnalyzer),
             (
                 vec!["rustup", "run", "stable", "rust-analyzer"],
@@ -123,7 +137,11 @@ mod tests {
             assert_eq!(config.resolved_kind(), expected, "{command:?}");
             config.kind = Some(LspServerKind::Pyright);
             assert_eq!(config.resolved_kind(), LspServerKind::Pyright);
+            config.kind = Some(LspServerKind::Ty);
+            assert_eq!(config.resolved_kind(), LspServerKind::Ty);
         }
+        assert_eq!(LspServerKind::Ty.to_string(), "ty");
+        assert_eq!(serde_json::to_value(LspServerKind::Ty).unwrap(), "ty");
     }
 
     #[test]

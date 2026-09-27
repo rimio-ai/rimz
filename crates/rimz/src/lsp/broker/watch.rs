@@ -128,6 +128,7 @@ pub(super) fn changes(
             &["pyrightconfig.json", "pyproject.toml"]
         }
         LspServerKind::Ruff => &["pyproject.toml", "ruff.toml", ".ruff.toml"],
+        LspServerKind::Ty => &["ty.toml", "pyproject.toml"],
         LspServerKind::RustAnalyzer | LspServerKind::Generic => &[],
     };
     let mut changes = Vec::new();
@@ -192,6 +193,7 @@ mod tests {
     #[test]
     fn python_arms_watch_configuration_basenames() {
         for kind in [
+            crate::config::LspServerKind::Ty,
             crate::config::LspServerKind::Ruff,
             crate::config::LspServerKind::Pyright,
             crate::config::LspServerKind::Basedpyright,
@@ -210,6 +212,24 @@ mod tests {
                 usize::from(kind != crate::config::LspServerKind::RustAnalyzer),
                 "{kind:?}"
             );
+            for (basename, expected) in [
+                ("ty.toml", kind == crate::config::LspServerKind::Ty),
+                ("ruff.toml", kind == crate::config::LspServerKind::Ruff),
+            ] {
+                let output = changes(
+                    kind,
+                    Path::new("/checkout"),
+                    &["py".into()],
+                    &[],
+                    [Event::new(EventKind::Modify(ModifyKind::Any))
+                        .add_path(Path::new("/checkout").join(basename))],
+                );
+                assert_eq!(
+                    output["changes"].as_array().unwrap().len(),
+                    usize::from(expected),
+                    "{kind}: {basename}"
+                );
+            }
         }
     }
 

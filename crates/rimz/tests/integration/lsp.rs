@@ -70,6 +70,12 @@ fn editor_query(directory: &Path, name: &str) -> Value {
 fn lsp_server_arms_deliver_settings_capabilities_and_status() {
     for (kind, options, sections, answers) in [
         (
+            "ty",
+            json!({"diagnosticMode":"openFilesOnly"}),
+            vec!["ty"],
+            json!([null]),
+        ),
+        (
             "pyright",
             json!({"python":{"analysis":{"typeCheckingMode":"strict"}},"pyright":{"disableOrganizeImports":true}}),
             vec!["python", "pyright", "python.analysis", "absent"],

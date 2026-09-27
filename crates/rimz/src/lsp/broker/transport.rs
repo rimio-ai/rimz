@@ -288,9 +288,20 @@ mod tests {
 
     #[test]
     fn python_and_generic_configuration_walk_sections_without_rust_prefixes() {
+        assert_eq!(
+            super::server_response(
+                crate::config::LspServerKind::Ty,
+                "workspace/configuration",
+                &json!({"items":[{"section":"ty"}]}),
+                &json!({"diagnosticMode":"openFilesOnly"}),
+                &Value::Null
+            ),
+            Ok(json!([null]))
+        );
         let options = json!({"python":{"analysis":{"typeCheckingMode":"strict"}},"pyright":{"disableOrganizeImports":true}});
         for kind in [
             crate::config::LspServerKind::Pyright,
+            crate::config::LspServerKind::Ty,
             crate::config::LspServerKind::Basedpyright,
             crate::config::LspServerKind::Ruff,
             crate::config::LspServerKind::Generic,
