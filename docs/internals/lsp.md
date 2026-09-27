@@ -12,7 +12,7 @@ RimZ resolves every launch's checkout before any pane opens ([fleet.md § One la
 
 ## The rules that shape it
 
-**Enrichment, never a precondition by default.** Memory refusal of an optional server, or a server that dies later, leaves agents on grep. The fail-fast invariant still governs configuration: a configured server whose binary is missing or whose command is untrusted refuses at the launch entry point with the fix. Memory refusal is visible to the human ([Visibility](#visibility)).
+**Enrichment, never a precondition by default.** Configuration errors and memory refusal of an optional server, or a server that dies later, leave agents on grep. `admission::admit_launch` warns once per launch and records configuration refusals in the diagnostic log. Untrusted project entries warn and stay inert, even if declared required; same-named machine entries remain effective. A required server's configuration error still refuses launch. Policy-wide errors refuse only when a required server's root markers match the checkout; otherwise they warn once and skip all servers. Refusal is visible to the human ([Visibility](#visibility)).
 
 **Registered at launch, started on demand.** Optional launches create a dormant broker, not a server process. The first agent query or editor request triggers memory admission and startup; required launches admit and start eagerly. Launch reminders name dormant and running servers alike, so no tool change is needed when a server restarts.
 

@@ -1463,7 +1463,7 @@ fn lsp_required_queue_orders_waiters_and_reaps_dead_owners() {
 }
 
 #[test]
-fn lsp_admission_refuses_untrusted_or_missing_program_before_spawn() {
+fn lsp_admission_warns_for_untrusted_and_optional_configuration_once() {
     use rimz::lsp::admission::{AdmissionRequest, WaitQueue, admit_launch};
 
     let env = Env::new();
@@ -1478,13 +1478,173 @@ fn lsp_admission_refuses_untrusted_or_missing_program_before_spawn() {
         policy: &machine.lsp,
         runtime: &runtime,
     };
-    let error = admit_launch(&request, &mut WaitQueue::default())
-        .err()
-        .expect("untrusted project must refuse");
-    assert!(error.to_string().contains("run rimz trust"));
+    let mut queue = WaitQueue::default();
+    let result = admit_launch(&request, &mut queue).expect("optional configuration must warn");
+    assert_eq!(result.ignored_untrusted.len(), 1);
+    assert!(result.ignored_untrusted[0].contains("rust"));
+    assert!(result.ignored_untrusted[0].contains("ignored until trusted; run rimz trust"));
+    assert_eq!(result.startup_refused.len(), 1);
+    assert!(result.startup_refused[0].contains("install it or remove [lsp.servers.rust]"));
+    assert!(result.admitted.is_empty());
+    assert!(result.wait_for_required.is_empty());
+    let records = rimz::diag::lsp::recent();
+    for message in result
+        .ignored_untrusted
+        .iter()
+        .chain(&result.startup_refused)
+    {
+        assert_eq!(
+            records
+                .iter()
+                .filter(
+                    |record| record.root == env.project_root.canonicalize().unwrap()
+                        && record.event == "refused"
+                        && record.details["reason"] == *message
+                )
+                .count(),
+            1
+        );
+    }
+    let second = admit_launch(&request, &mut queue).unwrap();
+    assert!(second.ignored_untrusted.is_empty());
+    assert!(second.startup_refused.is_empty());
+    assert_eq!(
+        rimz::diag::lsp::recent()
+            .iter()
+            .filter(|record| record.root == env.project_root.canonicalize().unwrap())
+            .count(),
+        2
+    );
+    assert!(
+        !rimz::lsp::registry::directory(&env.project_root.canonicalize().unwrap(), "rust")
+            .unwrap()
+            .exists()
+    );
+}
+
+#[test]
+fn lsp_admission_policy_errors_warn_unless_required_markers_match() {
+    use rimz::lsp::admission::{AdmissionRequest, WaitQueue, admit_launch};
+
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    let mut machine: MachineConfig = toml::from_str("[lsp]\nidle-timeout = 'tomorrow'\n[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']").unwrap();
+    let runtime = env.runtime_paths();
+    for required in [false, true] {
+        machine.lsp.servers.get_mut("rust").unwrap().policy = if required {
+            rimz::config::LspPolicy::Required
+        } else {
+            rimz::config::LspPolicy::Optional
+        };
+        for matched in [false, true] {
+            machine.lsp.servers.get_mut("rust").unwrap().root_markers =
+                vec![if matched { "Cargo.toml" } else { "absent" }.into()];
+            let request = AdmissionRequest {
+                root: &env.project_root,
+                project: &env.project_root,
+                servers: &machine.lsp.servers,
+                untrusted_servers: &[],
+                policy: &machine.lsp,
+                runtime: &runtime,
+            };
+            let mut queue = WaitQueue::default();
+            let result = admit_launch(&request, &mut queue);
+            if required && matched {
+                assert!(matches!(result, Err(rimz::lsp::LspErr::Configuration(_))));
+                continue;
+            }
+            let result = result.expect("policy errors without matching required servers must warn");
+            assert_eq!(result.startup_refused.len(), 1);
+            assert!(result.startup_refused[0].contains("idle-timeout"));
+            assert!(result.admitted.is_empty());
+            assert!(result.wait_for_required.is_empty());
+            assert!(
+                admit_launch(&request, &mut queue)
+                    .unwrap()
+                    .startup_refused
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
+fn lsp_admission_optional_entry_errors_are_isolated() {
+    use rimz::lsp::admission::{AdmissionRequest, WaitQueue, admit_launch};
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    let runtime = env.runtime_paths();
+    let base = json!({"command":["/bin/true"],"extensions":["rs"],"root-markers":["Cargo.toml"]});
+    for (field, value, expected) in [
+        ("command", json!([]), "needs command"),
+        ("extensions", json!([]), "needs command"),
+        ("root-markers", json!([]), "needs command"),
+        ("root-markers", json!(["../Cargo.toml"]), "must be relative"),
+        ("init-options", json!(1), "must be a table"),
+        ("memory-estimate", json!("bad"), "size"),
+        ("wait-timeout", json!("bad"), "duration"),
+    ] {
+        let mut config = base.clone();
+        config[field] = value;
+        let mut machine = MachineConfig::default();
+        machine
+            .lsp
+            .servers
+            .insert("rust".into(), serde_json::from_value(config).unwrap());
+        let request = AdmissionRequest {
+            root: &env.project_root,
+            project: &env.project_root,
+            servers: &machine.lsp.servers,
+            untrusted_servers: &[],
+            policy: &machine.lsp,
+            runtime: &runtime,
+        };
+        let result = admit_launch(&request, &mut WaitQueue::default())
+            .expect("optional entry errors must warn");
+        assert_eq!(result.startup_refused.len(), 1, "{field}");
+        assert!(result.startup_refused[0].contains(expected), "{field}");
+        assert!(result.admitted.is_empty());
+    }
+}
+
+#[test]
+fn lsp_attach_optional_configuration_error_exits_three() {
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"), "[lsp.servers.rust]\ncommand = ['/no-such-language-server/rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']").unwrap();
+    let mut child = env
+        .rimz()
+        .args(["lsp", "attach", "--server", "rust", "--stdio"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    rimz::lsp::protocol::write_frame(&mut child.stdin.take().unwrap(), &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":url::Url::from_directory_path(&env.project_root).unwrap()}})).unwrap();
+    child
+        .wait_with_output()
+        .unwrap()
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains(
+            "install it or remove [lsp.servers.rust]",
+        ));
+}
+
+#[test]
+fn lsp_admission_required_missing_program_refuses_before_spawn() {
+    use rimz::lsp::admission::{AdmissionRequest, WaitQueue, admit_launch};
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    let machine: MachineConfig = toml::from_str("[lsp.servers.rust]\ncommand = ['/no-such-language-server/rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = 'required'").unwrap();
+    let runtime = env.runtime_paths();
     let request = AdmissionRequest {
+        root: &env.project_root,
+        project: &env.project_root,
+        servers: &machine.lsp.servers,
         untrusted_servers: &[],
-        ..request
+        policy: &machine.lsp,
+        runtime: &runtime,
     };
     let error = admit_launch(&request, &mut WaitQueue::default())
         .err()
