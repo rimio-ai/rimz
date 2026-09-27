@@ -31,7 +31,6 @@ const THIRD_PARTY_PROVIDER_VARS: [&str; 3] = [
 const REMOTE_SESSION_ACCESS_TOKEN: &str = "CLAUDE_CODE_SESSION_ACCESS_TOKEN";
 const ENVIRONMENT_KIND: &str = "CLAUDE_CODE_ENVIRONMENT_KIND";
 const REMOTE_ENVIRONMENT_KIND: &str = "bridge";
-const MAX_ANCESTOR_DEPTH: usize = 32;
 
 /// Whether this process was spawned as a Claude remote-control session hook.
 /// Environment markers are the fast path; the bounded ancestry walk covers
@@ -50,38 +49,14 @@ fn remote_session_env(access_token: Option<&OsStr>, environment_kind: Option<&Os
         || environment_kind.is_some_and(|value| value == OsStr::new(REMOTE_ENVIRONMENT_KIND))
 }
 
-#[cfg(unix)]
 fn remote_control_in_ancestry() -> bool {
-    remote_control_in_ancestry_from(
-        std::os::unix::process::parent_id(),
-        |pid| crate::proc::comm_and_ppid(pid).map(|(_, ppid)| ppid),
-        crate::proc::cmdline,
-    )
+    claude_host_in(crate::proc::ancestor_pids(), crate::proc::cmdline)
 }
 
-#[cfg(not(unix))]
-fn remote_control_in_ancestry() -> bool {
-    false
-}
-
-fn remote_control_in_ancestry_from(
-    mut pid: u32,
-    mut parent_pid: impl FnMut(u32) -> Option<u32>,
-    mut cmdline: impl FnMut(u32) -> Option<String>,
-) -> bool {
-    for _ in 0..MAX_ANCESTOR_DEPTH {
-        if pid <= 1 {
-            return false;
-        }
-        if cmdline(pid).is_some_and(|command| crate::pane::command_is_claude_host(&command)) {
-            return true;
-        }
-        let Some(parent) = parent_pid(pid) else {
-            return false;
-        };
-        pid = parent;
-    }
-    false
+fn claude_host_in(pids: Vec<u32>, cmdline: impl Fn(u32) -> Option<String>) -> bool {
+    pids.into_iter().any(|pid| {
+        cmdline(pid).is_some_and(|command| crate::pane::command_is_claude_host(&command))
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -496,8 +471,6 @@ fn readiness_from(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use serde_json::json;
 
     use super::*;
@@ -517,39 +490,19 @@ mod tests {
 
     #[test]
     fn remote_session_ancestry_matches_only_a_claude_remote_control_host() {
-        let parent = |pid| match pid {
-            30 => Some(20),
-            20 => Some(10),
-            10 => Some(1),
-            _ => None,
-        };
         let remote = |pid| match pid {
             30 => Some("/versions/claude --print --sdk-url wss://example".to_owned()),
             20 => Some("/usr/local/bin/claude remote-control --spawn worktree".to_owned()),
             _ => None,
         };
-        assert!(remote_control_in_ancestry_from(30, parent, remote));
+        assert!(claude_host_in(vec![30, 20, 10], remote));
 
         let normal = |pid| match pid {
             30 => Some("/usr/local/bin/claude --resume session".to_owned()),
             20 => Some("zsh".to_owned()),
             _ => None,
         };
-        assert!(!remote_control_in_ancestry_from(30, parent, normal));
-    }
-
-    #[test]
-    fn remote_session_ancestry_walk_is_bounded() {
-        let calls = Cell::new(0);
-        assert!(!remote_control_in_ancestry_from(
-            100,
-            |pid| {
-                calls.set(calls.get() + 1);
-                Some(pid + 1)
-            },
-            |_| None,
-        ));
-        assert_eq!(calls.get(), MAX_ANCESTOR_DEPTH);
+        assert!(!claude_host_in(vec![30, 20, 10], normal));
     }
 
     #[test]
