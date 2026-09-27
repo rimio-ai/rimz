@@ -719,7 +719,7 @@ impl MachineConfig {
         sources
     }
 
-    /// Sandbox isolation is Linux bubblewrap, so elsewhere a configured `sandbox` falls back to `host` with a notice rather than refusing every launch. Idempotent: it runs before definitions load, so the skill check sees the effective machine policy, and again after, for the loaded profiles.
+    /// Sandbox isolation is Linux bubblewrap, so elsewhere a configured `sandbox` falls back to `host` with a notice rather than refusing every launch. Idempotent: it runs before definitions load, for the machine policy, and again after, for the loaded profiles; the definition skill check resolves host off Linux on its own.
     fn fall_back_to_host_isolation(&mut self, notices: &mut ConfigNotices) {
         let mut warn = |setting: &str| {
             notices.host_isolation_fallback.push(format!(
