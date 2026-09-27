@@ -385,18 +385,38 @@ pub fn live_server_names(root: &Path) -> Result<Vec<String>> {
 }
 
 pub fn stop_checkout(root: &Path, reason: StopReason) -> Result<()> {
-    // Worktree removal calls this after the directory has gone; its host path is already absolute.
-    let root = std::fs::canonicalize(root)
-        .unwrap_or_else(|_| crate::utils::path::normalize_path_lexical(root));
     acknowledge_all(
-        read_entries()?
-            .into_iter()
-            .filter(|entry| entry.root == root),
+        checkout_entries(root)?,
         &serde_json::json!({"op": "stop", "reason": reason}),
     )
 }
 
-pub(super) fn acknowledge_all(
+pub fn register_lease(root: &Path, launch_id: Option<&str>, pid: u32) -> Result<()> {
+    let start_token = crate::proc::process_start_token(pid)
+        .ok_or_else(|| LspErr::Protocol(format!("cannot identify lease process {pid}")))?;
+    acknowledge_all(
+        live_for_checkout(root)?,
+        &serde_json::json!({"op": "lease", "launch_id": launch_id, "pid": pid, "start_token": start_token}),
+    )
+}
+
+pub fn release_lease(root: &Path, launch_id: Option<&str>, pid: u32) -> Result<()> {
+    acknowledge_all(
+        checkout_entries(root)?,
+        &serde_json::json!({"op": "release", "launch_id": launch_id, "pid": pid}),
+    )
+}
+
+fn checkout_entries(root: &Path) -> Result<impl Iterator<Item = Entry>> {
+    // Worktree removal calls this after the directory has gone; its host path is already absolute.
+    let root = std::fs::canonicalize(root)
+        .unwrap_or_else(|_| crate::utils::path::normalize_path_lexical(root));
+    Ok(read_entries()?
+        .into_iter()
+        .filter(move |entry| entry.root == root))
+}
+
+fn acknowledge_all(
     entries: impl IntoIterator<Item = Entry>,
     operation: &serde_json::Value,
 ) -> Result<()> {

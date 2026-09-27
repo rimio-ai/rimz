@@ -5,7 +5,6 @@ pub mod attach;
 pub mod broker;
 pub mod check;
 pub mod history;
-pub mod lease;
 pub mod memory;
 pub mod protocol;
 pub mod query;
