@@ -58,6 +58,103 @@ fn wait_run_rejects_empty_commands() {
 }
 
 #[test]
+fn wait_check_lists_elapsed_and_checkin_limit() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    let receipt = wait_ok(&env, &["wait", "--check", "false", "--timeout", "12m"]);
+    assert!(
+        receipt.lines().next().unwrap().ends_with("(timeout 12m)"),
+        "{receipt}"
+    );
+    wait_until("watcher holds its lock", || {
+        let rows: serde_json::Value =
+            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        rows[0]["watcher_pid"].is_u64()
+    });
+    let rows: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    let row = &rows[0];
+    assert_eq!(row["type"], "check");
+    assert_eq!(row["state"], "watching");
+    assert_eq!(row["trigger"], "false");
+    assert_eq!(row["timeout"], "12m");
+    assert_eq!(row["timeout_s"], 720);
+    assert!(row["elapsed_s"].is_u64());
+    assert!(row["watcher_pid"].is_u64());
+    assert!(row.get("age").is_none());
+    wait_ok(&env, &["wait", "cancel", "--all"]);
+}
+
+#[test]
+fn lost_watch_keeps_elapsed_and_recorded_checkin_limit() {
+    // Keepalive on with a provider TTL records no limit; off falls back to 30m.
+    for (switch, timeout, timeout_s) in [
+        ("false", serde_json::json!("30m"), serde_json::json!(1800)),
+        ("true", serde_json::Value::Null, serde_json::Value::Null),
+    ] {
+        let env = Env::new();
+        register_calling_agent(&env);
+        wait_ok(&env, &["config", "set", "harness.cache_keepalive", switch]);
+        wait_ok(
+            &env,
+            &["config", "set", "harness.prompt_cache_ttl.claude", "1h"],
+        );
+        let armed = agent_wait(&env)
+            .env("RIMZ_BIN", "/bin/true")
+            .args(["wait", "--check", "false", "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            armed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&armed.stderr)
+        );
+        let rows: serde_json::Value =
+            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        assert_eq!(rows[0]["state"], "lost");
+        assert!(rows[0]["elapsed_s"].is_u64());
+        assert_eq!(rows[0]["timeout"], timeout, "keepalive {switch}");
+        assert_eq!(rows[0]["timeout_s"], timeout_s, "keepalive {switch}");
+        assert!(rows[0].get("watcher_pid").is_none());
+    }
+}
+
+#[test]
+fn loop_clock_wait_does_not_expose_check_guard_timeout_as_budget() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    let armed = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "clock",
+            "--wait",
+            "@planner",
+            "--every",
+            "1m",
+            "--check",
+            "false",
+            "--timeout",
+            "2s",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        armed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&armed.stderr)
+    );
+    let rows: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    assert_eq!(rows[0]["type"], "schedule");
+    assert_eq!(rows[0]["state"], "waiting");
+    for key in ["elapsed", "elapsed_s", "timeout", "timeout_s"] {
+        assert_eq!(rows[0].get(key), Some(&serde_json::Value::Null));
+    }
+}
+
+#[test]
 fn wait_delay_arms_instance_for_the_calling_agent() {
     let env = Env::new();
     register_calling_agent_with_launch(
@@ -77,6 +174,27 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     assert!(stdout.starts_with("armed wait-"), "{stdout}");
     assert!(stdout.contains("in 5m"), "{stdout}");
     assert!(stdout.contains("→ @planner"), "{stdout}");
+    assert!(!stdout.lines().next().unwrap().contains("(timeout"));
+    let listed = wait_ok(&env, &["wait", "list"]);
+    assert_eq!(
+        listed
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        [
+            "NAME", "TYPE", "STATE", "TARGET", "ELAPSED", "TIMEOUT", "TRIGGER"
+        ]
+    );
+    let rows: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+    assert_eq!(rows[0]["type"], "timer");
+    assert_eq!(rows[0]["state"], "pending");
+    assert_eq!(rows[0]["timeout"], "5m");
+    assert_eq!(rows[0]["timeout_s"], 300);
+    assert!(rows[0]["elapsed_s"].is_u64());
+    assert!(rows[0].get("watcher_pid").is_none());
     let tasks = wait_instances(&env);
     assert_eq!(tasks.0.len(), 1);
     let (name, entry) = tasks.0.iter().next().unwrap();
@@ -223,6 +341,11 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     let rows: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("wait list JSON");
     assert_eq!(rows.as_array().expect("wait rows").len(), 1);
     assert_eq!(rows[0]["name"], name);
+    assert_eq!(rows[0]["type"], "signal");
+    assert_eq!(rows[0]["state"], "waiting");
+    for key in ["elapsed", "elapsed_s", "timeout", "timeout_s"] {
+        assert_eq!(rows[0].get(key), Some(&serde_json::Value::Null));
+    }
     assert!(rows[0].get("dir").is_none());
 
     let canceled = agent_wait(&env)
@@ -300,10 +423,11 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
     let receipt = wait_ok(&env, &["wait", "--pid", &pid, "--timeout", "1s", "--json"]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     assert_eq!(receipt["trigger"], format!("pid {pid}"));
-    assert_eq!(receipt["trigger"], receipt["pending"][0]["trigger"]);
+    assert_eq!(receipt["pending"][0]["type"], "pid");
+    assert_eq!(receipt["pending"][0]["trigger"], pid);
     let listed: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
-    assert_eq!(listed[0]["trigger"], receipt["trigger"]);
+    assert_eq!(listed[0]["trigger"], pid);
     let tasks = wait_instances(&env);
     let entry = &tasks.0[receipt["name"].as_str().unwrap()];
     assert_eq!(
@@ -435,7 +559,8 @@ fn wait_check_polls_until_the_command_succeeds_then_retires() {
     let receipt: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["wait", "--check", &check, "--json"])).unwrap();
     assert_eq!(receipt["trigger"], format!("check: {check}"));
-    assert_eq!(receipt["trigger"], receipt["pending"][0]["trigger"]);
+    assert_eq!(receipt["pending"][0]["type"], "check");
+    assert_eq!(receipt["pending"][0]["trigger"], check);
     let tasks = wait_instances(&env);
     let entry = &tasks.0[receipt["name"].as_str().unwrap()];
     assert_eq!(
@@ -490,6 +615,7 @@ fn wait_check_on_fail_checks_in_with_still_not_met() {
     let checkin = wait_for_wait_messages(&env, 1);
     let text = &checkin[0].text;
     assert!(text.contains("\nstill not met after "), "{text}");
+    assert!(text.contains(" · still watching"), "{text}");
     assert!(text.contains("Stop it: rimz wait cancel wait-"), "{text}");
     assert!(!text.contains("output"), "{text}");
     assert_eq!(wait_instances(&env).0.len(), 1);
@@ -585,6 +711,8 @@ fn wait_file_fires_on_any_change_including_creation() {
     let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let path = canonical(&dir).join("app.log");
     assert_eq!(receipt["trigger"], format!("file: {}", path.display()));
+    assert_eq!(receipt["pending"][0]["type"], "file");
+    assert_eq!(receipt["pending"][0]["trigger"], path.display().to_string());
     let tasks = wait_instances(&env);
     assert_eq!(
         tasks.0[receipt["name"].as_str().unwrap()].watch,
@@ -637,6 +765,11 @@ fn wait_file_grep_fires_only_on_a_line_after_the_arm_point() {
     ))
     .unwrap();
     assert_eq!(receipt["trigger"], format!("file: {file} grep: listening"));
+    assert_eq!(receipt["pending"][0]["type"], "file");
+    assert_eq!(
+        receipt["pending"][0]["trigger"],
+        format!("{file} grep: listening")
+    );
     let append = |text: &str| {
         use std::io::Write;
         std::fs::OpenOptions::new()
@@ -1085,6 +1218,12 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
         let name = receipt["name"].as_str().unwrap();
         let messages = wait_for_wait_messages(&env, 1);
         let notice = &messages[0];
+        let listed: serde_json::Value =
+            serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
+        assert_eq!(listed[0]["state"], "watching");
+        assert!(
+            listed[0]["elapsed_s"].as_u64().unwrap() >= listed[0]["timeout_s"].as_u64().unwrap()
+        );
         assert!(
             notice.text.contains("still running after"),
             "--on {on}: {}",
@@ -1462,6 +1601,14 @@ fn wait_cancel_all_stops_command_groups_and_prints_pending() {
 
 #[test]
 fn wait_receipts_and_list_share_pending_rows() {
+    let stable_rows = |mut rows: serde_json::Value| {
+        for row in rows.as_array_mut().unwrap() {
+            let row = row.as_object_mut().unwrap();
+            row.remove("elapsed");
+            row.remove("elapsed_s");
+        }
+        rows
+    };
     let env = Env::new();
     register_calling_agent(&env);
     let first = wait_ok(&env, &["wait", "--in", "5m", "--json"]);
@@ -1472,7 +1619,7 @@ fn wait_receipts_and_list_share_pending_rows() {
     let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
     assert_eq!(first["pending"].as_array().unwrap().len(), 1);
     assert_eq!(second["pending"].as_array().unwrap().len(), 2);
-    assert_eq!(second["pending"], listed);
+    assert_eq!(stable_rows(second["pending"].clone()), stable_rows(listed));
     wait_ok(&env, &["loop", "disable", first["name"].as_str().unwrap()]);
     wait_ok(
         &env,
@@ -1493,13 +1640,16 @@ fn wait_receipts_and_list_share_pending_rows() {
             .unwrap()["state"],
         "disabled"
     );
+    let paused = held
+        .iter()
+        .find(|row| row["name"] == second["name"])
+        .unwrap();
+    assert_eq!(paused["state"], "paused");
     assert!(
-        held.iter()
-            .find(|row| row["name"] == second["name"])
-            .unwrap()["state"]
+        paused["trigger"]
             .as_str()
             .unwrap()
-            .starts_with("paused")
+            .contains(" · resumes in ")
     );
     let canceled = wait_ok(
         &env,
@@ -1511,8 +1661,8 @@ fn wait_receipts_and_list_share_pending_rows() {
     assert_eq!(canceled["pending"][0]["name"], second["name"]);
     let listed = wait_ok(&env, &["wait", "list", "--json"]);
     assert_eq!(
-        canceled["pending"],
-        serde_json::from_str::<serde_json::Value>(&listed).unwrap()
+        stable_rows(canceled["pending"].clone()),
+        stable_rows(serde_json::from_str::<serde_json::Value>(&listed).unwrap())
     );
     let human = wait_ok(&env, &["wait", "--in", "15m"]);
     assert!(human.starts_with("armed wait-"), "{human}");

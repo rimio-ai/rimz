@@ -90,6 +90,13 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         unreachable!("validate_shape requires exactly one wait trigger")
     };
+    let timeout = match &trigger {
+        DeliveryTrigger::Watch {
+            timeout: Some(timeout),
+            ..
+        } => format!(" (timeout {})", duration_label(*timeout)),
+        _ => String::new(),
+    };
     let ArmOutcome::Armed { name, .. } = arm_delivery(
         &ctx.workspace,
         DeliverySpec {
@@ -117,7 +124,11 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         });
     }
     let mut out = super::super::render::out();
-    writeln!(out, "armed {name}: {description} → {}", target.handle)?;
+    writeln!(
+        out,
+        "armed {name}: {description} → {}{timeout}",
+        target.handle
+    )?;
     list::write_rows(&mut out, pending)
 }
 

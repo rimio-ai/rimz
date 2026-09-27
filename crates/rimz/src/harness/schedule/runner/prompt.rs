@@ -20,9 +20,17 @@ pub(super) fn compose_wait(
     note: &str,
     now: Timestamp,
 ) -> String {
+    let checkin = match &evidence {
+        Evidence::Signal(signal) => signal
+            .watch
+            .as_ref()
+            .is_some_and(|watch| !watch.verdict.is_terminal()),
+        _ => false,
+    };
+    let continuation = if checkin { " · still watching" } else { "" };
     let mut body = String::new();
     body.push_str(&wait_line(task, meta, &evidence));
-    if let Some(verdict) = verdict_line(task, &evidence, meta, now, name) {
+    if let Some(verdict) = verdict_line(task, &evidence, meta, now, name, continuation) {
         body.push('\n');
         body.push_str(&verdict);
     } else {
@@ -36,12 +44,7 @@ pub(super) fn compose_wait(
         payload.insert("signal".to_owned(), Value::String(signal.name.to_string()));
         body.push_str(&Value::Object(payload).to_string());
     }
-    if let Evidence::Signal(signal) = &evidence
-        && signal
-            .watch
-            .as_ref()
-            .is_some_and(|watch| !watch.verdict.is_terminal())
-    {
+    if checkin {
         body.push_str(&format!("\n\nStop it: rimz wait cancel {name}"));
         if let Some(delay) = &task.timeout {
             body.push_str(&format!("\nAnother check-in: rimz wait --in {delay}"));
@@ -76,6 +79,7 @@ fn verdict_line(
     meta: Option<&WaitMeta>,
     now: Timestamp,
     name: &str,
+    continuation: &str,
 ) -> Option<String> {
     let mut verdict = match evidence {
         Evidence::Signal(signal) => match &signal.watch {
@@ -95,6 +99,7 @@ fn verdict_line(
         Evidence::Scheduled if meta.is_some_and(|meta| meta.delay.is_some()) => return None,
         Evidence::Scheduled => "fired".to_owned(),
     };
+    verdict.push_str(continuation);
     if let Evidence::Signal(signal) = evidence
         && let Some(watch) = &signal.watch
         && let Some(path) = &watch.output_path
