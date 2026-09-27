@@ -80,6 +80,8 @@ struct WaitArgs {
     timeout: Option<Duration>,
     #[arg(long)]
     json: bool,
+    // Legacy `--` words, captured only so validate_shape can refuse them with the
+    // `--run` fix. Remove once the skills patch is applied and habits have moved.
     #[arg(last = true, hide = true, value_name = "COMMAND")]
     command: Vec<String>,
 }
