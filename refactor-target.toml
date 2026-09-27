@@ -79,7 +79,8 @@ path = "crates/rimz/src/lsp"
 # Launch and doctor share per-server validation and marker selection.
 # CrashCause, shared spawn/ownership, and initialization parameters serve doctor probes.
 # Doctor exposes the startup check entry, result, and outcome through broker::probe.
-surface-budget = 106
+# Pass 26a: internal helpers narrowed; ledger reopens after 30 scoped commits.
+surface-budget = 80
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -224,7 +225,8 @@ upward-dependencies = [
 # effective::teams shares the machine fallback between producer lanes and the idle-compaction helper.
 # LspServerKind shares the configured server arm with admission, broker, registry, and status.
 # Watch kinds and bare subjects serve type-led wait listings.
-surface-budget = 171
+# Pass 26a: tightened config surface; config/lsp reopens after 30 scoped commits.
+surface-budget = 168
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -4115,3 +4117,68 @@ reason = "Field type of UiState::gate_notice, so it follows the field to pane re
 kind = "guard"
 key = "$0.root_class!=RootClass::Repo"
 reason = "Four sites turn one workspace-root fact into three different outcomes: channel.rs:145 returns an empty channel set, cli/gc.rs:324 reports WorktreeSweepStatus::Skipped, cli/worktree.rs:117 and cli/agents_cmd/resume.rs:183 bail with their own message (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::render"
+reason = "Product text and inline snapshots stay together in the domain (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::render_outcome"
+reason = "Product outcome text and inline snapshots stay together in the domain (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::outcome_json"
+reason = "Product JSON contract and its tests stay in the domain (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::check::Report::render"
+reason = "Anchor report text and inline snapshots stay together in the domain (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "cli::lsp::attach"
+reason = "Attach polling keeps its own exit semantics and output cadence (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "cli::lsp_admission::admit"
+reason = "Launch admission polling has different exit semantics and output cadence from attach (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::server::Server"
+reason = "Drop stops the server and descendants; RAII cleanup is load-bearing (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::registry::live_server_names"
+reason = "The launch-plan boundary should not map registry entries itself (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::registry::stop_checkout"
+reason = "The reason is data: team completion and checkout removal supply different stop reasons (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::DocumentKey"
+reason = "Broker already depends on query error vocabulary, so keeping document identity here adds no edge (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::query::file_path"
+reason = "Broker already depends on query error vocabulary, so keeping URI conversion here adds no edge (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::broker::initialize_and_run"
+reason = "Keep initializationOptions and capabilities overrides after initialize_params (pass 26a)."
+
+[[verdict]]
+kind = "item"
+key = "lsp::admission::RequiredDecision"
+reason = "Queue outcome remains distinct from policy and the memory fit predicate (pass 26a)."
