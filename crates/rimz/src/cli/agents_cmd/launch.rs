@@ -338,7 +338,6 @@ pub(super) fn launch_layout(
             session_name: workspace.session_name.clone(),
             cwd: launch.cwd.clone(),
             branch: launch.branch.clone(),
-            channel: room_channel.clone(),
             description: args.launch.cohort.description.clone(),
         },
     )?;
@@ -583,7 +582,6 @@ fn launch_resume_layout(
             session_name: workspace.session_name.clone(),
             cwd: cwd.clone(),
             branch: None,
-            channel: channel.clone(),
             description: None,
         },
     )?;

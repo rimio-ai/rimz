@@ -145,7 +145,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             session_name: workspace.session_name.clone(),
             cwd: seed.cwd.clone(),
             branch: None,
-            channel: channel.clone(),
             description: None,
         },
     )?;

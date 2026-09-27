@@ -603,7 +603,6 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
                 session_name: "rimz-test".to_owned(),
                 cwd: live,
                 branch: None,
-                channel: None,
                 description: None,
             },
         )

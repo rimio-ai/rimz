@@ -724,7 +724,6 @@ fn execute_attempt(
             session_name: prepared.workspace.session_name.clone(),
             cwd: prepared.launch.cwd.clone(),
             branch: prepared.launch.branch.clone(),
-            channel: prepared.room_channel.clone(),
             description: request.description.clone(),
         },
     )?;

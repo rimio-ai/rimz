@@ -93,7 +93,6 @@ pub struct AgentLaunchScope {
     pub session_name: String,
     pub cwd: PathBuf,
     pub branch: Option<String>,
-    pub channel: Option<String>,
     pub description: Option<String>,
 }
 
@@ -354,7 +353,6 @@ impl Store {
                         &scope.session_name,
                         &scope.cwd,
                         scope.branch.as_deref(),
-                        scope.channel.as_deref(),
                         scope.description.as_deref(),
                         None,
                     )
@@ -398,7 +396,6 @@ impl Store {
                 &scope.session_name,
                 &scope.cwd,
                 scope.branch.as_deref(),
-                scope.channel.as_deref(),
                 None,
                 None,
             ))
@@ -420,7 +417,6 @@ impl Store {
                 AgentLaunchState::Bound,
                 session_name,
                 cwd,
-                None,
                 None,
                 None,
                 Some(pane_id),
@@ -480,7 +476,6 @@ impl Store {
                 None,
                 None,
                 None,
-                None,
             ))
         })
     }
@@ -493,17 +488,12 @@ impl Store {
         session_name: &str,
         cwd: &Path,
         branch: Option<&str>,
-        scope_channel: Option<&str>,
         description: Option<&str>,
         pane_id: Option<&crate::ids::PaneId>,
     ) -> EventEnvelope {
         let runtime_owner = pane_id.map(|_| {
             runtime::current_process_owner(RuntimeOwnerKind::Agent, identity.agent_id.as_str())
         });
-        let mut launch = identity.launch.clone();
-        launch.channel = launch
-            .channel
-            .or_else(|| scope_channel.map(ToOwned::to_owned));
         EventEnvelope::agent_launched(
             self.inner.paths.workspace_id.clone(),
             session_name,
@@ -513,7 +503,7 @@ impl Store {
                 launch_id: Some(identity.agent_id.clone()),
                 agent_name: identity.name.clone(),
                 agent_name_explicit: identity.name_explicit,
-                launch,
+                launch: identity.launch.clone(),
                 state,
                 run_id: identity.run_id.clone(),
                 pane_id: pane_id.cloned(),

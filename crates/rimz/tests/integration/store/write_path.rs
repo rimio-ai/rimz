@@ -281,7 +281,6 @@ fn launch_allocation_reserves_ended_name_until_retention_prunes_it() {
         session_name: "rimz-test".to_owned(),
         cwd: h.store.paths().root.clone(),
         branch: Some("main".to_owned()),
-        channel: None,
         description: None,
     };
     let batch = h
