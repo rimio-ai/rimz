@@ -377,6 +377,11 @@ mod tests {
         let entry = serde_json::from_value(serde_json::json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": "ready", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []})).unwrap();
         let (router, events) = mpsc::channel();
         let shared = Arc::new(Shared {
+            settings: Arc::new(Mutex::new(crate::lsp::broker::Settings {
+                kind: crate::config::LspServerKind::Generic,
+                options: Value::Null,
+                editor_check_on_save: None,
+            })),
             router: router.clone(),
             model: Mutex::new(Model {
                 entry,
