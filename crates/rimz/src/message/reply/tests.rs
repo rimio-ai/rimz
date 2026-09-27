@@ -640,6 +640,7 @@ fn wait_message(
         DeliveryGate::Done,
     )
     .with_sender(MessageSender::Agent {
+        agent_id: None,
         kind: sender.kind.clone(),
         name: sender.name.clone(),
         profile: None,

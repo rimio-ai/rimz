@@ -213,6 +213,7 @@ pub(crate) fn sender_for(
         return MessageSender::Human;
     };
     MessageSender::Agent {
+        agent_id: caller.launch_id.clone(),
         kind: caller.kind.clone(),
         name: caller.name.clone(),
         profile: caller.profile.clone(),
@@ -224,11 +225,34 @@ pub(crate) fn sender_for(
 pub(crate) fn resolve_caller(
     store: &rimz::Store,
 ) -> Result<Option<rimz::harness::ancestry::CallerIdentity>> {
-    if let Some(caller) = rimz::harness::ancestry::CallerIdentity::from_env() {
-        return Ok(Some(caller));
+    let caller = rimz::harness::ancestry::CallerIdentity::from_env();
+    if caller
+        .as_ref()
+        .is_some_and(|caller| caller.launch_id.is_some())
+    {
+        return Ok(caller);
     }
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    Ok(rimz::harness::ancestry::CallerIdentity::from_process_ancestry(&projection.agents))
+    Ok(resolve_caller_from(&projection.agents, caller))
+}
+
+fn resolve_caller_from(
+    agents: &[rimz::agents::AgentState],
+    caller: Option<rimz::harness::ancestry::CallerIdentity>,
+) -> Option<rimz::harness::ancestry::CallerIdentity> {
+    let mut caller = caller
+        .or_else(|| rimz::harness::ancestry::CallerIdentity::from_process_ancestry(agents))?;
+    if caller.launch_id.is_none()
+        && let Ok(agent) = rimz::harness::ancestry::resolve_launch_caller(agents, &caller)
+    {
+        caller.launch_id = Some(
+            agent
+                .launch_id
+                .clone()
+                .unwrap_or_else(|| agent.agent_id.clone()),
+        );
+    }
+    Some(caller)
 }
 
 pub(crate) fn reply_wait(wait: Option<Option<Duration>>, agent_caller: bool) -> ReplyWait {
@@ -494,6 +518,90 @@ fn unescape(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_sender_identity(
+        agent: rimz::agents::AgentState,
+        caller: Option<rimz::harness::ancestry::CallerIdentity>,
+    ) {
+        use rimz::harness::ancestry::{LaunchAncestry, resolve_launch_ancestry};
+        let Some(LaunchAncestry::Peer {
+            launched_by: Some(launcher),
+            ..
+        }) = resolve_launch_ancestry(Some(&agent), false, 10).unwrap()
+        else {
+            panic!("peer ancestry");
+        };
+        let caller = resolve_caller_from(&[agent], caller).expect("caller");
+        let sender = sender_for(Some(&caller), Some("work"), false);
+        let encoded = serde_json::to_value(&sender).unwrap();
+        assert_eq!(
+            encoded["agent_id"],
+            serde_json::to_value(&launcher.agent_id).unwrap()
+        );
+        assert_eq!(
+            encoded["kind"],
+            serde_json::to_value(&launcher.kind).unwrap()
+        );
+        assert_eq!(sender.render(), "@launcher#work");
+        assert_eq!(sender_for(Some(&caller), None, true), MessageSender::System);
+        assert_eq!(sender_for(None, None, false), MessageSender::Human);
+    }
+
+    #[test]
+    fn sender_identity_matches_launch_ancestry() {
+        let mut agent =
+            rimz::testkit::agent_state("claude", "session", jiff::Timestamp::UNIX_EPOCH);
+        agent.launch_id = Some("launch-parent".into());
+        agent.name = Some("launcher".to_owned());
+        let caller = rimz::harness::ancestry::CallerIdentity {
+            kind: agent.kind.clone(),
+            launch_id: agent.launch_id.clone(),
+            pane_id: None,
+            name: agent.name.clone(),
+            profile: None,
+            role: None,
+        };
+        assert_sender_identity(agent, Some(caller));
+    }
+
+    #[test]
+    fn legacy_sender_identity_matches_launch_ancestry() {
+        for launch_id in [None, Some("launch-parent".into())] {
+            let mut agent =
+                rimz::testkit::agent_state("claude", "session", jiff::Timestamp::UNIX_EPOCH);
+            agent.launch_id = launch_id;
+            agent.name = Some("launcher".to_owned());
+            let pane_id = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, "%1");
+            agent.pane = Some(rimz::pane::PaneRef::from_id(pane_id.clone()));
+            let caller = rimz::harness::ancestry::CallerIdentity {
+                kind: agent.kind.clone(),
+                launch_id: None,
+                pane_id: Some(pane_id),
+                name: agent.name.clone(),
+                profile: None,
+                role: None,
+            };
+            assert_sender_identity(agent, Some(caller));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_ancestry_sender_identity_matches_launch_ancestry() {
+        for launch_id in [None, Some("launch-parent".into())] {
+            let mut agent =
+                rimz::testkit::agent_state("claude", "session", jiff::Timestamp::UNIX_EPOCH);
+            agent.launch_id = launch_id;
+            agent.name = Some("launcher".to_owned());
+            agent.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "parent",
+                std::os::unix::process::parent_id(),
+                None,
+            ));
+            assert_sender_identity(agent, None);
+        }
+    }
 
     #[cfg(unix)]
     #[test]

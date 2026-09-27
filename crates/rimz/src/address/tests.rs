@@ -241,6 +241,7 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
     let peers = addressable_agents(&snapshot);
     assert_eq!(agent_handle(peers[0], &peers, false), "@coder");
     let sender = MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("codex"),
         name: Some("coder-agent".to_owned()),
         profile: None,
@@ -612,6 +613,7 @@ fn message_header_parser_round_trips_attributed_senders() {
         ),
     ] {
         let sender = MessageSender::Agent {
+            agent_id: None,
             kind: AgentKind::new_unchecked("claude"),
             name: name.map(str::to_owned),
             profile: profile.map(str::to_owned),
@@ -633,6 +635,7 @@ fn message_header_parser_round_trips_attributed_senders() {
         );
     }
     let sender = MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("codex"),
         name: None,
         profile: None,
@@ -1003,6 +1006,7 @@ fn message_header_uses_live_handle_and_channel_only_when_crossing_channels() {
     snapshot.agents = vec![sender, target];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::store::message::MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("claude"),
         name: Some("lucid-atlas".to_owned()),
         profile: None,
@@ -1030,6 +1034,7 @@ fn message_header_uses_explicit_live_handle() {
     snapshot.agents = vec![sender, target];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::store::message::MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("claude"),
         name: Some("writer".to_owned()),
         profile: None,
@@ -1077,6 +1082,7 @@ fn recipient_channel_prefers_bound_then_pane_then_scope() {
 fn message_header_uses_recipient_channel_for_same_lane_fresh_pane() {
     let target = fresh_pane("codex", "terminal_9");
     let sender = MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("claude"),
         name: None,
         profile: None,
@@ -1109,6 +1115,7 @@ fn message_header_live_handle_disambiguates_same_kind_peers() {
     snapshot.agents = vec![one, two];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::store::message::MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("claude"),
         name: Some("bright-lark".to_owned()),
         profile: None,
@@ -1126,6 +1133,7 @@ fn message_header_live_handle_disambiguates_same_kind_peers() {
 fn message_header_falls_back_to_stored_identity_when_sender_is_absent() {
     let peers: Vec<&AgentState> = Vec::new();
     let sender = crate::store::message::MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("codex"),
         name: Some("lucid-atlas".to_owned()),
         profile: Some("reviewer".to_owned()),
@@ -1155,6 +1163,7 @@ fn message_header_uses_live_petname_and_profile_label() {
     snapshot.agents = vec![other_planner, live];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::store::message::MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("claude"),
         name: Some("calm-fox".to_owned()),
         profile: Some("stale-profile".to_owned()),

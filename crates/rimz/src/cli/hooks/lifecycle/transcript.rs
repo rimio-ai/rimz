@@ -380,6 +380,7 @@ fn launched_parent_handle(
 ) -> Option<String> {
     let sender = match rimz::address::launched_parent(&snapshot.agents, child) {
         Some(parent) => rimz::store::message::MessageSender::Agent {
+            agent_id: None,
             kind: parent.kind.clone(),
             name: parent.name.clone(),
             profile: parent.profile.clone(),
@@ -387,6 +388,7 @@ fn launched_parent_handle(
             channel: parent.channel(),
         },
         None => rimz::store::message::MessageSender::Agent {
+            agent_id: None,
             kind: child.parent_agent_kind.clone()?,
             name: None,
             profile: None,

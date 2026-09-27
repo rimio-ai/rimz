@@ -1120,6 +1120,7 @@ mod tests {
         agent.context = Some(context);
         let snapshot = SidebarSnapshot::build_with_agents(workspace_id(), vec![agent], now());
         let sender = MessageSender::Agent {
+            agent_id: None,
             kind: AgentKind::new_unchecked("claude"),
             name: Some("coder".to_owned()),
             profile: None,

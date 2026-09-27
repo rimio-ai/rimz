@@ -909,6 +909,7 @@ fn in_flight_turn_openers_keep_origin_causality_and_spend() {
     };
     use rimz::transcript::TranscriptKind;
     let agent_sender = MessageSender::Agent {
+        agent_id: None,
         kind: rimz::ids::AgentKind::new_unchecked("codex"),
         name: None,
         profile: None,

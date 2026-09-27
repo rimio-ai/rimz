@@ -504,6 +504,7 @@ fn assert_later_human_turn_does_not_confirm_launcher_steer(prompt: Option<&str>)
         message.gate = DeliveryGate::Any;
         message.text = "launcher correction during the human turn".to_owned();
         message.sender = MessageSender::Agent {
+            agent_id: None,
             kind: AgentKind::new_unchecked("codex"),
             name: Some("launcher".to_owned()),
             profile: None,
@@ -582,6 +583,7 @@ fn correlated_ack_aligns_headered_and_mixed_batches() {
         ),
         (
             MessageSender::Agent {
+                agent_id: None,
                 kind: AgentKind::new_unchecked("codex"),
                 name: None,
                 profile: None,

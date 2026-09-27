@@ -630,6 +630,7 @@ fn only_interactive_human_delivery_waives_a_budget() {
     assert!(!is_budget_waiving_delivery(&message));
     message.gate = DeliveryGate::Done;
     message.sender = MessageSender::Agent {
+        agent_id: None,
         kind: state.kind,
         name: None,
         profile: None,

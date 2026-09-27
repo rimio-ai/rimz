@@ -7,6 +7,19 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
+fn agent_sender_codec_preserves_optional_identity_without_changing_headers() {
+    let legacy = serde_json::json!({"origin": "agent", "kind": "claude", "name": "launcher"});
+    let sender: MessageSender = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&sender).unwrap(), legacy);
+    assert_eq!(sender.render(), "@launcher");
+    let mut identified = legacy;
+    identified["agent_id"] = serde_json::json!("launch-parent");
+    let sender: MessageSender = serde_json::from_value(identified.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&sender).unwrap(), identified);
+    assert_eq!(sender.render(), "@launcher");
+}
+
+#[test]
 fn submitted_sections_cover_every_sender_and_body() {
     let mut cases = vec![
         (MessageSender::Human, SectionOrigin::Human),
@@ -134,6 +147,7 @@ fn conversation_senders_exclude_system_traffic() {
     assert!(MessageSender::Human.is_conversation());
     assert!(
         MessageSender::Agent {
+            agent_id: None,
             kind: AgentKind::new_unchecked("codex"),
             name: None,
             profile: None,
@@ -408,6 +422,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     .with_address(Some("@coder#docs".to_owned()))
     .with_channel(Some("docs".to_owned()))
     .with_sender(MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("claude"),
         name: Some("lucid-atlas".to_owned()),
         profile: Some("planner".to_owned()),
@@ -702,6 +717,7 @@ fn sender_render_uses_attributed_address_precedence() {
     let cases = [
         (
             MessageSender::Agent {
+                agent_id: None,
                 kind: AgentKind::new_unchecked("claude"),
                 name: None,
                 profile: Some("planner".to_owned()),
@@ -727,6 +743,7 @@ fn sender_render_uses_attributed_address_precedence() {
         ),
         (
             MessageSender::Agent {
+                agent_id: None,
                 kind: AgentKind::new_unchecked("claude"),
                 name: Some("lucid-atlas".to_owned()),
                 profile: Some("planner".to_owned()),
@@ -737,6 +754,7 @@ fn sender_render_uses_attributed_address_precedence() {
         ),
         (
             MessageSender::Agent {
+                agent_id: None,
                 kind: AgentKind::new_unchecked("claude"),
                 name: Some("lucid-atlas".to_owned()),
                 profile: Some("planner".to_owned()),
@@ -747,6 +765,7 @@ fn sender_render_uses_attributed_address_precedence() {
         ),
         (
             MessageSender::Agent {
+                agent_id: None,
                 kind: AgentKind::new_unchecked("codex"),
                 name: None,
                 profile: None,
@@ -1174,6 +1193,7 @@ fn delivery_message(
 
 pub(crate) fn agent_sender(role: &str, channel: Option<&str>) -> MessageSender {
     MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("codex"),
         name: None,
         profile: None,
@@ -1330,6 +1350,7 @@ fn labeled_agent_batch_aligns_and_strips_labels() {
         DeliveryGate::Done,
     );
     first.sender = MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("claude"),
         name: Some("calm-fox".to_owned()),
         profile: Some("planner".to_owned()),

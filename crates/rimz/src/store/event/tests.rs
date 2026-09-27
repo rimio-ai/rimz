@@ -53,6 +53,7 @@ fn message_record() -> MessageRecord {
     message.address = Some("@reviewer#docs".to_owned());
     message.channel = Some("docs".to_owned());
     message.sender = MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("codex"),
         name: Some("swift-otter".to_owned()),
         profile: Some("codex-coder".to_owned()),

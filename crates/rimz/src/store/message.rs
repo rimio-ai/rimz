@@ -33,6 +33,8 @@ pub enum MessageSender {
     Agent {
         kind: AgentKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<AgentSessionId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
