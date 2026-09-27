@@ -4,7 +4,7 @@ use super::*;
 use crate::lsp::registry::{self, Entry, State};
 use serde_json::json;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// A qualifier matching more symbols than this skips the member fallback: each match costs an
@@ -18,16 +18,22 @@ fn bounded_map<T: Sync, R: Send, E: Send>(
     map: impl Fn(&T) -> std::result::Result<R, E> + Sync,
 ) -> std::result::Result<Vec<R>, E> {
     let next = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
     let results = Mutex::new((0..items.len()).map(|_| None).collect::<Vec<_>>());
     std::thread::scope(|scope| {
         for _ in 0..QUERY_WORKERS.min(items.len()) {
             scope.spawn(|| {
-                loop {
+                // After an error, claim nothing new: every lower index is already claimed, so the
+                // first error in input order still completes and wins.
+                while !failed.load(Ordering::Relaxed) {
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(item) = items.get(index) else {
                         break;
                     };
                     let result = map(item);
+                    if result.is_err() {
+                        failed.store(true, Ordering::Relaxed);
+                    }
                     results
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)[index] = Some(result);
