@@ -41,19 +41,19 @@ enum Command {
     /// Find a definition by position or exact symbol name.
     Def(Query),
     /// Find references by position or exact symbol name.
-    Refs(Query),
+    Refs(ListQuery),
     /// Show type and documentation at a position or symbol.
     Hover(Query),
     /// Find implementations of a trait or interface.
-    Impl(Query),
+    Impl(ListQuery),
     /// Find functions calling this symbol.
-    Callers(CallHierarchy),
+    Callers(ListQuery),
     /// Find functions called by this symbol.
-    Callees(CallHierarchy),
+    Callees(ListQuery),
     /// Show a file's outline.
     Symbols(Query),
     /// Search workspace symbols.
-    Find(Query),
+    Find(ListQuery),
     /// Check every path::symbol anchor in a Markdown file against the outline.
     Check {
         file: PathBuf,
@@ -98,17 +98,25 @@ struct Query {
 }
 
 #[derive(Debug, Args)]
-struct CallHierarchy {
+struct ListQuery {
     #[command(flatten)]
     query: Query,
-    /// Include callers/callees outside the checkout.
+    /// Include results outside the checkout.
     #[arg(long)]
     external: bool,
 }
 
 pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     let scope = match &args.command {
-        Command::Callers(args) | Command::Callees(args) if args.external => query::Scope::External,
+        Command::Refs(args)
+        | Command::Impl(args)
+        | Command::Callers(args)
+        | Command::Callees(args)
+        | Command::Find(args)
+            if args.external =>
+        {
+            query::Scope::External
+        }
         _ => query::Scope::Checkout,
     };
     let (verb, args) = match args.command {
@@ -146,13 +154,13 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             all,
         } => return stop(checkout, server, all, globals),
         Command::Def(args) => (Verb::Def, args),
-        Command::Refs(args) => (Verb::Refs, args),
+        Command::Refs(args) => (Verb::Refs, args.query),
         Command::Hover(args) => (Verb::Hover, args),
-        Command::Impl(args) => (Verb::Impl, args),
+        Command::Impl(args) => (Verb::Impl, args.query),
         Command::Callers(args) => (Verb::Callers, args.query),
         Command::Callees(args) => (Verb::Callees, args.query),
         Command::Symbols(args) => (Verb::Symbols, args),
-        Command::Find(args) => (Verb::Find, args),
+        Command::Find(args) => (Verb::Find, args.query),
     };
     let context = query_context(globals)?;
     let root = &context.root;

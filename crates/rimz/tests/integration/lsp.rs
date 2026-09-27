@@ -959,11 +959,18 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         .assert()
         .success()
         .stdout("[]\n");
-    for verb in ["def", "refs", "hover", "impl", "symbols", "find"] {
+    for verb in ["def", "hover", "symbols"] {
         env.rimz()
             .args(["lsp", verb, "lib.rs:1:4", "--external"])
             .assert()
             .code(2);
+    }
+    for verb in ["refs", "impl", "find"] {
+        env.rimz()
+            .args(["lsp", verb, "lib.rs:1:4", "--external"])
+            .assert()
+            .success()
+            .stdout("no results\n");
     }
     let mut owner = std::process::Command::new("sleep")
         .arg("30")
