@@ -8,7 +8,7 @@ The problem is who owns the server. A harness starts one per agent session and h
 
 ## Configure a server
 
-A server is one `[lsp.servers.<name>]` table in your per-machine `~/.rimz/config.toml`. No server is configured by default.
+A server is one `[lsp.servers.<name>]` table in your per-machine `~/.rimz/config.toml`. The recommended servers are rust-analyzer for Rust and ty for Python, one shared server per language in a checkout. No server is configured by default.
 
 Rust LSP example:
 
@@ -23,6 +23,17 @@ init-options = { checkOnSave = false, hover = { dropGlue = { enable = false } },
 `command` is an argv, not a shell line, and the executable has to be on the path of the shell that launches agents. `root-markers` decide which checkouts get this server: any listed path present at the checkout root enables it, so a repository without a `Cargo.toml` never starts `rust-analyzer`. `extensions` pick the server when a query names a file, and they decide which saved files the server is told about.
 
 The `init-options` matter for Rust. `checkOnSave = false` stops `rust-analyzer` running `cargo check` on startup and on every save: the queries expose no diagnostics, so the check would spend 57 CPU seconds and a 3.7 GB spike for nothing, and it would fight your agents' own builds for the checkout's `target/` lock. The `workspace.symbol` block makes symbol-name queries find functions, which `rust-analyzer` leaves out of workspace search by default, and lifts its 128-result cap that otherwise hides the symbol you asked for; leave `workspace.symbol.search.scope` unset, since `workspace_and_dependencies` searches dependencies instead of your code and breaks symbol-name queries. `hover.dropGlue` switches off the `needs Drop` line that `rust-analyzer` adds to a type's hover; its `Implements notable traits` line has no setting and stays. A server for another language needs no such tuning unless its defaults do work the queries never read.
+
+For Python, use ty 0.0.84 or newer. Older versions can return `no results` for files no editor holds open.
+
+```toml
+[lsp.servers.ty]
+command = ["ty", "server"]
+extensions = ["py"]
+root-markers = ["pyproject.toml", "ty.toml"]
+```
+
+If you use uv, `command = ["uvx", "ty", "server"]` works too, including a pinned token such as `ty@0.0.84`. No `init-options` are needed: ty defaults to checking only open files, avoiding diagnostic work the agent queries do not read. The server kind is detected from the command; set `kind = "ty"` for a wrapper script. `rimz lsp status --server ty` shows the detected kind.
 
 A repository can ship its own entry in its project config, so a team gets the same server without each member writing the table. Because `command` and `init-options` run and configure a process, they join the [trust hash](./security.md#project-trust): the entry stays inert until you run `rimz trust grant`. Launch warns about an untrusted entry and continues; a same-named machine entry stays in effect. A trusted project entry replaces the same-named machine entry whole, not field by field. The memory policy below stays machine-only, because a repository cannot decide how much of your machine it may take.
 
@@ -70,6 +81,8 @@ rimz lsp find Mux                            # workspace symbol search
 
 A name that matches several symbols lists the candidates instead of guessing; rerun with one of the listed qualified names or its position. A wrong qualifier lists possible names the same way, so you can repair the query in one rerun. `refs`, `impl`, `callers`, `callees`, and `find` list only results inside the checkout and end with how many were left out, if any; `--external` shows them. Add `--json` for structured output (the raw LSP result on success, an outcome and candidates for not-found or ambiguous names), and `--server <name>` when a checkout has more than one server and the file's extension does not settle it. The checkout is the one enclosing your current directory (or `--root`). Everything about targets, output, and flags is in the [reference](../reference/cli/lsp.md#queries).
 
+With ty, target Python methods by position, for example `rimz lsp def src/app.py:12:22`: a name such as `Greeter::greet` lists every same-named method as a candidate instead of resolving the class.
+
 When tracing several symbols, pass them together to the same verb rather than making one call per name; each gets a `==> TARGET <==` block, even when another target fails.
 
 Broad queries can return hundreds of locations. Lists show the first 50, with the total and remaining count whenever there are more. Add `--limit N` for a larger head or `--all` for the complete list in the selected scope. References, implementations, callers, and callees group entries by file; `find` keeps its relevance order. Checkout results come before external ones. Source snippets stop at 100 characters with `…` when shortened. JSON stays complete and cannot be combined with either limit flag.
@@ -87,7 +100,15 @@ Your editor already runs rust-analyzer for completion, navigation, and diagnosti
 | Neovim | Set `cmd = { "rimz", "lsp", "attach", "--server", "rust" }`, with `root_dir` set to the checkout; `--root` is optional. |
 | Helix | Set `language-server.rust-analyzer = { command = "rimz", args = ["lsp", "attach", "--server", "rust"] }`. |
 
-For Python, share navigation and type checking through Pyright or basedpyright, and formatting and linting through Ruff. Add the servers you use to your RimZ configuration:
+For Python, attach to the `ty` server configured above for navigation and type checking. Keep Ruff as your editor's own server for linting and formatting: Ruff does not answer the agents' navigation queries. Ruff can also be shared, but a second shared server on `py` requires `--server` on Python queries and makes `rimz lsp check` unable to choose a server for Python anchors.
+
+| Python editor | Setting |
+| --- | --- |
+| Neovim | In the ty LSP configuration, set `cmd = { "rimz", "lsp", "attach", "--server", "ty" }`, with `root_dir` set to the checkout. |
+| Helix | Set `language-server.ty = { command = "rimz", args = ["lsp", "attach", "--server", "ty"] }` and include `ty` in the Python language's `language-servers` list alongside the editor's own Ruff server. |
+| Zed | Python binary overrides have not been verified with attachment; this guide does not promise ty, Pyright, basedpyright, or Ruff attachment in Zed yet. |
+
+Pyright and basedpyright remain alternatives to ty. Choose one shared Python server per checkout; to use Pyright instead, replace the ty entry with:
 
 ```toml
 [lsp.servers.pyright]
@@ -95,23 +116,11 @@ command = ["pyright-langserver", "--stdio"]
 extensions = ["py"]
 root-markers = ["pyproject.toml", "pyrightconfig.json"]
 init-options = { python = { analysis = { typeCheckingMode = "strict" } } }
-
-[lsp.servers.ruff]
-command = ["ruff", "server"]
-extensions = ["py"]
-root-markers = ["pyproject.toml", "ruff.toml", ".ruff.toml"]
-init-options = { settings = { lineLength = 100 } }
 ```
 
-For basedpyright, use `command = ["basedpyright-langserver", "--stdio"]` and put analysis settings under `init-options.basedpyright.analysis`. The server kind is detected from the command; set `kind` explicitly for a wrapper script. `rimz lsp status --server pyright` shows the detected kind.
+For basedpyright, use `command = ["basedpyright-langserver", "--stdio"]` and put analysis settings under `init-options.basedpyright.analysis`. Use the corresponding editor LSP configuration and replace `ty` in the attachment arguments with your RimZ server name. Both kinds are detected from their commands; set `kind` explicitly for a wrapper script.
 
-| Python editor | Setting |
-| --- | --- |
-| Neovim | In the Pyright, basedpyright, or Ruff LSP configuration, set `cmd = { "rimz", "lsp", "attach", "--server", "pyright" }` (replace `pyright` with the RimZ server name), with `root_dir` set to the checkout. |
-| Helix | Set `language-server.pyright = { command = "rimz", args = ["lsp", "attach", "--server", "pyright"] }`; use the corresponding name for basedpyright or Ruff and include it in the Python language's `language-servers` list. |
-| Zed | Python binary overrides have not been verified with attachment; this guide does not promise Pyright, basedpyright, or Ruff attachment in Zed yet. |
-
-Python extensions in VS Code are outside this integration. Commands that need the editor to apply an edit or answer a server prompt, such as Pyright's organize-imports command, are unsupported. Ruff still supports formatting and code actions that return edits directly. Python cache and virtual-environment directories are not watched; after installing a package into `.venv`, run `rimz lsp stop --server pyright` (or the configured server name) so the next request starts a fresh server.
+Python extensions in VS Code are outside this integration. Commands that need the editor to apply an edit or answer a server prompt, such as Pyright's organize-imports command, are unsupported. Ruff still supports formatting and code actions that return edits directly. Python cache and virtual-environment directories are not watched; after installing a package into `.venv`, run `rimz lsp stop --server ty` (or the configured server name) so the next request starts a fresh server.
 
 For VS Code, the shim is an executable file at `~/.local/bin/rimz-lsp-rust` that runs RimZ with the attachment arguments; the command prints the path to paste into the setting. The other editors invoke RimZ directly, so `rimz` must be on their PATH. Restart the editor's language server after changing its configuration. Attachment uses the checkout reported by the editor, or the global `--root` if supplied. It joins the shared server or creates one when absent, without needing an agent launch first, under the same memory and trust policy.
 
