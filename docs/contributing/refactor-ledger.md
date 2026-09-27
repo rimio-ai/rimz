@@ -8,7 +8,7 @@ Survey at `c5edd6ff8` (2026-09-28, pass 26c), rebased onto pass 26a (`17cc18ca6`
 
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
-- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `agents/adapters/claude`, `store/writer`.
+- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `store/writer`; pass 27a closed `agents/adapters/claude`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
 - **Unjudged families:** the install shape family `PendingWrite::optional+report_files+settings_json::commit_pair+…` (`agents/adapters/{copilot,cursor}/install.rs`), newly over the finding gate; guard families `RunStatus::Completed` (four sites), `wait_for_required` (lsp, with 26a), `Isolation::Host`, and `degraded`.
@@ -28,7 +28,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/adapters` | landed pass-2 | — | — | sibling families are provider policy over shared helpers; interiors are per-adapter rows. |
 | `agents/adapters/(root)` | holds | `358688a13` | 30 | module declarations and the registry; nothing escapes `agents`. |
 | `agents/adapters/install_report` | holds | `358688a13` | 30 | `report_files` is `pub(super)` for the sibling installers. |
-| `agents/adapters/claude` | holds; landed pass-9 | `7af6d9f74` | 30 | neutral control outcomes, shared priced-record gate; remote-control trio, Stop validation and discovery stay separate. |
+| `agents/adapters/claude` | holds; landed pass-9; pass-27a | `72bd38fd1` | 30 | one ask decision and payload parser, proc-owned ancestry, three distinct home rules, child-cost fold, remote trio, and `deny_native_tool` (multi-value `--disallowedTools`, either denial order, 696a4d504). |
 | `agents/adapters/codex` | holds; landed pass-9 | `7af6d9f74` | 30 | one framed transport and handshake; rollout presence and pane-confirmation seam hold. |
 | `agents/adapters/kimi` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/qwen` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
@@ -293,6 +293,8 @@ One row per intended upward edge, `` `from` → `to` `` with an optional `to::{a
 Candidates a pass judged real but could not land, each with what unblocks it.
 
 - `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
+- `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
+- `agents/adapters/codex`: `cap_turn_error_label` and `TURN_ERROR_LABEL_MAX` copy Claude's `statusline` pair word for word; a shared helper beside `TurnErrorClass::classify_label` in `agents/context` lands with a pass owning codex or `agents/context`.
 - `config/definitions`: one load context for the seven-argument `Resolver::new` and the `SeatLoader` repack, plus one safe-name predicate (about −20 SLOC). Waits for the module's pace to drop below hot.
 - `pane::pane_is_host` → `pub(crate)` once `store/snapshot` public rustdoc stops linking it. Belongs to a `store` pass.
 - `harness/launch`: three relaunch sites in `cli/agents_cmd/{fork,restart}.rs` repeat posture prompt fields; needs a posture-aware seam `launch` may not import.
