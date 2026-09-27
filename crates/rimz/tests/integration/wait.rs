@@ -191,7 +191,7 @@ fn wait_checkin_default_yields_to_keepalive_but_explicit_timeout_wins() {
         if let Some(timeout) = explicit {
             args.extend(["--timeout", timeout]);
         }
-        args.extend(["--", "sleep", "600"]);
+        args.extend(["--run", "sleep 600"]);
         let receipt: serde_json::Value = serde_json::from_str(&wait_ok(&env, &args)).unwrap();
         let name = receipt["name"].as_str().unwrap();
         let tasks = wait_instances(&env);
