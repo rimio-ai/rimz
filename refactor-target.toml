@@ -74,7 +74,9 @@ path = "crates/rimz/src/lsp"
 # Anchor checks expose run, Report, and its exit-code and rendering methods;
 # Output::exit_code distinguishes not-found and ambiguous lookup outcomes;
 # the registry exposes attached editors, their open documents, and enclosing_checkout.
-surface-budget = 96
+# query::outcome_json (multi-target JSON) and query::ListOptions (list caps)
+# landed on separate branches; together they reopen this by one.
+surface-budget = 97
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
