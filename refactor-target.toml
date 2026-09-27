@@ -223,7 +223,8 @@ upward-dependencies = [
 # IdleCompactMode parsing, Team::idle_compact and ConfigEditor::retire_idle_compact_keys share role policy and setup retirement with consumers, replacing the old idle-span accessor/parser.
 # effective::teams shares the machine fallback between producer lanes and the idle-compaction helper.
 # LspServerKind shares the configured server arm with admission, broker, registry, and status.
-surface-budget = 169
+# Watch kinds and bare subjects serve type-led wait listings.
+surface-budget = 171
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

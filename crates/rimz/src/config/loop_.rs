@@ -193,15 +193,23 @@ impl FileMark {
 }
 
 impl WatchSpec {
-    /// The trigger text of receipts, `rimz wait list`, and loop listings.
-    pub fn describe(&self) -> String {
+    /// The `TYPE` word of `rimz wait list`.
+    pub fn kind(&self) -> &'static str {
         match self {
-            Self::Command(command) => {
-                format!("watch: {}", crate::theme::fmt::command_preview(command))
-            }
-            Self::Pid { pid } => format!("pid {pid}"),
+            Self::Command(_) => "watch",
+            Self::Pid { .. } => "pid",
+            Self::Check { .. } => "check",
+            Self::File { .. } => "file",
+        }
+    }
+
+    /// The trigger text without its kind prefix, as `rimz wait list` shows it.
+    pub fn subject(&self) -> String {
+        match self {
+            Self::Command(command) => crate::theme::fmt::command_preview(command).into_owned(),
+            Self::Pid { pid } => pid.to_string(),
             Self::Check { check, every, on } => {
-                let mut text = format!("check: {}", crate::theme::fmt::command_preview(check));
+                let mut text = crate::theme::fmt::command_preview(check).into_owned();
                 if every != "1s" {
                     text.push_str(&format!(" every {every}"));
                 }
@@ -212,13 +220,23 @@ impl WatchSpec {
             }
             Self::File { file, grep, .. } => match grep {
                 Some(grep) => format!(
-                    "file: {} grep: {}",
+                    "{} grep: {}",
                     file.display(),
                     crate::theme::fmt::command_preview(grep)
                 ),
-                None => format!("file: {}", file.display()),
+                None => file.display().to_string(),
             },
         }
+    }
+
+    /// The trigger text of receipts and loop listings.
+    pub fn describe(&self) -> String {
+        let separator = if matches!(self, Self::Pid { .. }) {
+            " "
+        } else {
+            ": "
+        };
+        format!("{}{separator}{}", self.kind(), self.subject())
     }
 
     /// The first line of the delivered wait message.
@@ -383,6 +401,64 @@ fn home_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watch_descriptions_preserve_prefixes_and_expose_subjects() {
+        let cases = [
+            (
+                WatchSpec::Command("echo hello".into()),
+                "watch",
+                "echo hello",
+                "watch: echo hello",
+            ),
+            (WatchSpec::Pid { pid: 123 }, "pid", "123", "pid 123"),
+            (
+                WatchSpec::Check {
+                    check: "false".into(),
+                    every: "1s".into(),
+                    on: CheckOn::Success,
+                },
+                "check",
+                "false",
+                "check: false",
+            ),
+            (
+                WatchSpec::Check {
+                    check: "false".into(),
+                    every: "2s".into(),
+                    on: CheckOn::Fail,
+                },
+                "check",
+                "false every 2s on fail",
+                "check: false every 2s on fail",
+            ),
+            (
+                WatchSpec::File {
+                    file: "app.log".into(),
+                    grep: None,
+                    mark: None,
+                },
+                "file",
+                "app.log",
+                "file: app.log",
+            ),
+            (
+                WatchSpec::File {
+                    file: "app.log".into(),
+                    grep: Some("ready".into()),
+                    mark: None,
+                },
+                "file",
+                "app.log grep: ready",
+                "file: app.log grep: ready",
+            ),
+        ];
+        for (spec, kind, subject, description) in cases {
+            assert_eq!(spec.describe(), description);
+            assert_eq!(spec.kind(), kind);
+            assert_eq!(spec.subject(), subject);
+        }
+    }
 
     #[test]
     fn resolve_root_expands_tilde_prefix() {
