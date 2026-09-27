@@ -1,6 +1,60 @@
 
 # cargo-vet audits file
 
+[[audits.clap]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "4.6.6 -> 4.6.7"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed production-source and manifest deltas. Library source changes are documentation-only; companion builder and derive upgrades are reviewed separately. No new executable library behavior. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.clap_builder]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "4.6.6 -> 4.6.7"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all 20 changed production files and manifests, including builder/command.rs, builder/value_parser.rs and parser/matches/matched_arg.rs. Concrete implementing types become Self without changing control flow, parsing bounds, storage or side effects. Production dependency requirements are unchanged. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.clap_complete]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "4.6.9 -> 4.6.11"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas. Zsh possible values without help now use existing escape_value consistently. Dynamic-engine diagnostics are gated by the explicit debug feature and use stderr; inspected src/macros.rs. Remaining source changes are equivalent Self substitutions. The minimum clap requirement rises to 4.6.6. No new execution or filesystem behavior. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.clap_derive]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "4.6.4 -> 4.6.7"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas, generated-code changes in derives/args.rs and derives/subcommand.rs, literal-boolean validation and unsupported attribute rejection. Opt-in deferred enum subcommands use the existing Command function-pointer mechanism; inspected eager metadata placement, update paths and Command::_build_self. Stable-feature generation remains eager. Remaining source changes are equivalent Self substitutions. No new process, filesystem, network or unsafe operations. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.crc32fast]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.5.1 -> 1.5.2"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed the complete archive delta, baseline implementation, existing fast-versus-slow property test and unchanged build.rs probe. The sole production change extracts the existing little-endian 16-byte CRC fold into fold_16 and uses it for remaining complete blocks before the bytewise tail. Both callers establish sufficient length; indices stay bounded against the unchanged 16-by-256 table. CRC complement handling is preserved. No new unsafe operation, dependency requirement or build behavior. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.granit-parser]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.2.1 -> 1.3.0"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas in src/input.rs, src/input/str.rs and src/scanner.rs, scanner/input context and regression assertions. Scalar scanning and oldest-simple-key tracking retain UTF-8 boundaries, control-character validation, error propagation and existing scanner limits. Inspected key bookkeeping through initialization, expiry, save, clear and removal. No new production dependencies, build scripts, unsafe code or external side effects. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.jiff]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.35 -> 0.2.37"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed every production/build delta and serializer, display-wrapper and duration-constructor context. Optional Serde helpers emit serialize_some while preserving formatting and timezone representability checks. New opt-in Arbitrary implementations use wrapped types, bounded duration construction and existing timezone database enumeration/lookup with fixed-offset fallback; the generator may read that database when enabled. Other changes remove a redundant cast and update package metadata and jiff-static versions. Build remains disabled; no unsafe code is introduced. The workspace retains jiff-core 0.1.0; its source and optional arbitrary-feature compatibility were not audited here. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.jiff-static]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.35 -> 0.2.37"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Compared the complete extracted packages. Production source is byte-identical; changes are package versions, VCS metadata and packaged lockfile selections. Manifest dependency requirements are unchanged; build remains disabled. Inspected procedural-macro entry points and existing caller-selected TZif file reads. This update adds no compile-time capability or generated-code change. Packaged lockfile changes are not dependency audits. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.rustix]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.1.4 -> 1.1.5"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production/build deltas and compared the renamed experimental runtime module separately. Timespec rounding carries microseconds with checked second addition; socket-timeout callers preserve zero rejection and saturation. Inspected libc/linux_raw callers, cfg corrections, statx imports, open flags, Unix-address formatting, FFI reexports, scalar-range attribute removal and assembly gating. The runtime module rename changes an experimental API; its contents otherwise change only test macro qualification. MSRV rises to 1.65, below this workspace floor. Read the complete build script: new cleanup removes only its fixed probe artifact beneath OUT_DIR. Production dependency requirements are unchanged. No platform execution or full baseline audit performed. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.scip]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-run"
@@ -12,6 +66,12 @@ who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "1.0.228 -> 1.0.229"
 notes = "AI source review verified published archive SHA-256 values against the lockfile revisions and compared extracted content. Reviewed all changed production/build hunks and relevant context in build.rs, src/lib.rs, src/core/lib.rs and src/core/de/impls.rs, plus manifests, packaged lockfile, README and VCS metadata. The derive compatibility cutoff rises to Rust 1.71, below the repository toolchain; never_type gating narrows to documentation builds. The duplicated collection visitor change explicitly reborrows the underlying collection without changing allocation sizing, insertion order or error propagation. Read the complete build script: its existing OUT_DIR private.rs generation and RUSTC version probe gain no new ambient capabilities. Remaining changes are documentation and lint settings. Delta review only, based on the imported 1.0.228 audit; serde_core and serde_derive are reviewed separately."
+
+[[audits.serde-saphyr]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.2.0 -> 1.3.0"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas, including serialization beyond the workspace deserialize-only selection. Changes correct tagged scalar/null handling, integer duplicate-key identity, recursive alias buffering and serialization quoting/layout. Inspected surrounding budget enforcement, checked integer parsers, recursive capture/replay error handling, nonzero indentation validation and regression assertions. Production dependency change requires granit-parser 1.3, reviewed separately. No new build script, unsafe code or external side effect. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.serde_core]]
 who = "GPT 6 Astra <noreply@openai.com>"
@@ -25,6 +85,18 @@ criteria = "safe-to-deploy"
 delta = "1.0.228 -> 1.0.229"
 notes = "AI source review verified published archive SHA-256 values against the lockfile revisions and compared extracted content. Reviewed every production-source delta and enclosing functions/callees in src/{bound.rs,de.rs,lib.rs,pretend.rs,ser.rs}, src/de/{enum_adjacently.rs,enum_externally.rs} and src/internals/{ast.rs,attr.rs,ctxt.rs,receiver.rs}, plus complete manifests and package metadata. Checked Syn 3.0.4 AST definitions for type-default removal, generic bounds, function-pointer and parenthesized-argument traversal, and receiver substitution. Iterator-to-loop rewrites preserve field/variant ordering and generated expressions; explicit Result matches preserve error types and missing-element handling. Attribute defaults, borrowing, diagnostics and remote/packed-field handling retain prior behavior. No introduced unsafe code or ambient capability was found. MSRV rises to 1.71; no build script is added. Delta review only, based on the imported 1.0.228 audit; Syn 3.0.4 remains covered separately by existing policy, not this review."
 
+[[audits.syn]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "3.0.4 -> 3.0.6"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas, surrounding full/reduced-feature parser paths, group parsing and the interpolated-lifetime regression test. Expression parsing recognizes interpolated lifetime labels using forked lookahead without consuming the original stream. LitStr tokenization errors retain the literal span. No new unsafe code, external interaction or production dependency requirement. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.toml]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.1.2+spec-1.1.0 -> 1.1.3+spec-1.1.0"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed the complete package delta and ValueDeserializer::deserialize_any/deserialize_enum context. Moving self.span rather than cloning preserves its Range value and visitor/error-span behavior. Other changes update packaging, lint settings, development dependencies and the toml_writer minimum to 1.1.2, already selected and separately audited. Build remains disabled; no new unsafe code, I/O or execution capability. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.toml_edit]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
@@ -36,6 +108,24 @@ who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "1.1.1+spec-1.1.0 -> 1.1.2+spec-1.1.0"
 notes = "Reviewed the published crate delta, manifests, lockfile, VCS metadata and src/string.rs, including ValueMetrics::calculate and its formatting consumers. Archive SHA-256 values match the old and new workspace lockfile checksums. Quote-run counters now use Saturating<u8>, preventing overflow while preserving the consumers' zero and two thresholds. The scan remains linear and resets counters on other bytes. Remaining changes affect package inclusion paths, version, lint settings and development lockfile dependencies; build remains disabled. No new I/O or unsafe code is introduced. This is a delta review from the existing exempted version, not a full audit."
+
+[[audits.ureq]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "3.4.0 -> 3.4.2"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed every production/build delta and relevant TLS/transport context. Small JSON buffering retains read limits and excludes decompressed bodies from the Content-Length shortcut. Config and TlsConfig pool-sharing checks isolate incompatible settings in both directions; reuse rejects buffered surplus input. Phase budgets use recorded predecessors and reject expired I/O budgets. TLS handshakes move to connection establishment without changing certificate verification; this does not prove a strict decreasing wall-clock deadline across handshake I/O. TCP fallback broadens only to address-specific errors and preserves the last failure. No build script is enabled. The ureq-proto minimum rises to 0.6.3; that dependency is reviewed separately. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.ureq-proto]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.6.1 -> 0.6.4"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed every production/build delta, client/server context and regression assertions. Received Content-Length values must be numerically identical; signs, empty elements, conflicts and overflow are rejected. Outgoing analyzers require one numeric value. Invalid status codes return errors; empty-valued headers no longer drop subsequent headers. Header matching uses complete case-insensitive comma-separated tokens. Network-path redirects retain the scheme and parse the new authority; existing authorization/cookie removal applies to the resolved URI. ArrayVec insertion remains capacity-checked. No build script or new dependency is introduced. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.uuid]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.26.0 -> 1.26.1"
+notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed every production delta, manifests, timestamp encoder and RNG context. Uuid::new_v7 counter alignment preserves version/variant fields, bounds shifts and retains the most significant 74 counter bits. Full-width counters now invoke the existing RNG and inherit its failure behavior. Timestamp-to-SystemTime conversion uses checked_add with UNIX_EPOCH fallback on overflow. Optional wasm RNG dependency requirements change, but that package is absent from the workspace lockfile and was not audited here. Build remains disabled; no unsafe code is introduced. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[trusted.addr2line]]
 criteria = "safe-to-deploy"
