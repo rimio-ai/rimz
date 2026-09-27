@@ -4,7 +4,7 @@
 
 use super::super::{
     admission::Shortfall,
-    query::{QueryErr, UnavailableReason},
+    query::{DocumentKey, QueryErr, UnavailableReason},
     registry::{AttachedEditor, OpenDocument, StopReason},
 };
 use serde_json::{Value, json};
@@ -53,6 +53,7 @@ struct Client {
 #[derive(Clone)]
 struct Holder {
     client: ClientId,
+    uri: String,
     text: String,
     version: i64,
     language_id: String,
@@ -61,6 +62,7 @@ struct Holder {
 
 struct View {
     owner: ClientId,
+    uri: String,
     version: i64,
     incarnation: u64,
 }
@@ -75,10 +77,10 @@ struct Snapshot {
 pub(super) struct Clients {
     server: String,
     clients: BTreeMap<ClientId, Client>,
-    documents: BTreeMap<String, Vec<Holder>>,
-    view: BTreeMap<String, View>,
-    snapshots: BTreeMap<String, Snapshot>,
-    shown: BTreeMap<(ClientId, String), String>,
+    documents: BTreeMap<DocumentKey, Vec<Holder>>,
+    view: BTreeMap<DocumentKey, View>,
+    snapshots: BTreeMap<DocumentKey, Snapshot>,
+    shown: BTreeMap<(ClientId, DocumentKey), String>,
     initialized: Option<Value>,
     active: bool,
     status: Option<Value>,
@@ -110,13 +112,13 @@ impl Clients {
                 since_ms: c.since_ms,
                 open: self
                     .documents
-                    .iter()
-                    .filter_map(|(uri, holders)| {
+                    .values()
+                    .filter_map(|holders| {
                         holders
                             .iter()
                             .find(|h| h.client == *id)
                             .map(|h| OpenDocument {
-                                uri: uri.clone(),
+                                uri: h.uri.clone(),
                                 owner: holders[0].client == *id,
                                 dirty: h.dirty,
                             })
@@ -169,8 +171,8 @@ impl Clients {
                 self.initialized = Some(initialize_result);
                 self.snapshots.clear();
                 self.view.clear();
-                for uri in self.documents.keys().cloned().collect::<Vec<_>>() {
-                    self.sync(&uri, &mut out);
+                for key in self.documents.keys().cloned().collect::<Vec<_>>() {
+                    self.sync(&key, &mut out);
                 }
                 for id in self.clients.keys().copied().collect::<Vec<_>>() {
                     // This loop does not remove the clients whose keys it collected.
@@ -227,13 +229,13 @@ impl Clients {
         if self.clients.remove(&id).is_none() {
             return;
         }
-        for uri in self.documents.keys().cloned().collect::<Vec<_>>() {
+        for key in self.documents.keys().cloned().collect::<Vec<_>>() {
             // sync changes only the server view, not this collected document map.
             self.documents
-                .get_mut(&uri)
+                .get_mut(&key)
                 .expect("listed document")
                 .retain(|h| h.client != id);
-            self.sync(&uri, out);
+            self.sync(&key, out);
         }
         self.documents.retain(|_, holders| !holders.is_empty());
         self.shown.retain(|(client, _), _| *client != id);
@@ -302,14 +304,14 @@ impl Clients {
                 if let Some(status) = &self.status {
                     out.push(Action::ToClient(id, status.clone()));
                 }
-                let uris = self
+                let keys = self
                     .documents
                     .iter()
                     .filter(|(_, holders)| holders.iter().any(|h| h.client == id))
-                    .map(|(uri, _)| uri.clone())
+                    .map(|(key, _)| key.clone())
                     .collect::<Vec<_>>();
-                for uri in uris {
-                    self.replay(id, &uri, out);
+                for key in keys {
+                    self.replay(id, &key, out);
                 }
             }
             "shutdown" => {
@@ -361,10 +363,11 @@ impl Clients {
         }
     }
 
-    fn document(&mut self, id: ClientId, frame: Value, out: &mut Vec<Action>) {
+    fn document(&mut self, id: ClientId, mut frame: Value, out: &mut Vec<Action>) {
         let Some(uri) = frame["params"]["textDocument"]["uri"].as_str() else {
             return;
         };
+        let key = DocumentKey::new(uri);
         let method = frame["method"].as_str().unwrap_or_default();
         let doc = &frame["params"]["textDocument"];
         if method == "textDocument/didOpen" {
@@ -375,23 +378,24 @@ impl Clients {
             ) else {
                 return;
             };
-            let holders = self.documents.entry(uri.to_owned()).or_default();
+            let holders = self.documents.entry(key.clone()).or_default();
             if holders.iter().any(|h| h.client == id) {
                 return;
             }
             holders.push(Holder {
                 client: id,
+                uri: uri.to_owned(),
                 text: text.to_owned(),
                 version,
                 language_id: language.to_owned(),
                 dirty: false,
             });
-            self.sync(uri, out);
-            self.replay(id, uri, out);
+            self.sync(&key, out);
+            self.replay(id, &key, out);
             out.push(Action::Publish);
             return;
         }
-        let Some(holders) = self.documents.get_mut(uri) else {
+        let Some(holders) = self.documents.get_mut(&key) else {
             return;
         };
         let Some(index) = holders.iter().position(|h| h.client == id) else {
@@ -400,8 +404,8 @@ impl Clients {
         match method {
             "textDocument/didClose" => {
                 holders.remove(index);
-                self.shown.remove(&(id, uri.to_owned()));
-                self.sync(uri, out);
+                self.shown.remove(&(id, key.clone()));
+                self.sync(&key, out);
                 self.documents.retain(|_, holders| !holders.is_empty());
                 out.push(Action::Publish);
             }
@@ -421,22 +425,26 @@ impl Clients {
                     return;
                 };
                 if index == 0 {
-                    self.snapshots.remove(uri);
+                    self.snapshots.remove(&key);
                 }
                 let holder = &mut holders[index];
                 holder.text = text.to_owned();
                 holder.version = version;
                 let publish = !holder.dirty;
                 holder.dirty = true;
-                let key = (id, uri.to_owned());
-                if self.shown.get(&key).is_some_and(|shown| shown != text) {
-                    self.shown.remove(&key);
+                let shown_key = (id, key.clone());
+                if self
+                    .shown
+                    .get(&shown_key)
+                    .is_some_and(|shown| shown != text)
+                {
+                    self.shown.remove(&shown_key);
                     // The server republishes for its owner's new text; a clear would only flicker.
                     if index != 0 && self.clients[&id].ready {
-                        out.push(Action::ToClient(id, json!({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": uri, "diagnostics": []}})));
+                        out.push(Action::ToClient(id, json!({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": holder.uri, "diagnostics": []}})));
                     }
                 }
-                self.sync(uri, out);
+                self.sync(&key, out);
                 if publish {
                     out.push(Action::Publish);
                 }
@@ -447,7 +455,8 @@ impl Clients {
                     holder.dirty = false;
                     out.push(Action::Publish);
                 }
-                if self.view.get(uri).is_some_and(|v| v.owner == id) {
+                if let Some(view) = self.view.get(&key).filter(|v| v.owner == id) {
+                    frame["params"]["textDocument"]["uri"] = json!(view.uri);
                     out.push(Action::ToServer(id, frame));
                 }
             }
@@ -455,38 +464,39 @@ impl Clients {
         }
     }
 
-    fn sync(&mut self, uri: &str, out: &mut Vec<Action>) {
+    fn sync(&mut self, key: &DocumentKey, out: &mut Vec<Action>) {
         if !self.active {
             return;
         }
-        let owner = self.documents.get(uri).and_then(|holders| holders.first());
-        let view = self.view.get(uri);
+        let owner = self.documents.get(key).and_then(|holders| holders.first());
+        let view = self.view.get(key);
         if view.is_some_and(|v| owner.is_none_or(|h| h.client != v.owner)) {
-            self.snapshots.remove(uri);
+            self.snapshots.remove(key);
             // The condition above proves a previous server view exists.
-            let previous = self.view.remove(uri).expect("previous view");
-            out.push(Action::ToServer(previous.owner, json!({"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": {"uri": uri}}})));
+            let previous = self.view.remove(key).expect("previous view");
+            out.push(Action::ToServer(previous.owner, json!({"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": {"uri": previous.uri}}})));
         }
         let Some(owner) = owner else {
             return;
         };
-        if let Some(view) = self.view.get_mut(uri) {
+        if let Some(view) = self.view.get_mut(key) {
             if view.version != owner.version {
                 view.version = owner.version;
-                out.push(Action::ToServer(owner.client, json!({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": uri, "version": owner.version}, "contentChanges": [{"text": owner.text}]}})));
+                out.push(Action::ToServer(owner.client, json!({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": view.uri, "version": owner.version}, "contentChanges": [{"text": owner.text}]}})));
             }
             return;
         }
         self.next += 1;
         self.view.insert(
-            uri.to_owned(),
+            key.clone(),
             View {
                 owner: owner.client,
+                uri: owner.uri.clone(),
                 version: owner.version,
                 incarnation: self.next,
             },
         );
-        out.push(Action::ToServer(owner.client, json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "version": owner.version, "languageId": owner.language_id, "text": owner.text}}})));
+        out.push(Action::ToServer(owner.client, json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": owner.uri, "version": owner.version, "languageId": owner.language_id, "text": owner.text}}})));
     }
 
     fn server_message(&mut self, mut frame: Value, out: &mut Vec<Action>) {
@@ -517,23 +527,31 @@ impl Clients {
         }
     }
 
-    fn diagnostics(&mut self, frame: Value, out: &mut Vec<Action>) {
+    fn diagnostics(&mut self, mut frame: Value, out: &mut Vec<Action>) {
         // A string URI proves params is an object for every version removal below.
         let Some(uri) = frame["params"]["uri"].as_str() else {
             return;
         };
+        let key = DocumentKey::new(uri);
         if frame["params"]["diagnostics"]
             .as_array()
             .is_some_and(Vec::is_empty)
         {
-            self.snapshots.remove(uri);
-            self.shown.retain(|(_, shown_uri), _| shown_uri != uri);
+            self.snapshots.remove(&key);
+            self.shown.retain(|(_, shown_key), _| *shown_key != key);
             for (id, client) in &self.clients {
                 if !client.ready {
                     continue;
                 }
                 let mut clear = frame.clone();
-                if self.view.get(uri).is_none_or(|view| view.owner != *id) {
+                if let Some(holder) = self
+                    .documents
+                    .get(&key)
+                    .and_then(|holders| holders.iter().find(|h| h.client == *id))
+                {
+                    clear["params"]["uri"] = json!(holder.uri);
+                }
+                if self.view.get(&key).is_none_or(|view| view.owner != *id) {
                     clear["params"]
                         .as_object_mut()
                         .expect("diagnostic params")
@@ -543,12 +561,12 @@ impl Clients {
             }
             return;
         }
-        let Some(view) = self.view.get(uri) else {
+        let Some(view) = self.view.get(&key) else {
             for (id, client) in &self.clients {
                 if !client.ready
                     || self
                         .documents
-                        .get(uri)
+                        .get(&key)
                         .is_some_and(|holders| holders.iter().any(|h| h.client == *id))
                 {
                     continue;
@@ -567,6 +585,7 @@ impl Clients {
             .is_some_and(|version| *version != json!(view.version))
         {
             if self.clients.get(&view.owner).is_some_and(|c| c.ready) {
+                frame["params"]["uri"] = json!(view.uri);
                 out.push(Action::ToClient(view.owner, frame));
             }
             return;
@@ -574,45 +593,51 @@ impl Clients {
         // A server view exists only for a held URI.
         let snapshot = Snapshot {
             frame: frame.clone(),
-            text: self.documents[uri][0].text.clone(),
+            text: self.documents[&key][0].text.clone(),
             incarnation: view.incarnation,
         };
-        self.snapshots.insert(uri.to_owned(), snapshot.clone());
+        self.snapshots.insert(key.clone(), snapshot.clone());
         for id in self.clients.keys().copied().collect::<Vec<_>>() {
-            self.deliver(id, uri, &snapshot, out);
+            self.deliver(id, &key, &snapshot, out);
         }
     }
 
-    fn replay(&mut self, id: ClientId, uri: &str, out: &mut Vec<Action>) {
-        if let Some(snapshot) = self.snapshots.get(uri).cloned()
+    fn replay(&mut self, id: ClientId, key: &DocumentKey, out: &mut Vec<Action>) {
+        if let Some(snapshot) = self.snapshots.get(key).cloned()
             && self
                 .view
-                .get(uri)
+                .get(key)
                 .is_some_and(|view| view.incarnation == snapshot.incarnation)
         {
-            self.deliver(id, uri, &snapshot, out);
+            self.deliver(id, key, &snapshot, out);
         }
     }
 
-    fn deliver(&mut self, id: ClientId, uri: &str, snapshot: &Snapshot, out: &mut Vec<Action>) {
+    fn deliver(
+        &mut self,
+        id: ClientId,
+        key: &DocumentKey,
+        snapshot: &Snapshot,
+        out: &mut Vec<Action>,
+    ) {
         // Snapshots were admitted by diagnostics, which requires an object params with a URI.
         if !self.clients[&id].ready {
             return;
         }
         let holder = self
             .documents
-            .get(uri)
+            .get(key)
             .and_then(|holders| holders.iter().find(|h| h.client == id));
         let mut frame = snapshot.frame.clone();
         if let Some(holder) = holder {
             if holder.text != snapshot.text {
                 return;
             }
-            if self.view.get(uri).is_none_or(|view| view.owner != id) {
+            frame["params"]["uri"] = json!(holder.uri);
+            if self.view.get(key).is_none_or(|view| view.owner != id) {
                 frame["params"]["version"] = json!(holder.version);
             }
-            self.shown
-                .insert((id, uri.to_owned()), snapshot.text.clone());
+            self.shown.insert((id, key.clone()), snapshot.text.clone());
         } else {
             frame["params"]
                 .as_object_mut()
