@@ -96,7 +96,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         group_header(ctx.theme, group, header_team, ctx.width, group_selected);
     let collapses = group.collapses();
     let header_hit = collapses.then(|| (0..u16::MAX, HitTarget::ToggleGroup(group.key.clone())));
-    let header_link = header_link.map(|(columns, url)| {
+    let header_link = header_link.into_iter().map(|(columns, url)| {
         (
             columns.start.saturating_add(1)..columns.end.saturating_add(1),
             HitTarget::Hyperlink(url),
@@ -527,11 +527,11 @@ fn group_header(
     team: Option<&str>,
     width: usize,
     sealed: bool,
-) -> (Line<'static>, Option<(std::ops::Range<u16>, String)>) {
+) -> (Line<'static>, Vec<(std::ops::Range<u16>, String)>) {
     // The catch-all is not a worktree — render it as a dim divider, not a bold
     // pod header, so out-of-project sessions read as "outside the project."
     if group.kind == SidebarWorktreeKind::External {
-        return (external_divider(theme, group, width), None);
+        return (external_divider(theme, group, width), Vec::new());
     }
     // The lane spine (added by the caller) opens the header, so the label leads
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
@@ -566,31 +566,6 @@ fn group_header(
         let (role, component) = ci_marker(ci);
         (format!(" {}", theme.glyph(role)), component)
     });
-    let badge = group.pr_number.map(|number| format!(" #{number}"));
-    // The name shortens first, then the `#N` badge drops, and the CI verdict
-    // goes last: the identity elements are admitted as a prefix of one ordered
-    // walk against a single budget, so an element is never admitted when an
-    // earlier present one was refused. That is what makes widening the pane
-    // unable to remove an element, whatever the glyph set's cell widths are.
-    let avail = cw.saturating_sub(right_width.saturating_add(1));
-    let mut identity_width = 0;
-    let mut admitted = [false; 2];
-    for (admit, width) in admitted.iter_mut().zip([
-        ci.as_ref().map(|(glyph, _)| text_width(glyph)),
-        badge.as_ref().map(|badge| text_width(badge)),
-    ]) {
-        let Some(width) = width else { continue };
-        if identity_width + width >= avail {
-            break;
-        }
-        identity_width += width;
-        *admit = true;
-    }
-    let ci = ci.filter(|_| admitted[0]);
-    let badge = badge.filter(|_| admitted[1]);
-    let label_width = cw
-        .saturating_sub(right_width.saturating_add(1).saturating_add(identity_width))
-        .max(1);
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
         SidebarWorktreeKind::Channel if !group.worktree_backed => {
@@ -617,25 +592,82 @@ fn group_header(
         qualifier_suffix.as_deref().unwrap_or_default(),
         team_suffix.as_deref().unwrap_or_default()
     );
+    let avail = cw.saturating_sub(right_width.saturating_add(1));
+    let ci_width = ci.as_ref().map_or(0, |(glyph, _)| text_width(glyph));
+    let mut members = Vec::new();
+    if let Some(number) = group.pr_number {
+        let arrow = theme.glyph(GlyphRole::WorktreePrStack);
+        for pr in &group.pr_stack.below {
+            members.push((arrow, pr.number, pr.url.as_ref()));
+        }
+        members.push((arrow, number, group.pr_url.as_ref()));
+        for level in &group.pr_stack.above {
+            for (index, pr) in level.iter().enumerate() {
+                members.push((
+                    if index == 0 { arrow } else { "," },
+                    pr.number,
+                    pr.url.as_ref(),
+                ));
+            }
+        }
+        let stack_width = members
+            .iter()
+            .enumerate()
+            .map(|(index, (separator, number, _))| {
+                text_width(if index == 0 { " " } else { separator })
+                    + text_width(&format!("#{number}"))
+            })
+            .sum::<usize>();
+        if text_width(&full_label) + ci_width + stack_width >= avail {
+            members = vec![(" ", number, group.pr_url.as_ref())];
+        }
+    }
+    let mut badge = String::new();
+    let mut badge_links = Vec::new();
+    for (index, (separator, number, url)) in members.into_iter().enumerate() {
+        badge.push_str(if index == 0 { " " } else { separator });
+        let start = text_width(&badge);
+        badge.push_str(&format!("#{number}"));
+        if let Some(url) = url {
+            badge_links.push((start..text_width(&badge), url));
+        }
+    }
+    let badge = (!badge.is_empty()).then_some(badge);
+    // The name shortens first, then the `#N` badge drops, and the CI verdict
+    // goes last: the identity elements are admitted as a prefix of one ordered
+    // walk against a single budget, so an element is never admitted when an
+    // earlier present one was refused. That is what makes widening the pane
+    // unable to remove an element, whatever the glyph set's cell widths are.
+    let mut identity_width = 0;
+    let mut admitted = [false; 2];
+    for (admit, width) in admitted.iter_mut().zip([
+        ci.as_ref().map(|(glyph, _)| text_width(glyph)),
+        badge.as_ref().map(|badge| text_width(badge)),
+    ]) {
+        let Some(width) = width else { continue };
+        if identity_width + width >= avail {
+            break;
+        }
+        identity_width += width;
+        *admit = true;
+    }
+    let ci = ci.filter(|_| admitted[0]);
+    let badge = badge.filter(|_| admitted[1]);
+    let label_width = avail.saturating_sub(identity_width).max(1);
     let left = ellipsize(&full_label, label_width);
     let left_width = text_width(&left);
-    let hyperlink = badge.as_ref().and_then(|badge| {
-        let url = group.pr_url.as_ref()?;
-        let badge_text = badge.trim_start();
-        let badge_lead = text_width(badge).saturating_sub(text_width(badge_text));
-        let ci_width = ci
-            .as_ref()
-            .map(|(glyph, _)| text_width(glyph))
-            .unwrap_or_default();
-        let start = left_width
-            .saturating_add(ci_width)
-            .saturating_add(badge_lead);
-        let end = start.saturating_add(text_width(badge_text));
-        Some((
-            u16::try_from(start).ok()?..u16::try_from(end).ok()?,
-            url.clone(),
-        ))
-    });
+    let hyperlinks = badge_links
+        .into_iter()
+        .filter(|_| admitted[1])
+        .filter_map(|(columns, url)| {
+            let offset = left_width.saturating_add(ci_width);
+            Some((
+                u16::try_from(offset.saturating_add(columns.start)).ok()?
+                    ..u16::try_from(offset.saturating_add(columns.end)).ok()?,
+                url.clone(),
+            ))
+        })
+        .collect();
     // The dotted `┄` seal caps only the *selected* worktree's header, so the lane
     // reads as one bracketed block; every other header is just its bold label and
     // right-pinned stats, with plain space filling the gap. Sized to land the line
@@ -701,7 +733,7 @@ fn group_header(
     }
     spans.push(Span::styled(fill, fill_style));
     spans.extend(right);
-    (Line::from(spans), hyperlink)
+    (Line::from(spans), hyperlinks)
 }
 
 /// The header's right-pinned git cluster. A known PR verdict (merged/closed/open)

@@ -87,6 +87,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(WorktreeTrunkMerge, "✓", Some("\u{f419}")),
     glyph!(WorktreePrOpen, "⑃", Some("\u{f407}")),
     glyph!(WorktreePrClosed, "✕", Some("\u{f4dc}")),
+    glyph!(WorktreePrStack, "→", Some("\u{f061}")),
     glyph!(WorktreeCiPassing, "✓", Some("\u{f058}")),
     glyph!(WorktreeCiFailing, "✕", Some("\u{f057}")),
     glyph!(WorktreeCiPending, "◌", Some("\u{f192}")),

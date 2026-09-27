@@ -887,6 +887,80 @@ fn render_pr_badge_keeps_identity_style_across_states() {
 }
 
 #[test]
+fn render_pr_stack_links_and_width_fallback() {
+    let theme = Theme::fixed(false);
+    let mut snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
+    let group = &mut snapshot.worktree_groups[0];
+    group.pr_number = Some(530);
+    group.pr_url = Some("https://github.com/org/repo/pull/530".to_owned());
+    group.ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    group.pr_stack.below.push(crate::store::snapshot::StackPr {
+        number: 522,
+        url: Some("https://github.com/org/repo/pull/522".to_owned()),
+    });
+    let plain = {
+        let mut plain = snapshot.clone();
+        plain.worktree_groups[0].pr_stack = Default::default();
+        plain
+    };
+    // Gutter + full label + CI + badge + gap + right cluster + edge.
+    for width in [39, 40, 41] {
+        let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))[0].clone();
+        if width <= 40 {
+            assert_eq!(
+                text,
+                line_texts(&group_lines_at_width(&plain, &theme, 0, width))[0]
+            );
+        } else {
+            assert!(text.contains("⑂ feature-migration ✓ #522→#530"), "{text}");
+        }
+    }
+    for fork in [false, true] {
+        if fork {
+            snapshot.worktree_groups[0].pr_stack.above.push(
+                [540, 541]
+                    .map(|number| crate::store::snapshot::StackPr {
+                        number,
+                        url: Some(format!("https://github.com/org/repo/pull/{number}")),
+                    })
+                    .into(),
+            );
+        }
+        let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 72))[0].clone();
+        assert!(
+            text.contains(if fork {
+                "#522→#530→#540,#541"
+            } else {
+                "#522→#530"
+            }),
+            "{text}"
+        );
+        let numbers = if fork {
+            vec![522, 530, 540, 541]
+        } else {
+            vec![522, 530]
+        };
+        let links = group_hyperlinks_at_width(&snapshot, &theme, 0, 72);
+        let expected: Vec<_> = numbers
+            .into_iter()
+            .map(|number| {
+                let badge = format!("#{number}");
+                let offset = text.find(&badge).unwrap();
+                let start = text_width(&text[..offset]) as u16;
+                (
+                    0,
+                    start..start + badge.len() as u16,
+                    format!("https://github.com/org/repo/pull/{number}"),
+                )
+            })
+            .collect();
+        assert_eq!(links, expected);
+    }
+    assert_snapshot("pr_stack_fork", snapshot_to_screen(&snapshot, 72, 14));
+}
+
+#[test]
 fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
     let theme = Theme::fixed(false);
     let mut snapshot =

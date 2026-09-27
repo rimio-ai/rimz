@@ -108,6 +108,8 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | `# name` | a named channel with no git state |
 | `✓` `✕` `◌` beside the name | the trunk's HEAD-commit CI, or a branch's open or merged pull request's CI: passing, failing, running |
 | `#91` | the branch's pull request |
+| `#522→#530→#540,#541` | a same-repository PR stack, bottom first; comma-separated branches end the stack |
+| `→` (`worktree.pr_stack`) | the next level of a PR stack |
 | `⇡3 ⇣1` | commits ahead of and behind the trunk |
 | `+127 -43` | lines added and removed against the trunk |
 | `⟳` `✓` `✕` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
@@ -393,7 +395,7 @@ Each group starts with a header. Its left side names the work, and its right sid
 ▎↩ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main🮇    ← merged: safe to remove
 ```
 
-On the left: `⑂` or `↩`, the branch name, the CI verdict (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a non-trunk branch without one shows no CI glyph, while the trunk shows its own HEAD-commit CI. Closed pull requests show no CI glyph. The team badge goes on the pipeline line when one is drawn, on the roster line when the group is folded, and on the header otherwise. In terminals that support hyperlinks, `#91` opens the pull request. When two groups have the same branch name, each adds a muted `· repo` qualifier, the shortest path suffix that tells the checkouts apart. When the header runs out of room, the name shortens first, then the pull request number is dropped, then the CI verdict last.
+On the left: `⑂` or `↩`, the branch name, the CI verdict (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a non-trunk branch without one shows no CI glyph, while the trunk shows its own HEAD-commit CI. Closed pull requests show no CI glyph. The team badge goes on the pipeline line when one is drawn, on the roster line when the group is folded, and on the header otherwise. In terminals that support hyperlinks, each PR number opens its pull request. A same-repository stack on GitHub or Gitea replaces the single badge with its levels, bottom first: `#522→#530→#540,#541`. Commas join PRs branching from the same level, where the display stops. The stack appears only when the entire run fits beside the full name and CI; otherwise only the branch's own PR number remains. When two groups have the same branch name, each adds a muted `· repo` qualifier, the shortest path suffix that tells the checkouts apart. When the header runs out of room, the name shortens first, then the pull request number is dropped, then the CI verdict last.
 
 On the right: commits ahead of and behind the trunk with zero counts left out, then lines added and removed, then the trunk marker. The line counts include committed, staged, unstaged, and untracked work, so work that `git diff` does not show still counts. The first marker that applies is shown:
 
