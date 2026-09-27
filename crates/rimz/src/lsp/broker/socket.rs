@@ -184,6 +184,7 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
     {
         return Err(LspErr::Protocol("broker is shutting down".into()));
     }
+    let model = &mut *model;
     match operation {
         Operation::Hello => {
             return Ok(json!({"state": model.entry.state, "elapsed_ms": shared.elapsed()}));
@@ -197,23 +198,27 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
             if !crate::proc::process_is_live(pid, Some(&start_token)) {
                 return Err(LspErr::Protocol("lease process is not live".into()));
             }
-            model.lifecycle.register(Lease {
-                launch_id,
-                pid,
-                start_token,
-                since_ms: crate::utils::time::unix_now_ms(),
-            });
+            model.lifecycle.register(
+                &mut model.entry.leases,
+                Lease {
+                    launch_id,
+                    pid,
+                    start_token,
+                    since_ms: crate::utils::time::unix_now_ms(),
+                },
+            );
         }
         Operation::Release { launch_id, pid } => {
-            model.lifecycle.retain(shared.elapsed(), |lease| {
-                lease.launch_id != launch_id || lease.pid != pid
-            })
+            model
+                .lifecycle
+                .retain(&mut model.entry.leases, shared.elapsed(), |lease| {
+                    lease.launch_id != launch_id || lease.pid != pid
+                })
         }
         Operation::Attach { .. } | Operation::Stop { .. } | Operation::Query { .. } => {
             unreachable!("handled before acquiring model")
         }
     }
-    model.entry.leases = model.lifecycle.leases.clone();
     registry::publish(&model.entry)?;
     Ok(json!({"ok": true}))
 }

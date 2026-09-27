@@ -607,17 +607,22 @@ fn housekeeping(shared: &Shared, request: &ServeRequest) -> Result<()> {
     let idle_timeout = super::admission::idle_timeout(&request.policy)?.as_millis() as u64;
     {
         let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-        model.lifecycle.retain(shared.elapsed(), |lease| {
-            crate::proc::process_is_live(lease.pid, Some(&lease.start_token))
-        });
-        model.entry.leases = model.lifecycle.leases.clone();
+        let model = &mut *model;
+        model
+            .lifecycle
+            .retain(&mut model.entry.leases, shared.elapsed(), |lease| {
+                crate::proc::process_is_live(lease.pid, Some(&lease.start_token))
+            });
         model.lifetime_peak_kb = model
             .lifetime_peak_kb
             .max(model.entry.server_pid.map_or(0, memory::tree_peak_kb));
         model.entry.peak_rss_kb = model.entry.peak_rss_kb.max(model.lifetime_peak_kb);
         let reason = if !request.root.exists() {
             Some(StopReason::CheckoutRemoved)
-        } else if let Some(reason) = model.lifecycle.expired(shared.elapsed()) {
+        } else if let Some(reason) = model
+            .lifecycle
+            .expired(&model.entry.leases, shared.elapsed())
+        {
             Some(reason)
         } else if model.entry.state == State::Ready
             && lifecycle::idle_expired(
