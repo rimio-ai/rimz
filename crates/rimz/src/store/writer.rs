@@ -11,10 +11,11 @@ use std::time::Duration;
 
 use crate::agents::LaunchParams;
 use crate::disk::{lock, paths::StatePaths};
-use crate::ids::{AgentKind, AgentSessionId, RunId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, EventId, RunId, WorkspaceId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
-    AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope,
+    AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope, SIGNAL_METHOD,
+    SignalEventPayload,
 };
 use crate::workspace::{ResolvedWorkspace, record};
 
@@ -26,7 +27,6 @@ mod publish;
 mod queue;
 mod reap;
 mod reset;
-mod signal;
 
 pub use lifecycle::{
     AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES, SideConversation,
@@ -329,6 +329,25 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn append_event(&self, event: &EventEnvelope) -> Result<()> {
         self.commit(|txn| txn.append(event))
+    }
+
+    #[must_use = "durability barrier; check the result"]
+    pub fn append_signal(
+        &self,
+        session_name: &str,
+        payload: SignalEventPayload,
+    ) -> Result<EventId> {
+        let event = EventEnvelope::new(
+            self.inner.paths.workspace_id.clone(),
+            session_name,
+            "rimz",
+            "signal",
+            SIGNAL_METHOD,
+            serde_json::to_value(payload).expect("signal payload is JSON-serializable"),
+        );
+        let event_id = event.event_id.clone();
+        self.commit(|txn| txn.append(&event))?;
+        Ok(event_id)
     }
 
     /// Allocate final agent card identities from the durable agent fold and
