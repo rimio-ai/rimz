@@ -162,7 +162,11 @@ pub fn load_with_roots(
     let machine = &machine.agents;
     let report = trust::status_with_roots(project_root, config_root)?;
     let config_path = project_root.join(PROJECT_CONFIG_REL);
-    let repo_value = read_repo_value(&config_path)?;
+    let repo_value = if report.state == TrustState::NoConfig {
+        None
+    } else {
+        read_repo_value(&config_path)?
+    };
     if let Some(key) = repo_value.as_ref().and_then(project_lsp_policy_key) {
         return Err(EffectiveConfigErr::ProjectLspPolicy(key.to_owned()));
     }

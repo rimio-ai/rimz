@@ -997,3 +997,40 @@ fn untrusted_layout_trust_uses_shared_structural_cells_and_inline_precedence() {
     )
     .expect("exact machine cell containing a colon stays inert");
 }
+
+fn write_home_machine_config(home: &tempfile::TempDir, text: &str) -> MachineConfig {
+    write_project_config(home, text);
+    let rimz_home = home.path().join(".rimz");
+    MachineConfig::load_from(&rimz_home.join("config.toml"), &rimz_home).expect("machine config")
+}
+
+#[test]
+fn home_machine_lsp_servers_are_machine_entries_not_untrusted_declarations() {
+    let home = tempdir().unwrap();
+    let machine = write_home_machine_config(
+        &home,
+        "[lsp.servers.rust]\ncommand = [\"rust-analyzer\"]\nextensions = [\"rs\"]\nroot-markers = [\"Cargo.toml\"]\n",
+    );
+    let loaded = load_with_roots(&machine, home.path(), &home.path().join(".rimz")).unwrap();
+    assert!(loaded.untrusted_lsp_servers.is_empty());
+    assert!(loaded.lsp_servers.contains_key("rust"));
+}
+
+#[test]
+fn home_machine_lsp_policy_keys_are_not_project_policy() {
+    let home = tempdir().unwrap();
+    let machine = write_home_machine_config(&home, "[lsp]\nreserve-percent = 10\n");
+    load_with_roots(&machine, home.path(), &home.path().join(".rimz")).unwrap();
+}
+
+#[test]
+fn home_project_config_stays_a_project_layer_when_rimz_home_is_elsewhere() {
+    let home = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    write_project_config(
+        &home,
+        "[lsp.servers.rust]\ncommand = [\"rust-analyzer\"]\nextensions = [\"rs\"]\nroot-markers = [\"Cargo.toml\"]\n",
+    );
+    let loaded = load(&AgentsConfig::default(), home.path(), config.path()).unwrap();
+    assert_eq!(loaded.untrusted_lsp_servers, vec!["rust".to_owned()]);
+}
