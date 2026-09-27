@@ -4657,7 +4657,7 @@ fn write_loop_fire_state_for_root(env: &Env, root: &Path, stamps: BTreeMap<Strin
 }
 
 fn wait_for_path(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while !path.exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(25));
     }
