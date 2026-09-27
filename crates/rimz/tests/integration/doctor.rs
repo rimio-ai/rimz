@@ -1463,11 +1463,15 @@ fn write_executable(path: &Path, contents: &str) {
         .expect("chmod executable stub");
 }
 
+/// The stubs list a live Zellij room they can never answer a health probe
+/// for, so bound the probe: at the default budget every doctor call on a live
+/// stub waits the full 8 s before reporting the same outcome.
 fn doctor_with_mux(env: &Env, stub_dir: &Path, flag: &str) -> Value {
     doctor_json(
         &env.rimz()
             .args([flag, "doctor", "--json"])
             .env("PATH", path_with_only(&[stub_dir.to_path_buf()]))
+            .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100")
             .output()
             .expect("spawn doctor with mux stubs"),
     )
