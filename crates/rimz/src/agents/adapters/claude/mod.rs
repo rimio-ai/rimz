@@ -717,6 +717,11 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let parts = ClaudeLifecycleParts::parse(event_name, payload);
+        let signal = map_claude_lifecycle_signal(self.spec(), event_name, payload, &parts);
+        let ask_kind = match &signal {
+            Some(LifecycleSignal::AwaitingInput { kind, .. }) => Some(*kind),
+            _ => None,
+        };
         // Cursor can execute Claude-compatible third-party hook commands with
         // Cursor-shaped payloads. Drop those before they can double-record or
         // be misparsed; `cursor_version` is Cursor's common-input discriminator.
@@ -727,25 +732,6 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
                 event_name: event_name.to_owned(),
             })
         } else {
-            let ask_kind = match event_name {
-                "PermissionRequest" => self
-                    .spec()
-                    .blocking_tool_kind(
-                        parts
-                            .permission_request
-                            .as_ref()
-                            .and_then(|request| request.tool_name.as_deref()),
-                    )
-                    .is_none()
-                    .then_some(AskKind::Permission),
-                "PreToolUse" => self.spec().blocking_tool_kind(
-                    parts
-                        .pre_tool_use
-                        .as_ref()
-                        .and_then(|request| request.tool_name.as_deref()),
-                ),
-                _ => None,
-            };
             decode_catalog_hook(CLAUDE_HOOKS, event_name, ask_kind)
         };
         decoded.set_routing(
@@ -803,7 +789,6 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
             });
         decoded.set_turn_error(turn_error);
 
-        let signal = map_claude_lifecycle_signal(self.spec(), event_name, payload, &parts);
         if let Some(signal) = signal
             && let Some((agent_id, parent_agent_id)) =
                 resolve_claude_observation_identity(self.spec().kind, event_name, payload, &parts)
