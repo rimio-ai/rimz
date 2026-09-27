@@ -105,7 +105,6 @@ pub(crate) use notifications::{NotificationTrigger, NotifyCondition, NotifyHandl
 pub(crate) use pets::PetsGlyphMode;
 pub use pets::{CellAspect, PetsConfig};
 pub(crate) use remote_control::RemoteControlConfig;
-pub(crate) use resume::DEFAULT_AUTO_CONTINUE_BACKOFF_SECS;
 pub use resume::ResumeConfig;
 use resume::parse_auto_redeem_min_gain;
 #[cfg(test)]

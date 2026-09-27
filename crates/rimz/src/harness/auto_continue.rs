@@ -37,7 +37,7 @@ use crate::agents::{
     AgentCardRef, AgentState, ProviderCapacity, TurnErrorClass, display_turn_error,
     effective_turn_error_class,
 };
-use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
+use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use crate::store::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
@@ -388,13 +388,7 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
         return;
     }
     let attempts = evidenced_attempts(ctx.resume_messages, agent, &record);
-    if !nudge_due(
-        &record,
-        attempts,
-        ctx.now,
-        &ctx.config.auto_continue_backoff_secs,
-        ctx.config.auto_continue_max_retries,
-    ) {
+    if !nudge_due(&record, attempts, ctx.now, ctx.config) {
         return;
     }
     let Some(pane_id) = ctx.snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
@@ -440,29 +434,14 @@ fn nudged_record(mut record: ParkRecord, now: Timestamp) -> ParkRecord {
     record
 }
 
-fn overload_backoff(retries: u32, backoff_secs: &[u64]) -> Duration {
-    let idx = (retries as usize).min(backoff_secs.len().saturating_sub(1));
-    let fallback = DEFAULT_AUTO_CONTINUE_BACKOFF_SECS
-        .last()
-        .copied()
-        .unwrap_or(180);
-    Duration::from_secs(backoff_secs.get(idx).copied().unwrap_or(fallback))
-}
-
 /// Whether a nudge is due for this park class. Rate limits wait for the captured
 /// deadline and then throttle repeats; backoff records wait from park time for
 /// the first try, then from the prior nudge for each retry step until the
 /// evidenced-attempt cap.
-fn nudge_due(
-    record: &ParkRecord,
-    attempts: u32,
-    now: Timestamp,
-    backoff_secs: &[u64],
-    max_retries: u32,
-) -> bool {
+fn nudge_due(record: &ParkRecord, attempts: u32, now: Timestamp, config: &ResumeConfig) -> bool {
     match &record.kind {
         ParkKind::RateLimit { deadline } | ParkKind::Budget { deadline } => {
-            if attempts >= max_retries {
+            if attempts >= config.auto_continue_max_retries {
                 return false;
             }
             now >= *deadline
@@ -472,12 +451,12 @@ fn nudge_due(
                 })
         }
         ParkKind::Overloaded { overloaded_at } => {
-            if attempts >= max_retries {
+            if attempts >= config.auto_continue_max_retries {
                 return false;
             }
             let anchor = record.last_nudge_at.unwrap_or(*overloaded_at);
             now.as_second() - anchor.as_second()
-                >= overload_backoff(record.retries, backoff_secs).as_secs() as i64
+                >= config.auto_continue_backoff(record.retries).as_secs() as i64
         }
     }
 }

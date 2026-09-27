@@ -11,7 +11,7 @@ const DEFAULT_AUTO_CONTINUE_TEXT: &str = "continue";
 /// nudges. The first retry lands 3 minutes after the marker, then the 5-minute
 /// gap repeats for every later retry. Override per machine; an empty ramp falls
 /// back to a 300s gap.
-pub const DEFAULT_AUTO_CONTINUE_BACKOFF_SECS: &[u64] = &[180, 300];
+const DEFAULT_AUTO_CONTINUE_BACKOFF_SECS: &[u64] = &[180, 300];
 
 /// The default ceiling on backoff auto-continue attempts. At the [default ramp][`DEFAULT_AUTO_CONTINUE_BACKOFF_SECS`]
 /// this spans ~58min (180 + 300x11) before the producer stops attempting
@@ -98,6 +98,16 @@ impl Default for ResumeConfig {
 }
 
 impl ResumeConfig {
+    pub(crate) fn auto_continue_backoff(&self, retries: u32) -> Duration {
+        let backoff_secs = &self.auto_continue_backoff_secs;
+        let idx = (retries as usize).min(backoff_secs.len().saturating_sub(1));
+        let fallback = DEFAULT_AUTO_CONTINUE_BACKOFF_SECS
+            .last()
+            .copied()
+            .unwrap_or(180);
+        Duration::from_secs(backoff_secs.get(idx).copied().unwrap_or(fallback))
+    }
+
     pub(crate) fn auto_redeem_min_gain(&self) -> Duration {
         parse_auto_redeem_min_gain(&self.auto_redeem_min_gain)
             .unwrap_or_else(|_| default_auto_redeem_min_gain())
@@ -126,6 +136,20 @@ pub(super) fn parse_auto_redeem_min_gain(value: &str) -> Result<Duration, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overload_backoff_expands_then_repeats_the_last_step() {
+        let mut config = ResumeConfig {
+            auto_continue_backoff_secs: vec![60, 120, 180],
+            ..ResumeConfig::default()
+        };
+        assert_eq!(config.auto_continue_backoff(0).as_secs(), 60);
+        assert_eq!(config.auto_continue_backoff(1).as_secs(), 120);
+        assert_eq!(config.auto_continue_backoff(2).as_secs(), 180);
+        assert_eq!(config.auto_continue_backoff(9).as_secs(), 180);
+        config.auto_continue_backoff_secs.clear();
+        assert_eq!(config.auto_continue_backoff(0).as_secs(), 300);
+    }
 
     #[test]
     fn default_resume_ceiling_is_128() {
