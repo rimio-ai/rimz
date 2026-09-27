@@ -114,12 +114,6 @@ pub(crate) fn check_workspace_layout(root: &Path) -> Result<bool> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Tier {
-    State,
-    Runtime,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Class {
     Log,
     Records,
@@ -157,19 +151,6 @@ impl Class {
             Self::Live => "live",
             Self::Lanes => "lanes",
             Self::Locks => "locks",
-        }
-    }
-
-    pub const fn tier(self) -> Tier {
-        match self {
-            Self::Log
-            | Self::Records
-            | Self::Audit
-            | Self::Cache
-            | Self::Owned
-            | Self::Tmp
-            | Self::Locks => Tier::State,
-            Self::Sock | Self::Live | Self::Lanes => Tier::Runtime,
         }
     }
 
