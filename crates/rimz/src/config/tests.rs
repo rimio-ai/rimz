@@ -1981,6 +1981,34 @@ fn isolation_resolution_precedence() {
     }
 }
 #[test]
+fn sandbox_settings_fall_back_to_host_with_notices() {
+    use super::Isolation::{Host, Sandbox};
+    let mut config = MachineConfig::default();
+    config.agents.isolation = Sandbox;
+    let profile = |isolation| Profile {
+        isolation,
+        ..toml::from_str("agent = 'claude'").unwrap()
+    };
+    let agents = [("boxed", Some(Sandbox)), ("open", Some(Host))];
+    let agents = agents.map(|(name, isolation)| (name.to_owned(), profile(isolation)));
+    config.agents.profiles.0.extend(agents);
+    let child = ("child".to_owned(), profile(Some(Sandbox)));
+    config.subagents.profiles.0.extend([child]);
+    let mut notices = ConfigNotices::default();
+    config.fall_back_to_host_isolation(&mut notices);
+    config.fall_back_to_host_isolation(&mut notices);
+    assert_eq!(config.agents.isolation, Host);
+    assert_eq!(config.agents.profiles.0["boxed"].isolation, Some(Host));
+    assert_eq!(config.subagents.profiles.0["child"].isolation, Some(Host));
+    insta::assert_debug_snapshot!(notices.host_isolation_fallback, @r#"
+    [
+        "warning: agents.isolation = \"sandbox\" needs Linux bubblewrap; running agents on the host instead",
+        "warning: profile `boxed` isolation = \"sandbox\" needs Linux bubblewrap; running agents on the host instead",
+        "warning: profile `child` isolation = \"sandbox\" needs Linux bubblewrap; running agents on the host instead",
+    ]
+    "#);
+}
+#[test]
 fn lsp_configuration_has_documented_defaults() {
     let config: MachineConfig = toml::from_str("[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\ninit-options = { checkOnSave = false }").unwrap();
     let value = serde_json::to_value(config).unwrap();
