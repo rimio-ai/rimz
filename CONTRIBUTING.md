@@ -30,4 +30,6 @@ Leave `incremental` unset. sccache caches the registry dependencies every worktr
 
 Keep each Git worktree's Cargo `target/` directory local to that worktree. Share compiler work through sccache; do not list `target` in `.worktreelink`, because Cargo fingerprints and final executables from divergent branches can overwrite one another. See the [toolchain and cache guide](./docs/contributing/rust-conventions.md#toolchain) and the [worktree seeding guide](./docs/guide/worktrees.md#seed-the-tree) for details.
 
+Xtask automatically prunes stale Cargo output daily after successful compile tasks; use `cargo xtask prune --dry-run` to preview cleanup (see the [pruning rules](./docs/contributing/rust-conventions.md#target-pruning)).
+
 Contributor rules live in [AGENTS.md](./AGENTS.md). Rust shape, test tiers, command surface, and gate details live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
