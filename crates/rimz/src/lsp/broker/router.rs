@@ -220,13 +220,16 @@ impl Router {
             let _ = sender.send(RouterEvent::Client(Event::Detach(id)));
         })?;
         let since_ms = crate::utils::time::unix_now_ms();
-        model.lifecycle.register(Lease {
-            launch_id: None,
-            pid,
-            start_token,
-            since_ms,
-        });
-        model.entry.leases = model.lifecycle.leases.clone();
+        let model_ref = &mut *model;
+        model_ref.lifecycle.register(
+            &mut model_ref.entry.leases,
+            Lease {
+                launch_id: None,
+                pid,
+                start_token,
+                since_ms,
+            },
+        );
         drop(model);
         self.next_client += 1;
         self.connections.insert(
@@ -257,10 +260,12 @@ impl Router {
                 .any(|other| other.pid == connection.pid)
             {
                 let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-                model.lifecycle.retain(shared.elapsed(), |lease| {
-                    lease.launch_id.is_some() || lease.pid != connection.pid
-                });
-                model.entry.leases = model.lifecycle.leases.clone();
+                let model = &mut *model;
+                model
+                    .lifecycle
+                    .retain(&mut model.entry.leases, shared.elapsed(), |lease| {
+                        lease.launch_id.is_some() || lease.pid != connection.pid
+                    });
             }
         }
         self.pending.retain(|(client, _, request)| {

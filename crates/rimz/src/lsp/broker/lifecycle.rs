@@ -18,26 +18,29 @@ pub(super) fn idle_expired(
 
 #[derive(Default)]
 pub(super) struct Lifecycle {
-    pub(super) leases: Vec<Lease>,
     last_release: Option<u64>,
 }
 
 impl Lifecycle {
-    pub(super) fn register(&mut self, lease: Lease) {
-        self.leases
-            .retain(|old| old.launch_id != lease.launch_id || old.pid != lease.pid);
-        self.leases.push(lease);
+    pub(super) fn register(&mut self, leases: &mut Vec<Lease>, lease: Lease) {
+        leases.retain(|old| old.launch_id != lease.launch_id || old.pid != lease.pid);
+        leases.push(lease);
         self.last_release = None;
     }
-    pub(super) fn retain(&mut self, now: u64, keep: impl FnMut(&Lease) -> bool) {
-        let had_leases = !self.leases.is_empty();
-        self.leases.retain(keep);
-        if had_leases && self.leases.is_empty() {
+    pub(super) fn retain(
+        &mut self,
+        leases: &mut Vec<Lease>,
+        now: u64,
+        keep: impl FnMut(&Lease) -> bool,
+    ) {
+        let had_leases = !leases.is_empty();
+        leases.retain(keep);
+        if had_leases && leases.is_empty() {
             self.last_release = Some(now);
         }
     }
-    pub(super) fn expired(&self, now: u64) -> Option<StopReason> {
-        if !self.leases.is_empty() {
+    pub(super) fn expired(&self, leases: &[Lease], now: u64) -> Option<StopReason> {
+        if !leases.is_empty() {
             return None;
         }
         match self.last_release {
@@ -119,31 +122,36 @@ mod tests {
         );
         assert!(lease.is_ok(), "a launch id is an optional label");
         let mut state = Lifecycle::default();
-        state.register(lease.unwrap());
-        assert_eq!(state.expired(600_000), None);
-        state.retain(600_000, |_| false);
-        assert_eq!(state.expired(660_000), Some(StopReason::Released));
+        let mut leases = Vec::new();
+        state.register(&mut leases, lease.unwrap());
+        assert_eq!(state.expired(&leases, 600_000), None);
+        state.retain(&mut leases, 600_000, |_| false);
+        assert_eq!(state.expired(&leases, 660_000), Some(StopReason::Released));
     }
 
     #[test]
     fn leases_reap_release_and_cancel_restart_grace() {
         let mut state = Lifecycle::default();
-        assert_eq!(state.expired(299_999), None);
-        assert_eq!(state.expired(300_000), Some(StopReason::NeverLeased));
-        state.register(lease(1));
-        state.register(lease(1));
-        state.register(lease(2));
-        assert_eq!(state.leases.len(), 2);
-        state.retain(400_000, |lease| lease.pid != 1);
-        assert_eq!(state.leases.len(), 1);
-        assert_eq!(state.expired(500_000), None);
-        state.retain(500_000, |_| false);
-        assert_eq!(state.expired(559_999), None);
-        state.register(lease(3));
-        assert_eq!(state.expired(560_000), None);
-        state.retain(600_000, |_| false);
-        state.retain(610_000, |_| false);
-        assert_eq!(state.expired(660_000), Some(StopReason::Released));
+        let mut leases = Vec::new();
+        assert_eq!(state.expired(&leases, 299_999), None);
+        assert_eq!(
+            state.expired(&leases, 300_000),
+            Some(StopReason::NeverLeased)
+        );
+        state.register(&mut leases, lease(1));
+        state.register(&mut leases, lease(1));
+        state.register(&mut leases, lease(2));
+        assert_eq!(leases.len(), 2);
+        state.retain(&mut leases, 400_000, |lease| lease.pid != 1);
+        assert_eq!(leases.len(), 1);
+        assert_eq!(state.expired(&leases, 500_000), None);
+        state.retain(&mut leases, 500_000, |_| false);
+        assert_eq!(state.expired(&leases, 559_999), None);
+        state.register(&mut leases, lease(3));
+        assert_eq!(state.expired(&leases, 560_000), None);
+        state.retain(&mut leases, 600_000, |_| false);
+        state.retain(&mut leases, 610_000, |_| false);
+        assert_eq!(state.expired(&leases, 660_000), Some(StopReason::Released));
     }
 
     #[test]
