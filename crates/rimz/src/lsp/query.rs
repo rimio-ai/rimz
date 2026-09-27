@@ -453,14 +453,14 @@ fn rank_find(root: &Path, query: &str, result: Value) -> Result<Value> {
     ))
 }
 
-pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String> {
+fn outcome_candidates<'a>(root: &Path, output: &'a Output) -> Result<(&'a str, Vec<Candidate>)> {
     let (Output::Ambiguous { name, symbols } | Output::NotFound { name, symbols }) = output else {
         return Err(LspErr::Protocol(
             "render lookup candidates only for not-found or ambiguous outcomes".into(),
         ));
     };
     let mut qualifier = name_segments(name);
-    let last = qualifier.pop().unwrap_or_default();
+    qualifier.pop();
     let mut candidates = Vec::new();
     for symbol in symbols {
         let path = symbol_path(root, symbol)?;
@@ -472,20 +472,31 @@ pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String
     }
     candidates
         .sort_by(|a, b| (&a.0, &a.1.name, &a.1.position).cmp(&(&b.0, &b.1.name, &b.1.position)));
-    let candidates: Vec<_> = candidates
+    let candidates = candidates
         .into_iter()
         .map(|(_, candidate)| candidate)
         .collect();
-    let missing = matches!(output, Output::NotFound { .. });
+    Ok((name, candidates))
+}
+
+pub fn outcome_json(root: &Path, output: &Output) -> Result<Value> {
+    let (name, candidates) = outcome_candidates(root, output)?;
+    Ok(serde_json::json!({
+        "outcome": if matches!(output, Output::NotFound { .. }) { "not-found" } else { "ambiguous" },
+        "name": name, "candidates": candidates,
+    }))
+}
+
+pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String> {
     if json {
         return Ok(format!(
             "{}\n",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "outcome": if missing { "not-found" } else { "ambiguous" },
-                "name": name, "candidates": candidates,
-            }))?
+            serde_json::to_string_pretty(&outcome_json(root, output)?)?
         ));
     }
+    let (name, candidates) = outcome_candidates(root, output)?;
+    let last = name_segments(name).pop().unwrap_or_default();
+    let missing = matches!(output, Output::NotFound { .. });
     let count = candidates.len();
     let header = if missing {
         if count == 0 {

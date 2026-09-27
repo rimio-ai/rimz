@@ -90,7 +90,8 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct Query {
-    target: String,
+    #[arg(value_name = "TARGET", required = true)]
+    targets: Vec<String>,
     #[arg(long)]
     server: Option<String>,
     #[arg(long)]
@@ -164,48 +165,98 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let context = query_context(globals)?;
     let root = &context.root;
-    let path = match verb {
-        Verb::Symbols => Some(PathBuf::from(&args.target)),
-        Verb::Find => None,
-        _ => match query::parse_target(&args.target)? {
-            query::Target::Position { path, .. } => Some(path),
-            _ => None,
-        },
-    };
-    let entry = match query::select(
-        root,
-        context.entries,
-        &context.servers,
-        args.server.as_deref(),
-        path.as_deref(),
-    ) {
-        Ok(entry) => entry,
-        Err(error) => return query_error(error),
-    };
-    let dirty = entry
-        .attached
-        .iter()
-        .flat_map(|editor| &editor.open)
-        .filter(|document| document.owner && document.dirty)
-        .map(|document| document.uri.clone())
-        .collect();
-    let output = match query::execute(&entry, verb, &args.target) {
-        Ok(output) => output,
-        Err(error) => return query_error(error),
-    };
-    let code = output.exit_code();
-    let text = match output {
-        query::Output::Answer { result, .. } if args.json => {
-            format!("{}\n", serde_json::to_string_pretty(&result)?)
-        }
-        query::Output::Answer {
-            result,
-            document_uri,
-        } => query::render(verb, root, document_uri.as_deref(), result, scope, &dirty)?,
-        output => query::render_outcome(root, &output, args.json)?,
-    };
+    let multiple = args.targets.len() > 1;
+    let mut failures = QueryFailures::default();
+    let mut code = 0;
+    let mut single_error = None;
+    let mut values = Vec::new();
     let mut out = render::out();
-    render::finish(out.write_all(text.as_bytes()).and_then(|()| out.flush()))?;
+    for (index, target) in args.targets.iter().enumerate() {
+        let result = (|| {
+            let path = match verb {
+                Verb::Symbols => Some(PathBuf::from(target)),
+                Verb::Find => None,
+                _ => match query::parse_target(target)? {
+                    query::Target::Position { path, .. } => Some(path),
+                    _ => None,
+                },
+            };
+            let entry = query::select(
+                root,
+                context.entries.clone(),
+                &context.servers,
+                args.server.as_deref(),
+                path.as_deref(),
+            )?;
+            let output =
+                failures.execute(&entry.server, || query::execute(&entry, verb, target))?;
+            Ok::<_, QueryErr>((entry, output))
+        })();
+        let text = match result {
+            Err(error) => {
+                if !multiple {
+                    single_error = Some(error);
+                    break;
+                }
+                code = query_exit(code, error.exit_code());
+                if args.json {
+                    values.push(serde_json::json!({
+                        "target": target, "outcome": "error", "exit": error.exit_code(),
+                        "error": error.to_string(),
+                    }));
+                    continue;
+                }
+                format!("error: {error}\n")
+            }
+            Ok((entry, output)) => {
+                code = query_exit(code, output.exit_code());
+                if multiple && args.json {
+                    let mut value = match &output {
+                        query::Output::Answer { result, .. } => serde_json::json!({
+                            "outcome": "answer", "result": result,
+                        }),
+                        _ => query::outcome_json(root, &output)?,
+                    };
+                    value["target"] = target.clone().into();
+                    value["exit"] = output.exit_code().into();
+                    values.push(value);
+                    continue;
+                }
+                let dirty = entry
+                    .attached
+                    .iter()
+                    .flat_map(|editor| &editor.open)
+                    .filter(|document| document.owner && document.dirty)
+                    .map(|document| document.uri.clone())
+                    .collect();
+                match output {
+                    query::Output::Answer { result, .. } if args.json => {
+                        format!("{}\n", serde_json::to_string_pretty(&result)?)
+                    }
+                    query::Output::Answer {
+                        result,
+                        document_uri,
+                    } => query::render(verb, root, document_uri.as_deref(), result, scope, &dirty)?,
+                    output => query::render_outcome(root, &output, args.json)?,
+                }
+            }
+        };
+        if multiple {
+            render::finish(writeln!(
+                out,
+                "{}==> {target} <==",
+                if index == 0 { "" } else { "\n" }
+            ))?;
+        }
+        render::finish(out.write_all(text.as_bytes()).and_then(|()| out.flush()))?;
+    }
+    if let Some(error) = single_error {
+        return query_error(error);
+    }
+    if multiple && args.json {
+        let text = format!("{}\n", serde_json::to_string_pretty(&values)?);
+        render::finish(out.write_all(text.as_bytes()).and_then(|()| out.flush()))?;
+    }
     if code != 0 {
         std::process::exit(code);
     }
@@ -216,6 +267,49 @@ struct QueryContext {
     root: PathBuf,
     entries: Vec<registry::Entry>,
     servers: std::collections::BTreeMap<String, rimz::config::LspServerConfig>,
+}
+
+fn query_exit(current: i32, next: i32) -> i32 {
+    [3, 4, 1, 6, 5, 0]
+        .into_iter()
+        .find(|code| *code == current || *code == next)
+        .unwrap_or(0)
+}
+
+#[derive(Default)]
+struct QueryFailures(std::collections::BTreeMap<String, QueryErr>);
+
+impl QueryFailures {
+    fn execute(
+        &mut self,
+        server: &str,
+        request: impl FnOnce() -> std::result::Result<query::Output, QueryErr>,
+    ) -> std::result::Result<query::Output, QueryErr> {
+        if let Some(error) = self.0.get(server).and_then(Self::server_error) {
+            return Err(error);
+        }
+        let result = request();
+        if let Err(error) = &result
+            && let Some(error) = Self::server_error(error)
+        {
+            self.0.insert(server.to_owned(), error);
+        }
+        result
+    }
+
+    fn server_error(error: &QueryErr) -> Option<QueryErr> {
+        match error {
+            QueryErr::Unavailable { root, reason } => Some(QueryErr::Unavailable {
+                root: root.clone(),
+                reason: reason.clone(),
+            }),
+            QueryErr::Indexing { server, seconds } => Some(QueryErr::Indexing {
+                server: server.clone(),
+                seconds: *seconds,
+            }),
+            QueryErr::Failed(_) => None,
+        }
+    }
 }
 
 fn query_context(globals: &GlobalFlags) -> Result<QueryContext> {
@@ -549,6 +643,51 @@ mod tests {
     use super::*;
     use registry::StopReason;
     use render::status::{self, StateRole};
+
+    #[test]
+    fn query_exit_uses_severity_not_argument_order() {
+        let codes = [0, 5, 6, 1, 4, 3];
+        for (rank, code) in codes.iter().enumerate() {
+            for other in &codes[..=rank] {
+                assert_eq!(query_exit(*code, *other), *code);
+                assert_eq!(query_exit(*other, *code), *code);
+            }
+        }
+    }
+
+    #[test]
+    fn query_failures_reuse_server_conditions_only() {
+        for code in [1, 3, 4] {
+            let mut failures = QueryFailures::default();
+            let mut requests = 0;
+            for _ in 0..3 {
+                let result = failures.execute("rust", || {
+                    requests += 1;
+                    Err(match code {
+                        3 => QueryErr::Unavailable {
+                            root: "/repo".into(),
+                            reason: query::UnavailableReason::NotRunning,
+                        },
+                        4 => QueryErr::Indexing {
+                            server: "rust".into(),
+                            seconds: 30,
+                        },
+                        _ => rimz::lsp::LspErr::Protocol("bad request".into()).into(),
+                    })
+                });
+                assert_eq!(result.err().unwrap().exit_code(), code);
+            }
+            assert_eq!(requests, if code == 1 { 3 } else { 1 });
+            assert!(
+                failures
+                    .execute("python", || Ok(query::Output::Answer {
+                        result: serde_json::Value::Null,
+                        document_uri: None
+                    }))
+                    .is_ok()
+            );
+        }
+    }
 
     #[test]
     fn list_table_orders_and_styles_server_states() {

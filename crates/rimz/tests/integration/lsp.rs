@@ -993,9 +993,58 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         );
     }
     env.rimz().args(["lsp", "find", "work"]).assert().success().stdout("function w::work  src/w.rs:1:1\nfunction w::worker  src/w.rs:1:1\nfunction r::rework  src/r.rs:1:1\nfunction u::unrelated  src/u.rs:1:1\n");
+    for json in [false, true] {
+        let targets = ["alias", "nosuch", "twin", "alias"];
+        let mut blocks = Vec::new();
+        let mut values = Vec::new();
+        for target in targets {
+            let mut command = env.rimz();
+            command.args(["lsp", "def", target]);
+            if json {
+                command.arg("--json");
+            }
+            let output = command.output().unwrap();
+            let code = output.status.code().unwrap();
+            if json {
+                let mut value: Value = serde_json::from_slice(&output.stdout).unwrap();
+                if code == 0 {
+                    value = json!({"outcome": "answer", "result": value});
+                }
+                value["target"] = target.into();
+                value["exit"] = code.into();
+                values.push(value);
+            } else {
+                blocks.push(format!(
+                    "==> {target} <==\n{}",
+                    String::from_utf8(output.stdout).unwrap()
+                ));
+            }
+        }
+        let mut command = env.rimz();
+        command.args(["lsp", "def"]).args(targets);
+        if json {
+            command.arg("--json");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(6));
+        assert!(output.stderr.is_empty());
+        if json {
+            assert_eq!(
+                serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+                json!(values)
+            );
+        } else {
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), blocks.join("\n"));
+        }
+    }
+    env.rimz().args(["lsp", "def", "alias", "x.py:1:1"]).assert().code(3).stderr("").stdout(format!(
+        "==> alias <==\n/fixture/definition.rs:1:1\n\n==> x.py:1:1 <==\nerror: no language server for {} (not running); use grep\n",
+        env.project_root.display()
+    ));
     for args in [
         &["lsp", "find", "work"][..],
         &["lsp", "def", "nosuch"],
+        &["lsp", "def", "alias", "nosuch"],
         &["lsp", "list", "--json"],
     ] {
         let (reader, writer) = std::io::pipe().unwrap();
