@@ -1605,6 +1605,27 @@ fn lsp_admission_optional_entry_errors_are_isolated() {
         assert!(result.startup_refused[0].contains(expected), "{field}");
         assert!(result.admitted.is_empty());
     }
+    let mut machine = MachineConfig::default();
+    machine.lsp.servers.insert(
+        "rust analyzer".into(),
+        serde_json::from_value(base).unwrap(),
+    );
+    let request = AdmissionRequest {
+        root: &env.project_root,
+        project: &env.project_root,
+        servers: &machine.lsp.servers,
+        untrusted_servers: &[],
+        policy: &machine.lsp,
+        runtime: &runtime,
+    };
+    let result = admit_launch(&request, &mut WaitQueue::default())
+        .expect("an optional entry with an invalid name must warn");
+    assert_eq!(
+        result.startup_refused,
+        [
+            "language server rust analyzer: server names must contain only letters, numbers, - or _; rename [lsp.servers.rust analyzer]"
+        ]
+    );
 }
 
 #[test]
