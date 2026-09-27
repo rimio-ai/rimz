@@ -60,3 +60,23 @@ fn pool_returns_the_first_input_error_with_its_type_intact() {
         Err(QueryErr::Indexing { seconds: 30, .. })
     ));
 }
+
+#[test]
+fn pool_claims_no_new_items_after_an_error() {
+    let started = Mutex::new(0);
+    let all_started = Condvar::new();
+    let result = bounded_map(&(0..12).collect::<Vec<_>>(), |index| {
+        let mut started = started.lock().unwrap();
+        *started += 1;
+        all_started.notify_all();
+        let (_started, timeout) = all_started
+            .wait_timeout_while(started, Duration::from_secs(2), |started| {
+                *started < QUERY_WORKERS
+            })
+            .unwrap();
+        assert!(!timeout.timed_out(), "workers must overlap");
+        Err::<(), _>(*index)
+    });
+    assert_eq!(result, Err(0));
+    assert_eq!(*started.lock().unwrap(), QUERY_WORKERS);
+}
