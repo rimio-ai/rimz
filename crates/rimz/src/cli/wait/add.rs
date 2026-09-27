@@ -81,13 +81,14 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             mark,
         };
         watch_trigger(spec, CheckOn::Any, timeout)
-    } else {
-        let command = command_string(&args.command)?;
+    } else if let Some(command) = args.run.clone() {
         watch_trigger(
             WatchSpec::Command(command),
             parse_on(args.on.as_deref()),
             timeout,
         )
+    } else {
+        unreachable!("validate_shape requires exactly one wait trigger")
     };
     let ArmOutcome::Armed { name, .. } = arm_delivery(
         &ctx.workspace,
@@ -130,16 +131,21 @@ fn watch_trigger(
 }
 
 fn validate_shape(args: &WaitArgs) -> Result<()> {
+    if !args.command.is_empty() {
+        let command = command_string(&args.command)?;
+        let quoted = shlex::try_quote(&command).context("quoting watched command suggestion")?;
+        bail!(
+            "the command after `--` is no longer accepted; pass it as one quoted string: --run {quoted}"
+        );
+    }
     if usize::from(args.in_after.is_some())
         + usize::from(args.pid.is_some())
         + usize::from(args.check.is_some())
         + usize::from(args.file.is_some())
-        + usize::from(!args.command.is_empty())
+        + usize::from(args.run.is_some())
         != 1
     {
-        bail!(
-            "choose exactly one wait trigger: --in, --pid, --check, --file, or a command after --"
-        );
+        bail!("choose exactly one wait trigger: --in, --pid, --check, --file, or --run");
     }
     if args
         .file
@@ -161,8 +167,11 @@ fn validate_shape(args: &WaitArgs) -> Result<()> {
     {
         bail!("--check needs a command");
     }
-    if args.on.is_some() && args.command.is_empty() && args.check.is_none() {
-        bail!("--on requires --check or a command after --");
+    if args.run.as_deref().is_some_and(|run| run.trim().is_empty()) {
+        bail!("--run needs a command");
+    }
+    if args.on.is_some() && args.run.is_none() && args.check.is_none() {
+        bail!("--on requires --check or --run");
     }
     if args.check.is_some() && args.on.as_deref() == Some("any") {
         bail!(
@@ -173,7 +182,7 @@ fn validate_shape(args: &WaitArgs) -> Result<()> {
         bail!("--every requires --check");
     }
     if args.timeout.is_some() && args.in_after.is_some() {
-        bail!("--timeout requires --pid, --check, --file, or a command after --");
+        bail!("--timeout requires --pid, --check, --file, or --run");
     }
     for (name, duration) in [
         ("--in", args.in_after),

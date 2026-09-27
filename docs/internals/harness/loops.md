@@ -441,7 +441,7 @@ A wait is a session-pinned delivery row: a `Deliver` task whose target is one li
 
 `SelfWait` is the only provenance that writes `wait_meta`: `armed_at` and the optional `delay`. A name that belongs to a project task, or for a team row to a machine task, is refused as configuration-owned.
 
-`rimz wait` accepts a positive delay under 24 hours, a positive `--pid`, a polled `--check`, a `--file` with optional `--grep`, or a command after `--`, and resolves the live calling agent through `@me`; a user shell cannot arm or cancel. `DeliveryTrigger::Watch` carries the spec, row polarity, and check-in timeout. PID watches observe existence, not process identity or exit status, and reject `--on`.
+`rimz wait` accepts a positive delay under 24 hours, a positive `--pid`, a polled `--check`, a `--file` with optional `--grep`, or `--run`, and resolves the live calling agent through `@me`; a user shell cannot arm or cancel. `DeliveryTrigger::Watch` carries the spec, row polarity, and check-in timeout. PID watches observe existence, not process identity or exit status, and reject `--on`.
 
 For signal deliveries, the builder applies caller-first, target-fallback defaults and the other-agent lifecycle guard ([cli/loop.md § Caller-scoped defaults](../../reference/cli/loop.md#caller-scoped-defaults)). One locked instance mutation then compares live rows by kind and session, parsed selector, normalized matches (absent equals empty), and resolved root. A duplicate returns `AlreadySubscribed` and rewrites nothing: not its name, prompt, provenance, or overlays.
 

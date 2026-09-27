@@ -81,8 +81,8 @@ rimz wait --in 30m
 rimz wait --pid 16776
 rimz wait --check 'nc -z localhost 3000'
 rimz wait --file build.log --grep 'READY'
-rimz wait -- gh run watch --exit-status
-rimz wait --on fail -- cargo test
+rimz wait --run 'gh run watch --exit-status'
+rimz wait --on fail --run 'cargo test'
 ```
 
 A timer has to be shorter than 24 hours. Everything else runs in a detached watcher with stdin closed, at the root of the checkout the wait was armed from, linked worktrees included; a polled `--check` or a `--file` watch samples once a second. When the trigger fires, the wake message names the command, its exit status, and the elapsed time, then points at a file holding the complete output rather than inlining it: `/tmp/rimz-waits/<name>.output` inside a [sandboxed pane](./security.md#sandbox-isolation), the same file under `~/.rimz/ws/<workspace-dir>/tmp/` otherwise. It is removed when the room closes, and `rimz loop logs <name>` keeps the last 4 KiB in durable history.

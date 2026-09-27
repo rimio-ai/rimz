@@ -176,7 +176,7 @@ A `--wait` subscription fills in scope the caller leaves out. From an agent the 
 | `team.*` | `team`, `instance` | `--match instance=<caller's cohort>`, such as `forge#feat-x`. A caller outside a team is an error. |
 | `agent.*` | `handle`, `session` | None: the add is refused. Name another agent with `--match handle=<other>` or `--match session=<other>`, so a target never wakes on its own lifecycle. |
 
-From the root checkout, pass `--match branch=<name>` or `--match path=<worktree-path>`, add from a linked worktree, or watch the command instead with `rimz wait -- gh run watch --exit-status`.
+From the root checkout, pass `--match branch=<name>` or `--match path=<worktree-path>`, add from a linked worktree, or watch the command instead with `rimz wait --run 'gh run watch --exit-status'`.
 
 ```sh
 rimz loop add ci-red --signal ci.failed --wait

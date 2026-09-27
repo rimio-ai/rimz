@@ -10,9 +10,9 @@ rimz wait --pid 16776                       # an existing process
 rimz wait --check 'nc -z localhost 3000'    # poll until the port opens
 rimz wait --file build.log                  # any file change
 rimz wait --file build.log --grep 'READY'   # a new matching line
-rimz wait -- gh run watch --exit-status     # a watched command
-rimz wait --on fail -- cargo test           # deliver only if the command fails
-rimz wait --timeout 1h -- cargo build       # request a check-in after 1h
+rimz wait --run 'gh run watch --exit-status' # a watched command
+rimz wait --on fail --run 'cargo test'      # deliver only if the command fails
+rimz wait --timeout 1h --run 'cargo build'  # request a check-in after 1h
 rimz wait list                              # pending waits (bare `rimz wait` does the same)
 rimz wait cancel wait-bold-comet
 rimz wait cancel --all
@@ -22,13 +22,13 @@ The [global flags](../cli.md#global-flags) apply.
 
 ## Arm a wait
 
-Give exactly one trigger: `--in`, `--pid`, `--check`, `--file`, or a command after `--`. With no trigger and no other arming flag, `rimz wait` lists pending waits instead.
+Give exactly one trigger: `--in`, `--pid`, `--check`, `--file`, or `--run`. With no trigger and no other arming flag, `rimz wait` lists pending waits instead.
 
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
 | `--in <DURATION>` | timer | Fire once after this delay. Greater than zero and less than `24h`. |
 | `--pid <PID>` | process | Fire once this existing process is gone. `1` to `2147483647`. |
-| `-- <COMMAND>...` | command | Run the command in a detached watcher and fire on its exit. |
+| `--run <COMMAND>` | command | Run the command in a detached watcher and fire on its exit. |
 | `--check <CMD>` | check | Poll a shell command until it succeeds (or fails with `--on fail`). |
 | `--every <DURATION>` | check only | Sleep between runs. Default `1s`, greater than zero and less than `24h`. |
 | `--file <PATH>` | file | Wait for a change in existence, size, or modification time. |
@@ -44,7 +44,7 @@ While an agent sleeps with waits pending, RimZ sends a neutral prompt-cache keep
 Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the workspace (a collision appends `-<N>`). The receipt names the wait, its trigger, and its target, then lists every pending row for the caller:
 
 ```console
-$ rimz wait -- cargo test
+$ rimz wait --run 'cargo test'
 armed wait-solid-pixel: watch: cargo test → @coder
 NAME              STATE               TARGET  AGE  TRIGGER
 wait-bold-comet   due 14:32           @coder  -    once at 14:32
@@ -57,15 +57,17 @@ Arming is refused, exit 1, in these cases:
 
 | Error | Cause |
 | --- | --- |
-| `choose exactly one wait trigger: --in, --pid, --check, --file, or a command after --` | Arming flags without a trigger, or more than one trigger. |
+| `choose exactly one wait trigger: --in, --pid, --check, --file, or --run` | Arming flags without a trigger, or more than one trigger. |
 | `--check needs a command` | An empty or whitespace-only check. |
+| `--run needs a command` | An empty or whitespace-only watched command. |
+| ``the command after `--` is no longer accepted; pass it as one quoted string: --run 'cargo test'`` | Legacy command words after `--`, even when another trigger is present. |
 | `--file needs a path` | An empty file path. |
 | `--grep requires --file` | A pattern without a file trigger. |
 | `--grep needs a pattern` | An empty pattern. |
-| `--on requires --check or a command after --` | `--on` with a timer, PID, or file. |
+| `--on requires --check or --run` | `--on` with a timer, PID, or file. |
 | `--on any has no meaning with --check; it polls until the command succeeds (default) or fails` | A check with `--on any`. |
 | `--every requires --check` | An interval on another trigger. |
-| `--timeout requires --pid, --check, --file, or a command after --` | `--timeout` with `--in`. |
+| `--timeout requires --pid, --check, --file, or --run` | `--timeout` with `--in`. |
 | `<flag> must be greater than zero` | Zero for `--in`, `--timeout`, or `--every`. |
 | `<flag> must be less than 24h` | `24h` or more for `--in`, `--timeout`, or `--every`. |
 | `--file <path> is a directory; watch a file` | The path names a directory. |
@@ -94,7 +96,7 @@ The receipt, the list, and the sidebar read `pid <PID>`. The delivered message s
 
 ### Polled check: `--check`
 
-`rimz wait --check 'nc -z localhost 3000'` runs the command through `sh -c` at the checkout root until it exits successfully. `--on fail` instead waits for a non-zero exit or death by signal. `--on any` is refused; use a command after `--` for a single run.
+`rimz wait --check 'nc -z localhost 3000'` runs the command through `sh -c` at the checkout root until it exits successfully. `--on fail` instead waits for a non-zero exit or death by signal. `--on any` is refused; use `--run` for a single run.
 
 The first run starts immediately. `--every` is the sleep between completed runs, default `1s`, not a fixed start-to-start interval. Each run truncates and rewrites the output file, so it holds the latest run's stdout and stderr. Exit 126 or 127 ends the wait and delivers `exit <CODE> after <ELAPSED>` rather than retrying a command that cannot run.
 
@@ -108,9 +110,11 @@ With `--grep 'READY'`, the watcher reads from the file's size at the arm point, 
 
 The message starts with `waited on file <path>`, adding ``for `<pattern>` `` with `--grep`. Completion reads `met after <ELAPSED>`; a match adds a one-line preview as ``met after <ELAPSED>: `<line>` `` and writes the whole matched line to the output file. The line stored in the verdict is capped at 4 KiB. A check-in reads `still not met after <ELAPSED>`.
 
-### Watched command: `--`
+### Watched command: `--run`
 
-The command after `--` runs through `sh -c` with stdin closed, at the root of the checkout it was armed from (a linked worktree's root when armed from one). It runs in a detached watcher in its own process group, so it outlives the turn that armed it. Stdout and stderr go to the [output file](#the-output-file).
+The `--run` command string runs through `sh -c` with stdin closed, at the root of the checkout it was armed from (a linked worktree's root when armed from one). It runs in a detached watcher in its own process group, so it outlives the turn that armed it. Stdout and stderr go to the [output file](#the-output-file).
+
+Quote the whole string so the caller's shell does not split it at `&&`, `|`, or `;`; it runs through POSIX `sh`, not bash.
 
 `--on` picks which final outcome delivers a message:
 

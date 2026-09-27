@@ -266,7 +266,7 @@ rimz wait --in 30m                           # one-shot wait after a delay
 rimz wait --check 'nc -z localhost 3000'     # poll until the service answers
 rimz wait --file build.log --grep 'READY'    # a new matching line in a file
 rimz wait --pid 16776                        # an existing process exits
-rimz wait -- gh run watch --exit-status      # a command exits, with its output in the message
+rimz wait --run 'gh run watch --exit-status' # a command exits, with its output in the message
 ```
 
 **Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#signals-the-rooms-event-bus) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.merged` and `pr.closed`, and agent and team lifecycle signals from what the room already watches, and anything can emit its own. A CI or pull request subscription follows the calling agent's own worktree branch.

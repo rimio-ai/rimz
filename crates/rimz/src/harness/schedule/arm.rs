@@ -305,7 +305,7 @@ fn ended_pinned_sessions<'a>(
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryScopeFailure {
     #[error(
-        "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Pass --match branch=<name> or --match path=<worktree-path>, or watch it with: rimz wait -- gh run watch --exit-status"
+        "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Pass --match branch=<name> or --match path=<worktree-path>, or watch it with: rimz wait --run 'gh run watch --exit-status'"
     )]
     RootCheckout,
     #[error("team.* waits need a team member; pass --match instance=<team#channel>")]
