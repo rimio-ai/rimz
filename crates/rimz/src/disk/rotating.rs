@@ -74,23 +74,18 @@ fn rotate_if_needed(path: &Path, max_bytes: u64) -> std::io::Result<()> {
 }
 
 pub(crate) fn rotated_path(path: &Path) -> PathBuf {
-    path.with_file_name(rotated_file_name(path))
+    path.with_file_name(format!("{}.1.jsonl", log_stem(path)))
 }
 
 fn lock_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{}.rotate.lock", log_stem(path)))
 }
 
-fn rotated_file_name(path: &Path) -> String {
-    format!("{}.1.jsonl", log_stem(path))
-}
-
-fn log_stem(path: &Path) -> String {
+fn log_stem(path: &Path) -> &str {
     path.file_name()
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_suffix(".jsonl"))
         .unwrap_or("log")
-        .to_owned()
 }
 
 struct RotationLock {
@@ -114,16 +109,13 @@ impl RotationLock {
     }
 
     fn create(lock_path: &Path) -> std::io::Result<Self> {
-        match OpenOptions::new()
+        OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(lock_path)
-        {
-            Ok(_) => Ok(Self {
-                path: lock_path.to_owned(),
-            }),
-            Err(err) => Err(err),
-        }
+            .open(lock_path)?;
+        Ok(Self {
+            path: lock_path.to_owned(),
+        })
     }
 }
 

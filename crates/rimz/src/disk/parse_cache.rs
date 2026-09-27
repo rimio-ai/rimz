@@ -99,6 +99,7 @@ struct Entry<T> {
     value: Arc<T>,
 }
 
+#[derive(PartialEq, Eq)]
 enum EntryStamp {
     Metadata { mtime: SystemTime, len: u64 },
     File(FileStamp),
@@ -115,15 +116,8 @@ impl<T> ParseCache<T> {
     /// last [`Self::store`].
     pub(crate) fn get(&self, path: &Path, mtime: SystemTime, len: u64) -> Option<Arc<T>> {
         self.slot.borrow().as_ref().and_then(|entry| {
-            (entry.path == path
-                && matches!(
-                    entry.stamp,
-                    EntryStamp::Metadata {
-                        mtime: cached_mtime,
-                        len: cached_len,
-                    } if cached_mtime == mtime && cached_len == len
-                ))
-            .then(|| Arc::clone(&entry.value))
+            (entry.path == path && entry.stamp == EntryStamp::Metadata { mtime, len })
+                .then(|| Arc::clone(&entry.value))
         })
     }
 
@@ -142,9 +136,8 @@ impl<T> ParseCache<T> {
     /// equal-length replacements inside one timestamp tick.
     pub(crate) fn get_stamped(&self, stamped: &StampedPath) -> Option<Arc<T>> {
         self.slot.borrow().as_ref().and_then(|entry| {
-            (entry.path == stamped.path
-                && matches!(entry.stamp, EntryStamp::File(stamp) if stamp == stamped.stamp))
-            .then(|| Arc::clone(&entry.value))
+            (entry.path == stamped.path && entry.stamp == EntryStamp::File(stamped.stamp))
+                .then(|| Arc::clone(&entry.value))
         })
     }
 

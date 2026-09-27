@@ -17,7 +17,6 @@ pub(crate) fn dir_size(path: &Path) -> u64 {
 fn dir_size_inner(path: &Path, seen_files: &mut HashSet<FileIdentity>) -> u64 {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return 0,
         Err(_) => return 0,
     };
     if file_identity(&meta).is_some_and(|identity| !seen_files.insert(identity)) {

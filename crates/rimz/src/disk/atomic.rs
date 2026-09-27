@@ -263,18 +263,18 @@ fn create_temp_file(path: &Path, mode: Option<u32>) -> io::Result<File> {
     Ok(file)
 }
 
-/// Append one pre-encoded record to `path` with a single `write()` call.
+/// Append one pre-encoded record to `path` with one `write_all` per record.
 ///
 /// The frame encoding (and its decoder) live in
 /// [`crate::store::event_log`]; this owns only the append discipline: one
-/// `write()` call per record so a partial write doesn't fragment, and a
-/// parent-dir sync when the append creates the file (file *existence* stays
-/// durable). The record itself carries no fsync — appended bytes ride the
-/// page cache until the write tail's debounced `sync_file_data` group
-/// barrier, or the pre-rename sync in `event_log`'s rotation.
-/// Recovery in [`crate::store::event_log::read_all`] tolerates a torn
-/// trailing record, and the frame CRC makes a power-cut's lost writeback
-/// read as deterministic corruption for `repair` to truncate.
+/// `write_all` per record, and a parent-dir sync when the append creates the
+/// file (file *existence* stays durable). The record itself carries no
+/// fsync — appended bytes ride the page cache until the write tail's
+/// debounced `sync_file_data` group barrier, or the pre-rename sync in
+/// `event_log`'s rotation. Recovery in
+/// [`crate::store::event_log::read_all`] tolerates a torn trailing record,
+/// and the frame CRC makes a power-cut's lost writeback read as
+/// deterministic corruption for `repair` to truncate.
 #[must_use = "durability barrier; check the result"]
 pub fn append_record_bytes(path: &Path, line: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
