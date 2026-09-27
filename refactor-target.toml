@@ -116,7 +116,7 @@ upward-dependencies = ["address"]
 # Native post-tool context attachment crosses the adapter/CLI hook seam.
 # A sanitized-prompt newtype and the RimZ prompt-block registry are the adapters' and the CLI's only way to hand over prompt text.
 # AgentState::last_request_at shares one request clock with producer and helper timers.
-surface-budget = 898
+surface-budget = 896
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -224,7 +224,8 @@ upward-dependencies = [
 # LspServerKind shares the configured server arm with admission, broker, registry, and status.
 # Watch kinds and bare subjects serve type-led wait listings.
 # Pass 26a: tightened config surface; config/lsp reopens after 30 scoped commits.
-surface-budget = 168
+# Pass 26c: the prompt-cache margin moved in from harness::idle_compact (+1).
+surface-budget = 169
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -318,7 +319,7 @@ path = "crates/rimz/src/harness"
 # GC scope is shared by the helper, durable assists, and stats projection.
 # Cache keepalive shares its request, helper recheck, prompt and producer entry across the CLI/sidebar seam.
 # `Redeemed` hands the refreshed usage to the CLI entry that publishes it through `sidebar::refresh`.
-surface-budget = 571
+surface-budget = 566
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -4180,3 +4181,8 @@ reason = "Keep initializationOptions and capabilities overrides after initialize
 kind = "item"
 key = "lsp::admission::RequiredDecision"
 reason = "Queue outcome remains distinct from policy and the memory fit predicate (pass 26a)."
+
+[[verdict]]
+kind = "shape"
+key = "kind+path+std::fs::read_dir"
+reason = "The four share only a missing root read as empty; each maps errors into its own type (SkillErr, anyhow, SandboxErr, io::Error) and keeps its own entry policy: agents::skills keys SKILL.md dirs first-root-wins, room::session warns past unreadable records to match a session, sandbox::skills canonicalizes and skips broken links with an optional preserved symlink, workspace dedups parsed WorkspaceDirName records. A disk helper needs a per-caller error mapper and saves no lines (pass 26c)."
