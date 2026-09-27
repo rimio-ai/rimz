@@ -814,6 +814,9 @@ pub struct AgentState {
     /// When the last provider request completed: a turn end, interruption, or successful compaction close. Carried across registration so resume does not move the idle-compaction clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_ended_at: Option<Timestamp>,
+    /// Best-effort last root tool timestamp, folded from the activity heartbeat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool_at: Option<Timestamp>,
     /// The user-task boundary used to retire older finished children. Follows `turn_started_at` except that agent and harness prompt headers carry it forward; context resets advance both stamps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_turn_started_at: Option<Timestamp>,
@@ -966,6 +969,8 @@ struct AgentStateWire {
     #[serde(default)]
     turn_ended_at: Option<Timestamp>,
     #[serde(default)]
+    last_tool_at: Option<Timestamp>,
+    #[serde(default)]
     user_turn_started_at: Option<Timestamp>,
     #[serde(default)]
     waiting_since: Option<Timestamp>,
@@ -1055,6 +1060,7 @@ impl From<AgentStateWire> for AgentState {
             subagent_started_at: wire.subagent_started_at,
             turn_started_at: wire.turn_started_at,
             turn_ended_at: wire.turn_ended_at,
+            last_tool_at: wire.last_tool_at,
             user_turn_started_at: wire.user_turn_started_at,
             waiting_since: wire.waiting_since,
             open_ask: wire.open_ask,
@@ -1079,6 +1085,14 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
+    /// Request-start estimate shared by cache-aligned timers.
+    pub fn last_request_at(&self) -> Option<Timestamp> {
+        let end = self.turn_ended_at?;
+        self.turn_started_at
+            .max(self.last_tool_at)
+            .map(|request| request.min(end))
+    }
+
     pub fn runs_in(&self, machine: crate::config::Isolation) -> crate::config::Isolation {
         self.effective_isolation
             .unwrap_or_else(|| crate::config::Isolation::resolve(self.isolation, None, machine))
@@ -1166,6 +1180,7 @@ impl AgentState {
             subagent_started_at: None,
             turn_started_at: None,
             turn_ended_at: None,
+            last_tool_at: None,
             user_turn_started_at: None,
             waiting_since: None,
             open_ask: None,

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
@@ -248,9 +249,17 @@ impl<'de> Deserialize<'de> for IdleCompactMode {
 }
 
 /// Harness behavior shared by immediate and parked message send paths.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct HarnessConfig {
+    /// Keep waiting agents' provider prompt caches warm.
+    pub cache_keepalive: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "prompt_cache_ttl_serde"
+    )]
+    prompt_cache_ttl: BTreeMap<String, Option<Duration>>,
     /// Default local-calendar-day cap for one room's whole agent fleet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<DayCap>,
@@ -278,12 +287,96 @@ pub struct HarnessConfig {
     pub flip_compact: Option<FlipCompact>,
 }
 
+impl Default for HarnessConfig {
+    fn default() -> Self {
+        Self {
+            cache_keepalive: true,
+            prompt_cache_ttl: BTreeMap::new(),
+            budget: None,
+            turn_budget: None,
+            smart_compact: None,
+            compact_instruction: None,
+            idle_compact: IdleCompactMode::default(),
+            flip_compact: None,
+        }
+    }
+}
+
 impl HarnessConfig {
+    /// Configured override, explicit off, or the provider definition's default.
+    pub fn prompt_cache_ttl(&self, kind: &crate::ids::AgentKind) -> Option<Duration> {
+        self.prompt_cache_ttl
+            .get(kind.as_str())
+            .copied()
+            .unwrap_or_else(|| crate::agents::find_definition(kind.as_str())?.prompt_cache_ttl())
+    }
+
     pub fn compact_instruction(&self, seat: CompactSeat) -> &str {
         self.compact_instruction.as_deref().unwrap_or(match seat {
             CompactSeat::Solo => DEFAULT_COMPACT_INSTRUCTION,
             CompactSeat::Team => TEAM_COMPACT_INSTRUCTION,
         })
+    }
+}
+
+mod prompt_cache_ttl_serde {
+    use super::*;
+
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<BTreeMap<String, Option<Duration>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        BTreeMap::<String, String>::deserialize(deserializer)?
+            .into_iter()
+            .map(|(kind, raw)| {
+                let ttl = parse_entry(&kind, &raw).map_err(serde::de::Error::custom)?;
+                Ok((kind, ttl))
+            })
+            .collect()
+    }
+
+    fn parse_entry(kind: &str, raw: &str) -> Result<Option<Duration>, String> {
+        if !crate::agents::known_kinds().any(|known| known == kind) {
+            return Err(format!(
+                "harness.prompt_cache_ttl.{kind}: unknown provider kind; use a built-in or installed plugin kind"
+            ));
+        }
+        if raw == "off" {
+            return Ok(None);
+        }
+        parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
+            .ok()
+            .filter(|ttl| *ttl > crate::harness::idle_compact::PROMPT_CACHE_MARGIN)
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "harness.prompt_cache_ttl.{kind} must be off or a duration longer than 1m, such as 5m"
+                )
+            })
+    }
+
+    pub fn serialize<S>(
+        values: &BTreeMap<String, Option<Duration>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        values
+            .iter()
+            .map(|(kind, ttl)| {
+                (
+                    kind,
+                    ttl.map_or_else(
+                        || "off".to_owned(),
+                        crate::utils::time::format_duration_compact,
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+            .serialize(serializer)
     }
 }
 
@@ -317,6 +410,57 @@ mod smart_compact_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_cache_defaults_and_overrides() {
+        let kind = crate::ids::AgentKind::new_unchecked;
+        let defaults = HarnessConfig::default();
+        assert!(defaults.cache_keepalive);
+        assert_eq!(
+            defaults.prompt_cache_ttl(&kind("claude")),
+            Some(Duration::from_secs(3600))
+        );
+        assert_eq!(
+            defaults.prompt_cache_ttl(&kind("codex")),
+            Some(Duration::from_secs(1800))
+        );
+        assert_eq!(defaults.prompt_cache_ttl(&kind("amp")), None);
+        let config: HarnessConfig = toml::from_str("cache_keepalive = false\n[prompt_cache_ttl]\nclaude = \"5m\"\ncodex = \"off\"\namp = \"10m\"").unwrap();
+        assert!(!config.cache_keepalive);
+        assert_eq!(
+            config.prompt_cache_ttl(&kind("claude")),
+            Some(Duration::from_secs(300))
+        );
+        assert_eq!(config.prompt_cache_ttl(&kind("codex")), None);
+        assert_eq!(
+            config.prompt_cache_ttl(&kind("amp")),
+            Some(Duration::from_secs(600))
+        );
+        assert_eq!(
+            toml::from_str::<HarnessConfig>(&toml::to_string(&config).unwrap()).unwrap(),
+            config
+        );
+    }
+
+    #[test]
+    fn prompt_cache_overrides_refuse_unknown_kinds_and_short_ttls() {
+        for (kind, value) in [
+            ("typo", "5m"),
+            ("claude", "1m"),
+            ("claude", "0s"),
+            ("claude", "on"),
+            ("claude", "nonsense"),
+        ] {
+            let raw = format!("[prompt_cache_ttl]\n{kind} = {value:?}");
+            let err = toml::from_str::<HarnessConfig>(&raw)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(&format!("harness.prompt_cache_ttl.{kind}")),
+                "{err}"
+            );
+        }
+    }
 
     #[test]
     fn smart_compact_deserializes_percent() {

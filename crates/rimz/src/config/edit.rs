@@ -939,6 +939,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_harness_flip_compact_edit(path)
         || is_harness_compact_instruction_edit(path)
         || is_harness_idle_compact_edit(path)
+        || is_harness_prompt_cache_ttl_edit(path)
         || is_daily_budget_edit(path)
         || is_turn_budget_edit(path)
         || is_auto_redeem_min_gain_edit(path)
@@ -1070,6 +1071,10 @@ fn is_harness_compact_instruction_edit(path: &[String]) -> bool {
 
 fn is_harness_idle_compact_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "idle_compact")
+}
+
+fn is_harness_prompt_cache_ttl_edit(path: &[String]) -> bool {
+    matches!(path, [root, table, _] if root == "harness" && table == "prompt_cache_ttl")
 }
 
 fn is_harness_flip_compact_edit(path: &[String]) -> bool {

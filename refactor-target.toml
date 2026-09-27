@@ -78,7 +78,8 @@ surface-budget = 96
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
-surface-budget = 6
+# Pre-tool hooks advance only the tool clock, leaving activity and the repeated-tool run intact.
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/agents"
@@ -108,7 +109,8 @@ upward-dependencies = ["address"]
 # The seat active-time sum and its session map are shared by store, sidebar and CLI.
 # Native post-tool context attachment crosses the adapter/CLI hook seam.
 # A sanitized-prompt newtype and the RimZ prompt-block registry are the adapters' and the CLI's only way to hand over prompt text.
-surface-budget = 897
+# AgentState::last_request_at shares one request clock with producer and helper timers.
+surface-budget = 898
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -197,6 +199,8 @@ path = "crates/rimz/src/config"
 upward-dependencies = [
     "agents",
     "harness::budget",
+    # TTL overrides must exceed the shared cache timer margin.
+    "harness::idle_compact",
     "harness::schedule",
     "harness::spec",
     "harness::team_prompt",

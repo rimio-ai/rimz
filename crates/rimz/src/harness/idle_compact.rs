@@ -12,8 +12,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::agents::{AgentAccount, AgentState, AgentStatus};
-use crate::config::{IdleCompactMode, MachineConfig, TeamsConfig};
+use crate::agents::{AgentState, AgentStatus};
+use crate::config::{HarnessConfig, IdleCompactMode, MachineConfig, TeamsConfig};
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
@@ -21,8 +21,8 @@ use crate::store::snapshot::SidebarSnapshot;
 /// Below this fill, re-caching costs less than an extra compaction turn.
 pub const IDLE_COMPACT_MIN_TOKENS: u64 = 50_000;
 
-/// Covers the final generation, producer tick, helper spawn, and submission.
-pub const PROMPT_CACHE_MARGIN: Duration = Duration::from_secs(3 * 60);
+/// Request anchoring excludes final generation; covers the producer tick, helper spawn, and submission.
+pub const PROMPT_CACHE_MARGIN: Duration = Duration::from_secs(60);
 
 /// Bounds duplicate helper spawns while a frame or context reading catches up.
 const IDLE_COMPACT_RESPAWN_THROTTLE: Duration = Duration::from_secs(10 * 60);
@@ -41,7 +41,7 @@ pub struct IdleCompactRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct FireRecord {
     fired_at: Timestamp,
-    fired_for_turn_end: Timestamp,
+    fired_for_request: Timestamp,
 }
 
 /// Idle interval in which compaction may run; cache expiry is an exclusive bound.
@@ -54,7 +54,7 @@ pub struct IdleWindow {
 pub fn fire_point(
     agent: &AgentState,
     mode: IdleCompactMode,
-    account: Option<&AgentAccount>,
+    harness: &HarnessConfig,
 ) -> Option<IdleWindow> {
     match mode {
         IdleCompactMode::Off => None,
@@ -63,8 +63,7 @@ pub fn fire_point(
             cache_expires: None,
         }),
         IdleCompactMode::On => {
-            let ttl = crate::agents::find_definition(agent.kind.as_str())?
-                .prompt_cache_ttl(agent.model.as_deref(), account)?;
+            let ttl = harness.prompt_cache_ttl(&agent.kind)?;
             let fire_after = ttl
                 .checked_sub(PROMPT_CACHE_MARGIN)
                 .filter(|duration| !duration.is_zero())?;
@@ -121,10 +120,10 @@ pub fn should_compact(
     window: Option<IdleWindow>,
     now: Timestamp,
 ) -> bool {
-    let (Some(window), Some(turn_ended_at)) = (window, agent.turn_ended_at) else {
+    let (Some(window), Some(last_request_at)) = (window, agent.last_request_at()) else {
         return false;
     };
-    let idle = now.as_second() - turn_ended_at.as_second();
+    let idle = now.as_second() - last_request_at.as_second();
     eligible_seat(agent)
         && command.is_some()
         && cohort_live(agent)
@@ -158,13 +157,11 @@ fn compact_idle_agents_with(
             continue;
         }
         let mode = resolve_mode(agent, teams, config.harness.idle_compact);
-        let account =
-            crate::sidebar::refresh::accounts::cached_account(runtime, &agent.login_key());
         let command = crate::agents::compact_command(agent, &config.harness);
         if !should_compact(
             agent,
             command.as_deref(),
-            fire_point(agent, mode, account.as_ref()),
+            fire_point(agent, mode, &config.harness),
             snapshot.now,
         ) {
             continue;
@@ -176,10 +173,10 @@ fn compact_idle_agents_with(
         let Some(pane_id) = snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
             continue;
         };
-        let (Some(command), Some(occupied_tokens), Some(turn_ended_at)) = (
+        let (Some(command), Some(occupied_tokens), Some(last_request_at)) = (
             command,
             agent.occupied_context_tokens(),
-            agent.turn_ended_at,
+            agent.last_request_at(),
         ) else {
             continue;
         };
@@ -198,7 +195,7 @@ fn compact_idle_agents_with(
                 &record_path,
                 &FireRecord {
                     fired_at: snapshot.now,
-                    fired_for_turn_end: turn_ended_at,
+                    fired_for_request: last_request_at,
                 },
             );
         }
@@ -207,7 +204,7 @@ fn compact_idle_agents_with(
 
 fn spawn_due(agent: &AgentState, now: Timestamp, record: Option<&FireRecord>) -> bool {
     record.is_none_or(|record| {
-        Some(record.fired_for_turn_end) != agent.turn_ended_at
+        Some(record.fired_for_request) != agent.last_request_at()
             && now.as_second() - record.fired_at.as_second()
                 >= IDLE_COMPACT_RESPAWN_THROTTLE.as_secs() as i64
     })
@@ -281,6 +278,7 @@ mod tests {
             ts(activity),
         );
         agent.team = Some("probe".to_owned());
+        agent.turn_started_at = Some(ts(activity));
         agent.turn_ended_at = Some(ts(activity));
         agent.usage.total_tokens = Some(tokens);
         agent.worktree_path = Some("/repo/worktree".to_owned());
@@ -313,7 +311,7 @@ mod tests {
             fire_point(
                 agent,
                 IdleCompactMode::After(Duration::from_secs(59 * 60)),
-                None,
+                &HarnessConfig::default(),
             ),
             ts(10_000),
         )
@@ -331,26 +329,26 @@ mod tests {
             fire_point(
                 &candidate,
                 IdleCompactMode::After(Duration::from_secs(59 * 60)),
-                None
+                &HarnessConfig::default()
             ),
             ts(10_000),
         ));
         assert!(!should_compact(
             &candidate,
             Some("/compact"),
-            fire_point(&candidate, IdleCompactMode::Off, None),
+            fire_point(&candidate, IdleCompactMode::Off, &HarnessConfig::default()),
             ts(10_000),
         ));
     }
 
     #[test]
-    fn predicate_uses_turn_end_despite_resume() {
+    fn predicate_clamps_request_anchor_after_resume() {
         let mut candidate = agent(AgentStatus::Idle, 30 * 60, 80_000);
         candidate.turn_ended_at = Some(ts(0));
         let window = fire_point(
             &candidate,
             IdleCompactMode::After(Duration::from_secs(57 * 60)),
-            None,
+            &HarnessConfig::default(),
         );
         for (now, expected) in [(57 * 60 - 1, false), (57 * 60, true), (86_400, true)] {
             assert_eq!(
@@ -364,6 +362,16 @@ mod tests {
     fn predicate_requires_a_completed_request() {
         let mut candidate = agent(AgentStatus::Idle, 0, 80_000);
         candidate.turn_ended_at = None;
+        assert!(!due(&candidate));
+    }
+
+    #[test]
+    fn predicate_counts_idle_from_the_last_request_not_the_response_end() {
+        let mut candidate = agent(AgentStatus::Idle, 5_000, 80_000);
+        candidate.last_tool_at = Some(ts(6_000));
+        candidate.turn_ended_at = Some(ts(9_000));
+        assert!(due(&candidate));
+        candidate.last_tool_at = Some(ts(7_000));
         assert!(!due(&candidate));
     }
 
@@ -388,32 +396,38 @@ mod tests {
 
     #[test]
     fn cache_timing_reaches_the_request_before_expiry() {
-        // Runtime premises: a one-second producer tick, ten seconds to spawn, ten seconds to submit, and two minutes for the previous final generation.
+        // Request anchoring leaves only tick, spawn, and submit latency.
         const PRODUCER_TICK_BOUND: u64 = 1;
         const HELPER_SPAWN_BOUND: u64 = 10;
         const KEYSTROKE_TO_REQUEST_BOUND: u64 = 10;
-        const FINAL_GENERATION_BOUND: u64 = 120;
-        for (kind, model, metered, ttl) in [
-            ("claude", "any", Some(true), Some(3600)),
-            ("codex", "gpt-5.6-terra", None, Some(1800)),
-            ("codex", "gpt-6-luna", Some(false), Some(1800)),
-            ("codex", "gpt-5-codex", Some(true), None),
-            ("claude", "any", Some(false), None),
-            ("claude", "any", None, None),
-            ("amp", "any", Some(true), None),
+        for (kind, model, config, ttl) in [
+            ("claude", "any", "", Some(3600)),
+            ("codex", "gpt-5.6-terra", "", Some(1800)),
+            ("codex", "gpt-6-luna", "", Some(1800)),
+            ("codex", "gpt-5-codex", "", Some(1800)),
+            ("amp", "any", "", None),
+            (
+                "claude",
+                "any",
+                "[prompt_cache_ttl]\nclaude = \"5m\"",
+                Some(300),
+            ),
+            (
+                "claude",
+                "any",
+                "[prompt_cache_ttl]\nclaude = \"off\"",
+                None,
+            ),
         ] {
             let mut candidate = agent(AgentStatus::Idle, 0, 80_000);
             candidate.kind = AgentKind::new_unchecked(kind);
             candidate.model = Some(model.to_owned());
-            let account = metered.map(|metered| crate::agents::AgentAccount {
-                metered: Some(metered),
-                ..Default::default()
-            });
-            let point = fire_point(&candidate, IdleCompactMode::default(), account.as_ref());
+            let harness: HarnessConfig = toml::from_str(config).unwrap();
+            let point = fire_point(&candidate, IdleCompactMode::default(), &harness);
             assert_eq!(
                 point.map(|point| point.fire_after.as_secs()),
-                ttl.map(|ttl| ttl - 180),
-                "{kind}/{model}/{metered:?}"
+                ttl.map(|ttl| ttl - 60),
+                "{kind}/{model}"
             );
             if let (Some(point), Some(ttl)) = (point, ttl) {
                 assert!(
@@ -421,7 +435,6 @@ mod tests {
                         + PRODUCER_TICK_BOUND
                         + HELPER_SPAWN_BOUND
                         + KEYSTROKE_TO_REQUEST_BOUND
-                        + FINAL_GENERATION_BOUND
                         < ttl
                 );
                 for (idle, expected) in [
@@ -484,8 +497,8 @@ mod tests {
         assert!(requests[0].command.contains("This seat is a team member"));
         let path = fire_record_path(&runtime, &candidate.kind, &candidate.agent_id);
         assert_eq!(
-            Some(read_fire_record(&path).unwrap().fired_for_turn_end),
-            candidate.turn_ended_at
+            Some(read_fire_record(&path).unwrap().fired_for_request),
+            candidate.last_request_at()
         );
         std::fs::remove_file(&path).unwrap();
         snapshot.agents[0].team = None;
@@ -547,17 +560,19 @@ mod tests {
 
         let same_turn = FireRecord {
             fired_at: ts(8_000),
-            fired_for_turn_end: ts(6_000),
+            fired_for_request: ts(6_000),
         };
         let mut resumed = agent(AgentStatus::Idle, 7_800, 80_000);
         resumed.turn_ended_at = candidate.turn_ended_at;
         assert!(!spawn_due(&resumed, ts(10_000), Some(&same_turn)));
         candidate.turn_ended_at = Some(ts(8_500));
+        assert!(!spawn_due(&candidate, ts(10_000), Some(&same_turn)));
+        candidate.last_tool_at = Some(ts(8_000));
         assert!(spawn_due(&candidate, ts(10_000), Some(&same_turn)));
 
         let recent = FireRecord {
             fired_at: ts(9_500),
-            fired_for_turn_end: ts(5_000),
+            fired_for_request: ts(5_000),
         };
         assert!(!spawn_due(&candidate, ts(10_000), Some(&recent)));
     }

@@ -20,7 +20,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let config = MachineConfig::load_lenient();
     let ctx = Ctx::for_workspace(request.workspace_id.clone(), Some(request.pane_id.mux()))?;
     let snapshot = ctx
-        .resolution_snapshot_with_context()
+        .published_snapshot()
         .context("reading idle-compaction delivery snapshot")?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -31,9 +31,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         .context("idle-compaction target agent is no longer in the rollup")?;
     let teams = rimz::config::effective::teams(&config, Some(&workspace.project_root));
     let mode = resolve_mode(agent, &teams, config.harness.idle_compact);
-    let account =
-        rimz::sidebar::refresh::accounts::cached_account(ctx.runtime(), &agent.login_key());
-    let window = fire_point(agent, mode, account.as_ref());
+    let window = fire_point(agent, mode, &config.harness);
     let command = rimz::agents::compact_command(agent, &config.harness);
     let now = Timestamp::now();
     if !should_compact(agent, command.as_deref(), window, now) {
@@ -58,12 +56,12 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         })
         .context("idle-compaction target pane is no longer bound to the agent")?;
 
-    let (Some(occupied_tokens), Some(turn_ended_at)) =
-        (agent.occupied_context_tokens(), agent.turn_ended_at)
+    let (Some(occupied_tokens), Some(last_request_at)) =
+        (agent.occupied_context_tokens(), agent.last_request_at())
     else {
         return Ok(());
     };
-    let idle_secs = now.as_second() - turn_ended_at.as_second();
+    let idle_secs = now.as_second() - last_request_at.as_second();
     if request.occupied_tokens != occupied_tokens {
         tracing::debug!(
             producer_occupied = request.occupied_tokens,

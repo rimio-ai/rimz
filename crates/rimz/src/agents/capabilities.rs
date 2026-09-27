@@ -508,12 +508,8 @@ pub trait TranscriptCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait ContextCapability: CoreCapability {
-    /// Known provider prompt-cache lifetime for this model and account.
-    fn prompt_cache_ttl(
-        &self,
-        _model: Option<&str>,
-        _account: Option<&AgentAccount>,
-    ) -> Option<std::time::Duration> {
+    /// Default provider prompt-cache lifetime, overridable in harness config.
+    fn prompt_cache_ttl(&self) -> Option<std::time::Duration> {
         None
     }
 

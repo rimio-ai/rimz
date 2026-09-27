@@ -1407,6 +1407,26 @@ fn harness_idle_compact_values_are_parsed_as_strings() {
 }
 
 #[test]
+fn harness_prompt_cache_edits_validate_provider_and_duration() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path(),
+    ));
+    editor.set("harness.cache_keepalive", "false").unwrap();
+    for value in ["5m", "off"] {
+        editor
+            .set("harness.prompt_cache_ttl.claude", value)
+            .unwrap();
+    }
+    for (key, value) in [("claude", "1m"), ("claude", "on"), ("typo", "5m")] {
+        let key = format!("harness.prompt_cache_ttl.{key}");
+        let err = editor.set(&key, value).unwrap_err().to_string();
+        assert!(err.contains(&key), "{err}");
+    }
+}
+
+#[test]
 fn harness_turn_budget_values_are_validated_as_plain_amount_strings() {
     let key = parse_key("harness.turn_budget").expect("key");
 

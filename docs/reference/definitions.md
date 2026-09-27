@@ -174,7 +174,7 @@ A selector is `family.event` or `family.*`: the family begins with a lowercase A
 
 `idle-compact` accepts `off`, `on`, or a duration such as `25m` (units `s`, `m`, `h`, `d`). YAML booleans `false` and `true` mean `off` and `on`; integers without units are refused. Omission inherits `harness.idle_compact`, whose default is `on`. An explicit role value overrides it, including a machine opt-out.
 
-`on` uses the provider prompt-cache lifetime minus three minutes; a duration supplies the threshold directly. Unknown lifetimes skip the role under `on`, and an adapter without a native compact command always skips. See [idle compaction](../guide/configuration.md#idle-compaction) for the provider table and eligibility.
+`on` uses the configured provider prompt-cache lifetime minus one minute; a duration supplies the threshold directly. Unknown or disabled lifetimes skip the role under `on`, and an adapter without a native compact command always skips. See [idle compaction](../guide/configuration.md#idle-compaction) for the provider defaults, overrides, and eligibility.
 
 This field is valid only on a team role. A standalone definition is rejected because a solo seat is never idle-compacted.
 
