@@ -99,6 +99,38 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     );
 }
 
+#[test]
+fn wait_checkin_default_yields_to_keepalive_but_explicit_timeout_wins() {
+    for (switch, ttl, explicit, expected) in [
+        ("true", "1h", None, None),
+        ("false", "1h", None, Some("30m")),
+        ("true", "off", None, Some("30m")),
+        ("true", "1h", Some("1s"), Some("1s")),
+    ] {
+        let env = Env::new();
+        register_calling_agent(&env);
+        wait_ok(&env, &["config", "set", "harness.cache_keepalive", switch]);
+        wait_ok(
+            &env,
+            &["config", "set", "harness.prompt_cache_ttl.claude", ttl],
+        );
+        let mut args = vec!["wait", "--json"];
+        if let Some(timeout) = explicit {
+            args.extend(["--timeout", timeout]);
+        }
+        args.extend(["--", "sleep", "600"]);
+        let receipt: serde_json::Value = serde_json::from_str(&wait_ok(&env, &args)).unwrap();
+        let name = receipt["name"].as_str().unwrap();
+        let tasks = wait_instances(&env);
+        assert_eq!(
+            tasks.0[name].timeout.as_deref(),
+            expected,
+            "keepalive {switch}, TTL {ttl}, explicit {explicit:?}"
+        );
+        wait_ok(&env, &["wait", "cancel", name]);
+    }
+}
+
 fn agents_wait_exit(env: &Env) -> Option<i32> {
     env.rimz()
         .args(["agents", "wait", "@planner", "--timeout", "1s"])

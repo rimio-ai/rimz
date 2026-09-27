@@ -72,7 +72,7 @@ struct WaitArgs {
     /// Deliver for a failed, successful, or any command outcome (default: any; --check: success).
     #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
     on: Option<String>,
-    /// Send one still-running notice after this duration; do not stop the wait (default: 30m).
+    /// Send one still-running notice; default 30m only without cache keepalive. Never stop the wait.
     #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     timeout: Option<Duration>,
     #[arg(long)]

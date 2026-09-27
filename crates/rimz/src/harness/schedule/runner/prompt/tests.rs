@@ -266,7 +266,9 @@ fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
                 }),
                 ..signal("wait.test", serde_json::json!({}))
             };
-            let delay = timeout.unwrap_or("30m");
+            let next = timeout
+                .map(|delay| format!("\nAnother check-in: rimz wait --in {delay}"))
+                .unwrap_or_default();
             let path = if output.is_empty() {
                 " · no output"
             } else {
@@ -282,7 +284,7 @@ fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
                     now()
                 ),
                 format!(
-                    "waited on `cargo test`\nstill running after 30m{path} [wait-test]\n\nStop it: rimz wait cancel wait-test\nAnother check-in: rimz wait --in {delay}"
+                    "waited on `cargo test`\nstill running after 30m{path} [wait-test]\n\nStop it: rimz wait cancel wait-test{next}"
                 )
             );
         }

@@ -28,6 +28,12 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     if agent.agent_id.is_provisional() {
         bail!("the calling agent has not registered a real session yet");
     }
+    let config = rimz::config::MachineConfig::load_lenient();
+    let timeout = args.timeout.or_else(|| {
+        (!(config.harness.cache_keepalive
+            && config.harness.prompt_cache_ttl(&agent.kind).is_some()))
+        .then_some(Duration::from_secs(30 * 60))
+    });
     let target = TaskTarget {
         kind: agent.kind.clone(),
         session: agent.agent_id.clone(),
@@ -47,7 +53,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         if nix::sys::signal::kill(process, None) == Err(nix::errno::Errno::EPERM) {
             bail!("cannot watch PID {pid}: permission denied; choose a process owned by your user");
         }
-        watch_trigger(WatchSpec::Pid { pid }, CheckOn::Any, &args)
+        watch_trigger(WatchSpec::Pid { pid }, CheckOn::Any, timeout)
     } else if let Some(check) = args.check.clone() {
         let spec = WatchSpec::Check {
             check,
@@ -57,7 +63,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
                 CheckOn::Success | CheckOn::Any => CheckOn::Success,
             },
         };
-        watch_trigger(spec, CheckOn::Any, &args)
+        watch_trigger(spec, CheckOn::Any, timeout)
     } else if let Some(file) = &args.file {
         let file = rimz::utils::path::normalize_path_lexical(
             &std::env::current_dir()
@@ -74,13 +80,13 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             grep: args.grep.clone(),
             mark,
         };
-        watch_trigger(spec, CheckOn::Any, &args)
+        watch_trigger(spec, CheckOn::Any, timeout)
     } else {
         let command = command_string(&args.command)?;
         watch_trigger(
             WatchSpec::Command(command),
             parse_on(args.on.as_deref()),
-            &args,
+            timeout,
         )
     };
     let ArmOutcome::Armed { name, .. } = arm_delivery(
@@ -114,16 +120,13 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     list::write_rows(&mut out, pending)
 }
 
-fn watch_trigger(spec: WatchSpec, on: CheckOn, args: &WaitArgs) -> (DeliveryTrigger, String) {
+fn watch_trigger(
+    spec: WatchSpec,
+    on: CheckOn,
+    timeout: Option<Duration>,
+) -> (DeliveryTrigger, String) {
     let description = spec.describe();
-    (
-        DeliveryTrigger::Watch {
-            spec,
-            on,
-            timeout: args.timeout.unwrap_or(Duration::from_secs(30 * 60)),
-        },
-        description,
-    )
+    (DeliveryTrigger::Watch { spec, on, timeout }, description)
 }
 
 fn validate_shape(args: &WaitArgs) -> Result<()> {
