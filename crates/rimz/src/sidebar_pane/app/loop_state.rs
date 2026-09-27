@@ -154,7 +154,6 @@ pub(super) struct LoopState {
     diag: crate::diag::DiagSink,
     result_rx: Receiver<FetchUpdate>,
     anim_start: Instant,
-    tick: Duration,
     /// Full pulled truth retained only while an overlay, focus fence, or gate
     /// hold can outlive its source. The steady overlay-free path moves the pull
     /// directly into `current` and keeps only the compact projections below.
@@ -249,7 +248,6 @@ impl LoopState {
             snapshot_now,
         );
         let now = Instant::now();
-        let tick = tick_for(config.tick_seconds);
         let pixel_wrap = config.mux == MuxName::Tmux;
         let read_marks = ReadMarkStore::new(runtime.clone(), config.instance_id.clone());
         let width = crate::mux::SidebarWidth::from_config(
@@ -270,7 +268,6 @@ impl LoopState {
             diag,
             result_rx,
             anim_start: now,
-            tick,
             last_focus_observation: FocusObservation::from_snapshot(&current),
             last_pulled_sig: observe::PulledFrameSig::from_snapshot(&current),
             overlay_baseline: None,
@@ -331,7 +328,7 @@ impl LoopState {
             // a fold must run to release the frozen row/group order after idle.
             let watchdog_due =
                 SELF_CLOSE_WATCHDOG.saturating_sub(self.last_self_close_check.elapsed());
-            let mut timeout = self.tick.min(watchdog_due);
+            let mut timeout = tick_for(self.config.tick_seconds).min(watchdog_due);
             if let Some(hold) = self.ui.order_hold.as_ref() {
                 let now_ms = jiff::Timestamp::now().as_millisecond();
                 let remaining = Duration::from_millis((hold.expires_ms - now_ms).max(0) as u64);
@@ -1154,7 +1151,7 @@ impl LoopState {
         // Data backstop: catch pane/git drift no store delta announced. It is
         // self-gated to the data tick; an armed clamp-deferred nudge merges
         // into this fold instead of waiting to echo it.
-        if self.fetched_at.elapsed() >= self.tick {
+        if self.fetched_at.elapsed() >= tick_for(self.config.tick_seconds) {
             fetch.request(FetchRequest::default(), false);
         }
 

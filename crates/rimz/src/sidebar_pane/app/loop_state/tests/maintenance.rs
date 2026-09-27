@@ -276,7 +276,7 @@ fn frame_timing_caps_idle_timeout_at_order_hold_expiry() {
         expires_ms: jiff::Timestamp::now().as_millisecond() + 200,
     });
 
-    rig.state.tick = Duration::from_secs(10);
+    rig.state.config.tick_seconds = 10;
     let (_active, timeout) = rig.state.frame_timing();
 
     assert!(
