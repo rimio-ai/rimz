@@ -616,7 +616,12 @@ fn validate_server(
     server: &str,
     config: &crate::config::LspServerConfig,
 ) -> Result<Option<(u64, Duration)>> {
-    registry::directory(root, server)?;
+    registry::directory(root, server).map_err(|error| match error {
+        LspErr::Configuration(message) => LspErr::Configuration(format!(
+            "language server {server}: {message}; rename [lsp.servers.{server}]"
+        )),
+        error => error,
+    })?;
     if config.root_markers.is_empty()
         || config.extensions.is_empty()
         || config.command.first().is_none_or(String::is_empty)
