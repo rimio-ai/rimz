@@ -1765,8 +1765,23 @@ reason = "MessageEdit::apply is called by CLI requeue as well as the writer; nar
 
 [[verdict]]
 kind = "item"
+key = "store::writer::AgentLifecycleReceipt"
+reason = "waiting_cleared hides transition interpretation from the hook caller; deleting it moves that interpretation to two call sites (pass 27b)."
+
+[[verdict]]
+kind = "item"
+key = "store::writer::DEFAULT_EVENT_LOG_ROTATE_BYTES"
+reason = "The CLI's rotate-events default speaks store, not disk; the re-export keeps that layer (pass 27b)."
+
+[[verdict]]
+kind = "item"
+key = "store::writer::fail_agent_launch_batch_with"
+reason = "Per-identity commit order is a test seam pinning a fix (pass 27b)."
+
+[[verdict]]
+kind = "item"
 key = "store::writer::AgentLaunchScope"
-reason = "Fork, launch and restart assemble fields from different sources, with restart copying the card channel; a constructor would only rename that assembly (pass 17b)."
+reason = "Fork, launch, restart, supervised run and resume assemble session, cwd, branch and description from different sources; a constructor would only rename that assembly (pass 17b; channel field deleted, pass 27b)."
 
 [[verdict]]
 kind = "item"
@@ -3702,11 +3717,6 @@ reason = "Pass 24a: cannot leave `effective`'s public surface — harness/schedu
 kind = "item"
 key = "config::effective::ProjectTasksErr"
 reason = "Pass 24a: carried by the kept public EffectiveConfigErr::Tasks::source, as the effective::Result alias is by the public load and project_tasks signatures."
-
-[[verdict]]
-kind = "item"
-key = "pane::pane_is_host"
-reason = "Pass 24a: narrowed to pub(crate) and restored. Public rustdoc for store::snapshot::panes::own_view_is_daemon (panes.rs:352) and store::snapshot::view::reap::only_daemon_view (reap.rs:180) links to it, and cargo xtask doc is a gate; unblocked by a pass on store that rewrites those links as plain backticks."
 
 [[verdict]]
 kind = "item"

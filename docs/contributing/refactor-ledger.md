@@ -4,13 +4,14 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-Survey at `c5edd6ff8` (2026-09-28, pass 26c), rebased onto pass 26a (`17cc18ca6`). Rewrite this section whenever a pass ends.
+Survey at `0a4d96f7c` (2026-09-28, pass 27b). Rewrite this section whenever a pass ends.
 
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
-- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `store/writer`; pass 27a closed `agents/adapters/claude`.
+- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08); pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
+- **Atlas gap:** `ledger.rs::commits_since` resolves an off-trunk SHA without an ancestry check, so a rebased-away row SHA reports no problem (reported in pass 27b).
 - **Unjudged families:** the install shape family `PendingWrite::optional+report_files+settings_json::commit_pair+…` (`agents/adapters/{copilot,cursor}/install.rs`), newly over the finding gate; guard families `RunStatus::Completed` (four sites), `wait_for_required` (lsp, with 26a), `Isolation::Host`, and `degraded`.
 
 ## Module verdicts
@@ -172,7 +173,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `mux/tab_name` | holds; landed pass-24c | `e083557ba` | 30 | already crate-internal. |
 | `mux/mount_proof` | holds; landed pass-24c | `e083557ba` | 30 | the backends' mount proof. |
 | `mux/pane_writer` | holds; landed pass-24c | `e083557ba` | 30 | the per-pane write lock `pane send` runs through. |
-| `pane` | holds; landed pass-24a | `4e445b73d` | 30 | owns `ClientPaneView`; `pane_is_host` linked from `store/snapshot` docs (deferred); `proc` cycle by intent. |
+| `pane` | holds; landed pass-24a | `4e445b73d` | 30 | owns `ClientPaneView`; `proc` cycle by intent. |
 | `proc` | holds; landed pass-25 | `358688a13` | 30 | platform seams, bounded execution and pane-probe abstention hold. |
 | `reload` | holds; landed pass-23c | `bc333aa67` | 30 | one durable staged-build path. |
 | `remote` | holds; landed pass-21a | `d9d30b10b` | 30 | pure transitions here, drivers in `cli/remote`. |
@@ -219,10 +220,10 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar_pane/render/fmt` | holds; landed pass-24c | `e083557ba` | 30 | label formatters are the render vocabulary. |
 | `sidebar_pane/render/layout` | holds; landed pass-24c | `e083557ba` | 30 | width vocabulary at render reach. |
 | `sidebar_pane/render/ansi` | holds; landed pass-24c | `e083557ba` | 30 | the one ANSI writer. |
-| `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b; pass-21b | — | — | owns every record it persists, imports nothing above it. |
+| `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b; pass-21b; pass-27b | — | — | owns every record it persists, imports nothing above it. |
 | `store/(root)` | holds; landed pass-24c | `e083557ba` | 30 | `snapshot` `pub` for the integration crate. |
 | `store/snapshot` | holds; landed pass-23a | `7c2fb3b70` | 30 | view model crate-wide because the renderer decodes it. |
-| `store/writer` | holds; landed pass-17b | `793e3fd0a` | 30 | one log boundary with four cache policies; one publish tail. |
+| `store/writer` | holds; landed pass-27b | `0a4d96f7c` | 30 | one log boundary; one queue terminal step; one lifecycle staging path. |
 | `store/event` | holds; landed pass-21b | `19c872874` | 30 | legacy `message.removed` parse holds. |
 | `store/message` | holds; landed pass-21b | `19c872874` | 30 | status aliases hold for mixed-binary workspaces; header grammar and codec hold. |
 | `store/gc` | holds; landed pass-21b | `19c872874` | 30 | exporter check pinned by `b58b6594c`. |
@@ -296,7 +297,8 @@ Candidates a pass judged real but could not land, each with what unblocks it.
 - `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
 - `agents/adapters/codex`: `cap_turn_error_label` and `TURN_ERROR_LABEL_MAX` copy Claude's `statusline` pair word for word; a shared helper beside `TurnErrorClass::classify_label` in `agents/context` lands with a pass owning codex or `agents/context`.
 - `config/definitions`: one load context for the seven-argument `Resolver::new` and the `SeatLoader` repack, plus one safe-name predicate (about −20 SLOC). Waits for the module's pace to drop below hot.
-- `pane::pane_is_host` → `pub(crate)` once `store/snapshot` public rustdoc stops linking it. Belongs to a `store` pass.
+- `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
+- `store/writer/lifecycle` ↔ `store/snapshot`: `lifecycle_transition` and the snapshot's lifecycle projection each assemble `lifecycle::step` inputs from an `AgentState`. One shared constructor waits for a pass on `store/snapshot`.
 - `harness/launch`: three relaunch sites in `cli/agents_cmd/{fork,restart}.rs` repeat posture prompt fields; needs a posture-aware seam `launch` may not import.
 - `harness/schedule/runner.rs`: `run_command`/`prepare_check` carry the cx; `fire_due_tasks` and `parse_signal_selector` are the seams. Waits for pace to settle.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
