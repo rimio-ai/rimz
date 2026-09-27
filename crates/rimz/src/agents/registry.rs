@@ -255,6 +255,15 @@ mod tests {
                 "{kind}"
             );
         }
+        for definition in all_definitions() {
+            if let Some(ttl) = definition.prompt_cache_ttl() {
+                assert!(
+                    ttl > crate::config::PROMPT_CACHE_MARGIN,
+                    "{}: idle compaction needs a TTL above the cache margin",
+                    definition.spec().kind
+                );
+            }
+        }
     }
 
     #[test]
