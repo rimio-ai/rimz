@@ -266,14 +266,14 @@ allowed-dependencies = [
 # Room entry asks for the legacy roots that can hold config, doctor for all of them.
 # Room writers and collectors share retention policy below store and diagnostics.
 # Lifetime classes expose room runtime paths and lock-preserving cleanup.
-# State classes expose their inventory and shared path routing for root-only readers.
+# State classes expose shared path routing for root-only readers.
 # Record codecs and cross-room scanners share the layout version, legacy default, and two validation entry points.
 # File-backed lock guards share blocking and immediate inode-checked acquisition.
 # Root-only readers share history probes and the remaining room retention policy.
 # Explicit state pairing and runtime-only preparation keep lock identity independent of runtime roots.
 # Daily machine GC shares its stamp and election-lock paths with the harness.
 # StatePaths::remove_root and RuntimePaths::remove_root let room replacement remove both whole trees.
-surface-budget = 204
+surface-budget = 200
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -2373,11 +2373,6 @@ key = "disk::lock::try_acquire"
 reason = "CLI supervised tests and message integration tests pin immediate lock contention through this public method. (pass 19b)."
 
 [[verdict]]
-kind = "pass-through"
-key = "disk::lock::acquire_with_timeout"
-reason = "The private deadline forwarder hides lock acquisition once; inlining is sideways. Integration common::DaemonGuard needs a 120-second bound while sidebar presence supplies its own (df017267b). (pass 19b)."
-
-[[verdict]]
 kind = "item"
 key = "disk::lock::LOCK_TIMEOUT"
 reason = "Sidebar refresh usage tests compare their timeout budgets to this crate-visible constant; atlas private would break those test callers. (pass 19b)."
@@ -2396,6 +2391,16 @@ reason = "Three outcomes preserve peer reuse, elected publication and local-only
 kind = "item"
 key = "disk::rotating::append"
 reason = "Best-effort rotating JSONL diagnostics deliberately skip fsync; generation traversal and append policy do not merge with durable atomic writes. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::legacy_layout"
+reason = "serde default named by string in workspace/record.rs; atlas sees no referrer; pins pre-layout records reading as layout 1 and being refused (2bf9c08d0). (pass 27d)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::HistoryPaths"
+reason = "Returned by pub StatePaths::history_paths, which cli/list.rs calls; private_interfaces floors it. (pass 27d)."
 
 [[verdict]]
 kind = "item"
