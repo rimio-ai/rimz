@@ -190,7 +190,7 @@ fn spawn_helper(runtime: &RuntimePaths, orphan: &OrphanedSubagent) {
     }
 }
 
-fn spawn_digest_helper(runtime: &RuntimePaths, parent_agent_id: AgentSessionId) {
+pub fn spawn_digest_helper(runtime: &RuntimePaths, parent_agent_id: AgentSessionId) {
     let request = SubagentDigestRequest {
         workspace_id: runtime.workspace_id.clone(),
         parent_agent_id,

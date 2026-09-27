@@ -321,7 +321,8 @@ path = "crates/rimz/src/harness"
 # `Redeemed` hands the refreshed usage to the CLI entry that publishes it through `sidebar::refresh`.
 # Peer launch receipts share the per-run response path with the publisher.
 # The peer-run interface serves launch, hook enrollment, and terminal backstops.
-surface-budget = 572
+# Lifecycle hooks share the detached fleet-digest helper with the orphan sweep.
+surface-budget = 573
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
