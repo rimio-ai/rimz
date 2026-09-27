@@ -6,6 +6,11 @@
 //! rendered as the human report ([`render`]) or serialized as JSON — to stdout
 //! or atomically to a file. Collection lives in the sibling modules; presentation
 //! lives in [`render`]; this file only assembles and emits.
+//!
+//! Each source a section reads fails on its own: a source added to an existing
+//! section carries its own error, so its failure renders as one note inside the
+//! section and never replaces data the section already showed. A broken config
+//! is exactly when someone runs doctor.
 
 use std::path::{Path, PathBuf};
 
