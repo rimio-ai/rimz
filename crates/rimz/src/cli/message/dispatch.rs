@@ -133,12 +133,7 @@ pub(super) fn send_message(
             wait.deadline_from(wait_started),
         );
     }
-    send::report_dispatch(
-        send::ReportMode::from(kind),
-        &target,
-        &result.outcomes,
-        &result.compacted,
-    )
+    send::report_dispatch(kind, &target, &result.outcomes, &result.compacted)
 }
 
 /// Validate the flag combinations a send mode forbids, then resolve it into the
