@@ -165,6 +165,16 @@ impl RebirthPlan {
             tracing::debug!(workspace = %self.paths.workspace_id, error = %err, "crash archive skipped");
         }
 
+        // Before recovery respawns panes, so no recovered peer's fresh turn is failed.
+        if let Some(store) = store.as_ref() {
+            for agent in &self.crash_roster {
+                if let Err(err) =
+                    crate::harness::run::fail_peer_run(store, agent, "peer room session ended")
+                {
+                    tracing::warn!(workspace = %self.paths.workspace_id, agent_id = %agent.agent_id, error = %err, "rebirth: could not fail peer turn");
+                }
+            }
+        }
         let (resume, resumed) = if choice == RebirthChoice::Recover {
             materialize_recovery(
                 store.as_ref(),

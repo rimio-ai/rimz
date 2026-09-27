@@ -670,11 +670,15 @@ The exit code is `0` when every target completes; otherwise it is the status cod
 
 `rimz agents stop <REF>` ends an agent's CLI process the way Ctrl+C would. For a live supervised run it cancels the run; for a completed run kept open with `--keep` it reclaims the pane; for an agent it closes the pane. The provider's session files stay on disk, so a stopped agent is one [`--resume`](#resume-agents) away.
 
+An interactive peer still takes the pane-close path when it has a launcher-opened run, whether that run is open or already terminal. An open turn reports failure to its launcher when session-end or the backstop observes the stop; an idle peer with no open turn reports nothing.
+
 Stopping a parent first stops its live children launched with `rimz subagents`, including when [`rimz teams stop`](./teams.md#drive-a-live-team) reaches the parent. Without `--all`, the reference must match one agent. With `--all`, `stop` acts on every match, prints one result line per agent, and exits `1` if any stop failed.
 
 #### `restart`
 
 `rimz agents restart <REF>` replaces one live agent's pane and resumes its provider session. It focuses the pane, opens the replacement in the same layout position, and closes the old pane; focus follows the replacement on Zellij and tmux.
+
+A peer's open launcher-requested turn is failed before the replacement pane opens and becomes eligible for its launcher's fleet report. The replacement does not continue that turn's run.
 
 The replacement renders the agent's profile from current configuration, including its isolation default, so profile edits take effect, and keeps its role, team, channel, permission mode, and recorded `--isolation`. One-off launch flags (`--model`, `--agent`, passthrough arguments) are not recorded and do not carry over. When the profile now resolves to a different provider, including an agent launched with `--agent`, restart refuses and points to `rimz agents <profile> --agent <kind>` for an explicit fresh launch.
 

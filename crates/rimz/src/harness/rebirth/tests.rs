@@ -381,6 +381,46 @@ fn recover_ends_only_agents_not_resumed_without_overwriting_worktree_gone_reason
 }
 
 #[test]
+fn rebirth_fails_peer_turns_even_when_the_peer_is_recovered() {
+    use crate::store::run::{PeerRun, RunRecord, RunStatus};
+    for choice in [RebirthChoice::Recover, RebirthChoice::Fresh] {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&[("peer", dir.path(), true)]);
+        let mut plan = fixture.inspect(false);
+        let peer = plan
+            .crash_roster
+            .iter_mut()
+            .find(|agent| agent.agent_id.as_str() == "peer")
+            .unwrap();
+        peer.launch_id = Some("peer-launch".into());
+        peer.launched_by = Some(crate::agents::LaunchedBy {
+            kind: peer.kind.clone(),
+            agent_id: "launcher".into(),
+        });
+        let mut record = RunRecord::new(
+            fixture.paths.workspace_id.clone(),
+            peer.kind.clone(),
+            crate::agents::PermissionMode::Auto,
+            "task".into(),
+            dir.path().into(),
+        );
+        record.peer = Some(PeerRun {
+            launch_id: "peer-launch".into(),
+            opened_by: Vec::new(),
+        });
+        crate::harness::run::create(&fixture.paths, &record).unwrap();
+        plan.materialize(choice, "rimz-test");
+        assert_eq!(
+            crate::harness::run::load(&fixture.paths, &record.run_id)
+                .unwrap()
+                .status,
+            RunStatus::Failed,
+            "{choice:?}"
+        );
+    }
+}
+
+#[test]
 fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
     use crate::agents::PermissionMode;
     use crate::harness::run;
