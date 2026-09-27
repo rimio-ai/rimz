@@ -37,10 +37,7 @@ impl Target {
             return Err(LspErr::Protocol("expected initialize".into()));
         }
         let cwd = editor_root(root, first, &std::env::current_dir()?)?.canonicalize()?;
-        let entries = {
-            let _lock = registry::lock()?;
-            registry::sweep_locked()?
-        };
+        let entries = registry::sweep()?;
         let checkout = registry::enclosing_checkout(&cwd, &entries);
         let workspace =
             crate::workspace::WorkspaceResolver::resolve(checkout.unwrap_or(&cwd), None)
@@ -71,10 +68,7 @@ impl Target {
     pub fn admit(&self, queue: &mut admission::WaitQueue) -> Result<admission::Admitted> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let entries = {
-                let _lock = registry::lock()?;
-                registry::sweep_locked()?
-            };
+            let entries = registry::sweep()?;
             let entry = entries
                 .into_iter()
                 .find(|entry| entry.root == self.root && entry.server == self.server);

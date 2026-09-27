@@ -318,7 +318,7 @@ fn eviction_candidates(
     entries.retain(|entry| {
         entry.state == registry::State::Ready
             && (entry.root != root || entry.server != server)
-            && crate::proc::process_is_live(entry.broker_pid, Some(&entry.broker_start_token))
+            && entry.broker_is_alive()
             && entry.ready_at_ms.is_some_and(|ready| {
                 now.saturating_sub(ready) >= YOUNG_PROTECTION_MS
                     && now.saturating_sub(ready.max(entry.last_request_at_ms.unwrap_or(ready)))
@@ -417,12 +417,7 @@ fn record_shortfall(event: &str, shortfall: &Shortfall) -> Result<()> {
 fn committed_bytes(entries: &[registry::Entry]) -> (u64, Vec<Holder>) {
     let mut committed = 0_u64;
     let mut holders = Vec::new();
-    for entry in entries.iter().filter(|entry| {
-        matches!(
-            entry.state,
-            registry::State::Starting | registry::State::Indexing | registry::State::Ready
-        )
-    }) {
+    for entry in entries.iter().filter(|entry| entry.state.is_running()) {
         let rss_bytes = entry
             .server_pid
             .and_then(crate::proc::tree_totals)

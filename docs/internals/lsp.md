@@ -172,7 +172,7 @@ Bounds are eight attached clients, 256 queued requests per client (`-32803` on o
 
 The registry is machine-level rather than per-room because admission budgets one machine's memory across every room on it.
 
-`disk::paths::lsp_runtime_dir()` holds `admission.lock`, owner-tagged `queue/` tickets, and one directory per key: the first 16 hex characters of the canonical checkout SHA-256 plus server name. Each directory has `entry.json`, `sock`, and a publication lock. There is no shared registry JSON file. `registry::sweep_locked`, used by admission, `list`, and `stop`, retains entries while the broker process token is live even when hello fails; an unavailable socket must not orphan a live server. Socket paths are validated against the Unix path budget.
+`disk::paths::lsp_runtime_dir()` holds `admission.lock`, owner-tagged `queue/` tickets, and one directory per key: the first 16 hex characters of the canonical checkout SHA-256 plus server name. Each directory has `entry.json`, `sock`, and a publication lock. There is no shared registry JSON file. `registry::sweep`, used by `list`, `status`, `stop`, and attach, takes the admission lock; admission uses `registry::sweep_locked` while holding it across its work. Both retain entries while the broker process token is live even when hello fails; an unavailable socket must not orphan a live server. Socket paths are validated against the Unix path budget.
 
 ## Configuration
 

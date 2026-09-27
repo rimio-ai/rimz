@@ -428,10 +428,7 @@ fn status(
     json: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let entries = {
-        let _lock = registry::lock()?;
-        registry::sweep_locked()?
-    };
+    let entries = registry::sweep()?;
     let cwd = std::fs::canonicalize(
         path.or_else(|| globals.root.clone())
             .unwrap_or(std::env::current_dir()?),
@@ -576,10 +573,7 @@ fn list_table(
     ])
     .right(&[3, 4, 5, 6, 7, 8]);
     for entry in entries {
-        let running = matches!(
-            entry.state,
-            State::Starting | State::Indexing | State::Ready
-        );
+        let running = entry.state.is_running();
         let (glyph, style) = render::verdict(status::lsp(&entry.state));
         let (rss, peak) = if running {
             let (rss_kb, peak_kb) = entry.server_pid.map_or((0, 0), &memory);
@@ -633,10 +627,7 @@ fn room_entries(
 }
 
 fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
-    let mut entries = {
-        let _lock = registry::lock()?;
-        registry::sweep_locked()?
-    };
+    let mut entries = registry::sweep()?;
     if !all {
         let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
         let workspace =
@@ -664,10 +655,7 @@ fn stop(
     all: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let entries = {
-        let _lock = registry::lock()?;
-        registry::sweep_locked()?
-    };
+    let entries = registry::sweep()?;
     let cwd = std::fs::canonicalize(
         path.or_else(|| globals.root.clone())
             .unwrap_or(std::env::current_dir()?),

@@ -63,14 +63,8 @@ pub fn check_startup(
                     .find(|entry| {
                         entry.root == root
                             && entry.server == *name
-                            && matches!(
-                                entry.state,
-                                State::Starting | State::Indexing | State::Ready
-                            )
-                            && crate::proc::process_is_live(
-                                entry.broker_pid,
-                                Some(&entry.broker_start_token),
-                            )
+                            && entry.state.is_running()
+                            && entry.broker_is_alive()
                     })
                     .map(|entry| Outcome::Running {
                         state: entry.state.clone(),

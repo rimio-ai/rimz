@@ -2,7 +2,7 @@
 
 use super::{memory, registry};
 use crate::lsp::Result;
-use registry::{State, StopReason};
+use registry::StopReason;
 use std::time::Duration;
 
 pub(super) fn check(percent: u8) -> Result<()> {
@@ -18,12 +18,7 @@ pub(super) fn check(percent: u8) -> Result<()> {
         return Ok(());
     };
     let mut entries = registry::read_entries()?;
-    entries.retain(|entry| {
-        matches!(
-            entry.state,
-            State::Starting | State::Indexing | State::Ready
-        ) && crate::proc::process_is_live(entry.broker_pid, Some(&entry.broker_start_token))
-    });
+    entries.retain(|entry| entry.state.is_running() && entry.broker_is_alive());
     registry::kill_order(&mut entries);
     for mut entry in entries {
         let free_before = memory::sample()?.available_bytes;
