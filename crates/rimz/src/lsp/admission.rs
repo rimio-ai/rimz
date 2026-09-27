@@ -461,6 +461,20 @@ fn validate_options(server: &str, config: &crate::config::LspServerConfig) -> Re
         LspServerKind::Pyright => &["python", "pyright"],
         LspServerKind::Basedpyright => &["python", "basedpyright", "pyright"],
         LspServerKind::Ruff => &["settings", "globalSettings"],
+        LspServerKind::Ty => &[
+            "logLevel",
+            "logFile",
+            "untrustedWorkspace",
+            "diagnosticMode",
+            "experimental",
+            "showSyntaxErrors",
+            "configuration",
+            "configurationFile",
+            "disableLanguageServices",
+            "inlayHints",
+            "completions",
+            "pythonExtension",
+        ],
         LspServerKind::RustAnalyzer | LspServerKind::Generic => return Ok(()),
     };
     if let Some(key) = options.keys().find(|key| !keys.contains(&key.as_str())) {
@@ -765,6 +779,25 @@ mod tests {
     fn server_arms_refuse_unread_settings() {
         for (kind, options, expected) in [
             (
+                "ty",
+                serde_json::json!({"ty":{}}),
+                Some(
+                    "language server python: init-options key ty is not read by ty; use one of: logLevel, logFile, untrustedWorkspace, diagnosticMode, experimental, showSyntaxErrors, configuration, configurationFile, disableLanguageServices, inlayHints, completions, pythonExtension",
+                ),
+            ),
+            (
+                "ty",
+                serde_json::json!({"python":{}}),
+                Some(
+                    "language server python: init-options key python is not read by ty; use one of: logLevel, logFile, untrustedWorkspace, diagnosticMode, experimental, showSyntaxErrors, configuration, configurationFile, disableLanguageServices, inlayHints, completions, pythonExtension",
+                ),
+            ),
+            (
+                "ty",
+                serde_json::json!({"logLevel":"info","logFile":"ty.log","untrustedWorkspace":true,"diagnosticMode":"openFilesOnly","experimental":{},"showSyntaxErrors":true,"configuration":{},"configurationFile":"ty.toml","disableLanguageServices":false,"inlayHints":{},"completions":{},"pythonExtension":{}}),
+                None,
+            ),
+            (
                 "pyright",
                 serde_json::json!({"analysis":{}}),
                 Some(
@@ -815,6 +848,7 @@ mod tests {
     #[test]
     fn editor_check_on_save_requires_rust_analyzer() {
         for kind in [
+            "ty",
             "pyright",
             "basedpyright",
             "ruff",
