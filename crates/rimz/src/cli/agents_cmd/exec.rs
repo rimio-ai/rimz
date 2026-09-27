@@ -138,7 +138,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             fail_run_on_exec_precondition(run_context.as_ref());
         })?;
     let process = plan.process();
-    if let Err(error) = rimz::lsp::lease::register(
+    if let Err(error) = rimz::lsp::registry::register_lease(
         &invocation.cwd,
         request.identity.launch_id.as_deref(),
         std::process::id(),
@@ -294,7 +294,7 @@ fn settle_after_exit(
         keep,
         checkout,
     } = run_exit;
-    if let Err(error) = rimz::lsp::lease::release(
+    if let Err(error) = rimz::lsp::registry::release_lease(
         checkout,
         request.identity.launch_id.as_deref(),
         std::process::id(),
