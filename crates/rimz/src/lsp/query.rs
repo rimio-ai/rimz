@@ -455,12 +455,19 @@ impl Candidate {
 
 fn render_find(root: &Path, symbols: &[SymbolInformation], scope: Scope) -> Result<String> {
     let mut lines = Vec::new();
+    let mut external = Vec::new();
+    let mut hidden = 0;
     for symbol in symbols {
-        if scope.includes(&displayed_path(root, &symbol.location.uri)?) {
+        let path = displayed_path(root, &symbol.location.uri)?;
+        if !scope.includes(&path) {
+            hidden += 1;
+        } else if Scope::Checkout.includes(&path) {
             lines.push(Candidate::new(root, symbol)?.line());
+        } else {
+            external.push(Candidate::new(root, symbol)?.line());
         }
     }
-    let hidden = symbols.len() - lines.len();
+    lines.extend(external);
     Ok(finish_scoped(lines, hidden))
 }
 
@@ -685,6 +692,7 @@ pub fn render(
     scope: Scope,
     dirty: &BTreeSet<String>,
 ) -> Result<String> {
+    let mut files = BTreeMap::new();
     render_with_source(
         verb,
         root,
@@ -693,13 +701,42 @@ pub fn render(
         scope,
         dirty,
         |uri, line| {
-            let text = std::fs::read_to_string(file_path(uri)?)?;
-            text.lines()
-                .nth(line as usize)
-                .map(str::to_owned)
+            let lines = files.entry(DocumentKey::new(uri)).or_insert_with(|| {
+                file_path(uri)
+                    .ok()
+                    .and_then(|path| std::fs::read_to_string(path).ok())
+                    .map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>())
+            });
+            lines
+                .as_ref()
+                .and_then(|lines| lines.get(line as usize))
+                .cloned()
                 .ok_or_else(|| LspErr::Protocol("location is past the end of the file".into()))
         },
     )
+}
+
+const SNIPPET_WIDTH: usize = 100;
+
+fn snippet(text: &str) -> String {
+    let text = text.trim();
+    if text.chars().count() <= SNIPPET_WIDTH {
+        return text.to_owned();
+    }
+    text.chars().take(SNIPPET_WIDTH - 1).chain(['…']).collect()
+}
+
+fn grouped_position(
+    lines: &mut Vec<String>,
+    previous: &mut Option<String>,
+    path: String,
+    position: Position,
+) -> String {
+    if previous.as_ref() != Some(&path) {
+        lines.push(path.clone());
+        *previous = Some(path);
+    }
+    format!("  {}:{}", position.line + 1, position.character + 1)
 }
 
 fn render_with_source(
@@ -714,29 +751,47 @@ fn render_with_source(
     if result.is_null() {
         return Ok("no results\n".into());
     }
+    let dirty: BTreeSet<_> = dirty.iter().map(|uri| DocumentKey::new(uri)).collect();
+    let mut source_suffix = |location: &Location| {
+        if dirty.contains(&DocumentKey::new(&location.uri)) {
+            "  (unsaved in editor)".into()
+        } else if let Ok(text) = source(&location.uri, location.range.start.line) {
+            format!("  {}", snippet(&text))
+        } else {
+            String::new()
+        }
+    };
     match verb {
-        Verb::Def | Verb::Refs | Verb::Impl => {
-            let dirty: BTreeSet<_> = dirty.iter().map(|uri| DocumentKey::new(uri)).collect();
+        Verb::Def => {
+            let mut sorted = BTreeMap::new();
+            for location in locations(result)? {
+                sorted.insert(
+                    (displayed_path(root, &location.uri)?, location.range.start),
+                    location,
+                );
+            }
+            let mut lines = Vec::new();
+            for location in sorted.into_values() {
+                let line = position_text(root, &location.uri, location.range.start)?;
+                lines.push(format!("{line}{}", source_suffix(&location)));
+            }
+            Ok(finish(lines))
+        }
+        Verb::Refs | Verb::Impl => {
             let mut sorted = BTreeMap::new();
             for location in locations(result)? {
                 let position = location.range.start;
-                sorted.insert((displayed_path(root, &location.uri)?, position), location);
+                let path = displayed_path(root, &location.uri)?;
+                sorted.insert((!Scope::Checkout.includes(&path), path, position), location);
             }
             let total = sorted.len();
-            if verb != Verb::Def {
-                sorted.retain(|(path, _), _| scope.includes(path));
-            }
+            sorted.retain(|(_, path, _), _| scope.includes(path));
             let hidden = total - sorted.len();
             let mut lines = Vec::new();
-            for location in sorted.into_values() {
-                let mut line = position_text(root, &location.uri, location.range.start)?;
-                if dirty.contains(&DocumentKey::new(&location.uri)) {
-                    line.push_str("  (unsaved in editor)");
-                } else if let Ok(text) = source(&location.uri, location.range.start.line) {
-                    line.push_str("  ");
-                    line.push_str(text.trim());
-                }
-                lines.push(line);
+            let mut previous = None;
+            for ((_, path, position), location) in sorted {
+                let line = grouped_position(&mut lines, &mut previous, path, position);
+                lines.push(format!("{line}{}", source_suffix(&location)));
             }
             Ok(finish_scoped(lines, hidden))
         }
@@ -795,9 +850,11 @@ fn render_with_source(
             };
             let mut sorted = BTreeMap::new();
             for item in items {
+                let path = displayed_path(root, &item.uri)?;
                 sorted.insert(
                     (
-                        displayed_path(root, &item.uri)?,
+                        !Scope::Checkout.includes(&path),
+                        path,
                         item.selection_range.start,
                         item.name.clone(),
                     ),
@@ -805,21 +862,15 @@ fn render_with_source(
                 );
             }
             let total = sorted.len();
-            sorted.retain(|(path, _, _), _| scope.includes(path));
+            sorted.retain(|(_, path, _, _), _| scope.includes(path));
             let hidden = total - sorted.len();
-            Ok(finish_scoped(
-                sorted
-                    .into_values()
-                    .map(|item| {
-                        Ok(format!(
-                            "{}  {}",
-                            item.name,
-                            position_text(root, &item.uri, item.selection_range.start)?
-                        ))
-                    })
-                    .collect::<Result<_>>()?,
-                hidden,
-            ))
+            let mut lines = Vec::new();
+            let mut previous = None;
+            for ((_, path, position, _), item) in sorted {
+                let line = grouped_position(&mut lines, &mut previous, path, position);
+                lines.push(format!("{line}  {}", item.name));
+            }
+            Ok(finish_scoped(lines, hidden))
         }
     }
 }
