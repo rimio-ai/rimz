@@ -25,6 +25,7 @@ fn row(id: &str, raw_pane: &str) -> SidebarRow {
 
 fn group(key: &str, rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
     SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: key.to_owned(),
         label: key.to_owned(),
         label_qualifier: None,

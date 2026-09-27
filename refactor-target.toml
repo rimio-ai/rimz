@@ -265,7 +265,8 @@ surface-budget = 204
 
 [[module]]
 path = "crates/rimz/src/forge"
-surface-budget = 39
+# Shared same-repository PR graph and stack walk feed sidebar enrichment.
+surface-budget = 42
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -443,7 +444,8 @@ path = "crates/rimz/src/store"
 # Submitted-prompt origin classification and a run's prompt origin are read by the lifecycle hooks in the binary crate.
 # Room-local class and orphan-temp collectors expose the scoped maintenance seam.
 # Child token figures share their window-versus-total vocabulary with both renderers.
-surface-budget = 326
+# Shared PrStack and StackPr are carried by both PR links and sidebar groups.
+surface-budget = 328
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -3976,6 +3978,21 @@ reason = "Restored after private_interfaces: type PrLink is more private than Re
 kind = "item"
 key = "forge::GhBulkPr"
 reason = "Constructed by the held sidebar/refresh/pr/tests.rs, so crate reach is the narrowest that keeps them compiling (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::PrStack"
+reason = "Shared serialized display field of PrLink and SidebarWorktreeGroup; the public snapshot also crosses the library/binary seam."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::StackPr"
+reason = "Public member shape of PrStack, carrying each linked PR number and optional URL."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::PrStack::is_empty"
+reason = "Serde skip predicate shared with forge::pr_state::PrLink; empty display stacks preserve the old serialized shapes."
 
 [[verdict]]
 kind = "item"

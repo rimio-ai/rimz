@@ -269,6 +269,7 @@ mod tests {
                 .push(PaneId::from_parts(crate::MuxName::Zellij, active));
         }
         snapshot.worktree_groups = vec![SidebarWorktreeGroup {
+            pr_stack: Default::default(),
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             label_qualifier: None,

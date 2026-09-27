@@ -265,6 +265,7 @@ fn project_pr_state_map(
     diff_cache: &DiffStatsCache,
 ) {
     for group in &mut snapshot.worktree_groups {
+        group.pr_stack = Default::default();
         let Some(path) = cached_git_backed_worktree_path(
             group.kind,
             &group.label,
@@ -288,6 +289,7 @@ fn project_pr_state_map(
             continue;
         }
         let link = states.get(path);
+        group.pr_stack = link.map(|link| link.stack.clone()).unwrap_or_default();
         group.pr_state = link.map(|link| link.state);
         group.ci = match link {
             Some(link) if matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged) => {

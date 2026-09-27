@@ -455,6 +455,7 @@ mod tests {
             SidebarSnapshot::build_with_agents(workspace, Vec::new(), jiff::Timestamp::now());
         snapshot.panes_produced_at_ms = Some(1);
         snapshot.worktree_groups = vec![SidebarWorktreeGroup {
+            pr_stack: Default::default(),
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             label_qualifier: None,

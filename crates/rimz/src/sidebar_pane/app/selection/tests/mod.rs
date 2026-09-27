@@ -86,6 +86,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         ),
     };
     snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
@@ -223,6 +224,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
     snapshot.worktree_groups = vec![
         crate::store::snapshot::SidebarWorktreeGroup {
+            pr_stack: Default::default(),
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             label_qualifier: None,
@@ -261,6 +263,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             pr_url: None,
         },
         crate::store::snapshot::SidebarWorktreeGroup {
+            pr_stack: Default::default(),
             key: "/repo/feature".to_owned(),
             label: "feature".to_owned(),
             label_qualifier: None,

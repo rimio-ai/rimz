@@ -1,16 +1,16 @@
 //! Pure forge PR and remote parsing; command execution stays in callers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::store::snapshot::{WorktreeCi, WorktreePrState};
+use crate::store::snapshot::{PrStack, StackPr, WorktreeCi, WorktreePrState};
 
 pub mod pr_state;
 
 const GH_HEAD_FIELDS: &str = "headRefName,headRepository,headRepositoryOwner,isCrossRepository";
-const TEA_LIST_FIELDS: &str = "index,state,head,created";
+const TEA_LIST_FIELDS: &str = "index,state,head,base,created";
 const LIST_LIMIT: &str = "500";
 const HEAD_FIELDS: &str = "head head_branch headRefName source_branch sourceBranch";
 const HEAD_OBJECT_FIELDS: &str = "ref name branch label";
@@ -75,8 +75,92 @@ pub(crate) struct GhBulkPr {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GhBulkResponse {
+    pub(crate) open: Option<Vec<OpenPr>>,
     pub(crate) prs: Vec<Option<GhBulkPr>>,
     pub(crate) commits: Vec<Option<WorktreeCi>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OpenPr {
+    pub(crate) number: u64,
+    pub(crate) head: String,
+    pub(crate) base: String,
+}
+
+pub(crate) fn pr_stack(
+    own: u64,
+    open: &[OpenPr],
+    is_trunk: impl Fn(&str) -> bool,
+    depth: usize,
+) -> PrStack {
+    let mut stack = PrStack::default();
+    let Some(own) = open.iter().find(|pr| pr.number == own) else {
+        return stack;
+    };
+    let mut seen = BTreeSet::from([own.number]);
+    let member = |pr: &OpenPr| StackPr {
+        number: pr.number,
+        url: None,
+    };
+    let mut current = own;
+    for _ in 0..depth {
+        if is_trunk(&current.base) {
+            break;
+        }
+        let Some(next) = open
+            .iter()
+            .filter(|pr| pr.head == current.base)
+            .max_by_key(|pr| pr.number)
+        else {
+            break;
+        };
+        if !seen.insert(next.number) {
+            break;
+        }
+        stack.below.push(member(next));
+        current = next;
+    }
+    stack.below.reverse();
+    current = own;
+    for _ in 0..depth {
+        let mut next = open
+            .iter()
+            .filter(|pr| pr.base == current.head)
+            .collect::<Vec<_>>();
+        if next.is_empty() || next.iter().any(|pr| seen.contains(&pr.number)) {
+            break;
+        }
+        next.sort_by_key(|pr| pr.number);
+        seen.extend(next.iter().map(|pr| pr.number));
+        stack.above.push(next.iter().map(|pr| member(pr)).collect());
+        if next.len() != 1 {
+            break;
+        }
+        current = next[0];
+    }
+    stack
+}
+
+pub(crate) fn parse_tea_open_prs(raw: &str) -> Result<Vec<OpenPr>, String> {
+    let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
+    let pulls = value
+        .as_array()
+        .ok_or_else(|| "tea PR list output must be a JSON array".to_owned())?;
+    Ok(pulls
+        .iter()
+        .filter_map(|pull| {
+            let head = branch_ref_from_value(pull.get("head"))?;
+            if head.contains(':') {
+                return None;
+            }
+            let (head, candidate) = tea_pr_candidate(pull)?;
+            (candidate.state == WorktreePrState::Open).then_some(OpenPr {
+                number: candidate.number,
+                head,
+                base: head_branch_from_value(pull.get("base"))?,
+            })
+        })
+        .collect())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -447,11 +531,19 @@ fn clean_segment(segment: &str) -> &str {
 }
 
 /// Build one aliased GitHub GraphQL query for branch PRs and commit rollups.
-pub(crate) fn github_bulk_query(repo_slug: &str, branches: &[&str], oids: &[&str]) -> String {
+pub(crate) fn github_bulk_query(
+    include_open: bool,
+    repo_slug: &str,
+    branches: &[&str],
+    oids: &[&str],
+) -> String {
     let (owner, repo) = repo_slug.split_once('/').unwrap_or(("", repo_slug));
     let mut fields = Vec::with_capacity(branches.len() + oids.len() + 1);
     // Keep an empty alias plan valid for a repo whose local HEAD is unavailable.
     fields.push("id".to_owned());
+    if include_open {
+        fields.push("open: pullRequests(first: 100, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { number headRefName baseRefName isCrossRepository } }".to_owned());
+    }
     for (index, branch) in branches.iter().enumerate() {
         fields.push(format!(
             "pr{index}: pullRequests(first: 10, headRefName: {}, states: [OPEN, MERGED, CLOSED], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number state createdAt statusCheckRollup {{ state }} mergeCommit {{ oid statusCheckRollup {{ state }} }} }} }}",
@@ -478,6 +570,7 @@ fn graphql_string(raw: &str) -> String {
 
 /// Parse the indexed aliases from a GitHub bulk GraphQL response.
 pub(crate) fn parse_github_bulk_response(
+    include_open: bool,
     raw: &str,
     branch_count: usize,
     oid_count: usize,
@@ -497,6 +590,20 @@ pub(crate) fn parse_github_bulk_response(
     #[derive(Deserialize)]
     struct PullConnection {
         nodes: Vec<Pull>,
+    }
+
+    #[derive(Deserialize)]
+    struct OpenConnection {
+        nodes: Vec<OpenPull>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct OpenPull {
+        number: u64,
+        head_ref_name: String,
+        base_ref_name: String,
+        is_cross_repository: bool,
     }
 
     #[derive(Deserialize)]
@@ -599,7 +706,28 @@ pub(crate) fn parse_github_bulk_response(
                 .and_then(ci_from_gh_rollup_state),
         );
     }
-    Ok(GhBulkResponse { prs, commits })
+    let open = if include_open {
+        let value = repository
+            .get("open")
+            .ok_or_else(|| "github GraphQL response is missing alias `open`".to_owned())?;
+        let connection: OpenConnection =
+            serde_json::from_value(value.clone()).map_err(|err| err.to_string())?;
+        Some(
+            connection
+                .nodes
+                .into_iter()
+                .filter(|pr| !pr.is_cross_repository)
+                .map(|pr| OpenPr {
+                    number: pr.number,
+                    head: pr.head_ref_name,
+                    base: pr.base_ref_name,
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+    Ok(GhBulkResponse { prs, commits, open })
 }
 
 fn prefer_github_bulk_pr(current: Option<GhBulkPr>, next: GhBulkPr) -> GhBulkPr {
@@ -797,13 +925,16 @@ fn pr_head_branch(value: &Value) -> Option<String> {
 }
 
 fn head_branch_from_value(value: Option<&Value>) -> Option<String> {
+    ref_name_branch(branch_ref_from_value(value)?)
+}
+
+fn branch_ref_from_value(value: Option<&Value>) -> Option<&str> {
     let value = value?;
-    let raw = value.as_str().or_else(|| {
+    value.as_str().or_else(|| {
         HEAD_OBJECT_FIELDS
             .split_ascii_whitespace()
             .find_map(|field| value.get(field)?.as_str())
-    })?;
-    ref_name_branch(raw)
+    })
 }
 
 fn ref_name_branch(raw: &str) -> Option<String> {

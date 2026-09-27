@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::snapshot::{WorktreeCi, WorktreePrState};
+use crate::store::snapshot::{PrStack, WorktreeCi, WorktreePrState};
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub(crate) struct PrStateCache {
@@ -68,6 +68,10 @@ pub struct PrLink {
     pub ci: Option<WorktreeCi>,
     #[serde(default)]
     pub merge_sha: Option<String>,
+    /// Same-repo open PRs stacked below and above this one; empty unless the
+    /// link is open and its repo's open set was read.
+    #[serde(default, skip_serializing_if = "PrStack::is_empty")]
+    pub stack: PrStack,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

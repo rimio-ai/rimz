@@ -235,6 +235,28 @@ impl SidebarPipeline {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrStack {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub below: Vec<StackPr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub above: Vec<Vec<StackPr>>,
+}
+
+impl PrStack {
+    pub fn is_empty(&self) -> bool {
+        self.below.is_empty() && self.above.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StackPr {
+    #[serde(default)]
+    pub number: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarWorktreeGroup {
     pub key: String,
@@ -303,6 +325,8 @@ pub struct SidebarWorktreeGroup {
     /// Best-effort web URL for the forge-resolved pull request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_url: Option<String>,
+    #[serde(default, skip_serializing_if = "PrStack::is_empty")]
+    pub pr_stack: PrStack,
 }
 
 impl SidebarWorktreeGroup {
@@ -489,6 +513,7 @@ mod tests {
 
     fn collapse_test_group(rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
         SidebarWorktreeGroup {
+            pr_stack: Default::default(),
             key: "group".to_owned(),
             label: "group".to_owned(),
             label_qualifier: None,

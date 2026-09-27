@@ -953,6 +953,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         ));
     }
     snapshot.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,

@@ -59,6 +59,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     slow.theme.animations.waiting =
         Some(toml::from_str("effect = \"breathe\"\n").expect("animation spec"));
     slow.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+        pr_stack: Default::default(),
         key: "/repo/main".to_owned(),
         label: "main".to_owned(),
         label_qualifier: None,
@@ -842,6 +843,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             own_view_is_daemon: daemon,
         });
         snap.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+            pr_stack: Default::default(),
             key: "/repo/main".to_owned(),
             label: "main".to_owned(),
             label_qualifier: None,

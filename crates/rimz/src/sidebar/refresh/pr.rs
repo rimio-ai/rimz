@@ -30,6 +30,7 @@ const PR_STATE_WAIT_STEPS: u32 = 15;
 const PR_STATE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PARALLEL_PR_PROBES: usize = 8;
 const GH_BULK_MAX_ALIASES: usize = 100;
+const PR_STACK_DEPTH: usize = 8;
 const UNSUPPORTED_REPO_KEY: &str = "<unsupported>";
 // Local worktree creation and forge PR creation use different clocks.
 const TERMINAL_PR_CLOCK_SKEW: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
@@ -293,6 +294,7 @@ impl Target {
         merge_sha: Option<String>,
     ) -> PrLink {
         PrLink {
+            stack: Default::default(),
             branch: Some(self.branch.clone()),
             incarnation: self.marker_created_at,
             state,
@@ -585,7 +587,8 @@ fn probe_due_repos(
         &due_groups,
         |(repo_key, group)| probe_repo_group(repo_key, group, &prior.states, &prior.branch_ci),
     );
-    for result in results {
+    for mut result in results {
+        attach_stacks(&mut result, diff_cache);
         for target in &result.targets {
             cache.states.remove(&target.path);
             cache.branch_ci.remove(&target.path);
@@ -627,6 +630,7 @@ fn probe_due_repos(
 }
 
 struct RepoGroupProbe {
+    open: Option<Vec<forge::OpenPr>>,
     repo_key: String,
     targets: Vec<Target>,
     states: BTreeMap<String, PrLink>,
@@ -648,6 +652,7 @@ fn probe_repo_group(
 
 #[derive(Debug)]
 struct GhQueryPlan {
+    include_open: bool,
     query: String,
     pr_targets: Vec<usize>,
     oids: Vec<String>,
@@ -673,9 +678,11 @@ fn plan_github_queries(group: &RepoGroup) -> Vec<GhQueryPlan> {
     let mut pr_offset = 0;
     let mut oid_offset = 0;
     while pr_offset < pr_targets.len() || oid_offset < oids.len() {
-        let pr_end = (pr_offset + GH_BULK_MAX_ALIASES).min(pr_targets.len());
+        let include_open = plans.is_empty() && !pr_targets.is_empty();
+        let alias_capacity = GH_BULK_MAX_ALIASES - usize::from(include_open);
+        let pr_end = (pr_offset + alias_capacity).min(pr_targets.len());
         let plan_pr_targets = pr_targets[pr_offset..pr_end].to_vec();
-        let oid_capacity = GH_BULK_MAX_ALIASES - plan_pr_targets.len();
+        let oid_capacity = alias_capacity - plan_pr_targets.len();
         let oid_end = (oid_offset + oid_capacity).min(oids.len());
         let plan_oids = oids[oid_offset..oid_end].to_vec();
         let branches = plan_pr_targets
@@ -684,7 +691,8 @@ fn plan_github_queries(group: &RepoGroup) -> Vec<GhQueryPlan> {
             .collect::<Vec<_>>();
         let oid_refs = plan_oids.iter().map(String::as_str).collect::<Vec<_>>();
         plans.push(GhQueryPlan {
-            query: forge::github_bulk_query(repo_slug, &branches, &oid_refs),
+            include_open,
+            query: forge::github_bulk_query(include_open, repo_slug, &branches, &oid_refs),
             pr_targets: plan_pr_targets,
             oids: plan_oids,
         });
@@ -693,7 +701,8 @@ fn plan_github_queries(group: &RepoGroup) -> Vec<GhQueryPlan> {
     }
     if plans.is_empty() {
         plans.push(GhQueryPlan {
-            query: forge::github_bulk_query(repo_slug, &[], &[]),
+            include_open: false,
+            query: forge::github_bulk_query(false, repo_slug, &[], &[]),
             pr_targets: Vec::new(),
             oids: Vec::new(),
         });
@@ -720,6 +729,7 @@ fn probe_github_repo_group(
             return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
         };
         let response = match forge::parse_github_bulk_response(
+            plan.include_open,
             &output,
             plan.pr_targets.len(),
             plan.oids.len(),
@@ -734,6 +744,7 @@ fn probe_github_repo_group(
     }
     let (states, branch_ci) = project_github_group(group, &batches);
     RepoGroupProbe {
+        open: batches.into_iter().find_map(|(_, response)| response.open),
         repo_key: repo_key.to_owned(),
         targets: group.targets.clone(),
         states,
@@ -801,6 +812,7 @@ fn failed_repo_group_probe(
     prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
     RepoGroupProbe {
+        open: None,
         repo_key: repo_key.to_owned(),
         targets: group.targets.clone(),
         states: carry_prior_states(&group.targets, prior),
@@ -815,8 +827,8 @@ fn probe_tea_repo_group(
     prior: &BTreeMap<String, PrLink>,
     prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
-    let open_map = match query_open_tea_prs(group) {
-        Some(open_map) => open_map,
+    let (open_map, open) = match query_open_tea_prs(group) {
+        Some(result) => result,
         None => {
             return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
         }
@@ -871,6 +883,39 @@ fn probe_tea_repo_group(
         states,
         branch_ci,
         ok,
+        open: Some(open),
+    }
+}
+
+fn attach_stacks(result: &mut RepoGroupProbe, diff_cache: &DiffStatsCache) {
+    let Some(open) = result.open.as_deref() else {
+        return;
+    };
+    for target in &result.targets {
+        let Some(link) = result.states.get_mut(&target.path) else {
+            continue;
+        };
+        let trunk = diff_cache
+            .entries
+            .get(&target.path)
+            .and_then(|entry| entry.trunk.as_deref());
+        link.stack = match (link.state, link.number) {
+            (WorktreePrState::Open, Some(number)) => forge::pr_stack(
+                number,
+                open,
+                |branch| is_trunk_branch(branch, trunk),
+                PR_STACK_DEPTH,
+            ),
+            _ => Default::default(),
+        };
+        for pr in link
+            .stack
+            .below
+            .iter_mut()
+            .chain(link.stack.above.iter_mut().flatten())
+        {
+            pr.url = target.remote.pr_web_url(pr.number);
+        }
     }
 }
 
@@ -906,12 +951,15 @@ fn carry_prior_branch_ci(
         .collect()
 }
 
-fn query_open_tea_prs(group: &RepoGroup) -> Option<BTreeMap<String, forge::PrCandidate>> {
+fn query_open_tea_prs(
+    group: &RepoGroup,
+) -> Option<(BTreeMap<String, forge::PrCandidate>, Vec<forge::OpenPr>)> {
     let args = forge::tea_pr_list_args("open", group.repo_slug.as_deref());
     let output = command_stdout(&group.worktree, "tea", &args)?;
-    forge::parse_tea_pr_list_links(&output)
+    let links = forge::parse_tea_pr_list_links(&output)
         .inspect_err(|err| tracing::debug!(error = %err, "forge PR open-set parse failed"))
-        .ok()
+        .ok()?;
+    Some((links, forge::parse_tea_open_prs(&output).ok()?))
 }
 
 struct ProbeState {

@@ -197,6 +197,7 @@ impl SidebarSnapshot {
                 )
                 .map(ToOwned::to_owned);
                 SidebarWorktreeGroup {
+                    pr_stack: Default::default(),
                     key,
                     label,
                     label_qualifier: None,
