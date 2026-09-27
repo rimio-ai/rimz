@@ -42,17 +42,16 @@ fn sleeping_card_describes_its_wait_using_the_snapshot_clock() {
         .pending_waits[0]
         .trigger = crate::agents::PendingWaitTrigger::Signal {
         selector: "pr.merged".to_owned(),
-        deadline: Some(snapshot.now + jiff::SignedDuration::from_hours(2)),
     };
     let lines = group_lines(&snapshot, &theme, 0);
     assert!(
         line_texts(&lines)
             .iter()
-            .any(|line| line.contains("wakes on pr.merged · 2h left"))
+            .any(|line| line.contains("wakes on pr.merged"))
     );
-    let detail = span_for(&lines, "2h left");
-    assert_eq!(detail.style.fg, theme.body().fg);
-    assert!(detail.style.add_modifier.contains(Modifier::ITALIC));
+    let headline = span_for(&lines, "wakes on pr.merged");
+    assert_eq!(headline.style.fg, theme.body().fg);
+    assert!(headline.style.add_modifier.contains(Modifier::ITALIC));
 
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()

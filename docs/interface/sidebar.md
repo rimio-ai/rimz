@@ -304,7 +304,6 @@ A card with waits uses the same entry layout:
 ▌    ⣾ command · cargo                          ◔  4m▐
 ▌      cargo xtask gate --name foo_test              ▐
 ▌    ⌁ signal · pr.merged                       ●  1h▐
-▌      2h left                                       ▐
 ```
 
 `⧉ subagents (N)` counts every child the session has spawned, both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md), for as long as RimZ retains the session's history. Their known cost sits on the right. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md) plus, for Claude, the shell commands it left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`.
@@ -323,7 +322,7 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 | check | working spinner | `check · test` (program name) | time since armed | full command, with the program path trimmed |
 | file | working spinner | `file · app.log changes`, or ``file · app.log matches `<pattern>` `` | time since armed | never |
 | background shell | working spinner | `shell ·` description, else program name, else just `shell` | time since RimZ first saw it | command when known, with the program path trimmed |
-| signal | `⌁` | `signal · pr.merged` (selector) | time since armed | only with a deadline: `2h left`, then `0m left` at or past it |
+| signal | `⌁` | `signal · pr.merged` (selector) | time since armed | never |
 
 Entries list in a fixed order, and opening more of the list only appends rows:
 
@@ -369,7 +368,7 @@ A sleeping card names its first pending wait in the description:
 | PID | `wakes after pid 16776` |
 | command or check | `wakes after <command>` |
 | file | `wakes when app.log changes`, or ``wakes when app.log matches `<pattern>` `` |
-| signal | `wakes on pr.merged`, or `wakes on pr.merged · 2h left` with a deadline |
+| signal | `wakes on pr.merged` |
 
 `☾` replaces only an idle or done status. Working, waiting, failed, paused, and waiting on subagents all take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 

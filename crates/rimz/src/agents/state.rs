@@ -142,12 +142,11 @@ pub enum PendingWaitTrigger {
     },
     Signal {
         selector: String,
-        deadline: Option<Timestamp>,
     },
 }
 
 impl PendingWait {
-    /// The sleeping card's sentence: `wakes in 12m`, `wakes now`, `wakes after cargo test`, `wakes when app.log changes`, or `wakes on pr.merged`. Signal deadlines are separate detail text.
+    /// The sleeping card's sentence: `wakes in 12m`, `wakes now`, `wakes after cargo test`, `wakes when app.log changes`, or `wakes on pr.merged`.
     pub fn label(&self, now: Timestamp) -> String {
         let headline = self.trigger.headline(now);
         match &self.trigger {
@@ -157,10 +156,7 @@ impl PendingWait {
                 format!("wakes after {} {headline}", self.trigger.kind_word())
             }
             PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Check { .. } => {
-                format!(
-                    "wakes after {}",
-                    self.trigger.detail(now).unwrap_or_default()
-                )
+                format!("wakes after {}", self.trigger.detail().unwrap_or_default())
             }
             PendingWaitTrigger::File { .. } => format!("wakes when {headline}"),
             PendingWaitTrigger::Signal { .. } => format!("wakes on {headline}"),
@@ -213,25 +209,11 @@ impl PendingWaitTrigger {
         }
     }
 
-    /// A full command or signal deadline, kept separate from the headline.
-    pub(crate) fn detail(&self, now: Timestamp) -> Option<String> {
-        use crate::theme::fmt::duration_label;
-
+    /// A full command, kept separate from the headline.
+    pub(crate) fn detail(&self) -> Option<String> {
         match self {
             Self::Command { command } | Self::Check { command } => {
                 single_line_description(&crate::proc::command::command_program_basename(command))
-            }
-            Self::Signal {
-                deadline: Some(deadline),
-                ..
-            } => {
-                let seconds = deadline.duration_since(now).as_secs().max(0) as u64;
-                let left = if *deadline <= now {
-                    "0m".to_owned()
-                } else {
-                    duration_label(seconds.div_ceil(60).max(1))
-                };
-                Some(format!("{left} left"))
             }
             _ => None,
         }

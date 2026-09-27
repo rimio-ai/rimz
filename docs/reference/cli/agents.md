@@ -468,7 +468,7 @@ Under each row, the agent's activity description (the line the sidebar card show
 | `success` | The last turn completed. |
 | `failed` | The last turn failed. |
 | `paused` | Parked by a provider limit or a budget cap. |
-| `sleeping` | At rest with a one-shot delivery armed for its session in this workspace: a timer, PID, watched command, polled check, file watch, or a one-shot or deadline signal. Standing subscriptions do not count, and running, waiting, failed, paused, or a live child take precedence. |
+| `sleeping` | At rest with a one-shot delivery armed for its session in this workspace: a timer, PID, watched command, polled check, file watch, or a one-shot signal. Standing subscriptions do not count, and running, waiting, failed, paused, or a live child take precedence. |
 
 The status is derived for display. [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`. `show` adds the turn phase.
 

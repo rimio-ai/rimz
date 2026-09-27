@@ -86,17 +86,6 @@ pub(super) fn description_line(
             wait.label(ctx.now),
             theme.body().add_modifier(Modifier::ITALIC),
         ));
-        if matches!(
-            wait.trigger,
-            crate::agents::PendingWaitTrigger::Signal { .. }
-        ) && let Some(detail) = wait.trigger.detail(ctx.now)
-        {
-            left.push(Span::styled(value_seam(theme), theme.muted()));
-            left.push(Span::styled(
-                detail,
-                theme.body().add_modifier(Modifier::ITALIC),
-            ));
-        }
     } else {
         match descriptor(row).and_then(crate::agents::single_line_description) {
             Some(text) => left.extend(body_spans(&text, false)),
