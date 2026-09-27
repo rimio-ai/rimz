@@ -61,8 +61,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// List shared servers on this machine.
+    /// List the current room's shared servers.
     List {
+        /// List every shared server on this machine.
+        #[arg(long)]
+        all: bool,
         #[arg(long)]
         json: bool,
     },
@@ -144,7 +147,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         Command::Serve { request } => {
             return Ok(rimz::lsp::broker::serve(serde_json::from_str(&request)?)?);
         }
-        Command::List { json } => return list(json),
+        Command::List { all, json } => return list(all, json, globals),
         Command::Check { file, json } => {
             let context = query_context(globals)?;
             let report = match check::run(&file, &context.root, &context.entries, &context.servers)
@@ -581,11 +584,32 @@ fn list_table(
     table
 }
 
-fn list(json: bool) -> Result<()> {
-    let entries = {
+/// Keeps the entries registered from the room's repository: attach records
+/// the launch repo root, which is the room root unless a pinned room's cwd
+/// names another repository.
+fn room_entries(
+    mut entries: Vec<registry::Entry>,
+    workspace: &rimz::workspace::ResolvedWorkspace,
+) -> Vec<registry::Entry> {
+    entries.retain(|entry| {
+        entry.project.as_deref().is_some_and(|project| {
+            project == workspace.project_root || project == workspace.launch_repo_root()
+        })
+    });
+    entries
+}
+
+fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
+    let mut entries = {
         let _lock = registry::lock()?;
         registry::sweep_locked()?
     };
+    if !all {
+        let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
+        let workspace =
+            rimz::workspace::WorkspaceResolver::resolve_participant(&cwd, globals.root.clone())?;
+        entries = room_entries(entries, &workspace);
+    }
     let mut out = render::out();
     if json {
         return render::finish(writeln!(out, "{}", serde_json::to_string_pretty(&entries)?));
@@ -707,9 +731,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn list_table_orders_and_styles_server_states() {
-        let entry = |root: &str, server: &str, state| registry::Entry {
+    fn entry(root: &str, server: &str, state: State) -> registry::Entry {
+        registry::Entry {
             root: root.into(),
             project: None,
             server: server.into(),
@@ -729,7 +752,44 @@ mod tests {
             restarts: 2,
             leases: vec![],
             attached: vec![],
+        }
+    }
+
+    #[test]
+    fn room_entries_keep_the_room_repository() {
+        let registered = |root: &str, project: Option<&str>| registry::Entry {
+            project: project.map(Into::into),
+            ..entry(root, "rust", State::Ready)
         };
+        let workspace = rimz::ResolvedWorkspace {
+            workspace_id: rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/room")),
+            project_root: "/room".into(),
+            cwd_project_root: Some("/other".into()),
+            root_class: rimz::workspace::RootClass::Repo,
+            worktree_root: "/other".into(),
+            worktree_branch: None,
+            session_name: "room".into(),
+            mux_hint: None,
+        };
+        let kept = room_entries(
+            vec![
+                registered("/room", Some("/room")),
+                registered("/worktrees/feat", Some("/room")),
+                registered("/other", Some("/other")),
+                registered("/elsewhere", Some("/elsewhere")),
+                registered("/room", None),
+            ],
+            &workspace,
+        );
+        let roots: Vec<_> = kept.iter().map(|entry| entry.root.as_path()).collect();
+        assert_eq!(
+            roots,
+            ["/room", "/worktrees/feat", "/other"].map(std::path::Path::new)
+        );
+    }
+
+    #[test]
+    fn list_table_orders_and_styles_server_states() {
         let mut ready = entry("/z", "rust", State::Ready);
         ready.last_request_at_ms = Some(11_000);
         let entries = vec![

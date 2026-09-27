@@ -106,13 +106,14 @@ rimz lsp shim --server rust --dir /path/to/bin
 
 ```sh
 rimz lsp list
+rimz lsp list --all
 rimz lsp list --json
 rimz lsp stop --server rust
 rimz lsp stop /path/to/checkout --server rust
 rimz lsp stop --all
 ```
 
-`list` covers the whole machine. Text columns are STATE, CHECKOUT, SERVER, RSS, PEAK, REQUESTS, LAST, RESTARTS, and LEASES; RSS through LEASES are right-aligned. CHECKOUT uses `~/` for paths under your home. Running servers sort first, then servers needing attention, then the rest; ties sort by checkout and server name. Dead entries are swept before listing.
+`list` covers the current room: entries whose recorded repository is the room's repository, or the repository of the current checkout. The room is the pane's pinned room, else the one resolved from cwd, and the global `--root` overrides both. Every worktree of the room's repository counts. `--all` covers the whole machine, including entries registered without a repository. Text columns are STATE, CHECKOUT, SERVER, RSS, PEAK, REQUESTS, LAST, RESTARTS, and LEASES; RSS through LEASES are right-aligned. CHECKOUT uses `~/` for paths under your home. Running servers sort first, then servers needing attention, then the rest; ties sort by checkout and server name. Dead entries are swept before listing.
 
 STATE pairs a glyph with a word, preserved without color: `✓ ready`, `▸ starting`, `▸ indexing`, `· not started`, `· dormant: idle`, `✗ dormant: crashed`, `! dormant: memory pressure`, or `· stopped: released`. A never-started server shows `not started`; other dormant entries show `dormant: <reason>`, and terminal shutdown shows `stopped: <reason>`.
 
