@@ -11,6 +11,7 @@ pub(super) mod watchdog;
 
 use super::server::{self, Server};
 use super::{LspErr, Result, admission::ServeRequest, history, memory, registry};
+use crate::config::LspServerKind;
 use lifecycle::{Lifecycle, Readiness};
 use registry::{Entry, State, StopReason};
 use serde_json::{Value, json};
@@ -20,7 +21,7 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use transport::Transport;
 
-fn client_capabilities(_config: &crate::config::LspServerConfig) -> Value {
+fn client_capabilities(kind: LspServerKind) -> Value {
     let text_document = json!({
         "synchronization": {"didSave": true, "willSave": true, "willSaveWaitUntil": true},
         "publishDiagnostics": {"relatedInformation": true, "versionSupport": true, "tagSupport": {"valueSet": [1, 2]}, "codeDescriptionSupport": true, "dataSupport": true},
@@ -40,7 +41,7 @@ fn client_capabilities(_config: &crate::config::LspServerConfig) -> Value {
         "inlayHint": {"resolveSupport": {"properties": ["tooltip", "textEdits", "label.tooltip", "label.location", "label.command"]}},
         "callHierarchy": {}, "typeHierarchy": {}, "typeDefinition": {}, "implementation": {}, "declaration": {}
     });
-    json!({
+    let mut capabilities = json!({
         "textDocument": text_document,
         "workspace": {
             "configuration": true, "workspaceFolders": true,
@@ -53,10 +54,24 @@ fn client_capabilities(_config: &crate::config::LspServerConfig) -> Value {
             "serverStatusNotification": true, "hoverActions": true, "codeActionGroup": true,
             "commands": {"commands": ["rust-analyzer.runSingle", "rust-analyzer.debugSingle", "rust-analyzer.showReferences", "rust-analyzer.gotoLocation", "rust-analyzer.triggerParameterHints", "rust-analyzer.rename"]}
         }
-    })
+    });
+    if kind != LspServerKind::RustAnalyzer {
+        // The capability object above is always an object.
+        capabilities
+            .as_object_mut()
+            .expect("capability object")
+            .remove("experimental");
+    }
+    capabilities
+}
+
+struct Settings {
+    kind: LspServerKind,
+    options: Value,
 }
 
 struct Shared {
+    settings: Arc<Mutex<Settings>>,
     router: mpsc::Sender<router::RouterEvent>,
     model: Mutex<Model>,
     changed: Condvar,
@@ -142,7 +157,9 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     super::admission::idle_timeout(&request.policy)?;
     nix::unistd::setsid().map_err(std::io::Error::from)?;
     let pid = std::process::id();
+    let kind = request.config.resolved_kind();
     let entry = Entry {
+        kind: Some(kind),
         root: root.clone(),
         project: Some(request.project.clone()),
         server: request.server.clone(),
@@ -181,6 +198,10 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     listener.set_nonblocking(true)?;
     let (router_tx, router_rx) = mpsc::channel();
     let shared = Arc::new(Shared {
+        settings: Arc::new(Mutex::new(Settings {
+            kind,
+            options: request.config.init_options.clone().unwrap_or(Value::Null),
+        })),
         router: router_tx,
         model: Mutex::new(Model {
             entry,
@@ -370,7 +391,7 @@ pub(crate) fn initialize_params(
         "processId": std::process::id(), "rootUri": uri.as_str(),
         "workspaceFolders": [{"uri": uri.as_str(), "name": root.file_name().unwrap_or_default().to_string_lossy()}],
         "initializationOptions": config.init_options.clone().unwrap_or(Value::Null),
-        "capabilities": client_capabilities(config)
+        "capabilities": client_capabilities(config.resolved_kind())
     }))
 }
 
@@ -381,7 +402,7 @@ fn initialize_and_run(
     server: &mut Server,
 ) -> Result<()> {
     memory::raise_oom_score(server.child.id())?;
-    let params = initialize_params(&request.root, &request.config)?;
+    let mut params = initialize_params(&request.root, &request.config)?;
     let (messages_tx, messages) = mpsc::channel();
     let sender = shared.router.clone();
     std::thread::spawn(move || {
@@ -398,10 +419,15 @@ fn initialize_and_run(
     let transport = Transport::start(
         server.child.stdout.take().expect("piped stdout"),
         server.child.stdin.take().expect("piped stdin"),
-        params["initializationOptions"].clone(),
+        shared.settings.clone(),
         params["workspaceFolders"].clone(),
         messages_tx,
     );
+    // Initialize from the broker's settings, the same state the transport answers configuration from.
+    let settings = shared.settings.lock().unwrap_or_else(|e| e.into_inner());
+    params["initializationOptions"] = settings.options.clone();
+    params["capabilities"] = client_capabilities(settings.kind);
+    drop(settings);
     let (_, initialized) = transport.request("initialize", params)?;
     shared
         .model
@@ -514,6 +540,11 @@ fn run(
                 .collect();
             let batch = watch::register_created(watcher, &request.root, batch, &report)?;
             let changes = watch::changes(
+                shared
+                    .settings
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .kind,
                 &request.root,
                 &request.config.extensions,
                 &request.config.root_markers,
@@ -728,7 +759,10 @@ mod tests {
         tearing_down.transport = Some(Transport::start(
             std::io::empty(),
             Vec::<u8>::new(),
-            Value::Null,
+            Arc::new(Mutex::new(Settings {
+                kind: LspServerKind::RustAnalyzer,
+                options: Value::Null,
+            })),
             Value::Null,
             mpsc::channel().0,
         ));

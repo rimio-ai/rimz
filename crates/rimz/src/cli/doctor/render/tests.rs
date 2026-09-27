@@ -136,6 +136,7 @@ fn shared_language_servers_read_like_lsp_list() {
     use rimz::lsp::registry::{State, StopReason};
     let server = |root: &str, name: &str, state| super::super::model::LspServer {
         entry: rimz::lsp::registry::Entry {
+            kind: None,
             root: root.into(),
             project: None,
             server: name.into(),

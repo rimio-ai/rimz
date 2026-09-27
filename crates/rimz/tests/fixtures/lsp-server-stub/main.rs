@@ -4,6 +4,14 @@ use rimz::lsp::protocol::{read_frame, write_frame};
 use serde_json::{Value, json};
 
 fn main() {
+    let mut args = std::env::args().skip(1);
+    let mut sections = Vec::<String>::new();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--configuration-section" => sections.push(args.next().expect("section argument")),
+            _ => panic!("unknown stub argument: {arg}"),
+        }
+    }
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut indexed = false;
@@ -29,6 +37,9 @@ fn main() {
             requests.push(message.clone());
         }
         let method = message["method"].as_str().unwrap_or("");
+        if method.is_empty() {
+            continue;
+        }
         let result = match method {
             "$/cancelRequest" => {
                 cancellations.push(message["params"]["id"].clone());
@@ -42,6 +53,9 @@ fn main() {
             }
             "initialized" => {
                 assert!(!indexed, "one initialized per lifetime");
+                if !sections.is_empty() {
+                    write_frame(&mut output, &json!({"jsonrpc":"2.0","id":"configuration","method":"workspace/configuration","params":{"items":sections.iter().map(|section| json!({"section":section})).collect::<Vec<_>>()}})).unwrap();
+                }
                 for kind in ["begin", "end"] {
                     write_frame(&mut output, &json!({"jsonrpc": "2.0", "method": "$/progress", "params": {"token": "index", "value": {"kind": kind}}})).unwrap();
                 }

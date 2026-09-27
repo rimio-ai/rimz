@@ -320,6 +320,10 @@ mod tests {
     fn query_at_consumer_never_returns_empty_results_while_indexing() {
         let entry: Entry = serde_json::from_value(json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": "indexing", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []})).unwrap();
         let shared = Shared {
+            settings: Arc::new(Mutex::new(super::super::Settings {
+                kind: crate::config::LspServerKind::Generic,
+                options: Value::Null,
+            })),
             router: std::sync::mpsc::channel().0,
             model: Mutex::new(Model {
                 entry,

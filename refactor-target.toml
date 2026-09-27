@@ -222,7 +222,8 @@ upward-dependencies = [
 # Worktree lifecycle hooks and their validation error cross the config/worktree seam.
 # IdleCompactMode parsing, Team::idle_compact and ConfigEditor::retire_idle_compact_keys share role policy and setup retirement with consumers, replacing the old idle-span accessor/parser.
 # effective::teams shares the machine fallback between producer lanes and the idle-compaction helper.
-surface-budget = 168
+# LspServerKind shares the configured server arm with admission, broker, registry, and status.
+surface-budget = 169
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

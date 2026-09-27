@@ -195,12 +195,15 @@ The Rust options disable checking that would contend with agent builds, include 
 | `[lsp.servers.<name>]` field | Default | Meaning |
 | --- | --- | --- |
 | `command` | required | Nonempty executable argv, not a shell command. |
+| `kind` | detected | `rust-analyzer`, `pyright`, `basedpyright`, `ruff`, or `generic`. An explicit value wins; otherwise the first command token whose basename is `rust-analyzer`, `pyright-langserver`, `basedpyright-langserver`, or `ruff` selects the kind, falling back to `generic`. Unknown values refuse config load. |
 | `extensions` | required | Nonempty file extensions without dots, used for selection and saved-file watching. |
 | `root-markers` | required | Nonempty checkout-relative paths; any existing marker enables this server for the checkout. |
 | `init-options` | absent | TOML table of initialization options passed to the server. |
 | `policy` | `"optional"` | `optional` starts on the first query; `required` admits and starts a new server before panes open. Both restart lazily after a stop. |
 | `wait-timeout` | `"10m"` | Required-server queue deadline, with duration units such as `20s` or `10m`. |
 | `memory-estimate` | `"8G"` | Admission estimate before matching peak history exists. |
+
+`init-options` is sent verbatim as `initializationOptions`. For Pyright it is a section-keyed object: `python` and `pyright`; for basedpyright: `python`, `basedpyright`, and legacy `pyright`. Analysis belongs under `python.analysis` for Pyright and `basedpyright.analysis` for basedpyright. Ruff accepts `settings` or `globalSettings` at the top level, including Ruff's per-workspace `settings` array shape. Other top-level keys on these three kinds refuse admission with the accepted keys in the error. Rust-analyzer and generic accept any table. Configuration requests walk the requested dotted section from this object; only rust-analyzer strips its own section prefix and returns the whole object for `rust-analyzer`. `kind` does not change the trust hash or learned memory-history key. Status reports the resolved kind; legacy entries may have no kind.
 
 Server names use ASCII letters, digits, `-`, or `_`; percentages range from 0 to 100. Sizes use decimal units (`8G` is 8 GB); `8GiB` is binary. Invalid machine-wide policy (`idle-timeout`, percentages, or `reserve-min`) refuses launch only when a required server's root markers match the checkout; otherwise it warns once and skips all servers. Memory admission accounts for running servers' committed growth and cgroup headroom; dormant entries reserve nothing. Query-time admission can evict older idle servers ([admission rules](../../internals/lsp.md#admission)). Required waits print position and remaining time in the launcher's terminal, not the sidebar. Joining an existing broker, even dormant, skips eager admission; later stops and restarts treat required and optional alike.
 

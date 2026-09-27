@@ -122,6 +122,8 @@ impl CrashCause {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Entry {
+    #[serde(default)]
+    pub kind: Option<crate::config::LspServerKind>,
     pub root: PathBuf,
     pub project: Option<PathBuf>,
     pub server: String,
@@ -474,6 +476,7 @@ mod tests {
     #[test]
     fn registry_round_trip_and_kill_order() {
         let entry = Entry {
+            kind: Some(crate::config::LspServerKind::RustAnalyzer),
             root: "/checkout".into(),
             project: Some("/project".into()),
             server: "rust".into(),
@@ -508,12 +511,15 @@ mod tests {
         assert!(legacy.as_object().unwrap().contains_key("last_crash"));
         legacy.as_object_mut().unwrap().remove("last_crash");
         legacy.as_object_mut().unwrap().remove("attached");
+        legacy.as_object_mut().unwrap().remove("kind");
         let parsed = serde_json::from_value::<Entry>(legacy);
         assert!(
             parsed.is_ok(),
             "legacy entries must remain readable: {parsed:?}"
         );
-        assert!(parsed.unwrap().attached.is_empty());
+        let parsed = parsed.unwrap();
+        assert!(parsed.attached.is_empty());
+        assert!(parsed.kind.is_none());
         let mut entries = vec![entry.clone(); 4];
         entries[0].server = "used-new".into();
         entries[0].request_count = 2;

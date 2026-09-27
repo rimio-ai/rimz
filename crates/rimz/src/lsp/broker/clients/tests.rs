@@ -605,12 +605,34 @@ fn pending_queues_are_bounded_and_queued_cancellation_is_local() {
 }
 
 #[test]
+fn non_rust_servers_omit_only_experimental_capabilities() {
+    let mut config: crate::config::LspServerConfig = serde_json::from_value(
+        json!({"command":["rust-analyzer"],"extensions":["py"],"root-markers":["pyproject.toml"]}),
+    )
+    .unwrap();
+    let mut expected = super::super::client_capabilities(config.resolved_kind());
+    expected.as_object_mut().unwrap().remove("experimental");
+    for kind in [
+        crate::config::LspServerKind::Pyright,
+        crate::config::LspServerKind::Basedpyright,
+        crate::config::LspServerKind::Ruff,
+        crate::config::LspServerKind::Generic,
+    ] {
+        config.kind = Some(kind);
+        assert_eq!(
+            super::super::client_capabilities(config.resolved_kind()),
+            expected
+        );
+    }
+}
+
+#[test]
 fn capabilities_preserve_editor_actions_without_unsafe_superset_features() {
-    let config = serde_json::from_value(
+    let config: crate::config::LspServerConfig = serde_json::from_value(
         json!({"command": ["rust-analyzer"], "extensions": ["rs"], "root-markers": ["Cargo.toml"]}),
     )
     .unwrap();
-    let caps = super::super::client_capabilities(&config);
+    let caps = super::super::client_capabilities(config.resolved_kind());
     assert_eq!(
         caps["experimental"]["commands"]["commands"],
         json!([

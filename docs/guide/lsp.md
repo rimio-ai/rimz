@@ -87,6 +87,32 @@ Your editor already runs rust-analyzer for completion, navigation, and diagnosti
 | Neovim | Set `cmd = { "rimz", "lsp", "attach", "--server", "rust" }`, with `root_dir` set to the checkout; `--root` is optional. |
 | Helix | Set `language-server.rust-analyzer = { command = "rimz", args = ["lsp", "attach", "--server", "rust"] }`. |
 
+For Python, share navigation and type checking through Pyright or basedpyright, and formatting and linting through Ruff. Add the servers you use to your RimZ configuration:
+
+```toml
+[lsp.servers.pyright]
+command = ["pyright-langserver", "--stdio"]
+extensions = ["py"]
+root-markers = ["pyproject.toml", "pyrightconfig.json"]
+init-options = { python = { analysis = { typeCheckingMode = "strict" } } }
+
+[lsp.servers.ruff]
+command = ["ruff", "server"]
+extensions = ["py"]
+root-markers = ["pyproject.toml", "ruff.toml", ".ruff.toml"]
+init-options = { settings = { lineLength = 100 } }
+```
+
+For basedpyright, use `command = ["basedpyright-langserver", "--stdio"]` and put analysis settings under `init-options.basedpyright.analysis`. The server kind is detected from the command; set `kind` explicitly for a wrapper script. `rimz lsp status --server pyright` shows the detected kind.
+
+| Python editor | Setting |
+| --- | --- |
+| Neovim | In the Pyright, basedpyright, or Ruff LSP configuration, set `cmd = { "rimz", "lsp", "attach", "--server", "pyright" }` (replace `pyright` with the RimZ server name), with `root_dir` set to the checkout. |
+| Helix | Set `language-server.pyright = { command = "rimz", args = ["lsp", "attach", "--server", "pyright"] }`; use the corresponding name for basedpyright or Ruff and include it in the Python language's `language-servers` list. |
+| Zed | Python binary overrides have not been verified with attachment; this guide does not promise Pyright, basedpyright, or Ruff attachment in Zed yet. |
+
+Python extensions in VS Code are outside this integration. Commands that need the editor to apply an edit or answer a server prompt, such as Pyright's organize-imports command, are unsupported. Ruff still supports formatting and code actions that return edits directly. Python cache and virtual-environment directories are not watched; after installing a package into `.venv`, run `rimz lsp stop --server pyright` (or the configured server name) so the next request starts a fresh server.
+
 For VS Code, the shim is an executable file at `~/.local/bin/rimz-lsp-rust` that runs RimZ with the attachment arguments; the command prints the path to paste into the setting. The other editors invoke RimZ directly, so `rimz` must be on their PATH. Restart the editor's language server after changing its configuration. Attachment uses the checkout reported by the editor, or the global `--root` if supplied. It joins the shared server or creates one when absent, without needing an agent launch first, under the same memory and trust policy.
 
 RimZ owns the server settings: editor initialization options and later server-setting changes are ignored. Change `init-options` in your RimZ server configuration instead. Attaching does not enable checking on save. To get cargo-check diagnostics, set `checkOnSave = true` and `cargo = { targetDir = true }` inside `init-options`, keeping any other options you use. The separate target directory avoids contention with agent builds; checking still costs CPU and memory.
