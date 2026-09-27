@@ -10,8 +10,18 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 fn editor_broker(env: &Env, idle: &str) -> (std::process::Child, std::path::PathBuf) {
+    editor_broker_modes(env, idle, &[])
+}
+
+fn editor_broker_modes(
+    env: &Env,
+    idle: &str,
+    modes: &[&str],
+) -> (std::process::Child, std::path::PathBuf) {
     let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
-    let config = serde_json::from_value(json!({"command":[stub],"extensions":["rs"],"root-markers":["Cargo.toml"],"memory-estimate":"1M"})).unwrap();
+    let mut command = vec![stub.to_string_lossy().into_owned()];
+    command.extend(modes.iter().map(|mode| (*mode).to_owned()));
+    let config = serde_json::from_value(json!({"command":command,"extensions":["rs"],"root-markers":["Cargo.toml"],"memory-estimate":"1M"})).unwrap();
     let mut machine = MachineConfig::default();
     machine.lsp.servers.insert("rust".into(), config);
     std::fs::write(
@@ -169,13 +179,17 @@ impl Editor {
     }
 
     fn attach_pid(directory: &Path, name: &str, pid: u32) -> Self {
+        Self::attach_capabilities(directory, name, pid, json!({}))
+    }
+
+    fn attach_capabilities(directory: &Path, name: &str, pid: u32, capabilities: Value) -> Self {
         let mut stream = UnixStream::connect(directory.join("sock")).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         // Pipeline the first frame to prove the handshake preserves buffered bytes.
         let mut bytes = format!("{}\n", json!({"op":"attach","pid":pid,"start_token":rimz::proc::process_start_token(pid).unwrap()})).into_bytes();
-        rimz::lsp::protocol::write_frame(&mut bytes, &json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":name}}})).unwrap();
+        rimz::lsp::protocol::write_frame(&mut bytes, &json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":name},"capabilities":capabilities}})).unwrap();
         stream.write_all(&bytes).unwrap();
         let mut editor = Self(BufReader::new(stream));
         let mut line = String::new();
@@ -249,6 +263,89 @@ impl Editor {
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
     }
+}
+
+#[test]
+fn lsp_editors_receive_negotiated_shapes_and_agents_keep_locations() {
+    let env = Env::new();
+    let (mut broker, directory) = editor_broker_modes(&env, "10m", &["--adaptable-replies"]);
+    let path = env.project_root.join("lib.rs");
+    std::fs::write(&path, "fn example() {}\n").unwrap();
+    let uri = url::Url::from_file_path(&path).unwrap().to_string();
+    let mut a = Editor::attach(&directory, "minimal");
+    let mut b = Editor::attach_capabilities(
+        &directory,
+        "rich",
+        std::process::id(),
+        json!({"textDocument":{"definition":{"linkSupport":true},"completion":{"completionItem":{"snippetSupport":true}}}}),
+    );
+    a.ready();
+    b.ready();
+    for (editor, rich) in [(&mut a, false), (&mut b, true)] {
+        editor.send(json!({"id":1,"method":"textDocument/definition","params":{"textDocument":{"uri":uri},"position":{"line":0,"character":3}}}));
+        let result = editor.until("id", json!(1))["result"].clone();
+        assert_eq!(result[0][if rich { "targetUri" } else { "uri" }], uri);
+        assert!(
+            result[0]
+                .get(if rich { "uri" } else { "targetUri" })
+                .is_none()
+        );
+        editor.send(json!({"id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":uri},"position":{"line":0,"character":3}}}));
+        let item = editor.until("id", json!(2))["result"][0].clone();
+        assert_eq!(item["insertTextFormat"], if rich { 2 } else { 1 });
+        assert_eq!(
+            item["insertText"],
+            if rich { "foo(${1:x})$0" } else { "foo(x)" }
+        );
+    }
+    let output = env
+        .rimz()
+        .args(["lsp", "def", "lib.rs:1:4", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let locations: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        locations,
+        json!([{"uri":uri,"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}}}])
+    );
+    editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}));
+    broker.wait().unwrap();
+}
+
+#[test]
+fn lsp_late_editor_receives_open_index_progress() {
+    let env = Env::new();
+    let (mut broker, directory) = editor_broker_modes(&env, "10m", &["--hold-index-progress"]);
+    let mut a = Editor::attach(&directory, "first");
+    // The stub's status follows its create/begin/report on the same ordered path, so A seeing it
+    // proves the router recorded them; a request reply returns on a separate path and can overtake.
+    a.ready();
+    let mut b = Editor::attach(&directory, "late");
+    b.ready();
+    let create = rimz::lsp::protocol::read_frame(&mut b.0).unwrap();
+    assert_eq!(create["method"], "window/workDoneProgress/create");
+    assert_eq!(create["params"]["token"], "index");
+    for kind in ["begin", "report"] {
+        let progress = rimz::lsp::protocol::read_frame(&mut b.0).unwrap();
+        assert_eq!(progress["method"], "$/progress");
+        assert_eq!(progress["params"]["value"]["kind"], kind);
+    }
+    b.send(json!({"id":2,"method":"workspace/symbol","params":{"query":"release-index"}}));
+    // The end notification and the reply reach the router on separate paths, in either order.
+    let (mut ended, mut replied) = (false, false);
+    while !(ended && replied) {
+        let frame = rimz::lsp::protocol::read_frame(&mut b.0).unwrap();
+        ended |= frame["method"] == "$/progress" && frame["params"]["value"]["kind"] == "end";
+        replied |= frame["id"] == 2;
+    }
+    b.quiet();
+    editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}));
+    broker.wait().unwrap();
 }
 
 #[test]

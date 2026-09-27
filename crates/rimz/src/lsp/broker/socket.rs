@@ -284,7 +284,11 @@ fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<V
         return Ok(json!({"error": {"code": -32003, "message": reason}}));
     }
     match response {
-        Ok(result) => Ok(json!({"result": result?})),
+        Ok(result) => {
+            let mut result = result?;
+            super::adaptation::reply(&mut result, method, &Value::Null);
+            Ok(json!({"result": result}))
+        }
         Err(error) => Err(LspErr::Protocol(format!("query did not answer: {error}"))),
     }
 }

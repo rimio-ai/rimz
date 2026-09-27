@@ -449,6 +449,7 @@ fn readiness_gates_fanout_and_replays_latest_status_once() {
             json!({"method": "experimental/serverStatus", "params": {"health": health}}),
         ));
     }
+    c.event(Event::ServerMessage(json!({"method":"$/progress","params":{"token":"editor-work","value":{"kind":"begin","title":"Untracked editor work"}}})));
     let out = recipient(&frame(&mut c, B, "initialized", json!({})), B);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["params"]["health"], "ok");
@@ -646,10 +647,211 @@ fn capabilities_preserve_editor_actions_without_unsafe_superset_features() {
     );
     assert_eq!(caps["experimental"]["hoverActions"], true);
     assert_eq!(caps["experimental"]["codeActionGroup"], true);
-    for absent in ["snippetTextEdit", "openServerLogs", "testExplorer"] {
+    assert_eq!(caps["experimental"]["snippetTextEdit"], true);
+    for absent in ["openServerLogs", "testExplorer", "localDocs"] {
         assert!(caps["experimental"].get(absent).is_none());
     }
-    assert!(!caps.to_string().contains("linkSupport"));
+    for method in [
+        "definition",
+        "typeDefinition",
+        "implementation",
+        "declaration",
+    ] {
+        assert_eq!(caps["textDocument"][method]["linkSupport"], true);
+    }
+    assert_eq!(
+        caps["textDocument"]["completion"]["completionItem"]["snippetSupport"],
+        true
+    );
     assert!(caps["workspace"].get("applyEdit").is_none());
     assert!(caps["general"].get("positionEncodings").is_none());
+}
+
+fn reply(c: &mut Clients, id: ClientId, method: &str, result: Value) -> Value {
+    c.event(Event::ClientFrame(
+        id,
+        json!({"id": 77, "method": method, "params": {}}),
+    ));
+    recipient(
+        &c.event(Event::ServerReply(
+            id,
+            json!(77),
+            json!({"id": 999, "result": result}),
+        )),
+        id,
+    )[0]["result"]
+        .clone()
+}
+
+#[test]
+fn replies_adapt_links_per_method_and_editor() {
+    let mut c = ready();
+    let range = json!({"start":{"line":1,"character":2},"end":{"line":1,"character":3}});
+    let link = json!({"targetUri":"file:///u", "targetRange":{}, "targetSelectionRange":range});
+    for method in [
+        "definition",
+        "typeDefinition",
+        "implementation",
+        "declaration",
+    ] {
+        frame(
+            &mut c,
+            B,
+            "initialize",
+            json!({"capabilities":{"textDocument":{method:{"linkSupport":true}}}}),
+        );
+        let method = format!("textDocument/{method}");
+        assert_eq!(
+            reply(&mut c, A, &method, json!([link])),
+            json!([{"uri":"file:///u", "range":range}])
+        );
+        assert_eq!(reply(&mut c, B, &method, json!([link])), json!([link]));
+        assert_eq!(
+            reply(&mut c, B, "textDocument/references", json!([link])),
+            json!([link])
+        );
+    }
+}
+
+#[test]
+fn replies_strip_snippets_in_completion_and_workspace_edits() {
+    let mut c = ready();
+    frame(
+        &mut c,
+        B,
+        "initialize",
+        json!({"capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":true}}},"experimental":{"snippetTextEdit":true}}}),
+    );
+    for (snippet, plain) in [
+        ("foo(${1:x}, ${2:y})$0", "foo(x, y)"),
+        ("$1suffix ${2:é}$0!", "suffix é!"),
+        ("${1|a,b|}", "a"),
+        (r"\$1", "$1"),
+        ("${1:outer ${2:inner}}", "outer inner"),
+        ("$NAME ${NAME:default} ${1} $9", " default  "),
+        (r"${1|a\,b,c|} \} \\", "a,b } \\"),
+    ] {
+        let item = json!({"label":"item", "insertTextFormat":2, "insertText":snippet,"textEdit":{"newText":snippet,"range":{}}});
+        let mut expected = item.clone();
+        expected["insertTextFormat"] = json!(1);
+        expected["insertText"] = json!(plain);
+        expected["textEdit"]["newText"] = json!(plain);
+        for (method, input, output) in [
+            ("textDocument/completion", json!([item]), json!([expected])),
+            (
+                "textDocument/completion",
+                json!({"isIncomplete":false,"items":[item]}),
+                json!({"isIncomplete":false,"items":[expected]}),
+            ),
+            ("completionItem/resolve", item.clone(), expected),
+        ] {
+            assert_eq!(reply(&mut c, A, method, input.clone()), output);
+            assert_eq!(reply(&mut c, B, method, input.clone()), input);
+        }
+        let edit = json!([{"edit":{"changes":{"file:///u":[{"newText":snippet,"insertTextFormat":2,"range":{}}]}}}]);
+        let converted = reply(&mut c, A, "textDocument/codeAction", edit.clone());
+        assert_eq!(
+            converted[0]["edit"]["changes"]["file:///u"][0],
+            json!({"newText":plain,"range":{}})
+        );
+        assert_eq!(
+            reply(&mut c, B, "textDocument/codeAction", edit.clone()),
+            edit
+        );
+    }
+}
+
+#[test]
+fn requests_and_replies_map_held_uris_in_both_directions() {
+    let mut c = ready();
+    let owner = "file:///a/b%40c/u.rs";
+    let other = "file:///a/b@c/u.rs";
+    for (id, uri) in [(A, owner), (B, other)] {
+        frame(
+            &mut c,
+            id,
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"rust","version":1,"text":"same"}}),
+        );
+    }
+    let request = json!({"id":8,"method":"textDocument/hover","params":{"textDocument":{"uri":other},"targetUri":other,"changes":{other:[]}}});
+    let sent = server(&c.event(Event::ClientFrame(B, request)));
+    assert_eq!(
+        sent[0]["params"],
+        json!({"textDocument":{"uri":owner},"targetUri":owner,"changes":{owner:[]}})
+    );
+    let result = reply(
+        &mut c,
+        B,
+        "textDocument/definition",
+        json!([{"uri":owner,"range":{}},{"uri":"file:///unheld","range":{}}]),
+    );
+    assert_eq!(
+        result,
+        json!([{"uri":other,"range":{}},{"uri":"file:///unheld","range":{}}])
+    );
+    assert_eq!(
+        reply(
+            &mut c,
+            B,
+            "workspace/executeCommand",
+            json!({"changes":{owner:[]},"targetUri":owner})
+        ),
+        json!({"changes":{other:[]},"targetUri":other})
+    );
+}
+
+#[test]
+fn progress_replays_open_tokens_in_creation_order_and_resets() {
+    for reset in ["end", "stop", "start", "none"] {
+        let mut c = ready();
+        attach(&mut c, C, false);
+        let status = json!({"method":"experimental/serverStatus","params":{"health":"ok"}});
+        c.event(Event::ServerMessage(status.clone()));
+        for token in [json!(9), json!("index")] {
+            let create =
+                json!({"id":80,"method":"window/workDoneProgress/create","params":{"token":token}});
+            let live = c.event(Event::ServerMessage(create));
+            assert_eq!(recipient(&live, A).len(), 1);
+            assert!(recipient(&live, C).is_empty());
+            for (kind, percentage) in [("begin", 0), ("report", 10), ("report", 50)] {
+                let progress = json!({"method":"$/progress","params":{"token":token,"value":{"kind":kind,"percentage":percentage}}});
+                assert_eq!(
+                    recipient(&c.event(Event::ServerMessage(progress.clone())), A),
+                    vec![progress]
+                );
+            }
+        }
+        match reset {
+            "end" => {
+                for token in [json!(9), json!("index")] {
+                    c.event(Event::ServerMessage(json!({"method":"$/progress","params":{"token":token,"value":{"kind":"end"}}})));
+                }
+            }
+            "stop" => {
+                c.event(Event::LifetimeEnded(StopReason::Idle));
+            }
+            // A server's first progress can reach the router before its lifetime's start event.
+            "start" => {
+                start(&mut c);
+            }
+            _ => {}
+        }
+        let actions = frame(&mut c, C, "initialized", json!({}));
+        assert!(recipient(&actions, A).is_empty());
+        let replay = recipient(&actions, C);
+        let kept = matches!(reset, "none" | "start");
+        assert_eq!(replay.len(), if kept { 7 } else { 1 }, "{reset}");
+        if kept {
+            assert_eq!(replay[0], status);
+            for (offset, token) in [(1, json!(9)), (4, json!("index"))] {
+                assert_eq!(replay[offset]["method"], "window/workDoneProgress/create");
+                assert_eq!(replay[offset]["params"]["token"], token);
+                assert_eq!(replay[offset + 1]["params"]["value"]["kind"], "begin");
+                assert_eq!(replay[offset + 2]["params"]["value"]["percentage"], 50);
+            }
+            assert_ne!(replay[1]["id"], replay[4]["id"]);
+        }
+        assert!(frame(&mut c, C, "initialized", json!({})).is_empty());
+    }
 }
