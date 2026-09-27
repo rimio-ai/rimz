@@ -78,7 +78,8 @@ path = "crates/rimz/src/lsp"
 # landed on separate branches; together they reopen this by one.
 # Launch and doctor share per-server validation and marker selection.
 # CrashCause, shared spawn/ownership, and initialization parameters serve doctor probes.
-surface-budget = 103
+# Doctor exposes the startup check entry, result, and outcome through broker::probe.
+surface-budget = 106
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"

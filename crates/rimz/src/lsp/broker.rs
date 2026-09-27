@@ -2,6 +2,7 @@
 
 mod clients;
 mod lifecycle;
+pub mod probe;
 mod router;
 mod socket;
 mod transport;

@@ -248,6 +248,86 @@ fn render_lsp(
             ]);
         }
         table.render(w)?;
+        for server in &lsp.servers {
+            if matches!(
+                server.entry.state,
+                rimz::lsp::registry::State::Dormant {
+                    reason: Some(rimz::lsp::registry::StopReason::Crashed),
+                    ..
+                }
+            ) && let Some(cause) = &server.entry.last_crash
+            {
+                detail(
+                    w,
+                    palette::muted(),
+                    &format!(
+                        "{} {}: {}",
+                        home_relative_path(&server.entry.root),
+                        server.entry.server,
+                        cause.exit_summary()
+                    ),
+                )?;
+                render_stderr(w, cause)?;
+            }
+        }
+    }
+    for check in &lsp.checks {
+        use rimz::lsp::broker::probe::Outcome;
+        let name = &check.server;
+        let (health, text, cause, fix) = match &check.outcome {
+            Outcome::Running { .. } => (Health::Ok, format!("{name} running"), None, None),
+            Outcome::Started { version } => (
+                Health::Ok,
+                format!(
+                    "{name} starts{}",
+                    version
+                        .as_ref()
+                        .map_or_else(String::new, |version| format!(" ({version})"))
+                ),
+                None,
+                None,
+            ),
+            Outcome::Failed { cause, fix } => (
+                Health::Alarm,
+                format!(
+                    "{name} cannot start in {}: {}",
+                    home_relative_path(&check.root),
+                    cause.exit_summary()
+                ),
+                Some(cause),
+                Some(fix),
+            ),
+            Outcome::TimedOut { cause, fix } => (
+                Health::Warn,
+                format!("{name} did not answer initialize within 10s"),
+                Some(cause),
+                Some(fix),
+            ),
+            Outcome::Invalid { error, fix } => {
+                (Health::Alarm, format!("{name}: {error}"), None, Some(fix))
+            }
+            Outcome::Untrusted { fix } => (
+                Health::Alarm,
+                format!("{name}: project configuration is untrusted"),
+                None,
+                Some(fix),
+            ),
+        };
+        note(tally, w, health, &text)?;
+        if let Some(cause) = cause {
+            render_stderr(w, cause)?;
+        }
+        if let Some(fix) = fix {
+            detail(w, palette::muted(), &format!("fix: {fix}"))?;
+        }
+    }
+    if let Some(error) = &lsp.checks_error {
+        note(
+            tally,
+            w,
+            Health::Alarm,
+            &format!("cannot check this checkout's language servers: {error}"),
+        )?;
     }
     if let Some(record) = &lsp.last_refusal {
         note(
@@ -263,6 +343,14 @@ fn render_lsp(
                 record.details
             ),
         )?;
+    }
+    Ok(())
+}
+
+fn render_stderr(w: &mut impl Write, cause: &rimz::lsp::registry::CrashCause) -> io::Result<()> {
+    let lines: Vec<_> = cause.stderr_tail.lines().rev().take(5).collect();
+    for line in lines.into_iter().rev() {
+        detail(w, palette::muted(), line)?;
     }
     Ok(())
 }

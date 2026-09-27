@@ -195,7 +195,7 @@ A merge names every file it wrote, merged, or left untouched. An unparseable fil
 rimz doctor [--audit] [--json] [--no-log-text] [--output <PATH>] [--clear]
 ```
 
-`rimz doctor` reports the machine, the backend, and the room for the current directory in one pass. It starts, stops, or reconfigures nothing, and it exits 0 whatever it finds; read the closing line, or the JSON, to act on the result. Without `--clear` or `--output`, it writes nothing to disk, including with `--audit` or `--json`. `--clear` writes a history watermark; `--output` writes the named report file.
+`rimz doctor` reports the machine, the backend, and the room for the current directory in one pass. It does not reconfigure the room, and it exits 0 whatever it finds; read the closing line, or the JSON, to act on the result. It briefly starts configured language servers that are not already running to check startup, then terminates their process groups. Without `--clear` or `--output`, RimZ writes no state, including with `--audit` or `--json`; a configured server may write its own files. `--clear` writes a history watermark; `--output` writes the named report file.
 
 | Flag | Effect |
 | --- | --- |
@@ -221,7 +221,7 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `ACCOUNTS` | Conditional. Each named account's home and status, marking this room's account. |
 | `AGENT PLUGINS` | Conditional. Each plugin manifest, its validation result, and its probes. |
 | `LOOP TASKS` | Configured loop tasks with target, trigger, and root. |
-| `LSP` | Shared language servers with state, checkout, server, memory, and leases, in `rimz lsp list` order, and the last memory refusal or queue timeout. |
+| `LSP` | Machine-wide shared servers in `rimz lsp list` order, recorded crash exit/stderr, and the last memory refusal or queue timeout. Current-checkout startup checks follow the table, with causes and fixes. |
 | `REMOTE CONTROL` | Remote-control hosts and their readiness, or `off`. |
 | `STORAGE` | RimZ's disk use by area. |
 | `PROTOCOLS` | Conditional on a resolved workspace. Event and sidebar protocol versions, and build drift between writers. |
@@ -232,6 +232,8 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `LAST INCIDENT` | Conditional. How the previous session died, when, the agents lost, `recovered: N of M`, and the forensics path. |
 
 Each row carries a glyph: `✓` healthy, `!` degraded but working, `✗` broken, with the fix beside it. The closing line counts problems and warnings and names their sections, for example `✗ 2 problems in HOOKS, MESSAGES  ·  ! 1 warning in DIAGNOSTICS`, or prints `✓ everything checked is healthy`. Only incidents still in the `investigate` state count toward it; `contained`, `recovered`, and `expected` incidents are summarized as context.
+
+The LSP startup checks use the current checkout's effective configuration and root markers. Running servers are not started again; untrusted project servers are not executed. Checks run concurrently, waiting up to ten seconds for startup. Failures, invalid configurations, and untrusted servers each count as a problem; a timeout is a warning. JSON adds `lsp.ready.checks`, sorted by server name, with outcomes `running`, `started`, `failed`, `timed_out`, `invalid`, or `untrusted`. No resolved workspace means an empty check array. When the checkout's LSP configuration cannot be loaded, the machine-wide table still renders, `lsp.ready.checks_error` carries the error, and doctor counts it as one problem.
 
 `--clear` stamps the workspace, so records written before that moment stay out of this and every later report. The diagnostic files, server logs, and event log stay on disk. It fails when the current directory does not resolve to a workspace.
 
