@@ -90,7 +90,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         accounts: agents::collect_accounts(ws),
         plugins: agents::collect_plugins(),
         loop_tasks: collect_loop(),
-        lsp: collect_lsp(),
+        lsp: collect_lsp(ws, globals),
         remote_control: runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path())),
         disk_usage: runtime::collect_storage(),
         protocols: ws.map(protocol::collect_protocols),
@@ -103,9 +103,42 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
     }
 }
 
-fn collect_lsp() -> model::Probe<model::Lsp> {
-    match rimz::lsp::registry::read_entries() {
-        Ok(entries) => model::Probe::Ready(model::Lsp {
+/// Startup checks for the current checkout; failures stay apart from the machine-wide table.
+fn collect_lsp_checks(
+    ws: &rimz::ResolvedWorkspace,
+    globals: &GlobalFlags,
+    entries: &[rimz::lsp::registry::Entry],
+) -> Result<Vec<rimz::lsp::broker::probe::Check>> {
+    let cwd = match &globals.root {
+        Some(root) => root.clone(),
+        None => std::env::current_dir()?,
+    };
+    let cwd = std::fs::canonicalize(cwd)?;
+    let root = rimz::lsp::registry::enclosing_checkout(&cwd, entries).unwrap_or(&ws.worktree_root);
+    let machine = rimz::config::MachineConfig::load_lenient();
+    let effective = rimz::config::effective::load(&machine, ws.launch_repo_root())?;
+    Ok(rimz::lsp::broker::probe::check_startup(
+        root,
+        &effective.lsp_servers,
+        &effective.untrusted_lsp_servers,
+        entries,
+    ))
+}
+
+fn collect_lsp(
+    ws: Option<&rimz::ResolvedWorkspace>,
+    globals: &GlobalFlags,
+) -> model::Probe<model::Lsp> {
+    let collect = || -> Result<model::Lsp> {
+        let entries = rimz::lsp::registry::read_entries()?;
+        let (checks, checks_error) = match ws.map(|ws| collect_lsp_checks(ws, globals, &entries)) {
+            None => (Vec::new(), None),
+            Some(Ok(checks)) => (checks, None),
+            Some(Err(error)) => (Vec::new(), Some(error.to_string())),
+        };
+        Ok(model::Lsp {
+            checks,
+            checks_error,
             servers: entries
                 .into_iter()
                 .map(|entry| {
@@ -123,7 +156,10 @@ fn collect_lsp() -> model::Probe<model::Lsp> {
                 .into_iter()
                 .rev()
                 .find(|record| matches!(record.event.as_str(), "refused" | "queue_timeout")),
-        }),
+        })
+    };
+    match collect() {
+        Ok(lsp) => model::Probe::Ready(lsp),
         Err(error) => model::Probe::Unavailable {
             error: error.to_string(),
         },

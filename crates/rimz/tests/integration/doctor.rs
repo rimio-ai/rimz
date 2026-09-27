@@ -73,6 +73,113 @@ fn doctor_json(output: &Output) -> Value {
 }
 
 #[test]
+fn doctor_checks_selected_servers_and_reports_startup_causes() {
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    let mut machine = rimz::config::MachineConfig::default();
+    for (name, command, marker) in [
+        (
+            "broken",
+            json!([
+                "sh",
+                "-c",
+                "echo \"error: Unknown binary 'rust-analyzer' in official toolchain '1.98.1-x86_64-unknown-linux-gnu'.\" >&2; exit 1"
+            ]),
+            "Cargo.toml",
+        ),
+        ("healthy", json!([stub]), "Cargo.toml"),
+        ("skipped", json!(["does-not-exist"]), "absent.marker"),
+        (
+            "missing",
+            json!(["rimz-doctor-missing-server"]),
+            "Cargo.toml",
+        ),
+    ] {
+        machine.lsp.servers.insert(
+            name.into(),
+            serde_json::from_value(json!({
+                "command": command, "extensions": ["rs"], "root-markers": [marker]
+            }))
+            .unwrap(),
+        );
+    }
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        toml::to_string(&std::collections::BTreeMap::from([("lsp", &machine.lsp)])).unwrap(),
+    )
+    .unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let checks = report["lsp"]["ready"]["checks"]
+        .as_array()
+        .expect("startup checks");
+    assert_eq!(checks.len(), 3);
+    assert_eq!(checks[0]["server"], "broken");
+    assert_eq!(checks[0]["outcome"], "failed");
+    assert_eq!(checks[0]["cause"]["exit_code"], 1);
+    assert!(
+        checks[0]["cause"]["stderr_tail"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown binary")
+    );
+    assert_eq!(
+        checks[0]["fix"],
+        "rustup component add rust-analyzer --toolchain 1.98.1-x86_64-unknown-linux-gnu"
+    );
+    assert_eq!(checks[1]["outcome"], "started");
+    assert_eq!(checks[2]["outcome"], "failed");
+    assert_eq!(
+        checks[2]["fix"],
+        "rimz-doctor-missing-server not found on PATH; install it or remove [lsp.servers.missing]"
+    );
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let human = String::from_utf8(output.stdout).unwrap();
+    assert!(human.contains("broken cannot start in"), "{human}");
+    assert!(human.contains("exit code 1"), "{human}");
+    assert!(human.contains("healthy starts"), "{human}");
+    assert!(human.contains("fix: rustup component add"), "{human}");
+    assert!(human.contains("problems"), "{human}");
+}
+
+#[test]
+fn doctor_does_not_execute_untrusted_project_servers() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.project_root.join(".rimz")).unwrap();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(env.project_root.join(".rimz/config.toml"), "[lsp.servers.untrusted]\ncommand = ['sh', '-c', 'touch doctor-sentinel']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\n").unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(report["lsp"]["ready"]["checks"][0]["outcome"], "untrusted");
+    assert_eq!(report["lsp"]["ready"]["checks"][0]["fix"], "run rimz trust");
+    assert!(!env.project_root.join("doctor-sentinel").exists());
+}
+
+#[test]
+fn doctor_keeps_the_lsp_table_when_project_config_is_malformed() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.project_root.join(".rimz")).unwrap();
+    std::fs::write(
+        env.project_root.join(".rimz/config.toml"),
+        "[lsp.servers.broken\n",
+    )
+    .unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let lsp = &report["lsp"]["ready"];
+    assert!(lsp["servers"].is_array(), "{report}");
+    assert!(
+        lsp["checks_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("config.toml")),
+        "{report}"
+    );
+    let human = String::from_utf8(env.rimz().arg("doctor").output().unwrap().stdout).unwrap();
+    assert!(
+        human.contains("cannot check this checkout's language servers"),
+        "{human}"
+    );
+}
+
+#[test]
 fn doctor_does_not_create_state_for_an_unopened_project() {
     let env = Env::new();
     let state = env.state_path_for(&env.project_root);

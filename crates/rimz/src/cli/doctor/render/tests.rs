@@ -27,6 +27,81 @@ fn terminal_fixture() -> Terminal {
 }
 
 #[test]
+fn startup_checks_count_failures_but_only_warn_for_timeouts() {
+    use rimz::lsp::broker::probe::{Check, Outcome};
+    let cause = rimz::lsp::registry::CrashCause {
+        at_ms: 0,
+        exit_code: Some(1),
+        signal: None,
+        stderr_tail: "hidden\none\ntwo\nthree\nfour\nfive\n".into(),
+        error: None,
+    };
+    let lsp = Probe::Ready(super::super::model::Lsp {
+        servers: vec![],
+        last_refusal: None,
+        checks_error: Some("bad project config".into()),
+        checks: vec![
+            Check {
+                server: "failed".into(),
+                root: "/checkout".into(),
+                outcome: Outcome::Failed {
+                    cause: cause.clone(),
+                    fix: "repair".into(),
+                },
+            },
+            Check {
+                server: "slow".into(),
+                root: "/checkout".into(),
+                outcome: Outcome::TimedOut {
+                    cause,
+                    fix: "wait".into(),
+                },
+            },
+            Check {
+                server: "bad".into(),
+                root: "/checkout".into(),
+                outcome: Outcome::Invalid {
+                    error: "empty command".into(),
+                    fix: "configure".into(),
+                },
+            },
+            Check {
+                server: "project".into(),
+                root: "/checkout".into(),
+                outcome: Outcome::Untrusted {
+                    fix: "run rimz trust".into(),
+                },
+            },
+            Check {
+                server: "healthy".into(),
+                root: "/checkout".into(),
+                outcome: Outcome::Started {
+                    version: Some("1.2".into()),
+                },
+            },
+            Check {
+                server: "live".into(),
+                root: "/checkout".into(),
+                outcome: Outcome::Running {
+                    state: rimz::lsp::registry::State::Ready,
+                },
+            },
+        ],
+    });
+    let mut tally = Tally::default();
+    let rendered = strip(|w| render_lsp(w, &lsp, &mut tally));
+    assert_eq!(tally.alarms.len(), 4, "{rendered}");
+    assert_eq!(tally.warns.len(), 1, "{rendered}");
+    assert!(rendered.contains("failed cannot start in /checkout: exit code 1"));
+    assert!(rendered.contains("slow did not answer initialize within 10s"));
+    assert!(rendered.contains("healthy starts (1.2)"));
+    assert!(rendered.contains("live running"));
+    assert!(rendered.contains("fix: repair"));
+    assert!(!rendered.contains("hidden"));
+    assert!(rendered.contains("cannot check this checkout's language servers: bad project config"));
+}
+
+#[test]
 fn shared_language_servers_show_dormant_reason_and_last_refusal() {
     let entry = serde_json::from_value(serde_json::json!({
         "root": "/checkout", "server": "rust", "nonce": "nonce", "broker_pid": 1, "broker_start_token": "token",
@@ -36,6 +111,8 @@ fn shared_language_servers_show_dormant_reason_and_last_refusal() {
         "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []
     })).unwrap();
     let lsp = Probe::Ready(super::super::model::Lsp {
+        checks: vec![],
+        checks_error: None,
         servers: vec![super::super::model::LspServer {
             entry,
             rss_bytes: 0,
@@ -87,6 +164,8 @@ fn shared_language_servers_read_like_lsp_list() {
         reason,
     };
     let lsp = Probe::Ready(super::super::model::Lsp {
+        checks: vec![],
+        checks_error: None,
         servers: vec![
             server("/b", "rust", dormant(None)),
             server("/a", "z", dormant(Some(StopReason::Idle))),
@@ -340,6 +419,8 @@ fn report_fixture() -> DoctorReport {
     DoctorReport {
         schema: "rimz.doctor.v1",
         lsp: Probe::Ready(super::super::model::Lsp {
+            checks: vec![],
+            checks_error: None,
             servers: Vec::new(),
             last_refusal: None,
         }),

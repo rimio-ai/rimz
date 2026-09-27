@@ -61,6 +61,9 @@ pub(super) struct DoctorReport {
 
 #[derive(Debug, Serialize)]
 pub(super) struct Lsp {
+    pub(super) checks: Vec<rimz::lsp::broker::probe::Check>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) checks_error: Option<String>,
     pub(super) servers: Vec<LspServer>,
     pub(super) last_refusal: Option<rimz::diag::lsp::Record>,
 }
