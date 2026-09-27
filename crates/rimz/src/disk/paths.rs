@@ -114,7 +114,7 @@ pub(crate) fn check_workspace_layout(root: &Path) -> Result<bool> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Class {
+pub(crate) enum Class {
     Log,
     Records,
     Audit,
@@ -139,7 +139,7 @@ impl Class {
     ];
     pub(crate) const RUNTIME: [Self; 3] = [Self::Sock, Self::Live, Self::Lanes];
 
-    pub const fn dir_name(self) -> &'static str {
+    pub(crate) const fn dir_name(self) -> &'static str {
         match self {
             Self::Log => "log",
             Self::Records => "records",
@@ -326,7 +326,7 @@ impl StatePaths {
         )
     }
 
-    pub fn agent_skills_dir(&self, handle: Option<&str>) -> PathBuf {
+    pub(crate) fn agent_skills_dir(&self, handle: Option<&str>) -> PathBuf {
         handle.map_or_else(
             || self.skills_dir.clone(),
             |handle| self.agents_dir.join(handle).join("skills"),
@@ -334,7 +334,7 @@ impl StatePaths {
     }
 
     /// Resolve classed files for readers that scan room roots without opening a store.
-    pub fn class_path(root: &Path, class: Class, name: impl AsRef<Path>) -> PathBuf {
+    pub(crate) fn class_path(root: &Path, class: Class, name: impl AsRef<Path>) -> PathBuf {
         class.path_under(root).join(name)
     }
 
@@ -342,7 +342,7 @@ impl StatePaths {
         Self::class_path(&self.root, Class::Audit, name)
     }
 
-    pub fn ensure_scratch_dir(&self, handle: Option<&str>) -> Result<PathBuf> {
+    pub(crate) fn ensure_scratch_dir(&self, handle: Option<&str>) -> Result<PathBuf> {
         self.ensure_tmp_dir()?;
         let dir = self.scratch_dir(handle);
         mkdir_p(&dir)?;
@@ -361,7 +361,7 @@ impl StatePaths {
     }
 
     /// Remove the entire room state tree, including incompatible history.
-    pub fn remove_root(&self) -> Result<()> {
+    pub(crate) fn remove_root(&self) -> Result<()> {
         match fs::remove_dir_all(&self.root) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -552,7 +552,7 @@ pub(crate) fn is_workspace_spending_file(name: &str) -> bool {
 
 impl RuntimePaths {
     /// Remove the entire room runtime tree.
-    pub fn remove_root(&self) -> Result<()> {
+    pub(crate) fn remove_root(&self) -> Result<()> {
         match fs::remove_dir_all(&self.root) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -713,7 +713,7 @@ impl RuntimePaths {
         self.live_path("prompt")
     }
 
-    pub fn live_path(&self, name: impl AsRef<Path>) -> PathBuf {
+    pub(crate) fn live_path(&self, name: impl AsRef<Path>) -> PathBuf {
         self.live_dir.join(name)
     }
 
@@ -1245,11 +1245,11 @@ pub fn runtime_rimz_root() -> PathBuf {
     runtime_rimz_root_under(&runtime_home())
 }
 
-pub fn lsp_runtime_dir() -> PathBuf {
+pub(crate) fn lsp_runtime_dir() -> PathBuf {
     runtime_rimz_root().join("lsp")
 }
 
-pub fn lsp_history_path() -> PathBuf {
+pub(crate) fn lsp_history_path() -> PathBuf {
     rimz_home().join("lsp-history.jsonl")
 }
 
