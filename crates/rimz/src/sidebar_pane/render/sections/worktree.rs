@@ -594,44 +594,43 @@ fn group_header(
     );
     let avail = cw.saturating_sub(right_width.saturating_add(1));
     let ci_width = ci.as_ref().map_or(0, |(glyph, _)| text_width(glyph));
-    let mut members = Vec::new();
-    if let Some(number) = group.pr_number {
-        let arrow = theme.glyph(GlyphRole::WorktreePrStack);
-        for pr in &group.pr_stack.below {
-            members.push((arrow, pr.number, pr.url.as_ref()));
-        }
-        members.push((arrow, number, group.pr_url.as_ref()));
-        for level in &group.pr_stack.above {
-            for (index, pr) in level.iter().enumerate() {
-                members.push((
-                    if index == 0 { arrow } else { "," },
-                    pr.number,
-                    pr.url.as_ref(),
-                ));
+    let badge_run = |members: &[(&str, u64, Option<&String>)]| {
+        let mut run = String::new();
+        let mut links = Vec::new();
+        for (index, (separator, number, url)) in members.iter().enumerate() {
+            run.push_str(if index == 0 { " " } else { separator });
+            let start = text_width(&run);
+            run.push_str(&format!("#{number}"));
+            if let Some(url) = url {
+                links.push((start..text_width(&run), String::clone(url)));
             }
         }
-        let stack_width = members
-            .iter()
-            .enumerate()
-            .map(|(index, (separator, number, _))| {
-                text_width(if index == 0 { " " } else { separator })
-                    + text_width(&format!("#{number}"))
-            })
-            .sum::<usize>();
-        if text_width(&full_label) + ci_width + stack_width >= avail {
-            members = vec![(" ", number, group.pr_url.as_ref())];
+        (run, links)
+    };
+    let (badge, badge_links) = match group.pr_number {
+        Some(number) => {
+            let arrow = theme.glyph(GlyphRole::WorktreePrStack);
+            let own = (arrow, number, group.pr_url.as_ref());
+            let mut members = Vec::new();
+            for pr in &group.pr_stack.below {
+                members.push((arrow, pr.number, pr.url.as_ref()));
+            }
+            members.push(own);
+            for level in &group.pr_stack.above {
+                for (index, pr) in level.iter().enumerate() {
+                    let separator = if index == 0 { arrow } else { "," };
+                    members.push((separator, pr.number, pr.url.as_ref()));
+                }
+            }
+            let stacked = badge_run(&members);
+            if text_width(&full_label) + ci_width + text_width(&stacked.0) < avail {
+                stacked
+            } else {
+                badge_run(&[own])
+            }
         }
-    }
-    let mut badge = String::new();
-    let mut badge_links = Vec::new();
-    for (index, (separator, number, url)) in members.into_iter().enumerate() {
-        badge.push_str(if index == 0 { " " } else { separator });
-        let start = text_width(&badge);
-        badge.push_str(&format!("#{number}"));
-        if let Some(url) = url {
-            badge_links.push((start..text_width(&badge), url));
-        }
-    }
+        None => (String::new(), Vec::new()),
+    };
     let badge = (!badge.is_empty()).then_some(badge);
     // The name shortens first, then the `#N` badge drops, and the CI verdict
     // goes last: the identity elements are admitted as a prefix of one ordered
@@ -664,7 +663,7 @@ fn group_header(
             Some((
                 u16::try_from(offset.saturating_add(columns.start)).ok()?
                     ..u16::try_from(offset.saturating_add(columns.end)).ok()?,
-                url.clone(),
+                url,
             ))
         })
         .collect();
