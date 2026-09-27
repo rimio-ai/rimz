@@ -70,7 +70,9 @@ pub(super) fn birth_split_commands(
 /// after birth. Shared by launch and reconcile so the template cannot drift.
 pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<String> {
     let serve = sidebar_serve_command(opts).join(" ");
-    let split = format!("split-window -h -b -d -l '#{{{SIDEBAR_WIDTH_OPTION}}}' '{serve}'");
+    let split = format!(
+        "split-window -h -b -d -c '#{{session_path}}' -l '#{{{SIDEBAR_WIDTH_OPTION}}}' '{serve}'"
+    );
     let mut hook_commands: Vec<String> = tmux_window_options(&opts.config.tmux)
         .into_iter()
         .map(|(key, value)| format!("set-window-option {key} '{}'", value))
@@ -412,7 +414,7 @@ mod tests {
                 format!(
                     "set-window-option allow-passthrough 'on' ; \
                      set-window-option aggressive-resize 'on' ; \
-                     split-window -h -b -d -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
+                     split-window -h -b -d -c '#{{session_path}}' -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
                      if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'"
                 ),
             ],
@@ -437,7 +439,7 @@ mod tests {
                      set-window-option pane-border-status 'top' ; \
                      set-window-option pane-border-format '{}' ; \
                      set-window-option pane-border-lines 'heavy' ; \
-                     split-window -h -b -d -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
+                     split-window -h -b -d -c '#{{session_path}}' -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
                      if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'",
                     sidebar_blanking_border_format()
                 ),

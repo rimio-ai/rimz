@@ -563,7 +563,7 @@ impl MuxBackend for TmuxBackend {
         // Fresh tmux births repurpose the first pane as the sidebar and split
         // the work shell to the right at final width. Reattach/recovery keeps
         // the long-standing non-destructive split:
-        //   tmux split-window -d -h -l <cols> -b -t <session> 'rimz sidebar serve ...'
+        //   tmux split-window -d -h -c '#{session_path}' -l <cols> -b -t <session> 'rimz sidebar serve ...'
         // `-d` keeps focus on the existing pane; `-b` places the new pane
         // before the target so the sidebar sits on the left. Workspace identity
         // is passed directly to the spawned renderer command.
@@ -638,6 +638,8 @@ impl MuxBackend for TmuxBackend {
             "split-window".to_owned(),
             "-d".to_owned(),
             "-h".to_owned(),
+            "-c".to_owned(),
+            "#{session_path}".to_owned(),
             "-l".to_owned(),
             size,
             "-b".to_owned(),

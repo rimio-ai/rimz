@@ -658,6 +658,8 @@ The waiting RimZ parent mirrors a client's `SIGTSTP` stop and resumes the child 
 
 tmux has no tab template, so a hook provides it. `open_sidebar` splits a left sidebar into the initial window at the launch seed and installs a session-scoped `after-new-window` hook that repeats the split in every later window.
 
+Every tmux sidebar starts in the session's directory (`#{session_path}`), including hook-docked sidebars and reconcile re-docks. Sidebar splits pass that format explicitly with `-c`: the tmux client runs from `/`, and `#{pane_current_path}` would resolve against the session's current window, not necessarily the new window targeted by the hook. This matches pristine birth, which retains the session's start directory. Zellij sidebars retain their tab's cwd instead. Existing sidebars keep their cwd until re-created; reconcile refreshes the hook for future windows without restarting live panes.
+
 The hook reads an absolute-column session option initialized from the resolved room share. Keypresses, adopted mouse drags, view changes, and reconcile passes refresh it, so a new window starts at the share rendered for the current view.
 
 Two details keep the first prompt clean. Both are tmux-only, because Zellij births terminals from the layout at their final size:

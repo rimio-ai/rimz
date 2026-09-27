@@ -5,7 +5,7 @@ Local contract for `crates/rimz/src/mux/` — the Zellij/tmux seam. Extends [cra
 ## The seam
 
 - Raw pane IDs live only inside the backend adapter; [`pane_from_env_value`](./mod.rs) is the one env→ID mapping, and everything leaves the module as a normalized `PaneId`.
-- Every tmux command addresses the RimZ-owned server through [`tmux::managed_cmd`](./tmux.rs) or the backend's own `cmd`, runs from `/`, and clears `$TMUX`; `cargo xtask invariants` rejects a bare `tmux` argv. The endpoint derives from the runtime domain alone, so it never takes a workspace or `disk::paths::RuntimePaths` argument.
+- Every tmux command addresses the RimZ-owned server through [`tmux::managed_cmd`](./tmux.rs) or the backend's own `cmd`, runs from `/`, and clears `$TMUX`; `cargo xtask invariants` rejects a bare `tmux` argv. A pane-creating command passes `-c`, because the client's `/` otherwise becomes the pane's start directory. The endpoint derives from the runtime domain alone, so it never takes a workspace or `disk::paths::RuntimePaths` argument.
 - Every control command runs through [`CommandSpec`](./command.rs) under its deadline; on the bound the child is killed and the caller gets `MuxErr::Timeout` — callers degrade, never block, because a wedged mux client otherwise hangs them forever.
 - `CommandSpec` may feed payload bytes through child stdin (currently tmux buffer loads); input writes and output drains share the command deadline, and debug output never includes stdin contents.
 - Feature work lands on both backends in the same change. A backend-only channel — the tmux control-mode presence watch, the Zellij presence plugin push — is a latency hint layered over the poll/socket truth.

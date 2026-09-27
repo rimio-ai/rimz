@@ -2,6 +2,105 @@
 
 use super::support::*;
 
+fn sidebar_cwd_fixture() -> (TmuxServer, TempDir, TempDir, TempDir, SidebarPaneOptions) {
+    let server = TmuxServer::new();
+    let room = TempDir::new().unwrap();
+    let tab = TempDir::new().unwrap();
+    let (stub_dir, stub) = sidebar_command_stub();
+    let mut opts = sidebar_opts("rimz-sidebar-cwd", stub, Some(200));
+    opts.cwd = tab.path().to_owned();
+    server
+        .backend
+        .ensure_session(&session_opts(
+            &opts.session_name,
+            opts.workspace_id.clone(),
+            room.path(),
+            room.path(),
+            Some((200, 60)),
+        ))
+        .unwrap();
+    (server, room, tab, stub_dir, opts)
+}
+
+#[test]
+fn fallback_sidebar_starts_in_session_directory() {
+    require_tmux!();
+    let (server, room, _tab, _stub, opts) = sidebar_cwd_fixture();
+    assert!(!opts.pristine_birth);
+    server.backend.open_sidebar(&opts, None).unwrap();
+    let sidebar = wait_for_sidebar_pane(&server, &opts.session_name, None);
+    assert_eq!(
+        Path::new(&server.display(sidebar.raw(), "#{pane_start_path}"))
+            .canonicalize()
+            .unwrap(),
+        room.path().canonicalize().unwrap(),
+    );
+}
+
+#[test]
+fn hook_sidebar_starts_in_session_directory() {
+    require_tmux!();
+    let (server, room, tab, _stub, opts) = sidebar_cwd_fixture();
+    server.backend.open_sidebar(&opts, None).unwrap();
+    // Keep a different current-window cwd so pane_current_path cannot pass.
+    server.tmux(&[
+        "respawn-pane",
+        "-k",
+        "-t",
+        &opts.session_name,
+        "-c",
+        tab.path().to_str().unwrap(),
+        "sleep 600",
+    ]);
+    server
+        .backend
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: "other".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    name: None,
+                }])],
+                focused_pane: 0,
+            },
+            focus: false,
+            dock_sidebar: true,
+            after: None,
+            sidebar: opts.clone(),
+        })
+        .unwrap();
+    let window = server.display(&format!("{}:other", opts.session_name), "#{window_id}");
+    let sidebar = wait_for_sidebar_pane(&server, &opts.session_name, Some(&window));
+    assert_eq!(
+        Path::new(&server.display(sidebar.raw(), "#{pane_start_path}"))
+            .canonicalize()
+            .unwrap(),
+        room.path().canonicalize().unwrap(),
+    );
+}
+
+#[test]
+fn recovered_sidebar_starts_in_session_directory() {
+    require_tmux!();
+    let (server, room, _tab, _stub, opts) = sidebar_cwd_fixture();
+    server.backend.open_sidebar(&opts, None).unwrap();
+    let sidebar = wait_for_sidebar_pane(&server, &opts.session_name, None);
+    server.tmux(&["kill-pane", "-t", sidebar.raw()]);
+    let report = server
+        .backend
+        .reconcile_sidebars(&opts, &Default::default())
+        .unwrap();
+    assert_eq!(report.recovered, 1);
+    let sidebar = wait_for_sidebar_pane(&server, &opts.session_name, None);
+    assert_eq!(
+        Path::new(&server.display(sidebar.raw(), "#{pane_start_path}"))
+            .canonicalize()
+            .unwrap(),
+        room.path().canonicalize().unwrap(),
+    );
+}
+
 #[test]
 fn reconcile_without_client_or_probe_leaves_width_seed_alone() {
     require_tmux!();
