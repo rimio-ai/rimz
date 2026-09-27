@@ -392,7 +392,7 @@ upward-dependencies = [
     "agents::registry",
 ]
 # The kernel tree high-water reader has Linux and non-Linux definitions.
-surface-budget = 105
+surface-budget = 104
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
@@ -1013,8 +1013,8 @@ reason = "Per-walk (dev, ino) dedupe; parse_cache::FileStamp keys on mtime and l
 
 [[verdict]]
 kind = "item"
-key = "sidebar::refresh::rate_limits::merge_account_rate_limits"
-reason = "Account-cache publication is the refresh lane's fusion (authoritative precedence, bound copies, unknown-episode marker); harness auto-redeem reaches it as a producer until the writer lifts beside its reader in agents::account."
+key = "sidebar::refresh::usage::publish_account_usage_snapshot"
+reason = "The one entry through which any caller publishes a normalized account-usage snapshot; the binary's auto-redeem helper calls it with the redemption's bound identity, so it stays pub. Account-cache publication and fusion (authoritative precedence, bound copies, unknown-episode marker) stay sidebar-owned: the two writers are pub(super) behind this entry and do not lift into agents::account, which keeps the schema and reader only (pass 25)."
 
 [[verdict]]
 kind = "item"
@@ -2293,11 +2293,6 @@ reason = "Public result of in_pane_agent_process_for_root, consumed by cli/hooks
 
 [[verdict]]
 kind = "item"
-key = "proc::in_pane_agent_start"
-reason = "No current caller: atlas proposes private, which would trip dead_code under -D warnings. Deletion is deferred rather than widening this source-only visibility pass into removal of an unused public entry. (pass 19b)."
-
-[[verdict]]
-kind = "item"
 key = "proc::testkit::spawn_count"
 reason = "Deliberate test-only measurement seam re-exported by testkit and used by integration/performance/produce_budget.rs; production-site absence does not make it private. (pass 19b)."
 
@@ -3308,6 +3303,21 @@ reason = "Pub field ScratchScan.files; atlas caveat 13 (pass 23b)."
 
 [[verdict]]
 kind = "item"
+key = "harness::auto_redeem::Redeemed"
+reason = "Return of pub execute_auto_redeem: the binary's helper publishes `usage` through sidebar::refresh before appending `report`, so harness never reaches sidebar; cli sees only pub (pass 25)."
+
+[[verdict]]
+kind = "item"
+key = "store::agent_context::attach_rest_certificates"
+reason = "The binary's supervised split and exec end-trace call the store-owned guard in place of their two copies (cli/supervised/pane.rs, cli/agents_cmd/exec.rs); cli sees only pub (pass 25)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::cursor::statusline::deserialize_optional_object_lossy"
+reason = "Not the rule of transcript_fs's visitor: it swallows an inner error, so a current_usage spelling both a field and its alias degrades to None instead of failing the whole statusline payload (pinned by duplicate_usage_alias_drops_usage_without_losing_percentage, pass 25)."
+
+[[verdict]]
+kind = "item"
 key = "harness::auto_redeem::AutoRedeemErr"
 reason = "Error type of pub execute_auto_redeem, the detached helper's CLI entry; atlas caveat 13 (pass 23b)."
 
@@ -3479,7 +3489,7 @@ reason = "Named by public capability methods on AgentDefinition; the reset-credi
 [[verdict]]
 kind = "item"
 key = "agents::account::RateLimitsCache"
-reason = "The integration crate constructs and reads the cache schema (tests/integration/loop_schedule.rs:14,2839-2872, run.rs:10,321-342); RateLimitCacheEntry and PendingRefill travel with it, and the harness account-cache writer lift is the deferral that would change their reach (pass 24b)."
+reason = "The integration crate constructs and reads the cache schema (tests/integration/loop_schedule.rs:14,2839-2872, run.rs:10,321-342); RateLimitCacheEntry and PendingRefill travel with it; the account-cache writers stay in sidebar::refresh, so no lift changes their reach (pass 24b; pass 25)."
 
 [[verdict]]
 kind = "item"
