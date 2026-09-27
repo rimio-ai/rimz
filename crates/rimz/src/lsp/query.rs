@@ -153,6 +153,18 @@ pub enum SymbolResolution {
     Ambiguous(Vec<SymbolInformation>),
 }
 
+impl SymbolResolution {
+    fn into_symbols(self) -> Vec<SymbolInformation> {
+        match self {
+            Self::Unique(symbol) => vec![symbol],
+            Self::Ambiguous(symbols)
+            | Self::Missing {
+                candidates: symbols,
+            } => symbols,
+        }
+    }
+}
+
 fn outline_members(
     container: &SymbolInformation,
     name: &str,
@@ -240,13 +252,7 @@ fn collapse_candidates(
     symbols: Vec<SymbolInformation>,
     definition: impl FnOnce(&[SymbolInformation]) -> std::result::Result<Vec<Vec<Location>>, QueryErr>,
 ) -> std::result::Result<Vec<SymbolInformation>, QueryErr> {
-    Ok(match collapse_symbols(symbols, definition)? {
-        SymbolResolution::Unique(symbol) => vec![symbol],
-        SymbolResolution::Ambiguous(symbols)
-        | SymbolResolution::Missing {
-            candidates: symbols,
-        } => symbols,
-    })
+    Ok(collapse_symbols(symbols, definition)?.into_symbols())
 }
 
 // Resolve a fixed head, leaving room for aliases beyond the 20 displayed candidates.
@@ -593,6 +599,9 @@ fn outcome_candidates<'a>(
 }
 
 pub fn outcome_json(root: &Path, output: &Output) -> Result<Value> {
+    if let Output::Answer { result, .. } = output {
+        return Ok(serde_json::json!({"outcome": "answer", "result": result}));
+    }
     let (name, candidates, unresolved) = outcome_candidates(root, output)?;
     let total = candidates.len() + unresolved;
     Ok(serde_json::json!({
