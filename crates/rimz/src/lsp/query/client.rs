@@ -3,11 +3,49 @@
 use super::*;
 use crate::lsp::registry::{self, Entry, State};
 use serde_json::json;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// A qualifier matching more symbols than this skips the member fallback: each match costs an
 /// outline request, and a broad qualifier like `tests` matches hundreds of modules.
 const MEMBER_CONTAINER_CAP: usize = 20;
+
+const QUERY_WORKERS: usize = 4;
+
+fn bounded_map<T: Sync, R: Send, E: Send>(
+    items: &[T],
+    map: impl Fn(&T) -> std::result::Result<R, E> + Sync,
+) -> std::result::Result<Vec<R>, E> {
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new((0..items.len()).map(|_| None).collect::<Vec<_>>());
+    std::thread::scope(|scope| {
+        for _ in 0..QUERY_WORKERS.min(items.len()) {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = items.get(index) else {
+                        break;
+                    };
+                    let result = map(item);
+                    results
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)[index] = Some(result);
+                }
+            });
+        }
+    });
+    results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;
 
 pub enum Output {
     Answer {
@@ -195,17 +233,25 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                             containers.clear();
                         }
                         containers.sort_by(|a, b| a.location.uri.cmp(&b.location.uri));
-                        for group in containers.chunk_by(|a, b| a.location.uri == b.location.uri) {
+                        let groups: Vec<_> = containers
+                            .chunk_by(|a, b| a.location.uri == b.location.uri)
+                            .collect();
+                        // At most MEMBER_CONTAINER_CAP distinct-file outline requests.
+                        let outlines = bounded_map(&groups, |group| {
                             let outline = request(
                                 entry,
                                 "textDocument/documentSymbol",
                                 json!({"textDocument": {"uri": group[0].location.uri}}),
                             )?;
                             if outline.is_null() {
-                                continue;
+                                return Ok::<_, QueryErr>(None);
                             }
-                            let outline: Symbols =
-                                serde_json::from_value(outline).map_err(LspErr::from)?;
+                            Ok(Some(
+                                serde_json::from_value::<Symbols>(outline).map_err(LspErr::from)?,
+                            ))
+                        })?;
+                        for (group, outline) in groups.into_iter().zip(outlines) {
+                            let Some(outline) = outline else { continue };
                             for container in group {
                                 members.extend(outline_members(container, &member, &outline));
                             }
@@ -259,8 +305,12 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
             "callHierarchy/outgoingCalls"
         };
         let mut calls = Vec::new();
-        for item in result.as_array().into_iter().flatten() {
-            let result = request(entry, method, json!({"item": item}))?;
+        // One request per prepared item (normally one); four in flight, no item-count cap.
+        let results = bounded_map(
+            result.as_array().map(Vec::as_slice).unwrap_or_default(),
+            |item| request(entry, method, json!({"item": item})),
+        )?;
+        for result in results {
             if let Some(results) = result.as_array() {
                 calls.extend(results.iter().cloned());
             }
