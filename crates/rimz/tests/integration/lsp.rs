@@ -953,6 +953,47 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         .code(5)
         .stdout("not found: BroadType::field\n");
     assert_eq!(outline_requests(), outlines_before);
+    let definition_requests = || {
+        query("requests")["result"]["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|request| request["method"] == "textDocument/definition")
+            .count()
+    };
+    for (name, code, header) in [
+        (
+            "Wrong::Many",
+            5,
+            "not found: Wrong::Many; up to 45 other symbols named Many:",
+        ),
+        (
+            "Many",
+            6,
+            "ambiguous: up to 45 symbols named Many; rerun with one of these names or a position",
+        ),
+    ] {
+        let before = definition_requests();
+        let output = env.rimz().args(["lsp", "def", name]).output().unwrap();
+        assert_eq!(output.status.code(), Some(code));
+        assert_eq!(definition_requests() - before, 30, "{name}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(text.lines().next().unwrap(), header);
+        assert_eq!(text.lines().count(), 22);
+        assert!(text.ends_with("25 more; narrow with a qualifier or use find\n"));
+    }
+    let before = definition_requests();
+    let output = env
+        .rimz()
+        .args(["lsp", "def", "Wrong::Many", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    assert_eq!(definition_requests() - before, 30);
+    let output: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output["total"], 45);
+    assert_eq!(output["truncated"], true);
+    assert_eq!(output["candidates"].as_array().unwrap().len(), 30);
     for name in [
         "a::TwinType::field",
         "b::TwinType::field",
@@ -989,7 +1030,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         assert!(output.stderr.is_empty());
         assert_eq!(
             serde_json::from_slice::<Value>(&output.stdout).unwrap(),
-            json!({"outcome": outcome, "name": name, "candidates": candidates})
+            json!({"outcome": outcome, "name": name, "total": candidates.as_array().unwrap().len(), "truncated": false, "candidates": candidates})
         );
     }
     env.rimz().args(["lsp", "find", "work"]).assert().success().stdout("function w::work  src/w.rs:1:1\nfunction w::worker  src/w.rs:1:1\nfunction r::rework  src/r.rs:1:1\nfunction u::unrelated  src/u.rs:1:1\n");

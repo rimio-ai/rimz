@@ -171,11 +171,12 @@ fn outline_members(
 
 fn collapse_symbols(
     symbols: Vec<SymbolInformation>,
-    mut definition: impl FnMut(&Location) -> std::result::Result<Vec<Location>, QueryErr>,
+    definition: impl FnOnce(&[SymbolInformation]) -> std::result::Result<Vec<Vec<Location>>, QueryErr>,
 ) -> std::result::Result<SymbolResolution, QueryErr> {
+    let definitions = definition(&symbols)?;
     let mut groups = BTreeMap::new();
-    for symbol in symbols {
-        let resolved = <[Location; 1]>::try_from(definition(&symbol.location)?)
+    for (symbol, definition) in symbols.into_iter().zip(definitions) {
+        let resolved = <[Location; 1]>::try_from(definition)
             .map(|[resolved]| resolved)
             .unwrap_or_else(|_| symbol.location.clone());
         groups
@@ -201,7 +202,7 @@ fn collapse_symbols(
 
 fn collapse_candidates(
     symbols: Vec<SymbolInformation>,
-    definition: impl FnMut(&Location) -> std::result::Result<Vec<Location>, QueryErr>,
+    definition: impl FnOnce(&[SymbolInformation]) -> std::result::Result<Vec<Vec<Location>>, QueryErr>,
 ) -> std::result::Result<Vec<SymbolInformation>, QueryErr> {
     Ok(match collapse_symbols(symbols, definition)? {
         SymbolResolution::Unique(symbol) => vec![symbol],
@@ -210,6 +211,44 @@ fn collapse_candidates(
             candidates: symbols,
         } => symbols,
     })
+}
+
+// Resolve a fixed head, leaving room for aliases beyond the 20 displayed candidates.
+const COLLAPSE_CAP: usize = 30;
+
+fn collapse_ranked(
+    root: &Path,
+    name: &str,
+    symbols: Vec<SymbolInformation>,
+    definition: impl FnOnce(&[SymbolInformation]) -> std::result::Result<Vec<Vec<Location>>, QueryErr>,
+) -> std::result::Result<(SymbolResolution, usize), QueryErr> {
+    let ranked = rank_candidates(root, name, &symbols)?;
+    let unresolved = symbols.len().saturating_sub(COLLAPSE_CAP);
+    let indices: Vec<_> = ranked
+        .into_iter()
+        .take(COLLAPSE_CAP)
+        .map(|(index, _)| index)
+        .collect();
+    let head: Vec<_> = indices
+        .iter()
+        .map(|&index| symbols[index].clone())
+        .collect();
+    let definitions = definition(&head)?;
+    // Request in rank order, but retain the original indexed alias preference within each group.
+    let mut resolved: Vec<_> = indices
+        .into_iter()
+        .zip(head.into_iter().zip(definitions))
+        .collect();
+    resolved.sort_by_key(|(index, _)| *index);
+    let (head, definitions): (Vec<_>, Vec<_>) =
+        resolved.into_iter().map(|(_, result)| result).unzip();
+    let mut symbols = collapse_candidates(head, |_| Ok(definitions))?;
+    let resolution = if symbols.len() == 1 && unresolved == 0 {
+        SymbolResolution::Unique(symbols.remove(0))
+    } else {
+        SymbolResolution::Ambiguous(symbols)
+    };
+    Ok((resolution, unresolved))
 }
 
 pub(super) fn without_generics(raw: &str) -> String {
@@ -453,37 +492,67 @@ fn rank_find(root: &Path, query: &str, result: Value) -> Result<Value> {
     ))
 }
 
-fn outcome_candidates<'a>(root: &Path, output: &'a Output) -> Result<(&'a str, Vec<Candidate>)> {
-    let (Output::Ambiguous { name, symbols } | Output::NotFound { name, symbols }) = output else {
-        return Err(LspErr::Protocol(
-            "render lookup candidates only for not-found or ambiguous outcomes".into(),
-        ));
-    };
+fn rank_candidates(
+    root: &Path,
+    name: &str,
+    symbols: &[SymbolInformation],
+) -> Result<Vec<(usize, Candidate)>> {
     let mut qualifier = name_segments(name);
     qualifier.pop();
     let mut candidates = Vec::new();
-    for symbol in symbols {
+    for (index, symbol) in symbols.iter().enumerate() {
         let path = symbol_path(root, symbol)?;
         let score = qualifier
             .iter()
             .filter(|segment| path.contains(segment))
             .count();
-        candidates.push((std::cmp::Reverse(score), Candidate::new(root, symbol)?));
+        candidates.push((
+            std::cmp::Reverse(score),
+            Candidate::new(root, symbol)?,
+            index,
+        ));
     }
     candidates
         .sort_by(|a, b| (&a.0, &a.1.name, &a.1.position).cmp(&(&b.0, &b.1.name, &b.1.position)));
-    let candidates = candidates
+    Ok(candidates
+        .into_iter()
+        .map(|(_, candidate, index)| (index, candidate))
+        .collect())
+}
+
+fn outcome_candidates<'a>(
+    root: &Path,
+    output: &'a Output,
+) -> Result<(&'a str, Vec<Candidate>, usize)> {
+    let (Output::Ambiguous {
+        name,
+        symbols,
+        unresolved,
+    }
+    | Output::NotFound {
+        name,
+        symbols,
+        unresolved,
+    }) = output
+    else {
+        return Err(LspErr::Protocol(
+            "render lookup candidates only for not-found or ambiguous outcomes".into(),
+        ));
+    };
+    let candidates = rank_candidates(root, name, symbols)?
         .into_iter()
         .map(|(_, candidate)| candidate)
         .collect();
-    Ok((name, candidates))
+    Ok((name, candidates, *unresolved))
 }
 
 pub fn outcome_json(root: &Path, output: &Output) -> Result<Value> {
-    let (name, candidates) = outcome_candidates(root, output)?;
+    let (name, candidates, unresolved) = outcome_candidates(root, output)?;
+    let total = candidates.len() + unresolved;
     Ok(serde_json::json!({
         "outcome": if matches!(output, Output::NotFound { .. }) { "not-found" } else { "ambiguous" },
         "name": name, "candidates": candidates,
+        "total": total, "truncated": unresolved > 0,
     }))
 }
 
@@ -494,30 +563,32 @@ pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String
             serde_json::to_string_pretty(&outcome_json(root, output)?)?
         ));
     }
-    let (name, candidates) = outcome_candidates(root, output)?;
+    let (name, candidates, unresolved) = outcome_candidates(root, output)?;
     let last = name_segments(name).pop().unwrap_or_default();
+    let count = candidates.len() + unresolved;
+    let bound = if unresolved == 0 { "" } else { "up to " };
     let missing = matches!(output, Output::NotFound { .. });
-    let count = candidates.len();
     let header = if missing {
         if count == 0 {
             format!("not found: {name}")
         } else {
             format!(
-                "not found: {name}; {count} other {} named {last}:",
+                "not found: {name}; {bound}{count} other {} named {last}:",
                 if count == 1 { "symbol" } else { "symbols" }
             )
         }
     } else {
         format!(
-            "ambiguous: {count} symbols named {name}; rerun with one of these names or a position"
+            "ambiguous: {bound}{count} symbols named {name}; rerun with one of these names or a position"
         )
     };
     let mut lines = vec![header];
     lines.extend(candidates.iter().take(20).map(Candidate::line));
-    if count > 20 {
+    let shown = candidates.len().min(20);
+    if count > shown {
         lines.push(format!(
             "{} more; narrow with a qualifier or use find",
-            count - 20
+            count - shown
         ));
     }
     Ok(finish(lines))
