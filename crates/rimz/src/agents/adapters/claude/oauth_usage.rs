@@ -1,10 +1,11 @@
 //! Direct Claude OAuth account-usage probe.
 //!
 //! This is a read-only fallback over Claude Code's local OAuth credentials. It
-//! reads `~/.claude/.credentials.json`, calls the provider usage endpoint, and
-//! normalizes the response into RimZ's account-window and paid-usage types. It
-//! never refreshes or writes credentials; retry/backoff and cache writes live in
-//! the CLI helper that calls this module.
+//! reads `.credentials.json` under the login's Claude config home, calls the
+//! provider usage endpoint, and normalizes the response into RimZ's
+//! account-window and paid-usage types. It never refreshes or writes
+//! credentials; retry/backoff and cache writes live in the CLI helper that
+//! calls this module.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -155,7 +156,6 @@ struct ExtraUsageWire {
 }
 
 pub(super) fn probe_usage(
-    cli_version: Option<&str>,
     login_env: &BTreeMap<String, String>,
 ) -> crate::agents::AccountUsageProbe {
     let credentials_stamp = credentials_stamp(login_env);
@@ -168,7 +168,7 @@ pub(super) fn probe_usage(
                 credentials_stamp,
                 ..Default::default()
             },
-            fetch_usage_with_url(&url, &credentials.access_token, cli_version),
+            fetch_usage_with_url(&url, &credentials.access_token),
         ),
         Err(err) => (
             crate::agents::AccountUsageIdentity {
@@ -183,9 +183,8 @@ pub(super) fn probe_usage(
 
 pub(in crate::agents) fn fetch_usage_with_token(
     access_token: &str,
-    cli_version: Option<&str>,
 ) -> Result<AccountUsageSnapshot> {
-    fetch_usage_with_url(&usage_url()?, access_token.trim(), cli_version)
+    fetch_usage_with_url(&usage_url()?, access_token.trim())
 }
 
 fn load_credentials(login_env: &BTreeMap<String, String>) -> Result<ClaudeOauthCredentials> {
@@ -295,12 +294,8 @@ fn parse_account_key(bytes: &[u8]) -> Result<String> {
     Ok(account_key("access-token", &access_token))
 }
 
-fn fetch_usage_with_url(
-    url: &str,
-    access_token: &str,
-    cli_version: Option<&str>,
-) -> Result<AccountUsageSnapshot> {
-    let body = http_get(url, access_token, cli_version)?;
+fn fetch_usage_with_url(url: &str, access_token: &str) -> Result<AccountUsageSnapshot> {
+    let body = http_get(url, access_token)?;
     parse_usage_response(&body)
 }
 
@@ -335,28 +330,27 @@ fn resolve_usage_url(override_url: Option<&str>) -> Result<String> {
     Ok(url.into())
 }
 
-fn http_get(url: &str, token: &str, cli_version: Option<&str>) -> Result<String> {
+fn http_get(url: &str, token: &str) -> Result<String> {
     let headers = [
         ("Authorization", format!("Bearer {token}")),
         ("Accept", "application/json".to_owned()),
         ("anthropic-beta", "oauth-2025-04-20".to_owned()),
-        ("User-Agent", claude_code_user_agent(cli_version)),
+        ("User-Agent", claude_code_user_agent()),
     ];
     oauth_http_get(url, &headers, "claude: fetching OAuth account usage")
         .map_err(|(kind, host)| ClaudeOauthUsageErr::Http { kind, host })
 }
 
-fn claude_code_user_agent(cli_version: Option<&str>) -> String {
-    let version = cli_version
-        .and_then(normalized_version)
-        .or_else(|| crate::agents::version::probe_cli_version("claude"))
-        .unwrap_or_else(|| USER_AGENT_FALLBACK_VERSION.to_owned());
-    format!("claude-cli/{version} (external, cli)")
+fn claude_code_user_agent() -> String {
+    user_agent(
+        crate::agents::version::probe_cli_version("claude")
+            .as_deref()
+            .unwrap_or(USER_AGENT_FALLBACK_VERSION),
+    )
 }
 
-fn normalized_version(version: &str) -> Option<String> {
-    let trimmed = version.trim();
-    (!trimmed.is_empty()).then_some(trimmed.to_owned())
+fn user_agent(version: &str) -> String {
+    format!("claude-cli/{version} (external, cli)")
 }
 
 fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {

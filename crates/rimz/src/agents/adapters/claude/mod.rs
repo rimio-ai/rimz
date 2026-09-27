@@ -973,7 +973,7 @@ impl crate::agents::capabilities::AccountCapability for ClaudeAdapter {
         &self,
         login_env: &BTreeMap<String, String>,
     ) -> crate::agents::AccountUsageProbe {
-        oauth_usage::probe_usage(None, login_env)
+        oauth_usage::probe_usage(login_env)
     }
 
     fn remote_control_status(

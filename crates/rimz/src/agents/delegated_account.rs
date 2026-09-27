@@ -174,14 +174,13 @@ pub(super) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
         credentials_stamp: stamp,
     };
     let result = match selected.provider.as_str() {
-        "anthropic" => super::adapters::claude::oauth_usage::fetch_usage_with_token(
-            &selected.access_token,
-            None,
-        )
-        .map_err(|source| Error::Claude {
-            adapter: config.adapter.name(),
-            source,
-        }),
+        "anthropic" => {
+            super::adapters::claude::oauth_usage::fetch_usage_with_token(&selected.access_token)
+                .map_err(|source| Error::Claude {
+                    adapter: config.adapter.name(),
+                    source,
+                })
+        }
         "openai" | "openai-codex" => super::adapters::codex::oauth_usage::fetch_usage_with_token(
             &selected.access_token,
             selected.account_id.as_deref(),
