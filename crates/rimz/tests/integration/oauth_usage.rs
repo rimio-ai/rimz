@@ -82,8 +82,8 @@ fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
     let (origin, server) = serve_after_failures(
         0,
         r#"{
-            "five_hour": { "utilization": 0, "resets_at": "2026-09-21T14:13:20Z" },
-            "seven_day": { "utilization": 0, "resets_at": "2026-09-27T09:06:40Z" }
+            "five_hour": { "utilization": 0, "resets_at": "2100-01-01T00:00:00Z" },
+            "seven_day": { "utilization": 0, "resets_at": "2100-01-01T00:00:00Z" }
         }"#,
     );
     let bin_dir = env.home_root.join("bin");
@@ -176,11 +176,11 @@ fn one_cold_snapshot_discovers_claude_and_publishes_first_usage_windows() {
         r#"{
             "five_hour": {
                 "utilization": 12.5,
-                "resets_at": "2026-09-21T14:13:20Z"
+                "resets_at": "2100-01-01T00:00:00Z"
             },
             "seven_day": {
                 "utilization": 7,
-                "resets_at": "2026-09-27T09:06:40Z"
+                "resets_at": "2100-01-01T00:00:00Z"
             }
         }"#,
     );
@@ -289,11 +289,11 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
             "cedar_ember": {"eligible": true, "grants": [{"resets_left": 1, "ends_at": "2026-10-22T16:00:00Z"}]},
             "five_hour": {
                 "utilization": 12.5,
-                "resets_at": "2026-09-21T14:13:20Z"
+                "resets_at": "2100-01-01T00:00:00Z"
             },
             "seven_day": {
                 "utilization": 7,
-                "resets_at": "2026-09-27T09:06:40Z"
+                "resets_at": "2100-01-01T00:00:00Z"
             },
             "extra_usage": {
                 "is_enabled": true,
@@ -500,7 +500,7 @@ fn claude_refresh_usage_retries_transient_http_failures() {
         r#"{
             "five_hour": {
                 "utilization": 12.5,
-                "resets_at": "2026-09-21T14:13:20Z"
+                "resets_at": "2100-01-01T00:00:00Z"
             }
         }"#,
     );
