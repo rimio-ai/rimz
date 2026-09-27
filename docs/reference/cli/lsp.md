@@ -113,7 +113,7 @@ RSS is current process-tree memory; PEAK is the larger of the recorded peak and 
 
 `--json` keeps registry order rather than the human table's sort and returns registry entries, including process identities, nonce, state, estimate, timestamps, counters, and leases; peak RSS remains in KiB as recorded, including while dormant.
 
-`stop [CHECKOUT]` defaults to the current checkout (or global `--root`). `--server <NAME>` selects one server when several exist. `--all` stops every machine entry and conflicts with both CHECKOUT and `--server`. Dead entries are swept first; a failure stopping one entry does not prevent attempts on the others. Stop prints one acknowledgment line per entry; no matching entries produce no lines. It has no `--json` flag. A hand stop frees server memory and leaves `dormant: stopped by hand`; the next query can restart it. Stopping an already dormant entry leaves its reason unchanged.
+`stop [CHECKOUT]` defaults to the current checkout (or global `--root`). `--server <NAME>` selects one server when several exist. `--all` stops every machine entry and conflicts with both CHECKOUT and `--server`. Dead entries are swept first; a failure stopping one entry does not prevent attempts on the others. Stop prints one acknowledgment line per entry; no matching entries produce no lines. It has no `--json` flag. A hand stop frees server memory and leaves `dormant: stopped by hand`; the next query can restart it. Stopping a `dormant: crashed` or `dormant: memory pressure` entry acknowledges the alarm: the reason becomes `stopped by hand` and the dormant-since time is kept. Stopping any other dormant entry leaves its reason unchanged.
 
 ## Status
 
