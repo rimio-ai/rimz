@@ -255,7 +255,7 @@ strip = "none"
 # panic at the faulting expression and enter the normal recovery/diagnostic
 # path rather than wrap into a huge allocation and abort silently. Shipped
 # artifacts are symbol-stripped and thin-LTO'd to keep install size down and
-# retain cross-unit optimization. Sixteen codegen units let the 236k-line `rimz`
+# retain cross-unit optimization. Sixteen codegen units let the 520k-line `rimz`
 # leaf crate use available cores; one unit serialized release rebuilds to one
 # core for roughly 2-4 minutes.
 [profile.release]
