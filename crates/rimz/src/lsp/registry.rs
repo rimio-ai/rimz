@@ -45,7 +45,7 @@ pub enum State {
 
 impl State {
     pub fn is_running(&self) -> bool {
-        matches!(self, Self::Starting | Self::Indexing | Self::Ready)
+        matches!(self, State::Starting | State::Indexing | State::Ready)
     }
 }
 
@@ -81,7 +81,7 @@ pub enum StopReason {
 }
 
 impl StopReason {
-    pub fn is_terminal(self) -> bool {
+    pub(super) fn is_terminal(self) -> bool {
         matches!(
             self,
             Self::CheckoutRemoved | Self::Released | Self::NeverLeased
@@ -186,7 +186,7 @@ pub fn enclosing_checkout<'a>(cwd: &Path, entries: &'a [Entry]) -> Option<&'a Pa
         .map(|entry| entry.root.as_path())
 }
 
-pub fn kill_order(entries: &mut [Entry]) {
+pub(super) fn kill_order(entries: &mut [Entry]) {
     entries.sort_by(|left, right| {
         let rank = |entry: &Entry| {
             (
@@ -218,7 +218,7 @@ pub(super) fn lock() -> Result<crate::disk::lock::WorkspaceLock> {
     )?)
 }
 
-pub fn publish(entry: &Entry) -> Result<()> {
+pub(super) fn publish(entry: &Entry) -> Result<()> {
     ensure_runtime()?;
     let directory = directory(&entry.root, &entry.server)?;
     publish_at(&directory, entry)
@@ -312,7 +312,7 @@ fn request_at(
     Ok(response)
 }
 
-pub fn is_live(entry: &Entry) -> bool {
+pub(super) fn is_live(entry: &Entry) -> bool {
     is_live_at(&crate::disk::paths::lsp_runtime_dir(), entry)
 }
 
@@ -368,7 +368,7 @@ pub mod testkit {
 }
 
 /// Read-only: launch compilation must not create runtime files or sweep entries.
-pub fn live_for_checkout(root: &Path) -> Result<Vec<Entry>> {
+fn live_for_checkout(root: &Path) -> Result<Vec<Entry>> {
     let root = std::fs::canonicalize(root)?;
     Ok(read_entries()?
         .into_iter()

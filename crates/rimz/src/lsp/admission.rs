@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-pub fn reserve_bytes(total: u64, percent: u8, minimum: u64) -> u64 {
+pub(super) fn reserve_bytes(total: u64, percent: u8, minimum: u64) -> u64 {
     ((u128::from(total) * u128::from(percent) / 100).min(u128::from(u64::MAX)) as u64).max(minimum)
 }
 
@@ -464,7 +464,7 @@ fn validate_options(server: &str, config: &crate::config::LspServerConfig) -> Re
 }
 
 /// Validate one configuration and select it when a checkout marker exists.
-pub(crate) fn select_server(
+pub(super) fn select_server(
     root: &Path,
     server: &str,
     config: &crate::config::LspServerConfig,

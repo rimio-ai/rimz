@@ -399,7 +399,7 @@ fn lifetime(shared: &Shared, request: &ServeRequest, epoch: u64) -> Result<bool>
     result.map(|()| true)
 }
 
-pub(crate) fn initialize_params(
+fn initialize_params(
     root: &std::path::Path,
     config: &crate::config::LspServerConfig,
 ) -> Result<Value> {

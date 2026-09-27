@@ -17,7 +17,7 @@ fn tree_peak_kb_with(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Memory {
+pub(super) struct Memory {
     pub total_bytes: u64,
     pub available_bytes: u64,
 }
@@ -40,7 +40,7 @@ fn parse_meminfo(text: &str) -> Result<Memory> {
     })
 }
 
-pub fn sample() -> Result<Memory> {
+pub(super) fn sample() -> Result<Memory> {
     let mut memory = parse_meminfo(&std::fs::read_to_string("/proc/meminfo")?)?;
     let cgroups = std::fs::read_to_string("/proc/self/cgroup")?;
     if let Some(group) = cgroups.lines().find_map(|line| line.strip_prefix("0::")) {
@@ -76,7 +76,7 @@ pub fn sample() -> Result<Memory> {
     Ok(memory)
 }
 
-pub fn raise_oom_score(pid: u32) -> Result<()> {
+pub(super) fn raise_oom_score(pid: u32) -> Result<()> {
     std::fs::write(format!("/proc/{pid}/oom_score_adj"), "800")?;
     Ok(())
 }

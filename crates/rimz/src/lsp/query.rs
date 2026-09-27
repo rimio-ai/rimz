@@ -135,7 +135,7 @@ pub enum UnavailableReason {
 }
 
 impl UnavailableReason {
-    pub fn stopped(reason: &super::registry::StopReason) -> Self {
+    fn stopped(reason: &super::registry::StopReason) -> Self {
         use super::registry::StopReason;
         match reason {
             StopReason::MemoryPressure => Self::MemoryPressure,
@@ -147,7 +147,7 @@ impl UnavailableReason {
     }
 }
 
-pub enum SymbolResolution {
+enum SymbolResolution {
     Missing { candidates: Vec<SymbolInformation> },
     Unique(SymbolInformation),
     Ambiguous(Vec<SymbolInformation>),
@@ -357,7 +357,7 @@ fn symbol_path(root: &Path, symbol: &SymbolInformation) -> Result<Vec<String>> {
         .collect())
 }
 
-pub fn resolve_symbol(root: &Path, name: &str, result: Value) -> Result<SymbolResolution> {
+fn resolve_symbol(root: &Path, name: &str, result: Value) -> Result<SymbolResolution> {
     let mut qualifier = name_segments(name);
     let name = qualifier.pop().unwrap_or_default();
     let symbols: Vec<SymbolInformation> = if result.is_null() {
@@ -404,7 +404,7 @@ impl DocumentKey {
     }
 }
 
-pub fn file_path(uri: &str) -> Result<PathBuf> {
+fn file_path(uri: &str) -> Result<PathBuf> {
     url::Url::parse(uri)
         .ok()
         .and_then(|url| url.to_file_path().ok())

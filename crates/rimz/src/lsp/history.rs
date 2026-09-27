@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Record {
+pub(super) struct Record {
     pub at_ms: u64,
     pub root: PathBuf,
     pub project: Option<PathBuf>,
@@ -38,7 +38,7 @@ fn estimate_records(
         .unwrap_or(fallback)
 }
 
-pub fn estimate(project: &Path, server: &str, settings: &str, fallback: u64) -> u64 {
+pub(super) fn estimate(project: &Path, server: &str, settings: &str, fallback: u64) -> u64 {
     let mut records = Vec::new();
     crate::disk::rotating::visit_records(&crate::disk::paths::lsp_history_path(), |record| {
         records.push(record)
@@ -46,7 +46,7 @@ pub fn estimate(project: &Path, server: &str, settings: &str, fallback: u64) -> 
     estimate_records(&records, project, server, settings, fallback)
 }
 
-pub fn append(record: &Record) {
+pub(super) fn append(record: &Record) {
     crate::disk::rotating::append(
         &crate::disk::paths::lsp_history_path(),
         4 * 1024 * 1024,
