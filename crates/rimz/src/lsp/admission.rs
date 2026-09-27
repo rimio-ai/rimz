@@ -975,10 +975,9 @@ mod tests {
                 rss_bytes: 6000,
             }],
         };
-        assert!(
-            queue_timeout("20s", &shortfall)
-                .to_string()
-                .contains("held by /held rust (6 KB)")
+        assert_eq!(
+            queue_timeout("20s", &shortfall).to_string(),
+            "language server rust is required but memory stayed short for 20s: needs 8 KB, 2 KB free, held by /held rust (6 KB); stop one with rimz lsp stop, or lower [lsp] reserve-percent"
         );
         let record = serde_json::to_value(&shortfall).unwrap();
         assert_eq!(record["available_bytes"], 5000);

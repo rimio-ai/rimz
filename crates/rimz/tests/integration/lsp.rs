@@ -67,6 +67,67 @@ fn editor_query(directory: &Path, name: &str) -> Value {
 }
 
 #[test]
+fn lsp_status_and_stop_select_one_lazy_server() {
+    let env = Env::new();
+    let root = env.project_root.canonicalize().unwrap();
+    let mut brokers = Vec::new();
+    for server in ["python", "rust"] {
+        let request = rimz::lsp::admission::ServeRequest {
+            root: root.clone(),
+            project: env.project_root.clone(),
+            server: server.into(),
+            settings_hash: "selection-test".into(),
+            config: serde_json::from_value(json!({
+                "command": [crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"))],
+                "extensions": ["rs"], "root-markers": ["Cargo.toml"], "memory-estimate": "1M"
+            })).unwrap(),
+            policy: rimz::config::LspConfig {
+                kill_floor_percent: 0,
+                reserve_percent: 0,
+                reserve_min: "0".into(),
+                ..Default::default()
+            },
+            eager: false,
+        };
+        brokers.push(spawn_test_broker(&env, &request));
+    }
+    for verb in ["status", "stop"] {
+        env.rimz()
+            .args(["lsp", verb])
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains(
+                "multiple language servers; choose --server NAME",
+            ));
+    }
+    env.rimz()
+        .args(["lsp", "status", "--server", "python"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("dormant"));
+    env.rimz()
+        .args(["lsp", "status", "--server", "go"])
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains("not running"));
+    env.rimz()
+        .args(["lsp", "stop", "--server", "python"])
+        .assert()
+        .success()
+        .stdout(format!("stopped python ({})\n", root.display()));
+    for (mut broker, directory) in brokers {
+        assert_eq!(
+            editor_rpc(
+                &directory,
+                json!({"op":"stop", "reason":"checkout removed"})
+            )["ok"],
+            true
+        );
+        broker.wait().unwrap();
+    }
+}
+
+#[test]
 fn lsp_server_arms_deliver_settings_capabilities_and_status() {
     for (kind, options, sections, answers) in [
         (
