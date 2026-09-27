@@ -76,7 +76,8 @@ path = "crates/rimz/src/lsp"
 # the registry exposes attached editors, their open documents, and enclosing_checkout.
 # query::outcome_json (multi-target JSON) and query::ListOptions (list caps)
 # landed on separate branches; together they reopen this by one.
-surface-budget = 97
+# Launch and doctor share per-server validation and marker selection.
+surface-budget = 98
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
