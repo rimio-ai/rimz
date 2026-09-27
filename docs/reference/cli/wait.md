@@ -60,7 +60,6 @@ Arming is refused, exit 1, in these cases:
 | `choose exactly one wait trigger: --in, --pid, --check, --file, or --run` | Arming flags without a trigger, or more than one trigger. |
 | `--check needs a command` | An empty or whitespace-only check. |
 | `--run needs a command` | An empty or whitespace-only watched command. |
-| ``the command after `--` is no longer accepted; pass it as one quoted string: --run 'cargo test'`` | Legacy command words after `--`, even when another trigger is present. |
 | `--file needs a path` | An empty file path. |
 | `--grep requires --file` | A pattern without a file trigger. |
 | `--grep needs a pattern` | An empty pattern. |

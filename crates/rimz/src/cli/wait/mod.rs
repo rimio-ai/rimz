@@ -80,10 +80,6 @@ struct WaitArgs {
     timeout: Option<Duration>,
     #[arg(long)]
     json: bool,
-    // Legacy `--` words, captured only so validate_shape can refuse them with the
-    // `--run` fix. Remove once the skills patch is applied and habits have moved.
-    #[arg(last = true, hide = true, value_name = "COMMAND")]
-    command: Vec<String>,
 }
 
 pub fn run(args: WaitCommand, globals: &GlobalFlags) -> Result<()> {
@@ -107,7 +103,6 @@ impl WaitArgs {
             && self.grep.is_none()
             && self.on.is_none()
             && self.timeout.is_none()
-            && self.command.is_empty()
     }
 }
 
@@ -143,12 +138,4 @@ fn parse_on(raw: Option<&str>) -> CheckOn {
         Some("any") | None => CheckOn::Any,
         Some(_) => unreachable!("clap restricts --on values"),
     }
-}
-
-fn command_string(argv: &[String]) -> Result<String> {
-    argv.iter()
-        .map(|arg| shlex::try_quote(arg).map(|arg| arg.into_owned()))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map(|argv| argv.join(" "))
-        .context("quoting watched command")
 }
