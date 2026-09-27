@@ -24,6 +24,14 @@ pub(super) fn touch_stamp(path: &std::path::Path) {
     let _ = std::fs::write(path, b"");
 }
 
+pub(super) fn claim(path: &std::path::Path, interval: Duration) -> bool {
+    let due = stamp_due(path, interval);
+    if due {
+        touch_stamp(path);
+    }
+    due
+}
+
 /// How long appended event-log bytes may ride the page cache before a write
 /// tail forces them down. Bounds power-cut loss to about a second of trailing
 /// events under sustained load.

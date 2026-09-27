@@ -16,14 +16,7 @@ use super::super::{Result, Store};
 use super::debounce;
 
 const REAP_INTERVAL: Duration = Duration::from_secs(60);
-
-fn dead_reap_stamp(paths: &StatePaths) -> std::path::PathBuf {
-    paths.cache_dir.join("dead-reap.stamp")
-}
-
-pub(super) fn reap_due(paths: &StatePaths) -> bool {
-    debounce::stamp_due(&dead_reap_stamp(paths), REAP_INTERVAL)
-}
+const DEAD_REAP_STAMP: &str = "dead-reap.stamp";
 
 fn reap_session_name(paths: &StatePaths) -> String {
     record::read(&paths.workspace_record)
@@ -138,10 +131,12 @@ impl Store {
     }
 
     pub(super) fn reap_dead_sessions_if_due(&self) {
-        if !reap_due(&self.inner.paths) {
+        if !debounce::claim(
+            &self.inner.paths.cache_dir.join(DEAD_REAP_STAMP),
+            REAP_INTERVAL,
+        ) {
             return;
         }
-        debounce::touch_stamp(&dead_reap_stamp(&self.inner.paths));
         if let Err(err) = self.reap_dead_sessions() {
             warn!(error = %err, "dead session reap failed after store commit");
         }

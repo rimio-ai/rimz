@@ -820,19 +820,25 @@ fn retired_session_revives_on_next_lifecycle_event() {
 }
 
 #[test]
-fn reap_due_tracks_missing_fresh_and_aged_stamp() {
+fn reap_claim_tracks_missing_fresh_and_aged_stamp() {
     let (_dir, store, _workspace_id) = store();
-    let paths = store.paths();
+    let stamp = store.paths().cache_dir.join(DEAD_REAP_STAMP);
 
-    assert!(reap_due(paths), "missing stamp is due");
-    debounce::touch_stamp(&dead_reap_stamp(paths));
-    assert!(!reap_due(paths), "fresh stamp is not due");
+    assert!(
+        debounce::claim(&stamp, REAP_INTERVAL),
+        "missing stamp claims"
+    );
+    assert!(stamp.exists());
+    assert!(
+        !debounce::claim(&stamp, REAP_INTERVAL),
+        "fresh stamp does not claim"
+    );
 
     std::fs::File::options()
         .write(true)
-        .open(dead_reap_stamp(paths))
+        .open(&stamp)
         .expect("stamp exists")
         .set_modified(SystemTime::now() - REAP_INTERVAL - Duration::from_secs(1))
         .expect("age stamp");
-    assert!(reap_due(paths), "aged stamp is due");
+    assert!(debounce::claim(&stamp, REAP_INTERVAL), "aged stamp claims");
 }
