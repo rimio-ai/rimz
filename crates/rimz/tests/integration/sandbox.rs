@@ -111,6 +111,9 @@ fn child_cap_launch(explicit_host: bool) {
     let trace = env.project_root.join("mux.log");
     let output = std::thread::scope(|scope| {
         scope.spawn(|| {
+            if explicit_host {
+                return; // A sandboxed parent cannot launch a host child.
+            }
             crate::common::room::bind_child_panes(
                 &store,
                 &trace,

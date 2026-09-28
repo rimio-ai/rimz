@@ -848,6 +848,9 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
     let launched = std::sync::atomic::AtomicBool::new(false);
     let output = std::thread::scope(|scope| {
         scope.spawn(|| {
+            if cwd == Some("missing") {
+                return; // Missing cwd refuses before opening a child pane.
+            }
             bind_child_panes(&store, &trace_path, &workspace.session_name, &launched);
         });
         let output = command.bounded_output();
