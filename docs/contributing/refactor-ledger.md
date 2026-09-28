@@ -4,14 +4,14 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-Survey on the pass 28a tree (base `427cacfc9`, 2026-09-28): no ledger problems, no stale verdict keys, no open families; every row SHA is on trunk. Rewrite this section whenever a pass ends.
+Pass 28g records the lifecycle reaction in `harness/team_stage` on `6b02f6006`, rebased onto trunk `36dd87064`. The rank/hot survey measures `cli/hooks` cx at 32.2 versus 58.0 at the round base (`27c50ce2d`); remaining hook hotspots carry item verdicts rather than threshold-only splits. `harness/team_stage` cx is 12.5 versus 0.5, missing the planned ceiling of 5: `react_to_lifecycle` (cx 12.0) carries an item verdict for its pinned per-event order; the mapped observation retains cx 2.1 rather than leaving the hotspot table. Binary modules receive no ledger row.
 
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
 - **Reopened** (churn past the row's count): none; pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`, pass 26b `sidebar_pane/app` and `sidebar_pane/render/sections`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
-- **Row SHAs:** the survey reports a row whose SHA `HEAD` does not reach as a ledger problem and leaves its module unheld; pass 28a re-stamped 29 rebased-away SHAs, passes 14 to 27, to their trunk commits. A PR that writes rows names them so the merge re-stamps them to the landed commit.
+- **Row SHAs:** the survey reports a row whose SHA `HEAD` does not reach as a ledger problem and leaves its module unheld; pass 28a re-stamped 29 rebased-away SHAs, passes 14 to 27, to their trunk commits. A PR that writes rows names them so the merge re-stamps them to the landed commit; pass 28g's `harness/team_stage` row carries a branch SHA.
 - **Unjudged families:** none; pass 28a judged the copilot/cursor install shape and the `RunStatus::Completed`, `wait_for_required`, `Isolation::Host` and `degraded` guards.
 
 ## Module verdicts
@@ -138,7 +138,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/launch_context` | holds; landed pass-23b | `25faa1bf6` | 30 | `TeamLaunchContext` floored by signatures. |
 | `harness/assist_log` | holds; landed pass-23b | `25faa1bf6` | 30 | `log_path` read by the binary's stats test. |
 | `harness/owed` | holds; landed pass-23b | `25faa1bf6` | 30 | binary test names `OwedWake` variants. |
-| `harness/team_stage` | holds; landed pass-23b | `25faa1bf6` | 30 | types floored by `flip`/`rewake`. |
+| `harness/team_stage` | holds; landed pass-28g | `6b02f6006` | 30 | owns the committed lifecycle reaction and private registration re-wake. |
 | `harness/ancestry` | holds; landed pass-23b | `25faa1bf6` | 30 | error floored by the resolver. |
 | `harness/parent_watch` | holds; landed pass-23b | `25faa1bf6` | 30 | reached from the exec command. |
 | `harness/run_wake` | holds; landed pass-23b | `25faa1bf6` | 30 | verdicted under `harness/run`. |
@@ -293,6 +293,9 @@ One row per intended upward edge, `` `from` → `to` `` with an optional `to::{a
 
 Candidates a pass judged real but could not land, each with what unblocks it.
 
+- `cli/hooks` → `harness/run`: supervised spend settlement still assembles context cost, transcript token totals and spend recording; waits for pass 28f's run ownership.
+- `cli/hooks` → `store/snapshot`: repeated agent lookup by `(kind, agent_id)` waits for pass 28d's snapshot ownership.
+- `harness/team_stage` ↔ `cli/teams`: trusted team loading remains duplicated; sharing it needs a typed harness error and a pass owning the CLI flip caller.
 - `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
 - `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
 - `agents/adapters/codex`: `cap_turn_error_label` and `TURN_ERROR_LABEL_MAX` copy Claude's `statusline` pair word for word; a shared helper beside `TurnErrorClass::classify_label` in `agents/context` lands with a pass owning codex or `agents/context`.
