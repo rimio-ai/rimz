@@ -87,7 +87,6 @@ pub(super) struct LinkSupervisor {
     control_path: PathBuf,
     policy: rimz::remote::ReconnectPolicy,
     dial_plan: Option<DialPlan>,
-    stop: AtomicBool,
     outage: Option<OutageState>,
     master: Option<MasterGuard>,
     held_screen: Option<rimz::tui::TerminalModeGuard>,
@@ -106,7 +105,6 @@ impl LinkSupervisor {
             control_path,
             policy: rimz::remote::ReconnectPolicy::from_env(),
             dial_plan,
-            stop: AtomicBool::new(false),
             outage: None,
             master: None,
             held_screen: None,
@@ -128,7 +126,6 @@ impl LinkSupervisor {
             &supervisor.policy,
             &mut outage,
             &mut ui,
-            Some(&supervisor.stop),
         )? {
             WaitOutcome::Connected {
                 master,
@@ -170,7 +167,6 @@ impl LinkSupervisor {
             &self.policy,
             outage,
             &mut ui,
-            Some(&self.stop),
         )? {
             WaitOutcome::Connected {
                 master,
@@ -227,7 +223,6 @@ pub(super) fn supervise_remote(
     let dial_plan = resolve_dial_plan(target.ssh_destination().as_str());
     let zombie_interval = dial_plan.as_ref().and_then(|_| dial_interval_from_env());
     let mut session_link = SessionLinkState::new(policy.gatetime, zombie_interval);
-    let stop = AtomicBool::new(false);
     let mut first_attempt = true;
     let guard = super::tty::TtyGuard::acquire();
     let mut initial_ui = OutageUi::auto(ConnectStage::Initial, host);
@@ -247,7 +242,6 @@ pub(super) fn supervise_remote(
         &policy,
         &mut initial_outage,
         &mut initial_ui,
-        Some(&stop),
     )? {
         WaitOutcome::Connected {
             master,
@@ -413,7 +407,6 @@ pub(super) fn supervise_remote(
             &policy,
             outage,
             &mut ui,
-            Some(&stop),
         )? {
             WaitOutcome::Connected {
                 master,
@@ -682,7 +675,6 @@ fn wait_for_master(
     policy: &rimz::remote::ReconnectPolicy,
     outage: &mut OutageState,
     ui: &mut OutageUi,
-    stop: Option<&AtomicBool>,
 ) -> Result<WaitOutcome> {
     let connect_stage = outage.connect_stage;
     let started = Instant::now();
@@ -696,21 +688,6 @@ fn wait_for_master(
     loop {
         let now = Instant::now();
         reachability.poll(now).present(Some(&mut outage.panel), ui);
-        if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
-            drop(std::mem::take(&mut master));
-            let last_error = outage.panel.last_error().map(str::to_owned);
-            ui.release()?;
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "{}",
-                interrupted_message(
-                    connect_stage,
-                    plan.target().host_display(),
-                    last_error.as_deref()
-                )
-            );
-            return Ok(WaitOutcome::Interrupted);
-        }
         reachability.schedule_probes(now);
 
         match master.advance(
@@ -825,7 +802,7 @@ fn wait_for_master(
             );
             return Ok(WaitOutcome::Interrupted);
         }
-        sleep_retry_wait(PANEL_TICK, stop);
+        std::thread::sleep(PANEL_TICK);
     }
 }
 
@@ -1389,11 +1366,18 @@ impl Drop for MasterGuard {
     }
 }
 
-fn sleep_retry_wait(duration: Duration, stop: Option<&AtomicBool>) {
-    if let Some(stop) = stop {
-        super::sleep_interruptibly(duration, stop);
-    } else {
-        std::thread::sleep(duration);
+fn sleep_interruptibly(duration: Duration, stop: &AtomicBool) {
+    if duration.is_zero() {
+        return;
+    }
+    let step = Duration::from_millis(50);
+    let deadline = Instant::now() + duration;
+    while !stop.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        if now >= deadline {
+            return;
+        }
+        std::thread::sleep((deadline - now).min(step));
     }
 }
 
@@ -1672,7 +1656,7 @@ fn wait_for_control_master(target: &RemoteTarget, control_path: &Path, stop: &At
         {
             return true;
         }
-        super::sleep_interruptibly(CONTROL_MASTER_CHECK_INTERVAL, stop);
+        sleep_interruptibly(CONTROL_MASTER_CHECK_INTERVAL, stop);
     }
     false
 }
@@ -1729,7 +1713,7 @@ fn probe_loop(
                 {
                     let _ = events.send(event);
                 }
-                super::sleep_interruptibly(respawn_delay, &stop);
+                sleep_interruptibly(respawn_delay, &stop);
             }
         }
     }
@@ -1989,7 +1973,7 @@ fn write_link_probe(stdin: &mut impl Write, probe: &LinkProbe) -> std::io::Resul
 fn sleep_until_next_tick(next_tick: Instant, stop: &AtomicBool) {
     let now = Instant::now();
     let until_tick = next_tick.saturating_duration_since(now);
-    super::sleep_interruptibly(until_tick.min(Duration::from_millis(50)), stop);
+    sleep_interruptibly(until_tick.min(Duration::from_millis(50)), stop);
 }
 
 pub(super) fn print_remote_command(spec: &rimz::mux::CommandSpec) {
