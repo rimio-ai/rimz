@@ -29,7 +29,17 @@ struct RemoteTunnel {
 
 impl Drop for RemoteTunnel {
     fn drop(&mut self) {
-        self.kill_and_reap();
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        child.signal_kill();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) => rimz::child_process::wait_wake(&self.wake_rx, None),
+            }
+        }
+        self.child = None;
     }
 }
 
@@ -93,20 +103,6 @@ impl RemoteTunnel {
             }
             rimz::child_process::wait_wake(&self.wake_rx, None);
         }
-    }
-
-    fn kill_and_reap(&mut self) {
-        let Some(child) = self.child.as_mut() else {
-            return;
-        };
-        child.signal_kill();
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) | Err(_) => break,
-                Ok(None) => rimz::child_process::wait_wake(&self.wake_rx, None),
-            }
-        }
-        self.child = None;
     }
 }
 
