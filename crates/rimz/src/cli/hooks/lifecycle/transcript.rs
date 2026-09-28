@@ -231,7 +231,8 @@ pub(super) fn record_conversation(
         entry
     };
 
-    match &observation.signal {
+    let message = assistant_message.unwrap_or_default().trim();
+    let mut entry = match &observation.signal {
         LifecycleSignal::TurnStarted { .. } => {
             let mut entries = Vec::new();
             let mut matched_ids = Vec::new();
@@ -295,9 +296,8 @@ pub(super) fn record_conversation(
                 // say: an attributed queue record arrived through RimZ's
                 // separate delivery path, and a harness-authored launch
                 // prompt would otherwise become the user's answer.
-                let fallback_prompt = if entry.origin() == rimz::transcript::EntryOrigin::Human
-                    && entry.message_id.is_none()
-                    && entry.entry == rimz::transcript::TranscriptKind::Prompt
+                let fallback_prompt = if *origin == SectionOrigin::Human
+                    && section.record.is_none()
                     && let Some(ask_id) = open_ask_id.take()
                 {
                     let fallback = entry.clone();
@@ -319,38 +319,22 @@ pub(super) fn record_conversation(
             for (entry, fallback_prompt) in entries {
                 append_turn_entry(store.paths(), &entry, fallback_prompt.as_ref())?;
             }
+            return Ok(());
         }
-        LifecycleSignal::TurnEnded { .. } => {
-            if let Some(message) = assistant_message
-                .map(str::trim)
-                .filter(|message| !message.is_empty())
-            {
-                let mut entry = entry_base(
-                    rimz::transcript::TranscriptKind::Assistant,
-                    message.to_owned(),
-                );
-                entry.reply_to = turn_opened_by(store, agent, &agent_id);
-                rimz::transcript::append(store.paths(), &entry)?;
-            }
-        }
-        LifecycleSignal::TurnInterrupted { .. } => {}
-        LifecycleSignal::AwaitingInput { ask_id, .. } => {
-            if questions.is_empty() {
-                return Ok(());
-            }
-            let last = assistant_message
-                .map(str::trim)
-                .filter(|message| !message.is_empty())
-                .unwrap_or_default()
-                .to_owned();
-            let mut entry = entry_base(rimz::transcript::TranscriptKind::Ask, last);
+        LifecycleSignal::TurnEnded { .. } if !message.is_empty() => entry_base(
+            rimz::transcript::TranscriptKind::Assistant,
+            message.to_owned(),
+        ),
+        LifecycleSignal::AwaitingInput { ask_id, .. } if !questions.is_empty() => {
+            let mut entry = entry_base(rimz::transcript::TranscriptKind::Ask, message.to_owned());
             entry.id = ask_id.clone();
             entry.questions = questions.to_vec();
-            entry.reply_to = turn_opened_by(store, agent, &agent_id);
-            rimz::transcript::append(store.paths(), &entry)?;
+            entry
         }
-        _ => {}
-    }
+        _ => return Ok(()),
+    };
+    entry.reply_to = turn_opened_by(store, agent, &agent_id);
+    rimz::transcript::append(store.paths(), &entry)?;
     Ok(())
 }
 
