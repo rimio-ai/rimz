@@ -168,6 +168,7 @@ exit 0
 
 #[cfg(unix)]
 struct WebFixture {
+    _room: crate::common::room::ShimRoom,
     env: Env,
     workspace: rimz::ResolvedWorkspace,
     bin_dir: PathBuf,
@@ -195,7 +196,13 @@ impl WebFixture {
             &env,
             &format!("[web]\nport = {web_port}\nshare_port = {share_port}\n"),
         );
+        let room = crate::common::room::ShimRoom::watch_tmux(
+            env.runtime_paths(),
+            &workspace.session_name,
+            &tmux_log,
+        );
         Self {
+            _room: room,
             env,
             workspace,
             bin_dir,
@@ -500,6 +507,11 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     std::fs::create_dir_all(&second_root).expect("mkdir second room");
     fixture.env.record(&second_root);
     let second = rimz::WorkspaceResolver::resolve(&second_root, None).expect("resolve second room");
+    let _second_room = crate::common::room::ShimRoom::watch_tmux(
+        fixture.env.store_for(&second_root).runtime_paths().clone(),
+        &second.session_name,
+        &fixture.tmux_log,
+    );
     let sessions = format!(
         "{}\\n{}",
         fixture.workspace.session_name, second.session_name
