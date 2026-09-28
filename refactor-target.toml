@@ -67,7 +67,9 @@ path = "crates/rimz/src/address.rs"
 # The fleet digest and its orphan backstop share one launched-fleet selector.
 # `role_holders` reopened this by one: the harness takes the Role-tier
 # claimed-wins rule from here instead of matching roles a second time.
-surface-budget = 34
+# `is_launch_row` reopened it by one: the peer-turn settle and its orphan
+# backstop share one current-row filter instead of spelling it twice.
+surface-budget = 35
 
 [[module]]
 path = "crates/rimz/src/lsp"

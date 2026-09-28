@@ -158,24 +158,22 @@ fn digest_parents_from(agents: &[AgentState], runs: &[RunRecord]) -> Vec<AgentSe
         .filter(|parent| parent.ended_at.is_none())
         .filter_map(|parent| {
             let fleet = FleetRuns::of(agents, runs, parent);
-            let peer_needs_settlement =
-                crate::address::launched_fleet(agents, parent)
-                    .into_iter()
-                    // An ended predecessor conversation shares its live successor's launch id.
-                    .filter(|peer| crate::address::launch_row(agents, &peer.kind, peer.launch_id.as_ref().unwrap_or(&peer.agent_id)).is_some_and(|row| std::ptr::eq(row, *peer)))
-                    .any(|peer| {
-                        newest_run(peer, runs).is_some_and(|run| {
-                            run.peer.is_some()
-                                && !run.status.is_terminal()
-                                && (peer.ended_at.is_some()
-                                    || crate::store::runtime::agent_liveness(peer)
-                                        == crate::store::runtime::AgentLiveness::Dead
-                                    || (run.parked_at.is_some() && {
-                                        let owed = FleetRuns::of(agents, runs, peer);
-                                        !owed.any_running() && owed.unreported().is_empty()
-                                    }))
-                        })
-                    });
+            let peer_needs_settlement = crate::address::launched_fleet(agents, parent)
+                .into_iter()
+                .filter(|peer| crate::address::is_launch_row(agents, peer))
+                .any(|peer| {
+                    newest_run(peer, runs).is_some_and(|run| {
+                        run.peer.is_some()
+                            && !run.status.is_terminal()
+                            && (peer.ended_at.is_some()
+                                || crate::store::runtime::agent_liveness(peer)
+                                    == crate::store::runtime::AgentLiveness::Dead
+                                || (run.parked_at.is_some() && {
+                                    let owed = FleetRuns::of(agents, runs, peer);
+                                    !owed.any_running() && owed.unreported().is_empty()
+                                }))
+                    })
+                });
             (peer_needs_settlement
                 || (!fleet.is_empty() && !fleet.any_running() && !fleet.unreported().is_empty()))
             .then(|| parent.agent_id.clone())

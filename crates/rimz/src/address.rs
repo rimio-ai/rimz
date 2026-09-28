@@ -962,6 +962,20 @@ pub fn launch_row<'a>(
     launch_occupant(&launch_members(agents, kind, id))
 }
 
+/// Whether `agent` is its launch's current row, as [`launch_row`] selects it.
+///
+/// An ended predecessor conversation shares its live successor's launch id,
+/// launcher, and open peer run, so a per-launch judgement (liveness, a turn to
+/// settle) filters through here rather than reading each row on its own.
+pub fn is_launch_row(agents: &[AgentState], agent: &AgentState) -> bool {
+    launch_row(
+        agents,
+        &agent.kind,
+        agent.launch_id.as_ref().unwrap_or(&agent.agent_id),
+    )
+    .is_some_and(|row| std::ptr::eq(row, agent))
+}
+
 /// One representative per launch instance. Every conversation in an agent
 /// instance shares its `launch_id`; this selector alone decides which row the
 /// launch currently is. It reads `holds_open_turn`, so callers that need the
@@ -1030,6 +1044,9 @@ pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> V
 /// This is the fleet report's selector only. Peers keep their own lifecycle,
 /// so stop, nesting, orphan reaping, and attribution use
 /// [`launched_children`].
+///
+/// Returns every conversation row of a launch, ended predecessors included;
+/// judge a launch's liveness through [`is_launch_row`], never per row.
 pub fn launched_fleet<'a>(agents: &'a [AgentState], launcher: &AgentState) -> Vec<&'a AgentState> {
     let members = launch_members(
         agents,
