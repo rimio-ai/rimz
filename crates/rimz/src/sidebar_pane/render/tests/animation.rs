@@ -397,40 +397,19 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
     };
     ui.theme(&snapshot.theme);
 
-    if ui.cached_theme(&snapshot.theme).unwrap().pet_body_enabled() {
-        assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
-        assert_eq!(
-            animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
-            Duration::from_millis(625)
-        );
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+    assert_eq!(
+        animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
+        Duration::from_millis(625)
+    );
 
-        let mut jumping_ui = ui.clone();
-        jumping_ui.pet.as_mut().expect("pet").frame_interval = Some(Duration::from_millis(286));
-        assert_eq!(
-            animation_interval(&snapshot, &jumping_ui, jumping_ui.animation_phase, false)
-                .expect("animated"),
-            Duration::from_millis(286)
-        );
-    } else {
-        assert!(
-            animation_interval(&snapshot, &ui, 0, false).is_none(),
-            "NO_COLOR suppresses pet body animation"
-        );
-        let mut loading_ui = ui.clone();
-        let pet = loading_ui.pet.as_mut().expect("pet");
-        pet.body = None;
-        pet.frame_interval = Some(crate::sidebar::timing::animation_frame(
-            crate::config::DisplayConfig::default().resolved_refresh_ms(),
-        ));
-        assert!(animation_interval(&snapshot, &loading_ui, 0, false).is_some());
-        assert_eq!(
-            animation_interval(&snapshot, &loading_ui, loading_ui.animation_phase, false)
-                .expect("animated"),
-            crate::sidebar::timing::animation_frame(
-                crate::config::DisplayConfig::default().resolved_refresh_ms()
-            )
-        );
-    }
+    let mut jumping_ui = ui.clone();
+    jumping_ui.pet.as_mut().expect("pet").frame_interval = Some(Duration::from_millis(286));
+    assert_eq!(
+        animation_interval(&snapshot, &jumping_ui, jumping_ui.animation_phase, false)
+            .expect("animated"),
+        Duration::from_millis(286)
+    );
 
     snapshot.theme.animations.idle =
         Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
