@@ -10,6 +10,9 @@ use crate::disk::{atomic, lock::WorkspaceLock};
 
 use super::scratch::is_atx_heading;
 
+/// File name of a team's board under its worktree root.
+pub const BOARD_FILE: &str = "blackboard.md";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoardSection {
     Goal,
@@ -187,7 +190,7 @@ pub(super) struct LockedBoard {
 impl LockedBoard {
     pub(super) fn open(store: &Store, worktree: &Path) -> Result<Self, BoardErr> {
         let worktree = canonical_worktree(worktree)?;
-        let path = worktree.join("blackboard.md");
+        let path = worktree.join(BOARD_FILE);
         let lock = WorkspaceLock::acquire(&store.runtime_paths().board_lock(&worktree))?;
         let text = read_board(&path)?;
         Ok(Self {

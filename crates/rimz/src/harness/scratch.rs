@@ -121,7 +121,7 @@ pub(crate) struct BoardRun {
 
 /// Read the current stage and run times from one blackboard snapshot.
 pub(crate) fn board_run(root: &Path, zone: &TimeZone) -> Option<BoardRun> {
-    let board = std::fs::read_to_string(root.join("blackboard.md")).ok()?;
+    let board = std::fs::read_to_string(root.join(super::board::BOARD_FILE)).ok()?;
     parse_board_run(&board, zone)
 }
 
@@ -198,7 +198,7 @@ fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
 
 /// Read the first `Stage:` line, separating only a terminal ` (@owner)` suffix.
 pub fn board_stage(root: &Path) -> Option<BoardStage> {
-    let board = std::fs::read_to_string(root.join("blackboard.md")).ok()?;
+    let board = std::fs::read_to_string(root.join(super::board::BOARD_FILE)).ok()?;
     parse_board_stage(&board)
 }
 
@@ -226,7 +226,7 @@ pub(super) fn parse_board_stage(board: &str) -> Option<BoardStage> {
 /// outside a fenced code block; `None` when the heading is absent or the
 /// section is blank.
 pub fn board_section(root: &Path, heading: &str) -> Option<String> {
-    let board = std::fs::read_to_string(root.join("blackboard.md")).ok()?;
+    let board = std::fs::read_to_string(root.join(super::board::BOARD_FILE)).ok()?;
     parse_board_section(&board, heading)
 }
 

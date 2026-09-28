@@ -31,7 +31,7 @@ impl Target {
     }
 
     fn board(&self) -> PathBuf {
-        self.worktree.join("blackboard.md")
+        self.worktree.join(rimz::harness::board::BOARD_FILE)
     }
 
     fn status(&self) -> RunStatus {
