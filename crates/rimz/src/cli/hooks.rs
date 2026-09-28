@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 
 use super::{GlobalFlags, open_store};
 use rimz::Store;
-use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
+use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{
     AgentDefinition, AgentHookClass, AgentLifecycleObservation, HookIngressAcceptance,
     HookIngressDecision, HookOutput, definition_by_kind,

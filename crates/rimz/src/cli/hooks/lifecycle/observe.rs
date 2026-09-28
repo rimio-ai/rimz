@@ -447,7 +447,8 @@ fn log_lifecycle_receipt(
             agent_id,
             observation.parent_agent_id.as_deref(),
             &observation.signal,
-            transition,
+            transition.next.status,
+            &transition.kind.into(),
         );
         if transition.compaction_closed
             && !matches!(observation.signal, LifecycleSignal::CompactionEnded { .. })
@@ -467,32 +468,14 @@ fn log_lifecycle_receipt(
         .iter()
         .filter(|event| receipt.primary_event_id.as_ref() != Some(&event.event_id))
     {
-        log_canonical_transition(kind, event);
-    }
-}
-
-fn log_canonical_transition(kind: &str, event: &rimz::agents::LifecycleEvent) {
-    match &event.transition {
-        rimz::agents::LifecycleTransition::Reconciled { from, reason } => warn!(
-            target: "rimz::agent::lifecycle",
+        log_transition(
             kind,
-            agent_id = event.agent_id.as_str(),
-            parent_agent_id = event.parent_agent_id.as_deref().unwrap_or(""),
-            from = ?from,
-            to = ?event.status,
-            signal = ?event.signal,
-            reason,
-            "reconciled lifecycle transition",
-        ),
-        rimz::agents::LifecycleTransition::Ignored { reason } => debug!(
-            target: "rimz::agent::lifecycle",
-            kind,
-            agent_id = event.agent_id.as_str(),
-            signal = ?event.signal,
-            reason,
-            "ignored lifecycle signal",
-        ),
-        rimz::agents::LifecycleTransition::Normal => {}
+            event.agent_id.as_str(),
+            event.parent_agent_id.as_deref(),
+            &event.signal,
+            event.status,
+            &event.transition,
+        );
     }
 }
 
@@ -501,21 +484,22 @@ fn log_transition(
     agent_id: &str,
     parent_agent_id: Option<&str>,
     signal: &LifecycleSignal,
-    transition: agent_lifecycle::Transition,
+    to: rimz::agents::AgentStatus,
+    transition: &rimz::agents::LifecycleTransition,
 ) {
-    match transition.kind {
-        TransitionKind::Reconciled { from, reason } => warn!(
+    match transition {
+        rimz::agents::LifecycleTransition::Reconciled { from, reason } => warn!(
             target: "rimz::agent::lifecycle",
             kind,
             agent_id,
             parent_agent_id = parent_agent_id.unwrap_or(""),
             from = ?from,
-            to = ?transition.next.status,
+            to = ?to,
             signal = ?signal,
             reason,
             "reconciled lifecycle transition",
         ),
-        TransitionKind::Ignored { reason } => debug!(
+        rimz::agents::LifecycleTransition::Ignored { reason } => debug!(
             target: "rimz::agent::lifecycle",
             kind,
             agent_id,
@@ -523,6 +507,6 @@ fn log_transition(
             reason,
             "ignored lifecycle signal",
         ),
-        TransitionKind::Normal => {}
+        rimz::agents::LifecycleTransition::Normal => {}
     }
 }
