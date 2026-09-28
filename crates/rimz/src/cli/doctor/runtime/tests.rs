@@ -6,6 +6,63 @@ use rimz::diag::record::{
 };
 use rimz::ids::LinkTier;
 
+#[test]
+fn remote_control_status_preserves_host_readiness_labels() {
+    use RemoteControlHost::{Claude, Codex};
+    use RuntimeControlLiveness::{Down, Unknown, Up};
+    use RuntimeControlReadiness::{Blocked, Disabled, Ready, Uninstalled};
+
+    // The issue constructor is library-private; obtain one through the public capability.
+    let home = tempfile::tempdir().unwrap();
+    let login_env = BTreeMap::from([(
+        "CODEX_HOME".to_owned(),
+        home.path().to_str().unwrap().to_owned(),
+    )]);
+    let Uninstalled(issue) = rimz::agents::find_definition("codex")
+        .unwrap()
+        .runtime_control_readiness(true, &login_env)
+    else {
+        panic!("empty Codex home has no standalone install");
+    };
+    let ready = Ready { host_argv: None };
+    let uninstalled = Uninstalled(issue.clone());
+    let blocked = Blocked(issue);
+    for (host, readiness, liveness, expected) in [
+        (Claude, &ready, Some(Up), ("ready, host serving", true)),
+        (
+            Claude,
+            &ready,
+            Some(Down),
+            ("ready, but the host stopped serving this project", false),
+        ),
+        (Claude, &ready, Some(Unknown), ("ready", true)),
+        (Claude, &ready, None, ("ready", true)),
+        (Claude, &uninstalled, None, ("enabled, not on PATH", false)),
+        (Claude, &blocked, None, ("enabled, blocked", false)),
+        (Claude, &Disabled, None, ("ready", true)),
+        (
+            Codex,
+            &uninstalled,
+            None,
+            ("enabled, standalone install missing", false),
+        ),
+        (
+            Codex,
+            &blocked,
+            None,
+            ("enabled, standalone install missing", false),
+        ),
+        (Codex, &ready, None, ("ready", true)),
+        (Codex, &Disabled, None, ("ready", true)),
+    ] {
+        assert_eq!(
+            remote_control_status(host, readiness, liveness),
+            expected,
+            "{host:?}, {readiness:?}, {liveness:?}"
+        );
+    }
+}
+
 fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
     rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")
 }

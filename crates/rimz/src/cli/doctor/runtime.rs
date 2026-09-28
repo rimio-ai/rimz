@@ -11,6 +11,7 @@ use rimz::mux::{
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION, pane_topology},
 };
+use rimz::remote_control::RemoteControlHost;
 use rimz::sidebar_pane::ZellijKittySupport;
 use rimz::store::event::SessionDeathCause;
 use rimz::{RuntimePaths, StatePaths};
@@ -837,6 +838,27 @@ fn topology_writer_id(writer: pane_topology::TopologyWriter) -> model::TopologyW
     }
 }
 
+fn remote_control_status(
+    host: RemoteControlHost,
+    readiness: &RuntimeControlReadiness,
+    liveness: Option<RuntimeControlLiveness>,
+) -> (&'static str, bool) {
+    use RemoteControlHost::{Claude, Codex};
+    use RuntimeControlLiveness::{Down, Up};
+    use RuntimeControlReadiness::{Blocked, Disabled, Ready, Uninstalled};
+
+    match (host, readiness, liveness) {
+        (Claude, Ready { .. }, Some(Up)) => ("ready, host serving", true),
+        (Claude, Ready { .. }, Some(Down)) => {
+            ("ready, but the host stopped serving this project", false)
+        }
+        (Claude, Uninstalled(_), _) => ("enabled, not on PATH", false),
+        (Claude, Blocked(_), _) => ("enabled, blocked", false),
+        (Codex, Uninstalled(_) | Blocked(_), _) => ("enabled, standalone install missing", false),
+        (_, Ready { .. } | Disabled, _) => ("ready", true),
+    }
+}
+
 /// Per-machine remote-control auto-launch posture. Doctor separates hard
 /// `rimz start` refusals for installed-agent misconfiguration from enabled
 /// hosts whose agent is not installed; start skips those inert toggles.
@@ -852,7 +874,11 @@ pub(super) fn collect_remote_control(
         }
     };
     let config = &machine.remote_control;
-    if !config.enabled_for("claude") && !config.enabled_for("codex") {
+    let mut hosts = [RemoteControlHost::Claude, RemoteControlHost::Codex]
+        .into_iter()
+        .filter(|host| config.enabled_for(host.kind()))
+        .peekable();
+    if hosts.peek().is_none() {
         return model::RemoteControl::Off;
     }
 
@@ -873,66 +899,35 @@ pub(super) fn collect_remote_control(
         },
         None => rimz::remote_control::HostLoginEnvs::ambient(),
     };
-    let login_env = envs.for_host(rimz::remote_control::RemoteControlHost::Claude);
     let readiness = rimz::remote_control::ReadinessSnapshot::probe(config, &envs);
     let advisories = rimz::remote_control::advisories(config, &envs);
     let mut agents = Vec::new();
-    if config.enabled_for("claude") {
-        let (detail, ready) = match readiness
-            .for_host(rimz::remote_control::RemoteControlHost::Claude)
-        {
-            // A ready host is one that *can* start. Whether one is serving right
-            // now is a separate question the provider's own record answers, and
-            // doctor is the place a stalled host should become visible.
-            RuntimeControlReadiness::Ready { .. } => {
-                match project_root
-                    .map(|root| runtime_control::host_liveness("claude", root, login_env))
-                {
-                    Some(RuntimeControlLiveness::Up) => ("ready, host serving".to_owned(), true),
-                    Some(RuntimeControlLiveness::Down) => (
-                        "ready, but the host stopped serving this project".to_owned(),
-                        false,
-                    ),
-                    _ => ("ready".to_owned(), true),
-                }
-            }
-            RuntimeControlReadiness::Uninstalled(_) => ("enabled, not on PATH".to_owned(), false),
-            RuntimeControlReadiness::Blocked(_) => ("enabled, blocked".to_owned(), false),
-            RuntimeControlReadiness::Disabled => ("ready".to_owned(), true),
+    for host in hosts {
+        let host_readiness = readiness.for_host(host);
+        // A ready host is one that *can* start. Whether one is serving right
+        // now is a separate question the provider's own record answers, and
+        // doctor is the place a stalled host should become visible.
+        let liveness = match (host, host_readiness, project_root) {
+            (RemoteControlHost::Claude, RuntimeControlReadiness::Ready { .. }, Some(root)) => Some(
+                runtime_control::host_liveness("claude", root, envs.for_host(host)),
+            ),
+            _ => None,
         };
+        let (detail, ready) = remote_control_status(host, host_readiness, liveness);
         agents.push(model::RemoteAgent {
-            kind: "claude",
-            detail,
-            ready,
-        });
-    }
-    if config.enabled_for("codex") {
-        let (detail, ready) =
-            match readiness.for_host(rimz::remote_control::RemoteControlHost::Codex) {
-                RuntimeControlReadiness::Uninstalled(_) => {
-                    ("enabled, standalone install missing".to_owned(), false)
-                }
-                RuntimeControlReadiness::Ready { .. } | RuntimeControlReadiness::Disabled => {
-                    ("ready".to_owned(), true)
-                }
-                RuntimeControlReadiness::Blocked(_) => {
-                    ("enabled, standalone install missing".to_owned(), false)
-                }
-            };
-        agents.push(model::RemoteAgent {
-            kind: "codex",
-            detail,
+            kind: host.kind(),
+            detail: detail.to_owned(),
             ready,
         });
     }
 
-    let skipped = match readiness.for_host(rimz::remote_control::RemoteControlHost::Codex) {
+    let skipped = match readiness.for_host(RemoteControlHost::Codex) {
         RuntimeControlReadiness::Uninstalled(issue) => {
             vec![issue.to_string()]
         }
         _ => Vec::new(),
     };
-    let refusals = match readiness.for_host(rimz::remote_control::RemoteControlHost::Claude) {
+    let refusals = match readiness.for_host(RemoteControlHost::Claude) {
         RuntimeControlReadiness::Blocked(issue) => {
             vec![issue.to_string()]
         }
