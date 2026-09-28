@@ -1,6 +1,6 @@
 # Sidebar live check
 
-Use this before hand-off for a renderer, pipeline line, consumer path, or click-routing change where a unit test cannot show the live frame.
+Use this before hand-off for a renderer, pipeline line, consumer path, or click-routing change where a unit test cannot show the live frame. For a pixel transport change, [Capture kitty graphics](#capture-kitty-graphics) records what the sidebar sends a kitty-capable client.
 
 ## Hold a room and join it
 
@@ -283,6 +283,34 @@ wait-patient-meter  watching pid 290923  @coder#probe  0s   check: true · in ~/
 ```
 
 The listing that follows `armed` can read `watcher lost` with AGE `-` right after arming; `wait list` two seconds later reads `watching pid`, so treat it as a listing race, not a failed arm. The feed only needs to run once per room; later `a` calls reuse the registered session. The run proved arming only, not delivery of the wait's result to the agent, and it has run on tmux only.
+
+## Capture kitty graphics
+
+A held room draws cell bars, never pixel meters or pixel pets, because no kitty-capable client is looking at it. On tmux the sidebar sends kitty graphics only when every rendering client's termname is a kitty-capable one (`sidebar_pane/pixel/probe.rs` `termname_allowed`: `xterm-kitty`, `kitty`, `xterm-ghostty`, `ghostty`), and the room keeps its own `tmux-256color` client attached. To check which image ids go out, the `p=` on each placement, or the `d=I` deletes, replace that client with a recorded one that reports `xterm-kitty`. This recipe is tmux-only.
+
+Take `ROOT` and the session from your card (`Mux: tmux  Session: room-e5ac`). The machine usually has no `xterm-kitty` terminfo, so alias one from `xterm-256color` under the room's tmp. Then detach the room's rendering client (control-mode `1` lines are RimZ's own link; leave them), and attach a `script`-recorded client for 30 seconds, long enough for the sidebar's 10-second caps refresh to see it:
+
+```sh
+S="$ROOT/runtime/rimz/tmux/server" SESSION=room-e5ac
+t() { target/debug/xtask sandbox in "$ROOT" -- tmux -S "$S" "$@"; }
+mkdir -p "$ROOT/tmp/terminfo"
+infocmp -x xterm-256color | sed '1,/^xterm-256color|/s/^xterm-256color|/xterm-kitty|/' | tic -x -o "$ROOT/tmp/terminfo" -
+t list-clients -F '#{client_control_mode} #{client_termname} #{client_name}'
+t detach-client -t "$(t list-clients -F '#{client_control_mode} #{client_name}' | awk '$1==0{print $2}')"
+target/debug/xtask sandbox in "$ROOT" -- sh -c "TERMINFO='$ROOT/tmp/terminfo' TERM=xterm-kitty timeout 30 script -qfec 'tmux -S $S attach -t $SESSION' '$ROOT/tmp/kitty.raw'" < /dev/null > /dev/null
+grep -ao $'\e_G[^;\e]*' "$ROOT/tmp/kitty.raw" | sed -E 's/i=[0-9]+/i=N/; s/[xy]=[0-9]+//g' | sort | uniq -c | sort -rn
+```
+
+`detach-client -a` detaches every client except the one named, so name the rendering client directly as above. In the recorded run (2026-09-28, tmux 3.7c) the tally read:
+
+```text
+   1536 _Ga=d,d=I,i=N,q=2
+      2 _Gm=0
+      2 _Ga=t,f=100,i=N,q=2,m=1
+      2 _Ga=p,U=1,i=N,p=1,c=38,r=1,q=2
+```
+
+The `d=I` lines are the sweeps a sidebar makes over its leased id window before its first transmit; the `a=t` transmits are chunked (`m=1` then `m=0`), and each virtual placement carries `p=1`. Counts depend on the room. Drop `-o` and read the raw lines to see the actual ids.
 
 ## Traps
 
