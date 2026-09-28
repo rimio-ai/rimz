@@ -70,6 +70,17 @@ fn default_root_class() -> RootClass {
 /// `latest.json` files read as stale instead of accreting one-off guards.
 pub const SNAPSHOT_VERSION: u32 = 26;
 
+/// The first rollup row matching an exact provider and session identity.
+pub fn find_agent<'a>(
+    agents: &'a [AgentState],
+    kind: &str,
+    agent_id: &AgentSessionId,
+) -> Option<&'a AgentState> {
+    agents
+        .iter()
+        .find(|state| state.kind == kind && state.agent_id == *agent_id)
+}
+
 /// Sidebar view-model. The pane frame admits every rendered card; store,
 /// sidecars, and realtime events only enrich rows admitted from live panes.
 /// Worktree groups are the renderer contract: grouping, attention ranking,

@@ -1,4 +1,5 @@
 use super::*;
+use rimz::store::snapshot::find_agent;
 use std::process::{Command, Stdio};
 
 #[cfg(test)]
@@ -352,17 +353,10 @@ fn derive_subagent_lifecycle(
         ) else {
             continue;
         };
-        if !snapshot
-            .agents
-            .iter()
-            .any(|state| state.kind.as_str() == kind && state.agent_id == *parent_id)
-        {
+        if find_agent(&snapshot.agents, kind, parent_id).is_none() {
             continue;
         }
-        let prior = snapshot
-            .agents
-            .iter()
-            .find(|state| state.kind.as_str() == kind && state.agent_id == *child_id);
+        let prior = find_agent(&snapshot.agents, kind, child_id);
         let event_name = match &observation.signal {
             LifecycleSignal::SubagentStarted if prior.is_none() => "chatsStoreSubagentStart",
             LifecycleSignal::SubagentStopped { .. }
@@ -544,13 +538,11 @@ fn session_run_id(
     let agent_id = agent_id?;
     // SessionEnd has already removed the peer from the live snapshot.
     let peer = agent_state(store, agent, agent_id).or_else(|| {
-        store
+        let snapshot = store
             .runtime_projection(rimz::RuntimeScope::Audit)
             .inspect_err(|error| warn!(%error, "lifecycle: failed to read peer identity"))
-            .ok()?
-            .agents
-            .into_iter()
-            .find(|peer| peer.kind == agent.spec().kind && peer.agent_id == *agent_id)
+            .ok()?;
+        find_agent(&snapshot.agents, agent.spec().kind, agent_id).cloned()
     })?;
     let open = if peer.is_team_seat() {
         rimz::harness::run::open_team_run(store.paths(), &peer)
