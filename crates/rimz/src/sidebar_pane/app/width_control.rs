@@ -59,7 +59,7 @@ struct WidthControl {
     in_flight: Option<IssuedStep>,
     learned_step: Option<u16>,
     /// Backend-native step estimate that seeds nearest-width tolerance and survives retargeting.
-    native_step: Option<NonZeroU16>,
+    native_step: Option<crate::mux::WidthStep>,
     retried_no_progress: bool,
     no_progress_cycles: u8,
     unacknowledged: Option<IssuedStep>,
@@ -101,8 +101,10 @@ impl WidthControl {
         self.traces.clear();
     }
 
-    fn seed_native_step(&mut self, step_cols: u16) {
-        self.native_step = NonZeroU16::new(step_cols).or(self.native_step);
+    fn seed_native_step(&mut self, step: crate::mux::WidthStep) {
+        if step.stop_step_cols != 0 {
+            self.native_step = Some(step);
+        }
     }
 
     fn target(&self) -> Option<NonZeroU16> {
@@ -191,8 +193,13 @@ impl WidthControl {
     }
 
     fn stop_step(&self) -> u16 {
+        if let Some(step) = self.native_step
+            && step.exact
+        {
+            return step.stop_step_cols;
+        }
         self.learned_step
-            .max(self.native_step.map(NonZeroU16::get))
+            .max(self.native_step.map(|step| step.stop_step_cols))
             .unwrap_or(1)
     }
 
@@ -246,12 +253,14 @@ impl WidthControl {
 
         if let Some(step) = self.in_flight {
             if own_cols != step.width_before {
-                let learned_step = own_cols.abs_diff(step.width_before);
-                self.learned_step = Some(learned_step);
-                self.traces.push_back(WidthTransition::FeedbackLearned {
-                    settled: own_cols,
-                    learned_step,
-                });
+                if !self.native_step.is_some_and(|step| step.exact) {
+                    let learned_step = own_cols.abs_diff(step.width_before);
+                    self.learned_step = Some(learned_step);
+                    self.traces.push_back(WidthTransition::FeedbackLearned {
+                        settled: own_cols,
+                        learned_step,
+                    });
+                }
                 self.in_flight = None;
                 self.retried_no_progress = false;
                 self.no_progress_cycles = 0;
@@ -351,6 +360,7 @@ pub(super) struct WidthController {
     started_at_ms: u64,
     current_view_cols: Option<u16>,
     last_siblings: Option<usize>,
+    siblings_stable_since_ms: Option<u64>,
     structural_at_ms: Option<u64>,
     fullscreen_observed_at_ms: Option<u64>,
     idle_retry_deadline: Option<Instant>,
@@ -378,6 +388,7 @@ impl WidthController {
             started_at_ms: crate::utils::time::unix_now_ms(),
             current_view_cols: None,
             last_siblings: None,
+            siblings_stable_since_ms: None,
             structural_at_ms: None,
             fullscreen_observed_at_ms: None,
             idle_retry_deadline: None,
@@ -474,7 +485,7 @@ impl WidthController {
             }
         };
         let adjustment_cols = step.adjustment_cols(dir);
-        self.convergence.seed_native_step(step.stop_step_cols);
+        self.convergence.seed_native_step(step);
         let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
             diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
                 trigger,
@@ -650,6 +661,10 @@ impl WidthController {
         }
         if let Some(siblings) = sibling_count {
             let previous = self.last_siblings.replace(siblings);
+            if previous != Some(siblings) || self.siblings_stable_since_ms.is_none() {
+                self.siblings_stable_since_ms =
+                    panes_observed_at_ms.map(|at_ms| at_ms.max(crate::utils::time::unix_now_ms()));
+            }
             if previous.is_some_and(|previous| previous != siblings)
                 && !self.note_structural(
                     panes_observed_at_ms.unwrap_or_else(crate::utils::time::unix_now_ms),
@@ -789,19 +804,37 @@ impl WidthController {
         let structurally_changed = self.structural_at_ms.is_some_and(|structural_at_ms| {
             structural_at_ms >= resize_at_ms.saturating_sub(STRUCTURAL_GUARD_MS)
         });
-        if view_changed {
-            self.classification_deadline = None;
-            self.classification_resize_at_ms = None;
-            self.observe(
-                measured_cols,
-                SidebarWidthControlTrigger::Classification,
-                diag,
-            );
+        if !view_changed
+            && !structurally_changed
+            && !panes_observed_at_ms.is_some_and(|observed_at_ms| {
+                observed_at_ms >= resize_at_ms.saturating_add(STRUCTURAL_GUARD_MS)
+            })
+        {
+            self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
             return;
         }
-        if structurally_changed {
-            self.classification_deadline = None;
-            self.classification_resize_at_ms = None;
+        self.classification_deadline = None;
+        self.classification_resize_at_ms = None;
+        let base_cols = self
+            .convergence
+            .target()
+            .map_or(measured_cols, NonZeroU16::get);
+        let proven_siblings = self
+            .siblings_stable_since_ms
+            .is_some_and(|at_ms| at_ms < resize_at_ms);
+        if view_changed || structurally_changed || !proven_siblings {
+            if !proven_siblings {
+                diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
+                    trigger: SidebarWidthIntentTrigger::MouseAdopt,
+                    own_cols: measured_cols,
+                    base_cols,
+                    view_cols: view_cols.get(),
+                    step_cols: Some(step.cols),
+                    step_exact: step.exact,
+                    target_cols: Some(base_cols),
+                    verdict: SidebarWidthIntentVerdict::RejectedUnproven,
+                });
+            }
             self.convergence.rearm();
             self.observe(
                 measured_cols,
@@ -810,22 +843,9 @@ impl WidthController {
             );
             return;
         }
-        if !panes_observed_at_ms.is_some_and(|observed_at_ms| {
-            observed_at_ms >= resize_at_ms.saturating_add(STRUCTURAL_GUARD_MS)
-        }) {
-            self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
-            return;
-        }
-        self.classification_deadline = None;
-        self.classification_resize_at_ms = None;
-
         let Some(measured) = NonZeroU16::new(measured_cols) else {
             return;
         };
-        let base_cols = self
-            .convergence
-            .target()
-            .map_or(measured_cols, NonZeroU16::get);
         let permille = match crate::mux::width_target::pin(
             &self.runtime,
             self.width,
@@ -870,7 +890,7 @@ impl WidthController {
             .sidebar_width_step(&self.runtime, &self.session_name, pane, floor)
             .ok()?;
         let view_cols = NonZeroU16::new(step.view_cols)?;
-        self.convergence.seed_native_step(step.stop_step_cols);
+        self.convergence.seed_native_step(step);
         self.current_view_cols = Some(view_cols.get());
         let target = match floor {
             Some(_) => crate::mux::width_target::adopt(&self.runtime, self.width, view_cols),
