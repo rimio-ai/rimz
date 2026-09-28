@@ -1249,8 +1249,10 @@ impl MasterAttempt {
         self.remove_control_path_on_drop = false;
         guard
     }
+}
 
-    fn stop(&mut self) {
+impl Drop for MasterAttempt {
+    fn drop(&mut self) {
         if let Some(child) = &mut self.child {
             let _ = child.kill();
             let _ = child.wait();
@@ -1273,12 +1275,6 @@ fn drain_stderr(child: &mut Child) -> Option<std::thread::JoinHandle<String>> {
             output
         })
     })
-}
-
-impl Drop for MasterAttempt {
-    fn drop(&mut self) {
-        self.stop();
-    }
 }
 
 struct MasterGuard {
@@ -1557,8 +1553,10 @@ impl ProbeHandle {
             None => attempt.plain(),
         }
     }
+}
 
-    fn finish(&mut self) {
+impl Drop for ProbeHandle {
+    fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -1568,12 +1566,6 @@ impl ProbeHandle {
         {
             remove_control_path(path);
         }
-    }
-}
-
-impl Drop for ProbeHandle {
-    fn drop(&mut self) {
-        self.finish();
     }
 }
 

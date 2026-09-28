@@ -288,14 +288,14 @@ fn preestablished_probe_preserves_the_master_socket() {
     let dir = tempfile::tempdir().expect("tempdir");
     let control = dir.path().join("master.sock");
     std::fs::write(&control, b"owned by master guard").expect("write control marker");
-    let mut probe = ProbeHandle {
+    let probe = ProbeHandle {
         stop: Arc::new(AtomicBool::new(true)),
         join: None,
         control_path: Some(control.clone()),
         remove_control_path: false,
     };
 
-    probe.finish();
+    drop(probe);
 
     assert!(control.exists());
 }
