@@ -43,13 +43,12 @@ impl PixelSlot {
         SLOT_ORIGIN + u32::from(self.0) * SLOT_STRIDE
     }
 
+    /// Unbracketed: the caller's frame carries the synchronized-output bracket.
     pub(super) fn sweep<W: Write>(self, writer: &mut W, wrap: bool) -> io::Result<()> {
-        write_synchronized_pixel_output(writer, |writer| {
-            for image_id in self.base()..self.base() + SLOT_STRIDE {
-                writer.write_all(&wrap_pixel_payload(&delete(image_id), wrap))?;
-            }
-            Ok(())
-        })
+        for image_id in self.base()..self.base() + SLOT_STRIDE {
+            writer.write_all(&wrap_pixel_payload(&delete(image_id), wrap))?;
+        }
+        Ok(())
     }
 }
 
@@ -204,18 +203,14 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
         self.last_resend_ms = None;
     }
 
+    /// Unbracketed: the caller's frame or teardown carries the
+    /// synchronized-output bracket, since mode 2026 does not nest.
     pub(super) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        if self.resident_ids.is_empty() {
-            return Ok(());
+        for image_id in std::mem::take(&mut self.resident_ids) {
+            writer.write_all(&wrap_pixel_payload(&delete(image_id), self.wrap))?;
         }
-        write_synchronized_pixel_output(writer, |writer| {
-            for image_id in std::mem::take(&mut self.resident_ids) {
-                writer.write_all(&wrap_pixel_payload(&delete(image_id), self.wrap))?;
-            }
-            self.invalidate();
-            Ok(())
-        })?;
-        writer.flush()
+        self.invalidate();
+        Ok(())
     }
 
     #[cfg(test)]

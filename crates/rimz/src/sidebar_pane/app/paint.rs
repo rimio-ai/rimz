@@ -12,7 +12,9 @@ use crate::sidebar_pane::pets::{
     PetAssets, PetBody, PetViewFrame, PixelPainter, effective_render_tier, probe_cell_aspect,
 };
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
-use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, PixelSlot};
+use crate::sidebar_pane::pixel::{
+    BEGIN_SYNC, END_SYNC, PixelRenderCaps, PixelSlot, write_synchronized_pixel_output,
+};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -253,7 +255,10 @@ impl FramePainter {
     }
 
     pub(super) fn clear<W: Write>(&mut self, backend: &mut W) -> io::Result<()> {
-        let pets = self.painter.clear(backend);
-        pets.and(self.meter_painter.clear(backend))
+        write_synchronized_pixel_output(backend, |backend| {
+            let pets = self.painter.clear(backend);
+            pets.and(self.meter_painter.clear(backend))
+        })?;
+        backend.flush()
     }
 }

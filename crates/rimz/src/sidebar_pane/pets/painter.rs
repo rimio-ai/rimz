@@ -137,7 +137,7 @@ mod tests {
     use super::*;
     use crate::sidebar_pane::pets::PetGridSize;
     use crate::sidebar_pane::pixel::{
-        BEGIN_SYNC, END_SYNC, MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS, sprite_image_id,
+        BEGIN_SYNC, MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS, sprite_image_id,
     };
 
     fn image() -> RgbaImage {
@@ -243,8 +243,7 @@ mod tests {
 
         let mut clear = Vec::new();
         painter.clear(&mut clear).expect("clear");
-        assert!(clear.starts_with(BEGIN_SYNC));
-        assert!(clear.ends_with(END_SYNC));
+        assert!(!clear.starts_with(BEGIN_SYNC));
         assert!(contains(&clear, b"a=d,d=I,i=5373952,q=2"));
         assert!(contains(&clear, b"a=d,d=I,i=5373953,q=2"));
         assert!(painter.transmitted_is_empty());
