@@ -503,12 +503,7 @@ pub struct TurnWaitView {
 
 impl TurnWaitView {
     pub fn load(store: &Store) -> Result<Self, crate::store::StoreErr> {
-        // An unreadable record leaves no root, as snapshot assembly does.
-        let project_root = crate::workspace::record::read_optional(&store.paths().workspace_record)
-            .ok()
-            .flatten()
-            .map(|record| record.project_root);
-        let waits = crate::harness::schedule::pending::SessionWaits::load(project_root.as_deref());
+        let waits = crate::harness::schedule::pending::SessionWaits::load(store.paths());
         let messages = store.list_messages()?;
         let mut snapshot = store.snapshot_cached()?;
         waits.attach(&mut snapshot);
