@@ -32,8 +32,8 @@ pub(crate) fn rendezvous(env: &str) {
 pub fn pixel_layer_config_json() -> String {
     serde_json::json!({
         "protocol": crate::web::TTYD_PIXEL_PROTOCOL,
-        "placeholder": u32::from(crate::sidebar_pane::pixel::PLACEHOLDER),
-        "diacritics": crate::sidebar_pane::pixel::ROW_COLUMN_DIACRITICS
+        "placeholder": u32::from(crate::pixel_wire::PLACEHOLDER),
+        "diacritics": crate::pixel_wire::ROW_COLUMN_DIACRITICS
             .iter()
             .map(char::to_string)
             .collect::<Vec<_>>(),

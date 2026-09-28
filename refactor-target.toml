@@ -10,6 +10,7 @@ layers = [
     "testkit",
     "update",
     "disk",
+    "pixel_wire",
 ],
     [
     "workspace",
@@ -70,6 +71,10 @@ path = "crates/rimz/src/address.rs"
 # `is_launch_row` reopened it by one: the peer-turn settle and its orphan
 # backstop share one current-row filter instead of spelling it twice.
 surface-budget = 35
+
+[[module]]
+path = "crates/rimz/src/pixel_wire.rs"
+surface-budget = 2
 
 [[module]]
 path = "crates/rimz/src/lsp"
@@ -2834,16 +2839,6 @@ reason = "One-caller message_id flag pinned by e3798c70c (pass 20a)."
 kind = "item"
 key = "sidebar_pane::pixel::probe::PixelRenderCaps"
 reason = "Parameter of pub pets::resolve_render_tier and part of pub detect_pixel_render_env's return, both called from the CLI binary; re-exported pub at sidebar_pane (pass 22a)."
-
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::pixel::PLACEHOLDER"
-reason = "web::ttyd::client and testkit serialize the placeholder encoding outside sidebar_pane; stays pub(crate) (pass 22a)."
-
-[[verdict]]
-kind = "item"
-key = "sidebar_pane::pixel::ROW_COLUMN_DIACRITICS"
-reason = "web::ttyd::client and testkit serialize the placeholder encoding outside sidebar_pane; stays pub(crate) (pass 22a)."
 
 [[verdict]]
 kind = "item"
