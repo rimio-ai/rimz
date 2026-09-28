@@ -4,6 +4,7 @@ Local contract for `crates/rimz/src/sidebar_pane/` — the pane-resident rendere
 
 ## The process
 
+- `web` never imports `sidebar_pane`: the kitty placeholder encoding both speak is the leaf `pixel_wire` module, and the renderer's one read of `web` is `web::pixel_ttyd_pids`, the ttyd daemons serving the current pixel page.
 - [`app.rs`](./app.rs) owns the serve loop; [`app/loop_state.rs`](./app/loop_state.rs) owns the renderer's state transitions and the loop-lifetime context. [`render/`](./render/mod.rs) turns a `SidebarSnapshot` into cells, and [`supervise.rs`](./supervise.rs) owns convergence.
 - Snapshots arrive in process on the fetch worker in [`app/fetch.rs`](./app/fetch.rs), which reads through [`sidebar::consumer`](../sidebar/consumer.rs). `rimz sidebar snapshot` is the inspection and scripting delegate over the same library, never this process's data path.
 - Rendering reads the snapshot clock. `cargo xtask invariants` rejects `Timestamp::now()` in non-test render code, which is what keeps a frame reproducible from its snapshot alone.

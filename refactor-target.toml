@@ -42,11 +42,11 @@ layers = [
     "room",
     "remote_control",
     "sandbox",
+    "web",
 ],
     [
     "sidebar",
     "sidebar_pane",
-    "web",
     "reload",
     "uninstall",
     "daemon_content",
@@ -525,6 +525,7 @@ surface-budget = 5
 
 [[module]]
 path = "crates/rimz/src/web"
+# Layer 5 keeps web below sidebar_pane: pixel_wire owns their shared encoding.
 surface-budget = 48
 
 [[module]]

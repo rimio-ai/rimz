@@ -4,6 +4,7 @@ Local contract for `crates/rimz/` — the CLI binary, hook entrypoints, and the 
 
 ## Crate-wide seams
 
+- `web` never imports `sidebar_pane`: the kitty placeholder encoding both speak is the leaf `pixel_wire` module, and the renderer's one read of `web` is `web::pixel_ttyd_pids`, the ttyd daemons serving the current pixel page.
 - Command handlers (`src/cli/`) parse, call domain modules, and present; domain logic lives in the domain module, never in a handler.
 - Domain modules stay free of Zellij, tmux, and agent-specific dependencies — backend knowledge enters through `mux/`, agent knowledge through `agents/`.
 - Run-wake matching uses `(workspace_id, run_id)` — never PID alone.
