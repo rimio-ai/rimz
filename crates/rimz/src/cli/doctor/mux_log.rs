@@ -12,7 +12,6 @@ use rimz::mux::{tmux, zellij};
 use super::model;
 
 const RECORD_TEXT_LIMIT: usize = 8 * 1024;
-const SAMPLE_CAP: usize = 1;
 const WINDOW_BYTES: u64 = 256 * 1024;
 /// Issue groups to keep from the tail. Routine lifecycle groups share one
 /// rendered line, so the budget buys real findings rather than repetition.
@@ -191,22 +190,7 @@ fn severity_label(severity: LogSeverity) -> &'static str {
     }
 }
 
-fn scan_tail(
-    path: &Path,
-    window: LogWindow,
-    parse_line: impl Fn(&str) -> RecordLine,
-    diagnose: impl Fn(
-        Option<&LogicalRecord>,
-        &LogicalRecord,
-        Option<&LogicalRecord>,
-    ) -> Option<LogDiagnosis>,
-    log_text: LogText,
-) -> io::Result<LogScan> {
-    let LogWindow {
-        bytes: window_bytes,
-        issue_cap: cap,
-        since,
-    } = window;
+fn read_tail(path: &Path, window_bytes: u64) -> io::Result<(u64, u64, Vec<u8>)> {
     let mut file = File::open(path)?;
     let size_bytes = file.metadata()?.len();
     let start = size_bytes.saturating_sub(window_bytes);
@@ -231,28 +215,40 @@ fn scan_tail(
         }
     }
 
-    let scanned_bytes = size_bytes.saturating_sub(start);
+    Ok((size_bytes, size_bytes.saturating_sub(start), buf))
+}
+
+fn scan_tail(
+    path: &Path,
+    window: LogWindow,
+    parse_line: impl Fn(&str) -> RecordLine,
+    diagnose: impl Fn(
+        Option<&LogicalRecord>,
+        &LogicalRecord,
+        Option<&LogicalRecord>,
+    ) -> Option<LogDiagnosis>,
+    log_text: LogText,
+) -> io::Result<LogScan> {
+    let LogWindow {
+        bytes: window_bytes,
+        issue_cap: cap,
+        since,
+    } = window;
+    let (size_bytes, scanned_bytes, buf) = read_tail(path, window_bytes)?;
     let text = String::from_utf8_lossy(&buf);
     let mut records = Vec::new();
-    let mut current: Option<RecordBuilder> = None;
     for raw_line in text.lines() {
         let line = raw_line.trim_end_matches('\r');
         match parse_line(line) {
             RecordLine::Start(start) => {
-                if let Some(record) = current.take() {
-                    records.push(record.finish());
-                }
-                current = Some(RecordBuilder::new(start, line));
+                records.push(LogicalRecord::new(start, line));
             }
             RecordLine::Continuation => {
-                if let Some(record) = current.as_mut() {
+                if let Some(record) = records.last_mut() {
                     record.push(line);
                 }
             }
         }
-    }
-    if let Some(record) = current {
-        records.push(record.finish());
     }
 
     let logical_records = records.len();
@@ -267,8 +263,7 @@ fn scan_tail(
     });
     let records_before_cutoff = logical_records - records.len();
     let mut problem_records = 0usize;
-    let mut groups = Vec::<(String, usize, model::MuxLogIssue)>::new();
-    let mut by_key = HashMap::<String, usize>::new();
+    let mut groups = HashMap::<String, (usize, model::MuxLogIssue)>::new();
     for (record_index, record) in records.iter().enumerate() {
         let Some(diagnosis) = diagnose(
             record_index
@@ -287,59 +282,43 @@ fn scan_tail(
             "{:?}:{:?}:{:?}:{}",
             severity, diagnosis.state, diagnosis.impact, diagnosis.key
         );
-        if let Some(group_index) = by_key.get(&group_key).copied() {
-            groups[group_index].1 = record_index;
-            let issue = &mut groups[group_index].2;
-            issue.occurrences = issue.occurrences.saturating_add(1);
-            if issue.first_occurrence.is_none() {
-                issue.first_occurrence = record.start.at;
-            }
-            if record.start.at.is_some() {
-                issue.last_occurrence = record.start.at;
-            }
-            if log_text == LogText::Include {
-                issue.evidence_truncated |= record.truncated;
-                let sample = diagnosis.sample.unwrap_or_else(|| record.text.clone());
-                if issue.samples.len() < SAMPLE_CAP && !issue.samples.contains(&sample) {
-                    issue.samples.push(sample);
-                }
-            }
-            continue;
-        }
-        let group_index = groups.len();
-        by_key.insert(group_key.clone(), group_index);
-        groups.push((
-            group_key,
-            record_index,
-            model::MuxLogIssue {
-                source_severity: severity_label(severity).to_owned(),
-                state: diagnosis.state,
-                impact: diagnosis.impact,
-                summary: diagnosis.summary.resolve(log_text),
-                occurrences: 1,
-                first_occurrence: record.start.at,
-                last_occurrence: record.start.at,
-                samples: if log_text == LogText::Include {
-                    vec![diagnosis.sample.unwrap_or_else(|| record.text.clone())]
-                } else {
-                    Vec::new()
+        let (last_index, issue) = groups.entry(group_key).or_insert_with(|| {
+            (
+                record_index,
+                model::MuxLogIssue {
+                    source_severity: severity_label(severity).to_owned(),
+                    state: diagnosis.state,
+                    impact: diagnosis.impact,
+                    summary: diagnosis.summary.resolve(log_text),
+                    occurrences: 0,
+                    first_occurrence: None,
+                    last_occurrence: None,
+                    samples: if log_text == LogText::Include {
+                        vec![diagnosis.sample.unwrap_or_else(|| record.text.clone())]
+                    } else {
+                        Vec::new()
+                    },
+                    evidence_truncated: false,
                 },
-                evidence_truncated: log_text == LogText::Include && record.truncated,
-            },
-        ));
+            )
+        });
+        issue.occurrences = issue.occurrences.saturating_add(1);
+        issue.first_occurrence = issue.first_occurrence.or(record.start.at);
+        issue.last_occurrence = record.start.at.or(issue.last_occurrence);
+        *last_index = record_index;
+        if log_text == LogText::Include {
+            issue.evidence_truncated |= record.truncated;
+        }
     }
 
-    groups.sort_by_key(|(_, last_index, _)| *last_index);
+    let mut groups: Vec<_> = groups.into_values().collect();
+    groups.sort_by_key(|(last_index, _)| *last_index);
     let omitted_issue_groups = groups.len().saturating_sub(cap);
-    let issues = if cap == 0 {
-        Vec::new()
-    } else {
-        groups
-            .into_iter()
-            .skip(omitted_issue_groups)
-            .map(|(_, _, issue)| issue)
-            .collect()
-    };
+    let issues = groups
+        .into_iter()
+        .skip(omitted_issue_groups)
+        .map(|(_, issue)| issue)
+        .collect();
     Ok(LogScan {
         size_bytes,
         scanned_bytes,
@@ -351,21 +330,15 @@ fn scan_tail(
     })
 }
 
-struct RecordBuilder {
-    start: LogRecordStart,
-    text: String,
-    truncated: bool,
-}
-
-impl RecordBuilder {
+impl LogicalRecord {
     fn new(start: LogRecordStart, line: &str) -> Self {
-        let mut builder = Self {
+        let mut record = Self {
             start,
             text: String::new(),
             truncated: false,
         };
-        builder.push(line);
-        builder
+        record.push(line);
+        record
     }
 
     fn push(&mut self, line: &str) {
@@ -392,14 +365,6 @@ impl RecordBuilder {
             .unwrap_or(0);
         self.text.push_str(&value[..boundary]);
         self.truncated = true;
-    }
-
-    fn finish(self) -> LogicalRecord {
-        LogicalRecord {
-            start: self.start,
-            text: self.text,
-            truncated: self.truncated,
-        }
     }
 }
 
