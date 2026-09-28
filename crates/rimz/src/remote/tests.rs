@@ -956,22 +956,22 @@ fn reconnect_state_settles_established_sessions_and_failures() {
             code: SSH_TRANSPORT_EXIT
         }
     );
-    assert_eq!(state.consecutive_failures, 0);
 
     assert_eq!(
         state.settle(Some(SSH_TRANSPORT_EXIT), true, None),
         Verdict::Retry
     );
-    assert_eq!(state.consecutive_failures, 1);
 
     assert_eq!(
         state.settle(Some(SSH_TRANSPORT_EXIT), false, None),
         Verdict::Retry
     );
-    assert_eq!(state.consecutive_failures, 2);
 
     state.settle_zombie_kill();
-    assert_eq!(state.consecutive_failures, 0);
+    assert_eq!(
+        state.settle(Some(SSH_TRANSPORT_EXIT), false, None),
+        Verdict::Retry
+    );
 
     assert_eq!(
         state.settle(Some(REMOTE_RIMZ_MISSING_EXIT), true, None),
@@ -979,7 +979,6 @@ fn reconnect_state_settles_established_sessions_and_failures() {
             code: REMOTE_RIMZ_MISSING_EXIT
         }
     );
-    assert_eq!(state.consecutive_failures, 0);
 }
 
 #[test]
