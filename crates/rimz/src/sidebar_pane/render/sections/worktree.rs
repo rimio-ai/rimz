@@ -276,7 +276,13 @@ fn pipeline_line(
         vec![Span::styled(ellipsize(&pipeline.stage, budget), name_style)]
     };
     if let Some(team) = team.filter(|_| draws_track || !has_track) {
-        let badge = format!("{team}{}", value_seam(theme));
+        // The track's glyphs already set the stage apart; a trackless stage needs the seam.
+        let seam = if draws_track {
+            " ".to_owned()
+        } else {
+            value_seam(theme)
+        };
+        let badge = format!("{team}{seam}");
         if spans_width(&body) + text_width(&badge) <= budget {
             left.push(Span::styled(
                 badge,

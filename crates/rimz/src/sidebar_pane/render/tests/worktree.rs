@@ -166,10 +166,10 @@ fn pipeline_completion_styles_and_width_admission() {
                     .any(|span| span.content == theme.glyph(GlyphRole::PipelineDone))
             );
         }
-        let team = line.spans.iter().find(|span| span.content == "forge · ");
+        let team = line.spans.iter().find(|span| span.content == "forge ");
         assert!(
             team.is_some(),
-            "the team badge must lead with its value seam"
+            "the team badge leads the track without a value seam"
         );
         let team = team.unwrap();
         assert_eq!(
@@ -181,9 +181,9 @@ fn pipeline_completion_styles_and_width_admission() {
     pipeline.stage = "Implement".to_owned();
     pipeline.stage_started_at = Some(fixed_now() - Duration::from_secs(7));
     for (width, expected) in [
-        (39, "● ● ◉ Implement ○ ○"),
-        (40, "forge · ● ● ◉ Implement ○ ○"),
-        (41, "forge · ● ● ◉ Implement ○ ○"),
+        (37, "● ● ◉ Implement ○ ○"),
+        (38, "forge ● ● ◉ Implement ○ ○"),
+        (39, "forge ● ● ◉ Implement ○ ○"),
         (31, "Implement"),
         (32, "● ● ◉ Implement ○ ○"),
         (33, "● ● ◉ Implement ○ ○"),
@@ -202,7 +202,7 @@ fn pipeline_completion_styles_and_width_admission() {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert!(text.contains(expected), "{width}: {text}");
-        assert_eq!(text.contains("forge"), width >= 40, "{width}: {text}");
+        assert_eq!(text.contains("forge"), width >= 38, "{width}: {text}");
         assert_eq!(text.contains('◉'), width >= 32, "{width}: {text}");
         assert_eq!(text.ends_with("7s / 47m🮇"), width >= 15, "{width}: {text}");
     }
@@ -309,7 +309,7 @@ fn pipeline_clocks_are_independent_and_pinned_right() {
             .iter()
             .map(|s| s.content.as_ref())
             .collect::<String>();
-        assert!(text.starts_with("▎  forge · "), "{text}");
+        assert!(text.starts_with("▎  forge ● "), "{text}");
         if expected.is_empty() {
             assert!(!text.contains('/'));
             continue;
