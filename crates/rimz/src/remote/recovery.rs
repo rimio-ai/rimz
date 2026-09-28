@@ -32,6 +32,7 @@ impl InternetProbe {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StageStatus {
+    Active,
     Waiting,
     Checking,
     Ok,
@@ -91,8 +92,6 @@ pub struct RecoveryFrame {
     pub host: String,
     pub outage_for: Duration,
     pub attempt: u32,
-    pub phase: FooterPhase,
-    pub last_error: Option<String>,
     pub attaching: bool,
     pub rows: Vec<StageFrame>,
 }
@@ -102,6 +101,49 @@ struct Checkpoint {
     endpoint_label: String,
     result: Option<StageStatus>,
     tun: Option<String>,
+}
+
+impl Checkpoint {
+    fn frame(
+        &self,
+        stage: RecoveryStage,
+        label: &str,
+        attaching: bool,
+        suspect: bool,
+    ) -> StageFrame {
+        let mut status = if attaching {
+            StageStatus::Ok
+        } else {
+            self.result.unwrap_or(StageStatus::Checking)
+        };
+        let mut detail = self.tun.as_ref().map_or_else(
+            || self.endpoint_label.clone(),
+            |tun| {
+                format!(
+                    "{} · via TUN {tun} · TCP check skipped",
+                    self.endpoint_label
+                )
+            },
+        );
+        if !attaching && suspect && status == StageStatus::Ok {
+            status = StageStatus::Suspect;
+            if let Some(tun) = &self.tun {
+                detail = format!("{} · via TUN {tun} · SSH failing", self.endpoint_label);
+            } else {
+                detail.push_str(" · answers TCP · SSH failing");
+            }
+        }
+        StageFrame {
+            stage,
+            status,
+            label: label.to_owned(),
+            detail,
+        }
+    }
+}
+
+fn countdown_seconds(duration: Duration) -> u64 {
+    duration.as_secs() + u64::from(duration.subsec_nanos() > 0)
 }
 
 /// Checkpoint state for one transport outage.
@@ -116,7 +158,6 @@ pub struct RecoveryPanel {
     shown_at: Option<Duration>,
     internet: Option<Checkpoint>,
     server: Option<Checkpoint>,
-    session: StageStatus,
     master_ready: bool,
     attempt: u32,
     last_error: Option<String>,
@@ -165,7 +206,6 @@ impl RecoveryPanel {
                 tun: None,
             }),
             server: server.map(checkpoint),
-            session: StageStatus::Waiting,
             master_ready: false,
             attempt: 0,
             last_error: None,
@@ -177,7 +217,6 @@ impl RecoveryPanel {
         self.grace_this_wait = !self.wait_started;
         self.wait_started = true;
         self.shown_at = None;
-        self.session = StageStatus::Waiting;
         self.master_ready = false;
     }
 
@@ -205,22 +244,12 @@ impl RecoveryPanel {
         }
     }
 
-    pub fn session_starting(&mut self) {
-        self.session = StageStatus::Checking;
-    }
-
     pub fn note_master_ready(&mut self) {
         self.master_ready = true;
-        self.session = StageStatus::Ok;
     }
 
     pub fn note_ssh_error(&mut self, error: Option<String>) {
         self.master_ready = false;
-        self.session = if error.is_some() {
-            StageStatus::Down
-        } else {
-            StageStatus::Waiting
-        };
         self.last_error = error;
     }
 
@@ -249,60 +278,31 @@ impl RecoveryPanel {
     pub fn frame(&self, outage_for: Duration, phase: FooterPhase) -> RecoveryFrame {
         let mut rows = Vec::with_capacity(4);
         if let Some(checkpoint) = &self.internet {
-            rows.push(StageFrame {
-                stage: RecoveryStage::Internet,
-                status: checkpoint.result.unwrap_or(StageStatus::Checking),
-                label: "Internet".to_owned(),
-                detail: checkpoint.endpoint_label.clone(),
-            });
+            let mut row = checkpoint.frame(
+                RecoveryStage::Internet,
+                "Internet",
+                self.master_ready,
+                false,
+            );
+            if !self.master_ready && phase == FooterPhase::WaitingForNetwork {
+                row.status = StageStatus::Active;
+                row.detail.push_str(" · waiting for network");
+            }
+            rows.push(row);
         }
         if let Some(checkpoint) = &self.server {
-            let mut status = checkpoint.result.unwrap_or(StageStatus::Checking);
-            let mut detail = checkpoint.tun.as_ref().map_or_else(
-                || checkpoint.endpoint_label.clone(),
-                |tun| {
-                    format!(
-                        "{} · via TUN {tun} · TCP check skipped",
-                        checkpoint.endpoint_label
-                    )
-                },
-            );
-            if status == StageStatus::Ok && self.attempt >= 2 {
-                status = StageStatus::Suspect;
-                if let Some(tun) = &checkpoint.tun {
-                    detail = format!(
-                        "{} · via TUN {tun} · SSH failing",
-                        checkpoint.endpoint_label
-                    );
-                } else {
-                    detail.push_str(" · answers TCP · SSH failing");
-                }
-            }
-            rows.push(StageFrame {
-                stage: RecoveryStage::Server,
-                status,
-                label: "Server".to_owned(),
-                detail,
-            });
+            rows.push(checkpoint.frame(
+                RecoveryStage::Server,
+                "Server",
+                self.master_ready,
+                self.attempt >= 2,
+            ));
         }
-        rows.push(StageFrame {
-            stage: RecoveryStage::Session,
-            status: self.session,
-            label: "SSH session".to_owned(),
-            detail: match self.session {
-                StageStatus::Checking => "starting…".to_owned(),
-                StageStatus::Down => self
-                    .last_error
-                    .clone()
-                    .unwrap_or_else(|| "failed".to_owned()),
-                StageStatus::Ok => "connected".to_owned(),
-                _ => "waiting".to_owned(),
-            },
-        });
+        rows.push(self.session_frame(phase));
         rows.push(StageFrame {
             stage: RecoveryStage::Multiplexer,
             status: if self.master_ready {
-                StageStatus::Checking
+                StageStatus::Active
             } else {
                 StageStatus::Waiting
             },
@@ -318,10 +318,44 @@ impl RecoveryPanel {
             host: self.host.clone(),
             outage_for,
             attempt: self.attempt,
-            phase,
-            last_error: self.last_error.clone(),
             attaching: self.master_ready,
             rows,
+        }
+    }
+
+    fn session_frame(&self, phase: FooterPhase) -> StageFrame {
+        let (status, detail) = if self.master_ready {
+            (StageStatus::Ok, "connected".to_owned())
+        } else {
+            let detail = match phase {
+                FooterPhase::Connecting => match self.connect_stage {
+                    ConnectStage::Initial => "connecting…".to_owned(),
+                    ConnectStage::Recovery => "reconnecting…".to_owned(),
+                },
+                FooterPhase::NextAttemptIn(remaining) => {
+                    let retry = format!("retry in {}s", countdown_seconds(remaining));
+                    match &self.last_error {
+                        Some(error) => format!("{error} · {retry}"),
+                        None => retry,
+                    }
+                }
+                FooterPhase::WaitingForNetwork if self.internet.is_none() => {
+                    "waiting for network".to_owned()
+                }
+                FooterPhase::WaitingForNetwork => "waiting".to_owned(),
+            };
+            let status = if phase == FooterPhase::WaitingForNetwork && self.internet.is_some() {
+                StageStatus::Waiting
+            } else {
+                StageStatus::Active
+            };
+            (status, detail)
+        };
+        StageFrame {
+            stage: RecoveryStage::Session,
+            status,
+            label: "SSH session".to_owned(),
+            detail,
         }
     }
 }
@@ -594,28 +628,20 @@ mod tests {
         assert_eq!(frame.outage_for, Duration::from_secs(133));
         assert_eq!(frame.attempt, 7);
         assert_eq!(
-            frame.phase,
-            FooterPhase::NextAttemptIn(Duration::from_secs(12))
-        );
-        assert_eq!(
-            frame.last_error.as_deref(),
-            Some("Permission denied (publickey).")
+            row(&frame, RecoveryStage::Session).detail,
+            "Permission denied (publickey). · retry in 12s"
         );
         assert_eq!(
             row(&frame, RecoveryStage::Session).status,
-            StageStatus::Down
+            StageStatus::Active
         );
 
-        panel.session_starting();
         let connecting = panel.frame(Duration::from_secs(133), FooterPhase::Connecting);
         assert_eq!(
             row(&connecting, RecoveryStage::Session).status,
-            StageStatus::Checking
+            StageStatus::Active
         );
-        assert_eq!(
-            connecting.last_error.as_deref(),
-            Some("Permission denied (publickey).")
-        );
+        assert_eq!(panel.last_error(), Some("Permission denied (publickey)."));
     }
 
     #[test]
@@ -643,7 +669,7 @@ mod tests {
         assert_eq!(row(&frame, RecoveryStage::Session).detail, "connected");
         assert_eq!(
             row(&frame, RecoveryStage::Multiplexer).status,
-            StageStatus::Checking
+            StageStatus::Active
         );
         assert_eq!(row(&frame, RecoveryStage::Multiplexer).detail, "attaching…");
     }
@@ -694,7 +720,7 @@ mod tests {
         assert!(!frame.attaching);
         assert_eq!(
             row(&frame, RecoveryStage::Session).status,
-            StageStatus::Down
+            StageStatus::Active
         );
         assert_eq!(
             row(&frame, RecoveryStage::Multiplexer).status,

@@ -268,7 +268,7 @@ pub(super) fn supervise_remote(
         .as_ref()
         .and_then(|_| dial_interval_from_env());
     let mut session_link = SessionLinkState::new(supervisor.policy.gatetime, zombie_interval);
-    loop {
+    'sessions: loop {
         let (events_tx, events_rx) = mpsc::channel();
         let confirmed_master = supervisor.master.is_some();
         let probe = if confirmed_master {
@@ -286,18 +286,15 @@ pub(super) fn supervise_remote(
                 port_sync.clone(),
             )
         };
-        let replacement = !first_attempt;
         let attempt = if first_attempt {
             supervisor.plan.initial()
         } else {
+            guard.settle_terminal_replies();
             supervisor.plan.retry()
         }
         .with_mark(supervisor.held_screen.is_some() && !rimz::tui::no_color());
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
-        if replacement {
-            guard.settle_terminal_replies();
-        }
         let outcome = run_ssh_session(
             &spec,
             host,
@@ -334,27 +331,33 @@ pub(super) fn supervise_remote(
         if outcome.established {
             supervisor.outage = None;
         }
-        let retry_cause = if outcome.killed_zombie {
-            handoff.release();
-            guard.reset_emulator();
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
-            );
-            reconnect.settle_zombie_kill();
-            LinkLoss::Zombie
-        } else {
+        let retry_cause = 'settle: {
+            if outcome.killed_zombie {
+                handoff.release();
+                guard.reset_emulator();
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
+                );
+                reconnect.settle_zombie_kill();
+                break 'settle LinkLoss::Zombie;
+            }
             match reconnect.settle(outcome.status.code(), outcome.established, attach_evidence) {
                 Verdict::CleanExit => {
                     handoff.release();
                     guard.reset_emulator();
-                    if outcome.status.code() == Some(rimz::remote::REMOTE_SESSION_LOST_EXIT) {
-                        let _ = writeln!(
-                            std::io::stderr().lock(),
-                            "rimz: remote room on {host} ended"
-                        );
-                    } else if outcome.stderr.is_some() {
-                        let _ = writeln!(std::io::stderr().lock(), "rimz: detached from {host}");
+                    match (outcome.status.code(), outcome.stderr.as_ref()) {
+                        (Some(rimz::remote::REMOTE_SESSION_LOST_EXIT), _) => {
+                            let _ = writeln!(
+                                std::io::stderr().lock(),
+                                "rimz: remote room on {host} ended"
+                            );
+                        }
+                        (_, Some(_)) => {
+                            let _ =
+                                writeln!(std::io::stderr().lock(), "rimz: detached from {host}");
+                        }
+                        _ => {}
                     }
                     return Ok(());
                 }
@@ -389,7 +392,7 @@ pub(super) fn supervise_remote(
                         std::io::stderr().lock(),
                         "rimz: remote session on {host} disconnected{detail} — reattaching",
                     );
-                    continue;
+                    continue 'sessions;
                 }
             }
         };
@@ -722,47 +725,36 @@ fn wait_for_master(
 
         if master.is_idle() && (initial_attempt_due || reachability.attempt_due(now)) {
             initial_attempt_due = false;
-            if let Err(err) = prepare_control_path(control_path) {
-                note_master_failure(
+            let attempt = prepare_control_path(control_path)
+                .map_err(|err| format!("preparing SSH control socket: {err}"))
+                .and_then(|()| {
+                    outage.begin_attempt();
+                    reachability.begin_attempt(now);
+                    MasterAttempt::spawn(
+                        plan.master(control_path, policy.master_connect_timeout),
+                        control_path.to_path_buf(),
+                    )
+                    .map_err(|err| format!("starting SSH: {err}"))
+                });
+            match attempt {
+                Ok(attempt) => master = MasterState::connecting(attempt, now),
+                Err(summary) => note_master_failure(
                     outage,
                     ui,
                     &mut reachability,
                     now,
-                    Some(format!("preparing SSH control socket: {err}")),
+                    Some(summary),
                     &mut last_reported_error,
-                );
-            } else {
-                outage.begin_attempt();
-                outage.panel.session_starting();
-                reachability.begin_attempt(now);
-                match MasterAttempt::spawn(
-                    plan.master(control_path, policy.master_connect_timeout),
-                    control_path.to_path_buf(),
-                ) {
-                    Ok(attempt) => master = MasterState::connecting(attempt, now),
-                    Err(err) => {
-                        note_master_failure(
-                            outage,
-                            ui,
-                            &mut reachability,
-                            now,
-                            Some(format!("starting SSH: {err}")),
-                            &mut last_reported_error,
-                        );
-                    }
-                }
+                ),
             }
         }
 
         let wait_elapsed = started.elapsed();
-        let outage_elapsed = outage.elapsed();
-        if ui.tick(
-            &mut outage.panel,
-            wait_elapsed,
-            outage_elapsed,
+        let frame = outage.panel.frame(
+            outage.elapsed(),
             reachability.footer(now, master.in_flight()),
-        )? == UiEvent::Interrupted
-        {
+        );
+        if ui.tick(&mut outage.panel, wait_elapsed, &frame)? == UiEvent::Interrupted {
             drop(std::mem::take(&mut master));
             let last_error = outage.panel.last_error().map(str::to_owned);
             ui.release()?;

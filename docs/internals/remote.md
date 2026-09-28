@@ -16,7 +16,7 @@ The second split is pure versus process. [`crates/rimz/src/remote/`](../../crate
 | [`remote/aliases.rs`](../../crates/rimz/src/remote/aliases.rs) | Saved aliases in `remote.toml`: schema, validation, and atomic CRUD. |
 | [`remote/link.rs`](../../crates/rimz/src/remote/link.rs) | The `rimz.link.v1` probe protocol, `ProbeWindow` and `LinkMonitor` accounting, the `SessionLinkState` machine, health-tier classification and badge heat, the control-socket path, and the `-O check` and probe-stream argv. |
 | [`remote/reachability.rs`](../../crates/rimz/src/remote/reachability.rs) | `ssh -G` endpoint discovery, TUN-interface classification, and the `AttemptPacer`. |
-| [`remote/recovery.rs`](../../crates/rimz/src/remote/recovery.rs) | `RecoveryPanel` checkpoint state and stage enums, panel timing, and the internet checkpoint endpoint. |
+| [`remote/recovery.rs`](../../crates/rimz/src/remote/recovery.rs) | `RecoveryPanel` checkpoint state, final panel rows and stage enums, panel timing, and the internet checkpoint endpoint. |
 | [`remote/forward.rs`](../../crates/rimz/src/remote/forward.rs) | Listener parsing from procfs, the `PortSync` diff state, and the forward and cancel argv. |
 | [`remote/web.rs`](../../crates/rimz/src/remote/web.rs) | Web prep, tunnel, and control-forward argv; local relay port selection. |
 | [`remote/setup.rs`](../../crates/rimz/src/remote/setup.rs) | The `rimz remote setup` installer snippet. |
@@ -183,6 +183,8 @@ The hidden master pins `ControlPersist=no`, `ConnectionAttempts=1`, and `ClearAl
 A batch-mode master cannot answer a password, two-factor, or host-key prompt. On the initial connection, a master child that exits with stderr that `transport_failure` does not recognize releases the panel for exactly one foreground interactive attach; a master that times out never does. A failure in that attach is fatal, so RimZ never loops a password prompt. Recovery stays batch-only and retries until Ctrl-C. The fallback inherits stderr so authentication prompts, banners, and host-key warnings remain usable.
 
 ### The handoff
+
+`RecoveryPanel::frame` derives each row's final status and detail for the current phase. `Active` selects the spinner (or the frozen handoff arrow), `Waiting` is dimmed, and `Checking` is an undimmed unknown checkpoint. On master confirmation every non-handoff row becomes `Ok`, with the server's non-suspect detail; the handoff row becomes `Active`. The CLI maps these statuses to glyphs and colors without reinterpreting stages or parsing detail text.
 
 The handoff keeps the alternate screen and click and wheel mouse reporting alive from panel to multiplexer. When the master is confirmed, the panel turns its checkpoints green and animates the yellow Multiplexer `attaching…` row for the rest of the minimum display. The final frame freezes that row with an arrow, parks the cursor on its symbol cell, and releases raw input without leaving the alternate screen or dropping mouse capture. The attached multiplexer paints directly over that frame, and residual scroll momentum stays a mouse event instead of becoming an arrow key.
 

@@ -10,10 +10,7 @@ use ratatui::crossterm::style::{
     Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor,
 };
 use ratatui::crossterm::terminal::{self, Clear, ClearType};
-use rimz::remote::reachability::FooterPhase;
-use rimz::remote::recovery::{
-    ConnectStage, RecoveryFrame, RecoveryPanel, RecoveryStage, StageStatus,
-};
+use rimz::remote::recovery::{ConnectStage, RecoveryFrame, RecoveryPanel, StageStatus};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::cli::spinner::{SPINNER_FRAMES, SPINNER_TICK, animation_allowed, format_elapsed};
@@ -149,8 +146,7 @@ impl OutageUi {
         &mut self,
         recovery: &mut RecoveryPanel,
         wait_elapsed: Duration,
-        outage_for: Duration,
-        phase: FooterPhase,
+        frame: &RecoveryFrame,
     ) -> io::Result<UiEvent> {
         if matches!(self.state, UiState::PlainLines) || !recovery.visible(wait_elapsed) {
             return Ok(UiEvent::Continue);
@@ -171,7 +167,7 @@ impl OutageUi {
         let UiState::Panel(panel) = &mut self.state else {
             return Ok(UiEvent::Continue);
         };
-        panel.draw(&recovery.frame(outage_for, phase))?;
+        panel.draw(frame)?;
         panel.poll_interrupt()
     }
 
@@ -310,7 +306,7 @@ impl OutagePanel {
     }
 
     fn handoff(mut self, frame: &RecoveryFrame) -> io::Result<TerminalModeGuard> {
-        let rows = attaching_rows(frame, '→');
+        let rows = frame_rows(frame, '→');
         self.draw_rows(&rows)?;
         if let Some(layout) = self.last_layout {
             let row_offset = u16::try_from(rows.len().saturating_sub(1)).unwrap_or(u16::MAX);
@@ -386,46 +382,46 @@ fn failure_rows(headline: &str, details: &[String], captured_logs: &[String]) ->
 }
 
 fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
-    let spinner = SPINNER_FRAMES[frame_index % SPINNER_FRAMES.len()];
-    if frame.attaching {
-        return attaching_rows(frame, spinner);
-    }
-    let spinner_stage = match frame.phase {
-        FooterPhase::WaitingForNetwork
-            if frame
-                .rows
-                .iter()
-                .any(|row| row.stage == RecoveryStage::Internet) =>
-        {
-            RecoveryStage::Internet
-        }
-        FooterPhase::WaitingForNetwork
-        | FooterPhase::Connecting
-        | FooterPhase::NextAttemptIn(_) => RecoveryStage::Session,
+    frame_rows(frame, SPINNER_FRAMES[frame_index % SPINNER_FRAMES.len()])
+}
+
+fn frame_rows(frame: &RecoveryFrame, active: char) -> Vec<DisplayRow> {
+    let (headline, color, context) = if frame.attaching {
+        (
+            format!("⚡ Connected to {}", frame.host),
+            Color::Green,
+            "opening session… · this can take a few seconds".to_owned(),
+        )
+    } else {
+        let (headline, context) = match frame.connect_stage {
+            ConnectStage::Initial => (
+                format!("⚡ Connecting to {}", frame.host),
+                format!(
+                    "attempt {} · {} · Ctrl-C stops",
+                    frame.attempt,
+                    format_elapsed(frame.outage_for).replace('m', "m ")
+                ),
+            ),
+            ConnectStage::Recovery => (
+                format!("⚡ Connection to {} lost", frame.host),
+                format!(
+                    "down {} · attempt {} · Ctrl-C stops",
+                    format_elapsed(frame.outage_for).replace('m', "m "),
+                    frame.attempt
+                ),
+            ),
+        };
+        (headline, Color::Yellow, context)
     };
     let mut rows = Vec::with_capacity(frame.rows.len() + 3);
     rows.push(DisplayRow {
-        text: match frame.connect_stage {
-            ConnectStage::Initial => format!("⚡ Connecting to {}", frame.host),
-            ConnectStage::Recovery => format!("⚡ Connection to {} lost", frame.host),
-        },
-        color: Color::Yellow,
+        text: headline,
+        color,
         bold: true,
         dim: false,
     });
     rows.push(DisplayRow {
-        text: match frame.connect_stage {
-            ConnectStage::Initial => format!(
-                "attempt {} · {} · Ctrl-C stops",
-                frame.attempt,
-                format_elapsed(frame.outage_for).replace('m', "m ")
-            ),
-            ConnectStage::Recovery => format!(
-                "down {} · attempt {} · Ctrl-C stops",
-                format_elapsed(frame.outage_for).replace('m', "m "),
-                frame.attempt
-            ),
-        },
+        text: context,
         color: Color::DarkGrey,
         bold: false,
         dim: true,
@@ -437,112 +433,22 @@ fn display_rows(frame: &RecoveryFrame, frame_index: usize) -> Vec<DisplayRow> {
         dim: false,
     });
     rows.extend(frame.rows.iter().map(|row| {
-        let spinner_target = row.stage == spinner_stage;
-        let waiting_stage = row.stage == RecoveryStage::Multiplexer
-            || (frame.phase == FooterPhase::WaitingForNetwork
-                && row.stage == RecoveryStage::Session
-                && !spinner_target);
-        let (symbol, color) = if spinner_target {
-            (spinner, Color::Yellow)
-        } else if waiting_stage {
-            ('○', Color::DarkGrey)
-        } else {
-            match row.status {
-                StageStatus::Waiting | StageStatus::Checking => ('○', Color::DarkGrey),
-                StageStatus::Ok => ('✓', Color::Green),
-                StageStatus::Down => ('✗', Color::Red),
-                StageStatus::Suspect => ('!', Color::Yellow),
-            }
-        };
-        let detail = match (row.stage, frame.phase) {
-            (RecoveryStage::Internet, FooterPhase::WaitingForNetwork) => {
-                format!("{} · waiting for network", row.detail)
-            }
-            (RecoveryStage::Session, FooterPhase::Connecting) => match frame.connect_stage {
-                ConnectStage::Initial => "connecting…".to_owned(),
-                ConnectStage::Recovery => "reconnecting…".to_owned(),
-            },
-            (RecoveryStage::Session, FooterPhase::NextAttemptIn(remaining)) => {
-                let retry = format!("retry in {}s", countdown_seconds(remaining));
-                match &frame.last_error {
-                    Some(error) => format!("{error} · {retry}"),
-                    None => retry,
-                }
-            }
-            (RecoveryStage::Session, FooterPhase::WaitingForNetwork) if spinner_target => {
-                "waiting for network".to_owned()
-            }
-            (RecoveryStage::Session, FooterPhase::WaitingForNetwork) => "waiting".to_owned(),
-            _ => row.detail.clone(),
+        let (symbol, color, dim) = match row.status {
+            StageStatus::Active => (active, Color::Yellow, false),
+            StageStatus::Waiting => ('○', Color::DarkGrey, true),
+            StageStatus::Checking => ('○', Color::DarkGrey, false),
+            StageStatus::Ok => ('✓', Color::Green, false),
+            StageStatus::Down => ('✗', Color::Red, false),
+            StageStatus::Suspect => ('!', Color::Yellow, false),
         };
         DisplayRow {
-            text: format!("{symbol}  {:<12} {detail}", row.label),
+            text: format!("{symbol}  {:<12} {}", row.label, row.detail),
             color,
             bold: false,
-            dim: waiting_stage,
+            dim,
         }
     }));
     rows
-}
-
-fn attaching_rows(frame: &RecoveryFrame, symbol: char) -> Vec<DisplayRow> {
-    let mut rows = Vec::with_capacity(frame.rows.len() + 3);
-    rows.push(DisplayRow {
-        text: format!("⚡ Connected to {}", frame.host),
-        color: Color::Green,
-        bold: true,
-        dim: false,
-    });
-    rows.push(DisplayRow {
-        text: "opening session… · this can take a few seconds".to_owned(),
-        color: Color::DarkGrey,
-        bold: false,
-        dim: true,
-    });
-    rows.push(DisplayRow {
-        text: String::new(),
-        color: Color::Reset,
-        bold: false,
-        dim: false,
-    });
-    rows.extend(frame.rows.iter().map(|row| {
-        let attaching = row.stage == RecoveryStage::Multiplexer;
-        DisplayRow {
-            text: format!(
-                "{}  {:<12} {}",
-                if attaching { symbol } else { '✓' },
-                row.label,
-                if attaching {
-                    row.detail.clone()
-                } else {
-                    success_detail(row)
-                }
-            ),
-            color: if attaching {
-                Color::Yellow
-            } else {
-                Color::Green
-            },
-            bold: false,
-            dim: false,
-        }
-    }));
-    rows
-}
-
-fn success_detail(row: &rimz::remote::recovery::StageFrame) -> String {
-    if row.stage == RecoveryStage::Session {
-        return "connected".to_owned();
-    }
-    if row.stage == RecoveryStage::Server {
-        if let Some(endpoint) = row.detail.strip_suffix(" · answers TCP · SSH failing") {
-            return endpoint.to_owned();
-        }
-        if let Some(route) = row.detail.strip_suffix(" · SSH failing") {
-            return format!("{route} · TCP check skipped");
-        }
-    }
-    row.detail.clone()
 }
 
 pub(super) struct HandoffScreen {
@@ -620,10 +526,6 @@ fn panel_layout(width: u16, height: u16, rows: &[DisplayRow]) -> PanelLayout {
         first_y: height.saturating_sub(u16::try_from(rows.len()).unwrap_or(u16::MAX)) / 2,
         row_count: rows.len(),
     }
-}
-
-fn countdown_seconds(duration: Duration) -> u64 {
-    duration.as_secs() + u64::from(duration.subsec_nanos() > 0)
 }
 
 fn truncate_width(text: &str, width: usize) -> String {
