@@ -8,27 +8,23 @@ Pass 29c records `cli/doctor` on `66bc4cffe` (rebased base `c42d760e8`): cx 33.0
 
 Pass 29b records source tip `eba365a6b` (base `221c53578`, rebased onto trunk `b426db4f4`): newly terminal non-peer spend settlement belongs to `harness/run`, and hooks share the exact rollup agent lookup in `store/snapshot`. Base to gated tree cx: `handle_lifecycle_hook` 13.6 to 12.7, `record_conversation` 13.7 to 10.6, and `cli/hooks` 32.2 to 28.2. Production SLOC falls by 44 against the 40-line minimum. The two item verdicts retain ordered phases and origin policy, refining pass 28g: repeated projections, root-tool eligibility, origin back-projection and response finalization were not inherent. The hook's cognitive complexity rises from 28 to 29 despite the local deletions. Binary modules receive no ledger row; the `harness/run` row names this branch's parent and needs re-stamping at merge.
 
-Pass 28f deepens room preparation, sandbox launch preflight and posture-owned exec requests on `fc67defc9`, rebased onto trunk `b25f9f9bf`. The contract measures production SLOC at −125 against its −100 ceiling. Against the merge base, `launch_layout` cx falls from 30.4 to 27.9 and `prepare_room` from 22.3 to 16.3. Both retain item verdicts for ordered preconditions, alongside the unchanged child-supervision and lane-resume decisions. Binary modules receive no ledger row.
+Round 28 (passes 28a to 28g) landed. Against the round base `27c50ce2d`, current module cx is `mux/zellij` 53.5 to 30.3, `store/snapshot` 34.2 to 24.3, `harness/schedule` 35.5 to 29.1, `cli/hooks` 58.0 to 32.2, and `cli/room` 22.3 to 16.3. Pass 28b shares the pixel wire; passes 28c to 28f deepen Zellij balancing, snapshot folding, schedule gates, and launch preflight. Pass 28g moves lifecycle reaction into `harness/team_stage`, whose cx is 12.5 against the planned ceiling of 5; its per-event order remains held by an item verdict. Binary modules receive no ledger row.
 
-Pass 28e records source tip `e269c4ec2` (base `b93ab174a`): the loop check gate has one terminal write, watch deadlines have two variants, and delivery add parses its signal selector once. Schedule production complexity remains in `run_command`, `team_lifecycle_signals` and `build_entry`, held by item verdicts rather than helper extraction.
+Round 29 is in flight: 29a resolves rewritten ledger SHAs and repairs the round-28 records; 29b reviews `cli/hooks` deferrals and lifecycle cx; 29c reviews `cli/doctor`; 29d reviews `cli/remote`; 29e reviews sidebar.
 
-Pass 28d reviewed `store/snapshot` complexity on `c34ca45c2` (base `1eaa698e9`): lifecycle effects fold onto the carried row; the local-bind cascade and the lifecycle fold's residual cx are inherent pinned rules. Pass 29b's shared lookup does not re-review or re-stamp that module. Pass 28g's `harness/team_stage` cx remains 12.5 versus 0.5 at the round base (`27c50ce2d`), missing the planned ceiling of 5, with `react_to_lifecycle` (cx 12.0) under an item verdict for its pinned per-event order.
-
-Pass 28c holds `mux/zellij` on the branch commit its row names (the merge re-stamps it): cx 53.5 to 22.3 against the round base `27c50ce2d`, with the companion balancer folded and no item verdicts added.
-
-Survey on the pass 28b tree (`9cc23c547`, 2026-09-28): no ledger problems or open families; one stale pass-28a shape verdict (`PendingWrite::optional+report_files+settings_json::commit_pair+settings_json::read_optional_bytes+settings_json::render_json`). The three pass-28b rows name the branch parent and need re-stamping if rebased. Rewrite this section whenever a pass ends.
+Survey on the pass 29a tree (`e60366be9` with the 11 SHA cells repaired, 2026-09-28): 4548 scoped commits (pace window 1137), 24 admission intents and 234 holds; no parse failures, ledger problems, pending restamps, stale verdict keys or open families. It suppresses 14 families; shape filters drop 9 standard-vocabulary families, 32 below the finding gate and 7 single-module APIs; guard filters drop 149 standard idioms and 19 predicate uses. Rewrite this section whenever a pass ends.
 
 - **Seam queue: empty.** Twelve seams landed in passes 1 to 28b. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
-- **Reopened** (churn past the row's count): none; pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`, pass 26b `sidebar_pane/app` and `sidebar_pane/render/sections`.
-- **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
-- **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
-- **Row SHAs:** the survey reports a row whose SHA `HEAD` does not reach as a ledger problem and leaves its module unheld; pass 28a re-stamped 29 rebased-away SHAs, passes 14 to 27, to their trunk commits. A PR that writes rows names them so the merge re-stamps them to the landed commit; pass 28g's `harness/team_stage` row, pass 28d's `store/snapshot` row and pass 28e's `harness/schedule` row carry branch SHAs, and pass 28f's `harness/plan`, `harness/resume`, `harness/launch`, `room` and `sandbox` rows carry `fc67defc9`.
-- **Unjudged families:** none; pass 28a judged the `RunStatus::Completed` and `wait_for_required` guards; pass 28f reaffirms its `Isolation::Host` and `degraded` verdicts and removes the stale copilot/cursor shape key, whose family is no longer detected.
+- **Reopened** (churn past the row's count): none; all 11 repaired modules are held.
+- **Never reviewed:** no production library module is unheld; binary modules and test-only rows carry no hold.
+- **Unreviewed admissions:** none; no unadmitted upward sites.
+- **Row SHAs:** the survey resolves an unreachable SHA to the oldest trunk commit that changed its occurrence count in this ledger; `survey --restamp` writes the resolved cells. An unresolved SHA remains a ledger problem and leaves its module unheld. Pass 29a repairs 11 rows from passes 28b to 28f to their landed record commits.
+- **Unjudged families:** none; no stale verdict keys.
 
 ## Module verdicts
 
-One row per module at the granularity `survey` ranks. `holds` carries the reviewed SHA (the record commit's parent) and the scoped-commit count that reopens it; `survey` flags the module `held` until the count is reached, then `reopen`. A landed module pass writes `holds; landed pass-N`; a bare `landed` marks a module whose edges a seam pass reviewed. A module reviewed under a parent's pass gets its own row at the parent's SHA.
+One row per module at the granularity `survey` ranks. `holds` carries the reviewed SHA (the record commit's parent as written, or the commit that wrote the row once restamped) and the scoped-commit count that reopens it; `survey` flags the module `held` until the count is reached, then `reopen`. A landed module pass writes `holds; landed pass-N`; a bare `landed` marks a module whose edges a seam pass reviewed. A module reviewed under a parent's pass gets its own row at the parent's SHA.
 
 | module | status | sha | reopen at | note |
 | --- | --- | --- | --- | --- |
@@ -130,10 +126,10 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `diag` | holds; landed pass-16 | `b90a229cb` | 30 | evidence vocabulary and append mechanics at L3 below store; one sink admission point. |
 | `disk` | holds; landed pass-27d | `7742c8a3e` | 30 | durability classes, filenames and lock identity hold; the class partition lives only in `Class::STATE`/`RUNTIME`. |
 | `harness` | landed pass-5; pass-7; pass-8; pass-14; pass-20a; pass-23b; pass-25 | — | — | policy reaching down; never reaches `sidebar`: usage refresh returns, its CLI entry publishes. |
-| `harness/schedule` | holds; landed pass-14; pass-23b; pass-28e | `e269c4ec2` | 30 | one arming rule and one check gate with `run_command`, `team_lifecycle_signals` and `build_entry` inherent by verdict. |
-| `harness/resume` | holds | `fc67defc9` | 30 | distinct lane outcomes preserve lazy restore-config loading. |
-| `harness/plan` | holds; landed pass-28f | `fc67defc9` | 30 | posture owns exec-request construction for every relaunch doorway. |
-| `harness/launch` | holds | `fc67defc9` | 30 | fresh requests and the private pane-identity key table keep the exec wire unchanged. |
+| `harness/schedule` | holds; landed pass-14; pass-23b; pass-28e | `38acd72cb` | 30 | one arming rule and one check gate with `run_command`, `team_lifecycle_signals` and `build_entry` inherent by verdict. |
+| `harness/resume` | holds | `f4084e548` | 30 | distinct lane outcomes preserve lazy restore-config loading. |
+| `harness/plan` | holds; landed pass-28f | `f4084e548` | 30 | posture owns exec-request construction for every relaunch doorway. |
+| `harness/launch` | holds | `f4084e548` | 30 | fresh requests and the private pane-identity key table keep the exec wire unchanged. |
 | `harness/spec` | holds; landed pass-20a | `4d7889261` | 30 | layout parse family stays `pub`. |
 | `harness/budget` | holds; landed pass-20a | `4d7889261` | 30 | evaluation private; ledger types are signature types. |
 | `harness/run` | holds; landed pass-29b | `eba365a6b` | 30 | newly terminal non-peer spend and owed-wake assembly stay behind lifecycle settlement; spend recording is private. |
@@ -169,7 +165,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `mux` | holds; landed pass-18c | `9ba3585b9` | 30 | planner verdicts private; `SplitPaneOptions::from_command` owns the pane-command projection. |
 | `mux/(root)` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
 | `mux/tmux` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
-| `mux/zellij` | holds; landed pass-28c | `5d321ca88` | 30 | companion balancer folded into step selection and a boundary walk, one output-error constructor; native convergence stays adapter-side; topology schema is the public wire. Reopened by user decision as a complexity round over the pass-10 hold; `sidebar.rs` width convergence and `reap.rs` not reviewed. |
+| `mux/zellij` | holds; landed pass-28c | `dbf48a52d` | 30 | companion balancer folded into step selection and a boundary walk, one output-error constructor; native convergence stays adapter-side; topology schema is the public wire. Reopened by user decision as a complexity round over the pass-10 hold; `sidebar.rs` width convergence and `reap.rs` not reviewed. |
 | `mux/capabilities` | holds; landed pass-24c | `e083557ba` | 30 | only `drops_desktop_osc` public. |
 | `mux/width` | holds; landed pass-24c | `e083557ba` | 30 | width types named by integration and `cli`. |
 | `mux/focus_key` | holds; landed pass-24c | `e083557ba` | 30 | floored by `MuxBackend::register_room_key`. |
@@ -190,8 +186,8 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `reload` | holds; landed pass-23c | `1830bd0c6` | 30 | one durable staged-build path. |
 | `remote` | holds; landed pass-21a | `e204ceebd` | 30 | pure transitions here, drivers in `cli/remote`. |
 | `remote_control` | holds; landed pass-15c | `944c8120e` | 30 | one enable preflight; typed snapshot and batch toggle. |
-| `room` | holds; landed pass-28f | `fc67defc9` | 30 | owns live-tab admission and managed birth with source-specific ownership. |
-| `sandbox` | holds; landed pass-28f | `fc67defc9` | 30 | launch preflight admits skills before probing isolation. |
+| `room` | holds; landed pass-28f | `f4084e548` | 30 | owns live-tab admission and managed birth with source-specific ownership. |
+| `sandbox` | holds; landed pass-28f | `f4084e548` | 30 | launch preflight admits skills before probing isolation. |
 | `sidebar` | landed pass-4 | — | — | election, fusion, refresh lanes, own cadences; interiors have rows. |
 | `sidebar/(root)` | holds; landed pass-23c | `1830bd0c6` | 30 | one data plane; `pub` items are binary, bench or integration reached, or signature floors. |
 | `sidebar/refresh` | holds; landed pass-25 | `4a82d6b28` | 30 | one refresh entry, one rate-limit transaction; one `pub` account-cache publish entry. |
@@ -214,7 +210,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar/workspace_projection` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar_pane/app` | holds; landed pass-26b | `be91f3434` | 30 | loop clock mechanics consume one render animation answer. |
 | `sidebar_pane/pets` | holds; landed pass-22a | `1b6ece679` | 30 | preview types `pub` for the CLI. |
-| `sidebar_pane/pixel` | holds; landed pass-22a; pass-28b | `9cc23c547` | 30 | placeholder encoding lives in the leaf `pixel_wire`. |
+| `sidebar_pane/pixel` | holds; landed pass-22a; pass-28b | `83b184ffb` | 30 | placeholder encoding lives in the leaf `pixel_wire`. |
 | `sidebar_pane/supervise` | holds; landed pass-22a | `1b6ece679` | 30 | worker entry points `pub` for the CLI. |
 | `sidebar_pane/render/chrome` | holds; landed pass-22a | `1b6ece679` | 30 | bottom-chrome builders are `compose`'s vocabulary. |
 | `sidebar_pane/render/labels` | holds; landed pass-22a | `1b6ece679` | 30 | glyph and meter vocabulary at render reach. |
@@ -234,7 +230,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar_pane/render/ansi` | holds; landed pass-24c | `e083557ba` | 30 | the one ANSI writer. |
 | `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b; pass-21b; pass-27b | — | — | owns every record it persists, imports nothing above it. |
 | `store/(root)` | holds; landed pass-24c | `e083557ba` | 30 | `snapshot` `pub` for the integration crate. |
-| `store/snapshot` | holds; landed pass-28d | `c34ca45c2` | 30 | view model crate-wide because the renderer decodes it; local-bind cascade and lifecycle fold inherent. |
+| `store/snapshot` | holds; landed pass-28d | `b93ab174a` | 30 | view model crate-wide because the renderer decodes it; local-bind cascade and lifecycle fold inherent. |
 | `store/writer` | holds; landed pass-27b | `52b2358b0` | 30 | one log boundary; one queue terminal step; one lifecycle staging path. |
 | `store/event` | holds; landed pass-21b | `5e6580fb0` | 30 | legacy `message.removed` parse holds. |
 | `store/message` | holds; landed pass-21b | `5e6580fb0` | 30 | status aliases hold for mixed-binary workspaces; header grammar and codec hold. |
@@ -253,8 +249,8 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `transcript` | holds; landed pass-24a | `2a9ec66e5` | 30 | `TranscriptLogErr` carried by the public signatures. |
 | `trust` | holds; landed pass-22b | `339310452` | 30 | `_with_roots` seams private except `grant_with_roots`. |
 | `wakeup` | holds; landed pass-24a | `2a9ec66e5` | 30 | the sidebar wire at L2 below `store`. |
-| `web` | holds; landed pass-28b | `9cc23c547` | 30 | `pixel_ttyd_pids` is the renderer's one read of current-page ttyd daemons. |
-| `pixel_wire` | holds; landed pass-28b | `9cc23c547` | 30 | leaf kitty placeholder encoding shared by native and browser renderers. |
+| `web` | holds; landed pass-28b | `83b184ffb` | 30 | `pixel_ttyd_pids` is the renderer's one read of current-page ttyd daemons. |
+| `pixel_wire` | holds; landed pass-28b | `83b184ffb` | 30 | leaf kitty placeholder encoding shared by native and browser renderers. |
 | `workspace` | holds; landed pass-22b | `339310452` | 30 | owns the room identity pin keys and `workspace.json`. |
 | `worktree` | holds; landed pass-8; pass-23b | `25faa1bf6` | 30 | landed proof at crate reach; request types named by `cli/worktree.rs`. |
 | `forge` | holds; landed pass-8; pass-24c | `e083557ba` | 30 | URL forwarders deleted; `PrLink` floored by `RefreshedLanes::pr_states`. |
