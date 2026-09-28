@@ -13,6 +13,7 @@ use super::super::modules::{
     resolve_reexport,
 };
 use super::super::references::{Edge, EdgeKind};
+use super::super::sources::SourceKind;
 use super::super::syntax::{FileSyntax, PubItem};
 use super::ModuleSelector;
 
@@ -235,7 +236,7 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
         .iter()
         .filter(|edge| edge.kind == EdgeKind::Reference && target.matches(&edge.to, &edge.to_path))
     {
-        if edge.test {
+        if edge.site_kind == SourceKind::Test {
             test_sites
                 .entry(edge_target(edge))
                 .or_default()
@@ -247,7 +248,7 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
                 });
             continue;
         }
-        if target.matches(&edge.from, &edge.from_path) {
+        if edge.site_kind != SourceKind::Production || target.matches(&edge.from, &edge.from_path) {
             continue;
         }
         let aggregate = outside.entry(edge_target(edge)).or_default();

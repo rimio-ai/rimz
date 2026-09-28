@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::super::references::{Edge, EdgeKind, FunctionId};
-use super::super::sources::Source;
+use super::super::sources::{Source, SourceKind};
 use super::super::syntax::FileSyntax;
 use super::ModuleSelector;
 
@@ -272,7 +272,7 @@ pub(super) fn callers_from_edges(
     let mut rows = BTreeMap::<String, Assembly>::new();
     for edge in edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
-            && !edge.test
+            && edge.site_kind == SourceKind::Production
             && target.matches(&edge.to, &edge.to_path)
             && !target.matches(&edge.from, &edge.from_path)
     }) {
@@ -369,7 +369,7 @@ pub(super) fn assembly_functions(
         BTreeMap::<FunctionId, BTreeMap<String, BTreeSet<(String, usize)>>>::new();
     for edge in edges
         .iter()
-        .filter(|edge| edge.kind == EdgeKind::Reference && !edge.test)
+        .filter(|edge| edge.kind == EdgeKind::Reference && edge.site_kind == SourceKind::Production)
     {
         let Some(function) = &edge.from_fn else {
             continue;
@@ -389,7 +389,7 @@ pub(super) fn assembly_functions(
     let mut by_function = BTreeMap::<FunctionId, (Vec<&Edge>, usize, BTreeSet<usize>)>::new();
     for edge in edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
-            && !edge.test
+            && edge.site_kind == SourceKind::Production
             && from.matches(&edge.from, &edge.from_path)
             && to.matches(&edge.to, &edge.to_path)
             && !is_type_alias_edge(edge, syntax_files)
@@ -573,7 +573,7 @@ pub(super) fn call_shapes(
     let mut functions = BTreeMap::<FunctionId, (String, Vec<&Edge>)>::new();
     for edge in edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
-            && !edge.test
+            && edge.site_kind == SourceKind::Production
             && target.matches(&edge.to, &edge.to_path)
             && !target.matches(&edge.from, &edge.from_path)
             && !is_type_alias_edge(edge, syntax_files)
@@ -638,7 +638,7 @@ pub(super) fn repeated_assembly(
     let mut raw_functions = BTreeMap::<FunctionId, (String, Vec<&Edge>)>::new();
     for edge in edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
-            && !edge.test
+            && edge.site_kind == SourceKind::Production
             && target.matches(&edge.to, &edge.to_path)
             && !target.matches(&edge.from, &edge.from_path)
             && !is_type_alias_edge(edge, syntax_files)

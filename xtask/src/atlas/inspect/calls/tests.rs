@@ -29,10 +29,30 @@ fn functions_rank_by_distinct_items_and_quote_the_heaviest() {
         .find(|function| function.name == "light")
         .unwrap();
     let mut edges = vec![
-        edge("a", "caller", Some(("heavy", heavy.line)), false),
-        edge("b", "caller", Some(("heavy", heavy.line)), false),
-        edge("a", "caller", Some(("heavy", heavy.line)), false),
-        edge("c", "caller", Some(("light", light.line)), false),
+        edge(
+            "a",
+            "caller",
+            Some(("heavy", heavy.line)),
+            SourceKind::Production,
+        ),
+        edge(
+            "b",
+            "caller",
+            Some(("heavy", heavy.line)),
+            SourceKind::Production,
+        ),
+        edge(
+            "a",
+            "caller",
+            Some(("heavy", heavy.line)),
+            SourceKind::Production,
+        ),
+        edge(
+            "c",
+            "caller",
+            Some(("light", light.line)),
+            SourceKind::Production,
+        ),
     ];
     edges[0].from_line = heavy.line + 10;
     edges[1].from_line = heavy.line + 40;
@@ -148,27 +168,42 @@ fn heaviest_quote_caps_site_windows_and_reports_omitted_sites() {
 fn call_shapes_group_functions_by_ordered_sequence_and_skip_single_items() {
     let mut edges = Vec::new();
     for (item, line) in [("A", 11), ("B", 12), ("B", 13), ("C", 14)] {
-        let mut edge = edge(item, "left", Some(("build", 10)), false);
+        let mut edge = edge(item, "left", Some(("build", 10)), SourceKind::Production);
         edge.from_line = line;
         edges.push(edge);
     }
     for (item, line) in [("A", 21), ("B", 22), ("C", 23)] {
-        let mut edge = edge(item, "right", Some(("assemble", 20)), false);
+        let mut edge = edge(
+            item,
+            "right",
+            Some(("assemble", 20)),
+            SourceKind::Production,
+        );
         edge.from_line = line;
         edges.push(edge);
     }
     for (item, line) in [("C", 41), ("A", 42)] {
-        let mut edge = edge(item, "left", Some(("other", 40)), false);
+        let mut edge = edge(item, "left", Some(("other", 40)), SourceKind::Production);
         edge.from_line = line;
         edges.push(edge);
     }
     for (item, line) in [("E", 61), ("D", 62), ("C", 63), ("B", 64), ("A", 65)] {
-        let mut edge = edge(item, "right", Some(("heavy", 60)), false);
+        let mut edge = edge(item, "right", Some(("heavy", 60)), SourceKind::Production);
         edge.from_line = line;
         edges.push(edge);
     }
-    edges.push(edge("A", "right", Some(("restore", 30)), false));
-    edges.push(edge("A", "store", Some(("inside", 50)), false));
+    edges.push(edge(
+        "A",
+        "right",
+        Some(("restore", 30)),
+        SourceKind::Production,
+    ));
+    edges.push(edge(
+        "A",
+        "store",
+        Some(("inside", 50)),
+        SourceKind::Production,
+    ));
 
     let rows = call_shapes(&edges, &selector("store"), &[]);
 
@@ -184,16 +219,19 @@ fn call_shapes_group_functions_by_ordered_sequence_and_skip_single_items() {
 fn inspect_groups_repeated_assembly_across_caller_modules() {
     let edges = ["A", "B", "C", "D"]
         .into_iter()
-        .map(|item| edge(item, "left", Some(("build", 10)), false))
-        .chain(
-            ["A", "B", "C", "D"]
-                .into_iter()
-                .map(|item| edge(item, "right", Some(("assemble", 20)), false)),
-        )
+        .map(|item| edge(item, "left", Some(("build", 10)), SourceKind::Production))
+        .chain(["A", "B", "C", "D"].into_iter().map(|item| {
+            edge(
+                item,
+                "right",
+                Some(("assemble", 20)),
+                SourceKind::Production,
+            )
+        }))
         .chain(
             ["A", "B", "C"]
                 .into_iter()
-                .map(|item| edge(item, "right", Some(("restore", 30)), false)),
+                .map(|item| edge(item, "right", Some(("restore", 30)), SourceKind::Production)),
         )
         .collect::<Vec<_>>();
 
@@ -243,7 +281,12 @@ fn builder_chain_folds_for_callers_heaviest_and_call_shapes() {
         .iter()
         .enumerate()
         .map(|(index, name)| {
-            let mut reference = edge(name, "caller", Some(("run_idle_compact", 1)), false);
+            let mut reference = edge(
+                name,
+                "caller",
+                Some(("run_idle_compact", 1)),
+                SourceKind::Production,
+            );
             reference.from_line = index + 2;
             reference.to_line = target_file
                 .pub_items
@@ -255,7 +298,12 @@ fn builder_chain_folds_for_callers_heaviest_and_call_shapes() {
         })
         .collect::<Vec<_>>();
     for (item, line) in [("queue", 1), ("deliver", 2), ("queue", 1)] {
-        let mut reference = edge(item, "caller", Some(("run_idle_compact", 1)), false);
+        let mut reference = edge(
+            item,
+            "caller",
+            Some(("run_idle_compact", 1)),
+            SourceKind::Production,
+        );
         reference.from_line = names.len() + line + 2;
         reference.to = "third::service".to_owned();
         reference.to_path = PathBuf::from("crates/demo/src/third/service.rs");
@@ -309,7 +357,12 @@ fn type_aliases_are_not_assembly_items() {
         .iter()
         .enumerate()
         .map(|(index, name)| {
-            let mut reference = edge(name, "caller", Some(("assemble", 1)), false);
+            let mut reference = edge(
+                name,
+                "caller",
+                Some(("assemble", 1)),
+                SourceKind::Production,
+            );
             reference.from_line = index + 2;
             reference.to_line = target_file
                 .pub_items

@@ -829,7 +829,7 @@ fn reference_edge(path: &str, item: &str, function_line: Option<usize>) -> Edge 
         to_line: 1,
         item: item.to_owned(),
         kind: EdgeKind::Reference,
-        test: false,
+        site_kind: SourceKind::Production,
         from_line: function_line.unwrap_or(1),
         from_fn: function_line.map(|line| FnRef {
             label: "run".to_owned(),
