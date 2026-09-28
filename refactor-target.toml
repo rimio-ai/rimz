@@ -335,7 +335,8 @@ path = "crates/rimz/src/harness"
 # The peer-run interface serves launch, hook enrollment, and terminal backstops.
 # Lifecycle hooks share the detached fleet-digest helper with the orphan sweep.
 # The team run's open, reopen and settle calls let `rimz teams flip` send TEAM_REPORT.
-surface-budget = 579
+# Posture-owned exec request construction shared by relaunch doorways (pass 28f).
+surface-budget = 580
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -739,7 +740,8 @@ allowed-dependencies = [
 ]
 # Typed explicit-vs-default permission mode and resumed-seed isolation cross into the CLI launcher.
 # Shared child isolation cap, outcome, clamp source, and refusal.
-surface-budget = 33
+# Posture-owned exec request construction shared by relaunch doorways (pass 28f).
+surface-budget = 34
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"

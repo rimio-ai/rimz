@@ -11,6 +11,49 @@ use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
 
 #[test]
+fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
+    use crate::harness::launch::{ExecAction, ExecRequest};
+
+    let posture = ResumeLaunchPosture {
+        args: vec!["--model".to_owned(), "opus".to_owned()],
+        system_prompt_file: Some("/prompts/system.md".into()),
+        append_system_prompt_files: vec!["/prompts/append.md".into()],
+        team_prompt: Some(crate::harness::team_prompt::TeamPrompt {
+            consensus: crate::harness::team_prompt::Consensus::BuiltIn,
+            files: vec!["/prompts/team.md".into()],
+        }),
+        skills: Some(vec!["merge".parse().unwrap()]),
+        isolation_default: Some(crate::config::Isolation::Sandbox),
+        mode: Some(PermissionMode::Auto),
+        model: Some("opus".to_owned()),
+        ..Default::default()
+    };
+    let kind = AgentKind::new_unchecked("claude");
+    let request = posture.exec_request(
+        kind.clone(),
+        ExecAction::Fork {
+            session_id: "session".to_owned(),
+            extra_args: vec!["discarded".to_owned()],
+        },
+    );
+    assert_eq!(
+        request,
+        ExecRequest {
+            action: ExecAction::Fork {
+                session_id: "session".to_owned(),
+                extra_args: posture.args.clone(),
+            },
+            system_prompt_file: posture.system_prompt_file.clone(),
+            append_system_prompt_files: posture.append_system_prompt_files.clone(),
+            team_prompt: posture.team_prompt.clone(),
+            skills: posture.skills.clone(),
+            isolation_default: posture.isolation_default,
+            ..ExecRequest::bare_launch(kind, Vec::new())
+        }
+    );
+}
+
+#[test]
 fn child_isolation_cap_respects_parent_and_request_source() {
     use crate::config::Isolation::{Host, Sandbox};
     for parent in [None, Some(Host), Some(Sandbox)] {

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::cli::supervised;
-use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest};
+use rimz::harness::launch::{ExecAction, ExecRequest};
 use rimz::harness::resume::{PostureRequest, ResumePosture};
 use rimz::store::run::RunRecord;
 
@@ -191,46 +191,17 @@ fn resume_request(
     child: &AgentState,
     run: &RunRecord,
     posture: &ResumePosture,
-    mut action: ExecAction,
+    action: ExecAction,
 ) -> ExecRequest {
-    *action.extra_args_mut() = posture.launch.args.clone();
+    let mut request = agents_cmd::relaunch_request(child, posture, action, None);
+    request.identity.name_explicit = true;
     let (close_pane_on_exit, exit_on_run_completion) = supervised::run_exit_policy(!run.keep);
     ExecRequest {
-        action,
         run_id: Some(run.run_id.clone()),
         subagent: true,
         close_pane_on_exit,
         exit_on_run_completion,
-        system_prompt_file: posture.launch.system_prompt_file.clone(),
-        append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
-        team_prompt: posture.launch.team_prompt.clone(),
-        skills: posture.launch.skills.clone(),
-        isolation_default: posture.launch.isolation_default,
-        identity: ExecIdentity {
-            name: child.name.clone(),
-            name_explicit: true,
-            launch_id: child.launch_id.as_ref().map(ToString::to_string),
-            params: rimz::agents::LaunchParams {
-                parent_agent_id: child.parent_agent_id.clone(),
-                parent_agent_kind: child.parent_agent_kind.clone(),
-                launch_depth: child.launch_depth,
-                launched_by: child.launched_by.clone().map(Box::new),
-                profile: child.profile.clone(),
-                login: child.login.clone(),
-                role: child.role.clone(),
-                team: child.team.clone(),
-                launch_group: child.launch_group.clone(),
-                launch_ordinal: child.launch_ordinal,
-                channel: child.channel.clone(),
-                mode: posture.launch.mode,
-                isolation: child.isolation,
-                model: posture.launch.model.clone(),
-                effort: posture.launch.effort.clone(),
-                budget: posture.launch.budget.clone(),
-                kind_ordinal: None,
-            },
-        },
-        ..ExecRequest::bare_launch(child.kind.clone(), Vec::new())
+        ..request
     }
 }
 

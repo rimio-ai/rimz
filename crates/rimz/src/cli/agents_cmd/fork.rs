@@ -102,18 +102,13 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     seed.launch.budget.clone_from(&posture.launch.budget);
     rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
-        &rimz::harness::launch::ExecRequest {
-            action: rimz::harness::launch::ExecAction::Fork {
+        &posture.launch.exec_request(
+            seed.kind.clone(),
+            rimz::harness::launch::ExecAction::Fork {
                 session_id: seed.source_session_id.to_string(),
-                extra_args: posture.launch.args.clone(),
+                extra_args: Vec::new(),
             },
-            system_prompt_file: posture.launch.system_prompt_file.clone(),
-            append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
-            team_prompt: posture.launch.team_prompt.clone(),
-            skills: posture.launch.skills.clone(),
-            isolation_default: posture.launch.isolation_default,
-            ..rimz::harness::launch::ExecRequest::bare_launch(seed.kind.clone(), Vec::new())
-        },
+        ),
         &seed.cwd,
         (isolation == rimz::config::Isolation::Host).then_some(store.runtime_paths()),
     )?;
@@ -152,15 +147,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         &rimz::proc::rimz_exe(),
         store.runtime_paths(),
         &rimz::harness::launch::ExecRequest {
-            action: rimz::harness::launch::ExecAction::Fork {
-                session_id: seed.source_session_id.to_string(),
-                extra_args: posture.launch.args,
-            },
-            system_prompt_file: posture.launch.system_prompt_file.clone(),
-            append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
-            team_prompt: posture.launch.team_prompt.clone(),
-            skills: posture.launch.skills.clone(),
-            isolation_default: posture.launch.isolation_default,
             close_pane_on_exit: placement != Placement::SamePane,
             identity: rimz::harness::launch::ExecIdentity {
                 name: Some(launch.name.clone()),
@@ -168,7 +154,13 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 launch_id: Some(launch.agent_id.to_string()),
                 params: launch.launch.clone(),
             },
-            ..rimz::harness::launch::ExecRequest::bare_launch(seed.kind.clone(), Vec::new())
+            ..posture.launch.exec_request(
+                seed.kind.clone(),
+                rimz::harness::launch::ExecAction::Fork {
+                    session_id: seed.source_session_id.to_string(),
+                    extra_args: Vec::new(),
+                },
+            )
         },
     )?;
     let panes = LayoutPanes {

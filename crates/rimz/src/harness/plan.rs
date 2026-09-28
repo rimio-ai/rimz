@@ -124,6 +124,26 @@ pub struct ResumeLaunchPosture {
     pub budget: Option<String>,
 }
 
+impl ResumeLaunchPosture {
+    /// Apply the posture's arguments and prompt/skill defaults to a launch action.
+    pub fn exec_request(
+        &self,
+        kind: crate::ids::AgentKind,
+        mut action: crate::harness::launch::ExecAction,
+    ) -> crate::harness::launch::ExecRequest {
+        *action.extra_args_mut() = self.args.clone();
+        crate::harness::launch::ExecRequest {
+            action,
+            system_prompt_file: self.system_prompt_file.clone(),
+            append_system_prompt_files: self.append_system_prompt_files.clone(),
+            team_prompt: self.team_prompt.clone(),
+            skills: self.skills.clone(),
+            isolation_default: self.isolation_default,
+            ..crate::harness::launch::ExecRequest::bare_launch(kind, Vec::new())
+        }
+    }
+}
+
 impl From<&AgentCell> for ResumeLaunchPosture {
     fn from(cell: &AgentCell) -> Self {
         Self {
@@ -1005,15 +1025,6 @@ pub(super) fn resume_command(
         rimz_bin,
         runtime,
         &crate::harness::launch::ExecRequest {
-            action: crate::harness::launch::ExecAction::Resume {
-                session_id: identity.session_id.to_string(),
-                extra_args: posture.args.clone(),
-            },
-            system_prompt_file: posture.system_prompt_file.clone(),
-            append_system_prompt_files: posture.append_system_prompt_files.clone(),
-            team_prompt: posture.team_prompt.clone(),
-            skills: posture.skills.clone(),
-            isolation_default: posture.isolation_default,
             close_pane_on_exit: true,
             identity: crate::harness::launch::ExecIdentity {
                 name: identity.name.clone(),
@@ -1027,7 +1038,13 @@ pub(super) fn resume_command(
                 ),
                 params,
             },
-            ..crate::harness::launch::ExecRequest::bare_launch(identity.kind.clone(), Vec::new())
+            ..posture.exec_request(
+                identity.kind.clone(),
+                crate::harness::launch::ExecAction::Resume {
+                    session_id: identity.session_id.to_string(),
+                    extra_args: Vec::new(),
+                },
+            )
         },
     );
     result.unwrap_or_else(|err| unreachable!("serializing canonical exec request: {err}"))
