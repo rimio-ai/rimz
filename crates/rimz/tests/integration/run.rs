@@ -810,6 +810,23 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
         },
     )
     .expect("write parent pane topology");
+    let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
+        workspace.workspace_id.clone(),
+        rimz::ids::SidebarInstanceId::new(),
+        MuxName::Zellij,
+        &workspace.session_name,
+        store.runtime_paths().sock_dir.join("sidebar.sock"),
+        None,
+    );
+    std::fs::create_dir_all(&store.runtime_paths().heartbeat_dir).expect("mkdir heartbeat");
+    std::fs::write(
+        store
+            .runtime_paths()
+            .heartbeat_dir
+            .join("sidebar.seeded.json"),
+        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
+    )
+    .expect("write parent room heartbeat");
     let presence = env.project_root.join("presence.wasm");
     std::fs::write(&presence, b"test-presence").expect("write presence fixture");
     let mut command = env.rimz();
@@ -826,7 +843,7 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
             std::ffi::OsStr::new(cwd)
         });
     }
-    let output = command
+    command
         .current_dir(&foreign)
         .envs(rimz::workspace::pin_env(&env.workspace_id, &env.project_root))
         .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
@@ -844,9 +861,17 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
             r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-        )
-        .bounded_output()
-        .expect("launch subagents from foreign cwd");
+        );
+    let launched = std::sync::atomic::AtomicBool::new(false);
+    let output = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            bind_child_panes(&store, &trace_path, &workspace.session_name, &launched);
+        });
+        let output = command.bounded_output();
+        launched.store(true, std::sync::atomic::Ordering::Relaxed);
+        output
+    })
+    .expect("launch subagents from foreign cwd");
     if cwd == Some("missing") {
         assert_eq!(output.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&output.stderr).contains("create it first"));
@@ -936,22 +961,10 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
             .iter()
             .find(|agent| agent.name == record.agent_name)
             .unwrap();
-        store
-            .bind_agent_launch(
-                &rimz::store::writer::AgentLaunchIdentity {
-                    kind: child.kind.clone(),
-                    agent_id: child.agent_id.clone(),
-                    name: child.name.clone().unwrap(),
-                    name_explicit: false,
-                    launch: LaunchParams::default(),
-                    run_id: Some(record.run_id.clone()),
-                    prompt: None,
-                },
-                &workspace.session_name,
-                &checkout,
-                &PaneId::from_parts(MuxName::Zellij, "terminal_3"),
-            )
-            .unwrap();
+        assert_eq!(
+            child.pane.as_ref().map(|pane| &pane.pane_id),
+            Some(&PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+        );
         let output = env.rimz()
             .args(["--mux", "zellij", "agents", "restart", &format!("@{}", child.name.as_deref().unwrap())])
             .envs(command.get_envs().filter_map(|(key, value)| value.map(|value| (key, value))))
@@ -972,6 +985,68 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
             reopened.contains(&format!("\t--cwd\t{}\t", checkout.display())),
             "{reopened}"
         );
+    }
+}
+
+/// The trace shim opens child panes that run nothing, so no child hook binds a
+/// launch and every child would sit out the whole subagent pane-bind wait.
+/// Stand in for each child's session-start hook: bind the launch once the trace
+/// shows its pane opening, the order a live pane produces.
+#[cfg(unix)]
+fn bind_child_panes(
+    store: &rimz::Store,
+    trace_path: &std::path::Path,
+    session_name: &str,
+    launched: &std::sync::atomic::AtomicBool,
+) {
+    let mut bound = Vec::new();
+    while !launched.load(std::sync::atomic::Ordering::Relaxed) {
+        let trace = std::fs::read_to_string(trace_path).unwrap_or_default();
+        let opened = trace
+            .lines()
+            .filter(|line| line.contains("\tnew-pane\t"))
+            .filter_map(|line| {
+                let args = line.split('\t').collect::<Vec<_>>();
+                let name = args.windows(2).find(|args| args[0] == "--name")?[1];
+                Some(name.to_owned())
+            })
+            .filter(|name| !bound.contains(name))
+            .collect::<Vec<_>>();
+        for name in opened {
+            let records = rimz::harness::run::list(store.paths()).expect("list child runs");
+            let Some(record) = records
+                .iter()
+                .find(|record| record.agent_name.as_deref() == Some(name.as_str()))
+            else {
+                continue;
+            };
+            let agents = store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .expect("child launch history")
+                .agents;
+            let child = agents
+                .iter()
+                .find(|agent| agent.name.as_deref() == Some(name.as_str()))
+                .expect("opened pane has a launch");
+            store
+                .bind_agent_launch(
+                    &rimz::store::writer::AgentLaunchIdentity {
+                        kind: child.kind.clone(),
+                        agent_id: child.agent_id.clone(),
+                        name: name.clone(),
+                        name_explicit: false,
+                        launch: LaunchParams::default(),
+                        run_id: Some(record.run_id.clone()),
+                        prompt: None,
+                    },
+                    session_name,
+                    &record.worktree_path,
+                    &PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", bound.len() + 3)),
+                )
+                .expect("bind child pane");
+            bound.push(name);
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
