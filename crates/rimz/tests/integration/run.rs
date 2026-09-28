@@ -1,5 +1,7 @@
 use crate::common::Env;
 #[cfg(unix)]
+use crate::common::room::{bind_child_panes, seed_live_zellij_room};
+#[cfg(unix)]
 use crate::common::{
     CommandTimeoutExt, path_with_front, write_failing_agent_shim, write_fake_login_shell,
 };
@@ -550,6 +552,11 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     )
     .expect("write heartbeat");
     let trace_path = env.project_root.join("fresh-supervised.log");
+    let _room = crate::common::room::ShimRoom::watch(
+        &env,
+        &trace_path,
+        r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+    );
     let presence = env.project_root.join("presence.wasm");
     std::fs::write(&presence, b"test-presence").expect("write presence fixture");
     let project_config = env.project_root.join(".rimz/config.toml");
@@ -794,39 +801,15 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
         ))
         .expect("seed parent checkout");
     let trace_path = env.project_root.join("subagent-checkout.log");
-    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
+    seed_live_zellij_room(
         store.runtime_paths(),
-        &rimz::mux::zellij::pane_topology::PaneTopologyCache {
-            session_name: workspace.session_name.clone(),
-            produced_at_ms: rimz::utils::time::unix_now_ms(),
-            writer: None,
-            focused_pane: None,
-            clients: None,
-            panes: serde_json::from_value(json!([
-                {"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},
-                {"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}
-            ]))
-            .expect("parent pane topology"),
-        },
-    )
-    .expect("write parent pane topology");
-    let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
-        workspace.workspace_id.clone(),
-        rimz::ids::SidebarInstanceId::new(),
-        MuxName::Zellij,
         &workspace.session_name,
-        store.runtime_paths().sock_dir.join("sidebar.sock"),
-        None,
+        serde_json::from_value(json!([
+            {"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},
+            {"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}
+        ]))
+        .expect("parent pane topology"),
     );
-    std::fs::create_dir_all(&store.runtime_paths().heartbeat_dir).expect("mkdir heartbeat");
-    std::fs::write(
-        store
-            .runtime_paths()
-            .heartbeat_dir
-            .join("sidebar.seeded.json"),
-        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
-    )
-    .expect("write parent room heartbeat");
     let presence = env.project_root.join("presence.wasm");
     std::fs::write(&presence, b"test-presence").expect("write presence fixture");
     let mut command = env.rimz();
@@ -985,68 +968,6 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
             reopened.contains(&format!("\t--cwd\t{}\t", checkout.display())),
             "{reopened}"
         );
-    }
-}
-
-/// The trace shim opens child panes that run nothing, so no child hook binds a
-/// launch and every child would sit out the whole subagent pane-bind wait.
-/// Stand in for each child's session-start hook: bind the launch once the trace
-/// shows its pane opening, the order a live pane produces.
-#[cfg(unix)]
-fn bind_child_panes(
-    store: &rimz::Store,
-    trace_path: &std::path::Path,
-    session_name: &str,
-    launched: &std::sync::atomic::AtomicBool,
-) {
-    let mut bound = Vec::new();
-    while !launched.load(std::sync::atomic::Ordering::Relaxed) {
-        let trace = std::fs::read_to_string(trace_path).unwrap_or_default();
-        let opened = trace
-            .lines()
-            .filter(|line| line.contains("\tnew-pane\t"))
-            .filter_map(|line| {
-                let args = line.split('\t').collect::<Vec<_>>();
-                let name = args.windows(2).find(|args| args[0] == "--name")?[1];
-                Some(name.to_owned())
-            })
-            .filter(|name| !bound.contains(name))
-            .collect::<Vec<_>>();
-        for name in opened {
-            let records = rimz::harness::run::list(store.paths()).expect("list child runs");
-            let Some(record) = records
-                .iter()
-                .find(|record| record.agent_name.as_deref() == Some(name.as_str()))
-            else {
-                continue;
-            };
-            let agents = store
-                .runtime_projection(rimz::RuntimeScope::Audit)
-                .expect("child launch history")
-                .agents;
-            let child = agents
-                .iter()
-                .find(|agent| agent.name.as_deref() == Some(name.as_str()))
-                .expect("opened pane has a launch");
-            store
-                .bind_agent_launch(
-                    &rimz::store::writer::AgentLaunchIdentity {
-                        kind: child.kind.clone(),
-                        agent_id: child.agent_id.clone(),
-                        name: name.clone(),
-                        name_explicit: false,
-                        launch: LaunchParams::default(),
-                        run_id: Some(record.run_id.clone()),
-                        prompt: None,
-                    },
-                    session_name,
-                    &record.worktree_path,
-                    &PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", bound.len() + 3)),
-                )
-                .expect("bind child pane");
-            bound.push(name);
-        }
-        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -2259,7 +2180,7 @@ fn spawn_retrying_print(
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
-    seed_live_zellij_room(env, &workspace.session_name);
+    seed_live_zellij_room(&env.runtime_paths(), &workspace.session_name, Vec::new());
     let mut command = env.rimz();
     command
         .args([
@@ -2293,39 +2214,6 @@ fn spawn_retrying_print(
     command.spawn().expect("spawn retrying print")
 }
 
-/// The trace shim lists the room as live but runs no presence plugin, so a
-/// launch that finds no fresh topology or sidebar heartbeat spends the whole
-/// Zellij health-probe budget inspecting it. Seed both, as a live room has.
-#[cfg(unix)]
-fn seed_live_zellij_room(env: &Env, session_name: &str) {
-    let runtime = env.runtime_paths();
-    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
-        &runtime,
-        &rimz::mux::zellij::pane_topology::PaneTopologyCache {
-            session_name: session_name.to_owned(),
-            produced_at_ms: rimz::utils::time::unix_now_ms(),
-            writer: None,
-            focused_pane: None,
-            clients: None,
-            panes: Vec::new(),
-        },
-    )
-    .expect("write pane topology");
-    let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
-        env.workspace_id.clone(),
-        rimz::ids::SidebarInstanceId::new(),
-        MuxName::Zellij,
-        session_name,
-        runtime.sock_dir.join("sidebar.sock"),
-        None,
-    );
-    std::fs::write(
-        runtime.heartbeat_dir.join("sidebar.seeded.json"),
-        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
-    )
-    .expect("write heartbeat");
-}
-
 #[cfg(unix)]
 fn spawn_verifying_print(
     env: &Env,
@@ -2341,7 +2229,7 @@ fn spawn_verifying_print(
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
-    seed_live_zellij_room(env, &workspace.session_name);
+    seed_live_zellij_room(&env.runtime_paths(), &workspace.session_name, Vec::new());
     let mut command = env.rimz();
     command
         .args([

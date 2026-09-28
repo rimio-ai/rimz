@@ -77,22 +77,15 @@ fn child_cap_launch(explicit_host: bool) {
             },
         ))
         .unwrap();
-    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
+    crate::common::room::seed_live_zellij_room(
         store.runtime_paths(),
-        &rimz::mux::zellij::pane_topology::PaneTopologyCache {
-            session_name: workspace.session_name.clone(),
-            produced_at_ms: rimz::utils::time::unix_now_ms(),
-            writer: None,
-            focused_pane: None,
-            clients: None,
-            panes: serde_json::from_value(serde_json::json!([
-                {"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},
-                {"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}
-            ]))
-            .unwrap(),
-        },
-    )
-    .unwrap();
+        &workspace.session_name,
+        serde_json::from_value(serde_json::json!([
+            {"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},
+            {"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}
+        ]))
+        .unwrap(),
+    );
     let shim = crate::common::write_failing_agent_shim(&env, "claude", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let presence = env.project_root.join("presence.wasm");
@@ -104,7 +97,7 @@ fn child_cap_launch(explicit_host: bool) {
     } else {
         command.args(["--cwd", "/tmp/clean"]);
     }
-    let output = command
+    command
         .env("RIMZ_ISOLATION", "sandbox")
         .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
         .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
@@ -113,8 +106,23 @@ fn child_cap_launch(explicit_host: bool) {
         .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("mux.log"))
         .env("RIMZ_PRESENCE_PLUGIN", presence).env("ZELLIJ_PANE_ID", "2")
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#)
-        .bounded_output().unwrap();
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#);
+    let launched = std::sync::atomic::AtomicBool::new(false);
+    let trace = env.project_root.join("mux.log");
+    let output = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            crate::common::room::bind_child_panes(
+                &store,
+                &trace,
+                &workspace.session_name,
+                &launched,
+            );
+        });
+        let output = command.bounded_output();
+        launched.store(true, std::sync::atomic::Ordering::Relaxed);
+        output
+    })
+    .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     if explicit_host {
         assert!(!output.status.success(), "{stderr}");

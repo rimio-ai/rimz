@@ -87,11 +87,9 @@ fn profile_sink() -> &'static str {
 
 /// Wall-time bound for any bounded child command, a mux control call or a full
 /// room workflow alike: it turns a wedged child into a named failure long
-/// before nextest's slow-timeout. It is one budget because a test cannot tell
-/// the two apart without reading production code, and room workflows carry
-/// designed fixed waits the fixtures never satisfy (the sidebar heartbeat wait
-/// on every room birth, the pane-bind wait per subagent child) that add up to
-/// about 9s before any load.
+/// before nextest's slow-timeout. The shim fixtures publish the records a live
+/// room's writers would, so no designed wait eats into it; the headroom is for
+/// loaded hosts.
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_STEP: Duration = Duration::from_millis(10);
 const TIMEOUT_OUTPUT_CONTEXT_BYTES: usize = 8 * 1024;

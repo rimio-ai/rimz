@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::workspace::WorkspaceResolver;
 
+use crate::common::room::ShimRoom;
 use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
 
 const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
@@ -458,6 +459,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let birth_workspace = WorkspaceResolver::resolve(&birth.project_root, None).expect("resolve");
     let birth_heartbeat = seed_sidebar_heartbeat(&birth, &birth_workspace.session_name, "birth");
     let birth_trace = birth.project_root.join("zellij-birth.log");
+    let _birth_room = ShimRoom::watch(&birth, &birth_trace, MATERIALIZED_ROOM_PANES);
     let mut birth_command = birth.rimz();
     configure_actionable_hooks(&mut birth_command, &birth, &birth_bin, &birth_trace, "");
     let birth_output = birth_command
@@ -505,6 +507,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let live_heartbeat = seed_sidebar_heartbeat(&live, &workspace.session_name, "live");
     let sessions = format!("{} [Created 1m ago]\n", workspace.session_name);
     let live_trace = live.project_root.join("zellij-live.log");
+    let _live_room = ShimRoom::watch(&live, &live_trace, MATERIALIZED_ROOM_PANES);
     let mut live_command = live.rimz();
     configure_actionable_hooks(&mut live_command, &live, &live_bin, &live_trace, &sessions);
     let live_output = live_command.bounded_output().expect("run live-room start");
@@ -548,6 +551,7 @@ fn reconnect_marker_keeps_pty_start_unattended() {
     let env = Env::new();
     let bin_dir = seed_actionable_agent(&env);
     let zellij_log = env.project_root.join("zellij-reconnect.log");
+    let _room = ShimRoom::watch(&env, &zellij_log, MATERIALIZED_ROOM_PANES);
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -559,6 +563,7 @@ fn reconnect_marker_keeps_pty_start_unattended() {
         .expect("open pty");
     let mut command = CommandBuilder::new(env.rimz_bin());
     env.pin_pty_command(&mut command);
+    command.cwd(&env.project_root);
     command.args(["--mux", "zellij", "start", "--no-attach"]);
     command.env("PATH", &bin_dir);
     command.env("TERM", "dumb");
@@ -688,6 +693,7 @@ fn start_replaces_an_old_layout_room_before_birth() {
 fn start_with_accounts(env: &Env, sessions: &str, accounts: &[&str]) -> std::process::Output {
     let bin_dir = seed_actionable_agent(env);
     let trace = env.project_root.join("zellij-accounts.log");
+    let _room = ShimRoom::watch(env, &trace, MATERIALIZED_ROOM_PANES);
     let mut command = env.rimz();
     configure_actionable_hooks(&mut command, env, &bin_dir, &trace, sessions);
     for account in accounts {
