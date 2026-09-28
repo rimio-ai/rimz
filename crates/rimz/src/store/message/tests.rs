@@ -215,7 +215,7 @@ fn prompt_origin_requires_only_non_user_headers() {
         "{labeled}\n\nType: STAGE\nFrom: @rimz\nContent:\nimplement"
     )));
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
-    let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
+    let report = "Type: AGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
     let wait = "Type: WAIT\nFrom: @rimz\nContent:\ncheck back";
     let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed";
     let stage = "Type: STAGE\nFrom: @rimz\nContent:\nImplement is yours.";
@@ -273,6 +273,8 @@ fn message_header_parser_rejects_near_misses() {
 fn message_header_parser_strips_only_a_valid_label() {
     for (header, kind) in [
         ("AGENT_MESSAGE", HeaderKind::Agent),
+        ("AGENT_REPORT", HeaderKind::Subagent),
+        ("AGENT_REPORT", HeaderKind::Subagent),
         ("SUBAGENT_REPORT", HeaderKind::Subagent),
     ] {
         let prompt = format!("Type: {header}\nFrom: @calm-fox#docs (planner)\nContent:\nship it");
@@ -289,7 +291,7 @@ fn signal_headers_split_mixed_batches() {
     let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed\n\ninspect the log";
     let wait = "Type: WAIT\nFrom: @rimz\nContent:\ncheck back";
     let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
-    let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
+    let report = "Type: AGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
     let sections = [agent, signal, wait, report, human, signal];
     let prompt = sections.join("\n\n");
     assert_eq!(split_batched_prompt(&prompt), sections);
@@ -305,7 +307,7 @@ fn signal_headers_split_mixed_batches() {
 #[test]
 fn split_batched_prompt_splits_only_on_typed_sections() {
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
-    let subagent = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nreport";
+    let subagent = "Type: AGENT_REPORT\nFrom: @rimz\nContent:\nreport";
     let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
     assert_eq!(
         split_batched_prompt(&format!("{agent}\n\n{human}")),
@@ -1266,7 +1268,7 @@ fn align_submitted_prompt_consumes_human_header() {
 fn align_submitted_prompt_consumes_harness_report_header() {
     let recipient = agent("session-recipient", None);
     for (notice, header_type) in [
-        (HarnessNotice::SubagentReport, "SUBAGENT_REPORT"),
+        (HarnessNotice::SubagentReport, "AGENT_REPORT"),
         (HarnessNotice::Wait, "WAIT"),
         (HarnessNotice::Signal, "SIGNAL"),
         (HarnessNotice::Stage, "STAGE"),

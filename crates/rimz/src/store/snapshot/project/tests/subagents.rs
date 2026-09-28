@@ -4,6 +4,7 @@ use super::*;
 fn harness_prompt_keeps_finished_children_listed() {
     for header in [
         "AGENT_MESSAGE",
+        "AGENT_REPORT",
         "SUBAGENT_REPORT",
         "WAIT",
         "SIGNAL",

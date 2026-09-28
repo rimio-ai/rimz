@@ -73,7 +73,7 @@ impl HarnessNotice {
     pub(crate) fn header_type(&self) -> String {
         match self {
             Self::CacheKeepalive => "CACHE_KEEPALIVE".to_owned(),
-            Self::SubagentReport => "SUBAGENT_REPORT".to_owned(),
+            Self::SubagentReport => "AGENT_REPORT".to_owned(),
             Self::Deadline => "DEADLINE".to_owned(),
             Self::Wait => "WAIT".to_owned(),
             Self::Signal => "SIGNAL".to_owned(),
@@ -974,6 +974,9 @@ fn classify_header_line(line: &str) -> Option<HeaderKind> {
     match line {
         "Type: CACHE_KEEPALIVE" => Some(HeaderKind::CacheKeepalive),
         "Type: AGENT_MESSAGE" => Some(HeaderKind::Agent),
+        "Type: AGENT_REPORT" => Some(HeaderKind::Subagent),
+        // The fleet digest's header before it was renamed, and the legacy
+        // `MessageSender::Subagent` header: transcripts already carry both.
         "Type: SUBAGENT_REPORT" => Some(HeaderKind::Subagent),
         "Type: WAIT" => Some(HeaderKind::Wait),
         "Type: SIGNAL" => Some(HeaderKind::Signal),

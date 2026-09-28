@@ -66,7 +66,7 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
     )
     .unwrap();
     let receipt = String::from_utf8(receipt).unwrap();
-    assert!(receipt.contains("SUBAGENT_REPORT"), "{receipt}");
+    assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
     assert!(
         receipt.contains(&format!("rimz agents wait {}", run.run_id)),
         "{receipt}"
@@ -144,7 +144,7 @@ fn peer_receipt_uses_launcher_row_or_host_fallback() {
             receipt.contains(&expected.display().to_string()),
             "{receipt}"
         );
-        assert!(receipt.contains("SUBAGENT_REPORT"), "{receipt}");
+        assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
     }
     let mut receipt = Vec::new();
     write_placed_peer_receipt(
