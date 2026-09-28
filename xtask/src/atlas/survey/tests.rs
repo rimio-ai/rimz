@@ -87,7 +87,10 @@ fn survey_output_is_bounded_by_top() {
             function: format!("hot-{index}"),
             path: PathBuf::from(format!("src/hot-{index}.rs")),
             line: 1,
-            cx: 1.0,
+            cyclomatic: 26.0,
+            cognitive: 29.0,
+            sloc: 118.0,
+            cx: 12.7,
             churn: 1.0,
             hot: 1.0,
         })
@@ -164,7 +167,8 @@ fn survey_output_is_bounded_by_top() {
     assert!(output.lines().count() <= 180, "{}", output.lines().count());
     assert!(output.contains("module-19"));
     assert!(!output.contains("module-20"));
-    assert!(output.contains("hot-19"));
+    assert!(output.contains("| function | file:line | cyc | cog | sloc | cx | churn% | hot |"));
+    assert!(output.contains("| hot-19 | src/hot-19.rs:1 | 26 | 29 | 118 | 12.7 | 1.0 | 1.0 |"));
     assert!(!output.contains("hot-20"));
     assert!(output.contains("and 10 more"));
     assert!(output.contains("sites counted per `[[module]]` rule"));
@@ -186,6 +190,18 @@ fn survey_output_is_bounded_by_top() {
     assert!(output.contains("guard families dropped as std idiom: 4"));
     assert!(output.contains("2 as predicate use"));
     assert!(output.contains("cx: severity-weighted over-threshold excess"));
+
+    let json: serde_json::Value =
+        serde_json::from_str(&render_json(&report, &OutputArgs::default()).unwrap()).unwrap();
+    let hot = &json["hot"][0];
+    assert_eq!(
+        (&hot["cyclomatic"], &hot["cognitive"], &hot["sloc"]),
+        (
+            &serde_json::json!(26.0),
+            &serde_json::json!(29.0),
+            &serde_json::json!(118.0)
+        )
+    );
 }
 
 #[test]
@@ -203,6 +219,9 @@ fn probes_join_rank_hot_shapes_guards_and_admitted_debt() {
             function: "fold_snapshot".to_owned(),
             path: PathBuf::from("crates/rimz/src/store/snapshot.rs"),
             line: 10,
+            cyclomatic: 0.0,
+            cognitive: 0.0,
+            sloc: 0.0,
             cx: 10.0,
             churn: 7.13,
             hot: 71.3,
@@ -211,6 +230,9 @@ fn probes_join_rank_hot_shapes_guards_and_admitted_debt() {
             function: "apply_delta".to_owned(),
             path: PathBuf::from("crates/rimz/src/store/snapshot/apply.rs"),
             line: 20,
+            cyclomatic: 0.0,
+            cognitive: 0.0,
+            sloc: 0.0,
             cx: 8.0,
             churn: 5.025,
             hot: 40.2,

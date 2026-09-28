@@ -1011,15 +1011,26 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
 
     if output_args.wants("hot") {
         writeln!(output, "\n## Function hotspots").unwrap();
-        writeln!(output, "| function | file:line | cx | churn% | hot |").unwrap();
-        writeln!(output, "| --- | --- | ---: | ---: | ---: |").unwrap();
+        writeln!(
+            output,
+            "| function | file:line | cyc | cog | sloc | cx | churn% | hot |"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+        )
+        .unwrap();
         for row in report.hot.iter().take(top) {
             writeln!(
                 output,
-                "| {} | {}:{} | {:.1} | {:.1} | {:.1} |",
+                "| {} | {}:{} | {:.0} | {:.0} | {:.0} | {:.1} | {:.1} | {:.1} |",
                 row.function,
                 row.path.display(),
                 row.line,
+                row.cyclomatic,
+                row.cognitive,
+                row.sloc,
                 row.cx,
                 row.churn,
                 row.hot
