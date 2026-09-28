@@ -669,7 +669,23 @@ impl WidthController {
         panes_observed_at_ms: Option<u64>,
         diag: &DiagSink,
     ) {
-        let now = Instant::now();
+        self.backstop_at(
+            measured_cols,
+            sibling_count,
+            panes_observed_at_ms,
+            diag,
+            Instant::now(),
+        );
+    }
+
+    fn backstop_at(
+        &mut self,
+        measured_cols: Option<u16>,
+        sibling_count: Option<usize>,
+        panes_observed_at_ms: Option<u64>,
+        diag: &DiagSink,
+        now: Instant,
+    ) {
         if self.key_burst.is_some() {
             if self
                 .key_burst

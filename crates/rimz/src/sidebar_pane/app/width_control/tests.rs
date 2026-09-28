@@ -7,6 +7,14 @@ fn target(cols: u16) -> NonZeroU16 {
     NonZeroU16::new(cols).expect("nonzero target")
 }
 
+fn burst_deadline(controller: &WidthController) -> Instant {
+    controller
+        .key_burst
+        .as_ref()
+        .expect("an open key burst")
+        .deadline
+}
+
 fn native_step(cols: u16, exact: bool) -> crate::mux::WidthStep {
     crate::mux::WidthStep {
         cols,
@@ -267,8 +275,13 @@ fn fullscreen_hold_rejects_width_intent_without_pinning_the_room_share() {
 
     controller.backstop(Some(200), Some(1), Some(held_at_ms), &diag);
     controller.adjust(200, WidthAdjust::Wider);
-    std::thread::sleep(Duration::from_millis(510));
-    controller.backstop(Some(200), Some(1), Some(held_at_ms), &diag);
+    controller.backstop_at(
+        Some(200),
+        Some(1),
+        Some(held_at_ms),
+        &diag,
+        burst_deadline(&controller),
+    );
 
     assert!(controller.convergence.is_fullscreen_held());
     assert_eq!(crate::mux::width_target::pinned(&runtime), None);
@@ -404,8 +417,7 @@ fn zellij_uses_live_step_and_clamps_floor_crossing() {
     controller.adjust(80, WidthAdjust::Wider);
     assert_eq!(controller.convergence.target(), Some(target(90)));
     assert_eq!(crate::mux::width_target::pinned(&runtime), None);
-    std::thread::sleep(Duration::from_millis(510));
-    controller.backstop(Some(90), None, None, &diag);
+    controller.backstop_at(Some(90), None, None, &diag, burst_deadline(&controller));
     let prior = NonZeroU16::new(30).expect("prior target");
     let prior_share =
         crate::mux::width_target::pin(&runtime, crate::mux::SidebarWidth::default(), prior, 200)
@@ -413,8 +425,7 @@ fn zellij_uses_live_step_and_clamps_floor_crossing() {
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
     controller.adjust(30, WidthAdjust::Narrower);
     assert_eq!(controller.convergence.target(), Some(target(24)));
-    std::thread::sleep(Duration::from_millis(510));
-    controller.backstop(Some(24), None, None, &diag);
+    controller.backstop_at(Some(24), None, None, &diag, burst_deadline(&controller));
     assert_eq!(
         crate::mux::width_target::pinned(&runtime),
         Some(crate::mux::WidthPermille::from_percent(12)),
@@ -464,10 +475,15 @@ fn width_key_burst_saves_and_broadcasts_only_the_last_target_once() {
         socket.recv(&mut payload).unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
-    controller.backstop(Some(50), None, None, &diag);
+    controller.backstop_at(
+        Some(50),
+        None,
+        None,
+        &diag,
+        burst_deadline(&controller) - Duration::from_millis(1),
+    );
     assert_eq!(crate::mux::width_target::pinned(&runtime), None);
-    std::thread::sleep(Duration::from_millis(510));
-    controller.backstop(Some(100), None, None, &diag);
+    controller.backstop_at(Some(100), None, None, &diag, burst_deadline(&controller));
     assert_eq!(
         crate::mux::width_target::pinned(&runtime),
         Some(crate::mux::WidthPermille::from_percent(50))
@@ -523,8 +539,7 @@ fn burst_commit_caps_against_a_view_resized_during_the_hold() {
     controller.adjust(60, WidthAdjust::Wider);
     assert_eq!(controller.convergence.target(), Some(target(72)));
     write_zellij_topology_for_view(&runtime, 100);
-    std::thread::sleep(Duration::from_millis(510));
-    controller.backstop(Some(72), None, None, &diag);
+    controller.backstop_at(Some(72), None, None, &diag, burst_deadline(&controller));
     assert_eq!(controller.convergence.target(), Some(target(50)));
     assert_eq!(
         crate::mux::width_target::pinned(&runtime),
