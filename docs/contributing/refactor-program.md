@@ -69,7 +69,7 @@ max-items = 3
 
 `paths` names every module the pass edits, callers included; `diff --expect` fails on a change outside them, which keeps the pass reviewable and concurrent passes safe.
 
-**Execute.** In a worktree on a branch named for the pass: pins first, then the steps in plan order, one commit per step or bundled module. `cargo xtask check` while iterating, `cargo xtask gate` before hand-off, higher tiers per [AGENTS.md → Testing](../../AGENTS.md#testing); a pass touching `benches/` or a walker's `pub` wire also runs `cargo xtask perf -- --no-run`. `cargo xtask atlas conform --ratchet` passes at every commit; new or repointed budgets are written from the block `--ratchet` prints. Rules the compiler and gates enforce:
+**Execute.** In a worktree on a branch named for the pass: pins first, then the steps in plan order, one commit per step or bundled module. `cargo xtask check` while iterating, `cargo xtask gate` before hand-off, higher tiers per [AGENTS.md → Testing](../../AGENTS.md#testing); a pass touching `benches/` or a walker's `pub` wire also runs `cargo xtask perf -- --no-run`. `cargo xtask atlas conform --ratchet` passes at every commit; new or repointed budgets are written from the block `--ratchet` prints. Take a surface-budget change only from what `atlas conform --ratchet` fails on, and add its admission comment only when the tightened budget still sits above base. Rules the compiler and gates enforce:
 
 - A narrowing turns rustdoc links it made private into plain backticks in the same commit (`cargo xtask doc`).
 - An item whose surviving readers are all unit tests is spelled `#[cfg(test)] pub(crate)` (precedent `config.rs`, `parse_scheme_text`), since `lint` builds without `cfg(test)`.
@@ -78,6 +78,8 @@ max-items = 3
 **Prove.** On a tree that passed `gate`, `cargo xtask atlas diff --expect <contract>` exits zero, or the drift is fixed or the contract loosened with the reason in the commit. A lint fix after `diff` reindexes, so prove again. `[[dependency]]` rows prove a closed direction; a grep is a convenience and must not count rustdoc links or inline `#[cfg(test)]` sites. Then `cargo xtask atlas conform --tighten --only <owned-path>` per owned path, restoring the comments it drops.
 
 ## Ending a pass
+
+After the final rebase, set the contract's `base` to the branch's new merge base, then run `atlas diff --expect`; trunk commits otherwise count as changed paths.
 
 The last commit, `docs(refactor): …`, carries the durable state, every number measured on the tree it ships:
 
