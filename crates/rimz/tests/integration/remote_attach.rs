@@ -1721,6 +1721,85 @@ fn established_link_drop_reconnects_and_notifies_once() {
 }
 
 #[test]
+fn repeated_transport_drops_narrate_each_retry_but_notify_once() {
+    let env = Env::new();
+    write_link_notify_command_config(&env);
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    let notify_log = env.project_root.join("notify.log");
+    std::fs::write(&plan, "255\n255\n0\n").expect("write plan");
+    let out = remote_connect_command(&env, &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_STDERR", "Connection reset by peer")
+        .env("RIMZ_REMOTE_GATETIME_MS", "60000")
+        .env("RIMZ_NOTIFY_TEST_LOG", &notify_log)
+        .bounded_output()
+        .expect("run repeated transport drops");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(main_invocation_count(&log), 3);
+    assert_eq!(master_invocation_count(&log), 3);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let narration = "rimz: link to dev-box lost — Connection reset by peer — reconnecting in the background; Ctrl-C stops";
+    assert_eq!(stderr.matches(narration).count(), 2, "{stderr}");
+    let text = wait_for_notify_log(
+        &notify_log,
+        &["link_lost|RimZ: remote link lost|SSH to dev-box dropped; reconnecting."],
+    );
+    assert_eq!(text.matches("link_lost|").count(), 1, "{text}");
+    assert!(
+        !text.contains("link_restored|"),
+        "no responsive session between drops: {text}"
+    );
+}
+
+#[test]
+fn control_socket_preparation_failure_is_narrated_before_retry() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let stderr_path = env.project_root.join("remote.stderr");
+    let blocker = env.runtime_root.join("rimz/link");
+    std::fs::create_dir_all(blocker.parent().expect("runtime parent")).expect("create runtime");
+    std::fs::write(&blocker, "not a directory").expect("block control directory");
+    let mut child = remote_connect_command(&env, &log)
+        .stderr(std::fs::File::create(&stderr_path).expect("capture stderr"))
+        .spawn()
+        .expect("spawn remote connect");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let stderr = std::fs::read_to_string(&stderr_path).expect("read stderr");
+        if stderr.contains("rimz: connect to dev-box failed — preparing SSH control socket:") {
+            break;
+        }
+        if Instant::now() >= deadline || child.try_wait().expect("poll remote connect").is_some() {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("missing preparation failure: {stderr}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(master_invocation_count(&log), 0);
+    std::fs::remove_file(&blocker).expect("unblock control directory");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll retry") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("control socket retry did not finish");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    assert_eq!(master_invocation_count(&log), 1);
+}
+
+#[test]
 fn established_mux_disconnect_reconnects() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
@@ -2340,11 +2419,65 @@ fn remote_web_reconnects_once_after_established_transport_exit() {
     assert_eq!(tunnel_invocation_count(&log), 2);
     assert_eq!(master_invocation_count(&log), 2);
     assert_eq!(web_prep_invocation_count(&log), 2);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("rimz: tunnel to dev-box restored"));
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("web tunnel to dev-box lost — reconnecting"),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn remote_web_recovers_from_prep_transport_failure_after_confirmed_master() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let prep_plan = env.project_root.join("prep.plan");
+    let tunnel_plan = env.project_root.join("tunnel.plan");
+    std::fs::write(&prep_plan, "255\n0\n").expect("write prep plan");
+    std::fs::write(&tunnel_plan, "0\n").expect("write tunnel plan");
+    let out = remote_web_command(&env, &log, reserve_local_port())
+        .env("RIMZ_TEST_SSH_WEB_PREP_PLAN", &prep_plan)
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &tunnel_plan)
+        .env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "500")
+        .bounded_output()
+        .expect("run prep retry");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(master_invocation_count(&log), 2);
+    assert_eq!(web_prep_invocation_count(&log), 2);
+    assert_eq!(tunnel_invocation_count(&log), 1);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 1);
+    assert!(String::from_utf8_lossy(&out.stderr).contains(
+        "rimz: web tunnel to dev-box lost — reconnecting in the background; Ctrl-C stops"
+    ));
+}
+
+#[test]
+fn remote_web_retries_control_forward_exit_before_readiness() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let tunnel_plan = env.project_root.join("tunnel.plan");
+    std::fs::write(&tunnel_plan, "255\n0\n").expect("write tunnel plan");
+    let out = remote_web_command(&env, &log, reserve_local_port())
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &tunnel_plan)
+        .env("RIMZ_TEST_SSH_MASTER_EXIT_MS", "500")
+        .bounded_output()
+        .expect("run forward retry");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(master_invocation_count(&log), 2);
+    assert_eq!(web_prep_invocation_count(&log), 2);
+    assert_eq!(tunnel_invocation_count(&log), 2);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 1);
+    assert!(String::from_utf8_lossy(&out.stderr).contains(
+        "rimz: web tunnel to dev-box lost — reconnecting in the background; Ctrl-C stops"
+    ));
 }
 
 #[test]
