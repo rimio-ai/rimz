@@ -1356,13 +1356,7 @@ mod tests {
         {
             return;
         }
-        let pids = || {
-            crate::web::pixel_daemon_records()
-                .into_iter()
-                .filter(|(_, protocol)| *protocol == crate::web::TTYD_PIXEL_PROTOCOL)
-                .map(|(pid, _)| pid)
-                .collect::<Vec<_>>()
-        };
+        let pids = crate::web::pixel_ttyd_pids;
         let mut writable = WritableDaemonRecord::basic_loopback(42, 8200);
         writable.process.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL);
         let mut broadcast = writable.process.clone();

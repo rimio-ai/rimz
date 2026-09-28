@@ -122,7 +122,7 @@ trait Probe {
     fn tmux_rendering_clients(&self, session_name: &str) -> io::Result<Vec<RenderingClient>>;
     fn tmux_session_name(&self) -> io::Result<String>;
     fn processes(&self) -> Vec<crate::proc::ProcInfo>;
-    fn pixel_daemon_records(&self) -> Vec<(u32, u32)>;
+    fn pixel_ttyd_pids(&self) -> Vec<u32>;
     fn env_var(&self, key: &str) -> Option<String>;
 }
 
@@ -255,8 +255,8 @@ impl Probe for LiveProbe {
         crate::proc::list_processes()
     }
 
-    fn pixel_daemon_records(&self) -> Vec<(u32, u32)> {
-        crate::web::pixel_daemon_records()
+    fn pixel_ttyd_pids(&self) -> Vec<u32> {
+        crate::web::pixel_ttyd_pids()
     }
 
     fn env_var(&self, key: &str) -> Option<String> {
@@ -281,10 +281,8 @@ fn rendering_clients_allowed(clients: &[RenderingClient], probe: &impl Probe) ->
     }
     let processes = probe.processes();
     let daemons = probe
-        .pixel_daemon_records()
+        .pixel_ttyd_pids()
         .into_iter()
-        .filter(|(_, protocol)| *protocol == crate::web::TTYD_PIXEL_PROTOCOL)
-        .map(|(pid, _)| pid)
         .filter(|pid| {
             processes.iter().any(|process| {
                 process.pid == *pid && crate::proc::command::argv0_label(&process.cmdline) == "ttyd"

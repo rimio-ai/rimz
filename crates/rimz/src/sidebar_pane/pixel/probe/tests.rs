@@ -20,7 +20,7 @@ struct FakeProbe {
     termnames: Option<Vec<String>>,
     session_name: Option<String>,
     processes: Vec<crate::proc::ProcInfo>,
-    daemon_records: Vec<(u32, u32)>,
+    ttyd_pids: Vec<u32>,
     env: BTreeMap<String, String>,
     passthrough_targets: RefCell<Vec<String>>,
     passthrough_all_panes: RefCell<Vec<String>>,
@@ -98,7 +98,7 @@ impl FakeProbe {
             termnames: Some(vec!["xterm-ghostty".to_owned()]),
             session_name: Some(TEST_SESSION.to_owned()),
             processes: Vec::new(),
-            daemon_records: Vec::new(),
+            ttyd_pids: Vec::new(),
             env: BTreeMap::new(),
             passthrough_targets: RefCell::new(Vec::new()),
             passthrough_all_panes: RefCell::new(Vec::new()),
@@ -161,8 +161,8 @@ impl Probe for FakeProbe {
         self.processes.clone()
     }
 
-    fn pixel_daemon_records(&self) -> Vec<(u32, u32)> {
-        self.daemon_records.clone()
+    fn pixel_ttyd_pids(&self) -> Vec<u32> {
+        self.ttyd_pids.clone()
     }
 
     fn env_var(&self, key: &str) -> Option<String> {
@@ -582,14 +582,14 @@ fn termname_gate_filters_control_clients_and_requires_all_to_match() {
 }
 
 #[test]
-fn ttyd_descendant_client_requires_live_matching_protocol_daemon() {
+fn ttyd_descendant_client_requires_live_pixel_daemon() {
     let capable = FakeProbe {
         termnames: Some(vec!["xterm-256color".to_owned()]),
         processes: vec![
             process(10, 1, "/usr/bin/ttyd -p 8200"),
             process(100, 10, "tmux attach -t rimz-test"),
         ],
-        daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
+        ttyd_pids: vec![10],
         ..FakeProbe::ok()
     };
     assert!(
@@ -606,19 +606,13 @@ fn ttyd_descendant_client_requires_live_matching_protocol_daemon() {
         FakeProbe {
             termnames: Some(vec!["xterm-256color".to_owned()]),
             processes: capable.processes.clone(),
-            daemon_records: Vec::new(),
-            ..FakeProbe::ok()
-        },
-        FakeProbe {
-            termnames: Some(vec!["xterm-256color".to_owned()]),
-            processes: capable.processes.clone(),
-            daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL + 1)],
+            ttyd_pids: Vec::new(),
             ..FakeProbe::ok()
         },
         FakeProbe {
             termnames: Some(vec!["xterm-256color".to_owned()]),
             processes: vec![process(100, 10, "tmux attach -t rimz-test")],
-            daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
+            ttyd_pids: vec![10],
             ..FakeProbe::ok()
         },
         FakeProbe {
@@ -627,7 +621,7 @@ fn ttyd_descendant_client_requires_live_matching_protocol_daemon() {
                 process(10, 1, "sleep 60"),
                 process(100, 10, "tmux attach -t rimz-test"),
             ],
-            daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
+            ttyd_pids: vec![10],
             ..FakeProbe::ok()
         },
         FakeProbe {
@@ -636,7 +630,7 @@ fn ttyd_descendant_client_requires_live_matching_protocol_daemon() {
                 process(10, 1, "sh -c ttyd -p 8200"),
                 process(100, 10, "tmux attach -t rimz-test"),
             ],
-            daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
+            ttyd_pids: vec![10],
             ..FakeProbe::ok()
         },
         FakeProbe {
@@ -645,7 +639,7 @@ fn ttyd_descendant_client_requires_live_matching_protocol_daemon() {
                 process(10, 1, "env A=b ttyd -p 8200"),
                 process(100, 10, "tmux attach -t rimz-test"),
             ],
-            daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
+            ttyd_pids: vec![10],
             ..FakeProbe::ok()
         },
     ] {
@@ -673,7 +667,7 @@ fn ttyd_ancestry_walk_is_bounded_to_four_hops() {
             process(22, 23, "sh"),
             process(23, 10, "sh"),
         ],
-        daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
+        ttyd_pids: vec![10],
         ..FakeProbe::ok()
     };
 
@@ -696,7 +690,7 @@ fn native_and_ttyd_clients_share_the_all_clients_gate() {
             process(10, 1, "ttyd -p 8200"),
             process(101, 10, "tmux attach"),
         ],
-        daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
+        ttyd_pids: vec![10],
         ..FakeProbe::ok()
     };
     assert!(
@@ -716,7 +710,7 @@ fn native_and_ttyd_clients_share_the_all_clients_gate() {
             "screen-256color".to_owned(),
         ]),
         processes: capable.processes.clone(),
-        daemon_records: capable.daemon_records.clone(),
+        ttyd_pids: capable.ttyd_pids.clone(),
         ..FakeProbe::ok()
     };
     assert!(
@@ -743,10 +737,7 @@ fn clients_from_writable_and_broadcast_ttyd_daemons_are_pixel_capable() {
             process(100, 10, "tmux attach -t rimz-test"),
             process(101, 20, "tmux attach -r -t rimz-test"),
         ],
-        daemon_records: vec![
-            (10, crate::web::TTYD_PIXEL_PROTOCOL),
-            (20, crate::web::TTYD_PIXEL_PROTOCOL),
-        ],
+        ttyd_pids: vec![10, 20],
         ..FakeProbe::ok()
     };
 
