@@ -50,7 +50,7 @@ impl SidebarSnapshot {
                 .then(left.session_id.cmp(&right.session_id))
         });
         let mut used_panes = HashSet::new();
-        let mut used_sessions = BTreeSet::new();
+        let mut fresh = Vec::new();
         let mut bindings = Vec::new();
         let mut diagnostics = Vec::new();
         let binding_index = PaneBindingIndex::new(&self.agents);
@@ -70,17 +70,10 @@ impl SidebarSnapshot {
                 })
             });
             if let Some(pane) = stamped {
-                if newer_launch_contradicts_observation(&binding_index, pane, observation) {
-                    diagnostics.push(DiagEvent::GhostSessionBind {
-                        agent_kind: observation.kind.clone(),
-                        agent_session_id: observation.session_id.clone(),
-                        pane_id: pane.pane_id.clone(),
-                    });
-                }
+                diagnostics.extend(ghost_session_bind(&binding_index, pane, observation));
                 // Exact durable identity consumes both sides before lifecycle
                 // freshness is considered, so a stale provider fold cannot
                 // later bind this pane to another same-cwd session.
-                used_sessions.insert(observation_index);
                 used_panes.insert(pane.pane_id.clone());
                 bindings.push((observation_index, pane.clone()));
                 continue;
@@ -91,7 +84,6 @@ impl SidebarSnapshot {
                     && !used_panes.contains(&pane.pane_id)
             }) {
                 used_panes.insert(pane.pane_id.clone());
-                used_sessions.insert(observation_index);
                 bindings.push((observation_index, pane.clone()));
                 continue;
             }
@@ -101,54 +93,40 @@ impl SidebarSnapshot {
                     .is_some()
                     && local_pane_matches(pane, observation)
             }) {
-                if newer_launch_contradicts_observation(&binding_index, pane, observation) {
-                    diagnostics.push(DiagEvent::GhostSessionBind {
-                        agent_kind: observation.kind.clone(),
-                        agent_session_id: observation.session_id.clone(),
-                        pane_id: pane.pane_id.clone(),
-                    });
-                }
+                diagnostics.extend(ghost_session_bind(&binding_index, pane, observation));
                 // This durable identity is co-resident but does not own the
                 // pane. Keep it out of cwd fallback without consuming the pane
                 // from the selected conversation's observation.
-                used_sessions.insert(observation_index);
                 continue;
             }
+            // A durably ended or dead-owner-expelled session is not a live
+            // binding candidate: the store-blind provider cache
+            // re-discovers its rollout forever, and adopting an unclaimed
+            // same-worktree pane would graft that dead identity onto
+            // whichever agent the pane actually hosts.
+            if self
+                .fenced_sessions
+                .contains(&(observation.kind.clone(), observation.session_id.clone()))
+            {
+                continue;
+            }
+            // A runtime-visible row can outlive its absent pane when it has
+            // no process owner or belongs to a still-live daemon. Hold that
+            // fresh fold rather than rebind it elsewhere. Mux rebirth
+            // clears pane stamps, so a reborn session re-enters here
+            // unstamped; a degraded frame only delays binding one cycle.
+            if let Some(agent) = binding_index
+                .root_index(&observation.kind, &observation.session_id)
+                .and_then(|index| binding_index.agent(index))
+                && let Some(stamped) = agent.pane.as_ref()
+                && !panes.iter().any(|pane| pane.pane_id == stamped.pane_id)
+            {
+                continue;
+            }
+            if let Some(fresh_binding_at) = observation.fresh_binding_at {
+                fresh.push((observation_index, observation, fresh_binding_at));
+            }
         }
-        let mut fresh = observations
-            .iter()
-            .enumerate()
-            .filter_map(|(index, observation)| {
-                if used_sessions.contains(&index) {
-                    return None;
-                }
-                // A durably ended or dead-owner-expelled session is not a live
-                // binding candidate: the store-blind provider cache
-                // re-discovers its rollout forever, and adopting an unclaimed
-                // same-worktree pane would graft that dead identity onto
-                // whichever agent the pane actually hosts.
-                if self
-                    .fenced_sessions
-                    .contains(&(observation.kind.clone(), observation.session_id.clone()))
-                {
-                    return None;
-                }
-                // A runtime-visible row can outlive its absent pane when it has
-                // no process owner or belongs to a still-live daemon. Hold that
-                // fresh fold rather than rebind it elsewhere. Mux rebirth
-                // clears pane stamps, so a reborn session re-enters here
-                // unstamped; a degraded frame only delays binding one cycle.
-                if let Some(agent) = binding_index
-                    .root_index(&observation.kind, &observation.session_id)
-                    .and_then(|index| binding_index.agent(index))
-                    && let Some(stamped) = agent.pane.as_ref()
-                    && !panes.iter().any(|pane| pane.pane_id == stamped.pane_id)
-                {
-                    return None;
-                }
-                Some((index, observation, observation.fresh_binding_at?))
-            })
-            .collect::<Vec<_>>();
         fresh.sort_by(
             |(left_index, left, left_at), (right_index, right, right_at)| {
                 right_at
@@ -441,18 +419,19 @@ fn fresh_pane_allows_bind(
     Ok(())
 }
 
-fn newer_launch_contradicts_observation(
+fn ghost_session_bind(
     binding_index: &PaneBindingIndex<'_>,
     pane: &PaneRef,
     observation: &LocalSessionObservation,
-) -> bool {
-    binding_index
-        .latest_launch_agent(pane, &observation.kind)
-        .is_some_and(|launch| {
-            launch.agent_id != observation.session_id
-                && launch.registered_at.is_some_and(|launched_at| {
-                    observation.created_at < launched_at || observation.last_activity < launched_at
-                })
+) -> Option<DiagEvent> {
+    let launch = binding_index.latest_launch_agent(pane, &observation.kind)?;
+    let launched_at = launch.registered_at?;
+    (launch.agent_id != observation.session_id
+        && (observation.created_at < launched_at || observation.last_activity < launched_at))
+        .then(|| DiagEvent::GhostSessionBind {
+            agent_kind: observation.kind.clone(),
+            agent_session_id: observation.session_id.clone(),
+            pane_id: pane.pane_id.clone(),
         })
 }
 
