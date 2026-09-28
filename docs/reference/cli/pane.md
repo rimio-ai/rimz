@@ -89,7 +89,7 @@ The JSON document has `session`, `mux`, and `tabs`. Each tab has `view_id` and `
 
 | Argument or flag | Meaning |
 | --- | --- |
-| `[TEXT]` | Literal text to type. Put `--` before text that begins with `-`. |
+| `[TEXT]` | Literal text to type. May start with `-`; only a value that is itself one of the command's flags (`--enter`, `--key`, `--key=…`, `-h`, `--help`, etc.) needs `--` before it. |
 | `--key <KEY>` | Press a named key. Repeat for several keys. |
 | `--enter` | Press Enter last. |
 

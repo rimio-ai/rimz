@@ -76,7 +76,8 @@ enum PaneSubcmd {
         /// Press a named key. Repeat to press several keys in order.
         #[arg(long, value_parser = parse_key)]
         key: Vec<NamedKey>,
-        /// Literal text to type. Use `--` before text that begins with `-`.
+        /// Literal text to type. May start with `-`; use `--` to escape a command flag, including `-h`/`--help`.
+        #[arg(allow_hyphen_values = true)]
         text: Option<String>,
     },
     /// Focus a pane.
@@ -757,9 +758,53 @@ fn parse_key(raw: &str) -> std::result::Result<NamedKey, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use jiff::Timestamp;
     use rimz::agents::AgentStatus;
     use rimz::ids::{AgentSessionId, MuxName};
+
+    #[derive(Debug, Parser)]
+    struct Harness {
+        #[command(flatten)]
+        args: PaneArgs,
+    }
+
+    #[test]
+    fn send_accepts_hyphen_text_and_flags() {
+        for value in ["--dry-run first", "-x", "-"] {
+            for argv in [
+                ["rimz", "send", "@coder", "--enter", value],
+                ["rimz", "send", "@coder", value, "--enter"],
+            ] {
+                let PaneSubcmd::Send {
+                    target,
+                    text,
+                    enter,
+                    ..
+                } = Harness::try_parse_from(argv)
+                    .expect("parse send")
+                    .args
+                    .command
+                else {
+                    panic!("send verb");
+                };
+                assert_eq!(target, "@coder");
+                assert_eq!(text.as_deref(), Some(value));
+                assert!(enter);
+            }
+        }
+        for value in ["--enter", "-h", "--help"] {
+            let PaneSubcmd::Send { text, .. } =
+                Harness::try_parse_from(["rimz", "send", "@coder", "--", value])
+                    .unwrap()
+                    .args
+                    .command
+            else {
+                panic!("send verb");
+            };
+            assert_eq!(text.as_deref(), Some(value));
+        }
+    }
 
     #[test]
     fn classify_pane_target_accepts_ids_and_agent_addresses() {
