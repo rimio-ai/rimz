@@ -825,10 +825,7 @@ fn ensure_sidebar_render_runtime_uses_snapshot_clock(root: &Path, files: &[PathB
             if in_tests {
                 continue;
             }
-            if line.contains(concat!("Timestamp", "::", "now()"))
-                && !(path.ends_with("crates/rimz/src/sidebar_pane/render/mod.rs")
-                    && line.contains(concat!("since: Timestamp", "::", "now()")))
-            {
+            if line.contains(concat!("Timestamp", "::", "now()")) {
                 violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
             }
         }
