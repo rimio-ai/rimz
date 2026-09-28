@@ -1430,6 +1430,12 @@ impl MuxBackend for ZellijBackend {
         let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
         let plan = super::super::plan_reconcile(&views, live);
         let planned_closes = plan.close_panes();
+        let added_views = plan.add_views();
+        let replaced_views: HashSet<_> = views
+            .iter()
+            .filter(|view| !view.sidebar_panes.is_empty() && added_views.contains(&view.view))
+            .map(|view| view.view.clone())
+            .collect();
         // Kept sidebars (not planned for closing) whose geometry sits off the
         // layout's dock — the residue of a mis-mounted add — converge in place
         // this pass, renderer untouched.
@@ -1500,6 +1506,30 @@ impl MuxBackend for ZellijBackend {
             },
             |pane| self.close_pane(&opts.session_name, pane),
         );
+        if !detached && failure.is_none() && !replaced_views.is_empty() {
+            let floor = Some(crate::utils::time::unix_now_ms());
+            match self.topology_listing(
+                Some(&opts.session_name),
+                None,
+                Some(&opts.workspace_id),
+                floor,
+                RECONCILE_LIST_TIMEOUT,
+            ) {
+                Ok(after) => {
+                    for (tab, pane) in off_spec_sidebars(&after.panes, &[], Some(opts.target)) {
+                        if replaced_views.contains(&tab.to_string()) {
+                            repair_sidebar_geometry(self, opts, tab, pane, floor, &mut report);
+                        }
+                    }
+                }
+                Err(err) => tracing::warn!(
+                    session = %opts.session_name,
+                    tags.operation = "zellij.reconcile.geometry_after_close",
+                    error = &err as &dyn std::error::Error,
+                    "sidebar replacement geometry unavailable after closing old panes",
+                ),
+            }
+        }
         if detached {
             tracing::info!(
                 session = %opts.session_name,

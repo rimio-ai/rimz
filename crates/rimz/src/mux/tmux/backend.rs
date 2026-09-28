@@ -33,7 +33,7 @@ const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
 
 impl TmuxBackend {
     /// Resize exactly-one-sidebar windows from one geometry snapshot, scoped
-    /// to the panes structural reconcile elected to keep.
+    /// to the panes structural reconcile kept or mounted.
     fn converge_live_sidebar_geometries(
         &self,
         opts: &WidthSyncOptions,
@@ -691,7 +691,7 @@ impl MuxBackend for TmuxBackend {
         // and drops a stray sidebar with `kill-pane -t`; no move/resize/refocus
         // dance and no session teardown is needed. `split-window` mounts fine on
         // a detached session, so tmux never defers an add the way the Zellij
-        // backend must (its detached screen thread drops the mount). Kept panes
+        // backend must (its detached screen thread drops the mount). Surviving panes
         // outside the cross-backend stop band snap to their per-window targets
         // after the close/add phases.
         let panes = self.list_panes(PaneListOptions {
@@ -718,6 +718,7 @@ impl MuxBackend for TmuxBackend {
         let mutated_views = plan.add_views();
         let mut report = SidebarRecovery::default();
         let build = sidebar_build_identity(opts)?;
+        let mut mounted = HashSet::new();
         let failure = execute_reconcile_plan(
             plan,
             &mut report,
@@ -727,6 +728,7 @@ impl MuxBackend for TmuxBackend {
                 if prove_sidebar_mount(opts, MuxName::Tmux, &pane, &build, || {
                     let _ = self.kill_pane(&pane);
                 }) {
+                    mounted.insert(pane.raw().to_owned());
                     Ok(ReconcileAddOutcome::Verified)
                 } else {
                     Err(MuxErr::Output {
@@ -748,7 +750,7 @@ impl MuxBackend for TmuxBackend {
                 "sidebar repair aborted; leaving remaining views unchanged",
             );
         }
-        let kept: HashSet<String> = views
+        let survivors: HashSet<String> = views
             .iter()
             .filter(|view| view.sidebar_panes.len() == 1)
             .filter(|view| !mutated_views.contains(&view.view))
@@ -756,8 +758,9 @@ impl MuxBackend for TmuxBackend {
                 let pane = view.sidebar_panes.first()?;
                 (!planned_closes.contains(pane)).then(|| pane.raw().to_owned())
             })
+            .chain(mounted)
             .collect();
-        if failure.is_none() && view_cols.is_some() && !kept.is_empty() {
+        if failure.is_none() && view_cols.is_some() && !survivors.is_empty() {
             match self.session_pane_geometries(&opts.session_name) {
                 Ok(geometries) => {
                     let sync = WidthSyncOptions {
@@ -766,7 +769,7 @@ impl MuxBackend for TmuxBackend {
                         target: opts.target,
                     };
                     report.redocked +=
-                        self.converge_live_sidebar_geometries(&sync, &geometries, &kept);
+                        self.converge_live_sidebar_geometries(&sync, &geometries, &survivors);
                 }
                 Err(err) => tracing::warn!(
                     session = %opts.session_name,
