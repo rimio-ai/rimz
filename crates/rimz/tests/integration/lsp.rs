@@ -828,11 +828,11 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
         ("Cargo.toml", ""),
         (
             "notes.md",
-            "`lib.rs::Type::method` (~3)\n`lib.rs::Type.field`\n`lib.rs::nosuch`\n`dup.rs::x`\n`gone.rs::x`\n`lib.rs::saved` (~40)\n`lib.rs:2`\n`notes.py::f`\n",
+            "`lib.rs::Type::method` (~3)\n`lib.rs::Type.field`\n`lib.rs::nosuch`\n`dup.rs::x`\n`gone.rs::x`\n`lib.rs::saved` (~40)\n`lib.rs:2`\n`notes.py::f`\n`o/r@v1:gone.rs::x`\n",
         ),
         (
             "ok.md",
-            "`lib.rs::Type::method` (~3)\n`lib.rs::Type.field`\n`lib.rs:2`\n",
+            "`lib.rs::Type::method` (~3)\n`lib.rs::Type.field`\n`lib.rs:2`\n`o/r@v1:gone.rs::x`\n",
         ),
     ] {
         let path = env.project_root.join(file);
@@ -900,7 +900,7 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
             "{text}"
         );
     }
-    assert!(text.ends_with("8 anchors in notes.md: 3 ok, 4 failed, 1 unchecked\n"));
+    assert!(text.ends_with("9 anchors in notes.md: 3 ok, 4 failed, 1 unchecked, 1 external\n"));
     let output = env
         .rimz()
         .args(["lsp", "check", "notes.md", "--json"])
@@ -911,7 +911,7 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         value["summary"],
-        json!({"anchors":8,"ok":3,"failed":4,"unchecked":1})
+        json!({"anchors":9,"ok":3,"failed":4,"unchecked":1,"external":1})
     );
     let statuses: Vec<_> = value["anchors"]
         .as_array()
@@ -929,7 +929,8 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
             "missing-path",
             "line-outside",
             "ok",
-            "unchecked"
+            "unchecked",
+            "external"
         ]
     );
     assert_eq!(value["anchors"][3]["files"].as_array().unwrap().len(), 2);
@@ -938,7 +939,7 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
         .assert()
         .success()
         .stderr("")
-        .stdout("3 anchors in ok.md: 3 ok, 0 failed, 0 unchecked\n");
+        .stdout("4 anchors in ok.md: 3 ok, 0 failed, 0 unchecked, 1 external\n");
     env.rimz()
         .args(["lsp", "check", "missing.md"])
         .assert()

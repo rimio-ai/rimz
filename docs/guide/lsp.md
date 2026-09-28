@@ -142,7 +142,7 @@ A note can name a symbol that does not exist or point at an old line. Before han
 rimz lsp check notes.md
 ```
 
-Fix each flagged path, symbol, or line and rerun. A path suffix that names several files needs more of the path. The summary counts what passed, failed, or remained unchecked; `unchecked` means no server covers that language, so verify those anchors by hand. The [reference](../reference/cli/lsp.md#check-anchors-in-a-notes-file) defines the accepted anchors and JSON output.
+Fix each flagged path, symbol, or line and rerun. A path suffix that names several files needs more of the path. The summary counts what passed, failed, remained unchecked, or was external; `unchecked` means no server covers that language, so verify those anchors by hand. Cite another repository with `owner/repo@ref:path::Symbol` or `owner/repo@ref:path:~N`: these count as `external`, without being verified or flagged as failures. The [reference](../reference/cli/lsp.md#check-anchors-in-a-notes-file) defines the accepted anchors and JSON output.
 
 ## See what is running, and stop it
 

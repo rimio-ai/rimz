@@ -54,7 +54,13 @@ pub fn run(
     let mut outlines = BTreeMap::new();
     let mut lengths = BTreeMap::new();
     let mut verdicts = Vec::new();
-    for anchor in extract(&source) {
+    for mut anchor in extract(&source) {
+        if let Some(qualifier) = anchor.qualifier.take() {
+            let mut result = verdict(anchor, None, Status::External);
+            result.detail = qualifier;
+            verdicts.push(result);
+            continue;
+        }
         let matches = resolve(root, &files, &anchor.path);
         if matches.len() != 1 {
             let status = if matches.is_empty() {
@@ -131,6 +137,7 @@ pub fn run(
 
 #[derive(Debug, PartialEq, Eq)]
 struct Anchor {
+    qualifier: Option<String>,
     line: usize,
     text: String,
     path: String,
@@ -165,6 +172,7 @@ struct Verdict {
 #[serde(rename_all = "kebab-case")]
 enum Status {
     Ok,
+    External,
     MissingPath,
     AmbiguousPath,
     MissingSymbol,
@@ -186,6 +194,7 @@ struct Summary {
     ok: usize,
     failed: usize,
     unchecked: usize,
+    external: usize,
 }
 
 impl Report {
@@ -198,7 +207,11 @@ impl Report {
             match anchor.status {
                 Status::Ok => summary.ok += 1,
                 Status::Unchecked => summary.unchecked += 1,
-                _ => summary.failed += 1,
+                Status::External => summary.external += 1,
+                Status::MissingPath
+                | Status::AmbiguousPath
+                | Status::MissingSymbol
+                | Status::LineOutside => summary.failed += 1,
             }
         }
         Self {
@@ -220,7 +233,7 @@ impl Report {
         let mut text = String::new();
         for anchor in &self.anchors {
             let status = match anchor.status {
-                Status::Ok => continue,
+                Status::Ok | Status::External => continue,
                 Status::MissingPath => "missing-path",
                 Status::AmbiguousPath => "ambiguous-path",
                 Status::MissingSymbol => "missing-symbol",
@@ -236,12 +249,13 @@ impl Report {
             ));
         }
         text.push_str(&format!(
-            "{} anchors in {}: {} ok, {} failed, {} unchecked\n",
+            "{} anchors in {}: {} ok, {} failed, {} unchecked, {} external\n",
             self.summary.anchors,
             self.notes.display(),
             self.summary.ok,
             self.summary.failed,
-            self.summary.unchecked
+            self.summary.unchecked,
+            self.summary.external
         ));
         Ok(text)
     }
@@ -252,83 +266,103 @@ fn extract(notes: &str) -> Vec<Anchor> {
     let mut anchors = Vec::new();
     while let Some((event, offset)) = events.next() {
         let Event::Code(code) = event else { continue };
-        let Some((path, rest)) = code.split_once(':') else {
-            continue;
-        };
-        let Some(extension) = Path::new(path).extension().and_then(|ext| ext.to_str()) else {
-            continue;
-        };
-        if path.chars().any(char::is_whitespace)
-            || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
-            || !extension.bytes().any(|byte| byte.is_ascii_alphabetic())
-        {
-            continue;
-        }
-        let mut text = code.to_string();
-        let (symbol, mut hint) = if let Some(raw) = rest.strip_prefix(':') {
-            let mut depth = 0_u32;
-            let end = raw
-                .char_indices()
-                .find_map(|(i, ch)| {
-                    match ch {
-                        '<' => depth += 1,
-                        '>' => depth = depth.saturating_sub(1),
-                        _ if depth == 0
-                            && (ch.is_whitespace()
-                                || "({[,~#!=;".contains(ch)
-                                || (ch == ':'
-                                    && !raw[..i].ends_with(':')
-                                    && raw[i + 1..].starts_with(|c: char| {
-                                        c.is_ascii_digit() || c == '~'
-                                    }))) =>
-                        {
-                            return Some(i);
-                        }
-                        _ => {}
-                    }
-                    None
+        let line = notes[..offset.start]
+            .bytes()
+            .filter(|b| *b == b'\n')
+            .count()
+            + 1;
+        let qualified = code.split_once(':').and_then(|(qualifier, rest)| {
+            let (repository, revision) = qualifier.split_once('@')?;
+            let (owner, repo) = repository.split_once('/')?;
+            if revision.is_empty()
+                || revision.chars().any(char::is_whitespace)
+                || [owner, repo].iter().any(|segment| {
+                    segment.is_empty()
+                        || !segment
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
                 })
-                .unwrap_or(raw.len());
-            let name = query::without_generics(&raw[..end]);
-            let chain = segments(name.trim_end_matches([':', '.']));
-            if chain.is_empty() {
-                continue;
+            {
+                return None;
             }
-            let tail = &raw[end..];
-            let hint = parse_hint(tail, false)
-                .or_else(|| {
-                    tail.strip_prefix('(')
-                        .and_then(|tail| tail.split_once(')'))
-                        .and_then(|(_, tail)| parse_hint(tail, false))
-                })
-                .map(|(hint, _)| hint);
-            (Some(chain), hint)
-        } else {
-            let Some((hint, _)) = parse_hint(rest, true) else {
-                continue;
-            };
-            (None, Some(hint))
+            let mut anchor = parse_anchor(rest, line)?;
+            anchor.qualifier = Some(qualifier.into());
+            anchor.text = code.to_string();
+            Some(anchor)
+        });
+        let Some(mut anchor) = qualified.or_else(|| parse_anchor(&code, line)) else {
+            continue;
         };
-        if hint.is_none()
+        if anchor.hint.is_none()
             && let Some((Event::Text(following), _)) = events.peek()
             && let Some((found, end)) = parse_hint(following, false)
         {
-            hint = Some(found);
-            text.push_str(&following[..end]);
+            anchor.hint = Some(found);
+            anchor.text.push_str(&following[..end]);
         }
-        anchors.push(Anchor {
-            line: notes[..offset.start]
-                .bytes()
-                .filter(|b| *b == b'\n')
-                .count()
-                + 1,
-            text,
-            path: path.into(),
-            symbol,
-            hint,
-        });
+        anchors.push(anchor);
     }
     anchors
+}
+
+fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
+    let (path, rest) = code.split_once(':')?;
+    let extension = Path::new(path).extension()?.to_str()?;
+    if path.chars().any(char::is_whitespace)
+        || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || !extension.bytes().any(|byte| byte.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    let (symbol, hint) = if let Some(raw) = rest.strip_prefix(':') {
+        let mut depth = 0_u32;
+        let end = raw
+            .char_indices()
+            .find_map(|(i, ch)| {
+                match ch {
+                    '<' => depth += 1,
+                    '>' => depth = depth.saturating_sub(1),
+                    _ if depth == 0
+                        && (ch.is_whitespace()
+                            || "({[,~#!=;".contains(ch)
+                            || (ch == ':'
+                                && !raw[..i].ends_with(':')
+                                && raw[i + 1..]
+                                    .starts_with(|c: char| c.is_ascii_digit() || c == '~'))) =>
+                    {
+                        return Some(i);
+                    }
+                    _ => {}
+                }
+                None
+            })
+            .unwrap_or(raw.len());
+        let name = query::without_generics(&raw[..end]);
+        let chain = segments(name.trim_end_matches([':', '.']));
+        if chain.is_empty() {
+            return None;
+        }
+        let tail = &raw[end..];
+        let hint = parse_hint(tail, false)
+            .or_else(|| {
+                tail.strip_prefix('(')
+                    .and_then(|tail| tail.split_once(')'))
+                    .and_then(|(_, tail)| parse_hint(tail, false))
+            })
+            .map(|(hint, _)| hint);
+        (Some(chain), hint)
+    } else {
+        let (hint, _) = parse_hint(rest, true)?;
+        (None, Some(hint))
+    };
+    Some(Anchor {
+        qualifier: None,
+        line,
+        text: code.into(),
+        path: path.into(),
+        symbol,
+        hint,
+    })
 }
 
 fn parse_hint(raw: &str, line_only: bool) -> Option<([u32; 2], usize)> {
