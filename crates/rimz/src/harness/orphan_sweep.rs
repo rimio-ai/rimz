@@ -150,9 +150,11 @@ fn digest_parents(
     runs: &[RunRecord],
 ) -> Result<Vec<AgentSessionId>, OrphanSweepErr> {
     let agents = crate::store::runtime::audit_projection(paths)?.agents;
-    let waits = SessionWaits::load(paths);
+    let waits = std::cell::OnceCell::new();
     Ok(digest_parents_from(&agents, runs, |kind, session| {
-        waits.contains(kind, session)
+        waits
+            .get_or_init(|| SessionWaits::load(paths))
+            .contains(kind, session)
     }))
 }
 
@@ -177,14 +179,14 @@ fn digest_parents_from(
                                 || crate::store::runtime::agent_liveness(peer)
                                     == crate::store::runtime::AgentLiveness::Dead
                                 || (run.parked_at.is_some()
-                                    && !run
-                                        .agent_id
-                                        .as_ref()
-                                        .is_some_and(|session| has_wait(&run.kind, session))
                                     && {
                                         let owed = FleetRuns::of(agents, runs, peer);
                                         !owed.any_running() && owed.unreported().is_empty()
-                                    }))
+                                    }
+                                    && !run
+                                        .agent_id
+                                        .as_ref()
+                                        .is_some_and(|session| has_wait(&run.kind, session))))
                     })
                 });
             (peer_needs_settlement
@@ -534,15 +536,19 @@ mod tests {
         });
         peer_run.status = crate::store::run::RunStatus::Running;
         peer_run.parked_at = Some(at);
+        peer_run.agent_id = Some(peer.agent_id.clone());
         let mut child_run = run("child", at);
         child_run.agent_id = Some(child.agent_id.clone());
         child_run.subagent = true;
         child_run.status = crate::store::run::RunStatus::Running;
         let agents = [launcher.clone(), peer, child];
         let mut runs = [peer_run, child_run];
-        assert!(!digest_parents_from(&agents, &runs, |_, _| false).contains(&launcher.agent_id));
+        let no_lookup = |_: &AgentKind, _: &AgentSessionId| -> bool {
+            panic!("a peer whose fleet is still owed needs no wait lookup")
+        };
+        assert!(!digest_parents_from(&agents, &runs, no_lookup).contains(&launcher.agent_id));
         runs[1].status = crate::store::run::RunStatus::Completed;
-        assert!(!digest_parents_from(&agents, &runs, |_, _| false).contains(&launcher.agent_id));
+        assert!(!digest_parents_from(&agents, &runs, no_lookup).contains(&launcher.agent_id));
         runs[1].report_message_id = Some(crate::MessageId::new());
         assert_eq!(
             digest_parents_from(&agents, &runs, |_, _| false),
