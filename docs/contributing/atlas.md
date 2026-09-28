@@ -88,7 +88,7 @@ cargo xtask atlas conform --tighten --only crates/rimz/src/store
 
 ## `index`
 
-**Evidence.** `cargo xtask atlas index [--doc <path>] [--symbol <name>]` lists raw SCIP occurrences before atlas filters references. Compare it with `inspect`: a site listed here but absent there was filtered by atlas; a site absent from both is an index miss. At least one selector is required. `--doc` is root-relative (`./` is normalized); `--symbol` takes one bare item name, such as `open`, using the same descriptor-tail match as atlas's item join. Use the full SCIP symbol in the output to distinguish same-named items.
+**Evidence.** `cargo xtask atlas index [--doc <path>] [--symbol <name>]` lists raw SCIP occurrences before atlas filters references. Compare it with `inspect`: a site listed here but absent there was filtered by atlas; a site absent from both is an index miss. At least one selector is required. `--doc` is root-relative (`./` is normalized); `--symbol` takes one bare item name, such as `open`, using the same descriptor-tail match as atlas's item join: the name must be a whole descriptor, so `ensure` does not select `should_ensure`. Use the full SCIP symbol in the output to distinguish same-named items.
 
 | Selectors | Selected symbols | Listed occurrences |
 | --- | --- | --- |
@@ -98,7 +98,7 @@ cargo xtask atlas conform --tighten --only crates/rimz/src/store
 
 The header names the index, selectors, and whether a requested document exists in the index. An absent document or empty match is a successful answer. `symbols` lists full symbols, available display names, SCIP kinds and enclosing symbols, all definition sites, and listed occurrence counts. `occurrences` lists normalized 1-based sites, roles, symbols, and enclosing functions, including documents outside atlas's source walk. Both sections are sorted and untruncated. Use `--out`, `--section`, or JSON with `jq` for large queries.
 
-Local symbols are omitted and counted under `unlisted.locals`: index-wide for symbol queries, in D for document-only queries. Selected occurrences without a line are counted under `unlisted.no_line`. Roles decode all seven SCIP bits; rust-analyzer currently sets only `definition`, with plain references carrying no bits (`[]` in JSON, `reference` in Markdown). Enclosing functions come from atlas's source syntax, not SCIP's unreliable enclosing ranges; non-production sources and files that fail to parse have no enclosing function.
+Local symbols are omitted; a document-only query counts D's locals under `unlisted.locals`, and a `--symbol` query, which can never select one, reports 0. Selected occurrences without a line are counted under `unlisted.no_line`. Roles decode all seven SCIP bits; rust-analyzer currently sets only `definition`, with plain references carrying no bits (`[]` in JSON, `reference` in Markdown). Enclosing functions come from atlas's source syntax, not SCIP's unreliable enclosing ranges; non-production sources and files that fail to parse have no enclosing function.
 
 The verb is read-only apart from the [index cache](#index-cache) and a requested `--out`: a miss builds the current tree's index, while a hit refreshes its timestamp and participates in keeping the two newest indexes. It does not accept a foreign index or base revision.
 
