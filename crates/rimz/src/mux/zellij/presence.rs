@@ -458,9 +458,10 @@ impl ZellijBackend {
         session_name: &str,
         writer: &crate::mux::zellij::pane_topology::TopologyWriter,
     ) -> Result<()> {
-        let payload = serde_json::to_string(writer).map_err(|err| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("serializing presence retire generation failed: {err}"),
+        let payload = serde_json::to_string(writer).map_err(|err| {
+            super::output_error(format!(
+                "serializing presence retire generation failed: {err}"
+            ))
         })?;
         self.broadcast_presence_pipe(session_name, PRESENCE_RETIRE_PIPE, &payload)
     }

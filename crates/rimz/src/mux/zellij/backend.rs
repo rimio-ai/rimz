@@ -18,7 +18,9 @@ use super::raw_pane::{
     tab_fullscreen_active, tab_view_cols,
 };
 use super::sidebar::DockOutcome;
-use super::{HEALTH_PROBE_RETRY_DELAY, RECONCILE_LIST_TIMEOUT, ZellijBackend, env_prefixed};
+use super::{
+    HEALTH_PROBE_RETRY_DELAY, RECONCILE_LIST_TIMEOUT, ZellijBackend, env_prefixed, output_error,
+};
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::companion_layout::{GridPane, balance, plan_append};
@@ -169,11 +171,8 @@ impl ZellijBackend {
             .zellij_action(session)
             .args(["list-panes", "--all", "--json"])
             .run_with_timeout(timeout)?;
-        let listed: Vec<Geometry> =
-            serde_json::from_slice(&output.stdout).map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("parsing companion geometry: {err}"),
-            })?;
+        let listed: Vec<Geometry> = serde_json::from_slice(&output.stdout)
+            .map_err(|err| output_error(format!("parsing companion geometry: {err}")))?;
         let native = ZellijPaneId::try_from(anchor)
             .ok()
             .and_then(ZellijPaneId::terminal_id);
@@ -455,9 +454,8 @@ impl ZellijBackend {
         let pane_id = ZellijPaneId::try_from(pane)
             .ok()
             .and_then(ZellijPaneId::terminal_id)
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("target pane `{pane}` has no numeric Zellij id"),
+            .ok_or_else(|| {
+                output_error(format!("target pane `{pane}` has no numeric Zellij id"))
             })?;
         let listed = self.raw_listed_panes(session_name, timeout)?;
         listed
@@ -467,9 +465,10 @@ impl ZellijBackend {
                 let tab_id = candidate.tab_id.or(candidate.tab_position)?;
                 Some((tab_id, candidate.tab_name))
             })
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("target pane `{pane}` is absent from session `{session_name}`"),
+            .ok_or_else(|| {
+                output_error(format!(
+                    "target pane `{pane}` is absent from session `{session_name}`"
+                ))
             })
     }
 
@@ -482,10 +481,8 @@ impl ZellijBackend {
             .zellij_action(session_name)
             .args(["list-panes", "--all", "--json"])
             .run_with_timeout(timeout)?;
-        serde_json::from_slice(&output.stdout).map_err(|err| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("parsing `list-panes --all --json`: {err}"),
-        })
+        serde_json::from_slice(&output.stdout)
+            .map_err(|err| output_error(format!("parsing `list-panes --all --json`: {err}")))
     }
 
     fn live_session_health(&self, name: &str) -> SessionHealth {
@@ -606,9 +603,8 @@ impl ZellijBackend {
         workspace_id: &WorkspaceId,
         restore: &PaneId,
     ) -> Result<()> {
-        let pane_id = parse_zellij_raw(restore).ok_or_else(|| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("focus restore pane `{restore}` has no terminal id"),
+        let pane_id = parse_zellij_raw(restore).ok_or_else(|| {
+            output_error(format!("focus restore pane `{restore}` has no terminal id"))
         })?;
         let tab_position = self
             .raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)?
@@ -616,9 +612,8 @@ impl ZellijBackend {
             .map(PaneTopologyPane::from)
             .find(|pane| pane.id == pane_id && pane.is_live_terminal())
             .map(|pane| pane.tab_position)
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("focus restore pane `{restore}` is no longer live"),
+            .ok_or_else(|| {
+                output_error(format!("focus restore pane `{restore}` is no longer live"))
             })?;
         let runtime = self.runtime_paths_for_workspace(workspace_id.clone())?;
         execute_focus_restoration(
@@ -632,10 +627,7 @@ impl ZellijBackend {
                 delay: super::FOCUS_RESTORE_RETRY_DELAY,
             },
         )
-        .map_err(|error| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: error.to_string(),
-        })
+        .map_err(output_error)
     }
 
     fn move_new_tab_after(&self, session: &str, anchor: &PaneId) -> Result<()> {
@@ -645,17 +637,16 @@ impl ZellijBackend {
             .into_iter()
             .map(Into::into)
             .collect();
-        let anchor_id = parse_zellij_raw(anchor).ok_or_else(|| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("tab anchor `{anchor}` has no terminal id"),
-        })?;
+        let anchor_id = parse_zellij_raw(anchor)
+            .ok_or_else(|| output_error(format!("tab anchor `{anchor}` has no terminal id")))?;
         let anchor_position = panes
             .iter()
             .find(|pane| pane.id == anchor_id && pane.is_live_terminal())
             .map(|pane| pane.tab_position)
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("tab anchor `{anchor}` is absent from session `{session}`"),
+            .ok_or_else(|| {
+                output_error(format!(
+                    "tab anchor `{anchor}` is absent from session `{session}`"
+                ))
             })?;
         let tab_count = self.list_tabs(session)?.len() as u64;
         let last_position = tab_count.saturating_sub(1);
@@ -667,10 +658,7 @@ impl ZellijBackend {
                     && !is_sidebar_pane(pane)
             })
             .map(|pane| pane.id)
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: "new tab has no live work pane".to_owned(),
-            })?;
+            .ok_or_else(|| output_error("new tab has no live work pane"))?;
         let new_pane = PaneId::from(ZellijPaneId::Terminal(new_pane_id));
         let mut focused = false;
         for attempt in 0..super::FOCUS_RESTORE_ATTEMPTS {
@@ -690,10 +678,7 @@ impl ZellijBackend {
             }
         }
         if !focused {
-            return Err(MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: "new tab did not accept focus before its move".to_owned(),
-            });
+            return Err(output_error("new tab did not accept focus before its move"));
         }
         let move_count = moves_to_place_after(anchor_position, tab_count);
         for completed in 0..move_count {
@@ -713,10 +698,9 @@ impl ZellijBackend {
                     break;
                 }
                 if attempt + 1 == super::FOCUS_RESTORE_ATTEMPTS {
-                    return Err(MuxErr::Output {
-                        program: "zellij".to_owned(),
-                        reason: "new tab did not move to the requested position".to_owned(),
-                    });
+                    return Err(output_error(
+                        "new tab did not move to the requested position",
+                    ));
                 }
                 std::thread::sleep(super::FOCUS_RESTORE_RETRY_DELAY);
             }
@@ -767,13 +751,10 @@ impl ZellijBackend {
                 std::thread::sleep(super::NEW_TAB_CONFIRM_STEP);
             }
         }
-        Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!(
-                "new-tab '{tab_name}' did not appear after {} attempts",
-                super::NEW_TAB_ATTEMPTS
-            ),
-        })
+        Err(output_error(format!(
+            "new-tab '{tab_name}' did not appear after {} attempts",
+            super::NEW_TAB_ATTEMPTS
+        )))
     }
 
     fn wait_for_named_tab_materialized(
@@ -790,13 +771,10 @@ impl ZellijBackend {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                return Err(MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: format!(
-                        "new-tab '{tab_name}' appeared but its layout panes did not materialize; \
+                return Err(output_error(format!(
+                    "new-tab '{tab_name}' appeared but its layout panes did not materialize; \
                          materialized named tabs stayed at {last_count}"
-                    ),
-                });
+                )));
             }
             std::thread::sleep(super::NEW_TAB_MATERIALIZE_STEP);
             last_count = named_tab_counts(&self.list_tabs(session)?, tab_name, theme).1;
@@ -821,24 +799,17 @@ impl ZellijBackend {
             if is_transient_empty(&output.stdout) {
                 continue;
             }
-            let tabs = serde_json::from_slice::<Vec<RawTab>>(&output.stdout).map_err(|e| {
-                MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: format!("parsing list-tabs JSON: {e}"),
-                }
-            })?;
+            let tabs = serde_json::from_slice::<Vec<RawTab>>(&output.stdout)
+                .map_err(|e| output_error(format!("parsing list-tabs JSON: {e}")))?;
             if tabs.is_empty() {
                 continue;
             }
             return Ok(tabs);
         }
-        Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!(
-                "list-tabs returned no output after {} attempts",
-                super::LIST_TABS_ATTEMPTS
-            ),
-        })
+        Err(output_error(format!(
+            "list-tabs returned no output after {} attempts",
+            super::LIST_TABS_ATTEMPTS
+        )))
     }
 }
 
@@ -1022,14 +993,12 @@ impl MuxBackend for ZellijBackend {
         }
         if let Some(target_pane) = target_pane {
             let pane_id = ZellijPaneId::try_from(target_pane)
-                .map_err(|err| MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: err.to_string(),
-                })?
+                .map_err(output_error)?
                 .terminal_id()
-                .ok_or_else(|| MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: format!("target pane `{target_pane}` is not a terminal pane"),
+                .ok_or_else(|| {
+                    output_error(format!(
+                        "target pane `{target_pane}` is not a terminal pane"
+                    ))
                 })?;
             spec = spec.env("ZELLIJ_PANE_ID", pane_id.to_string());
         }
@@ -1126,10 +1095,7 @@ impl MuxBackend for ZellijBackend {
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let target = ZellijPaneId::try_from(pane)
-            .map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: err.to_string(),
-            })?
+            .map_err(output_error)?
             .action_target();
         // `focus-pane-id <raw>` first ships in Zellij 0.44.1, one reason the
         // floor sits above 0.44.0.
@@ -1142,10 +1108,8 @@ impl MuxBackend for ZellijBackend {
 
     fn toggle_fullscreen(&self, pane: &PaneId, session: Option<&str>) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
-        let session = session.ok_or_else(|| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: "fullscreen toggle requires a session name".to_owned(),
-        })?;
+        let session =
+            session.ok_or_else(|| output_error("fullscreen toggle requires a session name"))?;
         self.broadcast_presence_pipe(session, super::PRESENCE_TOGGLE_FULLSCREEN_PIPE, pane.raw())
     }
 
@@ -1160,9 +1124,8 @@ impl MuxBackend for ZellijBackend {
         let pane_id = ZellijPaneId::try_from(pane)
             .ok()
             .and_then(ZellijPaneId::terminal_id)
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("target pane `{pane}` has no numeric topology id"),
+            .ok_or_else(|| {
+                output_error(format!("target pane `{pane}` has no numeric topology id"))
             })?;
         let cache = Self::fresh_cached_topology(
             runtime,
@@ -1170,24 +1133,24 @@ impl MuxBackend for ZellijBackend {
             crate::utils::time::unix_now_ms(),
             min_observed_at_ms,
         )
-        .ok_or_else(|| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("fresh pane topology is unavailable for session `{session}`"),
+        .ok_or_else(|| {
+            output_error(format!(
+                "fresh pane topology is unavailable for session `{session}`"
+            ))
         })?;
         let tab_position = cache
             .panes
             .iter()
             .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
             .map(|candidate| candidate.tab_position)
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("target pane `{pane}` is absent from the topology cache"),
+            .ok_or_else(|| {
+                output_error(format!(
+                    "target pane `{pane}` is absent from the topology cache"
+                ))
             })?;
-        let view_cols =
-            tab_view_cols(&cache.panes, tab_position).ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("tab {tab_position} has no tiled topology width"),
-            })?;
+        let view_cols = tab_view_cols(&cache.panes, tab_position).ok_or_else(|| {
+            output_error(format!("tab {tab_position} has no tiled topology width"))
+        })?;
         let cols = u16::try_from(crate::mux::width::zellij_resize_step_cols(view_cols))
             .unwrap_or(u16::MAX);
         let stop_step_cols =
@@ -1214,10 +1177,7 @@ impl MuxBackend for ZellijBackend {
             return Ok(());
         }
         let target = ZellijPaneId::try_from(pane)
-            .map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: err.to_string(),
-            })?
+            .map_err(output_error)?
             .action_target();
         self.resize_sidebar_step(
             session,
@@ -1238,10 +1198,7 @@ impl MuxBackend for ZellijBackend {
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let target = ZellijPaneId::try_from(pane)
-            .map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: err.to_string(),
-            })?
+            .map_err(output_error)?
             .action_target();
         let mut spec = self.cmd().args(["action", "dump-screen"]);
         if ansi {
@@ -1267,10 +1224,7 @@ impl MuxBackend for ZellijBackend {
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let target = ZellijPaneId::try_from(pane)
-            .map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: err.to_string(),
-            })?
+            .map_err(output_error)?
             .action_target();
         self.cmd()
             .args(["action", "write-chars", "--pane-id", &target, "--", text])
@@ -1281,10 +1235,7 @@ impl MuxBackend for ZellijBackend {
     fn send_key(&self, pane: &PaneId, key: NamedKey) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let target = ZellijPaneId::try_from(pane)
-            .map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: err.to_string(),
-            })?
+            .map_err(output_error)?
             .action_target();
         let bytes = key.write_bytes().iter().map(u8::to_string);
         self.cmd()
@@ -1298,10 +1249,7 @@ impl MuxBackend for ZellijBackend {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let payload = paste_payload(text);
         let target = ZellijPaneId::try_from(pane)
-            .map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: err.to_string(),
-            })?
+            .map_err(output_error)?
             .action_target();
         // Chunk the complete byte stream so small pastes remain one command.
         let bytes = BRACKET_PASTE_OPEN
@@ -1499,9 +1447,8 @@ impl MuxBackend for ZellijBackend {
             &mut report,
             !attached,
             |view| {
-                let tab_position = view.parse::<u64>().map_err(|err| MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: format!("invalid sidebar tab position `{view}`: {err}"),
+                let tab_position = view.parse::<u64>().map_err(|err| {
+                    output_error(format!("invalid sidebar tab position `{view}`: {err}"))
                 })?;
                 let added = self.add_sidebar_to_tab(opts, tab_position, width_floor)?;
                 if !prove_sidebar_mount(opts, MuxName::Zellij, &added.pane, &build, || {
@@ -1509,13 +1456,10 @@ impl MuxBackend for ZellijBackend {
                         self.cleanup_failed_add(opts, raw_id);
                     }
                 }) {
-                    return Err(MuxErr::Output {
-                        program: "zellij".to_owned(),
-                        reason: format!(
-                            "sidebar {} mounted in tab {tab_position} without a current-build heartbeat",
-                            added.pane
-                        ),
-                    });
+                    return Err(output_error(format!(
+                        "sidebar {} mounted in tab {tab_position} without a current-build heartbeat",
+                        added.pane
+                    )));
                 }
                 Ok(match added.dock {
                     DockOutcome::Docked => ReconcileAddOutcome::Verified,
