@@ -76,6 +76,15 @@ fn seed_sidebar_heartbeat(env: &Env, session_name: &str, label: &str) -> PathBuf
         serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
     )
     .expect("write heartbeat");
+    // A live renderer rewrites its heartbeat every beat; this one-shot seed has
+    // no writer, so the runtime-claim sweep would rightly reap it once the run
+    // outlasts `SIDEBAR_HEARTBEAT_TTL`. Dating it past the run's bound keeps it
+    // a live claim for the whole `rimz start`, however slow the host.
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|file| file.set_modified(std::time::SystemTime::now() + ROOM_WORKFLOW_TIMEOUT))
+        .expect("date heartbeat past the run");
     path
 }
 
