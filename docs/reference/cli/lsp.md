@@ -133,7 +133,7 @@ rimz lsp status --server rust --json
 
 `status [CHECKOUT]` inspects one server without starting it. CHECKOUT defaults to cwd or the global `--root`; the most deeply enclosing registered checkout is used. Dead entries are swept first. `--server <NAME>` selects a server and is required when several entries match. No matching entry exits 3.
 
-Text shows checkout, server name, state, broker and server pids, request count, and lease count. Each attached editor shows its pid, client name (or `unnamed`), and seconds since attachment, followed by indented buffer paths relative to the checkout where possible. `(owner)` marks the holder whose buffer the server uses; `(unsaved in editor)` means changed since open or save, not a comparison with disk. A buffer already unsaved when opened is not detected, and editing back to disk text does not clear the marker.
+Text shows checkout, server name, state (the word `list` prints, so a never-started server reads `not started`), broker and server pids, request count, and lease count. Each attached editor shows its pid, client name (or `unnamed`), and seconds since attachment, followed by indented buffer paths relative to the checkout where possible. `(owner)` marks the holder whose buffer the server uses; `(unsaved in editor)` means changed since open or save, not a comparison with disk. A buffer already unsaved when opened is not detected, and editing back to disk text does not clear the marker.
 
 When a crash cause is retained, text adds `last crash` with the exit code or signal (or error when neither is known) and age, plus `stderr` with up to five trailing lines. The next server start clears the cause. Crashed query errors direct you to this status command.
 

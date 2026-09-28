@@ -7,7 +7,7 @@ use rimz::lsp::{
     attach::{self, Outcome, Target},
     check,
     query::{self, QueryErr, Verb},
-    registry::{self, State},
+    registry,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -454,18 +454,7 @@ fn status(
                 .map_or_else(|| "unknown".into(), |kind| kind.to_string()),
         ),
     );
-    facts.push(
-        "state",
-        render::cell(match entry.state {
-            State::Starting => "starting".into(),
-            State::Indexing => "indexing".into(),
-            State::Ready => "ready".into(),
-            State::Dormant { reason, .. } => {
-                reason.map_or_else(|| "dormant".into(), |reason| format!("dormant: {reason}"))
-            }
-            State::Stopped { reason, .. } => format!("stopped: {reason}"),
-        }),
-    );
+    facts.push("state", render::cell(render::lsp_state_label(&entry.state)));
     facts.push("broker pid", render::cell(entry.broker_pid.to_string()));
     facts.push(
         "server pid",
@@ -689,7 +678,7 @@ fn stop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry::StopReason;
+    use registry::{State, StopReason};
     use render::status::{self, StateRole};
 
     #[test]
