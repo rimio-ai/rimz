@@ -25,6 +25,249 @@ fn authoritative(mut window: RateLimitWindow) -> RateLimitWindow {
 }
 
 #[test]
+fn projection_preserves_entry_identity_and_old_bound_truth() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let old = AgentRateLimits {
+        windows: vec![auth(60, reset, now)],
+    };
+    let bound = AgentRateLimits {
+        windows: vec![auth(40, reset, now)],
+    };
+    let live = AgentRateLimits {
+        windows: vec![auth(80, reset, now)],
+    };
+    for prior in [None]
+        .into_iter()
+        .chain([false, true].into_iter().flat_map(|account| {
+            let old = &old;
+            let bound = &bound;
+            [false, true].map(move |has_bound| {
+                Some(RateLimitCacheEntry {
+                    account_key: account.then(|| "account".to_owned()),
+                    limits: old.clone(),
+                    bound_limits: has_bound.then(|| bound.clone()),
+                    unknown_since_ms: Some(123),
+                    ..Default::default()
+                })
+            })
+        }))
+    {
+        let mut cached = RateLimitsCache::default();
+        if let Some(entry) = &prior {
+            cached.entries.insert(login_key("claude"), entry.clone());
+        }
+        let mut frame = snapshot_with_panels(
+            WorkspaceId::from_project_root(Path::new("/persist")),
+            vec![provider_panel("claude", live.windows.clone())],
+        );
+        frame.now = now;
+        let (next, refresh) =
+            project_rate_limits(&mut frame, &cached, &RoomLoginSet::native(), true, None);
+        let expected = RateLimitCacheEntry {
+            scope: Default::default(),
+            account_key: prior.as_ref().and_then(|entry| entry.account_key.clone()),
+            limits: live.clone(),
+            bound_limits: prior.as_ref().and_then(|entry| {
+                entry
+                    .bound_limits
+                    .clone()
+                    .or_else(|| entry.account_key.as_ref().map(|_| old.clone()))
+            }),
+            pending: vec![],
+            unknown_since_ms: None,
+        };
+        assert!(next.unwrap().entries[&login_key("claude")] == expected);
+        assert_eq!(frame.providers[0].windows, live.windows);
+        assert!(refresh.is_empty());
+    }
+}
+
+#[test]
+fn projection_trace_keeps_key_order_and_snapshot_clock_for_both_roles() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let cached_only = scoped_window("cached", "Cached", 40, reset);
+    let live_only = scoped_window("live", "Live", 20, reset);
+    let both = auth(80, reset, now);
+    let cached = kind_wide_cache(
+        1,
+        BTreeMap::from([(
+            "claude".to_owned(),
+            AgentRateLimits {
+                windows: vec![cached_only.clone(), auth(60, reset, now)],
+            },
+        )]),
+        BTreeMap::new(),
+    );
+    for producer in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trace.jsonl");
+        let mut frame = snapshot_with_panels(
+            WorkspaceId::from_project_root(Path::new("/trace")),
+            vec![provider_panel(
+                "claude",
+                vec![live_only.clone(), both.clone()],
+            )],
+        );
+        frame.now = now;
+        project_rate_limits(
+            &mut frame,
+            &cached,
+            &RoomLoginSet::native(),
+            producer,
+            Some(&path),
+        );
+        let records: Vec<serde_json::Value> = std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let expected: Vec<_> = [(&both, true), (&cached_only, false), (&live_only, true)]
+            .into_iter()
+            .map(|(window, live)| {
+                serde_json::json!({
+                    "ts": now.to_string(),
+                    "kind": "claude",
+                    "scope_id": window.scope.as_ref().map(|scope| &scope.id),
+                    "duration_mins": window.duration_mins,
+                    "live": live.then(|| serde_json::json!({
+                        "used_percentage": window.used_percentage,
+                        "resets_at": reset.to_string(),
+                        "observed_at": window.observed_at.map(|stamp| stamp.to_string()),
+                        "source": "authoritative",
+                    })),
+                    "truth_used_percentage": window.used_percentage,
+                    "truth_resets_at": reset.to_string(),
+                })
+            })
+            .collect();
+        assert_eq!(records, expected);
+    }
+}
+
+#[test]
+fn unmetered_projection_drops_only_its_login_without_trace_or_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace.jsonl");
+    let other: LoginKey = "claude@work".parse().unwrap();
+    let entry = RateLimitCacheEntry {
+        limits: AgentRateLimits {
+            windows: vec![rl_window(60, None)],
+        },
+        ..Default::default()
+    };
+    let cached = RateLimitsCache {
+        entries: BTreeMap::from([(login_key("claude"), entry.clone()), (other.clone(), entry)]),
+        ..Default::default()
+    };
+    let mut panel = provider_panel("claude", vec![rl_window(80, None)]);
+    panel.metered = false;
+    let mut frame = snapshot_with_panels(WorkspaceId::from_project_root(dir.path()), vec![panel]);
+    let (next, refresh) = project_rate_limits(
+        &mut frame,
+        &cached,
+        &RoomLoginSet::native(),
+        true,
+        Some(&path),
+    );
+    assert!(
+        next.unwrap().entries == BTreeMap::from([(other.clone(), cached.entries[&other].clone())])
+    );
+    assert!(frame.providers[0].windows.is_empty());
+    assert!(refresh.is_empty());
+    assert!(!path.exists());
+}
+
+#[test]
+fn consumer_reset_and_unknown_transitions_never_persist_or_refresh() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let cached = kind_wide_cache(
+        1,
+        BTreeMap::from([(
+            "claude".to_owned(),
+            AgentRateLimits {
+                windows: vec![auth(60, reset, now)],
+            },
+        )]),
+        BTreeMap::new(),
+    );
+    for (cache, windows) in [
+        (
+            cached,
+            vec![auth(10, reset + SignedDuration::from_secs(3_600), now)],
+        ),
+        (RateLimitsCache::default(), vec![]),
+    ] {
+        for producer in [false, true] {
+            let mut frame = snapshot_with_panels(
+                WorkspaceId::from_project_root(Path::new("/consumer")),
+                vec![provider_panel("claude", windows.clone())],
+            );
+            frame.now = now;
+            let (next, refresh) =
+                project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), producer, None);
+            assert_eq!(next.is_some(), producer);
+            assert_eq!(
+                refresh,
+                if producer {
+                    vec![login_key("claude")]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn account_merge_sorts_truth_and_pending_and_prunes_prior_only_keys() {
+    let (_dir, _workspace, runtime) = runtime();
+    let now = Timestamp::now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let prior = ["z", "omitted", "a"].map(|id| scoped_window(id, id, 60, reset));
+    let cached = kind_wide_cache(
+        1,
+        BTreeMap::from([(
+            "claude".to_owned(),
+            AgentRateLimits {
+                windows: prior.into(),
+            },
+        )]),
+        BTreeMap::new(),
+    );
+    write_rate_limits_cache(&runtime.shared_rate_limits_path(), &cached);
+    let live = ["z", "a"].map(|id| RateLimitWindow {
+        source: WindowSource::BestEffort,
+        observed_at: Some(now),
+        ..scoped_window(id, id, 2, reset)
+    });
+    merge_account_rate_limits(
+        &runtime,
+        &login_key("claude"),
+        Default::default(),
+        AgentRateLimits {
+            windows: live.into(),
+        },
+    );
+    let published = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let entry = &published.entries[&login_key("claude")];
+    assert_eq!(
+        entry.limits.windows,
+        ["a", "z"].map(|id| scoped_window(id, id, 60, reset))
+    );
+    assert_eq!(
+        entry
+            .pending
+            .iter()
+            .map(|refill| (refill.scope_id.as_deref(), refill.used_percentage))
+            .collect::<Vec<_>>(),
+        vec![(Some("a"), 2), (Some("z"), 2)]
+    );
+}
+
+#[test]
 fn room_publications_preserve_other_logins_and_project_only_their_own_windows() {
     let (dir, workspace, runtime) = runtime();
     let other_workspace = WorkspaceId::from_project_root(&dir.path().join("other"));
