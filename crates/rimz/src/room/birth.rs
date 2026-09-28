@@ -217,7 +217,7 @@ impl RoomContext {
             .chain(&resume.channel_tabs)
             .cloned()
             .collect();
-        let sidebar = self.sidebar_options(&cwd, resume_tabs, refresh_ms);
+        let sidebar = self.sidebar_options_with_resume(&cwd, resume_tabs, refresh_ms);
 
         self.register_room_keys();
 

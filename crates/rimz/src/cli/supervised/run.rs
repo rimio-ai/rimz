@@ -317,7 +317,7 @@ fn open_attempt_pane(
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();
     let tab = |title: String| -> Result<()> {
-        let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
+        let sidebar = room.sidebar_options(&prepared.launch.cwd);
         room.backend()
             .open_tab(&TabOptions {
                 env: env.clone(),
@@ -371,7 +371,7 @@ fn open_attempt_pane(
         RunPlacement::SubagentZone => match supervised::pane::lock_subagent_zone(&prepared.store) {
             Ok(guard) => {
                 subagent_zone_guard = Some(guard);
-                let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
+                let sidebar = room.sidebar_options(&prepared.launch.cwd);
                 match supervised::pane::split_into_subagent_zone(
                     room.backend(),
                     &prepared.store,

@@ -231,15 +231,9 @@ pub(super) fn launch_layout(
         allow_in_place,
     );
     let in_place = placement == Placement::SamePane;
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let room = RoomContext::from_resolved(
-        workspace,
-        machine_config.clone(),
-        mux,
-        RoomSizing::OrdinaryTab,
-    )?;
+    let room = RoomContext::live_tab(workspace, machine_config.clone(), globals.mux)?;
+    let mux = room.mux_name();
     let backend = room.backend();
-    rimz::room::require_live_session(backend, &workspace.session_name)?;
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(workspace)? {
         return Ok(());
     }
@@ -374,7 +368,7 @@ pub(super) fn launch_layout(
         },
         |channel| format!("#{channel}"),
     );
-    let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
+    let sidebar = room.sidebar_options(&cwd);
     let mut panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
@@ -696,15 +690,13 @@ fn launch_resume_layout(
         Placement::NewTab
     };
     let in_place = placement == Placement::SamePane;
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let room = RoomContext::from_resolved(
+    let room = RoomContext::live_tab(
         workspace,
         std::sync::Arc::new(machine_config.clone()),
-        mux,
-        RoomSizing::OrdinaryTab,
+        globals.mux,
     )?;
+    let mux = room.mux_name();
     let backend = room.backend();
-    rimz::room::require_live_session(backend, &workspace.session_name)?;
     let launch_requests = launch_identity_requests(
         &layout,
         None,
@@ -733,7 +725,7 @@ fn launch_resume_layout(
         || rimz::harness::spec::default_tab_title(&layout, None, team_name.as_deref()),
         |channel| format!("#{channel}"),
     );
-    let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
+    let sidebar = room.sidebar_options(&cwd);
     let mut panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {

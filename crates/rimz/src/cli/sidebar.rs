@@ -1087,7 +1087,7 @@ fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
             focus: true,
             dock_sidebar: false,
             after: None,
-            sidebar: room.sidebar_options(&workspace.worktree_root, Vec::new(), None),
+            sidebar: room.sidebar_options(&workspace.worktree_root),
         })
         .context("opening sidebar gallery")
 }
