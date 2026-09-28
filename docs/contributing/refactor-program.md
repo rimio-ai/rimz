@@ -96,6 +96,7 @@ A review fix after the record commit means re-measuring and amending it.
 - The contract declares `kind = "seam"`, lists every module on both sides in `paths`, proves each edge with a `[[dependency]]` row at its target `max-sites` (`0` for a closed direction) beside `[[rehome]]` rows for what moves, and takes a flat ceiling (`0`, or a small positive with the reason in the commit).
 - It runs alone: no module pass touches its `paths` until it merges, and the ledger marks it `in flight <branch>`.
 - Its target states the direction in one sentence copied into the module's `AGENTS.md` and into `refactor-target.toml` as a lowered admission, so `conform` keeps it closed.
+- A same-layer seam has no admission to lower: close it by lowering one side's layer or setting an `allowed-dependencies` list.
 - A sibling-family collapse names the winning member and quotes the divergences that must survive (those `git log -S` traces to a fix). Build the family dossier by running `inspect --module` on each sibling with the same `--section` set.
 - Two contracts on one branch from one base each list the union of changed paths, Markdown and TOML included; each contract's proof is its own dependency, delete or esc rows.
 
