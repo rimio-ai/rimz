@@ -39,15 +39,6 @@ pub(in crate::sidebar_pane::render) struct WorktreeRenderContext<'render, 'snaps
     pub(in crate::sidebar_pane::render) meter_pixels: Option<&'render mut MeterPixels>,
 }
 
-enum WorktreeTail {
-    None,
-    More {
-        line: Line<'static>,
-        totals: Option<Line<'static>>,
-    },
-    Less(Line<'static>),
-}
-
 /// Compose one worktree group's lines and interaction geometry together.
 /// The row index captured for a row's lines matches `app::visible_rows()`:
 /// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
@@ -86,12 +77,16 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     // worktree is just its bold label. The `external` divider is full-bleed
     // chrome with a blank gutter.
     let folded = finished_folded(visible_group);
-    let draws_pipeline = group.pipeline.is_some() && !folded;
+    let pipeline = group.pipeline.as_ref().filter(|_| !folded);
     let team = group
         .team
         .as_deref()
         .filter(|team| !group.label.ends_with(&format!("/{team}")));
-    let header_team = if draws_pipeline || folded { None } else { team };
+    let header_team = if pipeline.is_some() || folded {
+        None
+    } else {
+        team
+    };
     let (header, header_link) =
         group_header(ctx.theme, group, header_team, ctx.width, group_selected);
     let collapses = group.collapses();
@@ -112,9 +107,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         header_target,
         header_hit.into_iter().chain(header_link),
     );
-    if let Some(pipeline) = &group.pipeline
-        && !folded
-    {
+    if let Some(pipeline) = pipeline {
         let rows = visible_group.rows(roster);
         let owner = pipeline.owner.as_deref().and_then(|owner| {
             rows.iter().position(|row| {
@@ -139,10 +132,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
             None,
             ctx.width,
         );
-        match target {
-            Some(target) => block.push_target(line, target),
-            None => block.push_inert(line),
-        }
+        block.push_with_regions(line, None, target.map(|target| (0..u16::MAX, target)));
     }
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
@@ -172,23 +162,14 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         }
     }
     let target = HitTarget::ToggleGroup(group.key.clone());
-    match worktree_tail(ctx, roster, visible_group) {
-        WorktreeTail::More { line, totals } => {
-            block.push_target(
-                with_gutter(ctx.theme, line, lane, None, ctx.width),
-                target.clone(),
-            );
-            if let Some(totals) = totals {
-                block.push_target(
-                    with_gutter(ctx.theme, totals, lane, None, ctx.width),
-                    target,
-                );
-            }
-        }
-        WorktreeTail::Less(line) => {
-            block.push_target(with_gutter(ctx.theme, line, lane, None, ctx.width), target)
-        }
-        WorktreeTail::None => {}
+    for line in worktree_tail(ctx, roster, visible_group)
+        .into_iter()
+        .flatten()
+    {
+        block.push_target(
+            with_gutter(ctx.theme, line, lane, None, ctx.width),
+            target.clone(),
+        );
     }
     block
 }
@@ -205,8 +186,9 @@ fn pipeline_line(
 ) -> Line<'static> {
     let theme = ctx.theme;
     let position = pipeline.position();
+    let passed_style = theme.styled(Component::PipelinePassed, Modifier::empty());
     let name_style = if position == PipelinePosition::Done {
-        theme.styled(Component::PipelinePassed, Modifier::empty())
+        passed_style
     } else {
         owner.map_or(theme.muted(), |status| {
             status_style_at(theme, status, ctx.animation_phase)
@@ -219,10 +201,9 @@ fn pipeline_line(
                 track.push(Span::raw(" "));
             }
             let (role, style) = match position {
-                PipelinePosition::Done if index + 1 == pipeline.stages.len() => (
-                    GlyphRole::PipelineDone,
-                    theme.styled(Component::PipelinePassed, Modifier::empty()),
-                ),
+                PipelinePosition::Done if index + 1 == pipeline.stages.len() => {
+                    (GlyphRole::PipelineDone, passed_style)
+                }
                 PipelinePosition::At(current) if index == current => {
                     (GlyphRole::PipelineCurrent, name_style)
                 }
@@ -234,33 +215,23 @@ fn pipeline_line(
                     };
                     (GlyphRole::PipelineFuture, style)
                 }
-                _ => (
-                    GlyphRole::PipelinePassed,
-                    theme.styled(Component::PipelinePassed, Modifier::empty()),
-                ),
+                _ => (GlyphRole::PipelinePassed, passed_style),
             };
             track.push(Span::styled(theme.glyph(role).to_owned(), style));
-            if position == PipelinePosition::At(index)
-                || (position == PipelinePosition::Done && index + 1 == pipeline.stages.len())
-            {
+            if matches!(role, GlyphRole::PipelineCurrent | GlyphRole::PipelineDone) {
                 track.push(Span::raw(" "));
                 track.push(Span::styled(pipeline.stage.clone(), name_style));
             }
         }
     }
     let width = content_width(ctx.width);
-    let total = pipeline.total_secs(ctx.now);
     // Timestamp differences fit i64 seconds, as used by age_label.
-    let clock = match (pipeline.span_secs(ctx.now), total) {
-        (Some(stage), Some(total)) => Some(format!(
-            "{} / {}",
-            age_label(stage as i64),
-            age_label(total as i64)
-        )),
-        (Some(secs), None) | (None, Some(secs)) => Some(age_label(secs as i64)),
-        (None, None) => None,
-    }
-    .filter(|clock| 3 + text_width(clock) + 2 <= width);
+    let clock = [pipeline.span_secs(ctx.now), pipeline.total_secs(ctx.now)]
+        .into_iter()
+        .flatten()
+        .map(|secs| age_label(secs as i64))
+        .reduce(|stage, total| format!("{stage} / {total}"))
+        .filter(|clock| 3 + text_width(clock) + 2 <= width);
     // Keep two cells of the name (`I…`, never a bare `…`), then reserve the
     // whole right clock.
     // The badge drops before the track; dropping the track never buys it back.
@@ -302,26 +273,26 @@ fn worktree_tail(
     ctx: &RowCtx<'_>,
     roster: &VisibleRoster<'_>,
     visible_group: &VisibleGroup<'_>,
-) -> WorktreeTail {
+) -> [Option<Line<'static>>; 2] {
     let group = visible_group.source();
     let collapses = group.collapses();
     let hidden = visible_group.hidden_count();
     if hidden > 0 && !visible_group.expanded() {
-        return WorktreeTail::More {
-            line: if finished_folded(visible_group) {
+        return [
+            Some(if finished_folded(visible_group) {
                 finished_roster_line(ctx, visible_group, roster)
             } else {
                 Line::styled(format!("  +{hidden} more"), ctx.theme.muted())
-            },
-            totals: collapses
+            }),
+            collapses
                 .then(|| finished_totals_line(ctx, group))
                 .flatten(),
-        };
+        ];
     }
     if visible_group.natural_hidden_count() > 0 && visible_group.expanded() && !collapses {
-        WorktreeTail::Less(Line::styled("  − less", ctx.theme.muted()))
+        [Some(Line::styled("  − less", ctx.theme.muted())), None]
     } else {
-        WorktreeTail::None
+        [None, None]
     }
 }
 
@@ -570,7 +541,10 @@ fn group_header(
     let right_width = spans_width(&right);
     let ci = group.ci.map(|ci| {
         let (role, component) = ci_marker(ci);
-        (format!(" {}", theme.glyph(role)), component)
+        Span::styled(
+            format!(" {}", theme.glyph(role)),
+            theme.styled(component, Modifier::empty()),
+        )
     });
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
@@ -588,18 +562,36 @@ fn group_header(
             format!("{} {}", theme.glyph(role), group.label)
         }
     };
-    let team_suffix = team.map(|team| format!("{}{team}", value_seam(theme)));
-    let qualifier_suffix = group
-        .label_qualifier
-        .as_deref()
-        .map(|qualifier| format!("{}{qualifier}", value_seam(theme)));
-    let full_label = format!(
-        "{label_with_prefix}{}{}",
-        qualifier_suffix.as_deref().unwrap_or_default(),
-        team_suffix.as_deref().unwrap_or_default()
+    let label_style = if group.finished {
+        theme.muted().add_modifier(Modifier::BOLD)
+    } else {
+        theme.styled(Component::WorktreeHeader, Modifier::BOLD)
+    };
+    let mut spans = vec![Span::styled(label_with_prefix, label_style)];
+    spans.extend(
+        [
+            (
+                group.label_qualifier.as_deref(),
+                Component::WorktreeQualifier,
+            ),
+            (team, Component::TeamLabel),
+        ]
+        .into_iter()
+        .filter_map(|(suffix, component)| {
+            suffix.map(|suffix| {
+                Span::styled(
+                    format!("{}{suffix}", value_seam(theme)),
+                    theme.styled(component, Modifier::empty()),
+                )
+            })
+        }),
     );
+    let full_label = spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
     let avail = cw.saturating_sub(right_width.saturating_add(1));
-    let ci_width = ci.as_ref().map_or(0, |(glyph, _)| text_width(glyph));
+    let ci_width = ci.as_ref().map_or(0, Span::width);
     let badge_run = |members: &[(&str, u64, Option<&String>)]| {
         let mut run = String::new();
         let mut links = Vec::new();
@@ -617,53 +609,50 @@ fn group_header(
         Some(number) => {
             let arrow = theme.glyph(GlyphRole::WorktreePrStack);
             let own = (arrow, number, group.pr_url.as_ref());
-            let mut members = Vec::new();
-            for pr in &group.pr_stack.below {
-                members.push((arrow, pr.number, pr.url.as_ref()));
-            }
-            members.push(own);
-            for level in &group.pr_stack.above {
-                for (index, pr) in level.iter().enumerate() {
-                    let separator = if index == 0 { arrow } else { "," };
-                    members.push((separator, pr.number, pr.url.as_ref()));
-                }
-            }
+            let members = group
+                .pr_stack
+                .below
+                .iter()
+                .map(|pr| (arrow, pr.number, pr.url.as_ref()))
+                .chain(std::iter::once(own))
+                .chain(group.pr_stack.above.iter().flat_map(|level| {
+                    level.iter().enumerate().map(|(index, pr)| {
+                        let separator = if index == 0 { arrow } else { "," };
+                        (separator, pr.number, pr.url.as_ref())
+                    })
+                }))
+                .collect::<Vec<_>>();
             let stacked = badge_run(&members);
-            if text_width(&full_label) + ci_width + text_width(&stacked.0) < avail {
-                stacked
-            } else {
-                badge_run(&[own])
-            }
+            let (badge, links) =
+                if text_width(&full_label) + ci_width + text_width(&stacked.0) < avail {
+                    stacked
+                } else {
+                    badge_run(&[own])
+                };
+            (
+                Some(Span::styled(
+                    badge,
+                    theme.styled(Component::WorktreePrBadge, Modifier::empty()),
+                )),
+                links,
+            )
         }
-        None => (String::new(), Vec::new()),
+        None => (None, Vec::new()),
     };
-    let badge = (!badge.is_empty()).then_some(badge);
     // The name shortens first, then the `#N` badge drops, and the CI verdict
-    // goes last: the identity elements are admitted as a prefix of one ordered
-    // walk against a single budget, so an element is never admitted when an
-    // earlier present one was refused. That is what makes widening the pane
-    // unable to remove an element, whatever the glyph set's cell widths are.
-    let mut identity_width = 0;
-    let mut admitted = [false; 2];
-    for (admit, width) in admitted.iter_mut().zip([
-        ci.as_ref().map(|(glyph, _)| text_width(glyph)),
-        badge.as_ref().map(|badge| text_width(badge)),
-    ]) {
-        let Some(width) = width else { continue };
-        if identity_width + width >= avail {
-            break;
-        }
-        identity_width += width;
-        *admit = true;
-    }
-    let ci = ci.filter(|_| admitted[0]);
-    let badge = badge.filter(|_| admitted[1]);
+    // goes last: CI fits only below the budget, and the badge only when their
+    // combined width does. These strict inequalities admit a prefix, so a
+    // refused CI also refuses the badge, and widening the pane cannot remove
+    // an element, whatever the glyph set's cell widths are.
+    let ci = ci.filter(|_| ci_width < avail);
+    let badge = badge.filter(|badge| ci_width + badge.width() < avail);
+    let identity_width = ci.as_ref().map_or(0, Span::width) + badge.as_ref().map_or(0, Span::width);
     let label_width = avail.saturating_sub(identity_width).max(1);
     let left = ellipsize(&full_label, label_width);
     let left_width = text_width(&left);
     let hyperlinks = badge_links
         .into_iter()
-        .filter(|_| admitted[1])
+        .filter(|_| badge.is_some())
         .filter_map(|(columns, url)| {
             let offset = left_width.saturating_add(ci_width);
             Some((
@@ -679,18 +668,20 @@ fn group_header(
     // exactly on the content width — a space frames the dotted run from the text
     // on each side it touches.
     let middle = cw.saturating_sub(left_width + identity_width + right_width);
-    let fill = if sealed {
-        match (right.is_empty(), middle) {
-            (false, m) if m >= 2 => {
-                format!(" {} ", theme.glyph(GlyphRole::WorktreeDotted).repeat(m - 2))
-            }
-            (true, m) if m >= 1 => {
-                format!(" {}", theme.glyph(GlyphRole::WorktreeDotted).repeat(m - 1))
-            }
-            (_, m) => " ".repeat(m),
+    let fill = match (sealed, right.is_empty()) {
+        (true, false) if middle >= 2 => {
+            format!(
+                " {} ",
+                theme.glyph(GlyphRole::WorktreeDotted).repeat(middle - 2)
+            )
         }
-    } else {
-        " ".repeat(middle)
+        (true, true) if middle >= 1 => {
+            format!(
+                " {}",
+                theme.glyph(GlyphRole::WorktreeDotted).repeat(middle - 1)
+            )
+        }
+        _ => " ".repeat(middle),
     };
 
     // The selected worktree's dotted `┄` seal wears the dim selection tone, so it
@@ -701,41 +692,11 @@ fn group_header(
     } else {
         theme.faint()
     };
-    let label_style = if group.finished {
-        theme.muted().add_modifier(Modifier::BOLD)
-    } else {
-        theme.styled(Component::WorktreeHeader, Modifier::BOLD)
-    };
-    let mut spans = if left == full_label {
-        let mut spans = vec![Span::styled(label_with_prefix, label_style)];
-        if let Some(suffix) = qualifier_suffix {
-            spans.push(Span::styled(
-                suffix,
-                theme.styled(Component::WorktreeQualifier, Modifier::empty()),
-            ));
-        }
-        if let Some(suffix) = team_suffix {
-            spans.push(Span::styled(
-                suffix,
-                theme.styled(Component::TeamLabel, Modifier::empty()),
-            ));
-        }
-        spans
-    } else {
-        vec![Span::styled(left, label_style)]
-    };
-    if let Some((glyph, component)) = ci {
-        spans.push(Span::styled(
-            glyph,
-            theme.styled(component, Modifier::empty()),
-        ));
+    if left != full_label {
+        spans = vec![Span::styled(left, label_style)];
     }
-    if let Some(badge) = badge {
-        spans.push(Span::styled(
-            badge,
-            theme.styled(Component::WorktreePrBadge, Modifier::empty()),
-        ));
-    }
+    spans.extend(ci);
+    spans.extend(badge);
     spans.push(Span::styled(fill, fill_style));
     spans.extend(right);
     (Line::from(spans), hyperlinks)
