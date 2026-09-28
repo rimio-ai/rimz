@@ -73,6 +73,45 @@ fn doctor_json(output: &Output) -> Value {
 }
 
 #[test]
+fn doctor_flags_clock_tasks_without_a_scheduler() {
+    let env = Env::new();
+    std::fs::write(env.rimz_home().join("loop.toml"), format!(
+        "[tasks.morning]\nagent = 'claude'\nroot = '{}'\nevery = '1m'\n[tasks.signal]\nagent = 'claude'\nroot = '{}'\nsignal = 'ci.failed'\n", env.project_root.display(), env.project_root.display()
+    )).unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(report["loop_tasks"]["timer"]["state"], "not_installed");
+    assert_eq!(report["loop_tasks"]["tasks"][0]["room_open"], false);
+    assert_eq!(report["loop_tasks"]["unscheduled"], json!(["morning"]));
+    let output = env.rimz().arg("doctor").output().unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("rimz loop timer install")
+    );
+
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().unwrap();
+    let instance = SidebarInstanceId::new();
+    let heartbeat = SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        instance.clone(),
+        MuxName::Tmux,
+        "rimz-test",
+        runtime.sock_dir.join("sidebar.sock"),
+        None,
+    );
+    std::fs::write(
+        runtime.sidebar_heartbeat_path(&instance),
+        serde_json::to_vec(&heartbeat).unwrap(),
+    )
+    .unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(report["loop_tasks"]["tasks"][0]["room_open"], true);
+    assert_eq!(report["loop_tasks"]["unscheduled"], json!([]));
+}
+
+#[test]
 fn doctor_checks_selected_servers_and_reports_startup_causes() {
     let env = Env::new();
     std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();

@@ -220,7 +220,7 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `HOOKS` | Agents reporting to RimZ, a row with the fix for each agent whose hooks need a command, agents not found on the machine. |
 | `ACCOUNTS` | Conditional. Each named account's home and status, marking this room's account. |
 | `AGENT PLUGINS` | Conditional. Each plugin manifest, its validation result, and its probes. |
-| `LOOP TASKS` | Configured loop tasks with target, trigger, and root. |
+| `LOOP TASKS` | Configured loop tasks with target, trigger, root, room state, and loop timer state. Warns when a live clock task has neither an open room nor an active timer. |
 | `LSP` | Machine-wide shared servers in `rimz lsp list` order, recorded crash exit/stderr, and the last memory refusal or queue timeout. Current-checkout startup checks follow the table, with causes and fixes. |
 | `REMOTE CONTROL` | Remote-control hosts and their readiness, or `off`. |
 | `STORAGE` | RimZ's disk use by area. |

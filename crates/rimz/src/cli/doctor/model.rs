@@ -565,12 +565,21 @@ impl HookStatus {
     }
 }
 
-/// Loop tasks from config plus transient state: the scheduled-execution surface
-/// this machine carries, surfaced so it is visible. Room-open state lives in
-/// `rimz loop list`.
+/// Loop tasks from config plus transient state, their room and timer coverage,
+/// and the live clock tasks left without a scheduler.
 #[derive(Debug, Serialize)]
 pub(super) struct LoopTasks {
     pub(super) tasks: Vec<LoopTaskRow>,
+    pub(super) timer: LoopTimer,
+    pub(super) unscheduled: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(super) enum LoopTimer {
+    NotInstalled,
+    Installed { backend: &'static str, active: bool },
+    Unavailable { error: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -580,6 +589,7 @@ pub(super) struct LoopTaskRow {
     pub(super) when: String,
     pub(super) root: String,
     pub(super) valid: bool,
+    pub(super) room_open: bool,
 }
 
 #[derive(Debug, Serialize)]

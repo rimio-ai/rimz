@@ -30,6 +30,9 @@ mod render;
 mod runtime;
 mod watermark;
 
+#[cfg(test)]
+mod tests;
+
 use model::DoctorReport;
 
 #[derive(Debug, Args)]
@@ -223,9 +226,29 @@ fn config_file_error_detail(
 
 /// The loop tasks from config plus transient instance state. Read-only and
 /// workspace-independent: it surfaces the scheduled-execution surface this box
-/// carries; `rimz loop list` reports whether each task's room is open.
+/// carries, including live clock tasks without a scheduler.
 fn collect_loop() -> model::LoopTasks {
+    use super::loop_timer::{self, TimerStatus};
+    use rimz::harness::schedule::arming;
     use rimz::harness::schedule::catalog::{TaskCatalog, TaskSource, workspace_instance_roots};
+    let timer_status = loop_timer::status();
+    let timer_active = timer_status.as_ref().is_ok_and(TimerStatus::active);
+    let timer = match timer_status {
+        Ok(TimerStatus::NotInstalled) => model::LoopTimer::NotInstalled,
+        Ok(TimerStatus::Installed {
+            backend, active, ..
+        }) => model::LoopTimer::Installed {
+            backend: backend.label(),
+            active,
+        },
+        Err(error) => model::LoopTimer::Unavailable {
+            error: error.to_string(),
+        },
+    };
+    let arming = arming::load();
+    let now = jiff::Timestamp::now();
+    let mut rooms = std::collections::BTreeMap::new();
+    let mut unscheduled = Vec::new();
     let machine = TaskCatalog::load_lenient(None);
     let instances = workspace_instance_roots()
         .into_iter()
@@ -244,6 +267,22 @@ fn collect_loop() -> model::LoopTasks {
         .chain(instances.iter().map(|(name, task)| (name, task)))
         .map(|(name, task)| {
             let entry = task.entry();
+            let room_open = *rooms
+                .entry(entry.resolved_root())
+                .or_insert_with_key(|root| {
+                    rimz::RuntimePaths::for_project_root(root)
+                        .is_ok_and(|runtime| rimz::sidebar::fresh_sidebar_present(&runtime))
+                });
+            if unscheduled_clock(
+                task.trigger(),
+                arming.get(&task.key(name)),
+                task.source(),
+                room_open,
+                timer_active,
+                now,
+            ) {
+                unscheduled.push(name.clone());
+            }
             let (when, valid) = match task.trigger() {
                 Ok(trigger) => (trigger.describe(), true),
                 Err(err) => (format!("invalid: {err}"), false),
@@ -258,10 +297,32 @@ fn collect_loop() -> model::LoopTasks {
                 when,
                 root: entry.root.display().to_string(),
                 valid,
+                room_open,
             }
         })
         .collect();
-    model::LoopTasks { tasks: rows }
+    model::LoopTasks {
+        tasks: rows,
+        timer,
+        unscheduled,
+    }
+}
+
+fn unscheduled_clock(
+    trigger: &Result<rimz::harness::schedule::ParsedTrigger, rimz::harness::schedule::ScheduleErr>,
+    record: Option<&rimz::harness::schedule::arming::Arming>,
+    source: rimz::harness::schedule::catalog::TaskSource,
+    room_open: bool,
+    timer_active: bool,
+    now: jiff::Timestamp,
+) -> bool {
+    use rimz::harness::schedule::{Trigger, arming::ArmState};
+    !room_open
+        && !timer_active
+        && trigger
+            .as_ref()
+            .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Schedule(_)))
+        && ArmState::resolve(record, source, now) == ArmState::Live
 }
 
 fn workspace_view(ws: &rimz::ResolvedWorkspace) -> model::Workspace {

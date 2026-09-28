@@ -1,6 +1,6 @@
 use super::*;
 use crate::cli::doctor::model::{
-    AccountRow, HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow,
+    AccountRow, HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow, LoopTimer,
     MachineConfigProblem, MachineConfigProblemKind, MessageProblemRow, MuxBinaries, MuxLogIssue,
     OpenCounts, PresenceCommandFailure, PresencePluginRow, PresencePluginStatus,
     PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps, ZellijCaps,
@@ -460,7 +460,11 @@ fn report_fixture() -> DoctorReport {
         hooks: Vec::new(),
         accounts: Probe::Ready(Accounts { rows: Vec::new() }),
         plugins: Vec::new(),
-        loop_tasks: LoopTasks { tasks: Vec::new() },
+        loop_tasks: LoopTasks {
+            tasks: Vec::new(),
+            timer: LoopTimer::NotInstalled,
+            unscheduled: Vec::new(),
+        },
         remote_control: RemoteControl::Off,
         disk_usage: storage_fixture(),
         protocols: None,
@@ -620,6 +624,7 @@ fn loop_section_lists_tasks_and_flags_invalid_ones() {
                 when: "07:00 on weekdays".to_owned(),
                 root: "/home/you/code/app".to_owned(),
                 valid: true,
+                room_open: true,
             },
             LoopTaskRow {
                 name: "broken".to_owned(),
@@ -627,14 +632,21 @@ fn loop_section_lists_tasks_and_flags_invalid_ones() {
                 when: "invalid: bad time".to_owned(),
                 root: "/home/you/code/other".to_owned(),
                 valid: false,
+                room_open: false,
             },
         ],
+        timer: LoopTimer::NotInstalled,
+        unscheduled: Vec::new(),
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
         render_loop(w, &loop_tasks, &mut tally)
     });
     assert!(out.contains("LOOP TASKS"), "section title:\n{out}");
+    assert!(
+        out.contains("room open") && out.contains("no room"),
+        "{out}"
+    );
     assert!(
         out.contains("morning") && out.contains("07:00 on weekdays"),
         "{out}"
@@ -1278,10 +1290,84 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
 fn loop_section_reads_empty_when_unconfigured() {
     let out = strip(|w| {
         let mut tally = Tally::default();
-        render_loop(w, &LoopTasks { tasks: Vec::new() }, &mut tally)
+        render_loop(
+            w,
+            &LoopTasks {
+                tasks: Vec::new(),
+                timer: LoopTimer::NotInstalled,
+                unscheduled: Vec::new(),
+            },
+            &mut tally,
+        )
     });
     assert!(out.contains("LOOP TASKS"), "{out}");
     assert!(out.contains("none configured"), "{out}");
+}
+
+#[test]
+fn loop_section_reports_scheduler_coverage() {
+    for (timer, unscheduled, label, warnings) in [
+        (
+            LoopTimer::NotInstalled,
+            vec!["morning".into()],
+            "not installed",
+            1,
+        ),
+        (
+            LoopTimer::Installed {
+                backend: "systemd user",
+                active: false,
+            },
+            vec!["morning".into()],
+            "inactive (systemd user)",
+            1,
+        ),
+        (
+            LoopTimer::Installed {
+                backend: "systemd user",
+                active: true,
+            },
+            vec![],
+            "active (systemd user)",
+            0,
+        ),
+        (
+            LoopTimer::Unavailable {
+                error: "probe failed".into(),
+            },
+            vec![],
+            "unavailable (probe failed)",
+            1,
+        ),
+    ] {
+        let tasks = LoopTasks {
+            tasks: vec![LoopTaskRow {
+                name: "morning".into(),
+                spec: "claude".into(),
+                when: "every minute".into(),
+                root: "/project".into(),
+                valid: true,
+                room_open: false,
+            }],
+            timer,
+            unscheduled,
+        };
+        let mut tally = Tally::default();
+        let out = strip(|w| render_loop(w, &tasks, &mut tally));
+        assert!(out.contains("loop timer") && out.contains(label), "{out}");
+        assert_eq!(tally.warns.len(), warnings, "{out}");
+        if !tasks.unscheduled.is_empty() {
+            for text in [
+                "morning",
+                "no room is open for their root",
+                "rimz loop timer install",
+                "rimz loop timer status",
+                "rimz start",
+            ] {
+                assert!(out.contains(text), "{out}");
+            }
+        }
+    }
 }
 
 #[test]
