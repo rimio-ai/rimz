@@ -272,7 +272,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
             parked_on_background: false,
             turn_id: None,
         }),
-        conversation_input(Some("done"), &[], &[]),
+        conversation_input(Some("  done \n"), &[], &[]),
     )
     .unwrap();
     assert_eq!(
@@ -295,7 +295,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
             native_key: None,
         }),
         conversation_input(
-            None,
+            Some(" \n "),
             &[rimz::transcript::AskQuestion {
                 question: "Ship?".to_owned(),
                 options: Vec::new(),
@@ -312,8 +312,64 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
             .last()
             .unwrap()
             .reply_to,
-        vec![first.message_id, second.message_id]
+        vec![first.message_id.clone(), second.message_id.clone()]
     );
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries[2].text, "done");
+    assert_eq!(entries[3].text, "");
+    assert_eq!(entries[3].questions[0].question, "Ship?");
+    assert!(entries[3].questions[0].options.is_empty());
+    assert!(!entries[3].questions[0].multi_select);
+    assert!(!entries[3].questions[0].has_option_previews);
+    assert_eq!(
+        entries[3].id.as_ref().unwrap().as_str(),
+        "ask_0123456789abcdef"
+    );
+    for (signal, text) in [
+        (
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+            None,
+        ),
+        (
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+            Some(" \n "),
+        ),
+        (
+            LifecycleSignal::AwaitingInput {
+                kind: rimz::agents::AskKind::Question,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            },
+            Some("ignored without questions"),
+        ),
+        (
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+            Some("interrupted text"),
+        ),
+    ] {
+        record_conversation(
+            &workspace,
+            &store,
+            rimz::agents::definition_by_kind("claude").unwrap(),
+            &recorded(signal),
+            conversation_input(text, &[], &[]),
+        )
+        .unwrap();
+        assert_eq!(
+            rimz::transcript::read_all(store.paths()).unwrap().len(),
+            entries.len()
+        );
+    }
 
     let mut hand_typed = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     hand_typed.receipt.waiting_cleared = true;
@@ -883,6 +939,67 @@ fn agent_message_does_not_answer_open_ask() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Message);
     assert!(has_open_native_ask(&store, "claude", "sess-1"));
+
+    use rimz::store::message::{PromptSection, SectionOrigin};
+    let sections = [
+        PromptSection {
+            text: "attributed".into(),
+            origin: SectionOrigin::Agent("@planner".into()),
+            record: None,
+        },
+        PromptSection {
+            text: "harness".into(),
+            origin: SectionOrigin::Harness,
+            record: None,
+        },
+        PromptSection {
+            text: message.text.clone(),
+            origin: SectionOrigin::Human,
+            record: Some(&message),
+        },
+        PromptSection {
+            text: "first human".into(),
+            origin: SectionOrigin::Human,
+            record: None,
+        },
+        PromptSection {
+            text: "second human".into(),
+            origin: SectionOrigin::Human,
+            record: None,
+        },
+    ];
+    super::record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        ConversationInput {
+            assistant_message: None,
+            questions: &[],
+            sections: &sections,
+            run_id: None,
+        },
+    )
+    .unwrap();
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    use rimz::transcript::TranscriptKind;
+    assert_eq!(
+        entries[2..]
+            .iter()
+            .map(|entry| entry.entry)
+            .collect::<Vec<_>>(),
+        vec![
+            TranscriptKind::Message,
+            TranscriptKind::Prompt,
+            TranscriptKind::Prompt,
+            TranscriptKind::Answer,
+            TranscriptKind::Prompt
+        ]
+    );
+    assert_eq!(entries[4].message_id, Some(message.message_id));
+    assert_eq!(entries[5].id, ask.id);
+    assert_eq!(entries[5].text, "first human");
+    assert!(!has_open_native_ask(&store, "claude", "sess-1"));
 }
 
 #[test]

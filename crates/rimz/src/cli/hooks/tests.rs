@@ -135,6 +135,26 @@ fn deadline_context_reaches_only_the_root_post_tool_consumer_once() {
     };
     assert_eq!(feed("PreToolUse", false), HookReply::Silent);
     assert_eq!(feed("PostToolUse", true), HookReply::Silent);
+    let root_context =
+        rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "deadline-child");
+    assert_eq!(feed("SubagentStop", true), HookReply::Silent);
+    assert_eq!(
+        rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "deadline-child"),
+        root_context
+    );
+    let mut activity = rimz::agent_activity::read_for_keys(
+        store.runtime_paths(),
+        [("claude", "native-child"), ("claude", "deadline-child")],
+    );
+    activity.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+    assert_eq!(activity.len(), 2);
+    assert_eq!(activity[0].agent_id.as_str(), "deadline-child");
+    assert_eq!(activity[1].agent_id.as_str(), "native-child");
+    assert_eq!(activity[1].tool_at, None);
+    assert!(
+        rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "native-child")
+            .is_none()
+    );
     assert_eq!(
         rimz::harness::run::load(store.paths(), &record.run_id)
             .unwrap()
@@ -645,6 +665,44 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
     assert_eq!(
         user_inputs[0].origin.as_deref(),
         Some(std::path::Path::new("/tmp/hooks-test"))
+    );
+}
+
+#[test]
+fn context_only_session_end_cleans_up_sidecar() {
+    let (_dir, store) = hooks_test_store();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let payload = serde_json::json!({"session_id": "context-only", "cwd": "/tmp/hooks-test"});
+    let mut decoded = agent.decode_hook("SessionEnd", &payload).unwrap();
+    decoded.take_lifecycle();
+    assert!(decoded.lifecycle().is_none());
+    assert_eq!(decoded.context_agent_id().unwrap().as_str(), "context-only");
+    let mut context = rimz::agents::AgentContext::new("claude", jiff::Timestamp::now());
+    context.model_id = Some("stale-model".into());
+    rimz::store::agent_context::merge_observed(
+        store.runtime_paths(),
+        "claude",
+        "context-only",
+        context,
+    )
+    .unwrap();
+    assert!(
+        rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "context-only")
+            .is_some()
+    );
+    handle_lifecycle_hook(
+        &hooks_test_workspace(Some("main")),
+        &store,
+        agent,
+        &mut decoded,
+        &payload,
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+        &hooks_test_globals(),
+    )
+    .unwrap();
+    assert!(
+        rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "context-only")
+            .is_none()
     );
 }
 
