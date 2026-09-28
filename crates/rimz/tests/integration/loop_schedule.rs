@@ -1004,6 +1004,39 @@ fn other_session_hook_retires_non_hook_ended_subscription() {
     );
 }
 
+#[test]
+fn side_conversation_registration_hook_retires_ended_subscription() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-ended", "feature-loop");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "ended",
+            "--wait",
+            "@claude",
+            "--signal",
+            "deploy.done",
+        ],
+    );
+    assert!(read_loop_instances(&env).0.contains_key("ended"));
+    stamp_session_ended(&env, "sess-ended");
+    run_agent_hook(
+        &env,
+        "codex",
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "codex-side",
+            "source": "fork",
+            "transcript_path": null,
+        }),
+        &env.project_root,
+    );
+    assert!(read_loop_instances(&env).0.is_empty());
+}
+
 /// The hook reconcile is a price every observation pays, so one whose commit
 /// appends nothing must not pay it: nothing was published, the session reaper
 /// never ran, and no end appeared that was not already there. A side
