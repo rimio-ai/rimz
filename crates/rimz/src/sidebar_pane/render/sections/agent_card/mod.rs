@@ -315,7 +315,6 @@ fn sub_agent_entry_lines(
     rows: &[&SidebarSubAgent],
 ) -> Vec<Line<'static>> {
     let theme = ctx.theme;
-    let width = content_width(ctx.width);
     let animation_phase = ctx.animation_phase;
     let mut lines = Vec::new();
     // The metadata lines below form one per-card grid: the token figure
@@ -379,7 +378,7 @@ fn sub_agent_entry_lines(
                 kind: sub.name.clone(),
                 headline: detail.map(str::to_owned),
                 right,
-                detail: sub_agent_metadata_line(theme, sub, token_col, model_col, width),
+                detail: sub_agent_metadata_line(ctx, sub, token_col, model_col),
             },
         );
     }
@@ -398,12 +397,12 @@ fn sub_agent_finished(sub: &SidebarSubAgent) -> bool {
 }
 
 fn sub_agent_metadata_line(
-    theme: &Theme,
+    ctx: &RowCtx<'_>,
     sub: &SidebarSubAgent,
     token_col: usize,
     model_col: usize,
-    width: usize,
 ) -> Option<Line<'static>> {
+    let theme = ctx.theme;
     let tokens = sub_agent_tokens(sub);
     let elapsed = (!sub_agent_finished(sub))
         .then_some(sub.elapsed_secs)
@@ -414,7 +413,7 @@ fn sub_agent_metadata_line(
         return None;
     }
     let mut left = vec![Span::raw("      ")];
-    let mut prev_rendered = append_sub_agent_tokens(theme, &mut left, sub.tokens, token_col);
+    let mut prev_rendered = append_sub_agent_tokens(ctx, &mut left, sub.tokens, token_col);
     append_sub_agent_model(
         theme,
         &mut left,
@@ -431,11 +430,15 @@ fn sub_agent_metadata_line(
         model_col,
         prev_rendered,
     );
-    Some(pin_right(left, sub_agent_elapsed(theme, elapsed), width))
+    Some(pin_right(
+        left,
+        sub_agent_elapsed(theme, elapsed),
+        content_width(ctx.width),
+    ))
 }
 
 fn append_sub_agent_tokens(
-    theme: &Theme,
+    ctx: &RowCtx<'_>,
     left: &mut Vec<Span<'static>>,
     tokens: Option<SubAgentTokens>,
     token_col: usize,
@@ -443,13 +446,25 @@ fn append_sub_agent_tokens(
     if token_col == 0 {
         return false;
     }
+    let theme = ctx.theme;
     match tokens {
         Some(tokens) => {
             let (total, glyph, style) = match tokens {
+                // The parent's `▤` heat ramp on the token axis alone: a child
+                // reports no window size, so no percent.
                 SubAgentTokens::Window(total) => (
                     total,
                     theme.glyph(GlyphRole::TokensFilled).to_owned(),
-                    theme.muted(),
+                    theme.style(
+                        severity_heat_color(
+                            theme,
+                            ContextSeverity::Calm,
+                            0,
+                            Some(total),
+                            ctx.bands,
+                        ),
+                        Modifier::empty(),
+                    ),
                 ),
                 SubAgentTokens::Total(total) => (
                     total,
