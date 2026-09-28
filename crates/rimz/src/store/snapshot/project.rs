@@ -681,6 +681,8 @@ fn carried_base(
         state.background_shells = prior.background_shells.clone();
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
         state.compacted_awaiting_prompt = prior.compacted_awaiting_prompt;
+        state.turn_started_at = prior.turn_started_at;
+        state.user_turn_started_at = prior.user_turn_started_at;
         state.registered_at = prior.registered_at.or(Some(event_ts));
     }
     state
@@ -751,7 +753,8 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         &input.signal,
         lifecycle::LifecycleSignal::Ended | lifecycle::LifecycleSignal::Registered
     );
-    let mut lifecycle = lifecycle_projection(
+    fold_lifecycle(
+        &mut state,
         input.prior,
         input.event.timestamp,
         input.signal,
@@ -768,7 +771,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
             matches!(prior.status, AgentStatus::Running | AgentStatus::Waiting)
         })
     {
-        lifecycle.status = AgentStatus::Idle;
+        state.status = AgentStatus::Idle;
     }
     let default_window = crate::agents::spec_by_kind(input.kind.as_str())
         .and_then(|definition| definition.default_context_window);
@@ -804,8 +807,6 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.name_explicit = input.card_identity.name_explicit;
     state.kind_ordinal = Some(input.card_identity.kind_ordinal);
     state.ended_at = ended_at;
-    state.status = lifecycle.status;
-    state.phase = lifecycle.phase;
     state.pane = pane_projection(input.observation, input.prior);
     state.runtime_owner = runtime_owner;
     state.parent_agent_id = parent_agent_id;
@@ -834,18 +835,6 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         state.compacted_from = Some(compacted_from.clone());
     }
     state.usage = usage;
-    state.turn_started_at = lifecycle.turn_started_at;
-    state.turn_ended_at = lifecycle.turn_ended_at;
-    state.user_turn_started_at = lifecycle.user_turn_started_at;
-    state.waiting_since = lifecycle.waiting_since;
-    state.open_ask = lifecycle.open_ask;
-    state.started_turn_id = lifecycle.started_turn_id;
-    state.superseded_turn_id = lifecycle.superseded_turn_id;
-    state.interrupted_turn_id = lifecycle.interrupted_turn_id;
-    state.compacting_since = lifecycle.compacting_since;
-    state.compaction_count = lifecycle.compaction_count;
-    state.compacted_awaiting_prompt = lifecycle.compacted_awaiting_prompt;
-    state.tool_calls = lifecycle.tool_calls;
     // A shell never outlives its session: an end or a fresh registration
     // drops the list before this event's own report lands.
     if ends_session_shells {
@@ -985,42 +974,20 @@ fn assemble_launch_state(
     }
     state.status = status;
     state.phase = phase;
-    state.turn_started_at = if status == AgentStatus::Running {
-        Some(event.timestamp)
-    } else {
-        prior.and_then(|prior| prior.turn_started_at)
-    };
-    state.user_turn_started_at = if status == AgentStatus::Running {
-        Some(event.timestamp)
-    } else {
-        prior.and_then(|prior| prior.user_turn_started_at)
-    };
+    if status == AgentStatus::Running {
+        state.turn_started_at = Some(event.timestamp);
+        state.user_turn_started_at = Some(event.timestamp);
+    }
     state
 }
 
-struct LifecycleProjection {
-    status: AgentStatus,
-    phase: lifecycle::TurnPhase,
-    compacting_since: Option<Timestamp>,
-    compaction_count: u32,
-    compacted_awaiting_prompt: Option<Timestamp>,
-    tool_calls: BTreeMap<String, u32>,
-    turn_started_at: Option<Timestamp>,
-    turn_ended_at: Option<Timestamp>,
-    user_turn_started_at: Option<Timestamp>,
-    waiting_since: Option<Timestamp>,
-    open_ask: Option<crate::agents::OpenAsk>,
-    started_turn_id: Option<String>,
-    superseded_turn_id: Option<String>,
-    interrupted_turn_id: Option<String>,
-}
-
-fn lifecycle_projection(
+fn fold_lifecycle(
+    state: &mut AgentState,
     prior: Option<&AgentState>,
     timestamp: Timestamp,
     signal: lifecycle::LifecycleSignal,
     prompt: Option<&str>,
-) -> LifecycleProjection {
+) {
     let turn_ids = prior.map(AgentState::turn_ids).unwrap_or_default();
     let Transition {
         next,
@@ -1029,34 +996,30 @@ fn lifecycle_projection(
         opened_turn,
         ..
     } = AgentState::transition(prior, &signal);
-    let compacting_since = if next.compacting {
-        Some(timestamp)
-    } else {
-        None
-    };
+    state.status = next.status;
+    state.phase = next.phase;
+    state.compacting_since = next.compacting.then_some(timestamp);
     let completed_compaction = compaction_closed
         && !matches!(
             signal,
             lifecycle::LifecycleSignal::CompactionEnded { failed: true, .. }
         );
-    let compaction_count =
-        prior.map_or(0, |p| p.compaction_count) + u32::from(completed_compaction);
-    let compacted_awaiting_prompt = match &signal {
+    state.compaction_count += u32::from(completed_compaction);
+    match &signal {
         lifecycle::LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,
-        } => Some(timestamp),
-        lifecycle::LifecycleSignal::TurnStarted { .. } => None,
-        _ => prior.and_then(|p| p.compacted_awaiting_prompt),
-    };
-    let mut tool_calls = prior.map_or_else(BTreeMap::new, |p| p.tool_calls.clone());
+        } => state.compacted_awaiting_prompt = Some(timestamp),
+        lifecycle::LifecycleSignal::TurnStarted { .. } => state.compacted_awaiting_prompt = None,
+        _ => {}
+    }
     if let lifecycle::LifecycleSignal::ToolUsed {
         name: Some(name), ..
     } = &signal
     {
         let name = name.trim();
         if !name.is_empty() {
-            let total = tool_calls.entry(name.to_owned()).or_default();
+            let total = state.tool_calls.entry(name.to_owned()).or_default();
             *total = total.saturating_add(1);
         }
     }
@@ -1079,12 +1042,10 @@ fn lifecycle_projection(
             lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
                 | lifecycle::LifecycleSignal::Registered
         );
-    let turn_started_at = if opened_turn || resets_context {
-        Some(timestamp)
-    } else {
-        prior.and_then(|p| p.turn_started_at)
-    };
-    let turn_ended_at = if !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
+    if opened_turn || resets_context {
+        state.turn_started_at = Some(timestamp);
+    }
+    state.turn_ended_at = if !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
         && matches!(
             signal,
             lifecycle::LifecycleSignal::TurnEnded { .. }
@@ -1098,19 +1059,17 @@ fn lifecycle_projection(
     // A delivered prompt opens a provider turn but continues the user's task.
     let harness_prompt = matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. })
         && prompt.is_some_and(crate::store::message::prompt_is_harness_delivered);
-    let user_turn_started_at = if (opened_turn && !harness_prompt) || resets_context {
-        Some(timestamp)
-    } else {
-        prior.and_then(|p| p.user_turn_started_at)
-    };
-    let waiting_since = if matches!(&signal, lifecycle::LifecycleSignal::AwaitingInput { .. }) {
+    if (opened_turn && !harness_prompt) || resets_context {
+        state.user_turn_started_at = Some(timestamp);
+    }
+    state.waiting_since = if matches!(&signal, lifecycle::LifecycleSignal::AwaitingInput { .. }) {
         Some(timestamp)
     } else if next.status == AgentStatus::Waiting {
         prior.and_then(|p| p.waiting_since)
     } else {
         None
     };
-    let open_ask = match &signal {
+    state.open_ask = match &signal {
         lifecycle::LifecycleSignal::AwaitingInput {
             kind,
             ask_id: Some(id),
@@ -1127,24 +1086,11 @@ fn lifecycle_projection(
         _ if next.status == AgentStatus::Waiting => prior.and_then(|p| p.open_ask.clone()),
         _ => None,
     };
-    let (started_turn_id, superseded_turn_id, interrupted_turn_id) =
-        lifecycle::turn_ids_after(turn_ids, &signal, opened_turn);
-    LifecycleProjection {
-        status: next.status,
-        phase: next.phase,
-        compacting_since,
-        compaction_count,
-        compacted_awaiting_prompt,
-        tool_calls,
-        turn_started_at,
-        turn_ended_at,
-        user_turn_started_at,
-        waiting_since,
-        open_ask,
-        started_turn_id,
-        superseded_turn_id,
-        interrupted_turn_id,
-    }
+    (
+        state.started_turn_id,
+        state.superseded_turn_id,
+        state.interrupted_turn_id,
+    ) = lifecycle::turn_ids_after(turn_ids, &signal, opened_turn);
 }
 
 struct WorktreeProjection {
