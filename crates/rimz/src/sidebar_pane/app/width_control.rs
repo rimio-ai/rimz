@@ -502,7 +502,16 @@ impl WidthController {
             crate::mux::width::MIN_ADJUSTABLE_WIDTH,
             (u32::from(view_cols) * u32::from(self.width.max_percent.clamp(10, 90))).div_ceil(100)
                 as u16,
-        );
+        )
+        .map(|target| match (step.exact, self.convergence.target()) {
+            // A relative step from a pane still converging toward a broadcast
+            // target must not move the target against the press.
+            (false, Some(pending)) => match dir {
+                WidthAdjust::Narrower => target.min(pending),
+                WidthAdjust::Wider => target.max(pending),
+            },
+            _ => target,
+        });
         if let Some(target) = target {
             burst.target = Some(target);
             burst.dir = dir;

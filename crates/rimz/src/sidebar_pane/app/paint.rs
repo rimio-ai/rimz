@@ -66,6 +66,11 @@ impl FramePainter {
     }
 
     #[cfg(test)]
+    pub(super) fn set_probed_aspect(&mut self, aspect: Option<CellAspect>) {
+        self.probed_aspect = aspect;
+    }
+
+    #[cfg(test)]
     pub(super) fn caps(&self) -> PixelRenderCaps {
         self.caps
     }
@@ -81,11 +86,11 @@ impl FramePainter {
         session_name: &str,
         detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
     ) -> bool {
-        let previous = self.caps;
+        let previous = (self.caps, self.probed_aspect);
         self.caps = detect(mux, session_name, self.caps);
         self.last_caps_refresh = Instant::now();
         self.probed_aspect = probe_cell_aspect();
-        self.caps != previous
+        (self.caps, self.probed_aspect) != previous
     }
 
     pub(super) fn refresh_caps_if_stale_with(
