@@ -428,9 +428,22 @@ fn held_rows_are_flagged_from_the_ledger_and_reopen_at_the_commit_count() {
         "-m",
         "branch",
     ]);
-    let ledger = ledger::parse(&format!(
+    let ledger_path = root.path().join(LEDGER_FILE);
+    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+    std::fs::write(&ledger_path, format!(
         "## Module verdicts\n\n| module | status | sha | reopen at | note |\n| --- | --- | --- | --- | --- |\n| `store/snapshot` | holds | {base} | 3 | fresh |\n| `config` | holds | {base} | 2 | stale |\n| `mux` | holds | 0000000 | 2 | unknown sha |\n| `lsp` | holds | {rewritten} | 30 | off trunk |\n"
-    ));
+    )).unwrap();
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-qm",
+        "record",
+    ]);
+    let ledger = ledger::load(&ledger_path).unwrap().unwrap();
     let mut rows = ["store/snapshot", "config", "mux", "agents", "lsp"]
         .map(|module| Row {
             module: module.to_owned(),
