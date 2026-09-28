@@ -916,6 +916,26 @@ mod tests {
     use crate::config::{InlineAnsiColors, InlinePrimaryColors};
 
     #[test]
+    fn pixel_bootstrap_constants_are_byte_identical() {
+        let bootstrap = client_bootstrap(None);
+        let oracle = serde_json::to_string(
+            &ROW_COLUMN_DIACRITICS
+                .iter()
+                .map(char::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .expect("diacritic JSON");
+        assert_eq!(ROW_COLUMN_DIACRITICS.len(), 297);
+        for line in [
+            "const RIMZ_PIXEL_PROTOCOL=3;".to_owned(),
+            "const RIMZ_PIXEL_PLACEHOLDER=1109742;".to_owned(),
+            format!("const RIMZ_PIXEL_DIACRITICS={oracle};"),
+        ] {
+            assert!(bootstrap.lines().any(|actual| actual == line), "{line}");
+        }
+    }
+
+    #[test]
     fn browser_safety_options_survive_disabled_web() {
         let mut config = MachineConfig::default();
         config.web.enabled = false;

@@ -1347,6 +1347,57 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn pixel_daemon_filter_requires_current_protocol_records() {
+        // An inherited RIMZ_HOME can hold a live daemon's records; never clobber them.
+        if [DAEMON_FILE, SHARE_DAEMON_FILE]
+            .iter()
+            .any(|file| state_path(file).exists())
+        {
+            return;
+        }
+        let pids = || {
+            crate::web::pixel_daemon_records()
+                .into_iter()
+                .filter(|(_, protocol)| *protocol == crate::web::TTYD_PIXEL_PROTOCOL)
+                .map(|(pid, _)| pid)
+                .collect::<Vec<_>>()
+        };
+        let mut writable = WritableDaemonRecord::basic_loopback(42, 8200);
+        writable.process.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL);
+        let mut broadcast = writable.process.clone();
+        broadcast.pid = 43;
+        broadcast.port = 8201;
+        write_daemon(&writable).expect("writable record");
+        write_cache_json(&state_path(SHARE_DAEMON_FILE), &broadcast).expect("broadcast record");
+        assert_eq!(pids(), [42, 43]);
+
+        for protocol in [
+            Some(crate::web::TTYD_PIXEL_PROTOCOL - 1),
+            Some(crate::web::TTYD_PIXEL_PROTOCOL + 1),
+            None,
+        ] {
+            writable.process.pixel_protocol = protocol;
+            write_daemon(&writable).expect("writable record");
+            assert_eq!(pids(), [43]);
+            broadcast.pixel_protocol = protocol;
+            write_cache_json(&state_path(SHARE_DAEMON_FILE), &broadcast).expect("broadcast record");
+            assert!(pids().is_empty());
+            broadcast.pixel_protocol = Some(crate::web::TTYD_PIXEL_PROTOCOL);
+            write_cache_json(&state_path(SHARE_DAEMON_FILE), &broadcast).expect("broadcast record");
+        }
+
+        fs::remove_file(state_path(DAEMON_FILE)).expect("remove writable");
+        assert_eq!(pids(), [43]);
+        fs::write(state_path(DAEMON_FILE), b"corrupt").expect("corrupt writable");
+        assert_eq!(pids(), [43]);
+        fs::write(state_path(SHARE_DAEMON_FILE), b"corrupt").expect("corrupt broadcast");
+        assert!(pids().is_empty());
+        fs::remove_file(state_path(DAEMON_FILE)).expect("remove writable");
+        fs::remove_file(state_path(SHARE_DAEMON_FILE)).expect("remove broadcast");
+        assert!(pids().is_empty());
+    }
+
     fn credential() -> TtydCredential {
         TtydCredential {
             name: "rimz".to_owned(),
