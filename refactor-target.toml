@@ -4300,11 +4300,6 @@ key = "kind+path+std::fs::read_dir"
 reason = "The four share only a missing root read as empty; each maps errors into its own type (SkillErr, anyhow, SandboxErr, io::Error) and keeps its own entry policy: agents::skills keys SKILL.md dirs first-root-wins, room::session warns past unreadable records to match a session, sandbox::skills canonicalizes and skips broken links with an optional preserved symlink, workspace dedups parsed WorkspaceDirName records. A disk helper needs a per-caller error mapper and saves no lines (pass 26c)."
 
 [[verdict]]
-kind = "shape"
-key = "PendingWrite::optional+report_files+settings_json::commit_pair+settings_json::read_optional_bytes+settings_json::render_json"
-reason = "Two uninstall policies over the shared settings_json pair commit: copilot deletes its whole hooks file through the managed source and rolls the stripped settings back when that fails; cursor strips its owned entries in place, restores the displaced statusline from a state record it removes only after the last config file. A shared body would take both policies as parameters and shorten neither (pass 28a)."
-
-[[verdict]]
 kind = "guard"
 key = "$0.status!=RunStatus::Completed"
 reason = "Four decisions on one terminal status: reply prints a turn-failure line, supervised output prints run forensics, supervised run skips the verify loop, harness::run returns RunStoreErr::InvalidStatus. A shared predicate would rename equality and hide none of them (pass 28a)."
@@ -4317,12 +4312,12 @@ reason = "One admission outcome read three ways: lsp::admission releases the que
 [[verdict]]
 kind = "guard"
 key = "$0==Isolation::Host"
-reason = "sandbox::preflight returns no probe for host; agents restart and subagents resume run the host-only process preflight on requests each builds differently. Moving the check into a helper still needs the request, cwd and store at each caller and saves no lines (pass 28a)."
+reason = "sandbox::preflight returns no probe for host; agents restart and subagents resume run the host-only process preflight. These remain separate decisions after sharing request construction; a predicate would only rename equality (pass 28a, reaffirmed pass 28f)."
 
 [[verdict]]
 kind = "guard"
 key = "$0Some($1)=&$2.degraded"
-reason = "A degraded posture is advisory in explain (a warning row), a stderr note in fork, and fatal in subagents resume; the reason string is shared and the outcome is each command's (pass 28a)."
+reason = "A degraded posture is advisory in explain (a warning row), a stderr note in fork, and fatal in subagents resume; the reason string is shared and the outcome is each command's (pass 28a, reaffirmed pass 28f)."
 
 [[verdict]]
 kind = "item"
@@ -4348,3 +4343,23 @@ reason = "Pass 28e: provenance guards enforce self-wait and team contracts; Pars
 kind = "item"
 key = "harness::schedule::arm::DeliverySpec"
 reason = "Pass 28e contradicts the pass-28 dossier's deepen candidate: loop add, wait add and team arming each supply a different subset of caller-owned inputs to one arm_delivery call. This is use, not assembly; provenance constructors need all loop options as public fields or another options struct, reduce no types and reach outside the pass into cli/wait."
+
+[[verdict]]
+kind = "item"
+key = "cli::agents_cmd::exec::supervise_child"
+reason = "Inherent decision loop: child exit precedes monitoring, parent cancellation precedes TERM, run completion may resend TERM and reset its grace deadline, and cleanup signals have their own grace. A generic escalation helper would change which deadline holds (pass 28f)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::plan_lane_resume"
+reason = "Distinct lane outcomes pinned by the lane tests; restore config stays lazy so focusing a live member never loads it. Moving the branches would hide rather than remove the decisions (pass 28f)."
+
+[[verdict]]
+kind = "item"
+key = "cli::agents_cmd::launch::launch_layout"
+reason = "Ordered preconditions remain after room and sandbox admission moved behind their providers: launch tests pin refusal before worktree, pane and provisional-store side effects. Fresh and resume tails differ in batch failure handling and receipt timing, so sharing them would need mode flags (pass 28f)."
+
+[[verdict]]
+kind = "item"
+key = "cli::room::prepare_room"
+reason = "Ordered start/attach entry sequence: preflight live health before birth, prompts before login resolution, and host readiness before session effects. Room owns source-specific construction; the remaining branches express distinct entry policies (pass 28f)."
