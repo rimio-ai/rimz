@@ -420,7 +420,7 @@ surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/remote"
-surface-budget = 176
+surface-budget = 175
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -547,6 +547,10 @@ path = "crates/rimz/src/worktree"
 # Unmanaged-launch validation and lifecycle ownership also serve the binary CLI.
 # Attribution probes the selected checkout's branch through the shared resolver.
 surface-budget = 57
+
+[[module]]
+path = "crates/rimz/src/cli/remote.rs"
+surface-budget = 3
 
 [[module]]
 path = "crates/rimz/src/cli/remote/supervisor.rs"
@@ -1017,6 +1021,26 @@ reason = "TaskFire keeps ten explicit inputs; CLI owns the spawn."
 kind = "item"
 key = "remote::link::link_tier"
 reason = "Classifier and thresholds are remote policy over a store-owned tier; stays at L5 with the protocol."
+
+[[verdict]]
+kind = "pass-through"
+key = "cli::remote::supervisor::drop"
+reason = "Pass 29d: LinkSupervisor releases the held screen before fields drop the SSH master; explicit teardown order belongs here, not in field ordering."
+
+[[verdict]]
+kind = "pass-through"
+key = "cli::remote::tty::drop"
+reason = "Pass 29d: TtyGuard::restore is also called after each terminal session in supervise_remote; Drop shares that restoration on every exit."
+
+[[verdict]]
+kind = "item"
+key = "cli::remote::supervisor::supervise_remote"
+reason = "Pass 29d: cx 0.8 (cyclomatic/cognitive/SLOC 25/15/157), solely the SLOC term. Ordered probe teardown, tty restoration and handoff release precede distinct pinned exit and recovery narrations; extracting phases would move rather than remove decisions."
+
+[[verdict]]
+kind = "item"
+key = "cli::remote::supervisor::wait_for_master"
+reason = "Pass 29d: cx 0.6 (cyclomatic/cognitive/SLOC 26/12/126), solely the SLOC term. The master-wait driver orders reachability, master advancement, initial path preflight, retry startup and panel interruption; these effects stay together rather than split into single-caller helpers."
 
 [[verdict]]
 kind = "item"
