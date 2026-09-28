@@ -283,7 +283,8 @@ allowed-dependencies = [
 # Explicit state pairing and runtime-only preparation keep lock identity independent of runtime roots.
 # Daily machine GC shares its stamp and election-lock paths with the harness.
 # StatePaths::remove_root and RuntimePaths::remove_root let room replacement remove both whole trees.
-surface-budget = 200
+# Checked executable copying shares the durable publication funnel.
+surface-budget = 201
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -670,7 +671,8 @@ surface-budget = 26
 [[module]]
 path = "crates/rimz/src/disk/atomic.rs"
 allowed-dependencies = []
-surface-budget = 19
+# Checked executable copying shares the durable publication funnel.
+surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/store/gc"

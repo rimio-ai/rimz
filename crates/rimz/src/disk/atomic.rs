@@ -76,16 +76,43 @@ pub fn write_executable_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()
     })
 }
 
+/// Copy an executable through a durable mode-0755 temp, checking it before publication.
+#[must_use = "durability barrier; check the result"]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "staging caller lands in the next commit")
+)]
+pub(crate) fn copy_executable_atomically<E: From<AtomicErr>>(
+    src: &Path,
+    dst: &Path,
+    check: impl FnOnce(&Path) -> std::result::Result<(), E>,
+) -> std::result::Result<(), E> {
+    publish_temp(dst, Fsync::Durable, |tmp| {
+        copy_executable_temp(src, tmp)?;
+        check(tmp)
+    })
+}
+
+fn copy_executable_temp(src: &Path, tmp: &Path) -> Result<()> {
+    let mut source = File::open(src).map_err(AtomicErr::io(src))?;
+    let mut destination = create_temp_file(tmp, Some(0o755)).map_err(AtomicErr::io(tmp))?;
+    io::copy(&mut source, &mut destination).map_err(|source| {
+        AtomicErr::io(tmp)(io::Error::new(
+            source.kind(),
+            format!("copying from {}: {source}", src.display()),
+        ))
+    })?;
+    testkit::count_fsync();
+    destination.sync_all().map_err(AtomicErr::io(tmp))
+}
+
 /// Atomically replace `dst` with a hardlink to the executable at `src`.
 /// Filesystems that reject the link fall back to an executable byte copy.
 #[must_use = "durability barrier; check the result"]
 pub(crate) fn link_executable_atomically(src: &Path, dst: &Path) -> Result<()> {
     publish_temp(dst, Fsync::Durable, |tmp| {
         if std::fs::hard_link(src, tmp).is_err() {
-            let bytes = std::fs::read(src).map_err(AtomicErr::io(src))?;
-            write_temp_file(tmp, Fsync::Durable, Some(0o755), |writer| {
-                writer.write_all(&bytes).map_err(AtomicErr::io(tmp))
-            })?;
+            copy_executable_temp(src, tmp)?;
         }
         Ok(())
     })
@@ -222,11 +249,11 @@ fn write_temp_file(
     Ok(())
 }
 
-fn publish_temp(
+fn publish_temp<E: From<AtomicErr>>(
     path: &Path,
     fsync: Fsync,
-    materialize: impl FnOnce(&Path) -> Result<()>,
-) -> Result<()> {
+    materialize: impl FnOnce(&Path) -> std::result::Result<(), E>,
+) -> std::result::Result<(), E> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(AtomicErr::io(parent))?;
     }
@@ -239,7 +266,7 @@ fn publish_temp(
     match std::fs::remove_file(&tmp) {
         Ok(()) => {}
         Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-        Err(source) => return Err(AtomicErr::io(&tmp)(source)),
+        Err(source) => return Err(AtomicErr::io(&tmp)(source).into()),
     }
     temp_guard.disarm();
     if fsync == Fsync::Durable {
@@ -551,6 +578,33 @@ mod tests {
     }
 
     #[test]
+    fn executable_copy_rejection_preserves_destination_and_cleans_temp() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source");
+        let destination = dir.path().join("destination");
+        std::fs::write(&source, b"new build").unwrap();
+        for existing in [false, true] {
+            if existing {
+                std::fs::write(&destination, b"old build").unwrap();
+            }
+            let result = copy_executable_atomically(&source, &destination, |tmp| {
+                assert_eq!(std::fs::read(tmp).unwrap(), b"new build");
+                Err::<(), _>(AtomicErr::io(tmp)(io::Error::other("rejected")))
+            });
+            assert!(result.is_err(), "a rejected copy must not publish");
+            if existing {
+                assert_eq!(std::fs::read(&destination).unwrap(), b"old build");
+            } else {
+                assert!(!destination.exists());
+            }
+            assert_eq!(
+                std::fs::read_dir(dir.path()).unwrap().count(),
+                if existing { 2 } else { 1 }
+            );
+        }
+    }
+
+    #[test]
     fn durable_and_cache_replacements_keep_fsync_classes() {
         let dir = tempdir().unwrap();
         let before = testkit::fsync_count();
@@ -563,6 +617,18 @@ mod tests {
             testkit::fsync_count(),
             durable,
             "cache replacement skips sync"
+        );
+        let source = dir.path().join("executable");
+        write_executable_bytes_atomically(&source, b"build").unwrap();
+        let written = testkit::fsync_count();
+        copy_executable_atomically(&source, &dir.path().join("copy"), |_| {
+            Ok::<(), AtomicErr>(())
+        })
+        .unwrap();
+        assert_eq!(
+            testkit::fsync_count() - written,
+            written - durable,
+            "copy has the executable write's durable sync class"
         );
     }
 
