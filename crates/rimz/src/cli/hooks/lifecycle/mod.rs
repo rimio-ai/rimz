@@ -114,42 +114,38 @@ pub(super) fn handle_lifecycle_hook(
         );
     }
     record_native_answer(workspace, store, agent, decoded, recorded.as_ref());
-    let model_hint = recorded
-        .as_ref()
-        .and_then(|recorded| recorded.model_hint.as_deref());
-    let turn_ended = recorded.as_ref().is_some_and(|recorded| {
-        matches!(
-            recorded.observation.signal,
-            LifecycleSignal::TurnEnded { .. } | LifecycleSignal::TurnInterrupted { .. }
-        )
-    });
-    let tool_call = recorded.as_ref().and_then(|recorded| {
-        let LifecycleSignal::ToolUsed {
-            name: Some(name), ..
-        } = &recorded.observation.signal
-        else {
-            return None;
+    let (model_hint, transcript_path, observed_agent_id, parent_agent_id, signal) =
+        match recorded.as_ref() {
+            Some(recorded) => (
+                recorded.model_hint.as_deref(),
+                recorded.observation.transcript_path.as_deref(),
+                recorded.observation.agent_id.clone(),
+                recorded.observation.parent_agent_id.as_deref(),
+                Some(&recorded.observation.signal),
+            ),
+            None => (None, None, None, None, None),
         };
-        let name = name.trim();
-        if name.is_empty() {
-            return None;
-        }
-        agent
+    let turn_ended = matches!(
+        signal,
+        Some(LifecycleSignal::TurnEnded { .. } | LifecycleSignal::TurnInterrupted { .. })
+    );
+    let root_tool_used =
+        parent_agent_id.is_none() && matches!(signal, Some(LifecycleSignal::ToolUsed { .. }));
+    let tool_call = match signal {
+        Some(LifecycleSignal::ToolUsed {
+            name: Some(name), ..
+        }) if !name.trim().is_empty() => agent
             .spec()
             .tool_signature(payload)
-            .map(|digest| (name, digest))
-    });
+            .map(|digest| (name.trim(), digest)),
+        _ => None,
+    };
     let tool_run = tool_call
         .as_ref()
         .map_or(rimz::agent_activity::ToolRun::Reset, |(tool, digest)| {
             rimz::agent_activity::ToolRun::Call { tool, digest }
         });
-    let transcript_path = recorded
-        .as_ref()
-        .and_then(|recorded| recorded.observation.transcript_path.as_deref());
-    let context_agent_id = recorded
-        .as_ref()
-        .and_then(|recorded| recorded.observation.agent_id.clone())
+    let context_agent_id = observed_agent_id
         .or_else(|| decoded.context_agent_id().cloned())
         .or_else(|| agent_id.clone());
     active_time::record(
@@ -161,18 +157,10 @@ pub(super) fn handle_lifecycle_hook(
         &event_name,
     );
     if let Some(agent_id) = context_agent_id {
-        let parent_agent_id = recorded
-            .as_ref()
-            .and_then(|recorded| recorded.observation.parent_agent_id.as_deref());
-        let parent_activity_id = recorded
-            .as_ref()
-            .filter(|recorded| {
-                matches!(
-                    recorded.observation.signal,
-                    LifecycleSignal::SubagentStopped { .. }
-                )
-            })
-            .and_then(|recorded| recorded.observation.parent_agent_id.as_deref());
+        let parent_activity_id = match signal {
+            Some(LifecycleSignal::SubagentStopped { .. }) => parent_agent_id,
+            _ => None,
+        };
         manage_agent_context(AgentContextHook {
             workspace,
             store,
@@ -188,13 +176,7 @@ pub(super) fn handle_lifecycle_hook(
                 transcript_path,
                 turn_ended,
                 tool_run,
-                tool_used: parent_agent_id.is_none()
-                    && recorded.as_ref().is_some_and(|recorded| {
-                        matches!(
-                            recorded.observation.signal,
-                            LifecycleSignal::ToolUsed { .. }
-                        )
-                    }),
+                tool_used: root_tool_used,
             },
         });
     }
@@ -211,11 +193,7 @@ pub(super) fn handle_lifecycle_hook(
             assistant_message.as_deref(),
             run_id.as_ref(),
         );
-        if recorded.observation.parent_agent_id.is_none()
-            && matches!(
-                recorded.observation.signal,
-                LifecycleSignal::ToolUsed { .. }
-            )
+        if root_tool_used
             && agent.spec().capabilities.hook_context
             && let Some(run_id) = run_id.as_ref()
             && let Err(error) = rimz::harness::run::claim_rung(
