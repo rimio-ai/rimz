@@ -33,6 +33,194 @@ fn pipeline_snapshot() -> SidebarSnapshot {
 }
 
 #[test]
+fn header_label_parts_keep_styles_only_when_the_full_label_fits() {
+    let theme = Theme::fixed(false);
+    for finished in [false, true] {
+        for (qualifier, team, full, clipped) in [
+            (Some("q"), Some("t"), "x · q · t", "x · q ·…"),
+            (Some("q"), None, "x · q", "x ·…"),
+            (None, Some("t"), "x · t", "x ·…"),
+        ] {
+            let mut snapshot = pristine_worktree_with_pr_state(None);
+            let group = &mut snapshot.worktree_groups[0];
+            group.kind = crate::store::snapshot::SidebarWorktreeKind::Root;
+            group.label = "x".to_owned();
+            group.label_qualifier = qualifier.map(str::to_owned);
+            group.team = team.map(str::to_owned);
+            group.finished = finished;
+            let label_style = if finished {
+                theme.muted().add_modifier(Modifier::BOLD)
+            } else {
+                theme.styled(Component::WorktreeHeader, Modifier::BOLD)
+            };
+            // Two gutter cells and the header's one-cell gap are reserved.
+            let fits = text_width(full) + 3;
+            for width in [fits - 1, fits, fits + 1] {
+                let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+                let spans = &lines[0].spans;
+                assert_eq!(spans[1].style, label_style);
+                if width < fits {
+                    assert_eq!(spans[1].content, clipped);
+                    assert!(
+                        !spans
+                            .iter()
+                            .any(|span| span.content == " · q" || span.content == " · t")
+                    );
+                } else {
+                    assert_eq!(spans[1].content, "x");
+                    for (suffix, component) in qualifier
+                        .map(|_| (" · q", Component::WorktreeQualifier))
+                        .into_iter()
+                        .chain(team.map(|_| (" · t", Component::TeamLabel)))
+                    {
+                        assert_eq!(
+                            spans
+                                .iter()
+                                .find(|span| span.content == suffix)
+                                .unwrap()
+                                .style,
+                            theme.styled(component, Modifier::empty())
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn selected_header_seal_fill_thresholds() {
+    let theme = Theme::fixed(false);
+    for root in [false, true] {
+        let mut snapshot =
+            pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
+        let group = &mut snapshot.worktree_groups[0];
+        group.label = "x".to_owned();
+        if root {
+            group.kind = crate::store::snapshot::SidebarWorktreeKind::Root;
+        }
+        // Root: label 1 + gutters 2. Worktree: label 3 + right cluster 6 + gutters 2.
+        let cases = if root {
+            [(3, ""), (4, " "), (5, " ┄")]
+        } else {
+            [(12, " "), (13, "  "), (14, " ┄ ")]
+        };
+        for (width, expected) in cases {
+            let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+            let spans = &lines[0].spans;
+            let fill = spans
+                .iter()
+                .skip(2)
+                .take(spans.len() - 3)
+                .find(|span| span.content == expected);
+            if expected.is_empty() {
+                assert_eq!(line_texts(&lines)[0], "▎x🮇");
+            } else {
+                assert_eq!(
+                    fill.expect("header fill").style,
+                    theme.styled(Component::LaneSpine, Modifier::DIM)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_pipeline_is_inert_and_expanded_less_tail_toggles_without_ordinal() {
+    let theme = Theme::fixed(false);
+    let cost_rolls = CostRolls::default();
+    let mut snapshot = pipeline_snapshot();
+    snapshot.worktree_groups[0].rows.clear();
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    assert!(line_texts(&block.lines)[1].contains("Implement"));
+    assert_eq!(block.interactions.row_map()[1], None);
+    assert!(
+        !block
+            .interactions
+            .regions()
+            .iter()
+            .any(|region| region.rows.contains(&1))
+    );
+
+    let mut snapshot = snapshot_with(
+        (0..9)
+            .map(|index| {
+                agent(
+                    &format!("idle-{index}"),
+                    "claude",
+                    AgentStatus::Idle,
+                    Some("/repo/pipeline"),
+                    Some("pipeline"),
+                    None,
+                )
+            })
+            .collect(),
+    );
+    snapshot.worktree_groups[0].finished = false;
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    let group = &snapshot.worktree_groups[0];
+    let block = worktree_group_block(&ctx, group, true, None);
+    let tail = line_texts(&block.lines)
+        .iter()
+        .position(|text| text.contains("− less"))
+        .unwrap();
+    assert_eq!(block.interactions.row_map()[tail], None);
+    assert_eq!(
+        block
+            .interactions
+            .regions()
+            .iter()
+            .filter(|region| region.rows.contains(&tail))
+            .collect::<Vec<_>>(),
+        vec![&HitRegion::whole_line(
+            tail,
+            HitTarget::ToggleGroup(group.key.clone())
+        )]
+    );
+}
+
+#[test]
+fn pr_stack_orders_multiple_levels_and_leaves_url_less_members_unlinked() {
+    use crate::store::snapshot::StackPr;
+    let theme = Theme::fixed(false);
+    let mut snapshot = pristine_worktree_with_pr_state(None);
+    let group = &mut snapshot.worktree_groups[0];
+    group.pr_number = Some(2);
+    group.pr_url = Some("https://example.com/2".to_owned());
+    group.pr_stack.below = vec![StackPr {
+        number: 1,
+        url: Some("https://example.com/1".to_owned()),
+    }];
+    group.pr_stack.above = vec![
+        vec![
+            StackPr {
+                number: 3,
+                url: None,
+            },
+            StackPr {
+                number: 4,
+                url: Some("https://example.com/4".to_owned()),
+            },
+        ],
+        vec![StackPr {
+            number: 5,
+            url: Some("https://example.com/5".to_owned()),
+        }],
+    ];
+    let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 80))[0].clone();
+    assert!(text.contains(" #1→#2→#3,#4→#5"), "{text}");
+    assert_eq!(
+        group_hyperlinks_at_width(&snapshot, &theme, 0, 80),
+        [1, 2, 4, 5].map(|number| {
+            let offset = text.find(&format!("#{number}")).unwrap();
+            let start = u16::try_from(text_width(&text[..offset])).unwrap();
+            (0, start..start + 2, format!("https://example.com/{number}"))
+        })
+    );
+}
+
+#[test]
 fn render_pipeline_states() {
     for (name, stage, clock, nerd, width) in [
         ("pipeline_running", "Implement", true, false, 54),
