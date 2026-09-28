@@ -65,6 +65,8 @@ Only inline code spans count, never fenced blocks or prose. A path must have a f
 
 Symbol chains use either `::` or `.`. Generic arguments are removed; decorations end the symbol at whitespace, `(`, `{`, `[`, `,`, `~`, `#`, `!`, `=`, or `;`; trailing colons and dots are removed. Thus `config.rs::ConfigErr::Definition(DefinitionErr)` checks `ConfigErr::Definition`. A line hint inside the span after the symbol, or immediately following the span, accepts `(~42)`, `(42)`, `(~42-45)`, `(42-45)`, `~42`, `:~42`, `:42`, and `:42:3`. Symbol hints must overlap a matching outline range widened by three lines at each end. Every line of a line-only hint must exist in the file; it needs no server.
 
+Anchors into other repositories prepend `owner/repo@ref:` to any accepted local form: `ghostty-org/ghostty@v1.3.1:src/terminal/kitty/graphics_storage.zig::ImageStorage.delete` or `kovidgoyal/kitty@c73326a:kitty/graphics.c:~120`. Hints following the span work too. Owner and repo are exactly two nonempty segments containing only ASCII letters, digits, `-`, `_`, or `.`; ref is nonempty and contains no whitespace or colon (slashes and dots are allowed). Host-qualified forms are not supported. A valid qualifier followed by a valid local anchor is always `external`, even when it names this repository: no checkout path or server is queried. Use unqualified anchors for this checkout; bare upstream paths still resolve against it and can be `missing-path`.
+
 Paths resolve exactly first, then by a unique component-boundary suffix among tracked and untracked, non-ignored files present on disk; a deleted file whose removal is not yet staged is `missing-path`. Lengthen an ambiguous suffix instead of guessing. Symbols match an outline node and an ordered subsequence of its ancestors, ignoring generic arguments. A container's final whitespace-separated token also matches, so a method under `impl Type<T>` matches `Type::method`. Multiple matching nodes are accepted; a hint need only match one.
 
 | Status | Meaning |
@@ -75,10 +77,11 @@ Paths resolve exactly first, then by a unique component-boundary suffix among tr
 | `missing-symbol` | No outline node matches the chain. |
 | `line-outside` | The hint misses every matching range, or lies outside the file. |
 | `unchecked` | No configured server covers the extension; verify it by hand. |
+| `external` | Repo-qualified citation outside this checkout; recognised but not verified. |
 
-Text prints one line per failing or unchecked anchor: `<notes>:<line>  <status>  <anchor as written, hint included>  <detail>`. Details show candidate files, near-miss symbols and ranges, file length, or the missing server. The last line is `<N> anchors in <notes>: <ok> ok, <failed> failed, <unchecked> unchecked`. Exit 7 means at least one failure; exit 0 includes unchecked anchors and files with no anchors. An unreadable note or non-git checkout exits 1. A configured server that cannot answer aborts before printing any verdict, with the query's exit 1, 3, or 4.
+Text prints one line per failing or unchecked anchor: `<notes>:<line>  <status>  <anchor as written, hint included>  <detail>`. There is no per-anchor line for `ok` or `external`. Details show candidate files, near-miss symbols and ranges, file length, or the missing server. The last line is `<N> anchors in <notes>: <ok> ok, <failed> failed, <unchecked> unchecked, <external> external`, including zero counts. Exit 7 means at least one failure; exit 0 includes unchecked or external anchors and files with no anchors. An unreadable note or non-git checkout exits 1. A configured server that cannot answer aborts before printing any verdict, with the query's exit 1, 3, or 4.
 
-JSON includes every anchor, including `ok`. The fixed top-level keys are `notes`, `checkout`, `anchors`, and `summary`. Each anchor has `line`, `text`, `status`, `path`, `symbol`, `hint`, `range`, `candidates`, `files`, and `detail`. Paths are checkout-relative or null; symbols are segment arrays or null for line-only anchors. Hints and ranges are inclusive one-based `[start, end]` pairs or null. Candidates have `name`, `kind`, and `range`; files lists ambiguous paths. Summary has `anchors`, `ok`, `failed`, and `unchecked` counts.
+JSON includes every anchor, including `ok` and `external`. The fixed top-level keys are `notes`, `checkout`, `anchors`, and `summary`. Each anchor has `line`, `text`, `status`, `path`, `symbol`, `hint`, `range`, `candidates`, `files`, and `detail`. Paths are checkout-relative or null; symbols are segment arrays or null for line-only anchors. Hints and ranges are inclusive one-based `[start, end]` pairs or null. Candidates have `name`, `kind`, and `range`; files lists ambiguous paths. External anchors have null `path` and `range`, empty `candidates` and `files`, and the qualifier as written in `detail` (for example, `ghostty-org/ghostty@v1.3.1`); `symbol` and `hint` come from the local part, and `text` preserves the whole span and any absorbed trailing hint. Summary always has `anchors`, `ok`, `failed`, `unchecked`, and `external` counts; `anchors` is the sum of the other four counts.
 
 ## Attach
 
@@ -150,7 +153,7 @@ With several query targets, exit 0 means every target answered; otherwise the mo
 
 | Exit | Meaning |
 | --- | --- |
-| 0 | Answered, including `no results` for a resolved symbol; successful list, status, stop, shim, or attach version probe; attach ended on editor EOF; check has no failing anchors (unchecked anchors are allowed). |
+| 0 | Answered, including `no results` for a resolved symbol; successful list, status, stop, shim, or attach version probe; attach ended on editor EOF; check has no failing anchors (unchecked or external anchors are allowed). |
 | 1 | Command failed, including server-selection or protocol errors; details on stderr. |
 | 2 | Invalid command line, flag, or argument. |
 | 3 | Queries/status: no server for the checkout, memory admission refused, or terminal shutdown, with a reason and grep fallback on stderr. Attach: admission timeout/refusal, broker refusal, or broker connection closing/failing, with the diagnostic described above. |

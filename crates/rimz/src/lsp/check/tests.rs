@@ -200,6 +200,105 @@ fn extractor_handles_decorations_hints_and_excludes_nonanchors() {
 }
 
 #[test]
+fn repo_qualifiers_wrap_local_anchor_grammar() {
+    for (text, qualifier, path, symbol, hint) in [
+        (
+            "ghostty-org/ghostty@v1.3.1:src/terminal/kitty/graphics_storage.zig::ImageStorage.delete",
+            "ghostty-org/ghostty@v1.3.1",
+            "src/terminal/kitty/graphics_storage.zig",
+            Some(vec!["ImageStorage", "delete"]),
+            None,
+        ),
+        (
+            "kovidgoyal/kitty@c73326a:kitty/graphics.c:~120",
+            "kovidgoyal/kitty@c73326a",
+            "kitty/graphics.c",
+            None,
+            Some([120, 120]),
+        ),
+        (
+            "kovidgoyal/kitty@c73326a:kitty/graphics.c::filter_refs",
+            "kovidgoyal/kitty@c73326a",
+            "kitty/graphics.c",
+            Some(vec!["filter_refs"]),
+            None,
+        ),
+        (
+            "o/r@release/1.2:a.rs:~3",
+            "o/r@release/1.2",
+            "a.rs",
+            None,
+            Some([3, 3]),
+        ),
+        (
+            "o/r@v1:a.rs::Type<T>::f() (~12)",
+            "o/r@v1",
+            "a.rs",
+            Some(vec!["Type", "f"]),
+            Some([12, 12]),
+        ),
+    ] {
+        let extracted = extract(&format!("`{text}`"));
+        assert_eq!(extracted.len(), 1, "{text}");
+        let actual = &extracted[0];
+        assert_eq!(actual.qualifier.as_deref(), Some(qualifier));
+        assert_eq!(actual.path, path);
+        assert_eq!(
+            actual.symbol,
+            symbol.map(|s| s.into_iter().map(str::to_owned).collect())
+        );
+        assert_eq!(actual.hint, hint);
+        assert_eq!(actual.text, text);
+    }
+    let trailing = extract("`o/r@v1:a.zig::f` (~12)");
+    assert_eq!(trailing.len(), 1);
+    assert_eq!(trailing[0].hint, Some([12, 12]));
+    assert_eq!(trailing[0].text, "o/r@v1:a.zig::f (~12)");
+    for text in [
+        "o/r@v1",
+        "o/r@v1:",
+        "o/r@:a.rs::f",
+        "a/b/c@v1:a.rs::f",
+        "o/r@v1:notapath",
+        "o/r@v 1:a.rs::f",
+        "o!/r@v1:a.rs::f",
+    ] {
+        assert!(extract(&format!("`{text}`")).is_empty(), "{text}");
+    }
+    assert_eq!(anchor("node_modules/@types/x.ts::T").qualifier, None);
+}
+
+#[test]
+fn external_only_report_needs_no_server_or_checkout_path() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let notes = root.path().join("notes.md");
+    let text = "o/r@v1:absent.rs::f (~12)";
+    std::fs::write(&notes, format!("`{text}`")).unwrap();
+    let report = run(&notes, root.path(), &[], &BTreeMap::new()).unwrap();
+    assert_eq!(report.exit_code(), 0);
+    let rendered = report.render(false).unwrap();
+    assert_eq!(rendered.lines().count(), 1);
+    assert!(rendered.ends_with("0 ok, 0 failed, 0 unchecked, 1 external\n"));
+    let value: serde_json::Value = serde_json::from_str(&report.render(true).unwrap()).unwrap();
+    assert_eq!(
+        value["summary"],
+        json!({"anchors":1,"ok":0,"failed":0,"unchecked":0,"external":1})
+    );
+    assert_eq!(
+        value["anchors"][0],
+        json!({"line":1,"text":text,"status":"external","path":null,"symbol":["f"],"hint":[12,12],"range":null,"candidates":[],"files":[],"detail":"o/r@v1"})
+    );
+}
+
+#[test]
 fn hint_markers_distinguish_locations_from_ordinary_numbers() {
     for text in ["`a.rs::f` 12 callers", "`a.rs::f 12 callers`"] {
         let anchors = extract(text);
@@ -352,7 +451,7 @@ fn reports_include_all_json_keys_but_only_non_ok_text_lines() {
     assert_eq!(report.exit_code(), 7);
     let text = report.render(false).unwrap();
     assert_eq!(text.lines().count(), 3);
-    assert!(text.ends_with("3 anchors in notes.md: 1 ok, 1 failed, 1 unchecked\n"));
+    assert!(text.ends_with("3 anchors in notes.md: 1 ok, 1 failed, 1 unchecked, 0 external\n"));
     assert!(text.contains("notes.md:1  line-outside  a.rs:2  "));
     let value: serde_json::Value = serde_json::from_str(&report.render(true).unwrap()).unwrap();
     assert_eq!(value["anchors"].as_array().unwrap().len(), 3);
@@ -379,7 +478,7 @@ fn reports_include_all_json_keys_but_only_non_ok_text_lines() {
     );
     assert_eq!(
         value["summary"],
-        json!({"anchors":3,"ok":1,"failed":1,"unchecked":1})
+        json!({"anchors":3,"ok":1,"failed":1,"unchecked":1,"external":0})
     );
     assert_eq!(
         Report::new(Path::new("empty.md"), Path::new("/root"), vec![]).exit_code(),
