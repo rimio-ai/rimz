@@ -183,133 +183,16 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
     else {
         return Ok(());
     };
-    let mut first_prep = true;
-    let mut first_round = true;
-    let mut local_port = None;
-    let mut relay_state = None;
-
+    let mut rounds = WebRounds {
+        first_prep: true,
+        first_round: true,
+        relay: None,
+    };
     loop {
-        let round_control = supervisor.control().map(ToOwned::to_owned);
-        let master_confirmed = round_control.is_some();
-        let prep = run_web_prep(
-            &rimz::remote::web::web_prep_spec(
-                &remote.target,
-                web_prep_options(remote, client_size, first_prep),
-                round_control.as_deref(),
-            ),
-            "preparing remote web access",
-            host,
-            remote.target.remote_path(),
-            remote.origin.as_str(),
-        )?;
-        let prep = match prep {
-            WebPrepOutcome::Ready(prep) => {
-                first_prep = false;
-                prep
-            }
-            WebPrepOutcome::TransportFailure => {
-                match web_exit_action(
-                    settle_web_exit(
-                        &mut reconnect,
-                        Some(rimz::remote::SSH_TRANSPORT_EXIT),
-                        master_confirmed,
-                        false,
-                    ),
-                    host,
-                )? {
-                    WebExitAction::Done => return Ok(()),
-                    WebExitAction::Retry => {
-                        if !supervisor.recover(LinkLoss::WebTunnel)? {
-                            return Ok(());
-                        }
-                        continue;
-                    }
-                }
-            }
-        };
-        let (payload, tunnel_port, credential) = parse_web_payload(&prep)?;
-        let forward_port = rimz::remote::web::reserve_forward_port()
-            .context("reserving local SSH web forward port")?;
-        let round_target = rimz::web::RelayTarget {
-            upstream: SocketAddr::from(([127, 0, 0, 1], forward_port)),
-            authorization: credential.authorization(),
-        };
-        let local_port = match local_port {
-            Some(port) => port,
-            None => {
-                let listener =
-                    rimz::remote::web::bind_local_relay(&payload.session, remote.web.port)
-                        .context("binding local web tunnel relay")?;
-                let port = listener.local_addr()?.port();
-                let target = Arc::new(Mutex::new(round_target.clone()));
-                spawn_tunnel_relay(listener, Arc::clone(&target))?;
-                relay_state = Some(target);
-                local_port = Some(port);
-                port
-            }
-        };
-        let mut tunnel = if round_control.is_some() {
-            None
-        } else {
-            let spec =
-                rimz::remote::web::web_tunnel_spec(&remote.target, forward_port, tunnel_port);
-            Some(RemoteTunnel::start(&spec, host)?)
-        };
-        let readiness = match (round_control.as_deref(), tunnel.as_mut()) {
-            (Some(control), None) => establish_control_forward(
-                &rimz::remote::web::web_control_forward_spec(
-                    &remote.target,
-                    forward_port,
-                    tunnel_port,
-                    control,
-                ),
-                host,
-            )?,
-            (None, Some(tunnel)) => tunnel.wait_until_ready(forward_port)?,
-            _ => unreachable!("web tunnel kind follows ControlMaster availability"),
-        };
-        let port_ready = match readiness {
-            PortWait::Ready => true,
-            PortWait::Exited(exit_code) => {
-                if exit_code == Some(0) && !master_confirmed {
-                    bail!("web tunnel exited before local port accepted connections");
-                }
-                match web_exit_action(
-                    settle_web_exit(&mut reconnect, exit_code, master_confirmed, false),
-                    host,
-                )? {
-                    WebExitAction::Done => return Ok(()),
-                    WebExitAction::Retry => {
-                        if !supervisor.recover(LinkLoss::WebTunnel)? {
-                            return Ok(());
-                        }
-                        continue;
-                    }
-                }
-            }
-        };
-
-        supervisor.round_ready();
-        *relay_state
-            .as_ref()
-            .context("local web tunnel relay is not running")?
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = round_target;
-        if first_round {
-            let url = payload.local_url(local_port);
-            writeln!(std::io::stdout().lock(), "{url}")?;
-            super::super::open_browser_best_effort(&url);
-            report_web_tunnel_up(host, true);
-            first_round = false;
-        } else {
-            let _ = writeln!(std::io::stderr().lock(), "rimz: tunnel to {host} restored");
-        }
-        let exit_code = match tunnel.as_mut() {
-            Some(tunnel) => tunnel.wait_for_exit()?,
-            None => supervisor.wait_for_exit()?,
-        };
+        let master_confirmed = supervisor.control().is_some();
+        let exit = rounds.run(remote, client_size, &mut supervisor)?;
         match web_exit_action(
-            settle_web_exit(&mut reconnect, exit_code, master_confirmed, port_ready),
+            settle_web_exit(&mut reconnect, exit.code, master_confirmed, exit.port_ready),
             host,
         )? {
             WebExitAction::Done => return Ok(()),
@@ -319,6 +202,119 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
                 }
             }
         }
+    }
+}
+
+struct WebRounds {
+    first_prep: bool,
+    first_round: bool,
+    relay: Option<(u16, Arc<Mutex<rimz::web::RelayTarget>>)>,
+}
+
+enum RoundTransport {
+    Master(std::path::PathBuf),
+    Tunnel(RemoteTunnel),
+}
+
+struct WebRoundExit {
+    code: Option<i32>,
+    port_ready: bool,
+}
+
+impl WebRounds {
+    fn run(
+        &mut self,
+        remote: &RemoteConnect,
+        client_size: Option<(u16, u16)>,
+        supervisor: &mut LinkSupervisor,
+    ) -> Result<WebRoundExit> {
+        let host = remote.target.host_display();
+        let round_control = supervisor.control().map(ToOwned::to_owned);
+        let prep = run_web_prep(
+            &rimz::remote::web::web_prep_spec(
+                &remote.target,
+                web_prep_options(remote, client_size, self.first_prep),
+                round_control.as_deref(),
+            ),
+            "preparing remote web access",
+            host,
+            remote.target.remote_path(),
+            remote.origin.as_str(),
+        )?;
+        let WebPrepOutcome::Ready(prep) = prep else {
+            return Ok(WebRoundExit {
+                code: Some(rimz::remote::SSH_TRANSPORT_EXIT),
+                port_ready: false,
+            });
+        };
+        self.first_prep = false;
+        let (payload, tunnel_port, credential) = parse_web_payload(&prep)?;
+        let forward_port = rimz::remote::web::reserve_forward_port()
+            .context("reserving local SSH web forward port")?;
+        let round_target = rimz::web::RelayTarget {
+            upstream: SocketAddr::from(([127, 0, 0, 1], forward_port)),
+            authorization: credential.authorization(),
+        };
+        let (local_port, relay_target) = match &self.relay {
+            Some(relay) => relay,
+            None => {
+                let listener =
+                    rimz::remote::web::bind_local_relay(&payload.session, remote.web.port)
+                        .context("binding local web tunnel relay")?;
+                let port = listener.local_addr()?.port();
+                let target = Arc::new(Mutex::new(round_target.clone()));
+                spawn_tunnel_relay(listener, Arc::clone(&target))?;
+                self.relay.insert((port, target))
+            }
+        };
+        let mut transport = match round_control {
+            Some(control) => RoundTransport::Master(control),
+            None => {
+                let spec =
+                    rimz::remote::web::web_tunnel_spec(&remote.target, forward_port, tunnel_port);
+                RoundTransport::Tunnel(RemoteTunnel::start(&spec, host)?)
+            }
+        };
+        let readiness = match &mut transport {
+            RoundTransport::Master(control) => establish_control_forward(
+                &rimz::remote::web::web_control_forward_spec(
+                    &remote.target,
+                    forward_port,
+                    tunnel_port,
+                    control,
+                ),
+                host,
+            )?,
+            RoundTransport::Tunnel(tunnel) => tunnel.wait_until_ready(forward_port)?,
+        };
+        if let PortWait::Exited(code) = readiness {
+            if code == Some(0) && matches!(transport, RoundTransport::Tunnel(_)) {
+                bail!("web tunnel exited before local port accepted connections");
+            }
+            return Ok(WebRoundExit {
+                code,
+                port_ready: false,
+            });
+        }
+        supervisor.round_ready();
+        *relay_target.lock().unwrap_or_else(PoisonError::into_inner) = round_target;
+        if self.first_round {
+            let url = payload.local_url(*local_port);
+            writeln!(std::io::stdout().lock(), "{url}")?;
+            super::super::open_browser_best_effort(&url);
+            report_web_tunnel_up(host, true);
+            self.first_round = false;
+        } else {
+            let _ = writeln!(std::io::stderr().lock(), "rimz: tunnel to {host} restored");
+        }
+        let code = match &mut transport {
+            RoundTransport::Tunnel(tunnel) => tunnel.wait_for_exit()?,
+            RoundTransport::Master(_) => supervisor.wait_for_exit()?,
+        };
+        Ok(WebRoundExit {
+            code,
+            port_ready: true,
+        })
     }
 }
 
@@ -420,18 +416,10 @@ fn run_web_prep(
         return Ok(WebPrepOutcome::TransportFailure);
     }
     if let Some(code) = status.code()
-        && matches!(
-            code,
-            rimz::remote::REMOTE_RIMZ_MISSING_EXIT
-                | rimz::remote::REMOTE_VERSION_SKEW_EXIT
-                | rimz::remote::REMOTE_VERSION_INCOMPATIBLE_EXIT
-                | rimz::remote::REMOTE_PATH_MISSING_EXIT
-        )
+        && let Some(message) =
+            super::supervisor::known_remote_exit_message(code, host, remote_path, setup_hint)
     {
-        bail!(
-            "{}",
-            super::supervisor::fatal_session_message(code, host, remote_path, setup_hint, None)
-        );
+        bail!("{message}");
     }
     bail!("{label} failed with {status}");
 }
