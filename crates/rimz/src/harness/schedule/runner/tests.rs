@@ -397,12 +397,21 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     for on in [CheckOn::Success, CheckOn::Fail, CheckOn::Any] {
         let mut running = signal.clone();
         running.watch.as_mut().unwrap().verdict = WatchVerdict::Running { elapsed_ms: 1_000 };
+        running.watch.as_mut().unwrap().output = "still running".to_owned();
         let mut fire = skipped_fire(watch_name, &catalog, Some(running));
         fire.entry.on = Some(on);
+        fire.mode = LoopRunMode::Manual;
         let check = fire
             .prepare_check(&mut |_| panic!("supplied watch runs no check"))
             .expect("running watch always delivers");
         assert!(check.done.is_none());
+        let record = check.fire.expect("watch evidence").record;
+        assert_eq!(record.code, None);
+        assert!(!record.timed_out);
+        assert_eq!(record.output, "still running");
+        assert_eq!(record.output_path, Some(dir.path().join("watch.log")));
+        assert!(fire.check_trip.is_none());
+        fire.mode = LoopRunMode::Scheduled;
         fire.consume_ephemeral().expect("retain running watch");
         assert!(
             crate::harness::schedule::instances::load_from(&state.root)
@@ -434,6 +443,42 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     assert!(!instances.0.contains_key(watch_name));
     crate::harness::schedule::instances::remove(&state, poll_name, None)
         .expect("remove poll fixture");
+}
+
+#[test]
+fn check_only_terminals_consume_only_one_shots() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_workspace(WorkspaceId::from_project_root(dir.path())).unwrap();
+    for (name, once, command, result) in [
+        ("once-pass", true, "true", LoopRunResult::Completed),
+        ("standing-pass", false, "true", LoopRunResult::Completed),
+        ("once-fail", true, "false", LoopRunResult::Failed),
+    ] {
+        let entry = TaskEntry {
+            check: Some(command.to_owned()),
+            root: dir.path().to_path_buf(),
+            at: once.then(|| "07:00".to_owned()),
+            every: (!once).then(|| "1m".to_owned()),
+            ..TaskEntry::default()
+        };
+        crate::harness::schedule::instances::insert(&state, name, &entry).unwrap();
+        let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+        let mut fire = skipped_fire(name, &catalog, None);
+        let finished = fire.prepare_check(&mut |_| Ok(())).unwrap().done.unwrap();
+        assert_eq!(finished.record.result, result);
+        assert_eq!(finished.presentation.exit_code, None);
+        assert_eq!(finished.record.error, None);
+        assert!(finished.presentation.check_duration_ms.is_some());
+        assert_eq!(
+            crate::harness::schedule::instances::load_from(&state.root)
+                .0
+                .contains_key(name),
+            !once
+        );
+        if !once {
+            crate::harness::schedule::instances::remove(&state, name, None).unwrap();
+        }
+    }
 }
 
 fn skipped_fire<'a>(
@@ -635,6 +680,23 @@ fn run_check_captures_output_status_and_timeout() {
         orphan.output.is_empty(),
         "a reparented pipe holder cannot prevent timeout recording"
     );
+}
+
+#[test]
+fn polled_watch_probe_runs_to_exit_without_checkin() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run_command(
+        dir.path(),
+        "printf probe; exit 3",
+        WatchDeadline::None,
+        CheckEcho::Capture,
+        &BTreeMap::new(),
+        |_, _| panic!("a probe never checks in"),
+    )
+    .unwrap();
+    assert_eq!(output.code, Some(3));
+    assert_eq!(output.output, "probe");
+    assert!(!output.timed_out);
 }
 
 #[test]

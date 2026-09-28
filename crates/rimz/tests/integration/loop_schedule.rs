@@ -510,7 +510,7 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-dedupe", "feature-loop");
-    loop_ok(
+    let output = loop_ok(
         &env,
         &[
             "loop",
@@ -528,6 +528,7 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
             "keep this prompt",
         ],
     );
+    assert!(output.contains("added loop task `original`"), "{output}");
     let mut original = read_loop_instances(&env);
     original.0.get_mut("original").unwrap().team = Some("forge#feature-loop".parse().unwrap());
     write_loop_instances(&env, original.clone());
@@ -567,7 +568,10 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
             "discard this prompt",
         ],
     );
-    assert!(output.contains("original"), "{output}");
+    assert!(
+        output.contains("already subscribed as original"),
+        "{output}"
+    );
     assert_eq!(read_loop_instances(&env), original);
     assert_eq!(read_loop_arming(&env), arming);
     assert_eq!(read_loop_strikes(&env), strikes);
@@ -3187,7 +3191,11 @@ fn loop_check_failure_records_and_renders_history() {
             "15m",
         ],
     );
-    loop_ok(&env, &["loop", "fire", "history"]);
+    let output = loop_ok(&env, &["loop", "fire", "history"]);
+    assert!(
+        output.find("  check: printf healthy").unwrap() < output.find("  │ healthy").unwrap(),
+        "{output}"
+    );
     loop_ok(
         &env,
         &[
@@ -4077,9 +4085,10 @@ fn loop_add_rejects_agent_signal_self_waits() {
         args.extend(extra);
         let (_stdout, error) = loop_fail(&env, &args);
         assert!(
-            error.contains("requires --match handle=<other> or --match session=<other>"),
+            error.contains("requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"),
             "{error}"
         );
+        assert!(read_loop_instances(&env).0.is_empty());
     }
 
     loop_ok(
