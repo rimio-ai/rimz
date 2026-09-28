@@ -8,8 +8,10 @@ Pass 28g records the lifecycle reaction in `harness/team_stage` on `6b02f6006`, 
 
 Pass 28c holds `mux/zellij` on the branch commit its row names (the merge re-stamps it): cx 53.5 to 22.3 against the round base `27c50ce2d`, with the companion balancer folded and no item verdicts added.
 
-- **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
-- **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
+Survey on the pass 28b tree (`9cc23c547`, 2026-09-28): no ledger problems or open families; one stale pass-28a shape verdict (`PendingWrite::optional+report_files+settings_json::commit_pair+settings_json::read_optional_bytes+settings_json::render_json`). The three pass-28b rows name the branch parent and need re-stamping if rebased. Rewrite this section whenever a pass ends.
+
+- **Seam queue: empty.** Twelve seams landed in passes 1 to 28b. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
+- **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
 - **Reopened** (churn past the row's count): none; pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`, pass 26b `sidebar_pane/app` and `sidebar_pane/render/sections`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
@@ -204,7 +206,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar/workspace_projection` | holds; landed pass-23c | `1830bd0c6` | 30 | with `sidebar/(root)`. |
 | `sidebar_pane/app` | holds; landed pass-26b | `be91f3434` | 30 | loop clock mechanics consume one render animation answer. |
 | `sidebar_pane/pets` | holds; landed pass-22a | `1b6ece679` | 30 | preview types `pub` for the CLI. |
-| `sidebar_pane/pixel` | holds; landed pass-22a | `1b6ece679` | 30 | resend gate (`30108e572`) and Kitty support variants (`3718d6f34`) hold. |
+| `sidebar_pane/pixel` | holds; landed pass-22a; pass-28b | `9cc23c547` | 30 | placeholder encoding lives in the leaf `pixel_wire`. |
 | `sidebar_pane/supervise` | holds; landed pass-22a | `1b6ece679` | 30 | worker entry points `pub` for the CLI. |
 | `sidebar_pane/render/chrome` | holds; landed pass-22a | `1b6ece679` | 30 | bottom-chrome builders are `compose`'s vocabulary. |
 | `sidebar_pane/render/labels` | holds; landed pass-22a | `1b6ece679` | 30 | glyph and meter vocabulary at render reach. |
@@ -243,7 +245,8 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `transcript` | holds; landed pass-24a | `2a9ec66e5` | 30 | `TranscriptLogErr` carried by the public signatures. |
 | `trust` | holds; landed pass-22b | `339310452` | 30 | `_with_roots` seams private except `grant_with_roots`. |
 | `wakeup` | holds; landed pass-24a | `2a9ec66e5` | 30 | the sidebar wire at L2 below `store`. |
-| `web` | holds | `1830bd0c6` | 30 | domain façade over ttyd and gate interiors; `sidebar_pane` cycle by intent. |
+| `web` | holds; landed pass-28b | `9cc23c547` | 30 | `pixel_ttyd_pids` is the renderer's one read of current-page ttyd daemons. |
+| `pixel_wire` | holds; landed pass-28b | `9cc23c547` | 30 | leaf kitty placeholder encoding shared by native and browser renderers. |
 | `workspace` | holds; landed pass-22b | `339310452` | 30 | owns the room identity pin keys and `workspace.json`. |
 | `worktree` | holds; landed pass-8; pass-23b | `25faa1bf6` | 30 | landed proof at crate reach; request types named by `cli/worktree.rs`. |
 | `forge` | holds; landed pass-8; pass-24c | `e083557ba` | 30 | URL forwarders deleted; `PrLink` floored by `RefreshedLanes::pr_states`. |
@@ -313,6 +316,5 @@ Candidates a pass judged real but could not land, each with what unblocks it.
 - `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Belongs to a `store/snapshot` pass, which owns its callers.
 - `ids::ViewId::as_str`: no production reader, `dead_code` blocks narrowing, tests hold it. Wait for a pass on `sidebar/produce`.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
-- `sidebar_pane ↔ web`: four sites; closing either side needs a neutral pixel-wire module below both (a seam pass).
 - Reported, not fixed: Codex transcript lookup ignores `CODEX_HOME`, substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.
 - Compiler-refused narrowings (atlas caveat 13) are never deferrals; do not re-plan them from `inspect`'s `narrow to` column.
