@@ -7,7 +7,7 @@ use protobuf::Message;
 use scip::types::{Index, Occurrence, SymbolRole, occurrence};
 use serde::Serialize;
 
-use super::modules::crate_module_for_path;
+use super::modules::{crate_module_for_path, crate_path_for_source};
 use super::sources::{Source, SourceKind};
 use super::syntax::{FileSyntax, PubItem, SyntaxReport};
 
@@ -85,6 +85,7 @@ pub(super) struct Edge {
     pub(super) item: String,
     pub(super) kind: EdgeKind,
     pub(super) site_kind: SourceKind,
+    pub(super) cross_target: bool,
 }
 
 #[derive(Debug, Default)]
@@ -111,6 +112,7 @@ impl References {
     }
 
     fn from_index(index: &Index, syntax: &SyntaxReport, sources: &[Source]) -> Self {
+        let binaries = binary_modules(syntax);
         let sources_by_path = sources
             .iter()
             .map(|source| (source.path.as_path(), source))
@@ -217,6 +219,9 @@ impl References {
                             item: item.name.clone(),
                             kind: EdgeKind::Reference,
                             site_kind: site.site_kind,
+                            cross_target: crate_path_for_source(&site.path) != file.crate_path
+                                || in_binary(&site.path, &binaries)
+                                    != in_binary(&file.path, &binaries),
                         });
                     }
                 }
@@ -233,6 +238,39 @@ struct ReferenceSite {
     module: String,
     line: usize,
     site_kind: SourceKind,
+}
+
+fn binary_modules(syntax: &SyntaxReport) -> BTreeMap<PathBuf, BTreeSet<String>> {
+    let declared = |path: &Path| {
+        syntax
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .into_iter()
+            .flat_map(|file| file.mod_decls.iter().map(|(module, _)| module.clone()))
+            .collect::<BTreeSet<_>>()
+    };
+    syntax
+        .files
+        .iter()
+        .filter(|file| file.path.ends_with("src/main.rs"))
+        .map(|main| {
+            let library = declared(&main.crate_path.join("src/lib.rs"));
+            let binary = declared(&main.path).difference(&library).cloned().collect();
+            (main.crate_path.clone(), binary)
+        })
+        .collect()
+}
+
+fn in_binary(path: &Path, binaries: &BTreeMap<PathBuf, BTreeSet<String>>) -> bool {
+    let root = crate_path_for_source(path);
+    if path == root.join("src/main.rs") || path.starts_with(root.join("src/bin")) {
+        return true;
+    }
+    let module = crate_module_for_path(path);
+    binaries
+        .get(&root)
+        .is_some_and(|modules| modules.contains(module.split("::").next().unwrap_or(&module)))
 }
 
 fn normalized_document_path(relative_path: &str) -> PathBuf {
