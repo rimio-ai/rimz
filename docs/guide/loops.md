@@ -313,7 +313,7 @@ The evidence is the structured per-turn failure record the agent's own CLI write
 
 The cause picks the clock:
 
-- A rate-limit or spend-limit park has a known end, the account window's reset. The resume fires then, the first moment it can succeed.
+- A rate-limit or spend-limit park waits for the latest applicable account or model window to reset, including a Fable model limit. If the provider still reports a limit afterward, nudges stay at least two minutes apart; those limit replies do not restart the attempt cap.
 - A daily dollar-cap park resumes at the next local midnight, when the cap reopens.
 - A transient overload or API-error park has no reset clock, so it retries on a lengthening ramp: the first attempt three minutes after the failure, then every five (`resume.auto_continue_backoff_secs`, default `[180, 300]`, last value repeating).
 

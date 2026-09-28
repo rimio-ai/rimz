@@ -17,10 +17,7 @@
 //!   agent is still idle (`last_activity` has not advanced), the producer
 //!   spawns the detached `rimz agents auto-continue` helper that queues and
 //!   delivers a resume-gated message record.
-//! - **Clear.** Any activity since the park (the nudge took, or the agent woke on
-//!   its own) advances `last_activity`, and the stale record is removed. A
-//!   delivered resume message also clears the record; evidenced resume messages
-//!   control exhaustion, while helper spawns only pace retries.
+//! - **Clear.** Activity or a delivered resume message clears the record, except a nudge's still-limited reply carries the park and its attempt anchor forward. Evidenced resume messages control exhaustion, while helper spawns only pace retries.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`resume_park`].
@@ -73,11 +70,11 @@ pub struct AutoContinueRequest {
 struct ParkRecord {
     /// The park class and its durable resume facts.
     kind: ParkKind,
-    /// The agent's rollup `last_activity` at arm time. Equal or regressed means
-    /// the agent has done nothing since: still parked, safe to nudge. Advanced
-    /// means it woke (our nudge took, or it resumed on its own), so the record
-    /// is stale.
+    /// Current activity baseline; a nudge's limit reply advances it without starting a new park.
     parked_at_activity: Timestamp,
+    /// Original baseline when a limit reply rebases the activity stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    attempts_since: Option<Timestamp>,
     /// When the last auto-continue attempt fired, throttling re-nudges so a nudge
     /// that fails to wake a still-parked agent is retried without spamming a
     /// working one.
@@ -131,7 +128,8 @@ fn resume_park(
     )?;
     match effective_turn_error_class(error) {
         TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit => {
-            let deadline = capacity?.latest_spent_window_reset(now)?;
+            let deadline =
+                capacity?.latest_spent_window_reset_for_model(now, agent.model.as_deref())?;
             Some(ResumeArm::RateLimit { deadline })
         }
         TurnErrorClass::PausedOverloaded => Some(ResumeArm::Overloaded {
@@ -167,10 +165,7 @@ pub(crate) fn resume_gate_recovered(
             agent.turn_started_at,
         )
         .map(effective_turn_error_class)
-        .is_some_and(|class| {
-            class.is_limit()
-                && capacity.is_some_and(|capacity| capacity.subscription_budget_available(now))
-        }),
+        .is_some_and(|class| class.is_limit() && capacity_recovered(capacity.as_ref(), agent, now)),
     }
 }
 
@@ -214,6 +209,18 @@ pub(crate) fn resume_parked(
             continue;
         }
         clear_budget_park(runtime, &agent.kind, &agent.agent_id);
+        if let Some(mut record) = read_park(&path)
+            && matches!(record.kind, ParkKind::RateLimit { .. })
+            && !still_parked(&record, agent.last_activity)
+            && limit_marker_active(agent)
+            && latest_resume_message(resume_messages, agent, &record).is_some()
+        {
+            record
+                .attempts_since
+                .get_or_insert(record.parked_at_activity);
+            record.parked_at_activity = agent.last_activity;
+            write_park(&path, &record);
+        }
         let capacity = provider_capacities.get(&agent.kind);
         match resume_park(agent, capacity, now) {
             Some(ResumeArm::RateLimit { deadline }) => {
@@ -234,7 +241,10 @@ pub(crate) fn resume_parked(
                 // chance to fire the persisted due record on the recovery
                 // frame; clear only stale records whose marker already moved on.
                 if limit_marker_active(agent) {
-                    if read_park(&path).is_none() && capacity_recovered(capacity, now) {
+                    if read_park(&path).is_none()
+                        && capacity_recovered(capacity, agent, now)
+                        && !recent_resume_attempt(resume_messages, agent, now)
+                    {
                         arm_park(
                             &path,
                             ParkKind::RateLimit { deadline: now },
@@ -242,7 +252,7 @@ pub(crate) fn resume_parked(
                         );
                     }
                     fire_if_due(agent, &path, ctx);
-                } else if capacity_recovered(capacity, now) {
+                } else if capacity_recovered(capacity, agent, now) {
                     remove_park(&path);
                 } else {
                     fire_if_due(agent, &path, ctx);
@@ -285,8 +295,14 @@ pub(crate) fn exhausted_parks(
     exhausted
 }
 
-fn capacity_recovered(capacity: Option<&ProviderCapacity>, now: Timestamp) -> bool {
-    capacity.is_some_and(|capacity| capacity.subscription_budget_available(now))
+fn capacity_recovered(
+    capacity: Option<&ProviderCapacity>,
+    agent: &AgentState,
+    now: Timestamp,
+) -> bool {
+    capacity.is_some_and(|capacity| {
+        capacity.subscription_budget_available_for_model(now, agent.model.as_deref())
+    })
 }
 
 fn limit_marker_active(agent: &AgentState) -> bool {
@@ -315,14 +331,17 @@ fn arm_park(path: &Path, kind: ParkKind, last_activity: Timestamp) {
         .map(|record| {
             (
                 record.parked_at_activity,
+                record.attempts_since,
                 record.last_nudge_at,
                 record.retries,
             )
         });
-    let (parked_at_activity, last_nudge_at, retries) = carry.unwrap_or((last_activity, None, 0));
+    let (parked_at_activity, attempts_since, last_nudge_at, retries) =
+        carry.unwrap_or((last_activity, None, None, 0));
     let next = ParkRecord {
         kind,
         parked_at_activity,
+        attempts_since,
         last_nudge_at,
         retries,
     };
@@ -385,6 +404,11 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
         ParkKind::Budget { .. } => "budget_day_reset",
     };
     if ctx.text.is_empty() {
+        return;
+    }
+    if matches!(record.kind, ParkKind::RateLimit { .. })
+        && recent_resume_attempt(ctx.resume_messages, agent, ctx.now)
+    {
         return;
     }
     let attempts = evidenced_attempts(ctx.resume_messages, agent, &record);
@@ -462,15 +486,22 @@ fn nudge_due(record: &ParkRecord, attempts: u32, now: Timestamp, config: &Resume
 }
 
 fn evidenced_attempts(messages: &[ResumeMessage], agent: &AgentState, record: &ParkRecord) -> u32 {
+    let since = record.attempts_since.unwrap_or(record.parked_at_activity);
     let count = messages
         .iter()
-        .filter(|message| {
-            message.same_agent_card(agent) && message.enqueued_at >= record.parked_at_activity
-        })
+        .filter(|message| message.same_agent_card(agent) && message.enqueued_at >= since)
         .map(|message| message.message_id.as_str())
         .collect::<BTreeSet<_>>()
         .len();
     count.min(u32::MAX as usize) as u32
+}
+
+fn recent_resume_attempt(messages: &[ResumeMessage], agent: &AgentState, now: Timestamp) -> bool {
+    messages.iter().any(|message| {
+        message.same_agent_card(agent)
+            && now.duration_since(message.enqueued_at)
+                < jiff::SignedDuration::from_secs(AUTO_CONTINUE_RETRY_INTERVAL.as_secs() as i64)
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

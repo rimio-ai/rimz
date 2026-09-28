@@ -244,6 +244,51 @@ impl ProviderCapacity {
             .max()
     }
 
+    /// Latest reset of the account windows and this model's sub-caps.
+    pub(crate) fn latest_spent_window_reset_for_model(
+        &self,
+        now: Timestamp,
+        model: Option<&str>,
+    ) -> Option<Timestamp> {
+        self.model_windows(model)
+            .filter(|window| window.is_spent())
+            .filter_map(|window| window.resets_at.filter(|reset| *reset > now))
+            .chain(self.latest_spent_window_reset(now))
+            .max()
+    }
+
+    /// Model sub-caps can veto otherwise available account capacity.
+    pub(crate) fn subscription_budget_available_for_model(
+        &self,
+        now: Timestamp,
+        model: Option<&str>,
+    ) -> bool {
+        self.subscription_budget_available(now)
+            && self
+                .model_windows(model)
+                .all(|window| !window_spent_unreset(window, now))
+    }
+
+    fn model_windows(&self, model: Option<&str>) -> impl Iterator<Item = &RateLimitWindow> {
+        let model = model
+            .map(|model| crate::agents::model_display::display_model(model).to_ascii_lowercase());
+        self.windows.iter().filter(move |window| {
+            let Some(family) = window
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.id.strip_prefix("model:"))
+            else {
+                return false;
+            };
+            !family.is_empty()
+                && window.duration_mins.is_some_and(|mins| mins > 0)
+                && model
+                    .as_deref()
+                    .and_then(|model| model.strip_prefix(family))
+                    .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with([' ', '-', '@']))
+        })
+    }
+
     /// Whether a known subscription reading currently has capacity.
     pub(crate) fn subscription_budget_available(&self, now: Timestamp) -> bool {
         let mut has_known_available = false;
