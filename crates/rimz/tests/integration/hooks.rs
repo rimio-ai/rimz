@@ -1901,6 +1901,92 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
 }
 
 #[test]
+fn terminal_supervised_hook_settles_session_spend_once_but_not_for_peers() {
+    for peer in [false, true] {
+        let env = Env::new();
+        let transcript = env.project_root.join("spend.jsonl");
+        let usage = |input, output| {
+            json!({
+            "type": "assistant", "timestamp": "2026-07-01T00:00:00Z",
+            "sessionId": "spend-session", "costUSD": 0.25,
+            "message": {"id": "response-1", "role": "assistant", "model": "claude-sonnet-4-6", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": input, "output_tokens": output}}
+        }).to_string()
+        };
+        std::fs::write(&transcript, usage(120, 30)).unwrap();
+        let mut run = rimz::store::run::RunRecord::new(
+            env.workspace_id.clone(),
+            rimz::ids::AgentKind::new_unchecked("claude"),
+            rimz::agents::PermissionMode::Auto,
+            "go".into(),
+            env.project_root.clone(),
+        );
+        run.agent_id = Some("spend-session".into());
+        if peer {
+            run.peer = Some(rimz::store::run::PeerRun {
+                launch_id: "spend-session".into(),
+                opened_by: Vec::new(),
+            });
+        }
+        rimz::harness::run::create(env.store().paths(), &run).unwrap();
+        let payload = json!({"hook_event_name": "Stop", "session_id": "spend-session", "transcript_path": transcript, "cwd": env.project_root}).to_string();
+        let feed = || {
+            let mut command = env.hook_command("claude");
+            command.env(rimz::harness::launch::ENV_RUN_ID, run.run_id.as_str());
+            assert_hook_succeeded_neutral(
+                "claude",
+                env.spawn_payload(command, &payload)
+                    .wait_with_output()
+                    .unwrap(),
+            );
+            rimz::harness::run::load(env.store().paths(), &run.run_id).unwrap()
+        };
+        let settled = feed();
+        assert!(settled.status.is_terminal());
+        if peer {
+            assert_eq!(
+                (
+                    settled.cost_usd,
+                    settled.input_tokens,
+                    settled.output_tokens
+                ),
+                (None, None, None)
+            );
+        } else {
+            let cost = rimz::store::agent_context::read_one(
+                &env.runtime_paths(),
+                "claude",
+                "spend-session",
+            )
+            .unwrap()
+            .context
+            .cost
+            .unwrap()
+            .total_cost_usd;
+            assert!(cost.is_some());
+            assert_eq!(settled.cost_usd, cost);
+            assert_eq!(
+                (settled.input_tokens, settled.output_tokens),
+                (Some(120), Some(30))
+            );
+        }
+        std::fs::write(&transcript, usage(900, 80)).unwrap();
+        let replayed = feed();
+        assert_eq!(
+            (
+                replayed.cost_usd,
+                replayed.input_tokens,
+                replayed.output_tokens
+            ),
+            (
+                settled.cost_usd,
+                settled.input_tokens,
+                settled.output_tokens
+            )
+        );
+    }
+}
+
+#[test]
 fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
     let env = Env::new();
     let transcript_path = env.project_root.join("conv-cursor-end.jsonl");
