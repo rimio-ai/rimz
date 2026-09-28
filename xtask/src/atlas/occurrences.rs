@@ -304,6 +304,10 @@ fn markdown_code(value: &str) -> String {
     )
 }
 
+fn markdown_cell(value: Option<&str>) -> String {
+    value.map_or_else(|| "-".to_owned(), markdown_code)
+}
+
 fn render_markdown(
     report: &Report,
     index_path: &Path,
@@ -341,10 +345,14 @@ fn render_markdown(
                 text,
                 "| {} | {} | {} | {} | {} | {} |",
                 markdown_code(&symbol.symbol),
-                markdown_code(symbol.display_name.as_deref().unwrap_or("")),
-                markdown_code(symbol.kind.as_deref().unwrap_or("")),
-                markdown_code(symbol.enclosing_symbol.as_deref().unwrap_or("")),
-                markdown_code(&symbol.definitions.join(", ")),
+                markdown_cell(symbol.display_name.as_deref()),
+                markdown_cell(symbol.kind.as_deref()),
+                markdown_cell(symbol.enclosing_symbol.as_deref()),
+                markdown_cell(
+                    (!symbol.definitions.is_empty())
+                        .then(|| symbol.definitions.join(", "))
+                        .as_deref()
+                ),
                 symbol.occurrences
             );
         }
@@ -360,13 +368,12 @@ fn render_markdown(
             let function = site
                 .enclosing_fn
                 .as_ref()
-                .map(|function| format!("{}:{}", function.label, function.line))
-                .unwrap_or_default();
+                .map(|function| format!("{}:{}", function.label, function.line));
             let _ = writeln!(
                 text,
                 "| {} | {roles} | {} | {} |",
                 markdown_code(&format!("{}:{}", site.path.display(), site.line)),
-                markdown_code(&function),
+                markdown_cell(function.as_deref()),
                 markdown_code(&site.symbol)
             );
         }
@@ -599,6 +606,31 @@ mod tests {
 
     fn args(raw: &[&str]) -> Vec<String> {
         raw.iter().map(|arg| (*arg).into()).collect()
+    }
+
+    #[test]
+    fn markdown_renders_absent_metadata_as_a_plain_dash() {
+        let parsed = parse_args(&args(&["--doc", "a.rs"])).unwrap().unwrap();
+        let result = report(
+            Some("a.rs"),
+            None,
+            vec![document("a.rs", vec![occurrence(0, "a#", 0)])],
+        );
+        let text = render_markdown(
+            &result,
+            Path::new("index.scip"),
+            &parsed.query,
+            &parsed.output,
+        );
+        assert!(!text.contains("<code></code>"), "{text}");
+        assert!(
+            text.contains("| <code>a#</code> | - | - | - | - | 1 |"),
+            "{text}"
+        );
+        assert!(
+            text.contains("| <code>a.rs:1</code> | reference | - | <code>a#</code> |"),
+            "{text}"
+        );
     }
 
     #[test]
