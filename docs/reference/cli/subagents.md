@@ -117,10 +117,10 @@ A launch that fails partway stops the remaining launches. The error names the ch
 
 Launcher-opened turns of persistent interactive peers also join this fleet. Every unreported turn retains its own response at `rimz-subagents/<name>.<run_id>.output`, with that turn's prompt as its task and its own elapsed time. Two rows can name the same peer. An open peer run delays the whole fleet report; a user-typed turn without an open peer run does not. These rows use the `background agent` heading and never close the peer's pane.
 
-A parent that does not join its children gets one `AGENT_REPORT` message from `@rimz` once every child it launched has settled. A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet. The message is parked and delivered at the parent's next turn boundary:
+A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet; a fleet containing any solo agent run gets `AGENT_REPORT` instead. The message is parked and delivered at the parent's next turn boundary:
 
 ```text
-Type: AGENT_REPORT
+Type: SUBAGENT_REPORT
 From: @rimz
 Content:
 All 3 subagents settled, responses total ~5.1k tokens, 96 lines:

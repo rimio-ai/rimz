@@ -528,16 +528,14 @@ impl TurnWaitView {
 
     /// A harness wake between its publication and the turn it opens. Reply
     /// waits count `Wait` and `Signal`; a supervised run also counts the
-    /// `SubagentReport` digest a launcher is owed.
+    /// fleet digest a launcher is owed.
     pub(crate) fn wake_in_flight(&self, agent: &AgentState, digest: bool) -> bool {
         self.messages.iter().any(|message| {
-            let wake = match message.sender {
+            let wake = match &message.sender {
                 MessageSender::Harness {
                     notice: HarnessNotice::Wait | HarnessNotice::Signal,
                 } => true,
-                MessageSender::Harness {
-                    notice: HarnessNotice::SubagentReport,
-                } => digest,
+                MessageSender::Harness { notice } => digest && notice.is_fleet_digest(),
                 _ => false,
             };
             wake && !message.status.is_terminal() && message.same_agent_card(agent)

@@ -262,7 +262,7 @@ A failure before any byte is written keeps or returns the record to `Queued` wit
 
 ### The subagent-digest join guard
 
-An `AGENT_REPORT` digest points a parent at the response files of children that have settled. A parent that already joined those children inline (`rimz subagents wait`) has read the results, so the digest would cost it a turn and show it nothing. Two layers cancel it.
+A fleet digest (`SUBAGENT_REPORT` or `AGENT_REPORT`) points a launcher at the response files of runs that have settled. A launcher that already joined those runs inline has read the results, so the digest would cost it a turn and show it nothing. Two layers cancel it.
 
 The producer cancels first, as eager cleanup. An attended inline `rimz subagents wait` and a `rimz subagents stop` stamp `joined_at` on the run rows and cancel a digest whose every listed row is joined, and the composer rechecks after queueing ([subagents.md § The lifecycle, end to end](./subagents.md#the-lifecycle-end-to-end)). Any of these cancels can fail after the stamp and before the queue changes, so delivery cannot rely on them.
 
@@ -289,7 +289,7 @@ A record joins the batch only if it:
 
 The first record that fails a rule ends the batch. `Resume` control messages never batch.
 
-An `AGENT_REPORT` digest is always claimed alone, as its own head. Nothing else would stop it: a digest is an Enter-submitted `Prompt` with no batch key, so it could ride behind a channel-less human message, and a batch member joins a claim without passing the [join guard](#the-subagent-digest-join-guard). Other harness notices batch normally.
+A fleet digest (`SUBAGENT_REPORT` or `AGENT_REPORT`) is always claimed alone, as its own head. Nothing else would stop it: a digest is an Enter-submitted `Prompt` with no batch key, so it could ride behind a channel-less human message, and a batch member joins a claim without passing the [join guard](#the-subagent-digest-join-guard). Other harness notices batch normally, including `TEAM_REPORT`.
 
 The batch lands as one paste and one submit. Agent- and human-authored members keep their own [header](#the-message-header), system members stay verbatim, and a blank line separates sections. Claim, `Sent`, release, and pre-send failure each change the whole batch in one queue transaction.
 
@@ -380,8 +380,9 @@ Content:
 | --- | --- | --- |
 | `AGENT_MESSAGE` | A send from an identified agent caller | Stable reply address, followed by the profile (else kind) in parentheses unless it repeats the handle base |
 | `USER_MESSAGE` | A human's `rimz message` | `@user` |
-| `AGENT_REPORT` | The status-only fleet digest after all of an agent's launched children, `-p --bg` runs, and launcher-opened interactive peer turns settle | `@rimz` |
-| `TEAM_REPORT` | An agent-launched team's leader, reported to the launcher when the board flips to `Done` | `@rimz` |
+| `SUBAGENT_REPORT` | The status-only fleet digest when every row is a `rimz subagents` run | `@rimz` |
+| `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
+| `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
 | `WAIT` | A timer, command, or clock wait delivery | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping for a sleeping agent ([policy](./loops.md#prompt-cache-keepalive)) | `@rimz` |
 | `SIGNAL` | Every delivery fired by a `Trigger::Signal` row | `@rimz` |

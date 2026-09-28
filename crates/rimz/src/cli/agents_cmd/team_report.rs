@@ -4,6 +4,8 @@
 //! into `Done` publishes that message, queues one report to the launcher, and
 //! settles the run; a flip back out opens a fresh run, so every `Done` reports.
 
+use std::path::Path;
+
 use rimz::config::DONE_STAGE;
 use rimz::disk::summary::FileSummary;
 use rimz::harness::run;
@@ -33,12 +35,13 @@ pub(in crate::cli) fn on_flip(
     workspace: &ResolvedWorkspace,
     store: &Store,
     instance: &str,
+    board: &Path,
     from: Option<&str>,
     to: &str,
 ) -> anyhow::Result<TeamReportOutcome> {
     let was_done = from == Some(DONE_STAGE);
     if to == DONE_STAGE && !was_done {
-        return Ok(report_done(workspace, store, instance)?);
+        return Ok(report_done(workspace, store, instance, board)?);
     }
     if was_done && to != DONE_STAGE && run::reopen_team_run(store.paths(), instance)?.is_some() {
         return Ok(TeamReportOutcome::Reopened);
@@ -50,6 +53,7 @@ fn report_done(
     workspace: &ResolvedWorkspace,
     store: &Store,
     instance: &str,
+    board: &Path,
 ) -> Result<TeamReportOutcome, ReportErr> {
     let Some(record) = run::open_team_run_for(store.paths(), instance)? else {
         return Ok(TeamReportOutcome::NotOwed);
@@ -93,8 +97,9 @@ fn report_done(
         ..record.clone()
     };
     let text = format!(
-        "Team {instance} reached Done; its leader reports:\n{}",
-        compose_digest_row(leader, &settled, response.as_ref())
+        "Team {instance} reached Done; its leader reports:\n{}\nMemory: {}",
+        compose_digest_row(leader, &settled, response.as_ref()),
+        view.agent_path(board).display()
     );
     let pane_id = launcher.pane.as_ref().map(|pane| &pane.pane_id);
     let mut message = MessageRecord::new(

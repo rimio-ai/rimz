@@ -61,6 +61,7 @@ pub enum HarnessNotice {
     CacheKeepalive,
     Deadline,
     SubagentReport,
+    AgentReport,
     Wait,
     Signal,
     Stage,
@@ -72,10 +73,15 @@ pub enum HarnessNotice {
 }
 
 impl HarnessNotice {
+    pub(crate) fn is_fleet_digest(&self) -> bool {
+        matches!(self, Self::SubagentReport | Self::AgentReport)
+    }
+
     pub(crate) fn header_type(&self) -> String {
         match self {
             Self::CacheKeepalive => "CACHE_KEEPALIVE".to_owned(),
-            Self::SubagentReport => "AGENT_REPORT".to_owned(),
+            Self::SubagentReport => "SUBAGENT_REPORT".to_owned(),
+            Self::AgentReport => "AGENT_REPORT".to_owned(),
             Self::TeamReport => "TEAM_REPORT".to_owned(),
             Self::Deadline => "DEADLINE".to_owned(),
             Self::Wait => "WAIT".to_owned(),
@@ -94,7 +100,10 @@ impl MessageSender {
             Self::Agent { .. } => SectionOrigin::Agent(self.render()),
             Self::Subagent { .. }
             | Self::Harness {
-                notice: HarnessNotice::SubagentReport | HarnessNotice::TeamReport,
+                notice:
+                    HarnessNotice::SubagentReport
+                    | HarnessNotice::AgentReport
+                    | HarnessNotice::TeamReport,
             } => SectionOrigin::Subagent(self.render()),
             Self::Harness {
                 notice:
@@ -790,10 +799,8 @@ impl MessageRecord {
             && self.enter
             && !self.text.trim_start().starts_with('/')
             && !matches!(
-                self.sender,
-                MessageSender::Harness {
-                    notice: HarnessNotice::SubagentReport
-                }
+                &self.sender,
+                MessageSender::Harness { notice } if notice.is_fleet_digest()
             )
     }
 }
@@ -979,8 +986,8 @@ fn classify_header_line(line: &str) -> Option<HeaderKind> {
         "Type: AGENT_MESSAGE" => Some(HeaderKind::Agent),
         "Type: AGENT_REPORT" => Some(HeaderKind::Subagent),
         "Type: TEAM_REPORT" => Some(HeaderKind::Subagent),
-        // The fleet digest's header before it was renamed, and the legacy
-        // `MessageSender::Subagent` header: transcripts already carry both.
+        // The subagent fleet digest, and the legacy per-child
+        // `MessageSender::Subagent` header from `@<child>`.
         "Type: SUBAGENT_REPORT" => Some(HeaderKind::Subagent),
         "Type: WAIT" => Some(HeaderKind::Wait),
         "Type: SIGNAL" => Some(HeaderKind::Signal),

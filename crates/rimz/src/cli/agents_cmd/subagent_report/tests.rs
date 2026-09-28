@@ -47,7 +47,7 @@ fn peer_digest_uses_each_turn_task() {
     let mut second = first.clone();
     second.run_id = rimz::ids::RunId::new();
     second.prompt = "second task".into();
-    let digest = compose_digest(&[(&child, &first, None), (&child, &second, None)]);
+    let digest = compose_digest(&[(&child, &first, None), (&child, &second, None)], false);
     assert!(digest.contains("task: \"first task\""), "{digest}");
     assert!(digest.contains("task: \"second task\""), "{digest}");
     assert!(!digest.contains("stale launch description"));
@@ -93,7 +93,7 @@ fn digest_lists_a_single_result_without_a_trailing_command() {
     };
 
     assert_eq!(
-        compose_digest(&[(&child, &result, Some(&response))]),
+        compose_digest(&[(&child, &result, Some(&response))], true),
         "Your subagent settled:\n\
          - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (<1k tokens, 3 lines)"
     );
@@ -128,11 +128,14 @@ fn digest_sizes_non_completed_results_and_appends_reason() {
     };
 
     assert_eq!(
-        compose_digest(&[
-            (&naming, &completed, Some(&response)),
-            (&runtime, &blank, None),
-            (&reviewer, &timed_out, Some(&partial)),
-        ]),
+        compose_digest(
+            &[
+                (&naming, &completed, Some(&response)),
+                (&runtime, &blank, None),
+                (&reviewer, &timed_out, Some(&partial)),
+            ],
+            true
+        ),
         "All 3 subagents settled, responses total ~22k tokens, 3 lines:\n\
          - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (~1.2k tokens, 2 lines)\n\
          - @runtime: completed in 4m12s, task: \"map it\", no response\n\
@@ -206,6 +209,34 @@ fn child_run(workspace_id: &WorkspaceId, name: &str, status: RunStatus) -> RunRe
     record.agent_name = Some(name.to_owned());
     record.subagent = true;
     record
+}
+
+#[test]
+fn fleet_header_and_heading_follow_launch_kind() {
+    for flags in [[true, true], [false, false], [true, false]] {
+        let (_dir, workspace, store) = fixture();
+        append_agent(&store, "parent", None);
+        for (name, subagent) in ["first", "second"].into_iter().zip(flags) {
+            append_agent(&store, name, Some("parent"));
+            let mut record = child_run(&workspace.workspace_id, name, RunStatus::Completed);
+            record.subagent = subagent;
+            run::create(store.paths(), &record).unwrap();
+        }
+        report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap();
+        let messages = store.list_messages().unwrap();
+        assert_eq!(messages.len(), 1);
+        let (notice, noun) = if flags == [true, true] {
+            (HarnessNotice::SubagentReport, "subagents")
+        } else {
+            (HarnessNotice::AgentReport, "background agents")
+        };
+        assert_eq!(messages[0].sender, MessageSender::Harness { notice });
+        assert!(
+            messages[0]
+                .text
+                .starts_with(&format!("All 2 {noun} settled:"))
+        );
+    }
 }
 
 #[test]

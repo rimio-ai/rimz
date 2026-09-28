@@ -38,13 +38,18 @@ fn submitted_sections_cover_every_sender_and_body() {
     ];
     for notice in [
         HarnessNotice::SubagentReport,
+        HarnessNotice::AgentReport,
+        HarnessNotice::TeamReport,
         HarnessNotice::Wait,
         HarnessNotice::Signal,
         HarnessNotice::Stage,
         HarnessNotice::CacheKeepalive,
         HarnessNotice::Other("future".to_owned()),
     ] {
-        let origin = if notice == HarnessNotice::SubagentReport {
+        let origin = if matches!(
+            notice,
+            HarnessNotice::SubagentReport | HarnessNotice::AgentReport | HarnessNotice::TeamReport
+        ) {
             SectionOrigin::Subagent("@rimz".to_owned())
         } else {
             SectionOrigin::Notice("@rimz".to_owned())
@@ -1269,7 +1274,8 @@ fn align_submitted_prompt_consumes_human_header() {
 fn align_submitted_prompt_consumes_harness_report_header() {
     let recipient = agent("session-recipient", None);
     for (notice, header_type) in [
-        (HarnessNotice::SubagentReport, "AGENT_REPORT"),
+        (HarnessNotice::SubagentReport, "SUBAGENT_REPORT"),
+        (HarnessNotice::AgentReport, "AGENT_REPORT"),
         (HarnessNotice::TeamReport, "TEAM_REPORT"),
         (HarnessNotice::Wait, "WAIT"),
         (HarnessNotice::Signal, "SIGNAL"),
@@ -1308,6 +1314,30 @@ fn align_submitted_prompt_consumes_harness_report_header() {
             align_submitted_prompt(&prompt.replace("ship it", "ship"), &[&record]),
             None
         );
+    }
+}
+
+#[test]
+fn fleet_reports_keep_durable_names_and_never_batch() {
+    for (notice, name, batchable) in [
+        (HarnessNotice::SubagentReport, "subagent_report", false),
+        (HarnessNotice::AgentReport, "agent_report", false),
+        (HarnessNotice::TeamReport, "team_report", true),
+    ] {
+        let stored = serde_json::json!(name);
+        assert_eq!(
+            serde_json::from_value::<HarnessNotice>(stored.clone()).unwrap(),
+            notice
+        );
+        assert_eq!(serde_json::to_value(&notice).unwrap(), stored);
+        let record = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+            &agent("recipient", None),
+            "settled".into(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::Harness { notice });
+        assert_eq!(record.batchable(), batchable, "{name}");
     }
 }
 

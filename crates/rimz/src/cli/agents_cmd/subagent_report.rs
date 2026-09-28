@@ -149,14 +149,19 @@ fn report_fleet_with_kind(
         .map(|((child, run), response)| (*child, *run, response.as_ref()))
         .collect::<Vec<_>>();
 
+    let subagents = rows.iter().all(|(_, run)| run.subagent);
     let sender = MessageSender::Harness {
-        notice: HarnessNotice::SubagentReport,
+        notice: if subagents {
+            HarnessNotice::SubagentReport
+        } else {
+            HarnessNotice::AgentReport
+        },
     };
     let pane_id = parent.pane.as_ref().map(|pane| &pane.pane_id);
     let mut message = MessageRecord::new(
         workspace.workspace_id.clone(),
         parent,
-        compose_digest(&digest_rows),
+        compose_digest(&digest_rows, subagents),
         DeliveryGate::Done,
     )
     .with_channel(parent.channel())
@@ -294,8 +299,11 @@ fn settle_peer_turns(store: &Store, parent_id: &AgentSessionId) -> Result<(), Re
     Ok(())
 }
 
-fn compose_digest(rows: &[(&AgentState, &RunRecord, Option<&ResponseFile>)]) -> String {
-    let noun = if rows.iter().all(|(_, run, _)| run.subagent) {
+fn compose_digest(
+    rows: &[(&AgentState, &RunRecord, Option<&ResponseFile>)],
+    subagents: bool,
+) -> String {
+    let noun = if subagents {
         "subagent"
     } else {
         "background agent"

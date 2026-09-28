@@ -188,6 +188,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         &ctx.workspace,
         &ctx.store,
         &instance,
+        &receipt.board,
         receipt.from.as_deref(),
         &receipt.to,
     ) {

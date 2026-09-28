@@ -320,6 +320,7 @@ From: @rimz
 Content:
 Team forge#feat-rate-limits reached Done; its leader reports:
 - @planner: completed in 2h14m, task: "Add rate limiting to the public API", response: /tmp/rimz-subagents/planner.<run_id>.output (~1.2k tokens, 31 lines)
+Memory: /home/me/proj-worktrees/feat-rate-limits/blackboard.md
 ```
 
 | Part | Meaning |
@@ -327,6 +328,7 @@ Team forge#feat-rate-limits reached Done; its leader reports:
 | Elapsed | From the launch, or from the flip that last left `Done`, to this `Done` |
 | Task | The launch `--description`, falling back to the first line of the launch prompt |
 | Response | The leader's last final message, as a file the launcher can read, with its size; `no response` when the leader never finished a turn |
+| Memory | The absolute path of the team's board, as seen by the launcher |
 
 The report is parked and delivered at the launcher's next turn boundary. The flip receipt adds a `report` line naming the launcher. A flip out of `Done` prints `report   TEAM_REPORT again at the next Done`, and the next `Done` sends a new report.
 
