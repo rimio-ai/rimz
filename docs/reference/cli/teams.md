@@ -336,7 +336,7 @@ The seats do not report their own turns, including turns the launcher opens with
 
 ## Record an entry on the board
 
-`rimz teams record <SECTION> [TEXT] [--file PATH] [--stdin]` appends one timestamped entry to `blackboard.md` in the current worktree. SECTION is Goal, Decisions, or Result, case-insensitive. Supply exactly one of TEXT, `--file PATH`, or `--stdin`; files and stdin are read to EOF. Text loses carriage returns and surrounding whitespace, but keeps internal blank lines.
+`rimz teams record <SECTION> [TEXT] [--file PATH] [--stdin]` appends one timestamped entry to `blackboard.md` in the current worktree. SECTION is Goal, Decisions, or Result, case-insensitive. Supply exactly one of TEXT, `--file PATH`, or `--stdin`; files and stdin are read to EOF. Text loses carriage returns and surrounding whitespace, but keeps internal blank lines. TEXT may start with `-`; only a value that is itself `--file` or `--stdin` needs `--` before it, as in `rimz teams record Decisions -- --stdin`.
 
 Run it in the team's worktree. It uses `RIMZ_WORKTREE_PATH` when set, otherwise the current Git toplevel. No live cohort is required and there is no `--team` flag. A member of a cohort in this worktree records under its role; other callers record as `user`. A member of a cohort in another worktree is refused.
 
@@ -383,7 +383,7 @@ rimz teams flip Review "implementation committed; report in implement-notes.md" 
 rimz teams flip Done "reflection recorded in reflect-notes.md; run complete"
 ```
 
-`rimz teams flip <STAGE> <NOTE> [--team NAME]` sets the board's stage, records the note in its progress ledger, and wakes the stage's owner. `NOTE` is required for every stage, `Done` included, and must not be blank. Write it as where the work stands; it is not an instruction to the owner.
+`rimz teams flip <STAGE> <NOTE> [--team NAME]` sets the board's stage, records the note in its progress ledger, and wakes the stage's owner. `NOTE` is required for every stage, `Done` included, and must not be blank. Write it as where the work stands; it is not an instruction to the owner. `NOTE` may start with `-`, as in `rimz teams flip Review "--no-tests: docs only"`; only a note that is itself `--team` or `--team=…` needs `--` before it.
 
 ### Which cohort a flip acts on
 

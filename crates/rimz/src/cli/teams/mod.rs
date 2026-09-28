@@ -184,7 +184,11 @@ struct FlipArgs {
     #[arg(value_name = "STAGE")]
     stage: String,
     /// Nonblank progress note recorded on the board; what is done or where the work stands.
-    #[arg(value_name = "NOTE", value_parser = parse_progress_note)]
+    #[arg(
+        value_name = "NOTE",
+        value_parser = parse_progress_note,
+        allow_hyphen_values = true
+    )]
     note: String,
     /// Select a team when several teams share the worktree.
     #[arg(
@@ -205,7 +209,7 @@ struct RecordArgs {
     #[arg(value_name = "SECTION")]
     section: String,
     /// Text to append as one stamped entry.
-    #[arg(value_name = "TEXT")]
+    #[arg(value_name = "TEXT", allow_hyphen_values = true)]
     text: Option<String>,
     /// Read the entry from a UTF-8 file.
     #[arg(long, value_name = "PATH")]
@@ -483,6 +487,33 @@ mod tests {
         ] {
             assert!(TeamsHarness::try_parse_from(args).is_err());
         }
+        for text in ["--no-tests landed", "-x", "-"] {
+            let Some(TeamsSubcmd::Record(args)) =
+                parse_teams(&["rimz", "record", "Decisions", text]).command
+            else {
+                panic!("record verb");
+            };
+            assert_eq!(args.text.as_deref(), Some(text));
+        }
+        let Some(TeamsSubcmd::Record(args)) =
+            parse_teams(&["rimz", "record", "Result", "--file", "entry.md"]).command
+        else {
+            panic!("record verb");
+        };
+        assert_eq!(args.text, None);
+        assert_eq!(args.file.as_deref(), Some(std::path::Path::new("entry.md")));
+        let Some(TeamsSubcmd::Record(args)) =
+            parse_teams(&["rimz", "record", "Goal", "--stdin"]).command
+        else {
+            panic!("record verb");
+        };
+        assert!(args.stdin && args.text.is_none());
+        let Some(TeamsSubcmd::Record(args)) =
+            parse_teams(&["rimz", "record", "Goal", "--", "--stdin"]).command
+        else {
+            panic!("record verb");
+        };
+        assert_eq!(args.text.as_deref(), Some("--stdin"));
         let help = TeamsHarness::try_parse_from(["rimz", "record", "--help"])
             .unwrap_err()
             .to_string();
@@ -544,6 +575,22 @@ mod tests {
             panic!("flip verb");
         };
         assert_eq!(args.note, note);
+        for argv in [
+            ["rimz", "flip", "Plan", "--no-tests ran", "--team", "forge"],
+            ["rimz", "flip", "--team", "forge", "Plan", "--no-tests ran"],
+        ] {
+            let Some(TeamsSubcmd::Flip(args)) = parse_teams(&argv).command else {
+                panic!("flip verb");
+            };
+            assert_eq!(args.note, "--no-tests ran");
+            assert_eq!(args.team.as_deref(), Some("forge"));
+        }
+        let Some(TeamsSubcmd::Flip(args)) =
+            parse_teams(&["rimz", "flip", "Plan", "--", "--team"]).command
+        else {
+            panic!("flip verb");
+        };
+        assert_eq!(args.note, "--team");
         let help = TeamsHarness::try_parse_from(["rimz", "flip", "--help"]).unwrap_err();
         assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
         assert!(
