@@ -969,7 +969,7 @@ fn lsp_attach_bridge_resolves_admits_and_versions() {
     let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
     std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
     std::fs::write(env.rimz_home().join("config.toml"), format!("[lsp]\nreserve-percent = 0\nreserve-min = '0'\nkill-floor-percent = 0\n[lsp.servers.rust]\ncommand = [{}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\nmemory-estimate = '1M'\n", serde_json::to_string(&stub).unwrap())).unwrap();
-    let first = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":url::Url::from_directory_path(&env.project_root).unwrap()}});
+    let first = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":url::Url::from_directory_path(&env.project_root).unwrap().to_string()}});
     let mut child = env
         .rimz()
         .args(["lsp", "attach", "--server", "rust", "--stdio"])
@@ -2203,7 +2203,7 @@ fn lsp_attach_optional_configuration_error_exits_three() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    rimz::lsp::protocol::write_frame(&mut child.stdin.take().unwrap(), &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":url::Url::from_directory_path(&env.project_root).unwrap()}})).unwrap();
+    rimz::lsp::protocol::write_frame(&mut child.stdin.take().unwrap(), &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":url::Url::from_directory_path(&env.project_root).unwrap().to_string()}})).unwrap();
     child
         .wait_with_output()
         .unwrap()
