@@ -33,8 +33,10 @@ impl ItemKey {
 #[derive(Clone, Debug, Default, Serialize)]
 pub(super) struct ItemRefs {
     pub(super) production: BTreeSet<String>,
+    pub(super) testkit: BTreeSet<String>,
     pub(super) tests: BTreeSet<String>,
     pub(super) production_count: usize,
+    pub(super) testkit_count: usize,
     pub(super) test_count: usize,
 }
 
@@ -126,11 +128,6 @@ impl References {
             let Some(source) = sources_by_path.get(path.as_path()).copied() else {
                 continue;
             };
-            // Test-support code contributes to neither production nor test
-            // evidence, matching Atlas source-size and syntax classification.
-            if !source.is_production() && !source.is_test() {
-                continue;
-            }
             let file_syntax = syntax_by_path.get(path.as_path()).copied();
             let module = crate_module_for_path(&path);
             for occurrence in &document.occurrences {
@@ -149,12 +146,15 @@ impl References {
                     }
                     continue;
                 }
-                let site_kind = match file_syntax.and_then(|file| file.cfg_kind_at(line)) {
-                    Some(SourceKind::TestSupport) => continue,
-                    Some(SourceKind::Test) => SourceKind::Test,
-                    Some(SourceKind::Production) | None if source.is_test() => SourceKind::Test,
-                    _ => SourceKind::Production,
-                };
+                let site_kind = file_syntax
+                    .and_then(|file| file.cfg_kind_at(line))
+                    .unwrap_or(if source.is_production() {
+                        SourceKind::Production
+                    } else if source.is_test() {
+                        SourceKind::Test
+                    } else {
+                        SourceKind::TestSupport
+                    });
                 occurrences
                     .entry(&occurrence.symbol)
                     .or_default()
@@ -185,12 +185,19 @@ impl References {
                 let mut item_refs = ItemRefs::default();
                 for symbol in symbols {
                     for site in occurrences.get(symbol).into_iter().flatten() {
-                        if site.site_kind == SourceKind::Test {
-                            item_refs.tests.insert(site.module.clone());
-                            item_refs.test_count += 1;
-                        } else {
-                            item_refs.production.insert(site.module.clone());
-                            item_refs.production_count += 1;
+                        match site.site_kind {
+                            SourceKind::Production => {
+                                item_refs.production.insert(site.module.clone());
+                                item_refs.production_count += 1;
+                            }
+                            SourceKind::Test => {
+                                item_refs.tests.insert(site.module.clone());
+                                item_refs.test_count += 1;
+                            }
+                            SourceKind::TestSupport => {
+                                item_refs.testkit.insert(site.module.clone());
+                                item_refs.testkit_count += 1;
+                            }
                         }
                         let from_fn = syntax_by_path
                             .get(site.path.as_path())
@@ -278,6 +285,43 @@ mod tests {
             occurrences,
             ..scip::types::Document::default()
         }
+    }
+
+    #[test]
+    fn retains_testkit_file_and_region_sites() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("src/app")).unwrap();
+        for (path, text) in [
+            ("src/lib.rs", "pub fn cap() {}\nmod app;\n"),
+            (
+                "src/app.rs",
+                "#[cfg(feature = \"testkit\")]\nmod demo;\n#[cfg(feature = \"testkit\")]\nfn fixture() { crate::cap(); }\n",
+            ),
+            ("src/app/demo.rs", "fn demo() { crate::cap(); }\n"),
+        ] {
+            fs::write(root.path().join(path), text).unwrap();
+        }
+        let sources = super::super::sources::working_tree_rust_sources(root.path()).unwrap();
+        let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
+        let cap = "rust-analyzer cargo probe 0.0.0 cap().";
+        let index = Index {
+            documents: vec![
+                document("src/lib.rs", vec![occurrence(0, cap, true)]),
+                document("src/app.rs", vec![occurrence(3, cap, false)]),
+                document("src/app/demo.rs", vec![occurrence(0, cap, false)]),
+            ],
+            ..Index::default()
+        };
+        let references = References::from_index(&index, &syntax, &sources);
+        assert_eq!(references.edges.len(), 2);
+        assert!(
+            references
+                .edges
+                .iter()
+                .all(|edge| edge.site_kind == SourceKind::TestSupport)
+        );
+        let item = references.items.values().next().unwrap();
+        assert_eq!((item.production_count, item.test_count), (0, 0));
     }
 
     #[test]

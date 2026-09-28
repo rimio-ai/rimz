@@ -291,7 +291,7 @@ fn analyze_file(
     };
     fn_collector.visit_file(file);
 
-    let mut call_collector = CallCollector::new(source);
+    let mut call_collector = CallCollector::new(source, true);
     call_collector.visit_file(file);
 
     let mut guard_collector = GuardCollector {
@@ -1020,7 +1020,7 @@ impl FnCollector<'_> {
     fn push(&mut self, signature: &syn::Signature, span: proc_macro2::Span, block: &syn::Block) {
         let start = span.start().line;
         let end = span.end().line;
-        let mut calls = CallCollector::new(self.source);
+        let mut calls = CallCollector::new(self.source, false);
         calls.visit_block(block);
         let function = FnBody {
             name: signature.ident.to_string(),
@@ -1459,16 +1459,26 @@ fn compact_token_stream(tokens: TokenStream) -> String {
 
 struct CallCollector<'a> {
     source: &'a str,
+    include_testkit: bool,
     callees: Vec<String>,
     sites: Vec<CallSite>,
 }
 
 impl<'a> CallCollector<'a> {
-    fn new(source: &'a str) -> Self {
+    fn new(source: &'a str, include_testkit: bool) -> Self {
         Self {
             source,
+            include_testkit,
             callees: Vec::new(),
             sites: Vec::new(),
+        }
+    }
+
+    fn excludes(&self, attributes: &[syn::Attribute]) -> bool {
+        match cfg_kind(attributes) {
+            Some(SourceKind::Test) => true,
+            Some(SourceKind::TestSupport) => !self.include_testkit,
+            _ => false,
         }
     }
 
@@ -1548,37 +1558,37 @@ impl<'ast> Visit<'ast> for CallCollector<'_> {
     }
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-        if !is_cfg_excluded(&item.attrs) {
+        if !self.excludes(&item.attrs) {
             visit::visit_item_mod(self, item);
         }
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-        if !is_cfg_excluded(&item.attrs) {
+        if !self.excludes(&item.attrs) {
             visit::visit_item_impl(self, item);
         }
     }
 
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        if !is_cfg_excluded(&item.attrs) {
+        if !self.excludes(&item.attrs) {
             visit::visit_item_fn(self, item);
         }
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
-        if !is_cfg_excluded(&item.attrs) {
+        if !self.excludes(&item.attrs) {
             visit::visit_impl_item_fn(self, item);
         }
     }
 
     fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
-        if !is_cfg_excluded(&item.attrs) {
+        if !self.excludes(&item.attrs) {
             visit::visit_item_trait(self, item);
         }
     }
 
     fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
-        if !is_cfg_excluded(&item.attrs) {
+        if !self.excludes(&item.attrs) {
             visit::visit_trait_item_fn(self, item);
         }
     }

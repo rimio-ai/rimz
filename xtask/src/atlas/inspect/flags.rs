@@ -105,7 +105,7 @@ pub(super) fn flag_section(
         let mut sites = Vec::new();
         for edge in references.edges.iter().filter(|edge| {
             edge.kind == EdgeKind::Reference
-                && edge.site_kind == SourceKind::Production
+                && edge.site_kind != SourceKind::Test
                 && !module_is_within(&edge.from, &target.module)
                 && edge.to_path == row.path
                 && edge.to_line == row.line
