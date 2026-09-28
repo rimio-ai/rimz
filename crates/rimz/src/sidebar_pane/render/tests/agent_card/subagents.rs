@@ -702,3 +702,56 @@ fn codex_subagent_renders_nickname_nested_path_and_current_context() {
         "Codex's current context reading is rendered:\n{rendered}"
     );
 }
+
+#[test]
+fn subagent_window_glyph_heats_like_the_parent_context() {
+    let parent = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    let tokens = [("child-1", 12_400), ("child-2", 400_000)];
+    let children = tokens.map(|(id, _)| {
+        let mut child = agent(
+            id,
+            "claude",
+            AgentStatus::Running,
+            None,
+            None,
+            Some("Explore"),
+        );
+        child.parent_agent_id = Some("claude-1".into());
+        child
+    });
+    let mut snapshot = snapshot_with([vec![parent], children.to_vec()].concat());
+    for child in &mut snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents
+    {
+        let window = tokens
+            .iter()
+            .find(|(id, _)| *id == child.id)
+            .map(|(_, window)| *window);
+        child.tokens = window.map(crate::store::snapshot::SubAgentTokens::Window);
+    }
+    let theme = Theme::fixed(false);
+    let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
+    let glyph_style = |figure: &str| {
+        let line = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content.contains(figure)))
+            .unwrap_or_else(|| panic!("{figure} missing"));
+        line.spans
+            .iter()
+            .find(|span| span.content == theme.glyph(GlyphRole::TokensFilled))
+            .expect("window glyph")
+            .style
+            .fg
+    };
+    assert_eq!(glyph_style("12k"), Some(theme.heat_tone(0.0)));
+    assert_eq!(glyph_style("400k"), Some(theme.heat_tone(1.0)));
+}
