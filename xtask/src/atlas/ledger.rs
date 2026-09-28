@@ -138,8 +138,23 @@ impl Ledger {
 }
 
 /// Commits that touched `paths` after `sha`, the ledger's reopen measure
-/// (`git log --oneline <sha>.. -- <path> | wc -l`).
+/// (`git log --oneline <sha>.. -- <path> | wc -l`). A `sha` HEAD does not
+/// reach is an error: a rebase or squash merge rewrote it, and counting from
+/// the fork point would hold the module on a review trunk never carried.
 pub(super) fn commits_since(root: &Path, sha: &str, paths: &[&Path]) -> Result<usize> {
+    let ancestry = Command::new("git")
+        .args(["merge-base", "--is-ancestor", sha, "HEAD"])
+        .current_dir(root)
+        .output()
+        .context("running git merge-base for the ledger")?;
+    match ancestry.status.code() {
+        Some(0) => {}
+        Some(1) => bail!("{sha} is not an ancestor of HEAD"),
+        _ => bail!(
+            "git merge-base --is-ancestor {sha} HEAD failed: {}",
+            String::from_utf8_lossy(&ancestry.stderr).trim()
+        ),
+    }
     let mut command = Command::new("git");
     command
         .args(["rev-list", "--count", &format!("{sha}..HEAD"), "--"])

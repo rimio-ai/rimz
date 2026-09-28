@@ -411,7 +411,8 @@ const REOPEN_FLAG: &str = "reopen";
 
 /// Marks every rank row the ledger holds: `held` while the module's commits
 /// since the reviewed SHA stay under its reopen count, `reopen` once they
-/// reach it. A SHA git cannot resolve is reported and leaves the row alone.
+/// reach it. A SHA git cannot resolve or HEAD does not reach is reported and
+/// leaves the row alone.
 fn flag_held_rows(
     root: &Path,
     scope: &Path,
