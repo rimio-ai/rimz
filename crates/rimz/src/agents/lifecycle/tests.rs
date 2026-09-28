@@ -971,7 +971,8 @@ fn only_a_start_with_a_new_id_supersedes_the_started_turn() {
             superseded: ids.1.as_deref(),
             interrupted: None,
         };
-        turn_ids_after(prior, signal)
+        let (started, superseded, _) = turn_ids_after(prior, signal, false);
+        (started, superseded)
     };
     let owned = |id: &str| Some(id.to_owned());
 

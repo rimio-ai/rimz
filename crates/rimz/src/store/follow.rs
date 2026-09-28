@@ -221,14 +221,8 @@ impl EventFollower {
                 _ if transition.next.status != crate::agents::AgentStatus::Waiting => None,
                 _ => prior.and_then(|state| state.open_ask_key.clone()),
             };
-            let (started_turn_id, superseded_turn_id) =
-                turn_ids_after(turn_ids, &observation.signal);
-            let interrupted_turn_id = match &observation.signal {
-                LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
-                LifecycleSignal::Registered => None,
-                _ if transition.opened_turn => None,
-                _ => prior.and_then(|state| state.interrupted_turn_id.clone()),
-            };
+            let (started_turn_id, superseded_turn_id, interrupted_turn_id) =
+                turn_ids_after(turn_ids, &observation.signal, transition.opened_turn);
             self.states.insert(
                 key,
                 FollowState {

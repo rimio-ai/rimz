@@ -1021,26 +1021,14 @@ fn lifecycle_projection(
     signal: lifecycle::LifecycleSignal,
     prompt: Option<&str>,
 ) -> LifecycleProjection {
-    let prev_state = prior.map(AgentState::lifecycle);
-    let turn_ids = lifecycle::PriorTurnIds {
-        started: prior.and_then(|p| p.started_turn_id.as_deref()),
-        superseded: prior.and_then(|p| p.superseded_turn_id.as_deref()),
-        interrupted: prior.and_then(|p| p.interrupted_turn_id.as_deref()),
-    };
+    let turn_ids = prior.map(AgentState::turn_ids).unwrap_or_default();
     let Transition {
         next,
         kind,
         compaction_closed,
         opened_turn,
         ..
-    } = lifecycle::step(
-        prev_state.as_ref(),
-        prior
-            .and_then(|p| p.open_ask.as_ref())
-            .and_then(|ask| ask.native_key.as_deref()),
-        turn_ids,
-        &signal,
-    );
+    } = AgentState::transition(prior, &signal);
     let compacting_since = if next.compacting {
         Some(timestamp)
     } else {
@@ -1139,13 +1127,8 @@ fn lifecycle_projection(
         _ if next.status == AgentStatus::Waiting => prior.and_then(|p| p.open_ask.clone()),
         _ => None,
     };
-    let (started_turn_id, superseded_turn_id) = lifecycle::turn_ids_after(turn_ids, &signal);
-    let interrupted_turn_id = match &signal {
-        lifecycle::LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
-        lifecycle::LifecycleSignal::Registered => None,
-        _ if opened_turn => None,
-        _ => prior.and_then(|p| p.interrupted_turn_id.clone()),
-    };
+    let (started_turn_id, superseded_turn_id, interrupted_turn_id) =
+        lifecycle::turn_ids_after(turn_ids, &signal, opened_turn);
     LifecycleProjection {
         status: next.status,
         phase: next.phase,

@@ -214,19 +214,7 @@ fn lifecycle_transition(
 ) -> Option<Transition> {
     let agent_id = observation.agent_id.as_ref()?;
     let prior = find_agent(agents, kind, agent_id);
-    let previous = prior.map(AgentState::lifecycle);
-    Some(lifecycle::step(
-        previous.as_ref(),
-        prior
-            .and_then(|agent| agent.open_ask.as_ref())
-            .and_then(|ask| ask.native_key.as_deref()),
-        lifecycle::PriorTurnIds {
-            started: prior.and_then(|agent| agent.started_turn_id.as_deref()),
-            superseded: prior.and_then(|agent| agent.superseded_turn_id.as_deref()),
-            interrupted: prior.and_then(|agent| agent.interrupted_turn_id.as_deref()),
-        },
-        &observation.signal,
-    ))
+    Some(AgentState::transition(prior, &observation.signal))
 }
 
 fn derive_lifecycle_events(

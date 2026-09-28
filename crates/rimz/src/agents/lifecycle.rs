@@ -379,20 +379,29 @@ pub(crate) struct PriorTurnIds<'a> {
     pub interrupted: Option<&'a str>,
 }
 
-/// The `(started, superseded)` turn ids a record carries once `signal` folds
-/// onto one whose prior ids are `prior`. Only a turn start moves them, and a
-/// repeated start for the open turn keeps both.
+/// The `(started, superseded, interrupted)` turn ids a record carries once
+/// `signal` folds onto one whose prior ids are `prior`. Only a turn start
+/// moves the first two, and a repeated start for the open turn keeps both.
+/// An interruption records its id; registration or an opened turn clears it.
 pub(crate) fn turn_ids_after(
     prior: PriorTurnIds<'_>,
     signal: &LifecycleSignal,
-) -> (Option<String>, Option<String>) {
+    opened_turn: bool,
+) -> (Option<String>, Option<String>, Option<String>) {
     let owned = |id: Option<&str>| id.map(str::to_owned);
-    match signal {
+    let (started, superseded) = match signal {
         LifecycleSignal::TurnStarted { turn_id } if turn_id.as_deref() != prior.started => {
             (turn_id.clone(), owned(prior.started.or(prior.superseded)))
         }
         _ => (owned(prior.started), owned(prior.superseded)),
-    }
+    };
+    let interrupted = match signal {
+        LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
+        LifecycleSignal::Registered => None,
+        _ if opened_turn => None,
+        _ => owned(prior.interrupted),
+    };
+    (started, superseded, interrupted)
 }
 
 /// Fold one [`LifecycleSignal`] onto the prior [`LifecycleState`]. Pure and
