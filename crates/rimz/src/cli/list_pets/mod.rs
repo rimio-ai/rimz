@@ -6,8 +6,8 @@ use anyhow::Result;
 use clap::Args;
 use rimz::sidebar_pane::pets::{self, PetPixelPreview, PetPreview, PreviewCell};
 use rimz::sidebar_pane::{
-    detect_pixel_render_env, encode_png, inline_placeholder_row, transmit_png_chunks,
-    virtual_place, wrap_pixel_payload, write_synchronized_pixel_output,
+    detect_pixel_render_env, encode_png, inline_placeholder_row, transmit_png, virtual_place,
+    wrap_pixel_payload, write_synchronized_pixel_output,
 };
 
 use super::{GlobalFlags, machine_config};
@@ -166,14 +166,15 @@ pub(crate) fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
             continue;
         };
         let png = encode_png(frame.width, frame.height, &frame.data);
-        for packet in transmit_png_chunks(*image_id, &png) {
-            out.write_all(&wrap_pixel_payload(&packet, wrap))?;
-        }
+        let mut payload = transmit_png(*image_id, &png);
         let pacing = pacer.as_ref().is_some_and(|pacer| pacer.active());
-        out.write_all(&wrap_pixel_payload(
-            &virtual_place(*image_id, slot.cols, slot.rows, if pacing { 0 } else { 2 }),
-            wrap,
-        ))?;
+        payload.extend_from_slice(&virtual_place(
+            *image_id,
+            slot.cols,
+            slot.rows,
+            if pacing { 0 } else { 2 },
+        ));
+        out.write_all(&wrap_pixel_payload(&payload, wrap))?;
         if pacing {
             out.flush()?;
             if let Some(pacer) = pacer.as_mut() {
@@ -331,9 +332,11 @@ mod tests {
             PetPixelPreview {
                 id: "codex".to_owned(),
                 frame: Ok(pets::PixelPreviewFrame {
-                    width: 1,
-                    height: 1,
-                    data: vec![0, 1, 2, 3],
+                    width: 64,
+                    height: 64,
+                    data: (0..4096_u32)
+                        .flat_map(|value| value.wrapping_mul(2654435761).to_le_bytes())
+                        .collect(),
                 }),
             },
         )];
@@ -351,6 +354,10 @@ mod tests {
             .rposition(|window| window == b"\x1b[?2026l")
             .expect("draw phase ends synchronized output");
         assert!(bytes[..begin_sync].starts_with(b"\x1bPtmux;\x1b\x1b_Ga=t,"));
+        let graphics = String::from_utf8_lossy(&bytes[..begin_sync]);
+        assert!(graphics.contains("\x1b\x1b_Gm=0;"));
+        assert_eq!(graphics.matches("\x1bPtmux;").count(), preview.len());
+        assert!(graphics.contains("\x1b\x1b\\\x1b\x1b_Ga=p,U=1,i=42,"));
         assert!(bytes[..begin_sync].ends_with(b"q=2;\x1b\x1b\\\x1b\\"));
         assert!(bytes.ends_with(b"\x1b[?2026l"));
         assert!(begin_sync < end_sync);
