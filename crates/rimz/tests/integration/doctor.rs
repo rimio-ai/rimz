@@ -1668,6 +1668,27 @@ fn path_with_only(dirs: &[PathBuf]) -> OsString {
 }
 
 #[test]
+fn doctor_json_reports_uninstalled_claude_remote_control() {
+    let env = Env::new();
+    write_machine_config(&env, "[remote_control]\nclaude = true\n");
+    let output = env
+        .rimz()
+        .args(["doctor", "--json"])
+        .env("PATH", path_with_only(&[]))
+        .output()
+        .expect("spawn doctor");
+    let report = doctor_json(&output);
+    let remote = &report["remote_control"];
+    assert_eq!(
+        remote["agents"],
+        serde_json::json!([
+            {"kind": "claude", "detail": "enabled, not on PATH", "ready": false}
+        ])
+    );
+    assert_eq!(remote["refusals"], serde_json::json!([]));
+}
+
+#[test]
 fn doctor_json_reports_remote_control_refusals_and_skips() {
     let env = Env::new();
     write_machine_config(&env, "[remote_control]\nclaude = true\ncodex = true\n");
