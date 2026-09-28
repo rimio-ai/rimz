@@ -312,6 +312,126 @@ grep -ao $'\e_G[^;\e]*' "$ROOT/tmp/kitty.raw" | sed -E 's/i=[0-9]+/i=N/; s/[xy]=
 
 The `d=I` lines are the sweeps a sidebar makes over its leased id window before its first transmit; the `a=t` transmits are chunked (`m=1` then `m=0`), and each virtual placement carries `p=1`. Counts depend on the room. Drop `-o` and read the raw lines to see the actual ids.
 
+## Replay a kitty capture through Ghostty
+
+The tally above shows what RimZ sent, which does not prove how a terminal parsed it. A graphics fix that depends on ordering (two sidebars on one tmux client, say) is proven only at the consumer, so feed the `kitty.raw` from [Capture kitty graphics](#capture-kitty-graphics) through Ghostty's own stream and APC parser, and record the result of every kitty command. This harness proved the one-envelope-per-image fix in PR #627. On a capture of two `rimz list-pets` writers in one tmux window, Ghostty v1.3.1 read `errors=85` before the fix (41 `EINVAL: invalid data`, 39 `EINVAL: dimensions required`, 5 `ENOENT: image not found`) and `errors=0` after, over 4368 commands each.
+
+Check out the Ghostty tag under the room's tmp. Ghostty v1.3.1 builds with zig 0.15.2, which `uvx` fetches from PyPI, so no system zig is needed:
+
+```sh
+G="$ROOT/tmp/ghostty"
+git clone -q --depth 1 --branch v1.3.1 https://github.com/ghostty-org/ghostty "$G"
+uvx --from ziglang==0.15.2 python -m ziglang version
+```
+
+The harness is a zig test inside Ghostty's kitty module. It mirrors `src/termio/stream_handler.zig::StreamHandler.apcEnd`: APC bytes go to Ghostty's `apc.Handler`, each completed kitty command runs through `Terminal.kittyGraphics`, and every other action goes to the read-only stream handler. RimZ sends `q=2`, which suppresses the reply an error would produce, so a patch to `graphics_exec.zig` records each response message in a file-scope variable before the quiet check discards it:
+
+```sh
+cd "$G" && git apply <<'EOF'
+--- a/src/terminal/kitty/graphics_exec.zig
++++ b/src/terminal/kitty/graphics_exec.zig
+@@ -12,6 +12,10 @@ const Image = image.Image;
+ const ImageStorage = @import("graphics_storage.zig").ImageStorage;
+
+ const log = std.log.scoped(.kitty_gfx);
++var rimz_replay_result: []const u8 = "OK (no response)";
++test "petchunks-replay" {
++    try @import("petchunks_replay.zig").run(&rimz_replay_result);
++}
+
+ /// Execute a Kitty graphics command against the given terminal. This
+ /// will never fail, but the response may indicate an error and the
+@@ -74,6 +78,7 @@ pub fn execute(
+         => .{ .message = "ERROR: unimplemented action" },
+     };
+
++    rimz_replay_result = if (resp_) |resp| resp.message else "OK (no response)";
+     // Handle the quiet settings
+     if (resp_) |resp| {
+         if (!resp.ok()) {
+EOF
+cat > "$G/src/terminal/kitty/petchunks_replay.zig" <<'EOF'
+const std = @import("std");
+const Terminal = @import("../Terminal.zig");
+const apc = @import("../apc.zig");
+const stream = @import("../stream.zig");
+const readonly = @import("../stream_readonly.zig");
+
+pub fn run(result: *const []const u8) !void {
+    const alloc = std.heap.smp_allocator;
+    const input = try std.process.getEnvVarOwned(alloc, "PETCHUNKS_INPUT");
+    defer alloc.free(input);
+    const output = try std.process.getEnvVarOwned(alloc, "PETCHUNKS_OUTPUT");
+    defer alloc.free(output);
+    const bytes = try std.fs.cwd().readFileAlloc(alloc, input, 100 * 1024 * 1024);
+    defer alloc.free(bytes);
+    var file = try std.fs.cwd().createFile(output, .{});
+    defer file.close();
+    var terminal = try Terminal.init(alloc, .{ .rows = 50, .cols = 200 });
+    defer terminal.deinit(alloc);
+    const H = struct {
+        terminal: *Terminal,
+        alloc: std.mem.Allocator,
+        apc_handler: apc.Handler = .{},
+        file: std.fs.File,
+        result: *const []const u8,
+        commands: usize = 0,
+        errors: usize = 0,
+        pub fn deinit(self: *@This()) void {
+            self.apc_handler.deinit();
+        }
+        pub fn vt(self: *@This(), comptime action: stream.Action.Tag, value: stream.Action.Value(action)) !void {
+            switch (action) {
+                .apc_start => self.apc_handler.start(),
+                .apc_put => self.apc_handler.feed(self.alloc, value),
+                .apc_end => {
+                    var cmd = self.apc_handler.end() orelse return;
+                    defer cmd.deinit(self.alloc);
+                    switch (cmd) {
+                        .kitty => |*kitty_cmd| {
+                            _ = self.terminal.kittyGraphics(self.alloc, kitty_cmd);
+                            self.commands += 1;
+                            const message = self.result.*;
+                            if (!std.mem.startsWith(u8, message, "OK")) self.errors += 1;
+                            var buf: [1024]u8 = undefined;
+                            const line = try std.fmt.bufPrint(&buf, "command={d} action={s} result={s}\n", .{ self.commands, @tagName(kitty_cmd.control), message });
+                            try self.file.writeAll(line);
+                        },
+                    }
+                },
+                else => {
+                    var handler = readonly.Handler.init(self.terminal);
+                    try handler.vt(action, value);
+                },
+            }
+        }
+    };
+    var parser = stream.Stream(H).initAlloc(alloc, .{ .terminal = &terminal, .alloc = alloc, .file = file, .result = result });
+    defer parser.deinit();
+    try parser.nextSlice(bytes);
+    var buf: [256]u8 = undefined;
+    var total: usize = 0;
+    var ids = terminal.screens.active.kitty_images.images.keyIterator();
+    while (ids.next()) |id| {
+        try file.writeAll(try std.fmt.bufPrint(&buf, "image={d}\n", .{id.*}));
+        total += 1;
+    }
+    try file.writeAll(try std.fmt.bufPrint(&buf, "SUMMARY commands={d} errors={d} images={d}\n", .{ parser.handler.commands, parser.handler.errors, total }));
+}
+EOF
+```
+
+Run the test on the capture. The harness reads its input and output paths from the environment, and writes one `command=… action=… result=…` line per kitty command, one `image=` line per image left in storage, and a `SUMMARY` line:
+
+```sh
+cd "$G" && PETCHUNKS_INPUT="$ROOT/tmp/kitty.raw" PETCHUNKS_OUTPUT="$ROOT/tmp/kitty.results" \
+  uvx --from ziglang==0.15.2 python -m ziglang build test -Dapp-runtime=none -Doptimize=ReleaseFast -Dtest-filter=petchunks-replay
+grep SUMMARY "$ROOT/tmp/kitty.results"
+awk -F 'result=' '/result=/ && $2 !~ /^OK/ { n[$2]++ } END { for (e in n) print n[e], e }' "$ROOT/tmp/kitty.results"
+```
+
+The first build compiles Ghostty's test binary (1 minute 46 seconds on a machine whose zig package cache was already warm, longer when it must fetch Ghostty's dependencies); a rerun on another capture reuses it and takes seconds. Replay a capture from the base branch and one from your change, and compare the two `SUMMARY` lines: a clean replay reads `errors=0`. The harness parses a byte stream in one pass, so it covers Ghostty's parser and image storage, not the app's rendering, and it pins one Ghostty tag. Newer Ghostty can differ (on `main` a delete also cancels a half-received chunked image), so name the tag you replayed against.
+
 ## Traps
 
 - A live check of anything the elder, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check.
