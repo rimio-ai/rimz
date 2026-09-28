@@ -230,13 +230,12 @@ pub(in crate::cli) fn relaunch_action(
     Ok((action, fresh_reason.map(FreshReason::as_str)))
 }
 
-pub(super) fn relaunch_request(
+pub(in crate::cli) fn relaunch_request(
     agent: &AgentState,
     posture: &ResumePosture,
-    mut action: ExecAction,
+    action: ExecAction,
     fresh_identity: Option<&AgentLaunchIdentity>,
 ) -> ExecRequest {
-    *action.extra_args_mut() = posture.launch.args.clone();
     let identity_name = fresh_identity.map_or(agent.name.as_deref(), |identity| {
         Some(identity.name.as_str())
     });
@@ -260,12 +259,6 @@ pub(super) fn relaunch_request(
         kind_ordinal: None,
     };
     ExecRequest {
-        action,
-        system_prompt_file: posture.launch.system_prompt_file.clone(),
-        append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
-        team_prompt: posture.launch.team_prompt.clone(),
-        skills: posture.launch.skills.clone(),
-        isolation_default: posture.launch.isolation_default,
         close_pane_on_exit: true,
         identity: rimz::harness::launch::ExecIdentity {
             name: identity_name.map(ToOwned::to_owned),
@@ -276,7 +269,7 @@ pub(super) fn relaunch_request(
                 .or_else(|| agent.launch_id.as_ref().map(ToString::to_string)),
             params: restart_params,
         },
-        ..ExecRequest::bare_launch(agent.kind.clone(), Vec::new())
+        ..posture.launch.exec_request(agent.kind.clone(), action)
     }
 }
 

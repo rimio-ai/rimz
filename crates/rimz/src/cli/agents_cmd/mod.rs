@@ -98,7 +98,7 @@ use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::run_refresh_usage;
 use register::{RegisterArgs, run_register};
 use restart::restart_agent;
-pub(in crate::cli) use restart::{relaunch_action, restart_resolved};
+pub(in crate::cli) use restart::{relaunch_action, relaunch_request, restart_resolved};
 use resume::resume_lane;
 use run_timeout::run_timeout;
 pub(in crate::cli) use show::focus_resolved;

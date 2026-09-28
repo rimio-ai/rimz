@@ -1,5 +1,6 @@
 use super::*;
 use jiff::Timestamp;
+use rimz::harness::launch::ExecIdentity;
 
 #[test]
 fn only_the_parent_can_resolve_an_ended_child_for_resume() {
