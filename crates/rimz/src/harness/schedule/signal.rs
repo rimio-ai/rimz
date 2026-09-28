@@ -363,7 +363,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     let outcome = run_command(
         &task.entry().run_dir(),
         command,
-        timeout.map_or(WatchDeadline::None, WatchDeadline::CheckInOnce),
+        WatchDeadline::Watch(timeout),
         CheckEcho::Tee { file },
         &std::collections::BTreeMap::new(),
         |elapsed_ms, output| emit(WatchVerdict::Running { elapsed_ms }, output),
@@ -493,7 +493,7 @@ fn probe_check(
     let outcome = run_command(
         run_dir,
         check,
-        WatchDeadline::None,
+        WatchDeadline::Watch(None),
         CheckEcho::Tee {
             file: file.try_clone()?,
         },

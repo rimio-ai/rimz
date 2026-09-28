@@ -700,7 +700,7 @@ fn polled_watch_probe_runs_to_exit_without_checkin() {
     let output = run_command(
         dir.path(),
         "printf probe; exit 3",
-        WatchDeadline::None,
+        WatchDeadline::Watch(None),
         CheckEcho::Capture,
         &BTreeMap::new(),
         |_, _| panic!("a probe never checks in"),
@@ -719,7 +719,7 @@ fn watch_exit_during_checkin_delivery_is_not_lost() {
     let output = run_command(
         dir.path(),
         "printf interim; printf '%s' \"$$\" > command.pid; while [ ! -e release ]; do sleep 0.01; done; printf final; exit 3",
-        WatchDeadline::CheckInOnce(Duration::from_millis(100)),
+        WatchDeadline::Watch(Some(Duration::from_millis(100))),
         CheckEcho::Tee { file: File::create(&path).unwrap() },
         &BTreeMap::new(),
         |elapsed_ms, tail| {
