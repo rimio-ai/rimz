@@ -2,7 +2,7 @@
 //!
 //! Every report verb renders one `Report` value either as Markdown or JSON,
 //! narrowed to the sections the caller asked for, and delivers it to stdout
-//! or to `--out`. Parsing lives here so the three verbs accept the same flags.
+//! or to `--out`. Parsing lives here so the report verbs accept the same flags.
 
 use std::collections::BTreeSet;
 use std::fs;

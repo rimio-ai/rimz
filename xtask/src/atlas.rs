@@ -17,6 +17,7 @@ mod inspect;
 mod ledger;
 mod metrics;
 mod modules;
+mod occurrences;
 mod output;
 mod rank;
 mod references;
@@ -35,6 +36,7 @@ pub(crate) const USAGE: &str = "cargo xtask atlas <verb> [flags]
 Verbs:
   survey    produce one architecture-review sweep over a scope
   inspect   build one indexed module dossier and quote its heaviest caller
+  index     list the cached SCIP index's raw occurrences for a file or an item name
   diff      compare a base or enforce an executable pass contract
   conform   compare the tree with refactor-target.toml constraints
 
@@ -56,6 +58,7 @@ pub(crate) fn atlas(root: &Path, args: &[String]) -> Result<()> {
     match verb.as_str() {
         "diff" => diff::run(root, rest),
         "inspect" => inspect::run(root, rest),
+        "index" => occurrences::run(root, rest),
         "survey" => survey::run(root, rest),
         "conform" => conform::run(root, rest),
         _ => bail!("unknown atlas verb `{verb}`\n\n{USAGE}"),
