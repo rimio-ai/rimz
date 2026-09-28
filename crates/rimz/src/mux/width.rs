@@ -50,15 +50,18 @@ impl WidthStep {
 }
 
 /// Resolve the validated absolute target requested by one width keypress.
-/// Narrower steps clamp to the minimum until the pane is already at its floor.
+/// Steps clamp to the bounds and refuse movement beyond the requested bound.
 pub(crate) fn adjust_target_cols(
     base: u16,
     dir: WidthAdjust,
     step: WidthStep,
     min_cols: u16,
+    max_cols: u16,
 ) -> Option<NonZeroU16> {
+    let max_cols = max_cols.max(min_cols);
     match dir {
-        WidthAdjust::Wider => NonZeroU16::new(base.saturating_add(step.cols)),
+        WidthAdjust::Wider if base >= max_cols => None,
+        WidthAdjust::Wider => NonZeroU16::new(base.saturating_add(step.cols).min(max_cols)),
         WidthAdjust::Narrower if base <= min_cols => None,
         WidthAdjust::Narrower => {
             NonZeroU16::new(base.saturating_sub(step.adjustment_cols(dir)).max(min_cols))
@@ -90,7 +93,7 @@ impl WidthPercent {
 }
 
 /// Tenths of a percent of the full view, in the inclusive range `1..=1000`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct WidthPermille(u16);
 
@@ -186,7 +189,7 @@ impl SidebarTarget {
 }
 
 /// Sidebar pane width: the configured percentage policy for each live view,
-/// capped at `max_cols` columns (`theme.display.max_cols`).
+/// capped at `max_cols` columns (`theme.display.max_cols`) and `max_percent` of the view.
 /// A `width_percent` or `max_cols` edit applies on the next unpinned
 /// room-target resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,6 +198,8 @@ pub struct SidebarWidth {
     pub percent: WidthPercent,
     /// Column cap the percentage never exceeds (`theme.display.max_cols`).
     pub max_cols: NonZeroU16,
+    /// Maximum share, including pins; clamped to 10-90 when used.
+    pub max_percent: u16,
 }
 
 impl SidebarWidth {
@@ -212,13 +217,17 @@ impl SidebarWidth {
         Self {
             percent,
             max_cols: display.max_cols,
+            max_percent: display.max_percent,
         }
     }
 
     /// The capped target in columns for a view `total_cols` wide:
     /// `min(percent × total_cols, max_cols)`.
     pub fn target_cols(self, total_cols: u64) -> u64 {
-        let percent = self.percent.resolve(Some(total_cols));
+        let percent = self
+            .percent
+            .resolve(Some(total_cols))
+            .min(self.max_percent.clamp(10, 90));
         let cols = (total_cols * u64::from(percent)).div_ceil(100).max(1);
         cols.min(self.cap_cols())
     }
@@ -315,34 +324,42 @@ mod tests {
         };
 
         assert_eq!(
-            adjust_target_cols(30, WidthAdjust::Wider, inexact, 24),
+            adjust_target_cols(30, WidthAdjust::Wider, inexact, 24, 100),
             NonZeroU16::new(40)
         );
         assert_eq!(
-            adjust_target_cols(75, WidthAdjust::Wider, inexact, 24),
+            adjust_target_cols(75, WidthAdjust::Wider, inexact, 24, 100),
             NonZeroU16::new(85),
             "a floor-sized Zellij keypress targets the next measured lattice width",
         );
         assert_eq!(
-            adjust_target_cols(40, WidthAdjust::Narrower, inexact, 24),
+            adjust_target_cols(40, WidthAdjust::Narrower, inexact, 24, 100),
             NonZeroU16::new(29)
         );
         assert_eq!(
-            adjust_target_cols(75, WidthAdjust::Narrower, inexact, 24),
+            adjust_target_cols(75, WidthAdjust::Narrower, inexact, 24, 100),
             NonZeroU16::new(64),
             "a Zellij shrink uses the ceiling-sized native step",
         );
         assert_eq!(
-            adjust_target_cols(30, WidthAdjust::Narrower, inexact, 24),
+            adjust_target_cols(30, WidthAdjust::Narrower, inexact, 24, 100),
             NonZeroU16::new(24)
         );
         assert_eq!(
-            adjust_target_cols(25, WidthAdjust::Narrower, exact, 24),
+            adjust_target_cols(25, WidthAdjust::Narrower, exact, 24, 100),
             NonZeroU16::new(24)
         );
         assert_eq!(
-            adjust_target_cols(24, WidthAdjust::Narrower, exact, 24),
+            adjust_target_cols(24, WidthAdjust::Narrower, exact, 24, 100),
             None
+        );
+        assert_eq!(
+            adjust_target_cols(100, WidthAdjust::Wider, exact, 24, 100),
+            None
+        );
+        assert_eq!(
+            adjust_target_cols(95, WidthAdjust::Wider, inexact, 24, 100),
+            NonZeroU16::new(100)
         );
     }
 
@@ -375,7 +392,7 @@ mod tests {
 
         theme.display.width_percent = Some(95);
         let width = SidebarWidth::from_config(&theme);
-        assert_eq!(width.target_cols(60), 54);
+        assert_eq!(width.target_cols(60), 30);
         assert_eq!(width.percent.resolve(None), 90);
     }
 
@@ -427,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_target_renders_each_view_and_applies_only_the_default_cap() {
+    fn capped_sidebar_target_allows_pins_to_exceed_only_max_cols() {
         let target = SidebarTarget {
             share: WidthPermille::from_percent(25),
             max_cols: NonZeroU16::new(72).expect("nonzero"),
