@@ -6,14 +6,12 @@ use std::io::{self, Write};
 use ratatui::style::Color;
 use ratatui::text::Line;
 
-use super::{IMAGE_ID_COLOR_MASK, ImageRequest, ImageResidency, RgbaImage, encode_png};
+use super::{
+    ImageRequest, ImageResidency, METER_ID_CAPACITY, RgbaImage, encode_png, meter_image_id,
+};
 
 const CELL_W: u32 = 8;
 const CELL_H: u32 = 16;
-/// Pet sprites use IDs directly above the shared base; their sheets are bounded
-/// far below this offset. Meter slots occupy the range beginning here.
-const METER_ID_OFFSET: u32 = 0x4000;
-const METER_ID_CAPACITY: u32 = 512;
 
 /// The exact pixel shape of one context meter. Quantizing before interning keeps
 /// visually identical sub-pixel updates on the same terminal image id.
@@ -181,10 +179,6 @@ impl MeterPixels {
                 .then_some((image_id, raster))
         })
     }
-}
-
-fn meter_image_id(id_base: u32, index: u32) -> u32 {
-    (id_base.wrapping_add(METER_ID_OFFSET).wrapping_add(index) & IMAGE_ID_COLOR_MASK).max(1)
 }
 
 fn rasterize(raster: &MeterRaster) -> RgbaImage {

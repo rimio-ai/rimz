@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use super::PetPixelView;
 use crate::sidebar_pane::pixel::{
-    IMAGE_ID_COLOR_MASK, ImageRequest, ImageResidency, RgbaImage, encode_png,
-    runtime_image_id_base, sprite_image_id,
+    ImageRequest, ImageResidency, PixelSlot, RgbaImage, encode_png, sprite_image_id,
 };
+
+const _: () =
+    assert!(super::catalog::FRAME_COUNT <= crate::sidebar_pane::pixel::METER_ID_OFFSET as usize);
 
 /// Pet sprite indexes occupy the image IDs immediately above `id_base`.
 /// Other pixel surfaces reserve offsets outside the bounded sprite-sheet range.
@@ -20,29 +22,14 @@ pub(crate) struct PixelPainter {
     residency: ImageResidency<usize, String>,
 }
 
-impl Default for PixelPainter {
-    fn default() -> Self {
-        Self::new(true)
-    }
-}
-
 impl PixelPainter {
-    pub(crate) fn new(wrap: bool) -> Self {
-        Self::with_id_base(runtime_image_id_base(), wrap)
-    }
-
-    pub(crate) fn with_id_base(id_base: u32, wrap: bool) -> Self {
+    pub(in super::super) fn with_slot(slot: PixelSlot, wrap: bool) -> Self {
         Self {
-            id_base: id_base & IMAGE_ID_COLOR_MASK,
+            id_base: slot.base(),
             pet_id: None,
             png: BTreeMap::new(),
             residency: ImageResidency::new(wrap),
         }
-    }
-
-    #[cfg(feature = "testkit")]
-    pub(crate) fn runtime_id_base() -> u32 {
-        runtime_image_id_base()
     }
 
     pub(crate) fn id_base(&self) -> u32 {
@@ -97,9 +84,8 @@ impl PixelPainter {
         Ok(())
     }
 
-    /// Release compressed and resend bookkeeping when pets are disabled. Keep
-    /// only the tiny resident-id set so renderer teardown can still delete
-    /// images already installed in the terminal.
+    /// Release compressed payloads immediately; the next paint retires the
+    /// resident ids through `clear`, once a terminal writer is available.
     pub(crate) fn release_process_payload(&mut self) {
         self.pet_id = None;
         self.residency.invalidate();
@@ -166,7 +152,7 @@ mod tests {
         PetPixelView {
             pet_id: pet_id.to_owned(),
             sprite_index,
-            image_id: sprite_image_id(0x120000, sprite_index),
+            image_id: sprite_image_id(0x520000, sprite_index),
             size: PetGridSize { cols: 2, rows: 1 },
         }
     }
@@ -177,15 +163,15 @@ mod tests {
 
     #[test]
     fn first_transmit_is_lazy_and_repeat_writes_nothing() {
-        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let mut painter = PixelPainter::with_slot(PixelSlot::new(0), true);
         let pixel = view("codex", 0);
         let mut first = Vec::new();
         painter
             .ensure_transmitted(&mut first, &pixel, &image(), 0)
             .expect("first transmit");
 
-        assert!(contains(&first, b"a=t,f=100,i=1179648,q=2"));
-        assert!(contains(&first, b"a=p,U=1,i=1179648,c=2,r=1,q=2"));
+        assert!(contains(&first, b"a=t,f=100,i=5373952,q=2"));
+        assert!(contains(&first, b"a=p,U=1,i=5373952,p=1,c=2,r=1,q=2"));
         assert!(!first.starts_with(BEGIN_SYNC));
         let png = painter.png.get(&0).expect("lazy PNG").clone();
         let mut repeat = Vec::new();
@@ -198,7 +184,7 @@ mod tests {
 
     #[test]
     fn stale_sprites_share_frame_resends_then_obey_spacing() {
-        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let mut painter = PixelPainter::with_slot(PixelSlot::new(0), true);
         let first = view("codex", 0);
         let second = view("codex", 1);
         let third = view("codex", 2);
@@ -239,7 +225,7 @@ mod tests {
 
     #[test]
     fn pet_change_reuses_ids_without_delete_and_clear_deletes_every_slot() {
-        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let mut painter = PixelPainter::with_slot(PixelSlot::new(0), true);
         for pixel in [view("codex", 0), view("codex", 1)] {
             painter
                 .ensure_transmitted(&mut Vec::new(), &pixel, &image(), 0)
@@ -249,7 +235,7 @@ mod tests {
         painter
             .ensure_transmitted(&mut changed, &view("claude", 0), &image(), 0)
             .expect("pet change");
-        assert!(!contains(&changed, b"a=d,d=i"));
+        assert!(!contains(&changed, b"a=d,d=I"));
         assert!(painter.transmitted_contains(0));
         assert!(!painter.transmitted_contains(1));
         assert!(painter.resident_contains(0));
@@ -259,15 +245,15 @@ mod tests {
         painter.clear(&mut clear).expect("clear");
         assert!(clear.starts_with(BEGIN_SYNC));
         assert!(clear.ends_with(END_SYNC));
-        assert!(contains(&clear, b"a=d,d=i,i=1179648,q=2"));
-        assert!(contains(&clear, b"a=d,d=i,i=1179649,q=2"));
+        assert!(contains(&clear, b"a=d,d=I,i=5373952,q=2"));
+        assert!(contains(&clear, b"a=d,d=I,i=5373953,q=2"));
         assert!(painter.transmitted_is_empty());
         assert!(painter.resident_is_empty());
     }
 
     #[test]
     fn disabled_pets_release_payload_but_keep_terminal_ids() {
-        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        let mut painter = PixelPainter::with_slot(PixelSlot::new(0), true);
         painter.mark_resident_for_test("codex", 3, vec![1]);
 
         painter.release_process_payload();

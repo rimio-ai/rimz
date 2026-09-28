@@ -12,7 +12,7 @@ use crate::diag::record::DiagEvent;
 use crate::disk::paths::PathErr;
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
-use crate::sidebar_pane::pixel::{PixelRenderCaps, detect_pixel_render_caps};
+use crate::sidebar_pane::pixel::{PixelLease, PixelRenderCaps, detect_pixel_render_caps};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::{ClearType, CrosstermBackend};
@@ -166,6 +166,17 @@ pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     });
     let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchUpdate>();
+    let pixel_lease = match PixelLease::acquire(&runtime) {
+        Ok(Some(lease)) => Some(lease),
+        Ok(None) => {
+            warn!("sidebar pixel slots exhausted; using cell rendering for this worker");
+            None
+        }
+        Err(err) => {
+            warn!(error = %err, "sidebar pixel lease failed; using cell rendering for this worker");
+            None
+        }
+    };
     let mut state = LoopState::new(
         config.clone(),
         runtime.clone(),
@@ -175,6 +186,7 @@ pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
         initial_width,
         observe_tx,
         pet_render_caps,
+        pixel_lease.as_ref().map(|lease| lease.slot),
     );
     // Zellij's percentage template needs a startup trim on capped wide views.
     // tmux births through its live absolute-column hook; its resize wakeups
@@ -256,28 +268,32 @@ pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     // (or the first press without cached geometry), never on cached presses
     // or resize feedback. Width commits and trailing capability refreshes run once
     // after their bursts settle; resize actuators run off-thread.
-    while !state.should_exit {
-        let (active, mut timeout) = state.frame_timing();
-        timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
-        socket.set_read_timeout(Some(timeout))?;
-        match state.on_wakeup(&mut fetch, &mut terminal, wait_for_wakeup(&socket)?)? {
-            LoopFlow::Continue => {}
-            LoopFlow::Repoll => continue,
-            LoopFlow::Exit => break,
-        }
+    let loop_result: Result<()> = (|| {
+        while !state.should_exit {
+            let (active, mut timeout) = state.frame_timing();
+            timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
+            socket.set_read_timeout(Some(timeout))?;
+            match state.on_wakeup(&mut fetch, &mut terminal, wait_for_wakeup(&socket)?)? {
+                LoopFlow::Continue => {}
+                LoopFlow::Repoll => continue,
+                LoopFlow::Exit => break,
+            }
 
-        state.run_maintenance(&mut fetch);
-        state.run_width_control_backstop(&mut terminal);
-        state.maybe_remind(&mut terminal);
-        state.paint_frame_if_due(&mut terminal, active)?;
-    }
+            state.run_maintenance(&mut fetch);
+            state.run_width_control_backstop(&mut terminal);
+            state.maybe_remind(&mut terminal);
+            state.paint_frame_if_due(&mut terminal, active)?;
+        }
+        Ok(())
+    })();
+    state.clear_pixel(&mut terminal);
+    loop_result?;
     if !state.reload_requested
         && !state.tab_emptied
         && let Some(cause) = state.exit_cause
     {
         diag.emit_unlimited(DiagEvent::RendererExit { cause });
     }
-    state.clear_pixel(&mut terminal);
     if state.exit_cause == Some(crate::diag::record::RendererExitCause::DegradedGaveUp) {
         drop(_socket_cleanup);
         drop(_heartbeat_cleanup);

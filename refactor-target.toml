@@ -284,7 +284,8 @@ allowed-dependencies = [
 # Daily machine GC shares its stamp and election-lock paths with the harness.
 # StatePaths::remove_root and RuntimePaths::remove_root let room replacement remove both whole trees.
 # Checked executable copying shares the durable publication funnel.
-surface-budget = 201
+# Sidebar workers lease account-global pixel slots through one classed lock accessor.
+surface-budget = 202
 
 [[module]]
 path = "crates/rimz/src/forge"

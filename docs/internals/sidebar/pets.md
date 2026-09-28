@@ -186,21 +186,23 @@ Terminal cells are taller than they are wide, so `fitted_sample_rect` fits each 
 
 The pixel tier sends the decoded frames through the kitty graphics protocol and still lets ratatui's buffer diff place them. `render/sections/pets.rs` fills the footprint with placeholder cells: each is one grapheme cluster of U+10EEEE plus a row and a column combining mark, and its foreground RGB encodes the kitty image id, which is why ids are masked to 24 bits. Moving the pet or changing its frame is an ordinary cell diff.
 
-Animation cycles image ids instead of using kitty's animation-frame actions (`a=f`, `a=a`), which Ghostty does not implement; the transport sends only transmit (`a=t`), place (`a=p`), and delete (`a=d`). Each renderer process picks an id base (`runtime_image_id_base`, mixed from the pid and the clock), and sprite `n` uses `base + n`. A pet change re-transmits the new sheet under the same ids, so the terminal replaces image data in place without a delete.
+Animation cycles image ids instead of using kitty's animation-frame actions (`a=f`, `a=a`), which Ghostty does not implement; the transport sends only transmit (`a=t`), place (`a=p`), and delete (`a=d`). Each renderer leases the lowest free slot of an account-global pool of 256 flock guards. Slot `n` owns `0x520000 + n * 0x200 .. 0x520000 + (n + 1) * 0x200`, and sprite `s` uses `base + s`. Before its first transmit, the renderer sweeps every id in its slot with individual `d=I` deletes inside one synchronized-output bracket. A successor thus frees images left by a dead holder without touching another live sidebar's slot. This layout is a cross-version contract: moving it would orphan the previous layout. Lease exhaustion or an I/O failure warns once and selects cell rendering for the worker's lifetime. A pet change re-transmits the new sheet under the same ids, so the terminal replaces image data in place without a delete.
 
-Every graphics escape is wrapped in tmux's passthrough DCS when the sidebar runs inside tmux. The transmit writes a virtual placement (`U=1`) that the placeholder cells refer to, so tmux redraws and pane repaints keep the image inside the sidebar pane.
+Every graphics escape is wrapped in tmux's passthrough DCS when the sidebar runs inside tmux. Each transmit is followed by a virtual placement (`U=1,p=1`) that the placeholder cells refer to. Re-sends replace that placement rather than accumulating placements, and restore it on terminals that drop placements when replacing image data.
 
 `ImageResidency` in `pixel/mod.rs` decides when to send:
 
 - A sprite is transmitted the first time a frame shows it, or when its id or pet changes. `PixelPainter` encodes the PNG once per sprite and keeps it.
 - A sprite whose last send is `RESIDENT_REFRESH_MS` (2 seconds) old is re-sent the next time a frame shows it, so a dropped tmux passthrough or a terminal image-store eviction recovers on its own. Re-sends that fall on different frames are spaced at least `MIN_RESEND_SPACING_MS` (250 ms) apart.
-- Deletes are sent only at teardown (`PixelPainter::clear`), inside a synchronized-output bracket.
+- Deletes free both image data and placements (`d=I`), at teardown and on the next paint after pixels are disabled. Every serve-loop exit, including errors, attempts cleanup. A lost pty cannot deliver cleanup; slot reuse bounds those leftovers. Range deletes are never used because Ghostty 1.3.1 deletes unrelated images for that operation.
 
 The bracket in `draw_and_paint` makes each frame one redraw. tmux forwards synchronized output to the terminal because RimZ sets `terminal-features` `*:sync` during room setup (`apply_room_options` in `mux/tmux.rs`).
 
 Graphics traffic stays bounded because some macOS terminals re-evaluate the mouse pointer shape on every image update. `glyphs = "sextant"` removes that traffic entirely.
 
-The pixel context meter shares the transport and the id base: it interns each distinct raster from `base + 0x4000`, up to 512 ids, with least-recently-used eviction. [`pixel/meter.rs`](../../../crates/rimz/src/sidebar_pane/pixel/meter.rs) owns its mechanics.
+The pixel context meter shares the transport and the id base: it interns each distinct raster from `base + 0x100`, up to 256 ids, with least-recently-used eviction that protects visible and current-frame ids. When all ids are protected it falls back to cells. [`pixel/meter.rs`](../../../crates/rimz/src/sidebar_pane/pixel/meter.rs) owns its mechanics. Testkit galleries use fixed consecutive slots rather than leases.
+
+The bound depends on peak concurrent workers, not uptime or restart count. Pets still cost up to 72 decoded 192×208 RGBA frames per slot. Images left by older random-id renderers cannot be swept safely; resetting the terminal surface clears those legacy images.
 
 ## rimz list-pets
 

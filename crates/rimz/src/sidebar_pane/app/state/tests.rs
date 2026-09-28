@@ -327,6 +327,7 @@ impl ApplyHarness {
             None,
             observe_tx,
             PixelRenderCaps::default(),
+            Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
         );
         state.current = snapshot(ws);
         Self { state }

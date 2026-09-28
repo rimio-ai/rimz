@@ -18,7 +18,7 @@ use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, TAB_READ_DWELL};
 use crate::sidebar::unread::{self, UnreadClearCause};
-use crate::sidebar_pane::pixel::PixelRenderCaps;
+use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::sidebar_pane::view::BodyFilter;
 use crate::store::snapshot::{
@@ -243,6 +243,7 @@ impl LoopState {
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
         pet_render_caps: PixelRenderCaps,
+        pixel_slot: Option<PixelSlot>,
     ) -> Self {
         let snapshot_now = Timestamp::now();
         let current = SidebarSnapshot::build_with_agents(
@@ -290,7 +291,7 @@ impl LoopState {
                 make_up_filter,
                 ..UiState::default()
             },
-            paint: FramePainter::new(pet_render_caps, pixel_wrap),
+            paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
             read_marks,
             remind: RemindState::default(),
             dirty: true,
