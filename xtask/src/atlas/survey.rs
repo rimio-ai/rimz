@@ -24,7 +24,7 @@ const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 20;
 
 const USAGE: &str = "cargo xtask atlas survey [--path <prefix>] [--top N]
-    [--by <code|esc|churn|pace|cx|tc|depth>] [--all]
+    [--by <code|esc|churn|pace|cx|tc|depth>] [--all] [--restamp]
 
 Emits a bounded Markdown survey of accretion, admitted upward dependencies, and duplicated knowledge.
 Rank order defaults to accretion (code × churn).";
@@ -149,13 +149,16 @@ struct Debt {
 
 /// What the survey read from the refactor ledger, for the footer: absent,
 /// or the row counts plus the rows it could not use. A `holds` row whose
-/// SHA git does not know lands in `problems` and leaves its module unflagged.
+/// SHA cannot resolve lands in `problems` and leaves its module unflagged.
 #[derive(Clone, Debug, Default, Serialize)]
 struct LedgerNote {
     present: bool,
     intents: usize,
     holds: usize,
     problems: Vec<String>,
+    restamps: Vec<ledger::Restamp>,
+    #[serde(skip)]
+    restamped: bool,
 }
 
 fn usage() -> String {
@@ -168,6 +171,7 @@ struct Args {
     top: usize,
     by: RankBy,
     all: bool,
+    restamp: bool,
     output: OutputArgs,
 }
 
@@ -206,7 +210,11 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
             references: false,
         },
     )?;
-    let report = build_report(root, &facts, &args.path, args.by, args.all)?;
+    let mut report = build_report(root, &facts, &args.path, args.by, args.all)?;
+    if args.restamp {
+        ledger::write_restamps(root, &report.ledger.restamps)?;
+        report.ledger.restamped = true;
+    }
     let rendered = if args.output.json {
         render_json(&report, &args.output)?
     } else {
@@ -223,6 +231,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut top = None;
     let mut by = None;
     let mut all = false;
+    let mut restamp = false;
     let mut output = OutputArgs::default();
     let mut index = 0;
     while index < args.len() {
@@ -253,11 +262,16 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 set_once(&mut by, parsed, "survey", "--by")?;
                 index += 2;
             }
-            "--all" => {
-                if all {
-                    bail!("atlas survey --all may only be passed once");
+            "--all" | "--restamp" => {
+                let flag = if arg == "--all" {
+                    &mut all
+                } else {
+                    &mut restamp
+                };
+                if *flag {
+                    bail!("atlas survey {arg} may only be passed once");
                 }
-                all = true;
+                *flag = true;
                 index += 1;
             }
             _ => bail!("unknown atlas survey argument `{arg}`"),
@@ -269,6 +283,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         top: top.unwrap_or(DEFAULT_TOP),
         by: by.unwrap_or_default(),
         all,
+        restamp,
         output,
     }))
 }
@@ -282,15 +297,18 @@ fn build_report(
 ) -> Result<Report> {
     let mut rows = rank::rows_by(facts, scope, by)?;
     let totals = rank::totals(&rows);
-    let ledger = ledger::load(&root.join(LEDGER_FILE))?;
-    let mut ledger_note = ledger
-        .as_ref()
-        .map_or_else(LedgerNote::default, |ledger| LedgerNote {
+    let ledger = ledger::load(root)?;
+    let mut ledger_note = ledger.as_ref().map_or_else(LedgerNote::default, |ledger| {
+        let (intents, holds) = ledger.row_counts();
+        LedgerNote {
             present: true,
-            intents: ledger.intents.len(),
-            holds: ledger.holds.len(),
+            intents,
+            holds,
             problems: ledger.problems.clone(),
-        });
+            restamps: ledger.restamps.clone(),
+            restamped: false,
+        }
+    });
     if let Some(ledger) = &ledger {
         flag_held_rows(root, scope, ledger, &mut rows, &mut ledger_note.problems);
     }
@@ -421,17 +439,13 @@ fn flag_held_rows(
     problems: &mut Vec<String>,
 ) {
     for row in rows {
-        let Some(hold) = ledger.hold_for(&row.module) else {
-            continue;
-        };
         let directory = scope.join(&row.module);
         let file = directory.with_extension("rs");
-        match ledger::commits_since(root, &hold.sha, &[&directory, &file]) {
-            Ok(commits) if commits >= hold.reopen_at => row.flags.push(REOPEN_FLAG),
-            Ok(_) => row.flags.push(HELD_FLAG),
-            Err(error) => {
-                problems.push(format!("`{}` holds at {}: {error:#}", row.module, hold.sha))
-            }
+        match ledger.reopened(root, &row.module, &[&directory, &file]) {
+            Ok(Some(true)) => row.flags.push(REOPEN_FLAG),
+            Ok(Some(false)) => row.flags.push(HELD_FLAG),
+            Ok(None) => {}
+            Err(error) => problems.push(format!("{error:#}")),
         }
     }
 }
@@ -495,9 +509,9 @@ fn recorded_debt(
                     continue;
                 }
                 match ledger.and_then(|ledger| ledger.intent_for(&file.module_path, &resolved)) {
-                    Some(intent) => {
+                    Some((provider, intent)) => {
                         *reviewed
-                            .entry((intent.to.clone(), intent.intent.clone()))
+                            .entry((provider.to_owned(), intent.to_owned()))
                             .or_default() += 1;
                     }
                     None => *unreviewed.entry(resolved).or_default() += 1,
@@ -1204,6 +1218,38 @@ fn render_ledger_note(output: &mut String, note: &LedgerNote, top: usize) {
             note.problems.len() - top
         )
         .unwrap();
+    }
+    for restamp in note.restamps.iter().take(top) {
+        writeln!(
+            output,
+            "ledger restamp: `{}` {} -> {}",
+            restamp.module, restamp.from, restamp.to
+        )
+        .unwrap();
+    }
+    if note.restamps.len() > top {
+        writeln!(
+            output,
+            "ledger restamps: and {} more",
+            note.restamps.len() - top
+        )
+        .unwrap();
+    }
+    if !note.restamps.is_empty() {
+        if note.restamped {
+            writeln!(
+                output,
+                "ledger restamps: wrote {} sha cells to {LEDGER_FILE}",
+                note.restamps.len()
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                output,
+                "ledger restamps: `cargo xtask atlas survey --restamp` writes them"
+            )
+            .unwrap();
+        }
     }
 }
 

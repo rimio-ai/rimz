@@ -159,6 +159,8 @@ fn survey_output_is_bounded_by_top() {
             problems: (0..30)
                 .map(|index| format!("row {index} is unreadable"))
                 .collect(),
+            restamps: Vec::new(),
+            restamped: false,
         },
     };
 
@@ -430,9 +432,10 @@ fn held_rows_are_flagged_from_the_ledger_and_reopen_at_the_commit_count() {
     ]);
     let ledger_path = root.path().join(LEDGER_FILE);
     std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
-    std::fs::write(&ledger_path, format!(
-        "## Module verdicts\n\n| module | status | sha | reopen at | note |\n| --- | --- | --- | --- | --- |\n| `store/snapshot` | holds | {base} | 3 | fresh |\n| `config` | holds | {base} | 2 | stale |\n| `mux` | holds | 0000000 | 2 | unknown sha |\n| `lsp` | holds | {rewritten} | 30 | off trunk |\n"
-    )).unwrap();
+    let committed = format!(
+        "## Module verdicts\n\n| module | status | sha | reopen at | note |\n| --- | --- | --- | --- | --- |\n| `store/snapshot` | holds | {base} | 3 | fresh |\n| `config` | holds | {base} | 2 | stale |\n"
+    );
+    std::fs::write(&ledger_path, &committed).unwrap();
     git(&["add", "."]);
     git(&[
         "-c",
@@ -443,14 +446,22 @@ fn held_rows_are_flagged_from_the_ledger_and_reopen_at_the_commit_count() {
         "-qm",
         "record",
     ]);
-    let ledger = ledger::load(&ledger_path).unwrap().unwrap();
+    let uncommitted = format!(
+        "{committed}| `mux` | holds | 0000000 | 2 | unknown sha |\n| `lsp` | holds | {rewritten} | 30 | off trunk |\n"
+    );
+    std::fs::write(&ledger_path, &uncommitted).unwrap();
+    let ledger = ledger::load(root.path()).unwrap().unwrap();
+    assert!(
+        ledger.restamps.is_empty(),
+        "working-tree-only SHAs cannot resolve"
+    );
     let mut rows = ["store/snapshot", "config", "mux", "agents", "lsp"]
         .map(|module| Row {
             module: module.to_owned(),
             ..Row::default()
         })
         .to_vec();
-    let mut problems = Vec::new();
+    let mut problems = ledger.problems.clone();
 
     flag_held_rows(
         root.path(),
@@ -474,6 +485,65 @@ fn held_rows_are_flagged_from_the_ledger_and_reopen_at_the_commit_count() {
         problems[1],
         format!("`lsp` holds at {rewritten}: {rewritten} is not an ancestor of HEAD")
     );
+
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"atlas-fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-qm",
+        "land verdicts",
+    ]);
+    let landed = git(&["rev-parse", "HEAD"]);
+    let short = git(&["rev-parse", "--short=7", "HEAD"]);
+    let args = parse_args(&[
+        "--path".to_owned(),
+        "src/store".to_owned(),
+        "--restamp".to_owned(),
+        "--json".to_owned(),
+        "--section".to_owned(),
+        "footer".to_owned(),
+    ])
+    .unwrap()
+    .unwrap();
+    assert!(args.restamp);
+    let mut facts = Facts::load(
+        root.path(),
+        &args.path,
+        Facets {
+            history: true,
+            ..Facets::default()
+        },
+    )
+    .unwrap();
+    facts.metrics = Some(super::super::metrics::MetricsReport {
+        module_scores: BTreeMap::new(),
+        functions: Vec::new(),
+    });
+    let report = build_report(root.path(), &facts, &args.path, args.by, args.all).unwrap();
+    ledger::write_restamps(root.path(), &report.ledger.restamps).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&render_json(&report, &args.output).unwrap()).unwrap();
+    let restamps = json["footer"]["ledger"]["restamps"].as_array().unwrap();
+    assert_eq!(restamps.len(), 2);
+    assert_eq!(restamps[0]["module"], "mux");
+    assert_eq!(restamps[1]["module"], "lsp");
+    assert_eq!(
+        std::fs::read_to_string(&ledger_path).unwrap(),
+        uncommitted
+            .replace("0000000", &short)
+            .replace(&rewritten, &landed)
+    );
+    let ledger = ledger::load(root.path()).unwrap().unwrap();
+    assert!(ledger.problems.is_empty());
+    assert!(ledger.restamps.is_empty());
 }
 
 #[test]
@@ -552,6 +622,41 @@ fn survey_parses_json_out_and_sections() {
     assert!(parsed.output.wants("rank"));
     assert!(parsed.output.wants("guards"));
     assert!(!parsed.output.wants("shapes"));
+}
+
+#[test]
+fn survey_accepts_restamp_once() {
+    assert!(parse_args(&["--restamp".to_owned()]).is_ok());
+    let error = parse_args(&["--restamp".to_owned(), "--restamp".to_owned()]).unwrap_err();
+    assert!(error.to_string().contains("may only be passed once"));
+}
+
+#[test]
+fn ledger_restamp_footer_is_bounded_and_names_the_write_action() {
+    let mut note = LedgerNote {
+        present: true,
+        restamps: ["demo", "other"]
+            .map(|module| ledger::Restamp {
+                module: module.to_owned(),
+                from: "deadbeef0".to_owned(),
+                to: "123456789".to_owned(),
+                line: 1,
+            })
+            .to_vec(),
+        ..LedgerNote::default()
+    };
+    let mut output = String::new();
+    render_ledger_note(&mut output, &note, 1);
+    assert!(output.contains("ledger restamp: `demo` deadbeef0 -> 123456789"));
+    assert!(!output.contains("ledger restamp: `other`"));
+    assert!(output.contains("ledger restamps: and 1 more"));
+    assert!(output.contains("`cargo xtask atlas survey --restamp` writes them"));
+    note.restamped = true;
+    output.clear();
+    render_ledger_note(&mut output, &note, 1);
+    assert!(output.contains(&format!(
+        "ledger restamps: wrote 2 sha cells to {LEDGER_FILE}"
+    )));
 }
 
 #[test]
