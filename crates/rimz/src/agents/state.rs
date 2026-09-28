@@ -17,7 +17,9 @@ use super::background_shell::BackgroundShell;
 use super::context::{
     AgentContext, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettleOutcome,
 };
-use super::lifecycle::{AskKind, LifecycleState, TurnPhase};
+use super::lifecycle::{
+    self, AskKind, LifecycleSignal, LifecycleState, PriorTurnIds, Transition, TurnPhase,
+};
 use super::observation::AgentUsageSummary;
 
 /// Durable identity and summary for the blocking prompt currently owning an
@@ -1299,6 +1301,25 @@ impl AgentState {
             phase: self.phase,
             compacting: self.compacting_since.is_some(),
         }
+    }
+
+    pub(crate) fn turn_ids(&self) -> PriorTurnIds<'_> {
+        PriorTurnIds {
+            started: self.started_turn_id.as_deref(),
+            superseded: self.superseded_turn_id.as_deref(),
+            interrupted: self.interrupted_turn_id.as_deref(),
+        }
+    }
+
+    pub(crate) fn transition(prior: Option<&Self>, signal: &LifecycleSignal) -> Transition {
+        lifecycle::step(
+            prior.map(Self::lifecycle).as_ref(),
+            prior
+                .and_then(|agent| agent.open_ask.as_ref())
+                .and_then(|ask| ask.native_key.as_deref()),
+            prior.map(Self::turn_ids).unwrap_or_default(),
+            signal,
+        )
     }
 
     /// Status after cheap, context-only projections that every read path can

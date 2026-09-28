@@ -120,7 +120,8 @@ upward-dependencies = ["address"]
 # AgentState::last_request_at shares one request clock with producer and helper timers.
 # `is_team_seat` keeps team seats out of peer runs and the launcher's fleet digest.
 # Auto-continue shares model-aware reset and capacity queries with agents policy.
-surface-budget = 899
+# AgentState::transition and AgentState::turn_ids hand one row's lifecycle inputs to the snapshot fold and the writer.
+surface-budget = 901
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
