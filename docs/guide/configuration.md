@@ -583,14 +583,14 @@ An agent that runs `rimz agents` or `rimz teams` launches independent top-level 
 
 #### Environment at launch
 
-Agents receive their launch cwd, pane shell, and the working tree's short status, short HEAD hash, and latest commit by default, so they can start with their environment in view. The cwd and any resolved shell remain even when git is unavailable. To turn the whole environment paragraph off for your machine, set this in `~/.rimz/config.toml`:
+Agents receive their launch cwd and the kind of their pane shell (`zsh`, `bash`) by default, so they can start with their environment in view. Git state is left out: it can change between launch and the agent's first turn, so agents read it themselves. To turn the whole environment paragraph off for your machine, set this in `~/.rimz/config.toml`:
 
 ```toml
 [agents]
 env-reminder = false
 ```
 
-A trusted room's `.rimz/config.toml` can set the same key to override the machine value in either direction. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for output bounds and unavailable-git behavior.
+A trusted room's `.rimz/config.toml` can set the same key to override the machine value in either direction. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for the full reminder.
 
 #### Subagent launches
 

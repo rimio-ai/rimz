@@ -111,7 +111,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         .effective
         .is_none_or(|effective| effective.env_reminder)
     {
-        reminders.env = Some(super::launch_env::read(inputs.cwd));
+        reminders.env = Some(super::launch_env::read());
     }
     let login = crate::agents::room_login(
         &inputs.state.workspace_record,

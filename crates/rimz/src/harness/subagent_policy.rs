@@ -63,6 +63,15 @@ pub fn catalog(
     SubagentCatalog::Available(specs)
 }
 
+const AVAILABLE_PREAMBLE: &str = concat!(
+    "### Subagents\n\n",
+    "Whether you could do a piece of work yourself settles nothing; you could do all of it. ",
+    "What decides is what the work leaves in your window: when you need its result but not the ",
+    "output behind it (a gate run, a log, a sweep across files, a long command), a profile below ",
+    "takes it. The launch costs you one turn, and the output you read yourself costs you every turn after.\n\n",
+    "Launch them through Skill(rimz-subagents), subagents available to you:"
+);
+
 pub(super) fn reminder(catalog: &SubagentCatalog) -> String {
     match catalog {
         SubagentCatalog::Disabled => "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.".to_owned(),
@@ -74,9 +83,7 @@ pub(super) fn reminder(catalog: &SubagentCatalog) -> String {
                 .collect::<Vec<_>>()
                 .join("\n");
             // The skill owns the how (batching, the settle digest, joins); this only says what.
-            format!(
-                "### Subagents\n\nLaunch them through Skill(rimz-subagents), which also explains how their results come back.\n\n{list}"
-            )
+            format!("{AVAILABLE_PREAMBLE}\n\n{list}")
         }
     }
 }
@@ -285,9 +292,11 @@ mod tests {
         let text = reminder(&available);
         assert_eq!(
             text,
-            "### Subagents\n\nLaunch them through Skill(rimz-subagents), which also explains how their results come back.\n\n\
-             - `explorer`: Finds files and traces code paths\n\
-             - `lint`"
+            format!(
+                "{AVAILABLE_PREAMBLE}\n\n\
+                 - `explorer`: Finds files and traces code paths\n\
+                 - `lint`"
+            )
         );
         assert_eq!(
             reminder(&SubagentCatalog::Disabled),

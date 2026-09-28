@@ -527,31 +527,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
 #[test]
 fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() {
     let project = tempfile::tempdir().unwrap();
-    let repo = tempfile::tempdir().unwrap();
-    for args in [
-        vec!["init", "-q"],
-        vec![
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--allow-empty",
-            "-qm",
-            "base",
-        ],
-    ] {
-        assert!(
-            std::process::Command::new("git")
-                .current_dir(repo.path())
-                .args(args)
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
+    let other = tempfile::tempdir().unwrap();
     let machine = crate::config::MachineConfig::default();
     let mut effective =
         crate::config::effective::load_with_roots(&machine, project.path(), project.path())
@@ -562,7 +538,7 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
     for subagent in [false, true] {
         for enabled in [false, true] {
             effective.env_reminder = enabled;
-            for cwd in [project.path(), repo.path()] {
+            for cwd in [project.path(), other.path()] {
                 let mut request =
                     ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
                 request.subagent = subagent;
@@ -586,12 +562,8 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
                         .contains(&format!("### Environment\n\n- cwd: {}", cwd.display())),
                     enabled
                 );
-                assert_eq!(
-                    plan.process().reminder.contains("$ git status --short"),
-                    enabled && cwd == repo.path()
-                );
+                assert!(!plan.process().reminder.contains("git status"));
                 assert!(plan.warnings.is_empty());
-                assert!(!repo.path().join(".git/index.lock").exists());
             }
         }
     }

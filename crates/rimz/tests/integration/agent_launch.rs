@@ -787,15 +787,8 @@ fn explain_prints_the_plan_without_side_effects() {
             .any(|pair| pair[0] == "--model" && pair[1] == "fable")
     );
     let reminder = report["prompt"]["reminder"].as_str().unwrap();
-    assert!(reminder.contains("- shell: /bin/sh"));
-    assert!(reminder.contains("$ git status --short"));
-    assert!(reminder.contains("$ git rev-parse --short HEAD"));
-    let head = std::process::Command::new("git")
-        .current_dir(&env.project_root)
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .unwrap();
-    assert!(reminder.contains(std::str::from_utf8(&head.stdout).unwrap().trim()));
+    assert!(reminder.contains("- shell: sh"));
+    assert!(!reminder.contains("git status"));
     assert!(reminder.starts_with("<system_reminder>\nYou are @worker, running on"));
     assert!(!reminder.contains("effort"));
     assert!(reminder.contains("- `scout`: Inspect the code"));

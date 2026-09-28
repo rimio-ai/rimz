@@ -148,7 +148,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/board` | holds | `38b487c52` | 30 | `BoardErr`, `BoardSection` and `RecordReceipt` floored by `record`, which the teams CLI calls. |
 | `harness/cache_keepalive` | holds | `38b487c52` | 30 | request type stays `pub` for the integration crate. |
 | `harness/deadline` | holds; landed pass-26c | `38b487c52` | 30 | rung selection `pub(super)` for `run`; stop channel private. |
-| `harness/launch_env` | holds | `38b487c52` | 30 | already `pub(super)`; `GitState` floored by the `LaunchEnv` launch reminders render. |
+| `harness/launch_env` | holds | `38b487c52` | 30 | already `pub(super)`; `LaunchEnv` floored by the launch reminders render. |
 | `harness/launch_plan` | holds; landed pass-24c | `e083557ba` | 30 | error and warning types floor `compile`/`apply`. |
 | `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
