@@ -4326,3 +4326,23 @@ reason = "A degraded posture is advisory in explain (a warning row), a stderr no
 kind = "item"
 key = "store::snapshot::view::live::with_local_sessions_and_diagnostics"
 reason = "Inherent priority cascade of pinned bind rules: owning stamp, resume, co-resident, fresh one-to-one, then legacy-shadow rejection (pass 28d)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::run_command"
+reason = "Pass 28e: after collapsing watch deadlines, cx 10.8 (cognitive/cyclomatic/SLOC 21/50/130) remains in fix-pinned SIGINT forwarding, identity stripping, kill plus bounded drain, lossless check-in and Tee tail phases. Extracting echo setup or reader reaping into single-caller helpers moves complexity without deleting it."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::team::team_lifecycle_signals"
+reason = "Pass 28e: four distinct, test-pinned edge rules (team.waiting, team.failed, team.idle, team.ended) share one payload; extracting them only moves the rule table."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::arm::build_entry"
+reason = "Pass 28e: provenance guards enforce self-wait and team contracts; ParsedSchedule re-serialization canonicalizes stored task bytes (2h becomes 120m). Moving the conversion to a single-caller helper deletes nothing, and constructors cannot remove the guards without replacing public options or adding another options type."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::arm::DeliverySpec"
+reason = "Pass 28e contradicts the pass-28 dossier's deepen candidate: loop add, wait add and team arming each supply a different subset of caller-owned inputs to one arm_delivery call. This is use, not assembly; provenance constructors need all loop options as public fields or another options struct, reduce no types and reach outside the pass into cli/wait."
