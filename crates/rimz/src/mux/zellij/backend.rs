@@ -990,31 +990,24 @@ impl MuxBackend for ZellijBackend {
         let target = opts.target;
         let session_name = target.session_name();
         let target_pane = target.pane_id();
-        if let Some(target_pane) = target_pane {
-            ensure_pane_backend(target_pane, MuxName::Zellij)?;
-        }
-        let anchored_stack = opts.placement == SplitPlacement::Stacked && target_pane.is_some();
-        let no_focus = !opts.focus && self.supports_no_focus();
-        // Zellij gives `--tab-id` precedence over the CLI pane context. On
-        // 0.45+, `--no-focus` lets both tab-targeted and pane-targeted spawns
-        // preserve every attached client's view and the exact split anchor. On 0.44 an anchored stack
-        // uses `--near-current-pane` and lets `ZELLIJ_PANE_ID` imply the tab;
-        // directional spawns silently no-op with that flag and keep resolving
-        // a stable tab id.
-        let target_tab_id = match (&target, opts.placement) {
-            (
-                SplitTarget::SessionPane {
-                    session_name,
-                    pane_id,
-                },
-                SplitPlacement::Directional(_),
-            ) if !no_focus => Some(self.tab_id_for_pane(session_name, pane_id)?),
-            _ => None,
-        };
         let mut spec = match session_name {
             Some(session) => self.zellij_action(session).arg("new-pane"),
             None => self.cmd().args(["action", "new-pane"]),
         };
+        if let Some(target_pane) = target_pane {
+            ensure_pane_backend(target_pane, MuxName::Zellij)?;
+            let pane_id = ZellijPaneId::try_from(target_pane)
+                .map_err(output_error)?
+                .terminal_id()
+                .ok_or_else(|| {
+                    output_error(format!(
+                        "target pane `{target_pane}` is not a terminal pane"
+                    ))
+                })?;
+            spec = spec.env("ZELLIJ_PANE_ID", pane_id.to_string());
+        }
+        let anchored_stack = opts.placement == SplitPlacement::Stacked && target_pane.is_some();
+        let no_focus = !opts.focus && self.supports_no_focus();
         match opts.placement {
             SplitPlacement::Stacked => {
                 spec = spec.arg("--stacked");
@@ -1026,18 +1019,22 @@ impl MuxBackend for ZellijBackend {
                 spec = spec.args(["--direction", split_direction(direction)]);
             }
         }
-        if let Some(target_pane) = target_pane {
-            let pane_id = ZellijPaneId::try_from(target_pane)
-                .map_err(output_error)?
-                .terminal_id()
-                .ok_or_else(|| {
-                    output_error(format!(
-                        "target pane `{target_pane}` is not a terminal pane"
-                    ))
-                })?;
-            spec = spec.env("ZELLIJ_PANE_ID", pane_id.to_string());
-        }
-        if let Some(tab_id) = target_tab_id {
+        // Zellij gives `--tab-id` precedence over the CLI pane context. On
+        // 0.45+, `--no-focus` lets both tab-targeted and pane-targeted spawns
+        // preserve every attached client's view and the exact split anchor. On 0.44 an anchored stack
+        // uses `--near-current-pane` and lets `ZELLIJ_PANE_ID` imply the tab;
+        // directional spawns silently no-op with that flag and keep resolving
+        // a stable tab id.
+        if let (
+            SplitTarget::SessionPane {
+                session_name,
+                pane_id,
+            },
+            SplitPlacement::Directional(_),
+        ) = (&target, opts.placement)
+            && !no_focus
+        {
+            let tab_id = self.tab_id_for_pane(session_name, pane_id)?;
             spec = spec.args(["--tab-id".to_owned(), tab_id.to_string()]);
         }
         if no_focus {
@@ -1459,9 +1456,9 @@ impl MuxBackend for ZellijBackend {
         // above are safe detached). An unanswerable probe reads detached —
         // deferring one run is recoverable, a leaked pair is not. tmux splits
         // fine detached, so the gate is Zellij-internal.
-        let needs_attached = plan.has_adds() || !off_spec.is_empty();
-        let attached = !needs_attached || self.session_has_attached_client(&opts.session_name);
-        if attached {
+        let detached = (plan.has_adds() || !off_spec.is_empty())
+            && !self.session_has_attached_client(&opts.session_name);
+        if !detached {
             for (tab_position, raw_id) in &off_spec {
                 repair_sidebar_geometry(
                     self,
@@ -1473,14 +1470,14 @@ impl MuxBackend for ZellijBackend {
                 );
             }
         }
-        if needs_attached && !attached {
+        if detached {
             report.deferred += off_spec.len();
         }
         let build = sidebar_build_identity(opts)?;
         let failure = execute_reconcile_plan(
             plan,
             &mut report,
-            !attached,
+            detached,
             |view| {
                 let tab_position = view.parse::<u64>().map_err(|err| {
                     output_error(format!("invalid sidebar tab position `{view}`: {err}"))
@@ -1503,7 +1500,7 @@ impl MuxBackend for ZellijBackend {
             },
             |pane| self.close_pane(&opts.session_name, pane),
         );
-        if needs_attached && !attached {
+        if detached {
             tracing::info!(
                 session = %opts.session_name,
                 deferred = report.deferred,
