@@ -8,7 +8,7 @@ use crate::source_files;
 use super::history::Log;
 use super::index;
 use super::metrics::{self, MetricsReport};
-use super::modules::{path_in_scope, workspace_crate_names};
+use super::modules::{BinaryTargets, path_in_scope, workspace_crate_names};
 use super::references::References;
 use super::sources::{self, Source};
 use super::syntax::{self, ModIndex, SyntaxReport};
@@ -45,9 +45,9 @@ pub(super) struct Facts {
     /// Struct fields exactly one struct in the workspace declares: a guard
     /// naming one reads one type's state rather than a common field name.
     pub(super) unique_fields: BTreeSet<String>,
-    /// Top-level modules only a `main.rs` declares. Callers there sit outside
-    /// the library crate, so nothing they reach can narrow below `pub`.
-    pub(super) bin_modules: BTreeSet<String>,
+    /// Binary-target code in each crate. Callers there sit outside the
+    /// library crate, so nothing they reach can narrow below `pub`.
+    pub(super) binaries: BinaryTargets,
     pub(super) crate_names: BTreeSet<String>,
     pub(super) sizes: BTreeMap<PathBuf, FileSize>,
     pub(super) history: Option<Log>,
@@ -113,7 +113,7 @@ impl Facts {
         let defined_names = defined_names(&syntax);
         let defining_modules = defining_modules(&syntax);
         let unique_fields = unique_fields(&syntax);
-        let bin_modules = bin_modules(&syntax);
+        let binaries = BinaryTargets::new(&syntax.files);
         let sizes = file_sizes(&sources, &syntax);
         let scoped_sources = sources
             .iter()
@@ -153,7 +153,7 @@ impl Facts {
             defined_names,
             defining_modules,
             unique_fields,
-            bin_modules,
+            binaries,
             crate_names,
             sizes,
             history,
@@ -230,21 +230,6 @@ pub(super) fn unique_fields(syntax: &SyntaxReport) -> BTreeSet<String> {
         .into_iter()
         .filter(|(_, structs)| *structs == 1)
         .map(|(field, _)| field.to_owned())
-        .collect()
-}
-
-pub(super) fn bin_modules(syntax: &SyntaxReport) -> BTreeSet<String> {
-    let declared_by = |root: &str| {
-        syntax
-            .files
-            .iter()
-            .filter(|file| file.path.file_name().is_some_and(|name| name == root))
-            .flat_map(|file| file.mod_decls.iter().map(|(module, _)| module.clone()))
-            .collect::<BTreeSet<_>>()
-    };
-    declared_by("main.rs")
-        .difference(&declared_by("lib.rs"))
-        .cloned()
         .collect()
 }
 

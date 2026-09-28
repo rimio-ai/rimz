@@ -219,7 +219,7 @@ fn split_leaves_replace_the_parent_and_consume_top() {
         defined_names: super::super::facts::defined_names(&syntax),
         unique_fields: super::super::facts::unique_fields(&syntax),
         defining_modules: super::super::facts::defining_modules(&syntax),
-        bin_modules: super::super::facts::bin_modules(&syntax),
+        binaries: super::super::modules::BinaryTargets::new(&syntax.files),
         crate_names: BTreeSet::new(),
         sizes: BTreeMap::from([
             (
@@ -268,4 +268,83 @@ fn split_leaves_replace_the_parent_and_consume_top() {
     );
     assert_eq!(rows.iter().take(1).count(), 1);
     assert_eq!(rows[0].depth, Some(4_501.0));
+}
+
+fn binary_rank_facts() -> Facts {
+    use super::super::sources::Source;
+
+    let sources = vec![
+        Source::new("a/src/main.rs", "mod tool; fn main() {}"),
+        Source::new("a/src/lib.rs", "pub fn library() {}"),
+        Source::new("a/src/tool.rs", "mod run;"),
+        Source::new("a/src/tool/run.rs", "pub fn run() {}"),
+        Source::new("a/src/bin/extra.rs", "fn main() {}"),
+        Source::new("b/src/main.rs", "fn main() {}"),
+        Source::new("b/src/lib.rs", "mod tool; mod other;"),
+        Source::new("b/src/tool.rs", "pub fn library() {}"),
+        Source::new("b/src/other.rs", "mod tool;"),
+        Source::new("b/src/other/tool.rs", "pub fn nested() {}"),
+    ];
+    let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
+    Facts {
+        root: PathBuf::new(),
+        scope: PathBuf::from("."),
+        mod_index: super::super::syntax::ModIndex::new(&syntax.files),
+        known_modules: syntax
+            .files
+            .iter()
+            .map(|file| file.module_path.clone())
+            .collect(),
+        defined_names: super::super::facts::defined_names(&syntax),
+        defining_modules: super::super::facts::defining_modules(&syntax),
+        unique_fields: super::super::facts::unique_fields(&syntax),
+        binaries: super::super::modules::BinaryTargets::new(&syntax.files),
+        crate_names: BTreeSet::new(),
+        sizes: sources
+            .iter()
+            .map(|source| (source.path.clone(), FileSize { code: 1, tests: 0 }))
+            .collect(),
+        syntax,
+        sources,
+        history: Some(history::Log::empty()),
+        metrics: Some(super::super::metrics::MetricsReport {
+            module_scores: BTreeMap::new(),
+            functions: Vec::new(),
+        }),
+        references: None,
+    }
+}
+
+fn binary_flags(facts: &Facts, scope: &str) -> BTreeMap<String, bool> {
+    rows_by(facts, Path::new(scope), RankBy::Code)
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.module, row.flags.contains(&"bin")))
+        .collect()
+}
+
+#[test]
+fn binary_flags_keep_same_named_modules_in_separate_crates() {
+    let facts = binary_rank_facts();
+    assert!(binary_flags(&facts, "a/src")["tool"]);
+    assert!(!binary_flags(&facts, "b/src")["tool"]);
+}
+
+#[test]
+fn binary_flags_do_not_depend_on_survey_scope() {
+    let facts = binary_rank_facts();
+    assert!(!binary_flags(&facts, "b/src/other")["tool"]);
+    assert!(binary_flags(&facts, "a/src/tool")["run"]);
+    assert_eq!(
+        binary_flags(&facts, "./a/src"),
+        binary_flags(&facts, "a/src")
+    );
+}
+
+#[test]
+fn binary_flags_include_src_bin_but_not_the_crate_root() {
+    let facts = binary_rank_facts();
+    let flags = binary_flags(&facts, "a/src");
+    assert!(flags["bin"]);
+    assert!(!flags["(root)"]);
 }

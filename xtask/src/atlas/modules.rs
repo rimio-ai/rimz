@@ -9,6 +9,46 @@ use super::syntax::{FileSyntax, ModIndex, PubItem};
 
 pub(super) const EXTERNAL_REACH: &str = "(extern)";
 
+#[derive(Debug)]
+pub(super) struct BinaryTargets {
+    modules: BTreeMap<PathBuf, BTreeSet<String>>,
+}
+
+impl BinaryTargets {
+    pub(super) fn new(files: &[FileSyntax]) -> Self {
+        let declared = |path: &Path| {
+            files
+                .iter()
+                .find(|file| file.path == path)
+                .into_iter()
+                .flat_map(|file| file.mod_decls.iter().map(|(module, _)| module.clone()))
+                .collect::<BTreeSet<_>>()
+        };
+        let modules = files
+            .iter()
+            .filter(|file| file.path.ends_with("src/main.rs"))
+            .map(|main| {
+                let library = declared(&main.crate_path.join("src/lib.rs"));
+                let binary = declared(&main.path).difference(&library).cloned().collect();
+                (main.crate_path.clone(), binary)
+            })
+            .collect();
+        Self { modules }
+    }
+
+    pub(super) fn contains(&self, path: &Path) -> bool {
+        let path = scope_for_matching(path);
+        let root = crate_path_for_source(path);
+        if path == root.join("src/main.rs") || path.starts_with(root.join("src/bin")) {
+            return true;
+        }
+        let module = crate_module_for_path(path);
+        self.modules
+            .get(&root)
+            .is_some_and(|modules| modules.contains(module.split("::").next().unwrap_or(&module)))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct ItemId {
     pub(super) module: String,

@@ -252,7 +252,12 @@ fn level_rows(
             if history.pace.is_some_and(|pace| pace >= HOT_PACE) {
                 flags.push("hot");
             }
-            if is_binary_module(facts, &display) {
+            let path = if module == "(root)" {
+                scope.to_path_buf()
+            } else {
+                scope.join(&module)
+            };
+            if facts.binaries.contains(&path) {
                 flags.push("bin");
             }
             Row {
@@ -299,11 +304,6 @@ fn add_outlier_flags(rows: &mut [Row]) {
             row.flags.push("thin");
         }
     }
-}
-
-fn is_binary_module(facts: &Facts, module: &str) -> bool {
-    let top = module.split('/').next().unwrap_or(module);
-    facts.bin_modules.contains(top)
 }
 
 fn sort_rows(rows: &mut [Row], by: RankBy) {
