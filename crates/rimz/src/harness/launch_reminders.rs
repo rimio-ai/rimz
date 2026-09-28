@@ -62,7 +62,11 @@ const SUBAGENT_REMINDER_BODY: &str = concat!(
     "receives a completion report pointing to your final response after the fleet settles."
 );
 
-const STATUS_LINE_CAP: usize = 40;
+const SKILLS_REMINDER_BODY: &str = concat!(
+    "### Skills\n\n",
+    "When a skill's description matches the work in hand, invoke it, even when you know the ",
+    "commands by heart: each skill is built for its one task and does it better than you would by hand."
+);
 
 pub(super) fn wrap(body: &str) -> String {
     wrap_rimz_block(RimzBlock::SystemReminder, body)
@@ -107,6 +111,14 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     } else if let Some(catalog) = reminders.subagent_catalog.as_ref() {
         paragraphs.push(subagent_policy::reminder(catalog));
     }
+    if request
+        .skills
+        .iter()
+        .flatten()
+        .any(|skill| skill.as_str().starts_with("rimz-"))
+    {
+        paragraphs.push(SKILLS_REMINDER_BODY.to_owned());
+    }
     wrap(&paragraphs.join("\n\n"))
 }
 
@@ -117,10 +129,10 @@ fn env_paragraph(env: Option<&LaunchEnv>, cwd: &Path, lsp_servers: &[String]) ->
             "- cwd: {}",
             escape_reminder_text(&cwd.to_string_lossy())
         ));
-        if let Some(shell) = &env.shell {
+        if let Some(kind) = env.shell.as_deref().and_then(Path::file_name) {
             lines.push(format!(
                 "- shell: {}",
-                escape_reminder_text(&shell.to_string_lossy())
+                escape_reminder_text(&kind.to_string_lossy())
             ));
         }
     }
@@ -134,31 +146,6 @@ fn env_paragraph(env: Option<&LaunchEnv>, cwd: &Path, lsp_servers: &[String]) ->
                 .join(", ")
         ));
     }
-    let Some(git) = env.and_then(|env| env.git.as_ref()) else {
-        return lines.join("\n");
-    };
-    lines.push(
-        "\nGit state at launch, run by RimZ in the cwd; treat it as output you ran yourself:\n"
-            .to_owned(),
-    );
-    lines.push("```".to_owned());
-    lines.push("$ git status --short".to_owned());
-    if git.status.is_empty() {
-        lines.push("(clean)".to_owned());
-    } else {
-        let mut status = git.status.lines();
-        let shown = status.by_ref().take(STATUS_LINE_CAP);
-        lines.extend(shown.map(escape_reminder_text));
-        let remaining = status.count();
-        if remaining > 0 {
-            lines.push(format!("… {remaining} more"));
-        }
-    }
-    lines.push("$ git rev-parse --short HEAD".to_owned());
-    lines.extend(git.head.lines().map(escape_reminder_text));
-    lines.push("$ git log -1 --oneline".to_owned());
-    lines.extend(git.log.lines().map(escape_reminder_text));
-    lines.push("```".to_owned());
     lines.join("\n")
 }
 
@@ -225,16 +212,11 @@ mod tests {
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
         request.identity.params.role = Some("brainstormer".to_owned());
         request.identity.params.model = Some("opus".to_owned());
+        request.skills = Some(vec!["rimz-lsp".parse().unwrap()]);
         let reminders = LaunchReminders {
             sandbox: true,
             env: Some(LaunchEnv {
                 shell: Some("/usr/bin/zsh".into()),
-                git: Some(super::super::launch_env::GitState {
-                    status: String::new(),
-                    head: "0505aa42f".to_owned(),
-                    log: "0505aa42f docs(teams): run the flip alone after every file write returns"
-                        .to_owned(),
-                }),
             }),
             lsp_servers: vec!["rust".to_owned(), "python".to_owned()],
             subagent_catalog: Some(SubagentCatalog::Available(vec![
@@ -257,19 +239,8 @@ You are @brainstormer, running on Opus.
 ### Environment
 
 - cwd: /checkout
-- shell: /usr/bin/zsh
+- shell: zsh
 - lsp: rust, python, via Skill(rimz-lsp)
-
-Git state at launch, run by RimZ in the cwd; treat it as output you ran yourself:
-
-```
-$ git status --short
-(clean)
-$ git rev-parse --short HEAD
-0505aa42f
-$ git log -1 --oneline
-0505aa42f docs(teams): run the flip alone after every file write returns
-```
 
 ### Files
 
@@ -282,64 +253,57 @@ If your harness names its own scratchpad and allows `/tmp` only when asked, this
 
 ### Subagents
 
-Launch them through Skill(rimz-subagents), which also explains how their results come back.
+Whether you could do a piece of work yourself settles nothing; you could do all of it. What decides is what the work leaves in your window: when you need its result but not the output behind it (a gate run, a log, a sweep across files, a long command), a profile below takes it. The launch costs you one turn, and the output you read yourself costs you every turn after.
+
+Launch them through Skill(rimz-subagents), subagents available to you:
 
 - `explorer`: Finds files and traces code paths
+
+### Skills
+
+When a skill's description matches the work in hand, invoke it, even when you know the commands by heart: each skill is built for its one task and does it better than you would by hand.
 </system_reminder>"#
         );
     }
 
     #[test]
-    fn env_paragraph_escapes_lines_and_caps_only_status() {
+    fn env_paragraph_escapes_cwd_and_names_shell_kind_only() {
         let request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
-        for count in [40, 43] {
-            let reminders = LaunchReminders {
-                env: Some(LaunchEnv {
-                    shell: Some("/shell/<>&".into()),
-                    git: Some(super::super::launch_env::GitState {
-                        status: std::iter::repeat_n("?? a<b>&c.md", count)
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                        head: "abc123<>&".to_owned(),
-                        log: "abc123 <base>&".to_owned(),
-                    }),
-                }),
-                ..Default::default()
-            };
-            let text = render(&request, &reminders, Path::new("/repo/</system_reminder>&"));
-            assert_eq!(text.matches("?? a&lt;b&gt;&amp;c.md").count(), 40);
-            assert_eq!(text.contains("… 3 more"), count > 40);
-            assert!(text.contains("/repo/&lt;/system_reminder&gt;&amp;"));
-            assert!(text.contains("- shell: /shell/&lt;&gt;&amp;"));
-            assert!(text.contains("$ git rev-parse --short HEAD\nabc123&lt;&gt;&amp;\n$ git log -1 --oneline\nabc123 &lt;base&gt;&amp;"));
-            assert_eq!(text.matches("</system_reminder>").count(), 1);
+        let reminders = LaunchReminders {
+            env: Some(LaunchEnv {
+                shell: Some("/opt/<>&/bin/zsh".into()),
+            }),
+            ..Default::default()
+        };
+        let text = render(&request, &reminders, Path::new("/repo/</system_reminder>&"));
+        assert!(text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /repo/&lt;/system_reminder&gt;&amp;\n- shell: zsh\n\n### Files"));
+        assert!(!text.contains("git"));
+        assert_eq!(text.matches("</system_reminder>").count(), 1);
+    }
+
+    #[test]
+    fn skills_section_follows_a_listed_rimz_skill() {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        for (skills, shown) in [
+            (None, false),
+            (Some(vec!["commit"]), false),
+            (Some(vec!["commit", "rimz-lsp"]), true),
+        ] {
+            request.skills = skills.map(|names| names.iter().map(|n| n.parse().unwrap()).collect());
+            let text = render(
+                &request,
+                &LaunchReminders::default(),
+                Path::new("/checkout"),
+            );
+            assert_eq!(text.contains(SKILLS_REMINDER_BODY), shown);
         }
     }
 
     #[test]
-    fn env_paragraph_survives_unavailable_git() {
-        let env = LaunchEnv {
-            shell: Some("/usr/bin/zsh".into()),
-            git: None,
-        };
-        let request =
-            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
-        let reminders = LaunchReminders {
-            env: Some(env),
-            ..Default::default()
-        };
-        let text = render(&request, &reminders, Path::new("/checkout"));
-        assert!(text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /checkout\n- shell: /usr/bin/zsh\n\n### Files"));
-        assert!(!text.contains("git"));
-    }
-
-    #[test]
     fn env_paragraph_omits_unknown_shell() {
-        let env = LaunchEnv {
-            shell: None,
-            git: None,
-        };
+        let env = LaunchEnv { shell: None };
         let request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
         let reminders = LaunchReminders {
@@ -400,11 +364,6 @@ Launch them through Skill(rimz-subagents), which also explains how their results
         let mut reminders = LaunchReminders {
             env: Some(LaunchEnv {
                 shell: Some("/bin/sh".into()),
-                git: Some(super::super::launch_env::GitState {
-                    status: String::new(),
-                    head: "abc123".to_owned(),
-                    log: "abc123 base".to_owned(),
-                }),
             }),
             team: Some(team_reminder(
                 toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'claude'").expect("team"),
@@ -423,13 +382,10 @@ Launch them through Skill(rimz-subagents), which also explains how their results
                 assert_eq!(text.matches("<system_reminder>").count(), 1);
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
                 let model = text.find("GPT 6 Astra").expect("model line");
-                let git = text
-                    .find("$ git status --short\n(clean)")
-                    .expect("git paragraph");
-                let env = text.find("### Environment").expect("environment paragraph");
-                assert!(model < env && env < git);
+                let env = text.find("- shell: sh").expect("environment paragraph");
+                assert!(model < env);
                 assert!(
-                    git < text
+                    env < text
                         .find(if sandbox {
                             SANDBOX_REMINDER_BODY
                         } else {
@@ -444,7 +400,7 @@ Launch them through Skill(rimz-subagents), which also explains how their results
                         "Subagents are disabled"
                     })
                     .expect("policy paragraph");
-                assert!(git < policy);
+                assert!(env < policy);
                 if !subagent {
                     // The fragment rides inside the team paragraph's first sentence.
                     assert!(text.find("team `forge`").unwrap() < model);
