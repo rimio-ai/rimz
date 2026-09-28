@@ -1567,7 +1567,7 @@ fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
                     notice: HarnessNotice::SubagentReport | HarnessNotice::AgentReport
                 }
             )),
-        "team seats stay out of the launcher's AGENT_REPORT"
+        "team seats stay out of the launcher's fleet report"
     );
 
     let reopened = success(fixture.flip("Review", None, Some("One more pass.")));
