@@ -146,6 +146,7 @@ Read plan.md when the planner finishes.
 | `USER_MESSAGE` | A send from a user shell | `@user` |
 | `AGENT_MESSAGE` | A send from an agent, whether RimZ launched it or only saw it running | Reply address: role, else explicit name, else pet name; kind only when no role or name exists. Adds `#channel` when crossing channels, then the profile (else kind) in parentheses unless it repeats the handle base. |
 | `AGENT_REPORT` | The status digest sent once all of an agent's [subagents](./subagents.md) and background runs settle | `@rimz` |
+| `TEAM_REPORT` | The leader's final response, sent to the agent that launched a [team](./teams.md#team-reports) when its board reaches `Done` | `@rimz` |
 | `WAIT` | A [`rimz wait`](./wait.md) delivery, or a loop `--wait` delivery not triggered by a signal | `@rimz` |
 | `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery | `@rimz` |
 | `STAGE` | A [team stage](./teams.md) opening | `@rimz` |

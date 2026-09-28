@@ -120,6 +120,17 @@ pub struct PeerRun {
     pub opened_by: Vec<crate::ids::MessageId>,
 }
 
+/// The team-long run an agent-launched team keeps on its leader: it collects
+/// the leader's final messages across turns and settles only when the team's
+/// board flips to Done, which reports the leader to the launcher.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamRun {
+    /// The leader's launch id; every conversation row of the leader shares it.
+    pub launch_id: AgentSessionId,
+    /// `<team>#<channel>`, the cohort whose board settles this run.
+    pub instance: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: RunId,
@@ -158,6 +169,8 @@ pub struct RunRecord {
     pub subagent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer: Option<PeerRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<TeamRun>,
     /// Time at which the caller claimed the settled result, either by printing
     /// it during an open agent turn (or to a human shell) or discarding it
     /// through `rimz subagents stop`; joined runs are
@@ -225,7 +238,7 @@ pub enum RunPromptOrigin {
 impl RunRecord {
     pub fn prompt_origin(&self) -> RunPromptOrigin {
         match (
-            self.subagent || self.peer.is_some(),
+            self.subagent || self.peer.is_some() || self.team.is_some(),
             self.loop_task.as_ref(),
         ) {
             (true, _) => RunPromptOrigin::Parent,
@@ -242,6 +255,10 @@ impl RunRecord {
             return agent.launch_id.as_ref() == Some(&peer.launch_id)
                 || agent.agent_id == peer.launch_id
                 || self.agent_id.as_ref() == Some(&agent.agent_id);
+        }
+        if let Some(team) = &self.team {
+            return agent.launch_id.as_ref() == Some(&team.launch_id)
+                || agent.agent_id == team.launch_id;
         }
         self.agent_id.as_ref() == Some(&agent.agent_id)
             || agent
@@ -277,6 +294,7 @@ impl RunRecord {
             keep: false,
             subagent: false,
             peer: None,
+            team: None,
             joined_at: None,
             report_message_id: None,
             budget: None,

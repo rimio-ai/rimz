@@ -1046,7 +1046,8 @@ pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> V
 /// [`launched_children`].
 ///
 /// Returns every conversation row of a launch, ended predecessors included;
-/// judge a launch's liveness through [`is_launch_row`], never per row.
+/// judge a launch's liveness through [`is_launch_row`], never per row. Team
+/// seats are left out: a team reports once, at Done, not through this fleet.
 pub fn launched_fleet<'a>(agents: &'a [AgentState], launcher: &AgentState) -> Vec<&'a AgentState> {
     let members = launch_members(
         agents,
@@ -1056,6 +1057,7 @@ pub fn launched_fleet<'a>(agents: &'a [AgentState], launcher: &AgentState) -> Ve
     by_registration(
         agents
             .iter()
+            .filter(|agent| !agent.is_team_seat())
             .filter(|agent| {
                 agent.launcher_is(launcher)
                     || members.iter().any(|member| agent.launcher_is(member))

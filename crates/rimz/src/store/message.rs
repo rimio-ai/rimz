@@ -64,6 +64,8 @@ pub enum HarnessNotice {
     Wait,
     Signal,
     Stage,
+    /// The leader of an agent-launched team, reported when its board reaches Done.
+    TeamReport,
     /// Preserve newer notices verbatim through older queue rewrites and history pruning.
     #[serde(untagged)]
     Other(String),
@@ -74,6 +76,7 @@ impl HarnessNotice {
         match self {
             Self::CacheKeepalive => "CACHE_KEEPALIVE".to_owned(),
             Self::SubagentReport => "AGENT_REPORT".to_owned(),
+            Self::TeamReport => "TEAM_REPORT".to_owned(),
             Self::Deadline => "DEADLINE".to_owned(),
             Self::Wait => "WAIT".to_owned(),
             Self::Signal => "SIGNAL".to_owned(),
@@ -91,7 +94,7 @@ impl MessageSender {
             Self::Agent { .. } => SectionOrigin::Agent(self.render()),
             Self::Subagent { .. }
             | Self::Harness {
-                notice: HarnessNotice::SubagentReport,
+                notice: HarnessNotice::SubagentReport | HarnessNotice::TeamReport,
             } => SectionOrigin::Subagent(self.render()),
             Self::Harness {
                 notice:
@@ -975,6 +978,7 @@ fn classify_header_line(line: &str) -> Option<HeaderKind> {
         "Type: CACHE_KEEPALIVE" => Some(HeaderKind::CacheKeepalive),
         "Type: AGENT_MESSAGE" => Some(HeaderKind::Agent),
         "Type: AGENT_REPORT" => Some(HeaderKind::Subagent),
+        "Type: TEAM_REPORT" => Some(HeaderKind::Subagent),
         // The fleet digest's header before it was renamed, and the legacy
         // `MessageSender::Subagent` header: transcripts already carry both.
         "Type: SUBAGENT_REPORT" => Some(HeaderKind::Subagent),

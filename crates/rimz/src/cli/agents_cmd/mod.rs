@@ -32,6 +32,7 @@ mod runs_lookup;
 mod show;
 mod stop;
 mod subagent_report;
+pub(in crate::cli) mod team_report;
 mod top;
 mod validate;
 mod wait;

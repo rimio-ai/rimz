@@ -381,6 +381,7 @@ Content:
 | `AGENT_MESSAGE` | A send from an identified agent caller | Stable reply address, followed by the profile (else kind) in parentheses unless it repeats the handle base |
 | `USER_MESSAGE` | A human's `rimz message` | `@user` |
 | `AGENT_REPORT` | The status-only fleet digest after all of an agent's launched children, `-p --bg` runs, and launcher-opened interactive peer turns settle | `@rimz` |
+| `TEAM_REPORT` | An agent-launched team's leader, reported to the launcher when the board flips to `Done` | `@rimz` |
 | `WAIT` | A timer, command, or clock wait delivery | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping for a sleeping agent ([policy](./loops.md#prompt-cache-keepalive)) | `@rimz` |
 | `SIGNAL` | Every delivery fired by a `Trigger::Signal` row | `@rimz` |
