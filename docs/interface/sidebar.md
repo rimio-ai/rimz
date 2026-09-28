@@ -449,11 +449,11 @@ A group with one staged team and a readable worktree `blackboard.md` containing 
 
 ```
 ▎⑂ pipeline ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▎  forge · ● ● ◉ Implement ○ ○              47m / 47m🮇
+▎  forge ● ● ◉ Implement ○ ○                47m / 47m🮇
 ▌⣾ planner                                           ▐
 ```
 
-The team badge leads, followed by ` · ` and the track. The dots follow declared stage order: passed, current, then future, with the current stage's name immediately after its dot. Passed dots are green and future dots are muted unless already reached this run, in which case they are yellow: the shape says not done, the color says been there. Flipping backward moves the current dot back and warms the dots it left behind. At `Done`, every dot is passed and the last becomes the green done seal, followed by `Done` to keep the meaning visible without color. A board stage outside the declared pipeline shows its name without a track. The current dot and stage name take the visible stage owner's status color and animation phase, or stay muted when that owner has no visible card. The line never creates `!`, unread state, attention ranking, tab status, or a notification.
+The team badge leads, followed by the track; a stage outside the declared pipeline has no track and shows ` · ` between the badge and its name. The dots follow declared stage order: passed, current, then future, with the current stage's name immediately after its dot. Passed dots are green and future dots are muted unless already reached this run, in which case they are yellow: the shape says not done, the color says been there. Flipping backward moves the current dot back and warms the dots it left behind. At `Done`, every dot is passed and the last becomes the green done seal, followed by `Done` to keep the meaning visible without color. A board stage outside the declared pipeline shows its name without a track. The current dot and stage name take the visible stage owner's status color and animation phase, or stay muted when that owner has no visible card. The line never creates `!`, unread state, attention ranking, tab status, or a notification.
 
 Without color there is no revisit cue; a forward re-entry warms nothing to its right.
 
