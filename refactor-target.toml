@@ -3320,6 +3320,51 @@ reason = "Error type of pub flip; atlas caveat 13 (pass 23b, registration re-wak
 
 [[verdict]]
 kind = "item"
+key = "harness::team_stage::react_to_lifecycle"
+reason = "Moved whole from the hook in pass 28g: the append-free skip, the ended-session retire above the side-conversation return, then per event retire, arm, agent and team signals, fire, and re-wake, in the order the loop_schedule and teams_flip tests pin. Each phase has one caller and hides nothing, so splitting it only to cross the cx threshold would scatter that order (pass 28g)."
+
+[[verdict]]
+kind = "item"
+key = "cli::hooks::lifecycle::handle_lifecycle_hook"
+reason = "Ordered hook phases: release keyed asks, append lifecycle, return side conversations, derive children, resolve run identity, record responses and activity, settle runs, claim deadlines, confirm delivery, classify input, record transcript, rotate, then dispatch reactors. Splitting the single-use orchestration only to cross the cx threshold hides this ordering without deleting policy (pass 28g)."
+
+[[verdict]]
+kind = "item"
+key = "cli::hooks::lifecycle::transcript::record_conversation"
+reason = "Implements docs/internals/harness/transcript.md Writing entries: resolve launch origin before mapping sections, let only direct human input answer a keyed ask, preserve prompts on duplicate-answer races, and record assistant/ask entries. The case table remains together; a single-use helper would hide rather than simplify it (pass 28g)."
+
+[[verdict]]
+kind = "item"
+key = "cli::hooks::lifecycle::observe::record_mapped_lifecycle_observation"
+reason = "Ordered observation phase: seed root-only identity, enrich workspace and pane, collect provider-native children, append once, log the receipt, then invoke the harness reaction. The team loop is gone; splitting the remaining one-use preparation would hide ordering without removing policy (pass 28g)."
+
+[[verdict]]
+kind = "item"
+key = "cli::hooks::lifecycle::observe::correlate_subagent_observation"
+reason = "Observation preparation preserves launched-child semantics, reuses durable native parentage, then probes a bounded pane-local candidate set and quarantines ambiguity. These ordered exclusions guard one correlation decision; no threshold-only split (pass 28g)."
+
+[[verdict]]
+kind = "item"
+key = "cli::hooks::lifecycle::context::merge_agent_context_sidecars"
+reason = "Context phase merges turn errors and observed context before local pricing and refresh, reusing prior model hints and retaining transcript stat and spend fold only for the selected transcript. Provider calls and their wakeups stay in execution order rather than single-use threshold helpers (pass 28g)."
+
+[[verdict]]
+kind = "item"
+key = "cli::hooks::run_feed"
+reason = "Ingress phase rejects suppressed hooks before reading stdin, decodes payload, resolves daemon versus pane workspace identity, opens the store and dispatches the accepted hook. The binary boundary keeps its ordered error and routing decisions together (pass 28g)."
+
+[[verdict]]
+kind = "item"
+key = "cli::hooks::binding::recover_focused_pane_binding"
+reason = "Pane enrichment first excludes already-stamped and ineligible observations, then collects inputs, selects recovery and records diagnostic evidence before applying the binding. Policy already lives in HookPaneRecoveryContext; splitting its caller buys only a lower threshold score (pass 28g)."
+
+[[verdict]]
+kind = "item"
+key = "cli::hooks::binding::live_binding_inputs"
+reason = "Pane enrichment probes each selected backend in order: session liveness, repaired pane frame, then focus, retaining per-backend failure evidence. Different probe failures have different continuation rules; one-use helpers would only scatter the ordered phase (pass 28g)."
+
+[[verdict]]
+kind = "item"
 key = "harness::team_stage::FlipReceipt"
 reason = "Returned by pub flip (team_stage.rs:223-224); atlas caveat 13 (pass 23b)."
 
