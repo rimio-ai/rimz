@@ -8,9 +8,8 @@ use serde::Serialize;
 use super::super::facts::Facts;
 use super::super::history::{self, BlameCommit};
 use super::super::modules::{
-    EXTERNAL_REACH, EscapingItem, ReExport, bounded_names, crate_path_for_source,
-    escaping_items_for_boundary, is_declaration_only, module_is_within, reference_module_label,
-    resolve_reexport,
+    EXTERNAL_REACH, EscapingItem, ReExport, bounded_names, escaping_items_for_boundary,
+    is_declaration_only, module_is_within, reference_module_label, resolve_reexport,
 };
 use super::super::references::{Edge, EdgeKind};
 use super::super::sources::SourceKind;
@@ -157,28 +156,21 @@ fn parent_module(module: &str) -> &str {
     module.rsplit_once("::").map_or("", |(parent, _)| parent)
 }
 
-/// The narrowest visibility that still covers every production or testkit caller:
-/// `private` when only the item's module and its descendants reach it, or
-/// nothing does. A caller in a binary-only module sits outside the library
-/// crate, so the item must stay as visible as it is.
+/// The narrowest visibility covering production and testkit callers. Any cross-target reader prevents narrowing.
 fn narrow_to(
     item_module: &str,
     effective_reach: &str,
-    production_callers: &BTreeSet<String>,
-    production_sites: usize,
-    bin_modules: &BTreeSet<String>,
+    callers: &BTreeSet<String>,
+    cross_target: bool,
 ) -> String {
-    if production_sites == 0 {
-        return "private".to_owned();
-    }
-    let in_binary =
-        |caller: &String| bin_modules.contains(caller.split("::").next().unwrap_or(caller));
-    if production_callers.iter().any(in_binary) {
+    if cross_target {
         return "keep".to_owned();
     }
-    let ancestor = common_ancestor(
-        std::iter::once(item_module).chain(production_callers.iter().map(String::as_str)),
-    );
+    if callers.is_empty() {
+        return "private".to_owned();
+    }
+    let ancestor =
+        common_ancestor(std::iter::once(item_module).chain(callers.iter().map(String::as_str)));
     if ancestor == effective_reach {
         "keep".to_owned()
     } else if ancestor == item_module {
@@ -232,11 +224,15 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
     }
     let mut outside = BTreeMap::<EdgeTarget, Outside>::new();
     let mut test_sites = BTreeMap::<EdgeTarget, Vec<TestSite>>::new();
+    let mut cross_target = BTreeSet::new();
     for edge in references
         .edges
         .iter()
         .filter(|edge| edge.kind == EdgeKind::Reference && target.matches(&edge.to, &edge.to_path))
     {
+        if edge.cross_target {
+            cross_target.insert(edge_target(edge));
+        }
         if edge.site_kind == SourceKind::Test {
             test_sites
                 .entry(edge_target(edge))
@@ -339,8 +335,7 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
                         .union(&item_refs.testkit)
                         .cloned()
                         .collect(),
-                    item_refs.production_count + item_refs.testkit_count,
-                    &facts.bin_modules,
+                    cross_target.contains(&key),
                 ),
                 path: def_file.path.clone(),
                 line: definition.line,
@@ -396,17 +391,13 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
     (section, declaration_only)
 }
 
-/// Items whose tests sit outside the visibility they can narrow to. A test
-/// in another crate (`tests/`) loses every narrowing; a test in another
-/// module loses `private`, `pub(super)`, and `pub(in …)`. These are the
-/// tests a narrowing pass rewrites or deletes.
+/// In-crate tests outside the narrowed reach, which a narrowing pass rewrites or deletes.
 fn pins(rows: &[SurfaceRow], test_sites: &BTreeMap<EdgeTarget, Vec<TestSite>>) -> Vec<PinRow> {
     let mut pins = Vec::new();
     for row in rows.iter().filter(|row| row.narrow_to != "keep") {
         let Some(sites) = test_sites.get(&row.definition) else {
             continue;
         };
-        let crate_src = crate_path_for_source(&row.path).join("src");
         let reach = match row.narrow_to.as_str() {
             "private" => Some(row.module.clone()),
             "pub(super)" => Some(parent_module(&row.module).to_owned()),
@@ -419,10 +410,9 @@ fn pins(rows: &[SurfaceRow], test_sites: &BTreeMap<EdgeTarget, Vec<TestSite>>) -
         let lost = sites
             .iter()
             .filter(|site| {
-                !site.path.starts_with(&crate_src)
-                    || reach
-                        .as_deref()
-                        .is_some_and(|reach| !module_is_within(&site.module, reach))
+                reach
+                    .as_deref()
+                    .is_some_and(|reach| !module_is_within(&site.module, reach))
             })
             .map(|site| {
                 site.function.as_deref().map_or_else(

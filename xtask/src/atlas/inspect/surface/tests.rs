@@ -267,10 +267,8 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             .collect::<BTreeSet<_>>()
     };
 
-    let no_bins = BTreeSet::new();
-
     assert_eq!(
-        narrow_to("store", EXTERNAL_REACH, &callers(&[]), 0, &no_bins),
+        narrow_to("store", EXTERNAL_REACH, &callers(&[]), false),
         "private"
     );
     assert_eq!(
@@ -278,19 +276,12 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             "store::writer",
             EXTERNAL_REACH,
             &callers(&["store::reader"]),
-            1,
-            &no_bins
+            false
         ),
         "pub(super)"
     );
     assert_eq!(
-        narrow_to(
-            "store::writer",
-            EXTERNAL_REACH,
-            &callers(&["cli"]),
-            1,
-            &no_bins
-        ),
+        narrow_to("store::writer", EXTERNAL_REACH, &callers(&["cli"]), false),
         "pub(crate)"
     );
     assert_eq!(
@@ -298,8 +289,7 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             "store::writer::record",
             EXTERNAL_REACH,
             &callers(&["store::reader"]),
-            1,
-            &no_bins
+            false
         ),
         "pub(in crate::store)"
     );
@@ -308,8 +298,7 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             "store::writer",
             "store",
             &callers(&["store::reader"]),
-            1,
-            &no_bins
+            false
         ),
         "keep"
     );
@@ -319,8 +308,7 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             "message",
             EXTERNAL_REACH,
             &callers(&["message::deliver", "message::send"]),
-            2,
-            &no_bins
+            false
         ),
         "private"
     );
@@ -330,11 +318,126 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             "store::writer",
             EXTERNAL_REACH,
             &callers(&["cli::show"]),
-            1,
-            &callers(&["cli"])
+            true
         ),
         "keep"
     );
+}
+
+#[test]
+fn cross_target_readers_keep_visibility_for_every_site_class() {
+    let sites = [
+        (
+            "bench",
+            "benches/hot.rs",
+            "fn run() { probe::render::bench(); }",
+            0,
+        ),
+        ("bin", "src/cli.rs", "fn run() { probe::render::bin(); }", 0),
+        (
+            "bin_test",
+            "src/cli/tests.rs",
+            "fn run() { probe::render::bin_test(); }",
+            0,
+        ),
+        (
+            "bin_support",
+            "src/cli/demo.rs",
+            "fn run() { probe::render::bin_support(); }",
+            0,
+        ),
+        (
+            "tool",
+            "src/bin/tool.rs",
+            "fn main() { probe::render::tool(); }",
+            0,
+        ),
+        (
+            "main",
+            "src/main.rs",
+            "mod cli;\nfn main() { probe::render::main(); }",
+            1,
+        ),
+        (
+            "api",
+            "tests/api.rs",
+            "fn test() { probe::render::api(); }",
+            0,
+        ),
+        (
+            "example",
+            "examples/demo.rs",
+            "fn main() { probe::render::example(); }",
+            0,
+        ),
+        (
+            "foreign",
+            "other/src/reader.rs",
+            "fn run() { probe::render::foreign(); }",
+            0,
+        ),
+        (
+            "local",
+            "src/app.rs",
+            "fn run() { crate::render::local(); }",
+            0,
+        ),
+    ];
+    let declarations = sites
+        .iter()
+        .map(|(name, ..)| format!("pub fn {name}() {{}}\n"))
+        .collect::<String>();
+    let mut files = vec![
+        ("src/lib.rs", "pub mod render;\nmod app;\n"),
+        ("src/render.rs", declarations.as_str()),
+        ("other/src/main.rs", "mod app;\n"),
+        ("other/src/lib.rs", "mod cli;\nmod reader;\n"),
+    ];
+    files.extend(sites.iter().map(|(_, path, text, _)| (*path, *text)));
+    let root = crate_with_files(&files);
+    fs::write(root.path().join("src/cli.rs"), "fn run() { probe::render::bin(); }\n#[cfg(test)]\nmod tests;\n#[cfg(feature = \"testkit\")]\nmod demo;\n").unwrap();
+    let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let mut definitions = Vec::new();
+    let mut documents = Vec::new();
+    for (line, (name, path, _, site_line)) in sites.iter().enumerate() {
+        let symbol = format!("rust-analyzer cargo probe 0.0.0 {name}().");
+        definitions.push(occurrence(i32::try_from(line).unwrap(), &symbol, true));
+        documents.push(scip::types::Document {
+            relative_path: (*path).to_owned(),
+            occurrences: vec![occurrence(*site_line, &symbol, false)],
+            ..Default::default()
+        });
+    }
+    documents.push(scip::types::Document {
+        relative_path: "src/render.rs".to_owned(),
+        occurrences: definitions,
+        ..Default::default()
+    });
+    let index_path = root.path().join("index.scip");
+    scip::write_message_to_file(
+        &index_path,
+        Index {
+            documents,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    facts.references = Some(References::load(&index_path, &facts.syntax, &facts.sources).unwrap());
+    let (surface, _) = surface_section(&facts, &selector("render"));
+    assert_eq!(surface.items.len(), sites.len());
+    for row in &surface.items {
+        assert_eq!(
+            row.narrow_to,
+            if row.name == "local" {
+                "pub(crate)"
+            } else {
+                "keep"
+            },
+            "{}",
+            row.name
+        );
+    }
+    assert!(surface.pins.is_empty());
 }
 
 #[test]
@@ -398,7 +501,7 @@ fn surface_measures_reexports_at_their_definitions_and_pins_tests_past_the_narro
     assert_eq!(row.line, 1);
     assert_eq!((row.outside_sites, row.test_sites), (1, 1));
     assert_eq!(row.reach, "extern");
-    assert_eq!(row.narrow_to, "pub(crate)");
+    assert_eq!(row.narrow_to, "keep");
     let hidden = &surface.items[1];
     assert_eq!((hidden.outside_sites, hidden.test_sites), (0, 1));
     assert_eq!(hidden.narrow_to, "private");
@@ -417,19 +520,11 @@ fn surface_measures_reexports_at_their_definitions_and_pins_tests_past_the_narro
         .collect::<Vec<_>>();
     assert_eq!(
         pins,
-        [
-            (
-                "store::Hidden".to_owned(),
-                "private",
-                1,
-                vec!["t (src/cli.rs:4)".to_owned()]
-            ),
-            (
-                "store::Row".to_owned(),
-                "pub(crate)",
-                1,
-                vec!["tests/api.rs:1".to_owned()]
-            ),
-        ]
+        [(
+            "store::Hidden".to_owned(),
+            "private",
+            1,
+            vec!["t (src/cli.rs:4)".to_owned()]
+        ),]
     );
 }

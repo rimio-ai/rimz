@@ -57,6 +57,7 @@ pub(super) fn edge(
         item: item.to_owned(),
         kind: EdgeKind::Reference,
         site_kind,
+        cross_target: false,
     }
 }
 
