@@ -331,7 +331,7 @@ pub(crate) fn rel_age(ts: Timestamp, now: Timestamp) -> String {
     format!("{} ago", age_label(secs))
 }
 
-/// The state word `lsp list` and `doctor` both print for a registry state.
+/// The state word `lsp list`, `lsp status`, and `doctor` print for a registry state.
 pub(crate) fn lsp_state_label(state: &rimz::lsp::registry::State) -> String {
     use rimz::lsp::registry::State;
     match state {

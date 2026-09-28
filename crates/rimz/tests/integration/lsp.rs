@@ -104,7 +104,7 @@ fn lsp_status_and_stop_select_one_lazy_server() {
         .args(["lsp", "status", "--server", "python"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("dormant"));
+        .stdout(predicates::str::contains("not started"));
     env.rimz()
         .args(["lsp", "status", "--server", "go"])
         .assert()
