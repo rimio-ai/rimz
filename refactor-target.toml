@@ -4366,3 +4366,38 @@ reason = "Ordered preconditions remain after room and sandbox admission moved be
 kind = "item"
 key = "cli::room::prepare_room"
 reason = "Ordered start/attach entry sequence: preflight live health before birth, prompts before login resolution, and host readiness before session effects. Room owns source-specific construction; the remaining branches express distinct entry policies (pass 28f)."
+
+[[verdict]]
+kind = "item"
+key = "cli::doctor::render::render_lsp"
+reason = "Distinct diagnostics in report order: registry rows and crash details, six startup-check outcomes, then checks-error and last-refusal notes. The whole-output and tally pin covers these cases; a single-use extraction deletes no policy (pass 29c)."
+
+[[verdict]]
+kind = "item"
+key = "cli::doctor::render::render_mux"
+reason = "Distinct optional multiplexer fields render as ordered KeyVals rows before binary, log and duplicate-session notes. The render tests pin the diagnostics; splitting the rows shares no policy (pass 29c)."
+
+[[verdict]]
+kind = "item"
+key = "cli::doctor::runtime::collect_mux"
+reason = "Ordered probes are gated by backend, workspace and room liveness; providers already own the probes. Keeping the doctor report assembly together preserves probe order without single-use threshold helpers (pass 29c)."
+
+[[verdict]]
+kind = "item"
+key = "cli::doctor::runtime::presence_plugins_view"
+reason = "Generation-aware join of live ids, diagnostic spans, fresh topology writer and rejected writer, with desired-build comparison and stable row order. Five presence_plugins tests pin the join; a library DTO would duplicate the report model (pass 29c)."
+
+[[verdict]]
+kind = "item"
+key = "cli::doctor::runtime::classify_diagnostic"
+reason = "Exhaustive DiagEvent classification keeps contained, recovered, expected and investigate decisions in one table; new events must acquire a classification. Severity affects impact only for investigate (pass 29c)."
+
+[[verdict]]
+kind = "item"
+key = "cli::doctor::mux_log::diagnose_zellij_log_record"
+reason = "Distinct Zellij log shapes retain neighbor-aware disconnect pairing, lifecycle exclusions, pane-query timeout, protocol mismatch, missing directory and cause-chain fallback. The mux_log tests pin these cases; extracting them would scatter one classifier (pass 29c)."
+
+[[verdict]]
+kind = "item"
+key = "cli::doctor::mux_log::scan_tail"
+reason = "After mirror types and duplicate bookkeeping are deleted, the ordered read, assemble, cutoff, group and cap pipeline remains. Pins preserve first and last dated occurrences, last-occurrence ordering, first sample and truncation accumulation; further single-use splits delete nothing (pass 29c)."
