@@ -228,7 +228,7 @@ impl Env {
     }
 
     /// Base command: persistent roots and mux servers scoped to tempdirs, HOME
-    /// pinned, `RUST_LOG` cleared, cwd at the project root. The workspace
+    /// pinned, `RUST_LOG` cleared, stdin null, cwd at the project root. The workspace
     /// resolves from cwd — no `--root`; tests targeting another project
     /// override `current_dir`.
     pub fn rimz(&self) -> Command {
@@ -238,7 +238,8 @@ impl Env {
     /// Base command using a caller-supplied rimz executable path.
     pub fn rimz_at(&self, rimz_bin: &Path) -> Command {
         let mut cmd = Command::new(rimz_bin);
-        cmd.scrub_session_env()
+        cmd.stdin(Stdio::null())
+            .scrub_session_env()
             .env("RIMZ_HOME", self.rimz_home())
             .env("XDG_STATE_HOME", self.state_root())
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
