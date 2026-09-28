@@ -4,11 +4,13 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
+Pass 29b records source tip `eba365a6b` (base `221c53578`, rebased onto trunk `b426db4f4`): newly terminal non-peer spend settlement belongs to `harness/run`, and hooks share the exact rollup agent lookup in `store/snapshot`. Base to gated tree cx: `handle_lifecycle_hook` 13.6 to 12.7, `record_conversation` 13.7 to 10.6, and `cli/hooks` 32.2 to 28.2. Production SLOC falls by 44 against the 40-line minimum. The two item verdicts retain ordered phases and origin policy, refining pass 28g: repeated projections, root-tool eligibility, origin back-projection and response finalization were not inherent. The hook's cognitive complexity rises from 28 to 29 despite the local deletions. Binary modules receive no ledger row; the `harness/run` row names this branch's parent and needs re-stamping at merge.
+
 Pass 28f deepens room preparation, sandbox launch preflight and posture-owned exec requests on `fc67defc9`, rebased onto trunk `b25f9f9bf`. The contract measures production SLOC at −125 against its −100 ceiling. Against the merge base, `launch_layout` cx falls from 30.4 to 27.9 and `prepare_room` from 22.3 to 16.3. Both retain item verdicts for ordered preconditions, alongside the unchanged child-supervision and lane-resume decisions. Binary modules receive no ledger row.
 
 Pass 28e records source tip `e269c4ec2` (base `b93ab174a`): the loop check gate has one terminal write, watch deadlines have two variants, and delivery add parses its signal selector once. Schedule production complexity remains in `run_command`, `team_lifecycle_signals` and `build_entry`, held by item verdicts rather than helper extraction.
 
-Pass 28d reviewed `store/snapshot` complexity on `c34ca45c2` (base `1eaa698e9`): lifecycle effects fold onto the carried row; the local-bind cascade and the lifecycle fold's residual cx are inherent pinned rules. Pass 28g, before it, recorded the lifecycle reaction in `harness/team_stage` on `6b02f6006`, rebased onto trunk `36dd87064`: `cli/hooks` cx 32.2 versus 58.0 at the round base (`27c50ce2d`); `harness/team_stage` cx 12.5 versus 0.5, missing the planned ceiling of 5, with `react_to_lifecycle` (cx 12.0) under an item verdict for its pinned per-event order. Binary modules receive no ledger row. Rewrite this section whenever a pass ends.
+Pass 28d reviewed `store/snapshot` complexity on `c34ca45c2` (base `1eaa698e9`): lifecycle effects fold onto the carried row; the local-bind cascade and the lifecycle fold's residual cx are inherent pinned rules. Pass 29b's shared lookup does not re-review or re-stamp that module. Pass 28g's `harness/team_stage` cx remains 12.5 versus 0.5 at the round base (`27c50ce2d`), missing the planned ceiling of 5, with `react_to_lifecycle` (cx 12.0) under an item verdict for its pinned per-event order.
 
 Pass 28c holds `mux/zellij` on the branch commit its row names (the merge re-stamps it): cx 53.5 to 22.3 against the round base `27c50ce2d`, with the companion balancer folded and no item verdicts added.
 
@@ -132,7 +134,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/launch` | holds | `fc67defc9` | 30 | fresh requests and the private pane-identity key table keep the exec wire unchanged. |
 | `harness/spec` | holds; landed pass-20a | `4d7889261` | 30 | layout parse family stays `pub`. |
 | `harness/budget` | holds; landed pass-20a | `4d7889261` | 30 | evaluation private; ledger types are signature types. |
-| `harness/run` | holds; landed pass-20a | `4d7889261` | 30 | `RunWakeErr` and `socket_path` stay `pub`. |
+| `harness/run` | holds; landed pass-29b | `eba365a6b` | 30 | newly terminal non-peer spend and owed-wake assembly stay behind lifecycle settlement; spend recording is private. |
 | `harness/rebirth` | holds; landed pass-23b | `25faa1bf6` | 30 | `materialize` returns the plan; types floored by `room::RoomContext::inspect_rebirth`. |
 | `harness/auto_continue` | holds; landed pass-25 | `4a82d6b28` | 30 | `message` admission on `ResumeUnrecovered` held by intent. |
 | `harness/auto_redeem` | holds; landed pass-25 | `4a82d6b28` | 30 | `AutoRedeemErr`/`Redeemed` are the CLI entry's error and return. |
@@ -302,8 +304,6 @@ One row per intended upward edge, `` `from` → `to` `` with an optional `to::{a
 
 Candidates a pass judged real but could not land, each with what unblocks it.
 
-- `cli/hooks` → `harness/run`: supervised spend settlement still assembles context cost, transcript token totals and spend recording; waits for pass 28f's run ownership.
-- `cli/hooks` → `store/snapshot`: repeated agent lookup by `(kind, agent_id)` waits for pass 28d's snapshot ownership.
 - `harness/team_stage` ↔ `cli/teams`: trusted team loading remains duplicated; sharing it needs a typed harness error and a pass owning the CLI flip caller.
 - `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
 - `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.

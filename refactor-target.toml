@@ -488,8 +488,7 @@ path = "crates/rimz/src/store"
 # `TeamRun` marks the leader's team-long run record.
 # Subagent context percent shares the parent gauge's arithmetic with the renderer.
 # Fleet digest matching is shared by batching, delivery cancellation, and reply waits.
-# One rollup agent lookup shared by hooks and runtime-projection readers.
-surface-budget = 336
+surface-budget = 335
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -3331,12 +3330,12 @@ reason = "Moved whole from the hook in pass 28g: the append-free skip, the ended
 [[verdict]]
 kind = "item"
 key = "cli::hooks::lifecycle::handle_lifecycle_hook"
-reason = "Ordered hook phases: release keyed asks, append lifecycle, return side conversations, derive children, resolve run identity, record responses and activity, settle runs, claim deadlines, confirm delivery, classify input, record transcript, rotate, then dispatch reactors. Splitting the single-use orchestration only to cross the cx threshold hides this ordering without deleting policy (pass 28g)."
+reason = "After collapsing observation projections and root-tool eligibility, residual cx 12.7 selects ordered hook phases: side-conversation exit, child derivation, activity/context, run settlement, deadline delivery, message confirmation, transcript and reactors. The two run-identity reads straddle enrollment deliberately; extracting single-use phases would hide ordering without deleting policy (pass 29b; refines pass 28g)."
 
 [[verdict]]
 kind = "item"
 key = "cli::hooks::lifecycle::transcript::record_conversation"
-reason = "Implements docs/internals/harness/transcript.md Writing entries: resolve launch origin before mapping sections, let only direct human input answer a keyed ask, preserve prompts on duplicate-answer races, and record assistant/ask entries. The case table remains together; a single-use helper would hide rather than simplify it (pass 28g)."
+reason = "After sharing the agent lookup, reading answer eligibility from resolved origin and joining terminal response finalization, residual cx 10.6 implements docs/internals/harness/transcript.md Writing entries: lazily resolve launch origin, map attributed sections, let only record-less direct human input consume an ask, and preserve prompts on duplicate-answer races. Entry timestamps and opener reads stay at emission; extracting the case table would hide rather than delete policy (pass 29b; refines pass 28g)."
 
 [[verdict]]
 kind = "item"
