@@ -37,8 +37,33 @@ fn startup_checks_count_failures_but_only_warn_for_timeouts() {
         error: None,
     };
     let lsp = Probe::Ready(super::super::model::Lsp {
-        servers: vec![],
-        last_refusal: None,
+        servers: [
+            (
+                "crashed",
+                serde_json::json!({"dormant": {"reason": "crashed", "since_ms": 0}}),
+            ),
+            ("running", serde_json::json!("ready")),
+        ]
+        .into_iter()
+        .map(|(name, state)| super::super::model::LspServer {
+            entry: serde_json::from_value(serde_json::json!({
+                "root": "/checkout", "server": name, "nonce": "nonce",
+                "broker_pid": 1, "broker_start_token": "token",
+                "state": state, "started_at_ms": 0, "estimate_bytes": 0,
+                "settings_hash": "hash", "request_count": 0, "peak_rss_kb": 0,
+                "leases": [], "last_crash": cause.clone()
+            }))
+            .unwrap(),
+            rss_bytes: 1024,
+        })
+        .collect(),
+        last_refusal: Some(rimz::diag::lsp::Record {
+            at: "2026-01-01T00:00:00Z".parse().unwrap(),
+            root: "/other".into(),
+            server: "rust".into(),
+            event: "queue_timeout".into(),
+            details: serde_json::json!({}),
+        }),
         checks_error: Some("bad project config".into()),
         checks: vec![
             Check {
@@ -90,8 +115,12 @@ fn startup_checks_count_failures_but_only_warn_for_timeouts() {
     });
     let mut tally = Tally::default();
     let rendered = strip(|w| render_lsp(w, &lsp, &mut tally));
-    assert_eq!(tally.alarms.len(), 4, "{rendered}");
-    assert_eq!(tally.warns.len(), 1, "{rendered}");
+    assert_eq!(
+        rendered,
+        "\nLSP\nSTATE               CHECKOUT   SERVER    RSS  LEASES\n✓ ready             /checkout  running  1 KB       0\n✗ dormant: crashed  /checkout  crashed     -       0\n      /checkout crashed: exit code 1\n      one\n      two\n      three\n      four\n      five\n    ✗ failed cannot start in /checkout: exit code 1\n      one\n      two\n      three\n      four\n      five\n      fix: repair\n    ! slow did not answer initialize within 10s\n      one\n      two\n      three\n      four\n      five\n      fix: wait\n    ✗ bad: empty command\n      fix: configure\n    ✗ project: project configuration is untrusted\n      fix: run rimz trust\n    ✓ healthy starts (1.2)\n    ✓ live running\n    ✗ cannot check this checkout's language servers: bad project config\n    ! 2026-01-01T00:00:00Z: /other rust queue_timeout ({})\n"
+    );
+    assert_eq!(tally.alarms.len(), 5, "{rendered}");
+    assert_eq!(tally.warns.len(), 2, "{rendered}");
     assert!(rendered.contains("failed cannot start in /checkout: exit code 1"));
     assert!(rendered.contains("slow did not answer initialize within 10s"));
     assert!(rendered.contains("healthy starts (1.2)"));
