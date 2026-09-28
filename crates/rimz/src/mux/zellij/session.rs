@@ -192,12 +192,9 @@ impl ZellijBackend {
         let floor_ms = min_topology_produced_at_ms.unwrap_or(now_ms);
         self.request_topology_dump(&known);
         Self::wait_for_fresh_topology(runtime, &session, floor_ms, timeout).ok_or_else(|| {
-            MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!(
-                    "Zellij topology unavailable for session `{session}`; run `rimz doctor`"
-                ),
-            }
+            super::output_error(format!(
+                "Zellij topology unavailable for session `{session}`; run `rimz doctor`"
+            ))
         })
     }
 
@@ -240,10 +237,7 @@ impl ZellijBackend {
         std::env::var("ZELLIJ_SESSION_NAME")
             .ok()
             .filter(|session| !session.is_empty())
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: "pane listing on Zellij needs a RimZ room session".to_owned(),
-            })
+            .ok_or_else(|| super::output_error("pane listing on Zellij needs a RimZ room session"))
     }
 
     fn resolve_topology_workspace(
@@ -265,18 +259,12 @@ impl ZellijBackend {
             });
         }
         self.known_workspaces()
-            .map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("reading RimZ workspace registry: {err}"),
-            })?
+            .map_err(|err| super::output_error(format!("reading RimZ workspace registry: {err}")))?
             .into_iter()
             .find(|known| known.session_name == session)
-            .ok_or_else(|| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!(
+            .ok_or_else(|| super::output_error(format!(
                     "pane listing on Zellij needs a RimZ room; found no workspace for session `{session}`"
-                ),
-            })
+                )))
     }
 
     fn known_workspaces(&self) -> std::io::Result<Vec<KnownWorkspace>> {
@@ -295,10 +283,8 @@ impl ZellijBackend {
                 let state = self.state_paths_for_workspace(workspace_id)?;
                 Ok(RuntimePaths::for_state_under(&state, dir))
             }
-            None => RuntimePaths::for_workspace(workspace_id).map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: format!("resolving RimZ runtime paths: {err}"),
-            }),
+            None => RuntimePaths::for_workspace(workspace_id)
+                .map_err(|err| super::output_error(format!("resolving RimZ runtime paths: {err}"))),
         }
     }
 
@@ -310,10 +296,7 @@ impl ZellijBackend {
             Some(dir) => StatePaths::under(workspace_id, dir),
             None => StatePaths::for_workspace(workspace_id),
         }
-        .map_err(|err| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("resolving RimZ state paths: {err}"),
-        })
+        .map_err(|err| super::output_error(format!("resolving RimZ state paths: {err}")))
     }
 
     fn recorded_rimz_bin(&self, workspace_id: &WorkspaceId) -> Option<std::path::PathBuf> {

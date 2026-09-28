@@ -204,10 +204,7 @@ impl ZellijBackend {
     }
 
     fn ensure_birth_presence_plugin(&self, opts: &SidebarPaneOptions) -> Result<()> {
-        let wasm = super::ensure_presence_plugin_artifact().ok_or_else(|| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: "Zellij presence plugin artifact is unavailable; run `rimz doctor` or use the tmux backend".to_owned(),
-        })?;
+        let wasm = super::ensure_presence_plugin_artifact().ok_or_else(|| super::output_error("Zellij presence plugin artifact is unavailable; run `rimz doctor` or use the tmux backend"))?;
         let machine_config = crate::config::MachineConfig::load_lenient();
         let presence = PresencePluginOptions::from_config(
             &opts.session_name,
@@ -261,10 +258,9 @@ impl ZellijBackend {
                 .collect();
             let target_pane =
                 leftmost_live_work_pane(&before_panes, tab_position).ok_or_else(|| {
-                    MuxErr::Output {
-                        program: "zellij".to_owned(),
-                        reason: format!("tab {tab_position} has no stable work pane to target"),
-                    }
+                    super::output_error(format!(
+                        "tab {tab_position} has no stable work pane to target"
+                    ))
                 })?;
             let target_pane = PaneId::from(ZellijPaneId::Terminal(target_pane));
             let tab_id = self.tab_id_for_pane(&opts.session_name, &target_pane)?;
@@ -291,9 +287,10 @@ impl ZellijBackend {
                         dock: DockOutcome::Misdocked,
                     });
                 }
-                last_error = Some(spawn_err.unwrap_or_else(|| MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: format!("new-pane never mounted a sidebar pane in tab {tab_position}"),
+                last_error = Some(spawn_err.unwrap_or_else(|| {
+                    super::output_error(format!(
+                        "new-pane never mounted a sidebar pane in tab {tab_position}"
+                    ))
                 }));
                 continue;
             };
@@ -301,12 +298,9 @@ impl ZellijBackend {
                 MountOutcome::Intended(raw_id) => raw_id,
                 MountOutcome::WrongTab(raw_id) => {
                     self.cleanup_failed_add(opts, raw_id);
-                    return Err(MuxErr::Output {
-                        program: "zellij".to_owned(),
-                        reason: format!(
-                            "new-pane mounted sidebar terminal_{raw_id} outside target tab {tab_position}"
-                        ),
-                    });
+                    return Err(super::output_error(format!(
+                        "new-pane mounted sidebar terminal_{raw_id} outside target tab {tab_position}"
+                    )));
                 }
             };
             let pane = PaneId::from(ZellijPaneId::Terminal(raw_id));
@@ -354,9 +348,10 @@ impl ZellijBackend {
                 }
             }
         }
-        Err(last_error.unwrap_or_else(|| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("new-pane never mounted a docked sidebar pane in tab {tab_position}"),
+        Err(last_error.unwrap_or_else(|| {
+            super::output_error(format!(
+                "new-pane never mounted a docked sidebar pane in tab {tab_position}"
+            ))
         }))
     }
 

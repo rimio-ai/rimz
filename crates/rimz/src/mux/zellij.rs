@@ -39,6 +39,13 @@ use super::{CommandSpec, MuxBackend, MuxErr, Result};
 use crate::config::ZellijConfig;
 use crate::ids::PaneId;
 
+fn output_error(reason: impl std::fmt::Display) -> MuxErr {
+    MuxErr::Output {
+        program: "zellij".to_owned(),
+        reason: reason.to_string(),
+    }
+}
+
 /// Minimum Zellij version RimZ supports overall and reports as the doctor
 /// floor. Focus jumps (`action focus-pane-id`) and tab-targeted sidebar adds
 /// (`new-pane --tab-id`) first ship in 0.44.1, and the presence plugin's only
@@ -511,10 +518,7 @@ impl ZellijBackend {
 
     pub(super) fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {
         let target = pane_topology::ZellijPaneId::try_from(pane)
-            .map_err(|err| MuxErr::Output {
-                program: "zellij".to_owned(),
-                reason: err.to_string(),
-            })?
+            .map_err(output_error)?
             .action_target();
         self.zellij_action(session)
             .args(["close-pane".to_owned(), "--pane-id".to_owned(), target])

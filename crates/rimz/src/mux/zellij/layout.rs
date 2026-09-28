@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ids::MuxName;
 use crate::mux::{
-    BackgroundViewOptions, DaemonView, HostPane, LayoutColumn, MuxErr, Result, ResumeTab,
+    BackgroundViewOptions, DaemonView, HostPane, LayoutColumn, Result, ResumeTab,
     SidebarPaneOptions, TabOptions, sidebar_serve_args,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
@@ -197,10 +197,8 @@ pub(super) fn render_session_layout(
 }
 
 fn kdl_string(value: &str) -> Result<String> {
-    serde_json::to_string(value).map_err(|err| MuxErr::Output {
-        program: "zellij".to_owned(),
-        reason: format!("escaping layout string: {err}"),
-    })
+    serde_json::to_string(value)
+        .map_err(|err| super::output_error(format!("escaping layout string: {err}")))
 }
 
 /// A tab layout born `sidebar | content | hosts…`: the global sidebar docked on
@@ -320,10 +318,7 @@ fn render_daemon_columns(
 
 fn render_content_column(content: &[HostPane], indent: usize) -> Result<String> {
     match content {
-        [] => Err(MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: "daemon view has no content panes".to_owned(),
-        }),
+        [] => Err(super::output_error("daemon view has no content panes")),
         [pane] => render_managed_command_pane(&pane.argv, &pane.cwd, false, indent, None),
         panes => {
             let mut rendered = String::new();
@@ -486,10 +481,9 @@ fn render_named_command_pane(
     size: Option<&str>,
     name: Option<&str>,
 ) -> Result<String> {
-    let (program, args) = argv.split_first().ok_or_else(|| MuxErr::Output {
-        program: "zellij".to_owned(),
-        reason: "command pane has no program".to_owned(),
-    })?;
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| super::output_error("command pane has no program"))?;
     let program = kdl_string(program)?;
     let cwd = kdl_string(&cwd.to_string_lossy())?;
     let size_attr = match size {

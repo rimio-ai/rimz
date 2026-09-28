@@ -375,10 +375,7 @@ mod tests {
             |_| {
                 attempts += 1;
                 if attempts < 3 {
-                    Err(MuxErr::Output {
-                        program: "zellij".to_owned(),
-                        reason: "transient list-clients failure".to_owned(),
-                    })
+                    Err(super::super::output_error("transient list-clients failure"))
                 } else {
                     Ok(1)
                 }
