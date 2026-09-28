@@ -247,6 +247,42 @@ fn named_attach_preserves_recorded_room_owner() {
 }
 
 #[test]
+fn cold_cwd_attach_claims_recorded_room_owner() {
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let recorded_owner = env.project_root.join("previous-rimz");
+    rimz::disk::atomic::write_executable_bytes_atomically(&recorded_owner, b"recorded build")
+        .expect("write recorded room owner");
+    let store = env.store();
+    store
+        .record_room_bin(&workspace, recorded_owner.clone(), "recorded".to_owned())
+        .expect("record room owner");
+    let shim = FakeZellij::new().with_tmux();
+
+    let output = env
+        .rimz()
+        .args(["attach", "--print"])
+        .env("PATH", shim.bin_dir.path())
+        .env("RIMZ_ZELLIJ_BIN", &shim.bin)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100")
+        .bounded_output()
+        .expect("run rimz attach");
+
+    assert!(
+        output.status.success(),
+        "cold attach should succeed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let record = rimz::workspace::record::read(&store.paths().workspace_record)
+        .expect("read workspace record");
+    let claimed = record.rimz_bin.expect("cold attach records a room owner");
+    assert_ne!(claimed, recorded_owner);
+    assert!(claimed.is_file(), "claimed owner {claimed:?} is staged");
+}
+
+#[test]
 fn tmux_start_skips_wedged_rival_zellij_session_probe() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
