@@ -50,12 +50,15 @@ const REAPER_ARG: &str = "__sandbox-reaper";
 /// XDG roots keep Zellij and RimZ state off the host, while `TMUX_TMPDIR`
 /// keeps even a forgotten default `TmuxBackend` away from the user's server.
 /// Every sandbox also replaces `HOME`, covering agent configs whose upstream
-/// location does not follow XDG.
+/// location does not follow XDG. The host's Rust toolchain homes are pinned
+/// first, so a nested `cargo` whose launcher resolves rustup through `HOME`
+/// still finds the host toolchain rather than the empty sandbox home.
 ///
 /// An independent keepalive reaper applies the same cleanup when the owner dies before `Drop`.
 pub(crate) struct HostSandbox {
     _root: TempDir,
     env: BTreeMap<&'static str, PathBuf>,
+    toolchain: Vec<(&'static str, PathBuf)>,
     reaper: Option<SandboxReaper>,
 }
 
@@ -87,9 +90,11 @@ impl HostSandbox {
         .context("writing sandbox Zellij config")?;
         std::fs::write(env["HOME"].join(".zshrc"), "").context("writing sandbox zsh config")?;
         let reaper = SandboxReaper::spawn(root.path())?;
+        let toolchain = toolchain_env(|key| std::env::var_os(key));
         Ok(Self {
             _root: root,
             env,
+            toolchain,
             reaper,
         })
     }
@@ -115,9 +120,10 @@ impl HostSandbox {
     }
 
     pub(crate) fn command_env(&self) -> Vec<(&'static str, PathBuf)> {
-        self.env
+        self.toolchain
             .iter()
-            .map(|(key, value)| (*key, value.clone()))
+            .cloned()
+            .chain(self.env.iter().map(|(key, value)| (*key, value.clone())))
             .collect()
     }
 
@@ -133,6 +139,7 @@ impl HostSandbox {
     }
 
     fn apply_to(&self, command: &mut Command, scrub_session: bool) {
+        command.envs(self.toolchain.iter().map(|(key, value)| (key, value)));
         apply_env(command, &self.env, scrub_session);
     }
 
@@ -155,6 +162,27 @@ fn sandbox_env(root: &Path) -> BTreeMap<&'static str, PathBuf> {
         ("TMPDIR", root.join("tmp")),
         ("ZELLIJ_CONFIG_DIR", root.join("config").join("zellij")),
     ])
+}
+
+/// The host's Rust toolchain homes, resolved before the sandbox replaces
+/// `HOME`: an unset `CARGO_HOME` or `RUSTUP_HOME` takes rustup's default
+/// under the host `HOME`. A key already set passes through inherited, so it
+/// is not repeated here; with no host `HOME` there is nothing to resolve.
+fn toolchain_env(
+    host: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<(&'static str, PathBuf)> {
+    let set = |key: &str| host(key).is_some_and(|value| !value.is_empty());
+    let Some(home) = host("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+    else {
+        return Vec::new();
+    };
+    [("CARGO_HOME", ".cargo"), ("RUSTUP_HOME", ".rustup")]
+        .into_iter()
+        .filter(|(key, _)| !set(key))
+        .map(|(key, dir)| (key, home.join(dir)))
+        .collect()
 }
 
 impl Drop for HostSandbox {
@@ -537,6 +565,52 @@ mod tests {
                 "TMUX_PANE",
                 "ZELLIJ_SESSION_NAME",
             ]
+        );
+    }
+
+    fn host_env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> + use<> {
+        let pairs: BTreeMap<String, std::ffi::OsString> = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).into()))
+            .collect();
+        move |key| pairs.get(key).cloned()
+    }
+
+    #[test]
+    fn toolchain_homes_default_under_the_host_home_before_it_is_replaced() {
+        assert_eq!(
+            toolchain_env(host_env(&[("HOME", "/home/dev")])),
+            [
+                ("CARGO_HOME", PathBuf::from("/home/dev/.cargo")),
+                ("RUSTUP_HOME", PathBuf::from("/home/dev/.rustup")),
+            ]
+        );
+    }
+
+    #[test]
+    fn toolchain_homes_already_set_are_inherited_not_repeated() {
+        assert_eq!(
+            toolchain_env(host_env(&[
+                ("HOME", "/home/dev"),
+                ("CARGO_HOME", "/opt/cargo"),
+                ("RUSTUP_HOME", ""),
+            ])),
+            [("RUSTUP_HOME", PathBuf::from("/home/dev/.rustup"))]
+        );
+        assert!(toolchain_env(host_env(&[("CARGO_HOME", "/opt/cargo")])).is_empty());
+    }
+
+    #[test]
+    fn sandboxed_commands_carry_the_toolchain_pins_under_the_replaced_home() {
+        let sandbox = HostSandbox::for_manual_command().unwrap();
+        let env = sandbox.command_env();
+        for (key, value) in &sandbox.toolchain {
+            assert!(!value.starts_with(sandbox.root()), "{key}");
+            assert!(env.contains(&(*key, value.clone())), "{key}");
+        }
+        assert!(
+            env.iter()
+                .any(|(key, value)| *key == "HOME" && value.starts_with(sandbox.root()))
         );
     }
 
