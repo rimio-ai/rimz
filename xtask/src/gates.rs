@@ -216,8 +216,28 @@ pub(crate) fn perf(root: &Path, args: &[String]) -> Result<()> {
         "testkit".to_owned(),
         "--locked".to_owned(),
     ];
-    cargo_args.extend(args.iter().cloned());
+    cargo_args.extend(perf_bench_args(args));
     run(root, "cargo", cargo_args)
+}
+
+/// `--no-run` is a `cargo bench` flag, but callers write it after the `--`
+/// separator (`cargo xtask perf -- --no-run`), where cargo would hand it to the
+/// divan binary, which rejects it. Hoist it ahead of the separator.
+fn perf_bench_args(args: &[String]) -> Vec<String> {
+    let (mut cargo_flags, bench_args) = match args.iter().position(|arg| arg == "--") {
+        Some(separator) => (args[..separator].to_vec(), &args[separator + 1..]),
+        None => (args.to_vec(), &[][..]),
+    };
+    let (no_run, bench_args): (Vec<&String>, Vec<&String>) =
+        bench_args.iter().partition(|arg| *arg == "--no-run");
+    if !no_run.is_empty() && !cargo_flags.iter().any(|arg| arg == "--no-run") {
+        cargo_flags.push("--no-run".to_owned());
+    }
+    if !bench_args.is_empty() {
+        cargo_flags.push("--".to_owned());
+        cargo_flags.extend(bench_args.into_iter().cloned());
+    }
+    cargo_flags
 }
 
 fn workspace_version(root: &Path) -> Result<String> {
@@ -1290,6 +1310,22 @@ mod tests {
         assert!(!semver_registry_baseline_missing(
             b"error: failed to retrieve index\nCaused by:\n    registry request failed"
         ));
+    }
+
+    #[test]
+    fn perf_hoists_no_run_ahead_of_the_bench_separator() {
+        let args = |args: &[&str]| {
+            perf_bench_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+        };
+        assert_eq!(args(&["--", "--no-run"]), ["--no-run"]);
+        assert_eq!(args(&["--no-run"]), ["--no-run"]);
+        assert_eq!(args(&["--no-run", "--", "--no-run"]), ["--no-run"]);
+        assert_eq!(
+            args(&["--bench", "sidebar", "--", "--no-run", "fold"]),
+            ["--bench", "sidebar", "--no-run", "--", "fold"]
+        );
+        assert_eq!(args(&["--", "fold"]), ["--", "fold"]);
+        assert!(args(&[]).is_empty());
     }
 
     #[test]
