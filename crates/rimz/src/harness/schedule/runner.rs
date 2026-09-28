@@ -1489,9 +1489,8 @@ pub fn run_check(
 
 pub(super) enum WatchDeadline {
     KillAfter(Duration),
-    CheckInOnce(Duration),
-    /// Run to exit with no kill and no check-in: one probe of a polled watch.
-    None,
+    /// Run to exit, with an optional one-time check-in.
+    Watch(Option<Duration>),
 }
 
 #[cfg(not(test))]
@@ -1539,18 +1538,25 @@ pub(super) fn run_command(
         tail: Vec::with_capacity(cap),
         cap,
     }));
-    let mut interrupts = None;
-    let mut command = match deadline {
-        WatchDeadline::KillAfter(_) => {
-            interrupts = Some(signal_hook::iterator::Signals::new([
+    let captured_output = || {
+        capture
+            .lock()
+            .map(|capture| capture.output())
+            .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))
+    };
+    let (mut command, mut interrupts, kill_after, check_in_after) = match deadline {
+        WatchDeadline::KillAfter(timeout) => (
+            check_command(cmd),
+            Some(signal_hook::iterator::Signals::new([
                 signal_hook::consts::SIGINT,
-            ])?);
-            check_command(cmd)
-        }
-        WatchDeadline::CheckInOnce(_) | WatchDeadline::None => {
+            ])?),
+            Some(timeout),
+            None,
+        ),
+        WatchDeadline::Watch(check_in) => {
             let mut command = Command::new("sh");
             command.args(["-c", cmd]);
-            command
+            (command, None, None, check_in)
         }
     };
     if env.contains_key(LOOP_TASK_ENV) {
@@ -1581,12 +1587,8 @@ pub(super) fn run_command(
         prefix.map(|prefix| PipeForward::new(PipeDestination::Stderr, prefix)),
     );
     let started = Instant::now();
-    let mut check_in_at = match deadline {
-        WatchDeadline::KillAfter(timeout) | WatchDeadline::CheckInOnce(timeout) => {
-            Some(started + timeout)
-        }
-        WatchDeadline::None => None,
-    };
+    let mut kill_at = kill_after.map(|timeout| started + timeout);
+    let mut check_in_at = check_in_after.map(|timeout| started + timeout);
     let mut interrupted = false;
     let (status, timed_out) = loop {
         if let Some(interrupts) = &mut interrupts
@@ -1595,8 +1597,7 @@ pub(super) fn run_command(
             interrupted = true;
             let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGINT);
             let interrupt_deadline = Instant::now() + CHECK_INTERRUPT_GRACE;
-            check_in_at =
-                Some(check_in_at.map_or(interrupt_deadline, |at| at.min(interrupt_deadline)));
+            kill_at = kill_at.map(|at| at.min(interrupt_deadline));
         }
         if let Some(status) = child
             .try_wait()
@@ -1604,48 +1605,38 @@ pub(super) fn run_command(
         {
             break (status, false);
         }
-        if check_in_at.is_some_and(|at| Instant::now() >= at) {
-            if matches!(deadline, WatchDeadline::KillAfter(_)) {
-                let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
-                let _ = child.kill();
-                let status = child
-                    .wait()
-                    .with_context(|| format!("reaping timed-out loop check `{cmd}`"))?;
-                break (status, !interrupted);
-            }
-            check_in_at = None;
-            let output = capture
-                .lock()
-                .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))?
-                .output();
+        if kill_at.is_some_and(|at| Instant::now() >= at) {
+            let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .with_context(|| format!("reaping timed-out loop check `{cmd}`"))?;
+            break (status, !interrupted);
+        }
+        if check_in_at.take_if(|at| Instant::now() >= *at).is_some() {
+            let output = captured_output()?;
             check_in(elapsed_millis(started), output);
         }
         std::thread::sleep(CHECK_POLL_INTERVAL);
     };
     let drain_deadline = (timed_out || interrupted).then(|| Instant::now() + CHECK_DRAIN_GRACE);
     for drain in [stdout, stderr] {
-        if let Some(deadline) = drain_deadline {
-            while !drain.is_finished() && Instant::now() < deadline {
-                std::thread::sleep(CHECK_POLL_INTERVAL);
-            }
-            if !drain.is_finished() {
-                tracing::debug!("stopped check output truncated while a survivor holds its pipe");
-                continue;
-            }
+        while !drain.is_finished() && drain_deadline.is_some_and(|at| Instant::now() < at) {
+            std::thread::sleep(CHECK_POLL_INTERVAL);
+        }
+        if drain_deadline.is_some() && !drain.is_finished() {
+            tracing::debug!("stopped check output truncated while a survivor holds its pipe");
+            continue;
         }
         drain
             .join()
             .map_err(|_| anyhow::anyhow!("loop check output reader panicked"))??;
     }
-    let capture = capture
-        .lock()
-        .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))?;
-    let output = capture.output();
     Ok(CheckOutcome {
         passed: status.success() && !timed_out && !interrupted,
         timed_out,
         interrupted,
-        output,
+        output: captured_output()?,
         code: status.code(),
     })
 }
