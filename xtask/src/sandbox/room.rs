@@ -298,8 +298,23 @@ impl Room<'_> {
             &anchor.pane_id,
         );
         let (program, args) = argv.split_first().context("look command is empty")?;
-        output("visit tab", self.command(program).args(args))?;
-        Ok(())
+        // A fresh room issues focus requests of its own while it settles, and one of them can
+        // overtake this visit's `rimz pane focus` before dispatch. That is the room working,
+        // not a failure, so visit again rather than abort the room.
+        let mut attempt = 1;
+        loop {
+            match output("visit tab", self.command(program).args(args)) {
+                Ok(_) => return Ok(()),
+                Err(error)
+                    if attempt < LOOK_ATTEMPTS
+                        && format!("{error:#}").contains(FOCUS_SUPERSEDED) =>
+                {
+                    attempt += 1;
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// The client attaches asynchronously, and Zellij materializes a new tab's layout panes
@@ -439,6 +454,13 @@ fn tab_number(tab: &Tab, index: usize) -> usize {
         .unwrap_or(index)
         + 1
 }
+
+/// How many times a tab visit runs when a newer focus request supersedes it.
+const LOOK_ATTEMPTS: usize = 3;
+
+/// The error text of `FocusActionError::Superseded` in `crates/rimz/src/mux/focus_anchor.rs`,
+/// which reaches this process only as the `rimz pane focus` child's stderr.
+const FOCUS_SUPERSEDED: &str = "focus action was superseded before dispatch";
 
 /// The command that brings a tab into the client's view, program first. `rimz pane focus` does
 /// not move a Zellij client across tabs — only its own `go-to-tab` does — so the backends part
