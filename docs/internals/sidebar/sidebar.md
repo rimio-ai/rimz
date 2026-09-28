@@ -395,6 +395,8 @@ Reload replaces the running binary and keeps every pane. Repair fixes the pane s
 
 ### Build promotion
 
+Staging keys each generation by the header's linker identity (a streaming hash when absent), reuses a verified copy without reading the full source, and otherwise uses kernel-assisted copying where available and verifies the copy's identity before publishing it.
+
 `rimz reload` is user-wide, independent of cwd, and upgrade-only. It stages the invoking executable once as an immutable user-scoped generation, records its verified path and digest as each live room's durable target, atomically refreshes the room's stable `rimz` hardlink or copy, and sends a version-stable reload word as a latency hint. Each supervisor stats the workspace record once per second, digest-verifies a changed target, and asks its worker to hand off, so a missed datagram costs latency, not correctness. The CLI's heartbeat wait only reports: a sidebar that has not converged keeps retrying from the durable target without a repair.
 
 Promotion is worker-first. The old supervisor launches the target as a worker, waits for it to serve through a stability window, preflights the target's version command, and only then re-execs its own pane-command PID. A crashing or unlaunchable target costs worker respawns under backoff while the old supervisor and pane stay alive, and a later record change breaks the backoff. A successful handoff keeps pane id, tab, geometry, focus, terminal raw mode, and mouse capture.

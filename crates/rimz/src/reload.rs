@@ -49,6 +49,10 @@ const REAP_CONFIRM_DELAY: Duration = Duration::from_millis(500);
 pub enum StageBuildErr {
     #[error("the running RimZ executable has no readable on-disk source to stage")]
     MissingSource,
+    #[error(
+        "the RimZ executable at {path} changed while it was being staged; rerun once the build or install finishes"
+    )]
+    SourceChanged { path: PathBuf },
     #[error("cannot stage RimZ build at {path}: {source}")]
     Io {
         path: PathBuf,
@@ -66,17 +70,28 @@ pub(crate) fn stage_current_build() -> Result<StagedBuild, StageBuildErr> {
 }
 
 fn stage_build_under(source: &Path, state_root: &Path) -> Result<StagedBuild, StageBuildErr> {
-    let bytes = fs::read(source).map_err(|source_err| StageBuildErr::Io {
+    let build = crate::build_id::of_file(source).map_err(|source_err| StageBuildErr::Io {
         path: source.to_path_buf(),
         source: source_err,
     })?;
-    let build = crate::build_id::of_bytes(&bytes);
     let builds_dir = crate::disk::paths::builds_dir_under(state_root);
     let path = builds_dir.join(&build).join("rimz");
     let reusable = path.is_file()
         && crate::build_id::of_file(&path).is_ok_and(|staged_build| staged_build == build);
     if !reusable {
-        crate::disk::atomic::write_executable_bytes_atomically(&path, &bytes)?;
+        crate::disk::atomic::copy_executable_atomically(source, &path, |tmp| {
+            let copied_build =
+                crate::build_id::of_file(tmp).map_err(|source_err| StageBuildErr::Io {
+                    path: tmp.to_path_buf(),
+                    source: source_err,
+                })?;
+            if copied_build != build {
+                return Err(StageBuildErr::SourceChanged {
+                    path: source.to_path_buf(),
+                });
+            }
+            Ok(())
+        })?;
     }
     #[cfg(unix)]
     if reusable {
@@ -1054,6 +1069,93 @@ mod tests {
         let deleted = PathBuf::from(format!("{} (deleted)", missing.display()));
         assert_eq!(resolve_reexec_target(deleted), None);
         assert_eq!(resolve_reexec_target(missing), None);
+    }
+
+    fn staging_elf(note_offset: usize) -> Vec<u8> {
+        let mut image = vec![0_u8; note_offset.max(1 << 20) + 24];
+        image[..6].copy_from_slice(b"\x7fELF\x02\x01");
+        image[0x20..0x28].copy_from_slice(&64_u64.to_le_bytes());
+        image[0x36..0x38].copy_from_slice(&56_u16.to_le_bytes());
+        image[0x38..0x3a].copy_from_slice(&1_u16.to_le_bytes());
+        image[64..68].copy_from_slice(&4_u32.to_le_bytes());
+        image[72..80].copy_from_slice(&(note_offset as u64).to_le_bytes());
+        image[96..104].copy_from_slice(&24_u64.to_le_bytes());
+        image[note_offset..note_offset + 4].copy_from_slice(&4_u32.to_le_bytes());
+        image[note_offset + 4..note_offset + 8].copy_from_slice(&8_u32.to_le_bytes());
+        image[note_offset + 8..note_offset + 12].copy_from_slice(&3_u32.to_le_bytes());
+        image[note_offset + 12..note_offset + 24].copy_from_slice(b"GNU\0build-id");
+        image
+    }
+
+    #[test]
+    fn staging_copies_and_verifies_file_identity() {
+        for note_offset in [0x100, (1 << 20) + 0x100] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("source-rimz");
+            let image = staging_elf(note_offset);
+            fs::write(&source, &image).unwrap();
+            #[cfg(unix)]
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
+            let expected = crate::build_id::of_file(&source).unwrap();
+
+            let staged = stage_build_under(&source, dir.path()).unwrap();
+
+            assert_eq!(staged.build, expected);
+            assert_eq!(
+                staged.path,
+                dir.path().join("builds").join(&expected).join("rimz")
+            );
+            assert_eq!(
+                crate::build_id::of_file(&staged.path).unwrap(),
+                staged.build
+            );
+            assert_eq!(fs::read(&staged.path).unwrap(), image);
+            assert_eq!(
+                fs::read_dir(staged.path.parent().unwrap()).unwrap().count(),
+                1
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let metadata = fs::metadata(&staged.path).unwrap();
+                assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
+                assert_ne!(metadata.ino(), fs::metadata(&source).unwrap().ino());
+            }
+        }
+    }
+
+    #[test]
+    fn staging_reuses_header_identity_without_reading_sparse_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source-rimz");
+        fs::write(&source, staging_elf(0x100)).unwrap();
+        let first = stage_build_under(&source, dir.path()).unwrap();
+        let before = fs::metadata(&first.path).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_len(1 << 40)
+            .unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&first.path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let reused = stage_build_under(&source, dir.path());
+
+        assert!(
+            reused.is_ok(),
+            "a header-identical sparse image must reuse: {reused:?}"
+        );
+        assert_eq!(reused.unwrap(), first);
+        let after = fs::metadata(&first.path).unwrap();
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert_eq!(before.len(), after.len());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(before.ino(), after.ino());
+            assert_eq!(after.permissions().mode() & 0o777, 0o755);
+        }
     }
 
     #[test]
