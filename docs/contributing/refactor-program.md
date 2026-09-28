@@ -90,7 +90,7 @@ The last commit, `docs(refactor): …`, carries the durable state, every number 
 3. An admission intent row for every upward edge reviewed: `keep` with the reason, or `close` naming the closing pass. A closed edge loses its admission and its row.
 4. An open deferral line for a candidate judged real but not landable, with its unblocking condition; delete deferrals the pass landed or refuted.
 5. The tightened `refactor-target.toml`, carrying only the pass's own rules.
-6. The ledger's Status section rewritten for the tree the pass ships.
+6. The ledger's Status section rewritten for the tree the pass ships. Status names the merge base a pass measured against, never its own branch commits, which a rebase or squash merge rewrites.
 7. Doc updates the change implies: the module's `AGENTS.md`, its internals page, the [code map](../../AGENTS.md#code-map) when a module moved, [ARCHITECTURE.md](../../ARCHITECTURE.md) when the runtime shape changed, and the prose naming any item whose visibility changed. `CHANGELOG.md` stays untouched.
 
 A review fix after the record commit means re-measuring and amending it.
