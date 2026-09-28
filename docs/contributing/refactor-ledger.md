@@ -4,6 +4,8 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
+Pass 28e records source tip `e269c4ec2` (base `b93ab174a`): the loop check gate has one terminal write, watch deadlines have two variants, and delivery add parses its signal selector once. Schedule production complexity remains in `run_command`, `team_lifecycle_signals` and `build_entry`, held by item verdicts rather than helper extraction.
+
 Pass 28d reviewed `store/snapshot` complexity on `c34ca45c2` (base `1eaa698e9`): lifecycle effects fold onto the carried row; the local-bind cascade and the lifecycle fold's residual cx are inherent pinned rules. Pass 28g, before it, recorded the lifecycle reaction in `harness/team_stage` on `6b02f6006`, rebased onto trunk `36dd87064`: `cli/hooks` cx 32.2 versus 58.0 at the round base (`27c50ce2d`); `harness/team_stage` cx 12.5 versus 0.5, missing the planned ceiling of 5, with `react_to_lifecycle` (cx 12.0) under an item verdict for its pinned per-event order. Binary modules receive no ledger row. Rewrite this section whenever a pass ends.
 
 Pass 28c holds `mux/zellij` on the branch commit its row names (the merge re-stamps it): cx 53.5 to 22.3 against the round base `27c50ce2d`, with the companion balancer folded and no item verdicts added.
@@ -15,7 +17,7 @@ Survey on the pass 28b tree (`9cc23c547`, 2026-09-28): no ledger problems or ope
 - **Reopened** (churn past the row's count): none; pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`, pass 26b `sidebar_pane/app` and `sidebar_pane/render/sections`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
-- **Row SHAs:** the survey reports a row whose SHA `HEAD` does not reach as a ledger problem and leaves its module unheld; pass 28a re-stamped 29 rebased-away SHAs, passes 14 to 27, to their trunk commits. A PR that writes rows names them so the merge re-stamps them to the landed commit; pass 28g's `harness/team_stage` row and pass 28d's `store/snapshot` row carry branch SHAs.
+- **Row SHAs:** the survey reports a row whose SHA `HEAD` does not reach as a ledger problem and leaves its module unheld; pass 28a re-stamped 29 rebased-away SHAs, passes 14 to 27, to their trunk commits. A PR that writes rows names them so the merge re-stamps them to the landed commit; pass 28g's `harness/team_stage` row, pass 28d's `store/snapshot` row and pass 28e's `harness/schedule` row carry branch SHAs.
 - **Unjudged families:** none; pass 28a judged the copilot/cursor install shape and the `RunStatus::Completed`, `wait_for_required`, `Isolation::Host` and `degraded` guards.
 
 ## Module verdicts
@@ -122,7 +124,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `diag` | holds; landed pass-16 | `b90a229cb` | 30 | evidence vocabulary and append mechanics at L3 below store; one sink admission point. |
 | `disk` | holds; landed pass-27d | `7742c8a3e` | 30 | durability classes, filenames and lock identity hold; the class partition lives only in `Class::STATE`/`RUNTIME`. |
 | `harness` | landed pass-5; pass-7; pass-8; pass-14; pass-20a; pass-23b; pass-25 | — | — | policy reaching down; never reaches `sidebar`: usage refresh returns, its CLI entry publishes. |
-| `harness/schedule` | holds; landed pass-14; pass-23b | `25faa1bf6` | 30 | one arming rule; catalog, arm, team and signal error types are signature floors. |
+| `harness/schedule` | holds; landed pass-14; pass-23b; pass-28e | `e269c4ec2` | 30 | one arming rule and one check gate with `run_command`, `team_lifecycle_signals` and `build_entry` inherent by verdict. |
 | `harness/resume` | holds; landed pass-19a | `bdaedf434` | 30 | posture composes `plan::ResumeLaunchPosture`; recovery interior `pub(super)`. |
 | `harness/plan` | holds; landed pass-19a | `bdaedf434` | 30 | owns resume-argv DTOs; validation loops held by `92b6fbeab`. |
 | `harness/launch` | holds; landed pass-20a | `4d7889261` | 30 | one private `LAUNCH_FIELDS` key table encodes and decodes the pane identity env. |
@@ -307,7 +309,6 @@ Candidates a pass judged real but could not land, each with what unblocks it.
 - `config/definitions`: one load context for the seven-argument `Resolver::new` and the `SeatLoader` repack, plus one safe-name predicate (about −20 SLOC). Waits for the module's pace to drop below hot.
 - `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
 - `harness/launch`: three relaunch sites in `cli/agents_cmd/{fork,restart}.rs` repeat posture prompt fields; needs a posture-aware seam `launch` may not import.
-- `harness/schedule/runner.rs`: `run_command`/`prepare_check` carry the cx; `fire_due_tasks` and `parse_signal_selector` are the seams. Waits for pace to settle.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
 - `agents/attribution`: a `testkit` fixture builder would let five report types narrow. Waits for its `fix(attribution)` churn to settle.
