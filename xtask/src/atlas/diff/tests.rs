@@ -314,6 +314,16 @@ fn diff_expect_positive_seam_ceiling_needs_no_falling_esc() {
 }
 
 #[test]
+fn diff_expect_positive_tooling_ceiling_needs_no_falling_esc() {
+    let mut contract = contract(160);
+    contract.kind = PassKind::Tooling;
+    let rows = expectation_rows(&contract, 160, ExpectationChecks::default(), &[], true);
+
+    assert!(!rows.iter().any(|row| row.assertion == "module narrowing"));
+    assert!(rows.iter().all(|row| row.landed));
+}
+
+#[test]
 fn diff_expect_rejects_esc_excess() {
     let mut contract = contract(-1);
     contract.esc.push(EscExpectation {

@@ -10,11 +10,13 @@ Each pass asks of its scope: re-implemented from scratch, knowing what the code 
 
 Two tests decide most candidates. Deletion test: remove the module in your head; if the complexity vanishes it was a pass-through, if it reappears across callers it earns its keep. Call-site test: write the ideal call in a line or two; the delta to the real call site is what the interface failed to hide. A candidate must leave fewer files, flags, abstractions or options, or it is dropped. Finding nothing is a real outcome, recorded as `holds`; never inflate a ranking. In a complexity pass, a single-use extraction that deletes nothing is not a reduction: record the residual as a `[[verdict]]` item row instead.
 
-## Two kinds of pass
+## Three kinds of pass
 
 **Seam passes** close a dependency direction, collapse a sibling family, or move a seam between modules. They come from `survey`'s `debt`, module-cycle and shape-family rows, run alone and sequentially, and go before any module pass on the modules they touch. The ledger's Status section queues them.
 
 **Module passes** rethink one module at the granularity `survey` ranks (`store/snapshot`, `agents/spending`) as its callers see it. Up to three run concurrently when their scopes are disjoint ([rules](#concurrency)). Small neighbours in one layer are bundled into one pass with one contract.
+
+**Tooling passes** add a capability the user decided to `xtask/`, such as a new atlas behaviour. The contract declares `kind = "tooling"` and takes a positive ceiling priced from the target, with the reason in the commit; `diff --expect` asks it for no narrowing, so it narrows only where the design calls for it.
 
 ## Starting a pass
 
