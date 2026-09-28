@@ -4,6 +4,8 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
+Pass 29e records source tip `2251c6f2e` (base `c42d760e8`): shared rate-limit fusion and producer bookkeeping reduce `sidebar/refresh` cx from 27.1 to 16.7; collapsed worktree header, pipeline and tail representations reduce `sidebar_pane/render/sections` cx from 42.1 to 30.5. Both modules were deliberately reopened for this complexity review, not churned past their rows' count. Production SLOC falls by 47 against the contract's 30-line reduction floor, with no stored/wire or snapshot changes. The four target functions retain item verdicts for their distinct pinned policies; the untouched finished roster retains cx 1.2. The two reviewed modules have no individual surface-budget rules to tighten; their parent budgets stay unchanged.
+
 Pass 29c records `cli/doctor` on `66bc4cffe` (rebased base `c42d760e8`): cx 33.0 → 15.4, with `scan_tail` 13.1 → 0.4 and `collect_remote_control` 4.9 → 0; unchanged residuals are `render_lsp` 9.7, `render_mux` 1.8, `collect_mux` 1.1, `diagnose_zellij_log_record` 1.6, `presence_plugins_view` 0.4 and `classify_diagnostic` 0.4. Production SLOC falls by 85 against the contract's −50 ceiling. Seven item verdicts hold the residuals; binary modules receive no ledger row. Providers were judged and left untouched because they already own their probes and doctor owns grouping and presentation. `collect_loop` was deferred as fresh (`f13109387`).
 
 Pass 29b records source tip `eba365a6b` (base `221c53578`, rebased onto trunk `b426db4f4`): newly terminal non-peer spend settlement belongs to `harness/run`, and hooks share the exact rollup agent lookup in `store/snapshot`. Base to gated tree cx: `handle_lifecycle_hook` 13.6 to 12.7, `record_conversation` 13.7 to 10.6, and `cli/hooks` 32.2 to 28.2. Production SLOC falls by 44 against the 40-line minimum. The two item verdicts retain ordered phases and origin policy, refining pass 28g: repeated projections, root-tool eligibility, origin back-projection and response finalization were not inherent. The hook's cognitive complexity rises from 28 to 29 despite the local deletions. Binary modules receive no ledger row; the `harness/run` row names this branch's parent and needs re-stamping at merge.
@@ -12,14 +14,14 @@ Round 28 (passes 28a to 28g) landed. Against the round base `27c50ce2d`, current
 
 Round 29 is in flight: 29a resolves rewritten ledger SHAs and repairs the round-28 records; 29b reviews `cli/hooks` deferrals and lifecycle cx; 29c reviews `cli/doctor`; 29d reviews `cli/remote`; 29e reviews sidebar.
 
-Survey on the pass 29a tree (merge base `b426db4f4` plus pass 29a, 2026-09-28): 4548 scoped commits (pace window 1137), 24 admission intents and 234 holds; no parse failures, ledger problems, pending restamps, stale verdict keys or open families. It suppresses 14 families; shape filters drop 9 standard-vocabulary families, 32 below the finding gate and 7 single-module APIs; guard filters drop 149 standard idioms and 19 predicate uses. Rewrite this section whenever a pass ends.
+Survey on the pass 29a tree (merge base `b426db4f4` plus pass 29a, 2026-09-28): 4548 scoped commits (pace window 1137), 24 admission intents and 234 holds; no parse failures, ledger problems, pending restamps, stale verdict keys or open families. It suppresses 14 families; shape filters drop 9 standard-vocabulary families, 32 below the finding gate and 7 single-module APIs; guard filters drop 149 standard idioms and 19 predicate uses. Rewrite the Status paragraphs whenever a pass ends. The Reopened and Row SHAs bullets keep their meaning: a pass adds its own entries and removes only entries it resolved.
 
 - **Seam queue: empty.** Twelve seams landed in passes 1 to 28b. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
 - **Reopened** (churn past the row's count): none; all 11 repaired modules are held.
 - **Never reviewed:** no production library module is unheld; binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
-- **Row SHAs:** the survey resolves an unreachable SHA to the oldest trunk commit that changed its occurrence count in this ledger; `survey --restamp` writes the resolved cells. An unresolved SHA remains a ledger problem and leaves its module unheld. Pass 29a repairs 11 rows from passes 28b to 28f to their landed record commits.
+- **Row SHAs:** the survey resolves an unreachable SHA to the oldest trunk commit that changed its occurrence count in this ledger; `survey --restamp` writes the resolved cells. An unresolved SHA remains a ledger problem and leaves its module unheld. Pass 29a repairs 11 rows from passes 28b to 28f to their landed record commits. Pass 29e's `sidebar/refresh` and `sidebar_pane/render/sections` rows carry branch parent `2251c6f2e`; the merge must re-stamp both.
 - **Unjudged families:** none; no stale verdict keys.
 
 ## Module verdicts
@@ -190,7 +192,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sandbox` | holds; landed pass-28f | `f4084e548` | 30 | launch preflight admits skills before probing isolation. |
 | `sidebar` | landed pass-4 | — | — | election, fusion, refresh lanes, own cadences; interiors have rows. |
 | `sidebar/(root)` | holds; landed pass-23c | `1830bd0c6` | 30 | one data plane; `pub` items are binary, bench or integration reached, or signature floors. |
-| `sidebar/refresh` | holds; landed pass-25 | `4a82d6b28` | 30 | one refresh entry, one rate-limit transaction; one `pub` account-cache publish entry. |
+| `sidebar/refresh` | holds; landed pass-29e | `2251c6f2e` | 30 | one rate-limit transaction and one `pub` account-cache publish entry, sharing keyed fusion behind one producer/login boundary. |
 | `sidebar/consumer` | holds; landed pass-23c | `1830bd0c6` | 30 | two readers `pub` for the hotpath bench. |
 | `sidebar/frame` | holds; landed pass-23c | `1830bd0c6` | 30 | `PaneFrame` wire public field by field. |
 | `sidebar/produce` | holds; landed pass-17a | `78fa580ea` | 30 | named entries, no fold-mode core. |
@@ -218,7 +220,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar_pane/render/animation` | holds; landed pass-26b | `be91f3434` | 30 | cadence decision is now render's, contradicting pass 23c. |
 | `sidebar_pane/render/(root)` | holds; landed pass-26b | `be91f3434` | 30 | one live draw entry and pane-reach selectors. |
 | `sidebar_pane/render/compose` | holds; landed pass-18b | `045f8bfe6` | 30 | render bundle; frame types at pane reach. |
-| `sidebar_pane/render/sections` | holds; landed pass-26b | `be91f3434` | 30 | distinct width-budget rules with section-private gutter and layout imports. |
+| `sidebar_pane/render/sections` | holds; landed pass-29e | `2251c6f2e` | 30 | collapsed header and pipeline representations with pinned width and hit regions. |
 | `sidebar_pane/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `sidebar_pane/view` | holds; landed pass-24c | `e083557ba` | 30 | the pane's body projection; row cap read by the CLI fixture. |
 | `sidebar_pane/render/ui_state` | holds; landed pass-26b | `be91f3434` | 30 | pane-reach state owns the active roster projection. |

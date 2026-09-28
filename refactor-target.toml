@@ -1675,7 +1675,22 @@ reason = "Both caller-varying inputs and the thirteen ordered effects stay: Host
 [[verdict]]
 kind = "item"
 key = "sidebar::refresh::rate_limits::project_rate_limits"
-reason = "Fusion rules pin fixes 6da4f68af, 9a12899e0, 032eebd1b, ecf0350ee, bbfa6b230, 5cf7dd95a, 28dedb821, fe996ea64, 7757ab974, 93d21170f, 08f5c37f0 and c39851bf5; phase extraction adds interfaces without removing policy (pass 15b). Re-read at pass 23c after the one-transaction and per-account reshapes: still four commented phases that each delegate their rule, and splitting one would thread panel, prior_entry, index, truth, pending and refresh_logins through a new signature without removing a decision."
+reason = "Pass 29e: shared fusion and one producer/login boundary leave cx 9.8 (cognitive/cyclomatic/SLOC 27/35/154). Surviving policies: room-login retention and eligibility (5ed3dc2bd, 1216f58a1), unmetered clearing and scope isolation (5c9d149e5), foreign-account clearing (ecf0350ee), unconditional omission completion (032eebd1b), optional ordered tracing (2e7a6eb5a), idle freshness (fe996ea64, tightened by 28dedb821) and scoped expiry (4468b85cb), newly parked refill refresh (6da4f68af), reset advance only outside unknown cache (c39851bf5), unknown-episode opening/rearming (7757ab974), and preservation of the authoritative bound copy (bbfa6b230). Per-window fusion is shared through the index; the superseded authoritative-drop policy and account-cache deletion are not projector branches. Phase extraction would move these distinct decisions without removing them."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::sections::worktree::group_header"
+reason = "Pass 29e: cx 12.4 (cognitive/cyclomatic/SLOC 31/39/203) remains in external/root/channel identity, finished label tone, unclipped qualifier/team styles, and selected seal fill. Linked PR admission (5a0fcf120) and stack fallback (15273618d) have distinct budgets: the stack requires the full label, while strict CI-then-badge admission preserves one label cell and pre-admission CI link offsets. Width, style and hit-region pins hold these policies; a common admission helper would merge different boundaries."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::sections::worktree::pipeline_line"
+reason = "Pass 29e: cx 7.6 (cognitive/cyclomatic/SLOC 29/27/90) remains in stage-position/visited roles, owner status tone, whole-clock and whole-track admission, and name-only clipping (04e4df615). The badge cannot return after its track drops (77a4a3266); only a trackless badge uses the seam (dca39bf31). Completion and width-boundary pins preserve these distinct reservations; extracting them would only relocate policy."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::sections::worktree::worktree_group_lines_projected"
+reason = "Pass 29e: cx 5.3 (cognitive/cyclomatic/SLOC 18/27/127) remains in selected-lane and folded-team placement, header toggle versus first-row routing, hyperlink gutter offsets, and pipeline owner then same-team actionable then first-row precedence. Render pins preserve row ordinals and inert empty pipelines; More-before-Less and collapsing-only totals retain their tail policy. A shared routing helper would conceal decisions that belong to different rendered lines."
 
 [[verdict]]
 kind = "item"
