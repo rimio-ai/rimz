@@ -76,6 +76,44 @@ impl WindowIndex {
     fn projection_keys(&self) -> BTreeSet<RateLimitWindowKey> {
         self.live.keys().chain(self.prior.keys()).cloned().collect()
     }
+
+    fn fuse(
+        &self,
+        keys: impl IntoIterator<Item = RateLimitWindowKey>,
+        now: Timestamp,
+        allow_confirm: bool,
+    ) -> (
+        BTreeMap<RateLimitWindowKey, RateLimitWindow>,
+        Vec<PendingRefill>,
+    ) {
+        let mut truth = BTreeMap::new();
+        let mut pending = Vec::new();
+        for key in keys {
+            let (window, refill) = fuse_window(
+                self.prior.get(&key),
+                self.live.get(&key),
+                self.pending.get(&key),
+                now,
+                allow_confirm,
+            );
+            if let Some(window) = window {
+                truth.insert(key, window);
+            }
+            pending.extend(refill);
+        }
+        (truth, pending)
+    }
+}
+
+fn authoritative_windows(prior: Option<&RateLimitCacheEntry>) -> &[RateLimitWindow] {
+    prior.map_or(&[], |entry| {
+        entry
+            .bound_limits
+            .as_ref()
+            .unwrap_or(&entry.limits)
+            .windows
+            .as_slice()
+    })
 }
 
 /// Seed one login's account-scoped windows into the cache out-of-band, so a
@@ -116,36 +154,19 @@ pub(super) fn merge_account_rate_limits(
     // the producer clears the marker once a real value paints, so a provider that
     // answers with nothing forces one fetch instead of one per frame.
     let unknown_since_ms = prior_entry.and_then(|entry| entry.unknown_since_ms);
-    let prior_fused = prior_entry
-        .map(|entry| entry.limits.windows.as_slice())
-        .unwrap_or_default();
-    let prior_bound = prior_entry
-        .and_then(|entry| entry.bound_limits.as_ref())
-        .map(|limits| limits.windows.as_slice())
-        .unwrap_or(prior_fused);
-    complete_omitted_duration_windows(prior_bound, &mut windows);
+    complete_omitted_duration_windows(authoritative_windows(prior_entry), &mut windows);
     let bound_limits = identity.account_key.is_some().then(|| windows.clone());
     let index = WindowIndex::new(prior_entry, windows.windows);
-    let mut fused = Vec::with_capacity(index.live.len());
-    let mut pending = Vec::new();
     // Authoritative reads are complete snapshots: live-only keys prune omitted windows.
-    for (key, live) in index.live {
-        let (truth, refill) = fuse_window(
-            index.prior.get(&key),
-            Some(&live),
-            index.pending.get(&key),
-            observed_at,
-            true,
-        );
-        fused.extend(truth);
-        pending.extend(refill);
-    }
+    let (truth, pending) = index.fuse(index.live.keys().cloned(), observed_at, true);
     cache.entries.insert(
         key.clone(),
         RateLimitCacheEntry {
             scope: identity.scope,
             account_key: identity.account_key,
-            limits: AgentRateLimits { windows: fused },
+            limits: AgentRateLimits {
+                windows: truth.into_values().collect(),
+            },
             bound_limits,
             pending,
             unknown_since_ms,
@@ -373,55 +394,19 @@ fn project_rate_limits(
         if foreign_account {
             live_limits.windows.clear();
         }
-        let prior_authoritative = prior_entry
-            .and_then(|entry| entry.bound_limits.as_ref())
-            .map(|limits| limits.windows.as_slice())
-            .or_else(|| prior_entry.map(|entry| entry.limits.windows.as_slice()))
-            .unwrap_or_default();
-        complete_omitted_duration_windows(prior_authoritative, &mut live_limits);
+        complete_omitted_duration_windows(authoritative_windows(prior_entry), &mut live_limits);
         let index = WindowIndex::new(prior_entry, live_limits.windows);
 
         // Fuse each duration to its ground truth and carry or advance its
         // debounce marker. A live reading drives the fusion; absent one, the
         // prior truth is carried unchanged for the idle projection below.
-        let mut truth: BTreeMap<RateLimitWindowKey, RateLimitWindow> = BTreeMap::new();
-        let mut pending: Vec<PendingRefill> = Vec::new();
-        let mut kind_reset_advanced = false;
-        for key in index.projection_keys() {
-            let (window, refill) = fuse_window(
-                index.prior.get(&key),
-                index.live.get(&key),
-                index.pending.get(&key),
-                now,
-                producer,
-            );
-            if let (Some(window), Some(path)) = (window.as_ref(), trace) {
-                trace_rate_limits(path, &panel.kind, index.live.get(&key), window, now);
-            }
-            if let Some(window) = window {
-                if producer
-                    && index
-                        .prior
-                        .get(&key)
-                        .is_some_and(|prev| reset_advanced(prev.resets_at, window.resets_at))
-                {
-                    kind_reset_advanced = true;
-                }
-                truth.insert(key, window);
-            }
-            if let Some(refill) = refill {
-                // Verify a newly suspected refill without forcing another read
-                // on every frame while the same window remains parked.
-                if producer && login_key.is_some() && !index.pending.contains_key(&refill.key()) {
-                    refresh_logins.extend(login_key.clone());
-                }
-                pending.push(refill);
+        let (truth, pending) = index.fuse(index.projection_keys(), now, producer);
+        if let Some(path) = trace {
+            for (key, window) in &truth {
+                trace_rate_limits(path, &panel.kind, index.live.get(key), window, now);
             }
         }
         let cache_unknown = index.live.is_empty() && longest_cached_window_expired(&truth, now);
-        if producer && login_key.is_some() && !cache_unknown && kind_reset_advanced {
-            refresh_logins.extend(login_key.clone());
-        }
 
         // Display: roll every fused window's reset-to-max projection forward to
         // `now` — a no-op while its reset is future, a refill once it has passed,
@@ -442,6 +427,29 @@ fn project_rate_limits(
             })
             .collect();
         crate::store::snapshot::sort_windows(&mut display);
+        panel.windows = display;
+
+        let Some(login_key) = login_key.filter(|_| producer) else {
+            continue;
+        };
+        // Verify a newly suspected refill without forcing another read
+        // on every frame while the same window remains parked.
+        if pending
+            .iter()
+            .any(|refill| !index.pending.contains_key(&refill.key()))
+        {
+            refresh_logins.insert(login_key.clone());
+        }
+        if !cache_unknown
+            && truth.iter().any(|(key, window)| {
+                index
+                    .prior
+                    .get(key)
+                    .is_some_and(|prev| reset_advanced(prev.resets_at, window.resets_at))
+            })
+        {
+            refresh_logins.insert(login_key.clone());
+        }
 
         // A dashboard with no usable value is a refresh trigger, not only a paint
         // state: RimZ no longer knows this account's budget, so the authoritative
@@ -452,55 +460,41 @@ fn project_rate_limits(
         // the durable claim keeps the fetch itself single-flight, and completion
         // restamps the read on success and failure alike, so a provider that
         // stays unreachable falls back to ordinary throttling.
-        let display_unknown = producer
-            && login_key.is_some()
-            && display
-                .iter()
-                .all(|window| window.used_percentage.is_none());
+        let display_unknown = panel
+            .windows
+            .iter()
+            .all(|window| window.used_percentage.is_none());
         let unknown_since_ms = match prior_entry.and_then(|entry| entry.unknown_since_ms) {
             _ if !display_unknown => None,
             Some(since) => Some(since),
             None => {
-                refresh_logins.extend(login_key.clone());
+                refresh_logins.insert(login_key.clone());
                 Some(unix_now_ms())
             }
         };
-        panel.windows = display;
 
         // Persist fused truth, including authoritative lifted rows, any in-flight
         // refill, and the open unknown episode's marker. Display-only reset
         // projections and unknown windows are recomputed each frame.
-        if producer
-            && let Some(login_key) = login_key
-            && (!truth.is_empty() || !pending.is_empty() || unknown_since_ms.is_some())
-        {
-            let limits = AgentRateLimits {
-                windows: truth.values().cloned().collect(),
-            };
-            let mut entry = if let Some(prior) = prior_entry {
-                let mut entry = prior.clone();
-                // Only the authoritative writer binds credential identity.
-                // Preserve its copy while publishing admitted fused truth for
-                // every reader.
-                if entry.account_key.is_some() && entry.bound_limits.is_none() {
-                    entry.bound_limits = Some(entry.limits.clone());
-                }
-                entry.limits = limits;
-                entry.pending = pending;
-                entry
-            } else {
-                RateLimitCacheEntry {
-                    scope: panel.account_scope.clone(),
-                    account_key: None,
-                    limits,
-                    bound_limits: None,
-                    pending,
-                    unknown_since_ms: None,
-                }
-            };
-            entry.unknown_since_ms = unknown_since_ms;
-            next.entries.insert(login_key, entry);
-        }
+        let entry = RateLimitCacheEntry {
+            scope: panel.account_scope.clone(),
+            account_key: prior_entry.and_then(|prior| prior.account_key.clone()),
+            limits: AgentRateLimits {
+                windows: truth.into_values().collect(),
+            },
+            // Only the authoritative writer binds credential identity.
+            // Preserve its copy while publishing admitted fused truth for
+            // every reader.
+            bound_limits: prior_entry.and_then(|prior| {
+                prior
+                    .bound_limits
+                    .clone()
+                    .or_else(|| prior.account_key.as_ref().map(|_| prior.limits.clone()))
+            }),
+            pending,
+            unknown_since_ms,
+        };
+        next.entries.insert(login_key, entry);
     }
 
     (
