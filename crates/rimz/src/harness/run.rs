@@ -16,7 +16,9 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::agents::lifecycle::TerminalDisposition;
-use crate::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode, TurnPhase};
+use crate::agents::{
+    AgentDefinition, AgentLifecycleObservation, LifecycleSignal, PermissionMode, TurnPhase,
+};
 use crate::agents::{AgentState, AgentStatus};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::StatePaths;
@@ -477,7 +479,7 @@ pub fn budget_exceeded(
     })
 }
 
-pub fn record_spend(
+fn record_spend(
     paths: &StatePaths,
     run_id: &RunId,
     cost_usd: Option<f64>,
@@ -619,6 +621,69 @@ pub fn record_lifecycle(
         )
     })?;
     Ok(matches!(transition, LifecycleFold::NewlyTerminal).then_some(record))
+}
+
+/// Fold a hook lifecycle and settle a newly terminal non-peer run's session spend.
+pub fn settle_lifecycle(
+    store: &Store,
+    run_id: &RunId,
+    agent: &AgentDefinition,
+    observation: &AgentLifecycleObservation,
+    last_message: Option<String>,
+) -> Result<Option<RunRecord>> {
+    let kind = agent.spec().kind;
+    let record = record_lifecycle(
+        store.paths(),
+        run_id,
+        kind,
+        observation,
+        last_message,
+        || {
+            let agent_id = observation.agent_id.as_ref()?;
+            match super::owed::owed_wake(store, &agent.spec().kind_id(), agent_id) {
+                Ok(owed) => owed,
+                Err(err) => {
+                    tracing::warn!(error = %err, "could not read wakes owed to supervised run");
+                    None
+                }
+            }
+        },
+    )?;
+    Ok(record.map(|record| {
+        // Spend is session-cumulative, so it would overstate a later peer turn.
+        if record.peer.is_some() {
+            return record;
+        }
+        let cost_usd = record
+            .agent_id
+            .as_deref()
+            .and_then(|id| crate::store::agent_context::read_one(store.runtime_paths(), kind, id))
+            .and_then(|context| context.context.cost)
+            .and_then(|cost| cost.total_cost_usd);
+        let token_totals = record
+            .agent_id
+            .as_deref()
+            .zip(record.transcript_path.as_deref())
+            .and_then(|(agent_id, transcript_path)| {
+                let prices = crate::agents::pricing::cached_book(
+                    &store.runtime_paths().shared_pricing_cache_path(),
+                );
+                crate::agents::spending::session_token_totals(
+                    agent,
+                    agent_id,
+                    std::path::Path::new(transcript_path),
+                    &prices,
+                )
+            });
+        record_spend(
+            store.paths(),
+            &record.run_id,
+            cost_usd,
+            token_totals.map(|totals| totals.input),
+            token_totals.map(|totals| totals.output),
+        )
+        .unwrap_or(record)
+    }))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

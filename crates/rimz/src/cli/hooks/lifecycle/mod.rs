@@ -455,65 +455,14 @@ fn record_run_lifecycle(
     run_id: Option<&rimz::RunId>,
 ) -> Option<rimz::store::run::RunRecord> {
     let run_id = run_id?;
-    match rimz::harness::run::record_lifecycle(
-        store.paths(),
+    match rimz::harness::run::settle_lifecycle(
+        store,
         run_id,
-        agent.spec().kind,
+        agent,
         &recorded.observation,
         assistant_message.map(ToOwned::to_owned),
-        || {
-            let agent_id = recorded.observation.agent_id.as_ref()?;
-            match rimz::harness::owed::owed_wake(store, &agent.spec().kind_id(), agent_id) {
-                Ok(owed) => owed,
-                Err(err) => {
-                    tracing::warn!(error = %err, "could not read wakes owed to supervised run");
-                    None
-                }
-            }
-        },
     ) {
-        // Spend is session-cumulative, so it would overstate a later peer turn.
-        Ok(Some(record)) if record.peer.is_some() => Some(record),
-        Ok(Some(record)) => {
-            let cost_usd = recorded
-                .observation
-                .agent_id
-                .as_ref()
-                .and_then(|agent_id| {
-                    rimz::store::agent_context::read_one(
-                        store.runtime_paths(),
-                        agent.spec().kind,
-                        agent_id.as_str(),
-                    )
-                })
-                .and_then(|record| record.context.cost)
-                .and_then(|cost| cost.total_cost_usd);
-            let token_totals = record
-                .agent_id
-                .as_ref()
-                .zip(record.transcript_path.as_deref())
-                .and_then(|(agent_id, transcript_path)| {
-                    let prices = rimz::agents::pricing::cached_book(
-                        &store.runtime_paths().shared_pricing_cache_path(),
-                    );
-                    rimz::agents::spending::session_token_totals(
-                        agent,
-                        agent_id.as_str(),
-                        std::path::Path::new(transcript_path),
-                        &prices,
-                    )
-                });
-            let record = rimz::harness::run::record_spend(
-                store.paths(),
-                &record.run_id,
-                cost_usd,
-                token_totals.map(|totals| totals.input),
-                token_totals.map(|totals| totals.output),
-            )
-            .unwrap_or(record);
-            Some(record)
-        }
-        Ok(None) => None,
+        Ok(record) => record,
         Err(err) => {
             warn!(
                 agent = agent.spec().kind,
