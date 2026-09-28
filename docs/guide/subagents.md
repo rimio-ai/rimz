@@ -96,7 +96,7 @@ An [interactive peer launched by an agent](./fleet.md#manage-a-running-room) rep
 Each child's response file is available when that child settles, including when the parent joins it with `rimz subagents wait`. The parent does not need to poll for a report: once every child it launched has settled, RimZ parks one message for its next turn boundary:
 
 ```text
-Type: SUBAGENT_REPORT
+Type: AGENT_REPORT
 From: @rimz
 Content:
 All 3 subagents settled, responses total ~5.1k tokens, 96 lines:

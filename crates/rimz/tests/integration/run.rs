@@ -1371,7 +1371,7 @@ mod parked {
         fixture.assert_parked();
         fixture.resume(
             &message,
-            "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nwake now",
+            "Type: AGENT_REPORT\nFrom: @rimz\nContent:\nwake now",
         );
     }
 }

@@ -200,7 +200,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
         String::from_utf8_lossy(&pending_wait.stderr)
     );
     let receipt = String::from_utf8_lossy(&out.stdout);
-    assert!(receipt.contains("SUBAGENT_REPORT"), "{receipt}");
+    assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
     assert!(
         receipt.contains(&format!("rimz agents wait {}", first.run_id)),
         "{receipt}"

@@ -3205,10 +3205,7 @@ fn delivery_releases_digest_claim_when_post_claim_run_scan_fails() {
     );
     assert_text_then_enter(
         &trace_log,
-        &format!(
-            "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}",
-            digest.text
-        ),
+        &format!("Type: AGENT_REPORT\nFrom: @rimz\nContent:\n{}", digest.text),
     );
     assert_eq!(
         message_by_id(&env, &digest.message_id).status,
@@ -3478,10 +3475,7 @@ fn assert_subagent_report_delivered(joined: &[bool]) {
             .args(["message", "sweep"]),
         "sweep unconsumed digest",
     );
-    let prompt = format!(
-        "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}",
-        digest.text
-    );
+    let prompt = format!("Type: AGENT_REPORT\nFrom: @rimz\nContent:\n{}", digest.text);
     assert_text_then_enter(&trace_log, &prompt);
     assert_eq!(
         message_by_id(&env, &digest.message_id).status,

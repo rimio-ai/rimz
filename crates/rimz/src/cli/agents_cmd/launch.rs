@@ -528,7 +528,7 @@ fn write_peer_receipt(
         ));
         writeln!(
             w,
-            "@{name}'s response lands at {} when this turn settles. A SUBAGENT_REPORT from @rimz arrives at your next turn boundary when your fleet settles, and again after each turn your message opens. The peer keeps its pane. To block instead: rimz agents wait {}",
+            "@{name}'s response lands at {} when this turn settles. An AGENT_REPORT from @rimz arrives at your next turn boundary when your fleet settles, and again after each turn your message opens. The peer keeps its pane. To block instead: rimz agents wait {}",
             response.display(),
             run.run_id
         )?;

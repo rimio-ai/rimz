@@ -52,7 +52,7 @@ The receiver's turn-start hook first records and folds the lifecycle event into 
 | Header `Type` | Entry |
 | --- | --- |
 | `AGENT_MESSAGE` | `Message`, with structured `from` |
-| `SUBAGENT_REPORT` | `SubagentReport`, with `from: rimz` |
+| `AGENT_REPORT`, or the older `SUBAGENT_REPORT` | `SubagentReport`, with `from: rimz` |
 | `WAIT`, `SIGNAL`, `STAGE`, `CACHE_KEEPALIVE` | `Wait`, with `from: rimz` |
 | `USER_MESSAGE` | `Prompt`, header removed, no `from` |
 | none, matches a confirmed record or a record RimZ has in flight to this card | That record's origin: human → `Prompt` without `from`; agent → `Message` from its handle; subagent report → `SubagentReport`; notice → `Wait`; system → `Prompt` with `from: "rimz"` |

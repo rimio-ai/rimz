@@ -269,7 +269,7 @@ The first token after `From:` is the reply address: here, reply with `rimz messa
 
 Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come from `@rimz`, with the `Type` naming what produced them:
 
-- `SUBAGENT_REPORT`, the digest sent once an agent's launched children have all settled.
+- `AGENT_REPORT`, the digest sent once an agent's launched children have all settled.
 - `WAIT`, a [`rimz wait`](./loops.md) delivery coming due.
 - `SIGNAL`, a signal-triggered loop firing.
 - `STAGE`, a [team](./teams.md) stage opening.
