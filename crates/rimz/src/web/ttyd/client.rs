@@ -18,7 +18,7 @@ use super::{
     START_TIMEOUT, WritableDaemonRecord, choose_ephemeral_port, random_secret, spawn_detached,
     terminate_record, wait_for_port,
 };
-use crate::sidebar_pane::pixel::{PLACEHOLDER, ROW_COLUMN_DIACRITICS};
+use crate::pixel_wire::{PLACEHOLDER, ROW_COLUMN_DIACRITICS};
 use crate::web::WebWarning;
 
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);

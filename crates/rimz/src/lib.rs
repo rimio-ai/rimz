@@ -41,6 +41,7 @@ pub mod mux;
 pub mod observability;
 pub mod osc;
 pub mod pane;
+mod pixel_wire;
 pub mod proc;
 pub mod reload;
 pub mod remote;
