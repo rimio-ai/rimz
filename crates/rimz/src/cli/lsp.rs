@@ -42,13 +42,13 @@ enum Command {
     /// Find a definition by position or exact symbol name.
     Def(Query),
     /// Find references by position or exact symbol name.
-    Refs(ListQuery),
+    Refs(ReferencesQuery),
     /// Show type and documentation at a position or symbol.
     Hover(Query),
     /// Find implementations of a trait or interface.
     Impl(ListQuery),
     /// Find functions calling this symbol.
-    Callers(ListQuery),
+    Callers(ReferencesQuery),
     /// Find functions called by this symbol.
     Callees(ListQuery),
     /// Show a file's outline.
@@ -117,11 +117,20 @@ struct ListQuery {
     all: bool,
 }
 
+#[derive(Debug, Args)]
+struct ReferencesQuery {
+    #[command(flatten)]
+    list: ListQuery,
+    /// Hide references in test files and test modules.
+    #[arg(long, conflicts_with = "json")]
+    no_tests: bool,
+}
+
 pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
-    let options = match &args.command {
-        Command::Refs(args)
+    let mut options = match &args.command {
+        Command::Refs(ReferencesQuery { list: args, .. })
+        | Command::Callers(ReferencesQuery { list: args, .. })
         | Command::Impl(args)
-        | Command::Callers(args)
         | Command::Callees(args)
         | Command::Find(args) => {
             let scope = if args.external {
@@ -139,6 +148,9 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         }
         _ => query::Scope::Checkout.into(),
     };
+    if let Command::Refs(args) | Command::Callers(args) = &args.command {
+        options.no_tests = args.no_tests;
+    }
     let (verb, args) = match args.command {
         Command::Attach {
             server, version, ..
@@ -174,10 +186,10 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             all,
         } => return stop(checkout, server, all, globals),
         Command::Def(args) => (Verb::Def, args),
-        Command::Refs(args) => (Verb::Refs, args.query),
+        Command::Refs(args) => (Verb::Refs, args.list.query),
         Command::Hover(args) => (Verb::Hover, args),
         Command::Impl(args) => (Verb::Impl, args.query),
-        Command::Callers(args) => (Verb::Callers, args.query),
+        Command::Callers(args) => (Verb::Callers, args.list.query),
         Command::Callees(args) => (Verb::Callees, args.query),
         Command::Symbols(args) => (Verb::Symbols, args),
         Command::Find(args) => (Verb::Find, args.query),
@@ -244,7 +256,30 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                         result,
                         document_uri,
                     } => {
-                        query::render(verb, root, document_uri.as_deref(), result, options, &dirty)?
+                        query::render(
+                            verb,
+                            root,
+                            document_uri.as_deref(),
+                            result,
+                            options,
+                            &dirty,
+                            |path| {
+                                let output = query::execute(
+                                    &entry,
+                                    Verb::Symbols,
+                                    &query::Target::File(path.to_owned()),
+                                )
+                                .map_err(|error| match error {
+                                    QueryErr::Failed(error) => error,
+                                    error => rimz::lsp::LspErr::Protocol(error.to_string()),
+                                })?;
+                                // File-symbol queries return answers directly, without name resolution.
+                                let query::Output::Answer { result, .. } = output else {
+                                    unreachable!("file-symbol queries do not resolve names")
+                                };
+                                Ok(result)
+                            },
+                        )?
                     }
                     output => query::render_outcome(root, &output, args.json)?,
                 }
@@ -680,6 +715,40 @@ mod tests {
     use super::*;
     use registry::{State, StopReason};
     use render::status::{self, StateRole};
+
+    #[test]
+    fn no_tests_is_refs_and_callers_only_and_conflicts_with_json() {
+        use clap::Parser;
+        for verb in ["refs", "callers"] {
+            assert!(
+                crate::cli::Cli::try_parse_from([
+                    "rimz",
+                    "lsp",
+                    verb,
+                    "work",
+                    "--no-tests",
+                    "--all"
+                ])
+                .is_ok()
+            );
+            let error = crate::cli::Cli::try_parse_from([
+                "rimz",
+                "lsp",
+                verb,
+                "work",
+                "--no-tests",
+                "--json",
+            ])
+            .unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+        for verb in ["impl", "callees", "find"] {
+            let error =
+                crate::cli::Cli::try_parse_from(["rimz", "lsp", verb, "work", "--no-tests"])
+                    .unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
+    }
 
     #[test]
     fn query_exit_uses_severity_not_argument_order() {
