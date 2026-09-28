@@ -145,6 +145,71 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
     }
 }
 
+fn deadline_remaining(deadline: Instant) -> Option<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|time| !time.is_zero())
+}
+
+fn split_direction(direction: SplitDirection) -> &'static str {
+    match direction {
+        SplitDirection::Right => "right",
+        SplitDirection::Down => "down",
+    }
+}
+
+fn companion_grid_preserved(
+    before: &[GridPane],
+    chrome: &[GridPane],
+    panes: &[GridPane],
+    current_chrome: &[GridPane],
+) -> bool {
+    current_chrome == chrome
+        && before
+            .iter()
+            .all(|old| panes.iter().any(|pane| pane.pane_id == old.pane_id))
+}
+
+struct CompanionStep {
+    distance: u64,
+    direction: SplitDirection,
+    increase: bool,
+    pane: PaneId,
+}
+
+fn companion_step(
+    panes: &[GridPane],
+    targets: &[GridPane],
+    right: u64,
+    bottom: u64,
+) -> (u64, Option<CompanionStep>) {
+    use SplitDirection::{Down, Right};
+
+    let mut steps = Vec::new();
+    for target in targets {
+        // balance derives every target from this same pane set.
+        let pane = panes
+            .iter()
+            .find(|pane| pane.pane_id == target.pane_id)
+            .expect("balance target belongs to the grid");
+        for (direction, edge, desired, outer) in [
+            (Right, pane.x + pane.cols, target.x + target.cols, right),
+            (Down, pane.y + pane.rows, target.y + target.rows, bottom),
+        ] {
+            if edge != outer {
+                steps.push(CompanionStep {
+                    distance: edge.abs_diff(desired),
+                    direction,
+                    increase: edge < desired,
+                    pane: pane.pane_id.clone(),
+                });
+            }
+        }
+    }
+    let error = steps.iter().map(|step| step.distance).sum();
+    (error, steps.into_iter().max_by_key(|step| step.distance))
+}
+
 impl ZellijBackend {
     fn supports_no_focus(&self) -> bool {
         self.version()
@@ -236,76 +301,7 @@ impl ZellijBackend {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut previous_error = None;
         let mut confirmed_targets = None;
-        let mut last_move: Option<(PaneId, &str, bool)> = None;
-        // Returns false once the grid changed under us or the deadline passed.
-        let resize =
-            |panes: &[GridPane], pane: &PaneId, direction: &str, increase: bool| -> Result<bool> {
-                let Some(moved) = panes.iter().find(|candidate| candidate.pane_id == *pane) else {
-                    return Ok(false);
-                };
-                let edge = moved.x + moved.cols;
-                // A column boundary can span several independently resizable rows.
-                // Move every still-unmoved segment before evaluating the grid again:
-                // after only one segment the intermediate shape is not a column.
-                // Native resizing sometimes moves the entire aligned boundary, so
-                // re-read before each following segment instead of applying twice.
-                let boundary = if direction == "right" {
-                    panes
-                        .iter()
-                        .filter(|pane| pane.x + pane.cols == edge)
-                        .map(|pane| pane.pane_id.clone())
-                        .collect::<Vec<_>>()
-                } else {
-                    vec![pane.clone()]
-                };
-                for (index, pane) in boundary.into_iter().enumerate() {
-                    let Some(remaining) = deadline
-                        .checked_duration_since(Instant::now())
-                        .filter(|time| !time.is_zero())
-                    else {
-                        return Ok(false);
-                    };
-                    if index > 0 {
-                        let Some((current, current_chrome)) =
-                            self.companion_geometry(session, anchor, remaining)?
-                        else {
-                            return Ok(false);
-                        };
-                        if current_chrome != chrome
-                            || current.len() != panes.len()
-                            || !panes
-                                .iter()
-                                .all(|old| current.iter().any(|pane| pane.pane_id == old.pane_id))
-                        {
-                            return Ok(false);
-                        }
-                        let Some(current_pane) =
-                            current.iter().find(|candidate| candidate.pane_id == pane)
-                        else {
-                            return Ok(false);
-                        };
-                        if current_pane.x + current_pane.cols != edge {
-                            continue;
-                        }
-                    }
-                    let Some(remaining) = deadline
-                        .checked_duration_since(Instant::now())
-                        .filter(|time| !time.is_zero())
-                    else {
-                        return Ok(false);
-                    };
-                    self.zellij_action(session)
-                        .args([
-                            "resize",
-                            if increase { "increase" } else { "decrease" },
-                            direction,
-                            "--pane-id",
-                            pane.raw(),
-                        ])
-                        .run_with_timeout(remaining)?;
-                }
-                Ok(true)
-            };
+        let mut last_move: Option<CompanionStep> = None;
         let bounds = |panes: &[GridPane]| {
             (
                 panes.iter().map(|pane| pane.x).min(),
@@ -314,20 +310,14 @@ impl ZellijBackend {
                 panes.iter().map(|pane| pane.y + pane.rows).max(),
             )
         };
-        while let Some(remaining) = deadline
-            .checked_duration_since(Instant::now())
-            .filter(|time| !time.is_zero())
-        {
+        let before_bounds = bounds(before);
+        while let Some(remaining) = deadline_remaining(deadline) {
             let Some((panes, current_chrome)) =
                 self.companion_geometry(session, anchor, remaining)?
             else {
                 break;
             };
-            if current_chrome != chrome
-                || !before
-                    .iter()
-                    .all(|old| panes.iter().any(|pane| pane.pane_id == old.pane_id))
-            {
+            if !companion_grid_preserved(before, chrome, &panes, &current_chrome) {
                 break;
             }
             if panes == before {
@@ -337,7 +327,7 @@ impl ZellijBackend {
             if panes.len() != before.len() + 1 {
                 break;
             }
-            if bounds(&panes) != bounds(before) {
+            if bounds(&panes) != before_bounds {
                 break;
             }
             let Some(targets) = balance(&panes, 0) else {
@@ -350,53 +340,108 @@ impl ZellijBackend {
                 break;
             }
             confirmed_targets = Some(targets.clone());
-            let (_, _, right, bottom) = bounds(&panes);
-            let right = right.unwrap_or(0);
-            let bottom = bottom.unwrap_or(0);
-            let mut steps = Vec::new();
-            for target in &targets {
-                let Some(pane) = panes.iter().find(|pane| pane.pane_id == target.pane_id) else {
-                    return Ok(());
-                };
-                for (direction, edge, desired, outer) in [
-                    ("right", pane.x + pane.cols, target.x + target.cols, right),
-                    ("down", pane.y + pane.rows, target.y + target.rows, bottom),
-                ] {
-                    if edge != outer {
-                        steps.push((
-                            edge.abs_diff(desired),
-                            direction,
-                            edge < desired,
-                            &pane.pane_id,
-                        ));
-                    }
-                }
-            }
-            let error: u64 = steps.iter().map(|step| step.0).sum();
+            let (_, _, right, bottom) = before_bounds;
+            let (error, step) =
+                companion_step(&panes, &targets, right.unwrap_or(0), bottom.unwrap_or(0));
             if let Some(previous) = previous_error
                 && error >= previous
             {
                 // A native step coarser than the remaining distance overshot:
                 // undo it so the grid keeps its closer shape.
                 if error > previous
-                    && let Some((pane, direction, increase)) = last_move
+                    && let Some(mut step) = last_move
                 {
-                    resize(&panes, &pane, direction, !increase)?;
+                    step.increase = !step.increase;
+                    self.resize_boundary(session, anchor, &panes, chrome, &step, deadline)?;
                 }
                 break;
             }
             previous_error = Some(error);
-            let Some((distance, direction, increase, pane)) =
-                steps.into_iter().max_by_key(|step| step.0)
-            else {
+            let Some(step) = step else {
                 break;
             };
-            if distance == 0 || !resize(&panes, pane, direction, increase)? {
+            if step.distance == 0
+                || !self.resize_boundary(session, anchor, &panes, chrome, &step, deadline)?
+            {
                 break;
             }
-            last_move = Some((pane.clone(), direction, increase));
+            last_move = Some(step);
         }
         Ok(())
+    }
+
+    // Returns false once the grid changed under us or the deadline passed.
+    fn resize_boundary(
+        &self,
+        session: &str,
+        anchor: &PaneId,
+        panes: &[GridPane],
+        chrome: &[GridPane],
+        step: &CompanionStep,
+        deadline: Instant,
+    ) -> Result<bool> {
+        let Some(moved) = panes
+            .iter()
+            .find(|candidate| candidate.pane_id == step.pane)
+        else {
+            return Ok(false);
+        };
+        let edge = moved.x + moved.cols;
+        // A column boundary can span several independently resizable rows.
+        // Move every still-unmoved segment before evaluating the grid again:
+        // after only one segment the intermediate shape is not a column.
+        // Native resizing sometimes moves the entire aligned boundary, so
+        // re-read before each following segment instead of applying twice.
+        let boundary = if step.direction == SplitDirection::Right {
+            panes
+                .iter()
+                .filter(|pane| pane.x + pane.cols == edge)
+                .map(|pane| pane.pane_id.clone())
+                .collect::<Vec<_>>()
+        } else {
+            vec![step.pane.clone()]
+        };
+        for (index, pane) in boundary.into_iter().enumerate() {
+            let Some(remaining) = deadline_remaining(deadline) else {
+                return Ok(false);
+            };
+            if index > 0 {
+                let Some((current, current_chrome)) =
+                    self.companion_geometry(session, anchor, remaining)?
+                else {
+                    return Ok(false);
+                };
+                if current.len() != panes.len()
+                    || !companion_grid_preserved(panes, chrome, &current, &current_chrome)
+                {
+                    return Ok(false);
+                }
+                let Some(current_pane) = current.iter().find(|candidate| candidate.pane_id == pane)
+                else {
+                    return Ok(false);
+                };
+                if current_pane.x + current_pane.cols != edge {
+                    continue;
+                }
+            }
+            let Some(remaining) = deadline_remaining(deadline) else {
+                return Ok(false);
+            };
+            self.zellij_action(session)
+                .args([
+                    "resize",
+                    if step.increase {
+                        "increase"
+                    } else {
+                        "decrease"
+                    },
+                    split_direction(step.direction),
+                    "--pane-id",
+                    pane.raw(),
+                ])
+                .run_with_timeout(remaining)?;
+        }
+        Ok(true)
     }
 
     fn restore_background_split_focus(
@@ -496,17 +541,11 @@ impl ZellijBackend {
             match self.raw_listed_panes(name, remaining) {
                 Ok(_) => return SessionHealth::Healthy,
                 Err(err) => {
-                    let Some(wait_budget) = deadline
-                        .checked_duration_since(Instant::now())
-                        .filter(|remaining| !remaining.is_zero())
-                    else {
+                    let Some(wait_budget) = deadline_remaining(deadline) else {
                         break err;
                     };
                     std::thread::sleep(HEALTH_PROBE_RETRY_DELAY.min(wait_budget));
-                    let Some(next_budget) = deadline
-                        .checked_duration_since(Instant::now())
-                        .filter(|remaining| !remaining.is_zero())
-                    else {
+                    let Some(next_budget) = deadline_remaining(deadline) else {
                         break err;
                     };
                     remaining = next_budget;
@@ -984,11 +1023,7 @@ impl MuxBackend for ZellijBackend {
                 }
             }
             SplitPlacement::Directional(direction) => {
-                let direction = match direction {
-                    SplitDirection::Right => "right",
-                    SplitDirection::Down => "down",
-                };
-                spec = spec.args(["--direction", direction]);
+                spec = spec.args(["--direction", split_direction(direction)]);
             }
         }
         if let Some(target_pane) = target_pane {
