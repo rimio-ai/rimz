@@ -28,8 +28,8 @@ use tracing::warn;
 
 use super::GlobalFlags;
 use rimz::agents::{
-    AgentContext, AgentCost, AgentDefinition, PriceBook, StatusLineInvocation, definition_by_kind,
-    pricing,
+    AgentContext, AgentCost, AgentDefinition, PriceBook, StatusLineInvocation, SubagentContext,
+    SubagentUsageCursor, definition_by_kind, pricing,
 };
 use rimz::workspace::WorkspaceResolver;
 
@@ -134,6 +134,22 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     Ok(())
 }
 
+/// The observed child context with the transcript cursor's cost, usage, and
+/// model folded in. The cursor's model is the newest request the child made;
+/// before its first request the statusline task's own model stands.
+fn with_cursor(
+    observed: &SubagentContext,
+    cursor: Option<&SubagentUsageCursor>,
+) -> SubagentContext {
+    let mut context = observed.clone();
+    context.cost_usd = cursor.and_then(SubagentUsageCursor::display_cost);
+    context.usage = cursor.and_then(|cursor| cursor.last_call.clone());
+    if let Some(model) = cursor.and_then(|cursor| cursor.model.clone()) {
+        context.model = Some(model);
+    }
+    context
+}
+
 /// Runtime paths by project root, so a pre-birth workspace resolves the same
 /// dir name its birth mints.
 fn runtime_paths_for_root(project_root: &std::path::Path) -> Result<rimz::RuntimePaths> {
@@ -191,11 +207,7 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
                         book_fingerprint.as_deref(),
                     )
                     .or_else(|| prior_cursor.cloned());
-                let mut context = observation.context.clone();
-                context.cost_usd = cursor.as_ref().and_then(|cursor| cursor.display_cost());
-                context.model = cursor.as_ref().and_then(|cursor| cursor.model.clone());
-                context.usage = cursor.as_ref().and_then(|cursor| cursor.last_call.clone());
-                (context, cursor)
+                (with_cursor(&observation.context, cursor.as_ref()), cursor)
             },
         )
         .context("writing subagent-context sidecar")?;
@@ -440,5 +452,40 @@ mod tests {
             direct_argv("~/bin/statusline '~/literal arg'", Some(home)).unwrap(),
             ["/home/user space/bin/statusline", "~/literal arg"]
         );
+    }
+
+    #[test]
+    fn subagent_statusline_model_stands_until_the_transcript_names_one() {
+        let observed_at = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+        let observed = SubagentContext {
+            usage: None,
+            agent_type: Some("Explore".to_owned()),
+            model: Some("task-model".to_owned()),
+            effort: Some("high".to_owned()),
+            description: None,
+            cost_usd: None,
+            started_at: None,
+            observed_at,
+        };
+        let cursor = |model: Option<&str>| SubagentUsageCursor {
+            last_call: None,
+            transcript_path: "/tmp/parent/subagents/agent-child-1.jsonl".to_owned(),
+            offset: 0,
+            model: model.map(str::to_owned),
+            cost_usd: 0.25,
+            unpriced: false,
+            book_fingerprint: None,
+            last_request: None,
+        };
+
+        assert_eq!(
+            with_cursor(&observed, None).model.as_deref(),
+            Some("task-model")
+        );
+        let unnamed = with_cursor(&observed, Some(&cursor(None)));
+        assert_eq!(unnamed.model.as_deref(), Some("task-model"));
+        assert_eq!(unnamed.cost_usd, Some(0.25));
+        let named = with_cursor(&observed, Some(&cursor(Some("transcript-model"))));
+        assert_eq!(named.model.as_deref(), Some("transcript-model"));
     }
 }
