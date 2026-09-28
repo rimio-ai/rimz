@@ -16,7 +16,7 @@ use rimz::store::snapshot::{
 #[cfg(test)]
 use rimz::store::snapshot::{PaneAgent, RowCard, SidebarSubAgent};
 
-pub(super) const AGENT_REPORT_SCHEMA: u8 = 1;
+pub(super) const AGENT_LIST_SCHEMA: u8 = 1;
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct AgentListReport {
@@ -254,7 +254,7 @@ pub(super) fn build_list_report(
         })
         .collect();
     AgentListReport {
-        schema: AGENT_REPORT_SCHEMA,
+        schema: AGENT_LIST_SCHEMA,
         agents,
     }
 }
