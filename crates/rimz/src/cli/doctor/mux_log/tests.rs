@@ -44,8 +44,8 @@ fn diagnose(
 ) -> Option<LogDiagnosis> {
     record.start.severity.map(|_| LogDiagnosis {
         key: normalized_issue_key(&record.start.message),
-        state: LogState::Investigate,
-        impact: LogImpact::Warn,
+        state: model::DoctorState::Investigate,
+        impact: model::DoctorImpact::Warn,
         summary: LogSummary::Authored(record.start.message.clone()),
         sample: None,
     })
@@ -302,8 +302,8 @@ fn zellij_diagnosis_names_a_wrapped_error_by_its_cause() {
         mouse.summary.resolve(LogText::Include),
         "failed to set the cursor shape: I/O error (os error 5)"
     );
-    assert_eq!(mouse.state, LogState::Investigate);
-    assert_eq!(mouse.impact, LogImpact::Alarm);
+    assert_eq!(mouse.state, model::DoctorState::Investigate);
+    assert_eq!(mouse.impact, model::DoctorImpact::Alarm);
     assert_ne!(
         mouse.key, write.key,
         "two failures under one wrapper stay two issues"
@@ -346,13 +346,13 @@ fn zellij_diagnosis_requires_complete_known_lifecycle_evidence() {
     };
 
     let expected = diagnose_zellij_log_record(None, &unknown, Some(&broken_pipe)).unwrap();
-    assert_eq!(expected.state, LogState::Expected);
-    assert_eq!(expected.impact, LogImpact::Info);
+    assert_eq!(expected.state, model::DoctorState::Expected);
+    assert_eq!(expected.impact, model::DoctorImpact::Info);
     assert!(expected.sample.unwrap().contains("Broken pipe"));
     assert!(diagnose_zellij_log_record(Some(&unknown), &broken_pipe, None).is_none());
     let investigate = diagnose_zellij_log_record(None, &unknown, None).unwrap();
-    assert_eq!(investigate.state, LogState::Investigate);
-    assert_eq!(investigate.impact, LogImpact::Warn);
+    assert_eq!(investigate.state, model::DoctorState::Investigate);
+    assert_eq!(investigate.impact, model::DoctorImpact::Warn);
     assert!(
         investigate
             .summary
@@ -377,7 +377,7 @@ fn zellij_diagnosis_requires_complete_known_lifecycle_evidence() {
         diagnose_zellij_log_record(None, &cli_pipe, None)
             .unwrap()
             .state,
-        LogState::Expected
+        model::DoctorState::Expected
     );
 }
 
@@ -402,8 +402,8 @@ fn zellij_diagnosis_grades_self_inflicted_pane_errors_below_alarm() {
         "ERROR  |zellij_server::screen    | 2026-07-20 00:02:56.758 [screen] zellij-server/src/screen.rs:9730: Pane with id Terminal(336) not found",
     );
     let closed = diagnose_zellij_log_record(None, &closed, None).unwrap();
-    assert_eq!(closed.state, LogState::Expected);
-    assert_eq!(closed.impact, LogImpact::Info);
+    assert_eq!(closed.state, model::DoctorState::Expected);
+    assert_eq!(closed.impact, model::DoctorImpact::Info);
 
     // The id varies per occurrence; one key keeps the race a single issue.
     let other = record(
@@ -418,8 +418,8 @@ fn zellij_diagnosis_grades_self_inflicted_pane_errors_below_alarm() {
         "ERROR  |zellij_server::os_input_o| 2026-07-19 23:28:54.038 [pty] zellij-server/src/os_input_output_unix.rs:216: Failed to set CWD for new pane. '/tmp/rimz-presence-probe' does not exist or is not a folder",
     );
     let cwd = diagnose_zellij_log_record(None, &cwd, None).unwrap();
-    assert_eq!(cwd.state, LogState::Investigate);
-    assert_eq!(cwd.impact, LogImpact::Warn);
+    assert_eq!(cwd.state, model::DoctorState::Investigate);
+    assert_eq!(cwd.impact, model::DoctorImpact::Warn);
     assert!(
         cwd.summary
             .clone()
@@ -449,7 +449,7 @@ fn zellij_diagnosis_grades_self_inflicted_pane_errors_below_alarm() {
         diagnose_zellij_log_record(None, &reworded, None)
             .unwrap()
             .impact,
-        LogImpact::Alarm,
+        model::DoctorImpact::Alarm,
     );
 }
 
@@ -489,12 +489,12 @@ fn zellij_log_scan_groups_complete_0443_artifacts_conservatively() {
     assert_eq!(scan.logical_records, 7);
     assert_eq!(scan.problem_records, 5);
     assert_eq!(scan.issues.len(), 4);
-    assert_eq!(scan.issues[0].state, LogState::Expected);
+    assert_eq!(scan.issues[0].state, model::DoctorState::Expected);
     assert!(scan.issues[0].samples[0].contains("Broken pipe"));
     assert_eq!(scan.issues[1].occurrences, 2);
-    assert_eq!(scan.issues[1].state, LogState::Expected);
-    assert_eq!(scan.issues[2].state, LogState::Investigate);
-    assert_eq!(scan.issues[3].severity, LogSeverity::Panic);
+    assert_eq!(scan.issues[1].state, model::DoctorState::Expected);
+    assert_eq!(scan.issues[2].state, model::DoctorState::Investigate);
+    assert_eq!(scan.issues[3].source_severity, "panic");
 }
 
 #[test]
