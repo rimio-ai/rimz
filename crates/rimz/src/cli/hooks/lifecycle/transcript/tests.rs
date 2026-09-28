@@ -31,11 +31,7 @@ fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
             Some(rimz::ids::AgentSessionId::from("sess-1")),
             signal,
         ),
-        primary_event_id: None,
-        events: Vec::new(),
-        rotation_due: false,
-        side_conversation: None,
-        waiting_cleared: false,
+        receipt: Default::default(),
     }
 }
 
@@ -320,7 +316,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     );
 
     let mut hand_typed = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    hand_typed.waiting_cleared = true;
+    hand_typed.receipt.waiting_cleared = true;
     hand_typed.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("typed directly"));
     record_conversation(
         &workspace,
@@ -827,7 +823,7 @@ fn run_briefs_keep_loop_human_and_unresolved_parent_origins() {
             );
             ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
             rimz::transcript::append(store.paths(), &ask).unwrap();
-            started.waiting_cleared = true;
+            started.receipt.waiting_cleared = true;
             record_conversation(
                 &workspace,
                 &store,
@@ -869,7 +865,7 @@ fn agent_message_does_not_answer_open_ask() {
         rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    started.waiting_cleared = true;
+    started.receipt.waiting_cleared = true;
     started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
         "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nnew context",
     ));
@@ -935,7 +931,7 @@ fn idless_ask_does_not_capture_prompt() {
     );
     rimz::transcript::append(store.paths(), &ask).unwrap();
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    started.waiting_cleared = true;
+    started.receipt.waiting_cleared = true;
     started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("new task"));
 
     record_conversation(
@@ -974,7 +970,7 @@ fn prompt_after_answered_ask_starts_a_new_turn() {
     rimz::transcript::append(store.paths(), &ask).unwrap();
     rimz::transcript::append(store.paths(), &answer).unwrap();
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    started.waiting_cleared = true;
+    started.receipt.waiting_cleared = true;
     started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("next task"));
 
     record_conversation(

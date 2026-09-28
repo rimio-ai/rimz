@@ -98,7 +98,7 @@ pub(super) fn record_native_answer(
     // native duplicate rather than emitting a legacy id-less answer.
     let ask_id = latest_native_ask_id(store, agent.spec().kind, agent_id.as_str());
     let state = agent_state(store, agent, agent_id);
-    let awaiting = recorded.is_some_and(|recorded| recorded.waiting_cleared)
+    let awaiting = recorded.is_some_and(|recorded| recorded.receipt.waiting_cleared)
         || state
             .as_ref()
             .is_some_and(|state| state.is_awaiting_input())
@@ -240,6 +240,7 @@ pub(super) fn record_conversation(
             let mut matched_ids = Vec::new();
             if !sections.is_empty() {
                 let mut open_ask_id = recorded
+                    .receipt
                     .waiting_cleared
                     .then(|| latest_open_native_ask(store, agent.spec().kind, agent_id.as_str()))
                     .flatten()

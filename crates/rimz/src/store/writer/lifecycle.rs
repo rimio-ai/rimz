@@ -27,7 +27,7 @@ pub struct AgentLifecycleIntent<'a> {
     pub spawned_subagents: &'a [SpawnedSubagent],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AgentLifecycleReceipt {
     pub prior_status: Option<AgentStatus>,
     pub transition: Option<Transition>,

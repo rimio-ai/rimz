@@ -49,7 +49,7 @@ pub(super) fn handle_lifecycle_hook(
     let recorded =
         record_lifecycle_observation(workspace, store, agent, decoded, ingress_owner, globals);
     if let Some(recorded) = recorded.as_ref()
-        && let Some(side) = recorded.side_conversation.as_ref()
+        && let Some(side) = recorded.receipt.side_conversation.as_ref()
     {
         if let Some(host) = side.host.as_ref() {
             touch_agent_activity(
@@ -70,7 +70,7 @@ pub(super) fn handle_lifecycle_hook(
                 decoded.event_name(),
             );
         }
-        if recorded.rotation_due {
+        if recorded.receipt.rotation_due {
             spawn_auto_rotation(workspace);
         }
         return Ok(());
@@ -79,7 +79,7 @@ pub(super) fn handle_lifecycle_hook(
     let mut events: Vec<_> = released
         .iter()
         .chain(recorded.as_ref())
-        .flat_map(|recorded| recorded.events.clone())
+        .flat_map(|recorded| recorded.receipt.events.clone())
         .collect();
     let (derived_events, derived_rotation_due) = if recorded.as_ref().is_some_and(|recorded| {
         recorded.observation.agent_id.is_some() && recorded.observation.parent_agent_id.is_none()
@@ -89,7 +89,7 @@ pub(super) fn handle_lifecycle_hook(
         (Vec::new(), false)
     };
     events.extend(derived_events);
-    if derived_rotation_due || released.is_some_and(|released| released.rotation_due) {
+    if derived_rotation_due || released.is_some_and(|released| released.receipt.rotation_due) {
         spawn_auto_rotation(workspace);
     }
     let mut run_id = session_run_id(store, agent, agent_id.as_ref());
@@ -268,7 +268,7 @@ pub(super) fn handle_lifecycle_hook(
                 "lifecycle: failed to record transcript entry",
             );
         }
-        if recorded.rotation_due {
+        if recorded.receipt.rotation_due {
             spawn_auto_rotation(workspace);
         }
     }
@@ -278,7 +278,7 @@ pub(super) fn handle_lifecycle_hook(
             store,
             primary_event_id: recorded
                 .as_ref()
-                .and_then(|recorded| recorded.primary_event_id.as_ref()),
+                .and_then(|recorded| recorded.receipt.primary_event_id.as_ref()),
             run_completion: run_completion.as_ref(),
         },
         &events,
@@ -386,8 +386,8 @@ fn derive_subagent_lifecycle(
             ingress_owner,
             globals,
         );
-        rotation_due |= recorded.rotation_due;
-        events.extend(recorded.events);
+        rotation_due |= recorded.receipt.rotation_due;
+        events.extend(recorded.receipt.events);
     }
     (events, rotation_due)
 }
@@ -404,11 +404,7 @@ fn user_input_state_root(_store: &Store) -> Option<&std::path::Path> {
 struct RecordedLifecycle {
     model_hint: Option<String>,
     observation: AgentLifecycleObservation,
-    primary_event_id: Option<rimz::ids::EventId>,
-    events: Vec<rimz::agents::LifecycleEvent>,
-    rotation_due: bool,
-    side_conversation: Option<rimz::store::writer::SideConversation>,
-    waiting_cleared: bool,
+    receipt: rimz::store::writer::AgentLifecycleReceipt,
 }
 
 fn spawn_auto_rotation(workspace: &ResolvedWorkspace) {
@@ -762,11 +758,7 @@ mod tests {
             &RecordedLifecycle {
                 model_hint: None,
                 observation: compact_observation,
-                primary_event_id: None,
-                events: Vec::new(),
-                rotation_due: false,
-                side_conversation: None,
-                waiting_cleared: false,
+                receipt: Default::default(),
             },
             &test_workspace(),
         );
@@ -800,11 +792,7 @@ mod tests {
             &RecordedLifecycle {
                 model_hint: None,
                 observation: real_observation,
-                primary_event_id: None,
-                events: Vec::new(),
-                rotation_due: false,
-                side_conversation: None,
-                waiting_cleared: false,
+                receipt: Default::default(),
             },
             &test_workspace(),
         );
