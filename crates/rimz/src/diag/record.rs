@@ -132,6 +132,7 @@ pub enum SidebarWidthIntentVerdict {
     Accepted,
     RejectedFloor,
     RejectedCeiling,
+    RejectedUnproven,
     RejectedFullscreen,
     RejectedNoStep,
 }
@@ -142,6 +143,7 @@ impl SidebarWidthIntentVerdict {
             Self::Accepted => "accepted",
             Self::RejectedFloor => "rejected-floor",
             Self::RejectedCeiling => "rejected-ceiling",
+            Self::RejectedUnproven => "rejected-unproven",
             Self::RejectedFullscreen => "rejected-fullscreen",
             Self::RejectedNoStep => "rejected-no-step",
         }

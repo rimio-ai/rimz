@@ -7,6 +7,60 @@ fn target(cols: u16) -> NonZeroU16 {
     NonZeroU16::new(cols).expect("nonzero target")
 }
 
+fn native_step(cols: u16, exact: bool) -> crate::mux::WidthStep {
+    crate::mux::WidthStep {
+        cols,
+        stop_step_cols: cols,
+        exact,
+        view_cols: 200,
+        fullscreen_active: None,
+    }
+}
+
+#[test]
+fn exact_feedback_never_widens_the_native_tolerance() {
+    let now = Instant::now();
+    let mut control = WidthControl::new(Some(target(60)));
+    control.seed_native_step(native_step(1, true));
+    assert_eq!(control.decide(1, now), Some((1, 60)));
+    assert_eq!(control.decide(60, now + Duration::from_millis(10)), None);
+    assert_eq!(
+        control.decide(85, now + Duration::from_millis(20)),
+        Some((85, 60))
+    );
+    assert_eq!(control.stop_step(), 1);
+}
+
+#[test]
+fn first_post_resize_sibling_count_cannot_prove_a_drag() {
+    let (dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology_for_view(&runtime, 240);
+    let diag = crate::diag::DiagSink::under(
+        dir.path().to_path_buf(),
+        runtime.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
+    controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+    assert_eq!(controller.convergence.target(), Some(target(60)));
+    controller.observe(121, SidebarWidthControlTrigger::ResizeFeedback, &diag);
+    controller.classification_deadline = Some(Instant::now());
+    controller.backstop(Some(121), Some(1), Some(u64::MAX), &diag);
+
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
+    assert_eq!(controller.convergence.target(), Some(target(60)));
+    assert!(controller.convergence.in_flight());
+    let text = std::fs::read_to_string(diag.log_path().unwrap()).unwrap();
+    assert!(text.lines().any(|line| matches!(
+        serde_json::from_str::<crate::diag::record::DiagEnvelope>(line).unwrap().event,
+        crate::diag::record::DiagEvent::SidebarWidthIntent {
+            trigger: SidebarWidthIntentTrigger::MouseAdopt,
+            verdict: SidebarWidthIntentVerdict::RejectedUnproven,
+            ..
+        }
+    )));
+}
+
 fn controller(mux: MuxName) -> (tempfile::TempDir, RuntimePaths, WidthController) {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -240,6 +294,7 @@ fn fullscreen_hold_cancels_pending_classification_across_structural_change() {
     write_zellij_topology(&runtime);
     let diag = crate::diag::DiagSink::disabled();
     controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
     controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
     assert!(controller.classification_deadline.is_some());
@@ -274,7 +329,7 @@ fn narrower_after_an_exact_pin_issues_a_resize() {
     )
     .expect("narrower target");
     let mut control = WidthControl::new(Some(target(64)));
-    control.seed_native_step(step.stop_step_cols);
+    control.seed_native_step(step);
 
     control.retarget(Some(narrowed));
 
@@ -551,6 +606,7 @@ fn settled_drag_pins_once_after_the_debounce() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
@@ -624,6 +680,7 @@ fn settled_structural_resize_converges_without_adopting() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
@@ -761,6 +818,7 @@ fn settled_view_resize_reresolves_an_unpinned_target() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
     write_zellij_topology_for_view(&runtime, 240);
@@ -778,6 +836,7 @@ fn structural_marker_does_not_swallow_a_concurrent_view_change() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
     write_zellij_topology_for_view(&runtime, 240);
@@ -797,6 +856,7 @@ fn settled_view_resize_scales_a_pinned_target() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
     let share = crate::mux::width_target::pin(
         &runtime,
         crate::mux::SidebarWidth::default(),
@@ -821,6 +881,7 @@ fn settled_resize_without_geometry_never_adopts() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     controller.current_view_cols = Some(200);
     controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
     controller.convergence.retarget(Some(target(50)));
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
@@ -839,6 +900,7 @@ fn stale_pane_observation_waits_without_adopting_or_nudging() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
@@ -860,6 +922,7 @@ fn merely_newer_sibling_observation_waits_without_adopting_or_nudging() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
+    controller.siblings_stable_since_ms = Some(0);
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
 
@@ -900,17 +963,17 @@ fn observed_step_sets_the_nearest_reachable_band() {
 fn seeded_native_step_parks_within_half_a_step_of_the_target() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(80)));
-    control.seed_native_step(10);
+    control.seed_native_step(native_step(10, false));
 
     assert_eq!(control.stop_step(), 10);
     assert_eq!(control.decide(83, now), None);
 
     let mut below = WidthControl::new(Some(target(80)));
-    below.seed_native_step(10);
+    below.seed_native_step(native_step(10, false));
     assert_eq!(below.decide(79, now), None);
 
     let mut outside = WidthControl::new(Some(target(80)));
-    outside.seed_native_step(10);
+    outside.seed_native_step(native_step(10, false));
     assert_eq!(outside.decide(74, now), Some((74, 80)));
     assert_eq!(outside.decide(79, now + Duration::from_millis(10)), None);
 }
@@ -919,7 +982,7 @@ fn seeded_native_step_parks_within_half_a_step_of_the_target() {
 fn native_step_seed_survives_retargeting() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(80)));
-    control.seed_native_step(10);
+    control.seed_native_step(native_step(10, false));
 
     control.retarget(Some(target(90)));
 
@@ -931,7 +994,7 @@ fn native_step_seed_survives_retargeting() {
 fn a_short_learned_step_does_not_narrow_the_seeded_band() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(80)));
-    control.seed_native_step(10);
+    control.seed_native_step(native_step(10, false));
     assert_eq!(control.decide(60, now), Some((60, 80)));
 
     assert_eq!(
@@ -945,15 +1008,15 @@ fn a_short_learned_step_does_not_narrow_the_seeded_band() {
 fn step_estimate_uses_a_symmetric_band() {
     let now = Instant::now();
     let mut inside = WidthControl::new(Some(target(80)));
-    inside.seed_native_step(2);
+    inside.seed_native_step(native_step(2, false));
     assert_eq!(inside.decide(81, now), None);
 
     let mut below = WidthControl::new(Some(target(80)));
-    below.seed_native_step(2);
+    below.seed_native_step(native_step(2, false));
     assert_eq!(below.decide(79, now), None);
 
     let mut next_step = WidthControl::new(Some(target(80)));
-    next_step.seed_native_step(2);
+    next_step.seed_native_step(native_step(2, false));
     assert_eq!(next_step.decide(82, now), Some((82, 80)));
 }
 
@@ -961,7 +1024,7 @@ fn step_estimate_uses_a_symmetric_band() {
 fn one_column_stop_step_keeps_exact_backends_exact() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(80)));
-    control.seed_native_step(1);
+    control.seed_native_step(native_step(1, true));
 
     assert_eq!(control.decide(80, now), None);
     assert_eq!(control.decide(81, now), Some((81, 80)));
