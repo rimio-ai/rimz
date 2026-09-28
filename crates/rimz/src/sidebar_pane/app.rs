@@ -251,9 +251,11 @@ pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     // synchronously for instant feedback (see `apply_input`). The grid stays
     // warm while there is something to show (`active`) and relaxes to the
     // `tick` backstop when idle, snapping back the instant an event or
-    // animation arrives. The loop blocks only in `recv`, so no path forks a
-    // subprocess on the render thread and a busy fetch never freezes the spin
-    // or swallows a keypress.
+    // animation arrives. Fetches run off-thread. Width geometry probes still
+    // fork on target refresh, structural, classification, and commit events
+    // (or the first press without cached geometry), never on cached presses
+    // or resize feedback. Width commits and trailing capability refreshes run once
+    // after their bursts settle; resize actuators run off-thread.
     while !state.should_exit {
         let (active, mut timeout) = state.frame_timing();
         timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());

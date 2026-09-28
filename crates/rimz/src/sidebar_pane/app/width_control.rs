@@ -16,6 +16,7 @@ use tracing::{debug, warn};
 
 const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(1);
 const IDLE_RETRY: Duration = Duration::from_secs(5);
+const KEY_SETTLE: Duration = Duration::from_millis(300);
 const STRUCTURAL_GUARD_MS: u64 = 2_000;
 const MAX_STEPS: u8 = 32;
 // One cycle is an issued step plus its single no-progress retry.
@@ -350,6 +351,16 @@ impl WidthControl {
 }
 
 #[derive(Debug)]
+struct WidthKeyBurst {
+    deadline: Instant,
+    base_cols: u16,
+    own_cols: u16,
+    dir: WidthAdjust,
+    target: Option<NonZeroU16>,
+    verdict: SidebarWidthIntentVerdict,
+}
+
+#[derive(Debug)]
 pub(super) struct WidthController {
     runtime: RuntimePaths,
     session_name: String,
@@ -367,6 +378,7 @@ pub(super) struct WidthController {
     baseline_probe_deadline: Option<Instant>,
     classification_deadline: Option<Instant>,
     classification_resize_at_ms: Option<u64>,
+    key_burst: Option<WidthKeyBurst>,
 }
 
 impl WidthController {
@@ -395,6 +407,7 @@ impl WidthController {
             baseline_probe_deadline,
             classification_deadline: None,
             classification_resize_at_ms: None,
+            key_burst: None,
         }
     }
 
@@ -404,6 +417,7 @@ impl WidthController {
             self.baseline_probe_deadline,
             self.classification_deadline,
             self.idle_retry_deadline,
+            self.key_burst.as_ref().map(|burst| burst.deadline),
         ]
         .into_iter()
         .flatten()
@@ -423,7 +437,7 @@ impl WidthController {
         diag: &DiagSink,
     ) {
         self.width = crate::mux::SidebarWidth::from_config(theme);
-        if self.refresh_target(None).is_some() {
+        if self.refresh_target(None, false).is_some() {
             self.baseline_probe_deadline = None;
         } else if self.own_pane.is_some() {
             // A topology broadcast can arrive while the sidebar is the tab's
@@ -436,117 +450,109 @@ impl WidthController {
         }
     }
 
-    pub(super) fn adjust(&mut self, own_cols: u16, dir: WidthAdjust, diag: &DiagSink) {
-        let trigger = match dir {
-            WidthAdjust::Narrower => SidebarWidthIntentTrigger::Narrower,
-            WidthAdjust::Wider => SidebarWidthIntentTrigger::Wider,
-        };
-        let pending_cols = self.convergence.target().map(NonZeroU16::get);
-        let base_cols = match dir {
-            WidthAdjust::Narrower => pending_cols.map_or(own_cols, |target| target.min(own_cols)),
-            WidthAdjust::Wider => pending_cols.map_or(own_cols, |target| target.max(own_cols)),
-        };
-        if self.convergence.is_fullscreen_held() {
-            diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
-                trigger,
-                own_cols,
-                base_cols,
-                view_cols: self.current_view_cols.unwrap_or(0),
-                step_cols: None,
-                step_exact: false,
-                target_cols: None,
-                verdict: SidebarWidthIntentVerdict::RejectedFullscreen,
-            });
-            return;
-        }
+    pub(super) fn adjust(&mut self, own_cols: u16, dir: WidthAdjust) {
         let Some(pane) = self.own_pane.as_ref() else {
             return;
         };
-        let step = match crate::mux::backend_for(self.mux).sidebar_width_step(
-            &self.runtime,
-            &self.session_name,
-            pane,
-            None,
-        ) {
-            Ok(step) => step,
-            Err(err) => {
-                diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
-                    trigger,
-                    own_cols,
-                    base_cols,
-                    view_cols: 0,
-                    step_cols: None,
-                    step_exact: false,
-                    target_cols: None,
-                    verdict: SidebarWidthIntentVerdict::RejectedNoStep,
-                });
-                debug!(pane = %pane, error = %err, "sidebar width intent dropped without backend step");
-                return;
-            }
-        };
-        let adjustment_cols = step.adjustment_cols(dir);
-        self.convergence.seed_native_step(step);
-        let Some(view_cols) = NonZeroU16::new(step.view_cols) else {
-            diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
-                trigger,
-                own_cols,
-                base_cols,
-                view_cols: step.view_cols,
-                step_cols: Some(adjustment_cols),
-                step_exact: step.exact,
-                target_cols: None,
-                verdict: SidebarWidthIntentVerdict::RejectedNoStep,
-            });
-            debug!(pane = %pane, "sidebar width intent dropped without backend geometry");
+        if self.key_burst.is_none()
+            && self.current_view_cols.is_none()
+            && !self.convergence.is_fullscreen_held()
+            && let Ok(step) = crate::mux::backend_for(self.mux).sidebar_width_step(
+                &self.runtime,
+                &self.session_name,
+                pane,
+                None,
+            )
+            && step.view_cols != 0
+        {
+            self.current_view_cols = Some(step.view_cols);
+            self.convergence.seed_native_step(step);
+            self.baseline_probe_deadline = None;
+        }
+        let burst = self.key_burst.get_or_insert(WidthKeyBurst {
+            deadline: Instant::now() + KEY_SETTLE,
+            base_cols: own_cols,
+            own_cols,
+            dir,
+            target: None,
+            verdict: SidebarWidthIntentVerdict::RejectedNoStep,
+        });
+        burst.deadline = Instant::now() + KEY_SETTLE;
+        burst.own_cols = own_cols;
+        self.classification_deadline = None;
+        self.classification_resize_at_ms = None;
+        if self.convergence.is_fullscreen_held() {
+            burst.target = None;
+            burst.verdict = SidebarWidthIntentVerdict::RejectedFullscreen;
+            return;
+        }
+        let (Some(step), Some(view_cols)) = (self.convergence.native_step, self.current_view_cols)
+        else {
             return;
         };
-        self.current_view_cols = Some(view_cols.get());
-        let Some(target) = crate::mux::width::adjust_target_cols(
+        let base_cols = if step.exact {
+            self.convergence.target().map_or(own_cols, NonZeroU16::get)
+        } else {
+            own_cols
+        };
+        let target = crate::mux::width::adjust_target_cols(
             base_cols,
             dir,
             step,
             crate::mux::width::MIN_ADJUSTABLE_WIDTH,
-            (u32::from(view_cols.get()) * u32::from(self.width.max_percent.clamp(10, 90)))
-                .div_ceil(100) as u16,
-        ) else {
-            diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
-                trigger,
-                own_cols,
-                base_cols,
-                view_cols: view_cols.get(),
-                step_cols: Some(adjustment_cols),
-                step_exact: step.exact,
-                target_cols: None,
-                verdict: match dir {
-                    WidthAdjust::Narrower => SidebarWidthIntentVerdict::RejectedFloor,
-                    WidthAdjust::Wider => SidebarWidthIntentVerdict::RejectedCeiling,
-                },
-            });
-            debug!(pane = %pane, base_cols, step_cols = adjustment_cols, "sidebar width intent rejected at width bound");
+            (u32::from(view_cols) * u32::from(self.width.max_percent.clamp(10, 90))).div_ceil(100)
+                as u16,
+        );
+        if let Some(target) = target {
+            burst.target = Some(target);
+            burst.dir = dir;
+            burst.verdict = SidebarWidthIntentVerdict::Accepted;
+            self.convergence.retarget(Some(target));
+        } else if burst.target.is_none() {
+            burst.dir = dir;
+            burst.verdict = match dir {
+                WidthAdjust::Narrower => SidebarWidthIntentVerdict::RejectedFloor,
+                WidthAdjust::Wider => SidebarWidthIntentVerdict::RejectedCeiling,
+            };
+        }
+    }
+
+    fn commit_key_burst(&mut self, diag: &DiagSink) {
+        let _ = self.refresh_target(None, false);
+        let Some(mut burst) = self.key_burst.take() else {
             return;
         };
-        diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
-            trigger,
-            own_cols,
-            base_cols,
-            view_cols: view_cols.get(),
-            step_cols: Some(adjustment_cols),
-            step_exact: step.exact,
-            target_cols: Some(target.get()),
-            verdict: SidebarWidthIntentVerdict::Accepted,
-        });
-        let target =
+        let step = self.convergence.native_step;
+        if let Some(target) = burst.target
+            && let Some(view_cols) = self.current_view_cols.and_then(NonZeroU16::new)
+        {
             match crate::mux::width_target::pin(&self.runtime, self.width, target, view_cols.get())
             {
-                Ok(permille) => permille.cols(view_cols),
+                Ok(permille) => {
+                    let target = permille.cols(view_cols);
+                    self.convergence.retarget(Some(target));
+                    burst.target = Some(target);
+                    spawn_width_default_record(self.mux, &self.session_name, target.get());
+                }
                 Err(err) => {
                     warn!(error = %err, "sidebar width target pin failed");
                     return;
                 }
-            };
-        spawn_width_default_record(self.mux, &self.session_name, target.get());
-        self.convergence.retarget(Some(target));
-        self.observe(own_cols, SidebarWidthControlTrigger::Retarget, diag);
+            }
+        }
+        diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
+            trigger: match burst.dir {
+                WidthAdjust::Narrower => SidebarWidthIntentTrigger::Narrower,
+                WidthAdjust::Wider => SidebarWidthIntentTrigger::Wider,
+            },
+            own_cols: burst.own_cols,
+            base_cols: burst.base_cols,
+            view_cols: self.current_view_cols.unwrap_or(0),
+            step_cols: step.map(|step| step.adjustment_cols(burst.dir)),
+            step_exact: step.is_some_and(|step| step.exact),
+            target_cols: burst.target.map(NonZeroU16::get),
+            verdict: burst.verdict,
+        });
     }
 
     pub(super) fn observe(
@@ -559,6 +565,7 @@ impl WidthController {
             return;
         }
         if trigger == SidebarWidthControlTrigger::ResizeFeedback
+            && self.key_burst.is_none()
             && !self.convergence.in_flight()
             && !self.convergence.settle_unacknowledged(measured_cols)
         {
@@ -630,7 +637,7 @@ impl WidthController {
             self.structural_at_ms
                 .map_or(at_ms, |previous| previous.max(at_ms)),
         );
-        if self.refresh_target(Some(at_ms)).is_none() {
+        if self.refresh_target(Some(at_ms), true).is_none() {
             if self.own_pane.is_some() {
                 self.baseline_probe_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
             }
@@ -654,6 +661,19 @@ impl WidthController {
         diag: &DiagSink,
     ) {
         let now = Instant::now();
+        if self.key_burst.is_some() {
+            if self
+                .key_burst
+                .as_ref()
+                .is_some_and(|burst| now >= burst.deadline)
+            {
+                self.commit_key_burst(diag);
+            }
+            if let Some(cols) = measured_cols {
+                self.observe(cols, SidebarWidthControlTrigger::Retarget, diag);
+            }
+            self.idle_retry_deadline = None;
+        }
         if let (Some(cols), Some(observed_at_ms)) = (measured_cols, panes_observed_at_ms)
             && self.sync_fullscreen_hold(cols, observed_at_ms)
         {
@@ -714,12 +734,15 @@ impl WidthController {
             }
         }
         if let Some(cols) = measured_cols {
-            if self.classification_deadline.is_some() || self.convergence.is_fullscreen_held() {
+            if self.key_burst.is_some()
+                || self.classification_deadline.is_some()
+                || self.convergence.is_fullscreen_held()
+            {
                 self.idle_retry_deadline = None;
             } else if self.convergence.retries_when_idle() {
                 let deadline = self.idle_retry_deadline.get_or_insert(now + IDLE_RETRY);
                 if now >= *deadline {
-                    let _ = self.refresh_target(None);
+                    let _ = self.refresh_target(None, true);
                     if self.convergence.needs_adjustment(cols) {
                         self.convergence.retry_idle();
                         self.observe(cols, SidebarWidthControlTrigger::IdleRetry, diag);
@@ -764,7 +787,7 @@ impl WidthController {
         let floor = self
             .structural_at_ms
             .map_or(self.started_at_ms, |at_ms| at_ms.max(self.started_at_ms));
-        if self.refresh_target(Some(floor)).is_some() {
+        if self.refresh_target(Some(floor), true).is_some() {
             self.observe(measured_cols, SidebarWidthControlTrigger::Backstop, diag);
             return true;
         }
@@ -788,7 +811,7 @@ impl WidthController {
             return;
         }
         let previous_view_cols = self.current_view_cols;
-        let (step, view_cols) = match self.refresh_target(None) {
+        let (step, view_cols) = match self.refresh_target(None, true) {
             Some(proven) => proven,
             None => {
                 debug!("sidebar settled resize lacks backend geometry");
@@ -884,6 +907,7 @@ impl WidthController {
     fn refresh_target(
         &mut self,
         floor: Option<u64>,
+        remember_default: bool,
     ) -> Option<(crate::mux::WidthStep, NonZeroU16)> {
         let pane = self.own_pane.as_ref()?;
         let step = crate::mux::backend_for(self.mux)
@@ -892,6 +916,9 @@ impl WidthController {
         let view_cols = NonZeroU16::new(step.view_cols)?;
         self.convergence.seed_native_step(step);
         self.current_view_cols = Some(view_cols.get());
+        if self.key_burst.is_some() {
+            return Some((step, view_cols));
+        }
         let target = match floor {
             Some(_) => crate::mux::width_target::adopt(&self.runtime, self.width, view_cols),
             None => {
@@ -901,7 +928,7 @@ impl WidthController {
         .cols(Some(view_cols.get()));
         let changed = self.convergence.target() != Some(target);
         self.convergence.retarget(Some(target));
-        if changed {
+        if changed && remember_default {
             spawn_width_default_record(self.mux, &self.session_name, target.get());
         }
         Some((step, view_cols))
