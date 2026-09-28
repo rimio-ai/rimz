@@ -393,10 +393,23 @@ fn held_rows_are_flagged_from_the_ledger_and_reopen_at_the_commit_count() {
             "touch",
         ]);
     }
+    // A rebase-merged branch commit: it resolves, but HEAD never reaches it.
+    let rewritten = git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        &base,
+        "-m",
+        "branch",
+    ]);
     let ledger = ledger::parse(&format!(
-        "## Module verdicts\n\n| module | status | sha | reopen at | note |\n| --- | --- | --- | --- | --- |\n| `store/snapshot` | holds | {base} | 3 | fresh |\n| `config` | holds | {base} | 2 | stale |\n| `mux` | holds | 0000000 | 2 | unknown sha |\n"
+        "## Module verdicts\n\n| module | status | sha | reopen at | note |\n| --- | --- | --- | --- | --- |\n| `store/snapshot` | holds | {base} | 3 | fresh |\n| `config` | holds | {base} | 2 | stale |\n| `mux` | holds | 0000000 | 2 | unknown sha |\n| `lsp` | holds | {rewritten} | 30 | off trunk |\n"
     ));
-    let mut rows = ["store/snapshot", "config", "mux", "agents"]
+    let mut rows = ["store/snapshot", "config", "mux", "agents", "lsp"]
         .map(|module| Row {
             module: module.to_owned(),
             ..Row::default()
@@ -416,8 +429,16 @@ fn held_rows_are_flagged_from_the_ledger_and_reopen_at_the_commit_count() {
     assert_eq!(rows[1].flags, [REOPEN_FLAG], "2 commits reach reopen at 2");
     assert!(rows[2].flags.is_empty());
     assert!(rows[3].flags.is_empty());
-    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        rows[4].flags.is_empty(),
+        "an off-trunk sha leaves lsp unheld"
+    );
+    assert_eq!(problems.len(), 2, "{problems:?}");
     assert!(problems[0].starts_with("`mux` holds at 0000000"));
+    assert_eq!(
+        problems[1],
+        format!("`lsp` holds at {rewritten}: {rewritten} is not an ancestor of HEAD")
+    );
 }
 
 #[test]
