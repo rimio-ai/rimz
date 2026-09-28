@@ -26,7 +26,7 @@ pub struct TeamsArgs {
     )]
     name: Option<String>,
     /// Prompt delivered to the team's configured leader.
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", allow_hyphen_values = true, value_parser = agents_cmd::parse_cohort_prompt)]
     prompt: Option<String>,
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
@@ -108,7 +108,7 @@ struct TeamLaunchArgs {
     )]
     name: String,
     /// Prompt delivered to the team's configured leader.
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", allow_hyphen_values = true, value_parser = agents_cmd::parse_cohort_prompt)]
     prompt: Option<String>,
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
@@ -466,6 +466,85 @@ mod tests {
         TeamsHarness::try_parse_from(argv)
             .expect("parse teams command")
             .args
+    }
+
+    #[test]
+    fn launch_rejects_attached_short_prompt() {
+        for prefix in [vec!["rimz", "forge"], vec!["rimz", "launch", "forge"]] {
+            for prompt in ["-wfeat", "-w=feat"] {
+                for separator in [false, true] {
+                    let mut argv = prefix.clone();
+                    if separator {
+                        argv.push("--");
+                    }
+                    argv.push(prompt);
+                    let error =
+                        TeamsHarness::try_parse_from(argv).expect_err("reject attached short");
+                    assert!(
+                        error.to_string().contains("write -w NAME with a space"),
+                        "{error}"
+                    );
+                }
+            }
+            let mut argv = prefix;
+            argv.extend(["-w", "feat"]);
+            let args = parse_teams(&argv);
+            let launch = match args.command {
+                Some(TeamsSubcmd::Launch(args)) => args.launch,
+                None => args.launch,
+                _ => panic!("launch"),
+            };
+            assert_eq!(launch.worktree.as_deref(), Some("feat"));
+        }
+    }
+
+    #[test]
+    fn bare_launch_accepts_hyphen_prompt_and_flags() {
+        for prompt in ["--dry-run first", "-x", "-"] {
+            for argv in [
+                ["rimz", "forge", "--isolation", "host", prompt],
+                ["rimz", "forge", prompt, "--isolation", "host"],
+            ] {
+                let args = parse_teams(&argv);
+                assert!(args.command.is_none());
+                assert_eq!(args.name.as_deref(), Some("forge"));
+                assert_eq!(args.prompt.as_deref(), Some(prompt));
+                assert_eq!(args.isolation, Some(rimz::config::Isolation::Host));
+            }
+        }
+        for prompt in ["--isolation", "-h", "--help"] {
+            assert_eq!(
+                parse_teams(&["rimz", "forge", "--", prompt])
+                    .prompt
+                    .as_deref(),
+                Some(prompt)
+            );
+        }
+    }
+
+    #[test]
+    fn launch_verb_accepts_hyphen_prompt_and_flags() {
+        for prompt in ["--dry-run first", "-x", "-"] {
+            for argv in [
+                ["rimz", "launch", "forge", "--isolation", "host", prompt],
+                ["rimz", "launch", "forge", prompt, "--isolation", "host"],
+            ] {
+                let Some(TeamsSubcmd::Launch(args)) = parse_teams(&argv).command else {
+                    panic!("launch verb");
+                };
+                assert_eq!(args.name, "forge");
+                assert_eq!(args.prompt.as_deref(), Some(prompt));
+                assert_eq!(args.isolation, Some(rimz::config::Isolation::Host));
+            }
+        }
+        for prompt in ["--isolation", "-h", "--help"] {
+            let Some(TeamsSubcmd::Launch(args)) =
+                parse_teams(&["rimz", "launch", "forge", "--", prompt]).command
+            else {
+                panic!("launch verb");
+            };
+            assert_eq!(args.prompt.as_deref(), Some(prompt));
+        }
     }
 
     #[test]

@@ -107,6 +107,8 @@ When an agent runs `rimz agents`, each new agent is an independent top-level pee
 
 `rimz agents` shapes individual agents: model, effort, prompts, permission posture, name, placement, and supervised runs. [`rimz teams`](./teams.md) owns where a configured cohort runs, whether it resumes, and what each member may spend.
 
+`PROMPT` may start with `-`, except that prompts starting with `-w` or `-n` are refused to avoid mistaking attached short-option values for prompts; write `-w NAME` or `-n NAME` with a space. An interactive launch cannot take a prompt that is itself one of the command's flags (`--model`, `--model=…`, `-h`, `--help`, etc.); a print run can read it from `-p --stdin`, since `--` introduces provider passthrough arguments, not an escaped prompt.
+
 ### Permission-mode cells
 
 A `<kind>-<mode>` cell launches that kind with one permission posture. RimZ renders the posture into the adapter's own flags; a mode the adapter expresses through no flag still launches and adds no arguments.
@@ -700,6 +702,8 @@ Closing the old pane ends the replaced session, so its session-pinned loop rows 
 | `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary` | Queued until the turn ends. |
 
 Without `INSTRUCTION`, the command uses the [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction) brief. An instruction replaces that brief on adapters that accept trailing text (Claude, Grok, Droid), and `""` sends the bare command. Other adapters refuse any instruction, including `""`; rerun without one.
+
+`INSTRUCTION` may start with `-`; a value that is itself one of the command's flags (`-h`, `--help`, or a global flag such as `--color`) needs `--` before it.
 
 The command refuses, printing the reason on stderr with empty stdout and exit `1`, when the agent:
 

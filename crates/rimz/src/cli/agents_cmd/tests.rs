@@ -55,6 +55,137 @@ fn parse_agents(argv: &[&str]) -> AgentsArgs {
 }
 
 #[test]
+fn prompt_guards_cover_value_taking_shorts() {
+    let mut command = crate::cli::Cli::command();
+    command.build();
+    for (path, guarded) in [
+        (vec!["agents"], AGENT_PROMPT_SHORTS),
+        (vec!["agents", "launch"], AGENT_PROMPT_SHORTS),
+        (vec!["teams"], COHORT_PROMPT_SHORTS),
+        (vec!["teams", "launch"], COHORT_PROMPT_SHORTS),
+        (vec!["subagents"], &[][..]),
+        (vec!["subagents", "launch"], &[][..]),
+        (vec!["message"], &[][..]),
+        (vec!["pane", "send"], &[][..]),
+    ] {
+        let mut launch = &command;
+        for name in &path {
+            launch = launch.find_subcommand(name).expect("launch command");
+        }
+        let shorts: BTreeSet<_> = launch
+            .get_arguments()
+            .filter(|arg| arg.get_action().takes_values())
+            .flat_map(|arg| arg.get_short_and_visible_aliases().unwrap_or_default())
+            .collect();
+        assert_eq!(shorts, guarded.iter().copied().collect(), "{path:?}");
+    }
+}
+
+#[test]
+fn launch_rejects_attached_short_prompt() {
+    for prefix in [vec!["rimz", "claude"], vec!["rimz", "launch", "claude"]] {
+        for (short, value) in [("-w", "feat"), ("-n", "bob")] {
+            for prompt in [format!("{short}{value}"), format!("{short}={value}")] {
+                let mut argv = prefix.clone();
+                argv.push(&prompt);
+                let error = AgentsHarness::try_parse_from(argv).expect_err("reject attached short");
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("write {short} NAME with a space")),
+                    "{error}"
+                );
+            }
+            let mut argv = prefix.clone();
+            argv.extend([short, value]);
+            let args = parse_agents(&argv);
+            let launch = match args.command {
+                Some(AgentsSubcmd::Launch(launch)) => *launch,
+                None => args.launch,
+                _ => panic!("launch"),
+            };
+            let actual = if short == "-w" {
+                launch.cohort.worktree
+            } else {
+                launch.name
+            };
+            assert_eq!(actual.as_deref(), Some(value));
+        }
+    }
+}
+
+#[test]
+fn compact_accepts_hyphen_instruction_and_flags() {
+    for instruction in ["--keep failing test names", "-x", "-"] {
+        for argv in [
+            vec![
+                "rimz",
+                "agents",
+                "compact",
+                "@coder",
+                "--color",
+                "never",
+                instruction,
+            ],
+            vec![
+                "rimz",
+                "agents",
+                "compact",
+                "@coder",
+                instruction,
+                "--color",
+                "never",
+            ],
+        ] {
+            let cli = crate::cli::Cli::try_parse_from(argv).expect("parse compact instruction");
+            let Some(crate::cli::Subcmd::Agents(args)) = cli.subcommand else {
+                panic!("agents")
+            };
+            let Some(AgentsSubcmd::Compact {
+                reference,
+                instruction: actual,
+            }) = args.command
+            else {
+                panic!("compact")
+            };
+            assert_eq!(reference, "@coder");
+            assert_eq!(actual.as_deref(), Some(instruction));
+        }
+    }
+    for instruction in ["-h", "--help", "--color"] {
+        let args = parse_agents(&["rimz", "compact", "@coder", "--", instruction]);
+        let Some(AgentsSubcmd::Compact {
+            instruction: actual,
+            ..
+        }) = args.command
+        else {
+            panic!("compact")
+        };
+        assert_eq!(actual.as_deref(), Some(instruction));
+    }
+}
+
+#[test]
+fn launch_accepts_hyphen_prompt_and_flags() {
+    for prompt in ["--dry-run first", "-x", "-"] {
+        for argv in [
+            vec!["rimz", "claude", "--model", "opus", prompt],
+            vec!["rimz", "claude", prompt, "--model", "opus"],
+        ] {
+            let args = parse_agents(&argv);
+            assert_eq!(args.launch.spec.as_deref(), Some("claude"));
+            assert_eq!(args.launch.prompt.as_deref(), Some(prompt));
+            assert_eq!(args.launch.overrides.model.as_deref(), Some("opus"));
+        }
+    }
+    for prompt in ["--model", "-h", "--help"] {
+        let args = parse_agents(&["rimz", "claude", "--", prompt]);
+        assert!(args.launch.prompt.is_none());
+        assert_eq!(args.launch.overrides.passthrough, [prompt]);
+    }
+}
+
+#[test]
 fn profiles_parse_as_agent_profile_listings_without_legacy_aliases() {
     let args = parse_agents(&["rimz", "profiles", "--json", "--path"]);
     assert!(matches!(
@@ -426,7 +557,8 @@ mod parse {
                 .expect("global root override");
         assert_eq!(parsed.global.root.as_deref(), Some(Path::new("/repo")));
         assert!(
-            crate::cli::Cli::try_parse_from(["rimz", "agents", "claude", "--top-level"]).is_err()
+            crate::cli::Cli::try_parse_from(["rimz", "agents", "claude", "task", "--top-level"])
+                .is_err()
         );
     }
 

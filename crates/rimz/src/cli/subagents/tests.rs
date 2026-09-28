@@ -41,6 +41,41 @@ fn parse(argv: &[&str]) -> SubagentsArgs {
 }
 
 #[test]
+fn launch_accepts_hyphen_prompt_and_flags() {
+    for verb in [false, true] {
+        for prompt in ["--dry-run first", "-x", "-"] {
+            for tail in [
+                vec!["claude", "--model", "opus", prompt],
+                vec!["claude", prompt, "--model", "opus"],
+            ] {
+                let mut argv = vec!["rimz"];
+                if verb {
+                    argv.push("launch");
+                }
+                argv.extend(tail);
+                let args = parse(&argv);
+                let launch = if verb {
+                    let Some(SubagentsSubcmd::Launch(args)) = args.command else {
+                        panic!("launch verb");
+                    };
+                    args.launch
+                } else {
+                    args.launch
+                };
+                assert_eq!(launch.profile.as_deref(), Some("claude"));
+                assert_eq!(launch.prompt.as_deref(), Some(prompt));
+                assert_eq!(launch.model.as_deref(), Some("opus"));
+            }
+        }
+    }
+    for prompt in ["--model", "-h", "--help"] {
+        let args = parse(&["rimz", "claude", "--", prompt]);
+        assert!(args.launch.prompt.is_none());
+        assert_eq!(args.launch.passthrough, [prompt]);
+    }
+}
+
+#[test]
 fn launch_implies_supervised_background_defaults() {
     let args = parse(&[
         "rimz",

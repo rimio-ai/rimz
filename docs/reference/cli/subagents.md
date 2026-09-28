@@ -17,6 +17,8 @@ From a user shell, an agent-only verb fails before it touches the room, and the 
 
 ## Launch one child
 
+In both the bare and `launch` forms, `PROMPT` may start with `-`; a value that is itself one of the command's flags (`--model`, `--model=…`, `-h`, `--help`, etc.) must instead come from `--prompt-file`, since `--` introduces provider passthrough arguments, not an escaped prompt.
+
 ```sh
 rimz subagents claude "trace the authentication call path" --description "trace auth path"
 rimz subagents launch reviewer --prompt-file /tmp/review-brief.md

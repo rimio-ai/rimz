@@ -191,6 +191,8 @@ PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` neve
 
 ## Launch a team
 
+In both the bare and `launch` forms, `PROMPT` may start with `-`; a value that is itself one of the command's flags (`--isolation`, `--isolation=…`, `-h`, `--help`, etc.) needs `--` before it. A prompt starting with `-w` is refused, even after `--`, to avoid mistaking an attached worktree option for a prompt; use `-w NAME` with a space.
+
 ```sh
 rimz teams forge -w feat-rate-limits "add rate limiting"
 rimz teams forge#feat-rate-limits "add rate limiting"

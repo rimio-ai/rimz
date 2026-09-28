@@ -135,6 +135,28 @@ pub struct AgentsArgs {
     json: bool,
 }
 
+const COHORT_PROMPT_SHORTS: &[char] = &['w'];
+const AGENT_PROMPT_SHORTS: &[char] = &['w', 'n'];
+
+pub(super) fn parse_cohort_prompt(value: &str) -> Result<String, String> {
+    parse_launch_prompt(value, COHORT_PROMPT_SHORTS)
+}
+
+fn parse_agent_prompt(value: &str) -> Result<String, String> {
+    parse_launch_prompt(value, AGENT_PROMPT_SHORTS)
+}
+
+fn parse_launch_prompt(value: &str, shorts: &[char]) -> Result<String, String> {
+    if let Some(short) = value.strip_prefix('-').and_then(|rest| rest.chars().next())
+        && shorts.contains(&short)
+    {
+        return Err(format!(
+            "prompt starts with -{short}; write -{short} NAME with a space"
+        ));
+    }
+    Ok(value.to_owned())
+}
+
 #[derive(Debug, Default, PartialEq, Args)]
 pub(crate) struct CohortLaunchArgs {
     /// Seed launched cards' descriptions until agents name their own sessions.
@@ -233,7 +255,7 @@ pub(crate) struct AgentLaunchArgs {
     pub(crate) spec: Option<String>,
     /// Prompt delivered to the layout's leader agent (a team's `leader` role,
     /// defaulting to its first role; otherwise the first agent cell).
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", allow_hyphen_values = true, value_parser = parse_agent_prompt)]
     pub(crate) prompt: Option<String>,
     #[command(flatten)]
     pub(crate) cohort: CohortLaunchArgs,
@@ -502,6 +524,7 @@ enum AgentsSubcmd {
         #[arg(add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_refs))]
         reference: String,
         /// Replace the configured compaction brief; an empty string sends the bare command.
+        #[arg(allow_hyphen_values = true)]
         instruction: Option<String>,
     },
     /// Resume a lane's closed agents where they left off.

@@ -150,7 +150,7 @@ struct SubagentLaunchArgs {
     )]
     profile: Option<String>,
     /// Complete task prompt supplied by the parent agent.
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", allow_hyphen_values = true)]
     prompt: Option<String>,
     /// File whose contents become the child's prompt.
     #[arg(long = "prompt-file", value_name = "PATH", conflicts_with = "prompt")]

@@ -38,6 +38,7 @@ pub struct MessageArgs {
     target: Option<String>,
     /// The message, as one quoted argument. Omit it and pass `--stdin` or
     /// `--file` to deliver external contents verbatim.
+    #[arg(allow_hyphen_values = true)]
     text: Option<String>,
     /// Deliver after a successful/idle turn (`done`) or after success/idle/failure (`any`).
     #[arg(long, value_parser = parse_gate, default_value = "done", conflicts_with = "steer")]
@@ -357,5 +358,53 @@ fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {
         "abandoned" => Ok(MessageStatus::Abandoned),
         "archived" => Ok(MessageStatus::Archived),
         other => Err(format!("unknown message status `{other}`")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Debug, Parser)]
+    struct Harness {
+        #[command(flatten)]
+        args: MessageArgs,
+    }
+
+    #[test]
+    fn send_accepts_hyphen_text_and_flags() {
+        for text in ["--dry-run first", "-x", "-"] {
+            for argv in [
+                ["rimz", "@coder", "--steer", text],
+                ["rimz", "@coder", text, "--steer"],
+            ] {
+                let args = Harness::try_parse_from(argv).expect("parse message").args;
+                assert!(args.command.is_none());
+                assert_eq!(args.target.as_deref(), Some("@coder"));
+                assert_eq!(args.text.as_deref(), Some(text));
+                assert!(args.steer);
+            }
+        }
+        for text in ["--steer", "-h", "--help"] {
+            let args = Harness::try_parse_from(["rimz", "@coder", "--", text])
+                .unwrap()
+                .args;
+            assert_eq!(args.text.as_deref(), Some(text));
+        }
+        let args = Harness::try_parse_from(["rimz", "list", "--json"])
+            .unwrap()
+            .args;
+        assert!(matches!(
+            args.command,
+            Some(MessageSubcmd::List(ListArgs { json: true, .. }))
+        ));
+        let args = Harness::try_parse_from(["rimz", "show", "msg_0000000000000001", "--json"])
+            .unwrap()
+            .args;
+        assert!(matches!(
+            args.command,
+            Some(MessageSubcmd::Show { json: true, .. })
+        ));
     }
 }
