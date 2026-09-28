@@ -129,9 +129,9 @@ fn file_churn_can_make_lower_complexity_function_hotter() {
         path: PathBuf::from(path),
         name: name.to_owned(),
         line: 10,
-        cyclomatic: 0.0,
-        cognitive: 0.0,
-        sloc: 0.0,
+        cyclomatic: 26.0,
+        cognitive: 29.0,
+        sloc: 118.0,
         score,
     };
     let metrics = MetricsReport {
@@ -150,6 +150,14 @@ fn file_churn_can_make_lower_complexity_function_hotter() {
 
     assert_eq!(hotspots[0].function, "churning");
     assert_eq!(hotspots[0].hot, 250.0);
+    assert_eq!(
+        (
+            hotspots[0].cyclomatic,
+            hotspots[0].cognitive,
+            hotspots[0].sloc
+        ),
+        (26.0, 29.0, 118.0)
+    );
     assert_eq!(hotspots[1].hot, 100.0);
 }
 
