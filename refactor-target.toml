@@ -563,7 +563,8 @@ allowed-dependencies = [
     "tui",
     "utils::time",
 ]
-surface-budget = 9
+# Both supervisors name the loss passed to their shared recovery owner.
+surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/cli/remote/web.rs"

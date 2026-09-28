@@ -23,7 +23,7 @@ The second split is pure versus process. [`crates/rimz/src/remote/`](../../crate
 | [`remote/tty.rs`](../../crates/rimz/src/remote/tty.rs) | Termios damage detection, flag repair, the DSR status-reply scanner, and the emulator reset string. |
 | [`remote/version.rs`](../../crates/rimz/src/remote/version.rs) | Client/host version-skew classification. |
 | [`cli/remote.rs`](../../crates/rimz/src/cli/remote.rs) | The clap surface, alias resolution, and the print, one-shot, and supervise fork. |
-| [`cli/remote/supervisor.rs`](../../crates/rimz/src/cli/remote/supervisor.rs) | The supervision loop: background masters, foreground attach, probe threads, reachability workers, forwards, local notifications, and the `LinkSupervisor` that web tunnels share. |
+| [`cli/remote/supervisor.rs`](../../crates/rimz/src/cli/remote/supervisor.rs) | The supervision loop: background masters, foreground attach, probe threads, reachability workers, forwards, local notifications, and the `LinkSupervisor` shared by terminal attaches and web tunnels. |
 | [`cli/remote/outage_ui.rs`](../../crates/rimz/src/cli/remote/outage_ui.rs) | The alternate-screen connection panel and its plain-line fallback. |
 | [`cli/remote/web.rs`](../../crates/rimz/src/cli/remote/web.rs) | Web prep, the local auth relay, and tunnel supervision. |
 | [`cli/remote/link_stats.rs`](../../crates/rimz/src/cli/remote/link_stats.rs) | The remote-side `rimz remote link-stats ingest` service and listener sampling. |
@@ -136,13 +136,13 @@ The reap is best-effort, and it is skipped in four cases: tmux, an attach invoke
 
 ## The connect loop
 
-`supervise_remote` runs the same shape for the first connection and for every recovery: prove the transport out of sight, then hand the proven connection to a visible attach.
+`supervise_remote` uses `LinkSupervisor::connect` for the first connection and `LinkSupervisor::recover` for every recovery: prove the transport out of sight, then hand the proven connection to a visible attach. `LinkSupervisor` owns the master, held screen, and outage across both terminal and web rounds.
 
 ```text
 supervise_remote
      │
      ▼
- wait_for_master ........... runs behind the connection panel
+ LinkSupervisor::connect ... wait_for_master behind the connection panel
      │                       reachability workers pace the attempts
      │                       ssh -M -N -o BatchMode=yes, then -O check
      │
@@ -154,7 +154,7 @@ supervise_remote
      │                            ▼
      │                       Verdict::CleanExit → return to the caller
      │                       Verdict::Fatal     → bail with the mapped message
-     │                       Verdict::Retry     → back to wait_for_master
+     │                       Verdict::Retry     → LinkSupervisor::recover
      │                       Verdict::Reattach  → new ssh -t on the live master
      │
      └── NeedsInteractive ►  one foreground ssh -t, initial connect only

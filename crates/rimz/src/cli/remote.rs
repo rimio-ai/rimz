@@ -370,8 +370,8 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 let control = rimz::remote::link::validated_control_path()
                     .context("checking SSH ControlMaster socket path")?;
                 supervisor::supervise_remote(
-                    &plan,
-                    &control,
+                    plan,
+                    control,
                     remote.origin.as_str(),
                     remote.auto_forward,
                 )
