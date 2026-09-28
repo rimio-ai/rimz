@@ -970,7 +970,6 @@ pub enum Verdict {
 #[derive(Default)]
 pub struct ReconnectState {
     established: bool,
-    consecutive_failures: u32,
 }
 
 impl ReconnectState {
@@ -985,9 +984,8 @@ impl ReconnectState {
     ) -> Verdict {
         if established {
             self.established = true;
-            self.consecutive_failures = 0;
         }
-        let verdict = match exit_code {
+        match exit_code {
             Some(0) => Verdict::CleanExit,
             Some(
                 code @ (REMOTE_RIMZ_MISSING_EXIT
@@ -1013,18 +1011,13 @@ impl ReconnectState {
             Some(code) => Verdict::Fatal { code },
             // Signal-death: something killed ssh deliberately; don't fight it.
             None => Verdict::Fatal { code: 1 },
-        };
-        if matches!(verdict, Verdict::Retry) {
-            self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         }
-        verdict
     }
 
     /// Settle an intentional zombie-transport kill without classifying its
     /// signal exit as fatal.
     pub fn settle_zombie_kill(&mut self) {
         self.established = true;
-        self.consecutive_failures = 0;
     }
 }
 

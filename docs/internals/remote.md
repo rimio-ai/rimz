@@ -211,7 +211,7 @@ An attach over a confirmed master pipes and drains SSH stderr so control-client 
 | other nonzero | no settled evidence | `Fatal`: an immediate remote room or authentication failure. |
 | signal death | any | `Fatal`: something killed `ssh` deliberately. |
 
-A session counts as established once its link probe receives the first ack, once a master (initial or recovery) is confirmed, or once the foreground attach lives past the gatetime (30 seconds by default). Living past the gatetime is also the evidence that the multiplexer attach ran instead of failing at launch. `ReconnectState` folds establishment and consecutive failures across sessions, and `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
+A session counts as established once its link probe receives the first ack, once a master (initial or recovery) is confirmed, or once the foreground attach lives past the gatetime (30 seconds by default). Living past the gatetime is also the evidence that the multiplexer attach ran instead of failing at launch. `ReconnectState` preserves establishment across sessions, and `settle_zombie_kill` records an intentional kill without classifying its signal exit as fatal.
 
 ### The session-loss watchdog
 
