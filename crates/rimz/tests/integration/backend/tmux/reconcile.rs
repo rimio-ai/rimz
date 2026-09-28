@@ -2,6 +2,82 @@
 
 use super::support::*;
 
+#[test]
+fn replacements_snap_to_the_target_without_growing_the_default() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let room = TempDir::new().unwrap();
+    let (_stub_dir, stub) = sidebar_command_stub_with_script(
+        r#"#!/bin/sh
+printf '\033]2;rimz-sidebar\007'
+read -r rimz_test_heartbeat_dir < "$0.heartbeat-dir"
+sed "s/SIDEBAR_PANE/$TMUX_PANE/" "$0.heartbeat" > "$rimz_test_heartbeat_dir/sidebar.$TMUX_PANE.json"
+sleep 600
+"#,
+    );
+    let mut opts = sidebar_opts("rimz-replace-width", stub, Some(240));
+    opts.workspace_id = WorkspaceId::from_project_root(room.path());
+    let runtime = RuntimePaths::for_workspace(opts.workspace_id.clone()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
+        opts.workspace_id.clone(),
+        SidebarInstanceId::new(),
+        MuxName::Tmux,
+        &opts.session_name,
+        room.path().join("unused.sock"),
+        None,
+    );
+    heartbeat.build = Some(rimz::build_id::of_file(&opts.rimz_bin).unwrap());
+    let mut template = serde_json::to_value(heartbeat).unwrap();
+    template["pane_id"] = serde_json::json!("tmux:SIDEBAR_PANE");
+    std::fs::write(
+        opts.rimz_bin.with_extension("heartbeat"),
+        template.to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        opts.rimz_bin.with_extension("heartbeat-dir"),
+        format!("{}\n", runtime.heartbeat_dir.display()),
+    )
+    .unwrap();
+    opts.extra_env.clear();
+    server
+        .backend
+        .ensure_session(&session_opts(
+            &opts.session_name,
+            opts.workspace_id.clone(),
+            room.path(),
+            room.path(),
+            Some((240, 60)),
+        ))
+        .unwrap();
+    server.backend.open_sidebar(&opts, None).unwrap();
+    let mut sidebar = wait_for_sidebar_pane(&server, &opts.session_name, None);
+    server.tmux(&["resize-pane", "-t", sidebar.raw(), "-x", "90"]);
+    assert_eq!(server.display(sidebar.raw(), "#{pane_width}"), "90");
+
+    for _ in 0..2 {
+        let report = server
+            .backend
+            .reconcile_sidebars(&opts, &Default::default())
+            .unwrap();
+        assert_eq!(
+            report.failed, 0,
+            "replacement must prove its current-build heartbeat"
+        );
+        assert_eq!(report.recovered, 1);
+        assert_eq!(report.closed, 1);
+        let replacement = wait_for_sidebar_pane(&server, &opts.session_name, None);
+        assert_ne!(replacement, sidebar);
+        assert_eq!(server.display(replacement.raw(), "#{pane_width}"), "60");
+        assert_eq!(
+            server.show_option(&["-t", &opts.session_name], "@rimz_sidebar_cols"),
+            "60"
+        );
+        sidebar = replacement;
+    }
+}
+
 fn sidebar_cwd_fixture() -> (TmuxServer, TempDir, TempDir, TempDir, SidebarPaneOptions) {
     let server = TmuxServer::new();
     let room = TempDir::new().unwrap();

@@ -17,7 +17,7 @@ pub struct SidebarRecovery {
     pub failed: usize,
     /// Views deferred because their backend cannot mount into a detached session.
     pub deferred: usize,
-    /// Kept sidebar panes whose geometry was repaired in place.
+    /// Surviving sidebar panes whose geometry was repaired in place.
     pub redocked: usize,
     /// Working sidebar panes that remain outside the verified dock.
     pub misdocked: usize,
