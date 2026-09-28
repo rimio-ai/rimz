@@ -474,7 +474,8 @@ path = "crates/rimz/src/store"
 # Peer turn metadata and exact run-to-agent matching are shared with CLI consumers.
 # Delivery selection provenance crosses the locked acknowledgment callback seam.
 # `TeamRun` marks the leader's team-long run record.
-surface-budget = 333
+# Subagent context percent shares the parent gauge's arithmetic with the renderer.
+surface-budget = 334
 
 [[module]]
 path = "crates/rimz/src/theme"

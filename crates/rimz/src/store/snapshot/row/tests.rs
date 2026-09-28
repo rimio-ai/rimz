@@ -6,6 +6,30 @@ fn row_time() -> Timestamp {
 }
 
 #[test]
+fn subagent_context_window_round_trips_and_accepts_legacy_json() {
+    let mut value = serde_json::json!({
+        "id": "child", "name": "Explore", "status": "running",
+        "last_activity": row_time(), "tokens": {"window": 190_000}
+    });
+    let legacy: SidebarSubAgent = serde_json::from_value(value.clone()).unwrap();
+    assert!(
+        serde_json::to_value(legacy)
+            .unwrap()
+            .get("context_window")
+            .is_none()
+    );
+    value["context_window"] = serde_json::json!(200_000);
+    let child: SidebarSubAgent = serde_json::from_value(value).unwrap();
+    let encoded = serde_json::to_value(&child).unwrap();
+    assert_eq!(encoded["context_window"], 200_000);
+    assert_eq!(encoded["tokens"], serde_json::json!({"window": 190_000}));
+    assert_eq!(
+        serde_json::from_value::<SidebarSubAgent>(encoded).unwrap(),
+        child
+    );
+}
+
+#[test]
 fn serde_keeps_cards_flat_with_row_kind_key() {
     let agent = SidebarRow {
         id: "agent:s1".to_owned(),

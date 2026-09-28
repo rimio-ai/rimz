@@ -789,6 +789,7 @@ mod tests {
                     effort: Some("high".to_owned()),
                     description: None,
                     tokens: Some(SubAgentTokens::Window(1_200)),
+                    context_window: None,
                     cost_usd: None,
                     elapsed_secs: Some(12),
                     started_at: None,

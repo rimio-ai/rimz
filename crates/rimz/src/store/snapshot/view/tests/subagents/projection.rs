@@ -178,6 +178,37 @@ fn child_tokens_prefer_window_then_session_then_run_total_never_bare_total() {
 }
 
 #[test]
+fn child_context_window_uses_only_reported_window_occupancy() {
+    let mut child = agent("codex", "child", AgentStatus::Running, 0);
+    child.usage.fresh_input_tokens = Some(190_000);
+    assert!(
+        child.resolved_context_window().is_some(),
+        "kind has a default"
+    );
+    for (sidecar, usage, window_tokens, expected) in [
+        (None, None, true, None),
+        (None, Some(200_000), true, Some(200_000)),
+        (Some(1_000_000), Some(200_000), true, Some(1_000_000)),
+        (Some(0), Some(200_000), true, Some(0)),
+        (Some(200_000), Some(200_000), false, None),
+    ] {
+        let mut context = crate::agents::AgentContext::new("codex", epoch());
+        context.tokens = Some(crate::agents::AgentTokenUsage {
+            context_window_size: sidecar,
+            ..Default::default()
+        });
+        child.context = Some(context);
+        child.usage.context_window = usage;
+        child.usage.fresh_input_tokens = window_tokens.then_some(190_000);
+        child.usage.run_total_tokens = Some(250_000);
+        let projected = sub_agent_from_state(&child, epoch(), false);
+        let value = serde_json::to_value(projected).unwrap();
+        assert_eq!(value.get("context_window").is_some(), expected.is_some());
+        assert_eq!(value["context_window"], serde_json::json!(expected));
+    }
+}
+
+#[test]
 fn live_descendant_projects_clean_resting_parents_to_delegating_running() {
     for status in [
         AgentStatus::Idle,
