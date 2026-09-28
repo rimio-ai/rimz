@@ -77,13 +77,12 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         posture.launch.isolation_default,
         machine.agents.isolation,
     );
-    rimz::sandbox::preflight_skills(
+    rimz::sandbox::preflight_launch(
         isolation,
         &child.kind,
         posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    rimz::sandbox::preflight(isolation)?;
     rimz::harness::launch::preflight_agent_kind(
         &workspace.project_root,
         child.kind.as_str(),

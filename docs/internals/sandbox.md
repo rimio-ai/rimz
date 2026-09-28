@@ -32,7 +32,7 @@ Every entry point that can start a sandboxed agent probes bubblewrap first and r
 | `rimz agents explain` | For the explained launch's isolation. |
 | `rimz doctor` | Always; reports mode, binary path, version, probe verdict, and fix. In host mode the check is informational. |
 
-`launch`, `restart`, `fork`, supervised runs, the exec wrapper, and `explain` call `sandbox::preflight_skills` before the probe. It refuses a configured profile `skills` list under sandbox isolation when the adapter cannot mark skills user-only, so that refusal needs no bubblewrap at all.
+`launch`, `restart`, `fork`, supervised runs, subagent resume, the exec wrapper, and `explain` call `sandbox::preflight_launch` to check skills and then probe. It refuses a configured profile `skills` list under sandbox isolation when the adapter cannot mark skills user-only, so that refusal needs no bubblewrap at all.
 
 ## The launch plan
 

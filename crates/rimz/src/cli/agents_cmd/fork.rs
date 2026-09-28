@@ -83,13 +83,12 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         posture.launch.isolation_default,
         config.agents.isolation,
     );
-    rimz::sandbox::preflight_skills(
+    rimz::sandbox::preflight_launch(
         isolation,
         &seed.kind,
         posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    rimz::sandbox::preflight(isolation)?;
     if let Some(reason) = &posture.degraded {
         writeln!(
             crate::cli::render::err(),
