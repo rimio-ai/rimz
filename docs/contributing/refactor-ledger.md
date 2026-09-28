@@ -4,7 +4,7 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-Pass 28g records the lifecycle reaction in `harness/team_stage` on `6b02f6006`, rebased onto trunk `36dd87064`. The rank/hot survey measures `cli/hooks` cx at 32.2 versus 58.0 at the round base (`27c50ce2d`); remaining hook hotspots carry item verdicts rather than threshold-only splits. `harness/team_stage` cx is 12.5 versus 0.5, missing the planned ceiling of 5: `react_to_lifecycle` (cx 12.0) carries an item verdict for its pinned per-event order; the mapped observation retains cx 2.1 rather than leaving the hotspot table. Binary modules receive no ledger row.
+Pass 28d reviewed `store/snapshot` complexity on `c34ca45c2` (base `1eaa698e9`): lifecycle effects fold onto the carried row; the local-bind cascade and the lifecycle fold's residual cx are inherent pinned rules. Pass 28g, before it, recorded the lifecycle reaction in `harness/team_stage` on `6b02f6006`, rebased onto trunk `36dd87064`: `cli/hooks` cx 32.2 versus 58.0 at the round base (`27c50ce2d`); `harness/team_stage` cx 12.5 versus 0.5, missing the planned ceiling of 5, with `react_to_lifecycle` (cx 12.0) under an item verdict for its pinned per-event order. Binary modules receive no ledger row. Rewrite this section whenever a pass ends.
 
 Pass 28c holds `mux/zellij` on the branch commit its row names (the merge re-stamps it): cx 53.5 to 22.3 against the round base `27c50ce2d`, with the companion balancer folded and no item verdicts added.
 
@@ -15,7 +15,7 @@ Survey on the pass 28b tree (`9cc23c547`, 2026-09-28): no ledger problems or ope
 - **Reopened** (churn past the row's count): none; pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`, pass 26b `sidebar_pane/app` and `sidebar_pane/render/sections`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
-- **Row SHAs:** the survey reports a row whose SHA `HEAD` does not reach as a ledger problem and leaves its module unheld; pass 28a re-stamped 29 rebased-away SHAs, passes 14 to 27, to their trunk commits. A PR that writes rows names them so the merge re-stamps them to the landed commit; pass 28g's `harness/team_stage` row carries a branch SHA.
+- **Row SHAs:** the survey reports a row whose SHA `HEAD` does not reach as a ledger problem and leaves its module unheld; pass 28a re-stamped 29 rebased-away SHAs, passes 14 to 27, to their trunk commits. A PR that writes rows names them so the merge re-stamps them to the landed commit; pass 28g's `harness/team_stage` row and pass 28d's `store/snapshot` row carry branch SHAs.
 - **Unjudged families:** none; pass 28a judged the copilot/cursor install shape and the `RunStatus::Completed`, `wait_for_required`, `Isolation::Host` and `degraded` guards.
 
 ## Module verdicts
@@ -226,7 +226,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar_pane/render/ansi` | holds; landed pass-24c | `e083557ba` | 30 | the one ANSI writer. |
 | `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b; pass-21b; pass-27b | — | — | owns every record it persists, imports nothing above it. |
 | `store/(root)` | holds; landed pass-24c | `e083557ba` | 30 | `snapshot` `pub` for the integration crate. |
-| `store/snapshot` | holds; landed pass-23a | `250f10820` | 30 | view model crate-wide because the renderer decodes it. |
+| `store/snapshot` | holds; landed pass-28d | `c34ca45c2` | 30 | view model crate-wide because the renderer decodes it; local-bind cascade and lifecycle fold inherent. |
 | `store/writer` | holds; landed pass-27b | `52b2358b0` | 30 | one log boundary; one queue terminal step; one lifecycle staging path. |
 | `store/event` | holds; landed pass-21b | `5e6580fb0` | 30 | legacy `message.removed` parse holds. |
 | `store/message` | holds; landed pass-21b | `5e6580fb0` | 30 | status aliases hold for mixed-binary workspaces; header grammar and codec hold. |
@@ -306,14 +306,13 @@ Candidates a pass judged real but could not land, each with what unblocks it.
 - `agents/adapters/codex`: `cap_turn_error_label` and `TURN_ERROR_LABEL_MAX` copy Claude's `statusline` pair word for word; a shared helper beside `TurnErrorClass::classify_label` in `agents/context` lands with a pass owning codex or `agents/context`.
 - `config/definitions`: one load context for the seven-argument `Resolver::new` and the `SeatLoader` repack, plus one safe-name predicate (about −20 SLOC). Waits for the module's pace to drop below hot.
 - `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
-- `store/writer/lifecycle` ↔ `store/snapshot`: `lifecycle_transition` and the snapshot's lifecycle projection each assemble `lifecycle::step` inputs from an `AgentState`. One shared constructor waits for a pass on `store/snapshot`.
 - `harness/launch`: three relaunch sites in `cli/agents_cmd/{fork,restart}.rs` repeat posture prompt fields; needs a posture-aware seam `launch` may not import.
 - `harness/schedule/runner.rs`: `run_command`/`prepare_check` carry the cx; `fire_due_tasks` and `parse_signal_selector` are the seams. Waits for pace to settle.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
 - `agents/attribution`: a `testkit` fixture builder would let five report types narrow. Waits for its `fix(attribution)` churn to settle.
 - `disk`: the `StatePaths`/`RuntimePaths` constructor family (5 + 8, ~460 test sites on `under`/`under_named`) → `for_project_root(root, home)`, `for_workspace(id, home)`, `RuntimePaths::for_state(state, runtime_root)`. Waits for a round with no concurrent passes.
-- `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Belongs to a `store/snapshot` pass, which owns its callers.
+- `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Waits for a `store/snapshot` or `disk` pass that takes cache identity in scope.
 - `ids::ViewId::as_str`: no production reader, `dead_code` blocks narrowing, tests hold it. Wait for a pass on `sidebar/produce`.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
 - Reported, not fixed: Codex transcript lookup ignores `CODEX_HOME`, substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.

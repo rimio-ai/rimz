@@ -4129,7 +4129,7 @@ reason = "Public member shape of PrStack, carrying each linked PR number and opt
 
 [[verdict]]
 kind = "item"
-key = "store::snapshot::view::model::PrStack::is_empty"
+key = "store::snapshot::view::model::is_empty"
 reason = "Serde skip predicate shared with forge::pr_state::PrLink; empty display stacks preserve the old serialized shapes."
 
 [[verdict]]
@@ -4321,3 +4321,8 @@ reason = "sandbox::preflight returns no probe for host; agents restart and subag
 kind = "guard"
 key = "$0Some($1)=&$2.degraded"
 reason = "A degraded posture is advisory in explain (a warning row), a stderr note in fork, and fatal in subagents resume; the reason string is shared and the outcome is each command's (pass 28a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::live::with_local_sessions_and_diagnostics"
+reason = "Inherent priority cascade of pinned bind rules: owning stamp, resume, co-resident, fresh one-to-one, then legacy-shadow rejection (pass 28d)."
