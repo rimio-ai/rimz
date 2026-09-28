@@ -85,11 +85,14 @@ fn profile_sink() -> &'static str {
     if cfg!(windows) { "NUL" } else { "/dev/null" }
 }
 
-/// Maximum wall time for a mux control command in tests. Healthy control
-/// commands answer in milliseconds; this only catches wedged children.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-/// Full room workflows run several bounded mux probes and sidebar handoffs.
-pub const ROOM_WORKFLOW_TIMEOUT: Duration = Duration::from_secs(30);
+/// Wall-time bound for any bounded child command, a mux control call or a full
+/// room workflow alike: it turns a wedged child into a named failure long
+/// before nextest's slow-timeout. It is one budget because a test cannot tell
+/// the two apart without reading production code, and room workflows carry
+/// designed fixed waits the fixtures never satisfy (the sidebar heartbeat wait
+/// on every room birth, the pane-bind wait per subagent child) that add up to
+/// about 9s before any load.
+pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_STEP: Duration = Duration::from_millis(10);
 const TIMEOUT_OUTPUT_CONTEXT_BYTES: usize = 8 * 1024;
 

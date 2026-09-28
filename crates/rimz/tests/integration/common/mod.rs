@@ -24,7 +24,7 @@ mod zellij;
 #[cfg(unix)]
 use std::time::Duration;
 
-pub use command::{CommandTimeoutExt, ROOM_WORKFLOW_TIMEOUT, ScrubSessionEnvExt};
+pub use command::{COMMAND_TIMEOUT, CommandTimeoutExt, ScrubSessionEnvExt};
 pub use env::{Env, af_unix_bind_sandboxed, canonical, tmux_pane};
 pub use harness::Harness;
 pub use payloads::{

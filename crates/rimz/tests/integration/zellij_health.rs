@@ -8,7 +8,7 @@ use std::time::Duration;
 use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
-use crate::common::{CommandTimeoutExt, Env, ROOM_WORKFLOW_TIMEOUT};
+use crate::common::{CommandTimeoutExt, Env};
 
 #[test]
 fn unresponsive_live_zellij_room_fails_fast_and_is_preserved() {
@@ -36,9 +36,7 @@ fn assert_unresponsive_live_room_is_preserved(list_panes_sleep: Option<&str>) {
     if let Some(sleep) = list_panes_sleep {
         command.env("RIMZ_TEST_ZELLIJ_LIST_PANES_SLEEP", sleep);
     }
-    let output = command
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
-        .expect("run rimz start");
+    let output = command.bounded_output().expect("run rimz start");
 
     assert!(
         !output.status.success(),
@@ -87,7 +85,7 @@ fn unresponsive_foreign_zellij_session_names_native_recovery_and_bypass() {
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", session)
         .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100")
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run rimz attach");
 
     assert!(!output.status.success(), "unresponsive attach must fail");
@@ -147,7 +145,7 @@ fn unresponsive_zellij_session_with_unknown_ownership_avoids_destroy_guidance() 
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
         .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "100")
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run rimz attach");
 
     fs::remove_file(&workspaces).expect("remove lookup blocker");
@@ -267,7 +265,7 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
         // scheduler-sensitive when nextest runs the gate under load.
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "60")
         .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run rimz start");
 
     assert!(
@@ -308,7 +306,7 @@ fn zellij_start_fails_fast_when_selected_session_probe_wedges() {
         // probe deadlines ran and killed their children.
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS_SLEEP", "60")
         .env("RIMZ_TEST_SESSION_PROBE_MS", "100")
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run rimz start");
 
     assert!(
