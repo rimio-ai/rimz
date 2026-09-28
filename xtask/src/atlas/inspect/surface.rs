@@ -156,14 +156,17 @@ fn parent_module(module: &str) -> &str {
     module.rsplit_once("::").map_or("", |(parent, _)| parent)
 }
 
-/// The narrowest visibility covering production and testkit callers. Any cross-target reader prevents narrowing.
+/// The narrowest visibility that still covers every production and testkit
+/// caller and the reach of every public alias naming the item: `private`
+/// when only the item's module and its descendants reach it, or nothing
+/// does. A reader in another compilation target keeps it as visible as it is.
 fn narrow_to(
     item_module: &str,
     effective_reach: &str,
     callers: &BTreeSet<String>,
     cross_target: bool,
 ) -> String {
-    if cross_target {
+    if cross_target || callers.contains(EXTERNAL_REACH) {
         return "keep".to_owned();
     }
     if callers.is_empty() {
@@ -225,6 +228,26 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
     let mut outside = BTreeMap::<EdgeTarget, Outside>::new();
     let mut test_sites = BTreeMap::<EdgeTarget, Vec<TestSite>>::new();
     let mut cross_target = BTreeSet::new();
+    let alias_reaches = facts
+        .syntax
+        .files
+        .iter()
+        .map(|file| {
+            let aliases = file
+                .pub_items
+                .iter()
+                .filter(|item| item.kind == "type")
+                .map(|item| {
+                    (
+                        item.line..=item.end_line,
+                        facts.mod_index.effective_reach(file, item),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (file.path.as_path(), aliases)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut alias_floors = BTreeMap::<EdgeTarget, BTreeSet<String>>::new();
     for edge in references
         .edges
         .iter()
@@ -233,6 +256,16 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
         if edge.cross_target {
             cross_target.insert(edge_target(edge));
         }
+        let reaches = alias_reaches
+            .get(edge.from_path.as_path())
+            .into_iter()
+            .flatten()
+            .filter(|(lines, _)| lines.contains(&edge.from_line))
+            .map(|(_, reach)| reach.clone());
+        alias_floors
+            .entry(edge_target(edge))
+            .or_default()
+            .extend(reaches);
         if edge.site_kind == SourceKind::Test {
             test_sites
                 .entry(edge_target(edge))
@@ -322,6 +355,12 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
                 section.reexports += 1;
             }
             let reached = outside.remove(&key).unwrap_or_default();
+            let mut callers = item_refs
+                .production
+                .union(&item_refs.testkit)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            callers.extend(alias_floors.remove(&key).unwrap_or_default());
             section.items.push(SurfaceRow {
                 module: item.id.module.clone(),
                 name,
@@ -330,11 +369,7 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
                 narrow_to: narrow_to(
                     &item.id.module,
                     &effective_reach,
-                    &item_refs
-                        .production
-                        .union(&item_refs.testkit)
-                        .cloned()
-                        .collect(),
+                    &callers,
                     cross_target.contains(&key),
                 ),
                 path: def_file.path.clone(),
