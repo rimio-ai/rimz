@@ -3205,7 +3205,10 @@ fn delivery_releases_digest_claim_when_post_claim_run_scan_fails() {
     );
     assert_text_then_enter(
         &trace_log,
-        &format!("Type: AGENT_REPORT\nFrom: @rimz\nContent:\n{}", digest.text),
+        &format!(
+            "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}",
+            digest.text
+        ),
     );
     assert_eq!(
         message_by_id(&env, &digest.message_id).status,
@@ -3406,25 +3409,28 @@ fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
 }
 
 fn assert_joined_subagent_report_canceled(deliver: bool) {
-    let (env, digest, pane_fixture) = subagent_report_fixture(&[true]);
-    queue_messages(&env, &[&digest]);
-    let trace_log = env.project_root.join("zellij-report-cancel-trace.log");
-    let mut command = traced_rimz(&env, &trace_log);
-    command
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0");
-    if deliver {
-        command.args([
-            "message",
-            "deliver",
-            "--message-id",
-            digest.message_id.as_str(),
-        ]);
-    } else {
-        command.args(["message", "sweep"]);
+    for notice in [HarnessNotice::SubagentReport, HarnessNotice::AgentReport] {
+        let (env, mut digest, pane_fixture) = subagent_report_fixture(&[true]);
+        digest.sender = MessageSender::Harness { notice };
+        queue_messages(&env, &[&digest]);
+        let trace_log = env.project_root.join("zellij-report-cancel-trace.log");
+        let mut command = traced_rimz(&env, &trace_log);
+        command
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0");
+        if deliver {
+            command.args([
+                "message",
+                "deliver",
+                "--message-id",
+                digest.message_id.as_str(),
+            ]);
+        } else {
+            command.args(["message", "sweep"]);
+        }
+        run_success(&mut command, "consume joined digest");
+        assert_subagent_report_canceled(&env, &digest, &trace_log);
     }
-    run_success(&mut command, "consume joined digest");
-    assert_subagent_report_canceled(&env, &digest, &trace_log);
 }
 
 fn assert_no_report_pane_write(trace_log: &Path) {
@@ -3475,7 +3481,10 @@ fn assert_subagent_report_delivered(joined: &[bool]) {
             .args(["message", "sweep"]),
         "sweep unconsumed digest",
     );
-    let prompt = format!("Type: AGENT_REPORT\nFrom: @rimz\nContent:\n{}", digest.text);
+    let prompt = format!(
+        "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}",
+        digest.text
+    );
     assert_text_then_enter(&trace_log, &prompt);
     assert_eq!(
         message_by_id(&env, &digest.message_id).status,

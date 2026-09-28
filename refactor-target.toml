@@ -477,7 +477,8 @@ path = "crates/rimz/src/store"
 # Delivery selection provenance crosses the locked acknowledgment callback seam.
 # `TeamRun` marks the leader's team-long run record.
 # Subagent context percent shares the parent gauge's arithmetic with the renderer.
-surface-budget = 334
+# Fleet digest matching is shared by batching, delivery cancellation, and reply waits.
+surface-budget = 335
 
 [[module]]
 path = "crates/rimz/src/theme"

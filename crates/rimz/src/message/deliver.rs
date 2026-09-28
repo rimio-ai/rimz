@@ -13,8 +13,8 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{gate_open_for_agent, max_delivery_attempts_from_env};
 use crate::store::message::{
-    AfterCondition, DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender,
-    MessageStatus, WhenCondition, older_ready_blocker, queue_head,
+    AfterCondition, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
+    WhenCondition, older_ready_blocker, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::store::writer::BlockerUpdate;
@@ -378,10 +378,8 @@ fn cancel_joined_subagent_report(
     message: &MessageRecord,
 ) -> crate::store::Result<bool> {
     if !matches!(
-        message.sender,
-        MessageSender::Harness {
-            notice: HarnessNotice::SubagentReport
-        }
+        &message.sender,
+        MessageSender::Harness { notice } if notice.is_fleet_digest()
     ) || !crate::harness::run::report::digest_fully_joined(store.paths(), &message.message_id)?
     {
         return Ok(false);

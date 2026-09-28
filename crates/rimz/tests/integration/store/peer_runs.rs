@@ -209,7 +209,7 @@ fn peer_ack_rejects_nonlauncher_and_uncorrelated_delivery() {
             MessageSender::Harness {
                 notice: HarnessNotice::SubagentReport,
             },
-            Some("Type: AGENT_REPORT\nFrom: @rimz\nContent:\nwork"),
+            Some("Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nwork"),
             MessageBody::Prompt,
         ),
         (launcher(), None, MessageBody::Prompt),

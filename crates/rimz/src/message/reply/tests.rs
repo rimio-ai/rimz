@@ -148,8 +148,27 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
     }
     let delivered = view(wake(HarnessNotice::Wait), MessageStatus::Delivered);
     assert_eq!(delivered.completion(&agent), TurnCompletion::Completed);
-    let report = view(wake(HarnessNotice::SubagentReport), MessageStatus::Queued);
-    assert_eq!(report.completion(&agent), TurnCompletion::Completed);
+    for notice in [
+        HarnessNotice::SubagentReport,
+        HarnessNotice::AgentReport,
+        HarnessNotice::TeamReport,
+    ] {
+        let fleet = notice != HarnessNotice::TeamReport;
+        for status in [
+            MessageStatus::Queued,
+            MessageStatus::Claimed,
+            MessageStatus::Sent,
+            MessageStatus::Delivered,
+        ] {
+            let report = view(wake(notice.clone()), status);
+            assert_eq!(report.completion(&agent), TurnCompletion::Completed);
+            assert!(!report.wake_in_flight(&agent, false));
+            assert_eq!(
+                report.wake_in_flight(&agent, true),
+                fleet && !status.is_terminal()
+            );
+        }
+    }
 }
 
 #[test]

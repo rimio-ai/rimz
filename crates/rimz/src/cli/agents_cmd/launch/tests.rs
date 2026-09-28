@@ -183,6 +183,7 @@ fn peer_receipt_uses_launcher_row_or_host_fallback() {
         "{receipt}"
     );
     assert!(!receipt.contains("AGENT_REPORT"), "{receipt}");
+    assert!(receipt.contains("the team's board path"), "{receipt}");
 }
 
 #[test]

@@ -1521,6 +1521,14 @@ fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
     let reports = team_reports();
     assert_eq!(reports.len(), 1);
     let report = &reports[0];
+    assert!(
+        report.text.ends_with(&format!(
+            "Memory: {}",
+            fixture.board().canonicalize().unwrap().display()
+        )),
+        "{}",
+        report.text
+    );
     assert_eq!(report.agent_id.as_str(), "boss");
     assert_eq!(report.gate, DeliveryGate::Done);
     let response = store
@@ -1553,10 +1561,12 @@ fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
             .list_messages()
             .unwrap()
             .iter()
-            .all(|message| message.sender
-                != MessageSender::Harness {
-                    notice: HarnessNotice::SubagentReport
-                }),
+            .all(|message| !matches!(
+                message.sender,
+                MessageSender::Harness {
+                    notice: HarnessNotice::SubagentReport | HarnessNotice::AgentReport
+                }
+            )),
         "team seats stay out of the launcher's AGENT_REPORT"
     );
 

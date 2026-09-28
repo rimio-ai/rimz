@@ -529,7 +529,7 @@ fn write_peer_receipt(
         if let Some(team) = run.team.as_ref() {
             writeln!(
                 w,
-                "@{name} leads {instance}. When its board reaches Done, a TEAM_REPORT from @rimz arrives at your next turn boundary with the leader's final response at {}; the seats do not report their turns. The team keeps its panes. To block instead: rimz teams wait {instance}",
+                "@{name} leads {instance}. When its board reaches Done, a TEAM_REPORT from @rimz arrives at your next turn boundary with the leader's final response at {} and the team's board path; the seats do not report their turns. The team keeps its panes. To block instead: rimz teams wait {instance}",
                 response.display(),
                 instance = team.instance,
             )?;

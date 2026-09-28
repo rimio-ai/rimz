@@ -292,7 +292,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
                     matches!(
                         message.sender,
                         rimz::store::message::MessageSender::Harness {
-                            notice: rimz::store::message::HarnessNotice::SubagentReport
+                            notice: rimz::store::message::HarnessNotice::AgentReport
                         }
                     )
                 })

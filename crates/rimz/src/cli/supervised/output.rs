@@ -67,17 +67,22 @@ pub(crate) fn write_background_receipt(
                 .to_string(),
         ),
     };
-    let (noun, wait) = if subagent {
+    let (noun, report, wait) = if subagent {
         (
             "subagent",
+            "SUBAGENT_REPORT",
             format!("rimz subagents wait {}", handles.join(" ")),
         )
     } else {
-        ("agent", format!("rimz agents wait {}", names.join(" ")))
+        (
+            "agent",
+            "AGENT_REPORT",
+            format!("rimz agents wait {}", names.join(" ")),
+        )
     };
     writeln!(
         err,
-        "{} {verb} in the background. Each {noun}'s captured response lands at {response_path} when that {noun} settles. When every {noun} you launched has settled, one AGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: {wait}",
+        "{} {verb} in the background. Each {noun}'s captured response lands at {response_path} when that {noun} settles. When every {noun} you launched has settled, one {report} from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: {wait}",
         handles.join(", "),
     )?;
     Ok(())

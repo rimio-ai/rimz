@@ -1501,7 +1501,8 @@ fn tmux_settled_subagent_reports_to_parent() {
         String::from_utf8_lossy(&first.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&first.stderr).contains("one AGENT_REPORT from @rimz reaches you"),
+        String::from_utf8_lossy(&first.stderr)
+            .contains("one SUBAGENT_REPORT from @rimz reaches you"),
         "background launch should explain callback delivery: {}",
         String::from_utf8_lossy(&first.stderr)
     );
@@ -1603,7 +1604,7 @@ fn tmux_settled_subagent_reports_to_parent() {
         &socket,
         &parent_pane_raw,
         |frame| {
-            frame.contains("Type: AGENT_REPORT")
+            frame.contains("Type: SUBAGENT_REPORT")
                 && frame.contains("From: @rimz")
                 && frame.contains(&first_digest_line)
                 && frame.contains(&second_digest_line)
@@ -1611,7 +1612,7 @@ fn tmux_settled_subagent_reports_to_parent() {
         CAPTURE_BUDGET,
     );
     assert!(
-        parent_frame.contains("Type: AGENT_REPORT")
+        parent_frame.contains("Type: SUBAGENT_REPORT")
             && parent_frame.contains("From: @rimz")
             && parent_frame.contains(&first_digest_line)
             && parent_frame.contains(&second_digest_line)
@@ -1647,7 +1648,7 @@ fn tmux_settled_subagent_reports_to_parent() {
         &serde_json::json!({
             "hook_event_name": "UserPromptSubmit",
             "session_id": parent_agent.agent_id.as_str(),
-            "prompt": format!("Type: AGENT_REPORT\nFrom: @rimz\nContent:\n{}", fleet_digest.text),
+            "prompt": format!("Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}", fleet_digest.text),
         })
         .to_string(),
         &parent_hook_env,
@@ -1773,7 +1774,7 @@ fn tmux_settled_subagent_reports_to_parent() {
                 &serde_json::json!({
                     "hook_event_name": event,
                     "session_id": parent_agent.agent_id.as_str(),
-                    "prompt": format!("Type: AGENT_REPORT\nFrom: @rimz\nContent:\n{}", report.text),
+                    "prompt": format!("Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}", report.text),
                     "last_assistant_message": "received the child result",
                 })
                 .to_string(),
@@ -1838,14 +1839,14 @@ fn tmux_settled_subagent_reports_to_parent() {
         &socket,
         &parent_pane_raw,
         |frame| {
-            frame.contains("Type: AGENT_REPORT")
+            frame.contains("Type: SUBAGENT_REPORT")
                 && frame.contains("From: @rimz")
                 && frame.contains(&unattended_digest_line)
         },
         CAPTURE_BUDGET,
     );
     assert!(
-        unattended_frame.contains("Type: AGENT_REPORT")
+        unattended_frame.contains("Type: SUBAGENT_REPORT")
             && unattended_frame.contains("From: @rimz")
             && unattended_frame.contains(&unattended_digest_line)
             && !unattended_frame.contains("stub done"),
@@ -1934,14 +1935,14 @@ fn tmux_settled_subagent_reports_to_parent() {
         &socket,
         &parent_pane_raw,
         |frame| {
-            frame.contains("Type: AGENT_REPORT")
+            frame.contains("Type: SUBAGENT_REPORT")
                 && frame.contains("From: @rimz")
                 && frame.contains(&timed_digest_line)
         },
         CAPTURE_BUDGET,
     );
     assert!(
-        parent_frame.contains("Type: AGENT_REPORT")
+        parent_frame.contains("Type: SUBAGENT_REPORT")
             && parent_frame.contains("From: @rimz")
             && parent_frame.contains(&timed_digest_line)
             && !parent_frame.contains("stub done"),
