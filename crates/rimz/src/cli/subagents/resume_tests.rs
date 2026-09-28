@@ -29,7 +29,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
     child.parent_agent_kind = Some(child.kind.clone());
     child.launch_depth = Some(1);
     child.worktree_path = Some("/tmp/project".to_owned());
-    let posture = rimz::harness::resume::resolve_posture(
+    let mut posture = rimz::harness::resume::resolve_posture(
         PostureRequest {
             profile: None,
             kind: &child.kind,
@@ -37,6 +37,15 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
         },
         &Default::default(),
     );
+    posture.launch.args = vec!["--model".to_owned(), "opus".to_owned()];
+    posture.launch.system_prompt_file = Some("/prompts/coder.md".into());
+    posture.launch.append_system_prompt_files = vec!["/prompts/extra.md".into()];
+    posture.launch.team_prompt = Some(rimz::harness::team_prompt::TeamPrompt {
+        consensus: rimz::harness::team_prompt::Consensus::BuiltIn,
+        files: vec!["/prompts/team.md".into()],
+    });
+    posture.launch.skills = Some(vec!["merge".parse().unwrap()]);
+    posture.launch.isolation_default = Some(rimz::config::Isolation::Sandbox);
     let mut older = RunRecord::new(
         rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/project")),
         child.kind.clone(),
@@ -62,30 +71,38 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 extra_args: Vec::new(),
             },
         );
-        assert!(
-            matches!(request.action, ExecAction::Resume { ref session_id, .. } if session_id == child.agent_id.as_str())
-        );
-        assert_eq!(request.run_id.as_ref(), Some(&newer.run_id));
-        assert!(request.subagent);
-        assert_eq!(request.close_pane_on_exit, !keep);
-        assert_eq!(request.exit_on_run_completion, !keep);
-        assert!(
-            request.worktree_path.is_none(),
-            "resume must not own checkout cleanup"
-        );
-        assert_eq!(request.identity.name, child.name);
-        assert!(request.identity.name_explicit);
         assert_eq!(
-            request.identity.launch_id,
-            child.launch_id.as_ref().map(ToString::to_string)
-        );
-        assert_eq!(
-            request.identity.params.parent_agent_id,
-            child.parent_agent_id
-        );
-        assert_eq!(
-            request.identity.params.parent_agent_kind,
-            child.parent_agent_kind
+            request,
+            ExecRequest {
+                kind: child.kind.clone(),
+                action: ExecAction::Resume {
+                    session_id: child.agent_id.to_string(),
+                    extra_args: posture.launch.args.clone(),
+                },
+                system_prompt_file: posture.launch.system_prompt_file.clone(),
+                append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
+                team_prompt: posture.launch.team_prompt.clone(),
+                skills: posture.launch.skills.clone(),
+                isolation_default: posture.launch.isolation_default,
+                provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
+                run_id: Some(newer.run_id.clone()),
+                worktree_path: None,
+                close_pane_on_exit: !keep,
+                exit_on_run_completion: !keep,
+                subagent: true,
+                identity: ExecIdentity {
+                    name: Some("otter".to_owned()),
+                    name_explicit: true,
+                    launch_id: Some("launch_child".to_owned()),
+                    params: rimz::agents::LaunchParams {
+                        parent_agent_id: child.parent_agent_id.clone(),
+                        parent_agent_kind: child.parent_agent_kind.clone(),
+                        launch_depth: Some(1),
+                        mode: posture.launch.mode,
+                        ..Default::default()
+                    },
+                },
+            }
         );
     }
 }

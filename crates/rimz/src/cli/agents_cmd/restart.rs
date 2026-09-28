@@ -516,6 +516,13 @@ mod tests {
             launch: rimz::harness::plan::ResumeLaunchPosture {
                 args: vec!["--model".to_owned(), "opus".to_owned()],
                 system_prompt_file: Some("/prompts/coder.md".into()),
+                append_system_prompt_files: vec!["/prompts/extra.md".into()],
+                team_prompt: Some(rimz::harness::team_prompt::TeamPrompt {
+                    consensus: rimz::harness::team_prompt::Consensus::BuiltIn,
+                    files: vec!["/prompts/team.md".into()],
+                }),
+                skills: Some(vec!["merge".parse().unwrap()]),
+                isolation_default: Some(rimz::config::Isolation::Sandbox),
                 model: Some("opus".to_owned()),
                 ..Default::default()
             },
@@ -531,16 +538,16 @@ mod tests {
         assert_eq!(
             request,
             ExecRequest {
-                isolation_default: None,
+                isolation_default: Some(rimz::config::Isolation::Sandbox),
                 kind: agent.kind.clone(),
                 action: ExecAction::Resume {
                     session_id: "a1".to_owned(),
                     extra_args: posture.launch.args.clone(),
                 },
                 system_prompt_file: posture.launch.system_prompt_file.clone(),
-                append_system_prompt_files: Vec::new(),
-                team_prompt: None,
-                skills: None,
+                append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
+                team_prompt: posture.launch.team_prompt.clone(),
+                skills: posture.launch.skills.clone(),
                 provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
                 run_id: None,
                 worktree_path: None,
