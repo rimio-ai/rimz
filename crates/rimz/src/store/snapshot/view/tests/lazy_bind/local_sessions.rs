@@ -821,6 +821,65 @@ fn exact_old_stamp_beside_a_newer_launch_reports_a_ghost_bind() {
 }
 
 #[test]
+fn ghost_diagnostics_distinguish_owner_co_resident_and_resume_binds() {
+    for path in ["owner", "co-resident", "resume"] {
+        let mut old = agent("codex", "session-old", AgentStatus::Running, 0).in_pane("%1");
+        old.launch_id = Some(AgentSessionId::from("launch_old"));
+        old.registered_at = Some(ago(60));
+        let mut fresh = agent("codex", "launch_new", AgentStatus::Idle, 1).in_pane("%1");
+        fresh.launch_id = Some(fresh.agent_id.clone());
+        fresh.registered_at = Some(ago(5));
+        let mut pane = pane("%1", "codex", "/repo/main");
+        if path != "owner" {
+            old.status = AgentStatus::Idle;
+            fresh.status = AgentStatus::Running;
+        }
+        if path == "resume" {
+            old.pane = None;
+            pane.resumed_session_id = Some(old.agent_id.clone());
+        }
+        let mut observed_old = identity_observation("codex", "session-old", 10);
+        observed_old.created_at = ago(60);
+        let mut observations = vec![observed_old];
+        if path == "co-resident" {
+            observations.push(identity_observation("codex", "launch_new", 1));
+        }
+        let (snapshot, diagnostics) = room(vec![old, fresh])
+            .with_local_sessions_and_diagnostics(std::slice::from_ref(&pane), observations);
+        if path == "resume" {
+            assert!(diagnostics.is_empty());
+        } else {
+            assert_eq!(
+                diagnostics,
+                [DiagEvent::GhostSessionBind {
+                    agent_kind: AgentKind::new_unchecked("codex"),
+                    agent_session_id: AgentSessionId::from("session-old"),
+                    pane_id: pane.pane_id.clone(),
+                }],
+                "{path}"
+            );
+        }
+        let bound_id = if path == "co-resident" {
+            "launch_new"
+        } else {
+            "session-old"
+        };
+        assert_eq!(
+            rollup_agent(&snapshot, bound_id).transcript_path.as_deref(),
+            Some(format!("/codex/{bound_id}.jsonl").as_str()),
+            "{path}"
+        );
+        if path == "co-resident" {
+            assert!(
+                rollup_agent(&snapshot, "session-old")
+                    .transcript_path
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
 fn ended_session_cannot_adopt_a_provisional_launch_identity() {
     let mut provisional = agent("codex", "launch_abc", AgentStatus::Running, 1).in_pane("%1");
     provisional.name = Some("writer".to_owned());

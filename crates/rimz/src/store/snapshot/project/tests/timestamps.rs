@@ -1,6 +1,102 @@
 use super::*;
 
 #[test]
+fn turn_ids_carry_supersede_and_clear_through_the_fold() {
+    let mut events = Vec::new();
+    for (signal, expected) in [
+        (
+            json!({"signal": "turn_started", "turn_id": "a"}),
+            (Some("a"), None, None),
+        ),
+        (
+            json!({"signal": "turn_started", "turn_id": "a"}),
+            (Some("a"), None, None),
+        ),
+        (
+            json!({"signal": "turn_started", "turn_id": "b"}),
+            (Some("b"), Some("a"), None),
+        ),
+        (
+            json!({"signal": "turn_interrupted", "turn_id": "b"}),
+            (Some("b"), Some("a"), Some("b")),
+        ),
+        (
+            json!({"signal": "tool_used", "mutates": false, "turn_id": "b"}),
+            (Some("b"), Some("a"), Some("b")),
+        ),
+        (
+            json!({"signal": "turn_started", "turn_id": "c"}),
+            (Some("c"), Some("b"), None),
+        ),
+        (
+            json!({"signal": "turn_interrupted", "turn_id": "c"}),
+            (Some("c"), Some("b"), Some("c")),
+        ),
+        (
+            json!({"signal": "registered"}),
+            (Some("c"), Some("b"), None),
+        ),
+    ] {
+        events.push(raw_lifecycle_at(
+            "codex",
+            events.len() as i64,
+            json!({
+                "agent_id": "session-a", "signal": signal,
+            }),
+        ));
+        let agents = reduce_agent_states(&events);
+        let state = &agents[0];
+        assert_eq!(
+            (
+                state.started_turn_id.as_deref(),
+                state.superseded_turn_id.as_deref(),
+                state.interrupted_turn_id.as_deref()
+            ),
+            expected,
+            "event {}",
+            events.len()
+        );
+    }
+}
+
+#[test]
+fn launch_carries_or_restamps_start_clocks_but_drops_end_clock() {
+    let mut prior = crate::testkit::agent_state("codex", "launch-a", epoch());
+    prior.turn_started_at = Some(epoch());
+    prior.user_turn_started_at = Some(epoch() + jiff::SignedDuration::from_secs(1));
+    prior.turn_ended_at = Some(epoch() + jiff::SignedDuration::from_secs(2));
+    for prompted in [false, true] {
+        let mut payload = launch_payload("launch-a", "lucid-atlas");
+        payload.prompt = prompted.then(|| "boot".to_owned());
+        let mut event = launch_event("codex", payload);
+        event.timestamp = epoch() + jiff::SignedDuration::from_secs(3);
+        let states = reduce_agent_states_seeded(
+            BTreeMap::from([((prior.kind.clone(), prior.agent_id.clone()), prior.clone())]),
+            &[event.clone()],
+        );
+        let state = states.values().next().unwrap();
+        assert_eq!(
+            state.turn_started_at,
+            if prompted {
+                Some(event.timestamp)
+            } else {
+                prior.turn_started_at
+            }
+        );
+        assert_eq!(
+            state.user_turn_started_at,
+            if prompted {
+                Some(event.timestamp)
+            } else {
+                prior.user_turn_started_at
+            }
+        );
+        // Reported launch asymmetry, not endorsed: lifecycle registration carries this clock.
+        assert_eq!(state.turn_ended_at, None);
+    }
+}
+
+#[test]
 fn turn_end_clock_tracks_completions_not_resume_or_tools() {
     let mut events = Vec::new();
     let mut expected = None;
