@@ -684,6 +684,10 @@ pub struct SidebarSubAgent {
     /// Window occupancy when known, otherwise a provider-reported whole-run total.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<SubAgentTokens>,
+    /// The child's reported context window size, the denominator for its
+    /// `Window` tokens; absent when the child reported none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
     /// Exact cumulative cost from a provider-native child feed, or from a
     /// pane-backed child's own session sidecar. Provider-native cost is already
     /// included in the parent transcript; pane-backed cost is added separately.
@@ -699,6 +703,15 @@ pub struct SidebarSubAgent {
     /// stable across refreshes, unlike the enrichment-fed `started_at`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
+}
+
+impl SidebarSubAgent {
+    pub(crate) fn context_gauge_percent(&self) -> Option<u8> {
+        let SubAgentTokens::Window(used) = self.tokens? else {
+            return None;
+        };
+        derive_percent(used, self.context_window?)
+    }
 }
 
 #[cfg(test)]

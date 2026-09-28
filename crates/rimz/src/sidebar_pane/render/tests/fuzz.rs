@@ -135,6 +135,7 @@ fn sub_agents(count: usize, text: &str) -> Vec<SidebarSubAgent> {
             tokens: Some(crate::store::snapshot::SubAgentTokens::Window(
                 (idx as u64).saturating_mul(1_000_000),
             )),
+            context_window: None,
             cost_usd: Some(999_999.99),
             elapsed_secs: Some(idx as i64),
             started_at: Some(fixed_now()),

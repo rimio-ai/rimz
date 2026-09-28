@@ -754,4 +754,35 @@ fn subagent_window_glyph_heats_like_the_parent_context() {
     };
     assert_eq!(glyph_style("12k"), Some(theme.heat_tone(0.0)));
     assert_eq!(glyph_style("400k"), Some(theme.heat_tone(1.0)));
+
+    for (window, percent) in [(Some(200_000), 95), (None, 0), (Some(0), 0)] {
+        for child in &mut snapshot.worktree_groups[0].rows[0]
+            .as_agent_mut()
+            .unwrap()
+            .sub_agents
+        {
+            child.tokens = Some(crate::store::snapshot::SubAgentTokens::Window(190_000));
+            child.context_window = window;
+        }
+        let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
+        let glyph = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content.contains("190k")))
+            .expect("child token line")
+            .spans
+            .iter()
+            .find(|span| span.content == theme.glyph(GlyphRole::TokensFilled))
+            .expect("child window glyph");
+        assert_eq!(
+            glyph.style.fg,
+            Some(crate::sidebar_pane::render::labels::severity_heat_color(
+                &theme,
+                crate::agents::ContextSeverity::Calm,
+                percent,
+                Some(190_000),
+                &Default::default(),
+            )),
+            "reported window {window:?}"
+        );
+    }
 }

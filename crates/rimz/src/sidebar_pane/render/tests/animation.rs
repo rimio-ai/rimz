@@ -780,6 +780,7 @@ fn selected_pet_action_follows_the_focused_card() {
             effort: None,
             description: None,
             tokens: None,
+            context_window: None,
             cost_usd: None,
             elapsed_secs: None,
             started_at: None,

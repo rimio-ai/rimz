@@ -413,7 +413,7 @@ fn sub_agent_metadata_line(
         return None;
     }
     let mut left = vec![Span::raw("      ")];
-    let mut prev_rendered = append_sub_agent_tokens(ctx, &mut left, sub.tokens, token_col);
+    let mut prev_rendered = append_sub_agent_tokens(ctx, &mut left, sub, token_col);
     append_sub_agent_model(
         theme,
         &mut left,
@@ -440,18 +440,18 @@ fn sub_agent_metadata_line(
 fn append_sub_agent_tokens(
     ctx: &RowCtx<'_>,
     left: &mut Vec<Span<'static>>,
-    tokens: Option<SubAgentTokens>,
+    sub: &SidebarSubAgent,
     token_col: usize,
 ) -> bool {
     if token_col == 0 {
         return false;
     }
     let theme = ctx.theme;
-    match tokens {
+    match sub.tokens {
         Some(tokens) => {
             let (total, glyph, style) = match tokens {
-                // The parent's `▤` heat ramp on the token axis alone: a child
-                // reports no window size, so no percent.
+                // Match the parent's heat ramp; without a reported window,
+                // only the token axis contributes.
                 SubAgentTokens::Window(total) => (
                     total,
                     theme.glyph(GlyphRole::TokensFilled).to_owned(),
@@ -459,7 +459,7 @@ fn append_sub_agent_tokens(
                         severity_heat_color(
                             theme,
                             ContextSeverity::Calm,
-                            0,
+                            sub.context_gauge_percent().unwrap_or(0),
                             Some(total),
                             ctx.bands,
                         ),

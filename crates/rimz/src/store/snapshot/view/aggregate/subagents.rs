@@ -244,6 +244,17 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
         };
         until.duration_since(started).as_secs().max(0)
     });
+    let tokens = child_tokens(child);
+    let context_window = if matches!(tokens, Some(SubAgentTokens::Window(_))) {
+        child
+            .context
+            .as_ref()
+            .and_then(|context| context.tokens.as_ref())
+            .and_then(|tokens| tokens.context_window_size)
+            .or(child.usage.context_window)
+    } else {
+        None
+    };
     SidebarSubAgent {
         id: child.agent_id.to_string(),
         prior_turn,
@@ -264,7 +275,8 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
             .subagent_description
             .clone()
             .or_else(|| child.description.clone()),
-        tokens: child_tokens(child),
+        tokens,
+        context_window,
         cost_usd: child_cost_usd(child),
         elapsed_secs,
         started_at,

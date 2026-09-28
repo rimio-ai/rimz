@@ -36,6 +36,7 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
         tokens: Some(crate::store::snapshot::SubAgentTokens::Window(
             40_000 + (index as u64) * 7_321,
         )),
+        context_window: None,
         cost_usd: None,
         elapsed_secs: Some(90 + index as i64),
         started_at: Some(now),
