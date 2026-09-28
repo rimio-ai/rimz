@@ -25,19 +25,27 @@ pub fn seed_live_zellij_room(
         },
     )
     .expect("write pane topology");
+    seed_sidebar_heartbeat(runtime, MuxName::Zellij, session_name, "seeded");
+}
+
+pub fn seed_sidebar_heartbeat(
+    runtime: &rimz::RuntimePaths,
+    mux: MuxName,
+    session_name: &str,
+    label: &str,
+) -> std::path::PathBuf {
+    runtime.ensure_dirs().expect("runtime dirs");
     let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
         runtime.workspace_id.clone(),
         rimz::ids::SidebarInstanceId::new(),
-        MuxName::Zellij,
+        mux,
         session_name,
-        runtime.sock_dir.join("sidebar.sock"),
+        runtime.sock_dir.join(format!("{label}.sock")),
         None,
     );
-    std::fs::write(
-        runtime.heartbeat_dir.join("sidebar.seeded.json"),
-        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
-    )
-    .expect("write heartbeat");
+    let path = runtime.heartbeat_dir.join(format!("sidebar.{label}.json"));
+    rimz::disk::atomic::write_temp_then_rename_cache(&path, &heartbeat).expect("write heartbeat");
+    path
 }
 
 /// Publish the renderer's first heartbeat after birth (not before the rebirth
@@ -60,6 +68,40 @@ impl ShimRoom {
             clients: None,
             panes: serde_json::from_str(panes).expect("shim room panes"),
         };
+        Self::watch_trace(trace, move |line| {
+            if line.contains("\tattach\t--create-background\t") {
+                seed_live_zellij_room(&runtime, &workspace.session_name, topology.panes.clone());
+            } else if line.contains("\trimz:dump_topology\t") {
+                topology.produced_at_ms = rimz::utils::time::unix_now_ms();
+                rimz::mux::zellij::pane_topology::write_pane_topology_cache(&runtime, &topology)
+                    .expect("publish shim room topology");
+            }
+        })
+    }
+
+    pub fn watch_tmux(
+        runtime: rimz::RuntimePaths,
+        session_name: &str,
+        trace: &std::path::Path,
+    ) -> Self {
+        let session_name = session_name.to_owned();
+        Self::watch_trace(trace, move |line| {
+            let args = line.split_whitespace().collect::<Vec<_>>();
+            if args.first() == Some(&"split-window")
+                && args.windows(2).any(|pair| pair == ["sidebar", "serve"])
+                && args
+                    .windows(2)
+                    .any(|pair| pair == ["--session-name", &session_name])
+            {
+                seed_sidebar_heartbeat(&runtime, MuxName::Tmux, &session_name, "seeded");
+            }
+        })
+    }
+
+    fn watch_trace(
+        trace: &std::path::Path,
+        mut publish: impl FnMut(&str) + Send + 'static,
+    ) -> Self {
         let trace = trace.to_owned();
         let mut consumed = std::fs::read_to_string(&trace)
             .unwrap_or_default()
@@ -72,21 +114,7 @@ impl ShimRoom {
                 let log = std::fs::read_to_string(&trace).unwrap_or_default();
                 let log = &log[..log.rfind('\n').map_or(0, |end| end + 1)];
                 for line in log.lines().skip(consumed) {
-                    if line.contains("\tattach\t--create-background\t") {
-                        seed_live_zellij_room(
-                            &runtime,
-                            &workspace.session_name,
-                            topology.panes.clone(),
-                        );
-                        continue;
-                    } else if !line.contains("\trimz:dump_topology\t") {
-                        continue;
-                    }
-                    topology.produced_at_ms = rimz::utils::time::unix_now_ms();
-                    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
-                        &runtime, &topology,
-                    )
-                    .expect("publish shim room topology");
+                    publish(line);
                 }
                 consumed = log.lines().count();
                 std::thread::sleep(Duration::from_millis(10));

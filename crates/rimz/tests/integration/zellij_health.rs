@@ -258,10 +258,17 @@ fn cold_cwd_attach_claims_recorded_room_owner() {
         .record_room_bin(&workspace, recorded_owner.clone(), "recorded".to_owned())
         .expect("record room owner");
     let shim = FakeZellij::new().with_tmux();
+    let tmux_log = env.project_root.join("tmux.log");
+    let _room = crate::common::room::ShimRoom::watch_tmux(
+        env.runtime_paths(),
+        &workspace.session_name,
+        &tmux_log,
+    );
 
     let output = env
         .rimz()
         .args(["attach", "--print"])
+        .env("RIMZ_TEST_TMUX_LOG", &tmux_log)
         .env("PATH", shim.bin_dir.path())
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
@@ -287,10 +294,17 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
     let shim = FakeZellij::new().with_tmux();
+    let tmux_log = env.project_root.join("tmux.log");
+    let _room = crate::common::room::ShimRoom::watch_tmux(
+        env.runtime_paths(),
+        &workspace.session_name,
+        &tmux_log,
+    );
 
     let output = env
         .rimz()
         .args(["--tmux", "start", "--no-attach"])
+        .env("RIMZ_TEST_TMUX_LOG", &tmux_log)
         .env("PATH", shim.bin_dir.path())
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
@@ -441,6 +455,9 @@ fn fake_tmux_script() -> &'static str {
     r#"#!/bin/sh
 if [ "$1" = "-S" ]; then
   shift 2
+fi
+if [ -n "$RIMZ_TEST_TMUX_LOG" ]; then
+  printf '%s\n' "$*" >> "$RIMZ_TEST_TMUX_LOG"
 fi
 if [ "$1" = "-V" ]; then
   printf 'tmux 3.5\n'

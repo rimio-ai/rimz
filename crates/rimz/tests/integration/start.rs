@@ -62,21 +62,12 @@ fn configure_actionable_hooks(
 
 fn seed_sidebar_heartbeat(env: &Env, session_name: &str, label: &str) -> PathBuf {
     let runtime = env.runtime_paths();
-    runtime.ensure_dirs().expect("runtime dirs");
-    let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
-        env.workspace_id.clone(),
-        rimz::ids::SidebarInstanceId::new(),
+    let path = crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
         rimz::MuxName::Zellij,
         session_name,
-        runtime.sock_dir.join(format!("{label}.sock")),
-        None,
+        label,
     );
-    let path = runtime.heartbeat_dir.join(format!("sidebar.{label}.json"));
-    std::fs::write(
-        &path,
-        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
-    )
-    .expect("write heartbeat");
     // A live renderer rewrites its heartbeat every beat; this one-shot seed has
     // no writer, so the runtime-claim sweep would rightly reap it once the run
     // outlasts `SIDEBAR_HEARTBEAT_TTL`. Dating it past the run's bound keeps it
