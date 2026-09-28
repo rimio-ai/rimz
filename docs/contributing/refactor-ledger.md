@@ -6,6 +6,8 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 Pass 28g records the lifecycle reaction in `harness/team_stage` on `6b02f6006`, rebased onto trunk `36dd87064`. The rank/hot survey measures `cli/hooks` cx at 32.2 versus 58.0 at the round base (`27c50ce2d`); remaining hook hotspots carry item verdicts rather than threshold-only splits. `harness/team_stage` cx is 12.5 versus 0.5, missing the planned ceiling of 5: `react_to_lifecycle` (cx 12.0) carries an item verdict for its pinned per-event order; the mapped observation retains cx 2.1 rather than leaving the hotspot table. Binary modules receive no ledger row.
 
+Pass 28c holds `mux/zellij` on the branch commit its row names (the merge re-stamps it): cx 53.5 to 22.3 against the round base `27c50ce2d`, with the companion balancer folded and no item verdicts added.
+
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
 - **Reopened** (churn past the row's count): none; pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`, pass 26b `sidebar_pane/app` and `sidebar_pane/render/sections`.
@@ -157,7 +159,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `mux` | holds; landed pass-18c | `9ba3585b9` | 30 | planner verdicts private; `SplitPaneOptions::from_command` owns the pane-command projection. |
 | `mux/(root)` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
 | `mux/tmux` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
-| `mux/zellij` | holds; landed pass-10 | `173682d90` | 30 | presence lifecycle deepened; topology schema is the public wire. |
+| `mux/zellij` | holds; landed pass-28c | `5d321ca88` | 30 | companion balancer folded into step selection and a boundary walk, one output-error constructor; native convergence stays adapter-side; topology schema is the public wire. Reopened by user decision as a complexity round over the pass-10 hold; `sidebar.rs` width convergence and `reap.rs` not reviewed. |
 | `mux/capabilities` | holds; landed pass-24c | `e083557ba` | 30 | only `drops_desktop_osc` public. |
 | `mux/width` | holds; landed pass-24c | `e083557ba` | 30 | width types named by integration and `cli`. |
 | `mux/focus_key` | holds; landed pass-24c | `e083557ba` | 30 | floored by `MuxBackend::register_room_key`. |
