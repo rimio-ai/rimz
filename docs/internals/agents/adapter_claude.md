@@ -284,7 +284,7 @@ A remote session's SDK child inherits the user's Claude hooks, but its events ar
 | authentication (2.1.157 and later) | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN` in the launch environment or settings `env`, or `apiKeyHelper` in settings |
 | endpoint (2.1.196 and later) | an `ANTHROPIC_BASE_URL` other than `https://api.anthropic.com`, or `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, or `CLAUDE_CODE_USE_FOUNDRY`, in the launch environment or settings `env` |
 
-A long-lived `CLAUDE_CODE_OAUTH_TOKEN` blocks because it can make model requests but cannot establish Remote Control; the fix message tells the user to unset it and run `claude auth login`. A ready result carries the host argv, prefixed with `env CLAUDE_CONFIG_DIR=<home>` when the room's login sets one. `remote_control_status` separately reads `remoteControlAtStartup: true` to light the provider dashboard's `⇅ rc` flag for ordinary pane sessions.
+A long-lived `CLAUDE_CODE_OAUTH_TOKEN` blocks because it can make model requests but cannot establish Remote Control; the fix message tells the user to unset it and run `claude auth login`. A ready result carries the host argv, prefixed with `env CLAUDE_CONFIG_DIR=<home>` when the room's login sets one. `remote_control_status` separately reads `remoteControlAtStartup: true` to light the provider dashboard's `⇅ rc` flag for ordinary pane sessions, withholding it under `disableRemoteControl` or when the version-gated authentication or endpoint rows above would block.
 
 ### Consent
 

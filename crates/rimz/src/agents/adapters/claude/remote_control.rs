@@ -147,7 +147,8 @@ pub(crate) fn pane_auto_enabled(settings: &ClaudeRcSettings, version: Option<Cli
     if auth_conflict && version.is_some_and(|found| found >= AUTH_ENV_BLOCKS_RC_SINCE) {
         return false;
     }
-    true
+    let endpoint_conflict = settings.env_endpoint_conflict || launch_endpoint_conflict();
+    !(endpoint_conflict && version.is_some_and(|found| found >= CUSTOM_ENDPOINT_BLOCKS_RC_SINCE))
 }
 
 fn launch_env_auth_conflict() -> bool {
@@ -582,6 +583,38 @@ mod tests {
             &conflict,
             Some(CliVersion::new(2, 1, 157))
         ));
+    }
+
+    #[test]
+    fn pane_auto_status_applies_the_custom_endpoint_gate_readiness_applies() {
+        let endpoint = ClaudeRcSettings {
+            remote_control_at_startup: true,
+            env_endpoint_conflict: true,
+            ..ClaudeRcSettings::default()
+        };
+
+        assert!(pane_auto_enabled(&endpoint, None));
+        assert!(pane_auto_enabled(
+            &endpoint,
+            Some(CliVersion::new(2, 1, 195))
+        ));
+        assert!(!pane_auto_enabled(
+            &endpoint,
+            Some(CUSTOM_ENDPOINT_BLOCKS_RC_SINCE)
+        ));
+        assert!(
+            readiness_from(
+                Some(CUSTOM_ENDPOINT_BLOCKS_RC_SINCE),
+                PathBuf::from("settings.json"),
+                endpoint,
+                false,
+                false,
+                false,
+                false,
+                None,
+            )
+            .is_err()
+        );
     }
 
     fn readiness_settings() -> ClaudeRcSettings {
