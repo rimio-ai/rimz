@@ -238,100 +238,85 @@ pub(super) fn record_conversation(
         LifecycleSignal::TurnStarted { .. } => {
             let mut entries = Vec::new();
             let mut matched_ids = Vec::new();
-            if !sections.is_empty() {
-                let mut open_ask_id = recorded
-                    .receipt
-                    .waiting_cleared
-                    .then(|| latest_open_native_ask(store, agent.spec().kind, agent_id.as_str()))
-                    .flatten()
-                    .and_then(|ask| ask.id);
-                // One read per turn, and none when no section needs it.
-                let mut run = None;
-                for section in sections {
-                    use rimz::store::message::SectionOrigin;
-                    use rimz::transcript::TranscriptKind;
-                    let (kind, from) = match &section.origin {
-                        SectionOrigin::Human => (TranscriptKind::Prompt, None),
-                        SectionOrigin::Agent(handle) => {
-                            (TranscriptKind::Message, Some(handle.clone()))
+            let mut open_ask_id = (recorded.receipt.waiting_cleared && !sections.is_empty())
+                .then(|| latest_open_native_ask(store, agent.spec().kind, agent_id.as_str()))
+                .flatten()
+                .and_then(|ask| ask.id);
+            // One read per turn, and none when no section needs it.
+            let mut run = None;
+            for section in sections {
+                use rimz::store::message::SectionOrigin;
+                use rimz::transcript::TranscriptKind;
+                let mut origin = Cow::Borrowed(&section.origin);
+                if section.origin == SectionOrigin::Human
+                    && section.record.is_none()
+                    && let Some(run) = run
+                        .get_or_insert_with(|| {
+                            run_id.and_then(|id| rimz::harness::run::load(store.paths(), id).ok())
+                        })
+                        .as_ref()
+                    && peel_rimz_blocks(&run.prompt).trim()
+                        == peel_rimz_blocks(&section.text).trim()
+                {
+                    origin = Cow::Owned(match run.prompt_origin() {
+                        RunPromptOrigin::Parent => {
+                            let parent = state.and_then(|state| {
+                                launched_parent_handle(
+                                    snapshot.as_ref()?,
+                                    state,
+                                    channel.as_deref(),
+                                )
+                            });
+                            parent.map_or(SectionOrigin::Harness, SectionOrigin::Agent)
                         }
-                        SectionOrigin::Subagent(handle) => {
-                            (TranscriptKind::SubagentReport, Some(handle.clone()))
-                        }
-                        SectionOrigin::Notice(handle) => {
-                            (TranscriptKind::Wait, Some(handle.clone()))
-                        }
-                        SectionOrigin::Harness => (
-                            TranscriptKind::Prompt,
-                            Some(rimz::transcript::HARNESS_FROM.to_owned()),
-                        ),
-                    };
-                    let mut entry = entry_base(kind, section.text.clone());
-                    entry.from = from;
-                    if section.origin == SectionOrigin::Human
-                        && section.record.is_none()
-                        && let Some(run) = run
-                            .get_or_insert_with(|| {
-                                run_id
-                                    .and_then(|id| rimz::harness::run::load(store.paths(), id).ok())
-                            })
-                            .as_ref()
-                        && peel_rimz_blocks(&run.prompt).trim()
-                            == peel_rimz_blocks(&section.text).trim()
-                    {
-                        match run.prompt_origin() {
-                            RunPromptOrigin::Parent => {
-                                let parent = state.and_then(|state| {
-                                    launched_parent_handle(
-                                        snapshot.as_ref()?,
-                                        state,
-                                        channel.as_deref(),
-                                    )
-                                });
-                                if let Some(handle) = parent {
-                                    entry.entry = TranscriptKind::Message;
-                                    entry.from = Some(handle);
-                                } else {
-                                    entry.from = Some(rimz::transcript::HARNESS_FROM.to_owned());
-                                }
-                            }
-                            RunPromptOrigin::Harness => {
-                                entry.from = Some(rimz::transcript::HARNESS_FROM.to_owned());
-                            }
-                            RunPromptOrigin::Human => {}
-                        }
-                    }
-                    if let Some(message) = section.record {
-                        entry.message_id = Some(message.message_id.clone());
-                        entry.enqueued_at = Some(message.enqueued_at);
-                        entry.reply_to = message.in_reply_to.clone();
-                        matched_ids.push(message.message_id.clone());
-                    }
-                    // Only direct human input answers an open ask. The entry's
-                    // origin is what says so, after the run record has had its
-                    // say: an attributed queue record arrived through RimZ's
-                    // separate delivery path, and a harness-authored launch
-                    // prompt would otherwise become the user's answer.
-                    let fallback_prompt = if entry.origin() == rimz::transcript::EntryOrigin::Human
-                        && entry.message_id.is_none()
-                        && entry.entry == rimz::transcript::TranscriptKind::Prompt
-                        && let Some(ask_id) = open_ask_id.take()
-                    {
-                        let fallback = entry.clone();
-                        entry.entry = rimz::transcript::TranscriptKind::Answer;
-                        entry.id = Some(ask_id);
-                        entry.from = Some(rimz::transcript::HUMAN_FROM.to_owned());
-                        entry.answers = vec![rimz::transcript::AskAnswer {
-                            question: None,
-                            chosen: vec![entry.text.clone()],
-                            note: None,
-                        }];
-                        Some(fallback)
-                    } else {
-                        None
-                    };
-                    entries.push((entry, fallback_prompt));
+                        RunPromptOrigin::Harness => SectionOrigin::Harness,
+                        RunPromptOrigin::Human => SectionOrigin::Human,
+                    });
                 }
+                let (kind, from) = match origin.as_ref() {
+                    SectionOrigin::Human => (TranscriptKind::Prompt, None),
+                    SectionOrigin::Agent(handle) => (TranscriptKind::Message, Some(handle.clone())),
+                    SectionOrigin::Subagent(handle) => {
+                        (TranscriptKind::SubagentReport, Some(handle.clone()))
+                    }
+                    SectionOrigin::Notice(handle) => (TranscriptKind::Wait, Some(handle.clone())),
+                    SectionOrigin::Harness => (
+                        TranscriptKind::Prompt,
+                        Some(rimz::transcript::HARNESS_FROM.to_owned()),
+                    ),
+                };
+                let mut entry = entry_base(kind, section.text.clone());
+                entry.from = from;
+                if let Some(message) = section.record {
+                    entry.message_id = Some(message.message_id.clone());
+                    entry.enqueued_at = Some(message.enqueued_at);
+                    entry.reply_to = message.in_reply_to.clone();
+                    matched_ids.push(message.message_id.clone());
+                }
+                // Only direct human input answers an open ask. The entry's
+                // origin is what says so, after the run record has had its
+                // say: an attributed queue record arrived through RimZ's
+                // separate delivery path, and a harness-authored launch
+                // prompt would otherwise become the user's answer.
+                let fallback_prompt = if entry.origin() == rimz::transcript::EntryOrigin::Human
+                    && entry.message_id.is_none()
+                    && entry.entry == rimz::transcript::TranscriptKind::Prompt
+                    && let Some(ask_id) = open_ask_id.take()
+                {
+                    let fallback = entry.clone();
+                    entry.entry = rimz::transcript::TranscriptKind::Answer;
+                    entry.id = Some(ask_id);
+                    entry.from = Some(rimz::transcript::HUMAN_FROM.to_owned());
+                    entry.answers = vec![rimz::transcript::AskAnswer {
+                        question: None,
+                        chosen: vec![entry.text.clone()],
+                        note: None,
+                    }];
+                    Some(fallback)
+                } else {
+                    None
+                };
+                entries.push((entry, fallback_prompt));
             }
             replace_turn_opened_by(store, agent, &agent_id, matched_ids);
             for (entry, fallback_prompt) in entries {
