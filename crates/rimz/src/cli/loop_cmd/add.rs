@@ -18,6 +18,7 @@ enum AddTaskAction {
     },
     Deliver {
         target: TaskTarget,
+        selector: Option<schedule::signal::SignalSelector>,
         matches: BTreeMap<String, String>,
     },
     CheckOnly,
@@ -41,8 +42,12 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let project_root = workspace.project_root.clone();
     let action = resolve_add_action(&args, &workspace, action_kind)?;
     let action = match action {
-        AddTaskAction::Deliver { target, matches } => {
-            return add_delivery(&args, &workspace, target, matches);
+        AddTaskAction::Deliver {
+            target,
+            selector,
+            matches,
+        } => {
+            return add_delivery(&args, &workspace, target, selector, matches);
         }
         action => action,
     };
@@ -106,12 +111,13 @@ fn add_delivery(
     args: &AddArgs,
     workspace: &rimz::ResolvedWorkspace,
     target: TaskTarget,
+    selector: Option<schedule::signal::SignalSelector>,
     matches: BTreeMap<String, String>,
 ) -> Result<()> {
     let timing = resolve_add_timing(args)?;
-    let trigger = if let Some(raw) = &args.signal {
+    let trigger = if let Some(selector) = selector {
         DeliveryTrigger::Signal {
-            selector: schedule::parse_signal_selector(&args.name, raw, Some(&matches))?,
+            selector,
             matches,
             lifetime: if args.once {
                 SubscriptionLifetime::Once
@@ -173,12 +179,12 @@ fn add_delivery(
         },
     )?;
     let mut out = ui::out();
-    let ArmOutcome::Armed { name, task } = outcome else {
-        let ArmOutcome::AlreadySubscribed { name } = outcome else {
-            unreachable!()
-        };
-        writeln!(out, "already subscribed as {name}")?;
-        return Ok(());
+    let (name, task) = match outcome {
+        ArmOutcome::Armed { name, task } => (name, task),
+        ArmOutcome::AlreadySubscribed { name } => {
+            writeln!(out, "already subscribed as {name}")?;
+            return Ok(());
+        }
     };
     writeln!(out, "added loop task `{name}`")?;
     let entry = task.entry();
@@ -314,9 +320,7 @@ fn resolve_add_action(
         }
         TaskActionKind::Deliver => {
             let address = args.wait.as_deref().unwrap_or_default();
-            let (target, matches) = resolve_delivery_target(workspace, args, address)?;
-            validate_self_wait(args, &target)?;
-            AddTaskAction::Deliver { target, matches }
+            resolve_delivery_target(workspace, args, address)?
         }
         TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
     };
@@ -572,7 +576,7 @@ fn resolve_delivery_target(
     workspace: &rimz::ResolvedWorkspace,
     args: &AddArgs,
     address: &str,
-) -> Result<(TaskTarget, BTreeMap<String, String>)> {
+) -> Result<AddTaskAction> {
     let store = crate::cli::open_store(workspace)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let channel = crate::cli::current_channel(workspace);
@@ -601,19 +605,25 @@ fn resolve_delivery_target(
         .map(|caller| rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller))
         .transpose()?
         .unwrap_or(agent);
+    let target = TaskTarget {
+        kind: agent.kind.clone(),
+        session: agent.agent_id.clone(),
+        handle: rimz::address::agent_handle(agent, &peers, true),
+    };
     let mut matches = parse_matches(&args.matches)?;
-    if let Some(raw) = args.signal.as_deref() {
+    let selector = if let Some(raw) = args.signal.as_deref() {
         let selector = schedule::parse_signal_selector(&args.name, raw, Some(&matches))?;
         arm::default_signal_matches(workspace, &snapshot.agents, scope, &selector, &mut matches)?;
-    }
-    Ok((
-        TaskTarget {
-            kind: agent.kind.clone(),
-            session: agent.agent_id.clone(),
-            handle: rimz::address::agent_handle(agent, &peers, true),
-        },
+        arm::validate_self_signal(&selector, &matches, &target)?;
+        Some(selector)
+    } else {
+        None
+    };
+    Ok(AddTaskAction::Deliver {
+        target,
+        selector,
         matches,
-    ))
+    })
 }
 
 fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
@@ -628,15 +638,6 @@ fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
             Ok((key.to_owned(), value.to_owned()))
         })
         .collect()
-}
-
-fn validate_self_wait(args: &AddArgs, target: &TaskTarget) -> Result<()> {
-    let Some(raw) = args.signal.as_deref() else {
-        return Ok(());
-    };
-    let matches = parse_matches(&args.matches)?;
-    let selector = schedule::parse_signal_selector(&args.name, raw, Some(&matches))?;
-    Ok(arm::validate_self_signal(&selector, &matches, target)?)
 }
 
 fn self_wait_guard_message() -> &'static str {
