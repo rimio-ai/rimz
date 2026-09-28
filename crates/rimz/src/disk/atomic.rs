@@ -78,10 +78,6 @@ pub fn write_executable_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()
 
 /// Copy an executable through a durable mode-0755 temp, checking it before publication.
 #[must_use = "durability barrier; check the result"]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staging caller lands in the next commit")
-)]
 pub(crate) fn copy_executable_atomically<E: From<AtomicErr>>(
     src: &Path,
     dst: &Path,
