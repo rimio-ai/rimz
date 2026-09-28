@@ -82,10 +82,11 @@ pub fn write_session_sync(target: Option<(&str, &str)>) -> io::Result<()> {
     stdout.flush()
 }
 
-pub(crate) fn pixel_daemon_records() -> Vec<(u32, u32)> {
+pub(crate) fn pixel_ttyd_pids() -> Vec<u32> {
     [ttyd::pixel_daemon_record(), ttyd::pixel_broadcast_record()]
         .into_iter()
         .flatten()
+        .filter_map(|(pid, protocol)| (protocol == TTYD_PIXEL_PROTOCOL).then_some(pid))
         .collect()
 }
 
