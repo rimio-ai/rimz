@@ -299,16 +299,16 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
 /// Up to two indented lines for each visible child. Line 1 leads with the same
 /// live cell an agent row wears — the thinking head while the child reasons,
 /// the working fill while it acts, or the static `✓`/`!` verdict once it
-/// finishes — then its type and description, with how long ago a finished child
-/// landed and its known cost pinned right. Line 2 carries the typed token
-/// figure, model, and reasoning effort on a per-card column grid, with elapsed
-/// work pinned right. Children stay at the soft middle weight and indent past
-/// the parent's stats. The token glyph distinguishes current window occupancy
-/// from a whole-run total; unknown figures leave a blank slot. A metadata-free
-/// child degrades to its bare type line, while a finished child keeps metadata
-/// but drops the elapsed clock. Entry lines for `rows`, laid on the metadata
-/// grid of every child in `grid`, so rows rendered in separate bands share one
-/// set of columns.
+/// finishes — then its type and description, with its known cost pinned right.
+/// Line 2 carries the typed token figure, model, and reasoning effort on a
+/// per-card column grid, with the clock pinned right: elapsed work while the
+/// child runs, how long ago it landed once it finishes. Children stay at the
+/// soft middle weight and indent past the parent's stats. The token glyph
+/// distinguishes current window occupancy from a whole-run total; unknown
+/// figures leave a blank slot. A metadata-free finished child degrades to its
+/// bare type line, its landed age pinned ahead of its cost. Entry lines for
+/// `rows`, laid on the metadata grid of every child in `grid`, so rows rendered
+/// in separate bands share one set of columns.
 fn sub_agent_entry_lines(
     ctx: &RowCtx<'_>,
     grid: &[SidebarSubAgent],
@@ -352,10 +352,11 @@ fn sub_agent_entry_lines(
             .description
             .as_deref()
             .or(sub.task.as_deref().filter(|task| *task != sub.name));
-        // A landed child pins how long ago it finished, ahead of its cost; a
-        // live child's elapsed clock rides line 2 instead.
+        // The clock rides line 2; a metadata-free landed child has no line 2,
+        // so it pins how long ago it finished ahead of its cost instead.
+        let detail_line = sub_agent_metadata_line(ctx, sub, token_col, model_col);
         let mut right = Vec::new();
-        if sub_agent_finished(sub) {
+        if detail_line.is_none() && sub_agent_finished(sub) {
             right.push(Span::styled(
                 elapsed_cluster(theme, age_secs(sub.last_activity, ctx.now)),
                 theme.muted(),
@@ -378,7 +379,7 @@ fn sub_agent_entry_lines(
                 kind: sub.name.clone(),
                 headline: detail.map(str::to_owned),
                 right,
-                detail: sub_agent_metadata_line(ctx, sub, token_col, model_col),
+                detail: detail_line,
             },
         );
     }
@@ -404,9 +405,8 @@ fn sub_agent_metadata_line(
 ) -> Option<Line<'static>> {
     let theme = ctx.theme;
     let tokens = sub_agent_tokens(sub);
-    let elapsed = (!sub_agent_finished(sub))
-        .then_some(sub.elapsed_secs)
-        .flatten();
+    let finished = sub_agent_finished(sub);
+    let elapsed = (!finished).then_some(sub.elapsed_secs).flatten();
     let model = sub.model.as_deref();
     let effort = sub.effort.as_deref();
     if tokens.is_none() && elapsed.is_none() && model.is_none() && effort.is_none() {
@@ -430,11 +430,15 @@ fn sub_agent_metadata_line(
         model_col,
         prev_rendered,
     );
-    Some(pin_right(
-        left,
-        sub_agent_elapsed(theme, elapsed),
-        content_width(ctx.width),
-    ))
+    let clock = if finished {
+        vec![Span::styled(
+            elapsed_cluster(theme, age_secs(sub.last_activity, ctx.now)),
+            theme.muted(),
+        )]
+    } else {
+        sub_agent_elapsed(theme, elapsed)
+    };
+    Some(pin_right(left, clock, content_width(ctx.width)))
 }
 
 fn append_sub_agent_tokens(

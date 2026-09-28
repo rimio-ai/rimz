@@ -17,8 +17,8 @@ expression: rendered
 ▌   subagents (2)                                   ▐
 ▌    ⠁ Plan · run focused nextest                    ▐
 ▌      󰿦 18k · Haiku · xhigh                    󰪞  3m▐
-▌     Explore · audit auth watcher changes     󰪞 <1m▐
-▌       22k · Haiku · xhigh                         ▐
+▌     Explore · audit auth watcher changes          ▐
+▌       22k · Haiku · xhigh                    󰪞 <1m▐
 ▎⢄ claude · Opus 4.8 · xhigh · 1m              $12.62🮇
 ▎  audit provider spend                              🮇
 ▎  󰕰 ━━━━━━━━━━━━━━━━━╺━╺──────────────────────   29%🮇

@@ -199,8 +199,8 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
         .find(|line| line.contains("Explore · locate the render seam"))
         .expect("priced child line");
     assert!(
-        priced_line.ends_with("◔ <1m $0.42▐"),
-        "the landed age and the exact child cost pin right on line 1:\n{rendered}"
+        priced_line.ends_with(" $0.42▐") && !priced_line.contains('◔'),
+        "the exact child cost pins right on line 1, the clock stays off it:\n{rendered}"
     );
     // The running child's leading cell is the thinking orbit (frame 0 at the
     // test's fixed animation phase), the agent-row head vocabulary verbatim.
@@ -230,8 +230,8 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
         .find(|line| line.contains("▤ 12k"))
         .expect("finished child metadata line");
     assert!(
-        !finished_line.contains('◔'),
-        "the finished child has no elapsed clock:\n{rendered}"
+        finished_line.ends_with("◔ <1m▐"),
+        "the finished child's landed age pins right on line 2:\n{rendered}"
     );
     // Both metadata-bearing children render a second line.
     let subagent_metadata_rows = rendered
@@ -554,6 +554,10 @@ fn metadata_free_finished_subagent_stays_one_line() {
             .get(child_line + 1)
             .is_some_and(|line| line.starts_with("▌      ")),
         "metadata-free completion stays one line:\n{rendered}"
+    );
+    assert!(
+        lines[child_line].contains('◔'),
+        "with no line 2, the landed age pins on line 1:\n{rendered}"
     );
 }
 #[test]
