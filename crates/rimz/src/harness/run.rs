@@ -682,7 +682,10 @@ pub fn settle_lifecycle(
             token_totals.map(|totals| totals.input),
             token_totals.map(|totals| totals.output),
         )
-        .unwrap_or(record)
+        .unwrap_or_else(|err| {
+            tracing::warn!(run_id = %record.run_id, error = %err, "could not record supervised run spend");
+            record
+        })
     }))
 }
 
