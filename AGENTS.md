@@ -160,7 +160,7 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 - [dependabot-loop.md](./docs/contributing/dependabot-loop.md) — the worktree-isolated dependency repair loop, duplicate prevention, and merge-time closure.
 - [agent-adapters.md](./docs/contributing/agent-adapters.md) — the built-in adapter integration playbook: protocol reference to landed adapter, step by step, with the deliverables checklist.
 - [model-upgrades.md](./docs/contributing/model-upgrades.md) — what a new provider model needs: the Codex alias table, its effort check, and the two pricing cases upstream leaves silent.
-- [atlas.md](./docs/contributing/atlas.md) — operating guide for `cargo xtask atlas`: the four verbs, the pass contract, and the `refactor-target.toml` schema.
+- [atlas.md](./docs/contributing/atlas.md) — operating guide for `cargo xtask atlas`: the five verbs (including raw index diagnosis), the pass contract, and the `refactor-target.toml` schema.
 - [refactor-program.md](./docs/contributing/refactor-program.md) — the whole-repository refactor as a program of passes: seam and module passes, the pass sequence, concurrency rules, and what a pass records; [refactor-ledger.md](./docs/contributing/refactor-ledger.md) is the memory between passes and the program's current status.
 - [sidebar-screenshots.md](./docs/contributing/sidebar-screenshots.md) — contributor PNG capture workflow for sidebar frames.
 - [sidebar-live-check.md](./docs/contributing/sidebar-live-check.md) — live sidebar clock, stage-flip, and click-routing checks in disposable tmux and Zellij rooms, and the native-subagent replay.

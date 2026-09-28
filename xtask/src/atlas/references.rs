@@ -94,16 +94,20 @@ pub(super) struct References {
     pub(super) edges: Vec<Edge>,
 }
 
+pub(super) fn read_index(index_path: &Path) -> Result<Index> {
+    let bytes = fs::read(index_path)
+        .with_context(|| format!("reading SCIP index {}", index_path.display()))?;
+    Index::parse_from_bytes(&bytes)
+        .with_context(|| format!("parsing SCIP index {}", index_path.display()))
+}
+
 impl References {
     pub(super) fn load(
         index_path: &Path,
         syntax: &SyntaxReport,
         sources: &[Source],
     ) -> Result<Self> {
-        let bytes = fs::read(index_path)
-            .with_context(|| format!("reading SCIP index {}", index_path.display()))?;
-        let index = Index::parse_from_bytes(&bytes)
-            .with_context(|| format!("parsing SCIP index {}", index_path.display()))?;
+        let index = read_index(index_path)?;
         Ok(Self::from_index(&index, syntax, sources))
     }
 
@@ -239,14 +243,14 @@ struct ReferenceSite {
     site_kind: SourceKind,
 }
 
-fn normalized_document_path(relative_path: &str) -> PathBuf {
+pub(super) fn normalized_document_path(relative_path: &str) -> PathBuf {
     Path::new(relative_path)
         .components()
         .filter(|component| !matches!(component, Component::CurDir))
         .collect()
 }
 
-fn occurrence_line(occurrence: &Occurrence) -> Option<usize> {
+pub(super) fn occurrence_line(occurrence: &Occurrence) -> Option<usize> {
     let zero_based = match occurrence.typed_range.as_ref() {
         Some(occurrence::Typed_range::SingleLineRange(range)) => range.line,
         Some(occurrence::Typed_range::MultiLineRange(range)) => range.start_line,
@@ -256,11 +260,11 @@ fn occurrence_line(occurrence: &Occurrence) -> Option<usize> {
     usize::try_from(zero_based).ok()?.checked_add(1)
 }
 
-fn has_role(occurrence: &Occurrence, role: SymbolRole) -> bool {
+pub(super) fn has_role(occurrence: &Occurrence, role: SymbolRole) -> bool {
     occurrence.symbol_roles & role as i32 != 0
 }
 
-fn descriptor_tail_matches(symbol: &str, name: &str) -> bool {
+pub(super) fn descriptor_tail_matches(symbol: &str, name: &str) -> bool {
     ["().", "#", ".", "/"]
         .iter()
         .any(|suffix| symbol.ends_with(&format!("{name}{suffix}")))

@@ -1,6 +1,6 @@
 # Atlas: refactor analysis
 
-`cargo xtask atlas` produces bounded Markdown evidence for architecture review. Its four commands survey a scope, inspect a module, prove a pass, and keep target constraints from regressing. Atlas locates and sizes; reading decides. Every section below is tagged **finding** (a row is a candidate on its own) or **evidence** (a row needs a reader), and the [vocabulary](#vocabulary) at the end defines the terms the output does not explain.
+`cargo xtask atlas` produces Markdown evidence for architecture review. Its five commands survey a scope, inspect a module, list raw index occurrences, prove a pass, and keep target constraints from regressing. Atlas locates and sizes; reading decides. Every section below is tagged **finding** (a row is a candidate on its own) or **evidence** (a row needs a reader), and the [vocabulary](#vocabulary) at the end defines the terms the output does not explain.
 
 ## Review workflow
 
@@ -86,9 +86,25 @@ cargo xtask atlas conform --ratchet
 cargo xtask atlas conform --tighten --only crates/rimz/src/store
 ```
 
+## `index`
+
+**Evidence.** `cargo xtask atlas index [--doc <path>] [--symbol <name>]` lists raw SCIP occurrences before atlas filters references. Compare it with `inspect`: a site listed here but absent there was filtered by atlas; a site absent from both is an index miss. At least one selector is required. `--doc` is root-relative (`./` is normalized); `--symbol` takes one bare item name, such as `open`, using the same descriptor-tail match as atlas's item join. Use the full SCIP symbol in the output to distinguish same-named items.
+
+| Selectors | Selected symbols | Listed occurrences |
+| --- | --- | --- |
+| `--symbol N` | Every non-local symbol matching N | Every occurrence of those symbols, index-wide |
+| `--doc D --symbol N` | Matching symbols with a definition in D | Every occurrence of those symbols, index-wide |
+| `--doc D` | Every non-local symbol occurring in D | Non-local occurrences in D only |
+
+The header names the index, selectors, and whether a requested document exists in the index. An absent document or empty match is a successful answer. `symbols` lists full symbols, available display names, SCIP kinds and enclosing symbols, all definition sites, and listed occurrence counts. `occurrences` lists normalized 1-based sites, roles, symbols, and enclosing functions, including documents outside atlas's source walk. Both sections are sorted and untruncated. Use `--out`, `--section`, or JSON with `jq` for large queries.
+
+Local symbols are omitted and counted under `unlisted.locals`: index-wide for symbol queries, in D for document-only queries. Selected occurrences without a line are counted under `unlisted.no_line`. Roles decode all seven SCIP bits; rust-analyzer currently sets only `definition`, with plain references carrying no bits (`[]` in JSON, `reference` in Markdown). Enclosing functions come from atlas's source syntax, not SCIP's unreliable enclosing ranges; non-production sources and files that fail to parse have no enclosing function.
+
+The verb is read-only apart from the [index cache](#index-cache) and a requested `--out`: a miss builds the current tree's index, while a hit refreshes its timestamp and participates in keeping the two newest indexes. It does not accept a foreign index or base revision.
+
 ## Output flags
 
-Every report verb (`survey`, `inspect`, `diff`) takes the same three flags. `--json` emits the full report as JSON (`--top` bounds Markdown only); `--out <file>` writes it there instead of stdout; `--section <a,b>` keeps only the named sections in either form. An agent reading a dossier should write it with `--out` and narrow it with `--section` or `jq` rather than let the whole report through stdout.
+Every report verb (`survey`, `inspect`, `index`, `diff`) takes the same three flags. `--json` emits the full report as JSON (`--top` bounds Markdown only where supported); `--out <file>` writes it there instead of stdout; `--section <a,b>` keeps only the named sections in either form. An agent reading a dossier should write it with `--out` and narrow it with `--section` or `jq` rather than let the whole report through stdout.
 
 ```sh
 cargo xtask atlas inspect --module crates/rimz/src/store --json --section verdict,surface --out /tmp/store.json
@@ -96,7 +112,7 @@ cargo xtask atlas inspect --module crates/rimz/src/store --json --section verdic
 
 ## Index cache
 
-`inspect` and `diff` read a rust-analyzer SCIP index of the whole workspace, cached under `target/atlas/index-<key>.scip` where the key hashes every Rust source and `Cargo.lock`. The first run after any source change generates it, which takes over a minute and says so on stderr; later runs on the same tree reuse it. `diff` indexes `--base` in a temporary checkout under the same cache, so its first run generates twice. The two newest indexes are kept. `survey` and `conform` never build one.
+`inspect`, `index`, and `diff` read a rust-analyzer SCIP index of the whole workspace, cached under `target/atlas/index-<key>.scip` where the key hashes every Rust source and `Cargo.lock`. The first run after any source change generates it, which takes over a minute and says so on stderr; later runs on the same tree reuse it. `diff` indexes `--base` in a temporary checkout under the same cache, so its first run generates twice. The two newest indexes are kept. `survey` and `conform` never build one.
 
 ## Pass contract v2
 
