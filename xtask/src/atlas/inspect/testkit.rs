@@ -5,6 +5,7 @@ use std::process::Command;
 use scip::types::{Occurrence, SymbolRole};
 
 use super::super::references::{Edge, EdgeKind, FnRef};
+use super::super::sources::SourceKind;
 use super::selector::ModuleSelector;
 
 pub(super) fn crate_with_files(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -36,7 +37,12 @@ pub(super) fn occurrence(line: i32, symbol: &str, definition: bool) -> Occurrenc
     }
 }
 
-pub(super) fn edge(item: &str, from: &str, function: Option<(&str, usize)>, test: bool) -> Edge {
+pub(super) fn edge(
+    item: &str,
+    from: &str,
+    function: Option<(&str, usize)>,
+    site_kind: SourceKind,
+) -> Edge {
     Edge {
         from_path: PathBuf::from(format!("crates/demo/src/{from}.rs")),
         to_path: PathBuf::from("crates/demo/src/store.rs"),
@@ -50,7 +56,7 @@ pub(super) fn edge(item: &str, from: &str, function: Option<(&str, usize)>, test
         to_line: 1,
         item: item.to_owned(),
         kind: EdgeKind::Reference,
-        test,
+        site_kind,
     }
 }
 

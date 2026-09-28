@@ -8,7 +8,7 @@ use scip::types::{Index, Occurrence, SymbolRole, occurrence};
 use serde::Serialize;
 
 use super::modules::crate_module_for_path;
-use super::sources::Source;
+use super::sources::{Source, SourceKind};
 use super::syntax::{FileSyntax, PubItem, SyntaxReport};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -82,7 +82,7 @@ pub(super) struct Edge {
     pub(super) to_line: usize,
     pub(super) item: String,
     pub(super) kind: EdgeKind,
-    pub(super) test: bool,
+    pub(super) site_kind: SourceKind,
 }
 
 #[derive(Debug, Default)]
@@ -149,10 +149,11 @@ impl References {
                     }
                     continue;
                 }
-                let test = match file_syntax.and_then(|file| file.cfg_kind_at(line)) {
-                    Some(super::sources::SourceKind::TestSupport) => continue,
-                    Some(super::sources::SourceKind::Test) => true,
-                    Some(super::sources::SourceKind::Production) | None => source.is_test(),
+                let site_kind = match file_syntax.and_then(|file| file.cfg_kind_at(line)) {
+                    Some(SourceKind::TestSupport) => continue,
+                    Some(SourceKind::Test) => SourceKind::Test,
+                    Some(SourceKind::Production) | None if source.is_test() => SourceKind::Test,
+                    _ => SourceKind::Production,
                 };
                 occurrences
                     .entry(&occurrence.symbol)
@@ -161,7 +162,7 @@ impl References {
                         path: path.clone(),
                         module: module.clone(),
                         line,
-                        test,
+                        site_kind,
                     });
             }
         }
@@ -184,7 +185,7 @@ impl References {
                 let mut item_refs = ItemRefs::default();
                 for symbol in symbols {
                     for site in occurrences.get(symbol).into_iter().flatten() {
-                        if site.test {
+                        if site.site_kind == SourceKind::Test {
                             item_refs.tests.insert(site.module.clone());
                             item_refs.test_count += 1;
                         } else {
@@ -208,7 +209,7 @@ impl References {
                             to_line: item.line,
                             item: item.name.clone(),
                             kind: EdgeKind::Reference,
-                            test: site.test,
+                            site_kind: site.site_kind,
                         });
                     }
                 }
@@ -224,7 +225,7 @@ struct ReferenceSite {
     path: PathBuf,
     module: String,
     line: usize,
-    test: bool,
+    site_kind: SourceKind,
 }
 
 fn normalized_document_path(relative_path: &str) -> PathBuf {
@@ -346,11 +347,21 @@ mod tests {
                 && edge.to.is_empty()
                 && edge.to_path == Path::new("crates/demo/src/lib.rs")
         }));
-        assert_eq!(references.edges.iter().filter(|edge| edge.test).count(), 2);
+        assert_eq!(
+            references
+                .edges
+                .iter()
+                .filter(|edge| edge.site_kind == SourceKind::Test)
+                .count(),
+            2
+        );
         let inline_test = references
             .edges
             .iter()
-            .find(|edge| edge.test && edge.from_path == Path::new("crates/demo/src/lib.rs"))
+            .find(|edge| {
+                edge.site_kind == SourceKind::Test
+                    && edge.from_path == Path::new("crates/demo/src/lib.rs")
+            })
             .expect("inline test reference edge");
         assert_eq!(
             inline_test.from_fn.as_ref(),
@@ -418,7 +429,7 @@ mod tests {
             .iter()
             .find(|edge| edge.from_line == 13)
             .expect("test method reference edge");
-        assert!(test_method_edge.test);
+        assert!(test_method_edge.site_kind == SourceKind::Test);
         assert_eq!(
             test_method_edge
                 .from_fn

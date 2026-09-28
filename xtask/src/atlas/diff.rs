@@ -20,7 +20,7 @@ use super::modules::{
 };
 use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind, FunctionId};
-use super::sources;
+use super::sources::{self, SourceKind};
 use super::syntax::{FileSyntax, Spelling};
 use super::target::{self, LayerRanks, TARGET_FILE};
 use super::{positive_usize, set_once, validate_scope, value};
@@ -740,7 +740,7 @@ fn collect_reference_edges<'a>(
     let mut by_fn = BTreeMap::<(String, String), BTreeMap<FunctionId, Vec<&Edge>>>::new();
     for edge in edges.filter(|edge| {
         edge.kind == EdgeKind::Reference
-            && !edge.test
+            && edge.site_kind == SourceKind::Production
             && (in_paths(&edge.from_path, paths) ^ in_paths(&edge.to_path, paths))
     }) {
         let pair = (edge.from.clone(), edge.to.clone());
@@ -858,7 +858,7 @@ fn contract_assembly(
         .iter()
         .filter(|edge| {
             edge.kind == EdgeKind::Reference
-                && !edge.test
+                && edge.site_kind == SourceKind::Production
                 && from.matches(&edge.from, &edge.from_path)
                 && to.matches(&edge.to, &edge.to_path)
         })

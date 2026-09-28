@@ -15,6 +15,7 @@ use super::modules::{
 use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind};
 use super::shapes::{self, ShapeFamily};
+use super::sources::SourceKind;
 use super::syntax::{FileSyntax, resolved_internal_import};
 use super::target::{self, ModuleRule, TARGET_FILE, Target, Verdict, VerdictKind};
 use super::{positive_usize, set_once, value};
@@ -872,13 +873,13 @@ fn item_evidence(
     });
     let production_referrers = matching
         .clone()
-        .filter(|edge| !edge.test)
+        .filter(|edge| edge.site_kind == SourceKind::Production)
         .map(referrer)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
     let test_referrers = matching
-        .filter(|edge| edge.test)
+        .filter(|edge| edge.site_kind == SourceKind::Test)
         .map(referrer)
         .collect::<BTreeSet<_>>()
         .into_iter()
