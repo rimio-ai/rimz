@@ -200,16 +200,21 @@ fn read_credentials_bytes(login_env: &BTreeMap<String, String>) -> Result<Vec<u8
     match std::fs::read(&path) {
         Ok(bytes) => Ok(bytes),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            if login_env
-                .get("CLAUDE_CONFIG_DIR")
-                .is_some_and(|value| !value.is_empty())
-            {
+            if names_config_dir(login_env) {
                 return Err(ClaudeOauthUsageErr::NoCredentials);
             }
             read_keychain_credentials_bytes()
         }
         Err(err) => Err(ClaudeOauthUsageErr::Io(err)),
     }
+}
+
+/// Whether `CLAUDE_CONFIG_DIR` names a directory, parsed as `config_home`
+/// parses it, so a value that resolves to `$HOME/.claude` (such as `","`)
+/// still reaches the keychain like an unset one.
+fn names_config_dir(login_env: &BTreeMap<String, String>) -> bool {
+    super::remote_consent::configured_dir(login_env.get("CLAUDE_CONFIG_DIR").map(String::as_str))
+        .is_some()
 }
 
 fn read_keychain_credentials_bytes() -> Result<Vec<u8>> {

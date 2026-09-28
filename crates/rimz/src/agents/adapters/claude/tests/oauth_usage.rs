@@ -412,3 +412,15 @@ fn limit_resets_without_valid_expiry_still_count() {
     assert_eq!(reset.soonest_expiry, None);
     assert!(reset.expiries.is_empty());
 }
+
+#[test]
+fn keychain_skip_follows_the_config_dir_that_config_home_resolves() {
+    let env = |value: &str| BTreeMap::from([("CLAUDE_CONFIG_DIR".to_owned(), value.to_owned())]);
+    assert!(names_config_dir(&env("/named")));
+    assert!(names_config_dir(&env(" , /named")));
+    // These resolve credentials under `$HOME/.claude`, so the keychain applies.
+    assert!(!names_config_dir(&env("")));
+    assert!(!names_config_dir(&env(",")));
+    assert!(!names_config_dir(&env(" , ")));
+    assert!(!names_config_dir(&BTreeMap::new()));
+}
