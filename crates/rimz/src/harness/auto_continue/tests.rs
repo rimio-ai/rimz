@@ -16,6 +16,7 @@ fn rate_record(deadline: i64, activity: i64, last_nudge: Option<i64>, retries: u
             deadline: ts(deadline),
         },
         parked_at_activity: ts(activity),
+        attempts_since: None,
         last_nudge_at: last_nudge.map(ts),
         retries,
     }
@@ -32,6 +33,7 @@ fn overloaded_record(
             overloaded_at: ts(overloaded_at),
         },
         parked_at_activity: ts(activity),
+        attempts_since: None,
         last_nudge_at: last_nudge.map(ts),
         retries,
     }
@@ -630,6 +632,177 @@ fn stalled_stream_park_uses_default_three_minute_retry() {
 }
 
 #[test]
+fn model_limit_waits_for_scoped_reset() {
+    for model in [
+        "claude-fable-5-1",
+        "claude-fable-5-1-20260801",
+        "claude-opus-4-8",
+    ] {
+        let (_dir, runtime) = temp_runtime();
+        write_recovered_window(&runtime);
+        let mut cache =
+            crate::agents::account::read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        let mut scoped = window(100, 7_500);
+        scoped.scope = Some(crate::agents::RateLimitWindowScope {
+            id: "model:fable".to_owned(),
+            label: "Fable".to_owned(),
+        });
+        cache
+            .entries
+            .values_mut()
+            .next()
+            .unwrap()
+            .limits
+            .windows
+            .push(scoped);
+        write_rate_limits_cache(&runtime, &cache);
+        let mut agent = parked_agent(1_000, 5_990, TurnErrorClass::PausedRateLimit, "Fable limit");
+        agent.model = Some(model.to_owned());
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            runtime.workspace_id.clone(),
+            vec![agent],
+            ts(6_000),
+        );
+        snapshot.agent_panes = vec![live_pane()];
+        let config = ResumeConfig {
+            auto_continue: true,
+            ..ResumeConfig::default()
+        };
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &[],
+        );
+        if model == "claude-opus-4-8" {
+            assert_eq!(
+                read_park(&park_path(&runtime)),
+                Some(rate_record(6_000, 1_000, Some(6_000), 1))
+            );
+            assert!(resume_gate_recovered(
+                &runtime,
+                &snapshot.agents[0],
+                ts(6_000)
+            ));
+            continue;
+        }
+        assert_eq!(
+            read_park(&park_path(&runtime)),
+            Some(rate_record(7_500, 1_000, None, 0))
+        );
+        assert!(!resume_gate_recovered(
+            &runtime,
+            &snapshot.agents[0],
+            ts(6_000)
+        ));
+        snapshot.now = ts(7_500);
+        assert!(resume_gate_recovered(
+            &runtime,
+            &snapshot.agents[0],
+            snapshot.now
+        ));
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &[],
+        );
+        assert_eq!(
+            read_park(&park_path(&runtime)),
+            Some(rate_record(7_500, 1_000, Some(7_500), 1))
+        );
+    }
+}
+
+#[test]
+fn limit_replies_preserve_pacing_and_retry_cap() {
+    let (_dir, runtime) = temp_runtime();
+    write_recovered_window(&runtime);
+    let config = ResumeConfig {
+        auto_continue: true,
+        auto_continue_max_retries: 3,
+        ..ResumeConfig::default()
+    };
+    let mut messages = vec![resume_message(100, MessageStatus::Delivered, 800)];
+    let mut nudges = Vec::new();
+    let mut activity = 1_000;
+    for now in 6_000..6_600 {
+        let mut agent = parked_agent(
+            activity,
+            activity + 1,
+            TurnErrorClass::PausedRateLimit,
+            "usage limit",
+        );
+        agent.user_turn_started_at = Some(ts(activity));
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(now));
+        snapshot.agent_panes = vec![live_pane()];
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &messages,
+        );
+        if read_park(&park_path(&runtime))
+            .is_some_and(|record| record.last_nudge_at == Some(ts(now)))
+        {
+            assert!(
+                nudges.last().is_none_or(|previous| now - previous >= 120),
+                "limit reply bypassed pacing at {now}"
+            );
+            assert!(nudges.len() < 3, "limit reply reset the retry cap");
+            nudges.push(now);
+            messages.push(resume_message(
+                nudges.len() as u64,
+                MessageStatus::Delivered,
+                now,
+            ));
+            activity = now + 1;
+        }
+        if now == 6_599 {
+            assert!(
+                exhausted_parks(&snapshot, &runtime, &config, &messages).contains(&(
+                    snapshot.agents[0].kind.clone(),
+                    snapshot.agents[0].agent_id.clone()
+                ))
+            );
+            // Real progress clears this episode before another limit starts.
+            snapshot.agents[0].context = None;
+            resume_parked(
+                &snapshot,
+                &runtime,
+                &crate::agents::RoomLoginSet::native(),
+                &config,
+                &messages,
+            );
+            assert!(read_park(&park_path(&runtime)).is_none());
+        }
+    }
+    assert_eq!(nudges, vec![6_000, 6_120, 6_240]);
+    let mut agent = parked_agent(7_000, 7_001, TurnErrorClass::PausedRateLimit, "usage limit");
+    agent.user_turn_started_at = Some(ts(7_000));
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), vec![agent], ts(7_001));
+    snapshot.agent_panes = vec![live_pane()];
+    for _ in 0..2 {
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &config,
+            &messages,
+        );
+    }
+    assert_eq!(
+        read_park(&park_path(&runtime)).unwrap().last_nudge_at,
+        Some(ts(7_001))
+    );
+}
+
+#[test]
 fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
@@ -750,7 +923,7 @@ fn fire_with_resume_message(status: MessageStatus) -> Option<ParkRecord> {
         auto_continue_max_retries: 3,
         ..ResumeConfig::default()
     };
-    let messages = [resume_message(1, status, 5_900)];
+    let messages = [resume_message(1, status, 5_800)];
     fire_if_due(
         &snapshot.agents[0],
         &path,

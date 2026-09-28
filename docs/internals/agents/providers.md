@@ -268,9 +268,9 @@ A spent window supplies a reset clock only after the turn carries a provider-cer
 
 **Fire.** Once the reset deadline or backoff step is due and `last_activity` has not advanced, the producer spawns the helper, which queues and delivers a resume-gated message. Overload and transient API-error parks follow `auto_continue_backoff_secs` (default `[180, 300]`), whose last value repeats: the first attempt lands after 3 minutes and later ones every 5. Message events carry the queued, sent, delivered, timed-out, or failed trace, and after delivery the [assist log](../harness/loops.md#the-assist-log) keeps the park time, verdict, handle, and message id.
 
-**Clear.** Any activity since the park advances `last_activity` and removes the record, as does a delivered resume message.
+**Clear.** Activity since the park or a delivered resume message removes the record. When activity advances but a provider limit still holds and a matching-card resume message was enqueued at or after the park baseline, the producer instead carries the park forward: it rebases `last_activity` while preserving the original attempt anchor and retry state. Real progress that clears the limit marker clears the park as before.
 
-**Exhaust.** All park classes share `auto_continue_max_retries` (default 12), counted from evidenced `DeliveryGate::Resume` messages since the park; helper spawns and pre-queue crashes only pace retries. At the default ramp, attempts span about 58 minutes before the row promotes to actionable `failed`.
+**Exhaust.** All park classes share `auto_continue_max_retries` (default 12), counted from evidenced `DeliveryGate::Resume` messages since the original park; helper spawns and pre-queue crashes only pace retries. A nudge's limit reply preserves that count even when it advances the user-turn timestamp. Real progress ends the episode, so a later park gets a fresh allowance. Rate-limit nudges also wait at least 120 seconds after any matching-card resume message, even after the park record is cleared. At the default overload ramp, attempts span about 58 minutes before the row promotes to actionable `failed`.
 
 ## Daily dollar caps
 

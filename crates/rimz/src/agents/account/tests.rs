@@ -239,6 +239,43 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
 }
 
 #[test]
+fn model_capacity_matches_only_the_model_family() {
+    let now = Timestamp::from_second(1_000_000).unwrap();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let mut scoped = window(now, Some(100), 3_600, Some(300));
+    scoped.scope = Some(crate::agents::RateLimitWindowScope {
+        id: "model:fable".to_owned(),
+        label: "Fable".to_owned(),
+    });
+    let capacity =
+        ProviderCapacity::from_windows(vec![window(now, Some(20), 3_600, Some(300)), scoped]);
+    for (model, matches) in [
+        (Some("claude-fable-5-1"), true),
+        (Some("claude-fable-5-1-20260801"), true),
+        (Some("claude-opus-4-8"), false),
+        (Some("Fable 5.1@high"), true),
+        (Some("fAbLe"), true),
+        (Some("Fablework"), false),
+        (Some("Opus 4.6"), false),
+        (None, false),
+    ] {
+        assert_eq!(
+            capacity.latest_spent_window_reset_for_model(now, model),
+            matches.then_some(reset),
+            "{model:?}"
+        );
+        assert_eq!(
+            capacity.subscription_budget_available_for_model(now, model),
+            !matches,
+            "{model:?}"
+        );
+        assert!(capacity.subscription_budget_available_for_model(reset, model));
+    }
+    assert_eq!(capacity.latest_spent_window_reset(now), None);
+    assert!(capacity.subscription_budget_available(now));
+}
+
+#[test]
 fn spent_reset_and_available_capacity_use_projected_windows() {
     let now = Timestamp::from_second(1_000_000).unwrap();
     let spent = ProviderCapacity::from_windows(vec![window(now, Some(100), 3_600, Some(300))]);
