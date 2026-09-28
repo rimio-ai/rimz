@@ -264,18 +264,9 @@ fn settle_peer_turns(store: &Store, parent_id: &AgentSessionId) -> Result<(), Re
     };
     let mut stranded = Vec::new();
     let agents = &projection.agents;
-    // Judge each launch by its current row: an ended predecessor conversation
-    // shares the launch id, and so the open run, of its live successor.
     for peer in rimz::address::launched_fleet(agents, parent)
         .into_iter()
-        .filter(|peer| {
-            rimz::address::launch_row(
-                agents,
-                &peer.kind,
-                peer.launch_id.as_ref().unwrap_or(&peer.agent_id),
-            )
-            .is_some_and(|row| std::ptr::eq(row, *peer))
-        })
+        .filter(|peer| rimz::address::is_launch_row(agents, peer))
     {
         let Some(record) = run::open_peer_run(store.paths(), peer)? else {
             continue;
