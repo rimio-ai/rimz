@@ -291,6 +291,7 @@ path = "crates/rimz/src/harness"
 # Team inspection shares scratch discovery and board-stage records with launch reminders.
 # Delivery specs and team subscriptions share the CLI/library boundary.
 # Read-only pending deliveries are shared by wait listings, hooks and enrichment.
+# Session wait membership lets the orphan sweep skip armed parked peers.
 # Submitted-prompt header grammar now belongs to store.
 # Loop hosts and check ownership cross the scheduler/CLI/room seams.
 # The validated exec envelope establishes cleanup context before artifact I/O.
@@ -326,7 +327,7 @@ path = "crates/rimz/src/harness"
 # The peer-run interface serves launch, hook enrollment, and terminal backstops.
 # Lifecycle hooks share the detached fleet-digest helper with the orphan sweep.
 # The team run's open, reopen and settle calls let `rimz teams flip` send TEAM_REPORT.
-surface-budget = 577
+surface-budget = 578
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

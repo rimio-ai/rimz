@@ -15,6 +15,7 @@ use crate::store::run::RunRecord;
 use crate::{RuntimePaths, StatePaths};
 
 use super::fleet::{FleetRuns, newest_run};
+use super::schedule::pending::SessionWaits;
 
 const ORPHAN_GRACE: Duration = Duration::from_secs(10 * 60);
 #[cfg(any(test, feature = "testkit"))]
@@ -149,10 +150,17 @@ fn digest_parents(
     runs: &[RunRecord],
 ) -> Result<Vec<AgentSessionId>, OrphanSweepErr> {
     let agents = crate::store::runtime::audit_projection(paths)?.agents;
-    Ok(digest_parents_from(&agents, runs))
+    let waits = SessionWaits::load(paths);
+    Ok(digest_parents_from(&agents, runs, |kind, session| {
+        waits.contains(kind, session)
+    }))
 }
 
-fn digest_parents_from(agents: &[AgentState], runs: &[RunRecord]) -> Vec<AgentSessionId> {
+fn digest_parents_from(
+    agents: &[AgentState],
+    runs: &[RunRecord],
+    has_wait: impl Fn(&AgentKind, &AgentSessionId) -> bool,
+) -> Vec<AgentSessionId> {
     agents
         .iter()
         .filter(|parent| parent.ended_at.is_none())
@@ -168,10 +176,15 @@ fn digest_parents_from(agents: &[AgentState], runs: &[RunRecord]) -> Vec<AgentSe
                             && (peer.ended_at.is_some()
                                 || crate::store::runtime::agent_liveness(peer)
                                     == crate::store::runtime::AgentLiveness::Dead
-                                || (run.parked_at.is_some() && {
-                                    let owed = FleetRuns::of(agents, runs, peer);
-                                    !owed.any_running() && owed.unreported().is_empty()
-                                }))
+                                || (run.parked_at.is_some()
+                                    && !run
+                                        .agent_id
+                                        .as_ref()
+                                        .is_some_and(|session| has_wait(&run.kind, session))
+                                    && {
+                                        let owed = FleetRuns::of(agents, runs, peer);
+                                        !owed.any_running() && owed.unreported().is_empty()
+                                    }))
                     })
                 });
             (peer_needs_settlement
@@ -372,12 +385,15 @@ mod tests {
         });
         let agents = [vec![parent.clone()], children.to_vec()].concat();
 
-        assert_eq!(digest_parents_from(&agents, &runs), vec![parent.agent_id]);
+        assert_eq!(
+            digest_parents_from(&agents, &runs, |_, _| false),
+            vec![parent.agent_id]
+        );
         let message_id = crate::MessageId::new();
         for run in &mut runs {
             run.report_message_id = Some(message_id.clone());
         }
-        assert!(digest_parents_from(&agents, &runs).is_empty());
+        assert!(digest_parents_from(&agents, &runs, |_, _| false).is_empty());
     }
 
     #[test]
@@ -411,6 +427,7 @@ mod tests {
                 let parents = digest_parents_from(
                     &[launcher.clone(), peer.clone()],
                     std::slice::from_ref(&record),
+                    |_, _| false,
                 );
                 assert_eq!(
                     parents.contains(&launcher.agent_id),
@@ -418,6 +435,49 @@ mod tests {
                     "pending={pending}, ended={ended}, parked={parked}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn parked_peer_backstop_checks_the_runs_wait_identity() {
+        let at = Timestamp::from_second(1_000).unwrap();
+        let launcher = crate::testkit::agent_state("codex", "launcher", at);
+        let mut peer = crate::testkit::agent_state("codex", "row-session", at);
+        peer.launch_id = Some("peer-launch".into());
+        peer.launched_by = Some(crate::agents::LaunchedBy {
+            kind: launcher.kind.clone(),
+            agent_id: launcher.agent_id.clone(),
+        });
+        let mut record = run("peer", at);
+        record.agent_id = Some("run-session".into());
+        record.status = crate::store::run::RunStatus::Running;
+        record.parked_at = Some(at);
+        record.peer = Some(crate::store::run::PeerRun {
+            launch_id: "peer-launch".into(),
+            opened_by: Vec::new(),
+        });
+        for (wait_kind, wait_session, ended, has_session, expected) in [
+            ("codex", "row-session", false, true, true),
+            ("claude", "run-session", false, true, true),
+            ("codex", "run-session", true, true, true),
+            ("codex", "run-session", false, false, true),
+            ("codex", "run-session", false, true, false),
+        ] {
+            peer.ended_at = ended.then_some(at);
+            record.agent_id = has_session.then(|| "run-session".into());
+            let parents = digest_parents_from(
+                &[launcher.clone(), peer.clone()],
+                std::slice::from_ref(&record),
+                |kind, session| {
+                    kind == &AgentKind::new_unchecked(wait_kind)
+                        && session == &AgentSessionId::from(wait_session)
+                },
+            );
+            assert_eq!(
+                parents.contains(&launcher.agent_id),
+                expected,
+                "wait={wait_kind}/{wait_session}, ended={ended}, has_session={has_session}"
+            );
         }
     }
 
@@ -445,10 +505,10 @@ mod tests {
         });
         let mut agents = [launcher.clone(), cleared, peer];
         let runs = std::slice::from_ref(&record);
-        assert!(!digest_parents_from(&agents, runs).contains(&launcher.agent_id));
+        assert!(!digest_parents_from(&agents, runs, |_, _| false).contains(&launcher.agent_id));
         agents[2].ended_at = Some(at);
         assert!(
-            digest_parents_from(&agents, runs).contains(&launcher.agent_id),
+            digest_parents_from(&agents, runs, |_, _| false).contains(&launcher.agent_id),
             "the launch's own end still settles its turn"
         );
     }
@@ -480,11 +540,14 @@ mod tests {
         child_run.status = crate::store::run::RunStatus::Running;
         let agents = [launcher.clone(), peer, child];
         let mut runs = [peer_run, child_run];
-        assert!(!digest_parents_from(&agents, &runs).contains(&launcher.agent_id));
+        assert!(!digest_parents_from(&agents, &runs, |_, _| false).contains(&launcher.agent_id));
         runs[1].status = crate::store::run::RunStatus::Completed;
-        assert!(!digest_parents_from(&agents, &runs).contains(&launcher.agent_id));
+        assert!(!digest_parents_from(&agents, &runs, |_, _| false).contains(&launcher.agent_id));
         runs[1].report_message_id = Some(crate::MessageId::new());
-        assert_eq!(digest_parents_from(&agents, &runs), vec![launcher.agent_id]);
+        assert_eq!(
+            digest_parents_from(&agents, &runs, |_, _| false),
+            vec![launcher.agent_id]
+        );
     }
 
     #[test]
@@ -504,10 +567,10 @@ mod tests {
         let agents = [launcher.clone(), peer];
 
         assert_eq!(
-            digest_parents_from(&agents, std::slice::from_ref(&peer_run)),
+            digest_parents_from(&agents, std::slice::from_ref(&peer_run), |_, _| false),
             vec![launcher.agent_id]
         );
         peer_run.joined_at = Some(at);
-        assert!(digest_parents_from(&agents, &[peer_run]).is_empty());
+        assert!(digest_parents_from(&agents, &[peer_run], |_, _| false).is_empty());
     }
 }

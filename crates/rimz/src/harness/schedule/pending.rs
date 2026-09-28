@@ -125,10 +125,19 @@ pub(crate) struct SessionWaits(BTreeMap<(AgentKind, AgentSessionId), Vec<Pending
 impl SessionWaits {
     /// Read the catalog now. The machine config is loaded only for a
     /// workspace that holds instance rows.
-    pub(crate) fn load(project_root: Option<&Path>) -> Self {
-        Self::load_at(project_root, || {
+    pub(crate) fn load(paths: &crate::StatePaths) -> Self {
+        // An unreadable record leaves no root, as snapshot assembly does.
+        let project_root = crate::workspace::record::read_optional(&paths.workspace_record)
+            .ok()
+            .flatten()
+            .map(|record| record.project_root);
+        Self::load_at(project_root.as_deref(), || {
             jiff::Zoned::now().with_time_zone(MachineConfig::load_lenient().time_zone())
         })
+    }
+
+    pub(crate) fn contains(&self, kind: &AgentKind, session: &AgentSessionId) -> bool {
+        self.0.contains_key(&(kind.clone(), session.clone()))
     }
 
     fn load_at(project_root: Option<&Path>, now: impl FnOnce() -> jiff::Zoned) -> Self {
