@@ -35,6 +35,9 @@ pub(super) enum PassKind {
     #[default]
     Module,
     Seam,
+    /// Adds a user-decided capability to `xtask/`: its ceiling is priced from
+    /// its target, so `diff --expect` asks it for no narrowing.
+    Tooling,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -348,6 +351,27 @@ max-sites = 0
             assert_eq!(loaded.kind, PassKind::Seam);
             assert_eq!(loaded.max_production_sloc_delta, ceiling);
         }
+    }
+
+    #[test]
+    fn tooling_contract_loads_a_positive_ceiling() {
+        let (root, syntax) = syntax();
+        let path = root.path().join("pass.toml");
+        fs::write(
+            &path,
+            r#"version = 2
+base = "main"
+kind = "tooling"
+paths = ["src"]
+max-production-sloc-delta = 160
+"#,
+        )
+        .unwrap();
+
+        let loaded = load(root.path(), &path, &syntax, &syntax).unwrap();
+
+        assert_eq!(loaded.kind, PassKind::Tooling);
+        assert_eq!(loaded.max_production_sloc_delta, 160);
     }
 
     #[test]
