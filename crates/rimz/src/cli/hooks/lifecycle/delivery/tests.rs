@@ -48,11 +48,7 @@ fn turn_started() -> RecordedLifecycle {
     RecordedLifecycle {
         model_hint: None,
         observation,
-        primary_event_id: None,
-        events: Vec::new(),
-        rotation_due: false,
-        side_conversation: None,
-        waiting_cleared: false,
+        receipt: Default::default(),
     }
 }
 
