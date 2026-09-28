@@ -314,6 +314,8 @@ Stop gives durable cancellation a grace period, sends SIGTERM only when the lock
 
 ### A clock task never fired
 
+`rimz doctor` flags live clock tasks with no open room and no active loop timer under `LOOP TASKS`. Run `rimz loop timer install`, then `rimz loop timer status`, or run `rimz start` in the task's root to keep time in an open room. Disabled and paused tasks are not flagged.
+
 A clock task no clock has picked up shows `-` in the `NEXT` column of `rimz loop list`. Either no room is open for that task's project and the loop timer is not installed, or the timer is installed but its tick could not reach your systemd user session, in which case it refuses rather than firing and prints the fix. `rimz loop timer status` says which. [Who keeps time](./loops.md#who-keeps-time) covers both, along with what a timer fire does to your machine.
 
 Signal and watch tasks need no timekeeper: whatever emits the signal or runs the command fires them, room or no room.

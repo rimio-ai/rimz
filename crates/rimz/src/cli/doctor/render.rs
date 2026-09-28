@@ -1576,11 +1576,13 @@ fn push_probe_rows(table: &mut Table, tally: &mut Tally, plugin: &PluginRow) {
 }
 
 fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) -> io::Result<()> {
+    use super::model::LoopTimer;
+
     section(w, tally, "LOOP TASKS")?;
     if loop_tasks.tasks.is_empty() {
         return writeln!(w, "  {}", paint(palette::faint(), "none configured"));
     }
-    let mut table = Table::new(["", "NAME", "TARGET", "WHEN", "ROOT"]);
+    let mut table = Table::new(["", "NAME", "TARGET", "WHEN", "ROOT", "ROOM"]);
     for row in &loop_tasks.tasks {
         let health = if row.valid {
             Health::Info
@@ -1593,14 +1595,53 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
             cell(row.spec.as_str()),
             cell(row.when.as_str()).fg(style_of(health)),
             cell(home_relative(&row.root)).fg(palette::body()),
+            if row.room_open {
+                cell("room open").fg(palette::good())
+            } else {
+                cell("no room").fg(palette::muted())
+            },
         ]);
     }
     table.render(w)?;
+    let (label, cause, health) = match &loop_tasks.timer {
+        LoopTimer::NotInstalled => (
+            "not installed".to_owned(),
+            "is not installed",
+            Health::Neutral,
+        ),
+        LoopTimer::Installed { backend, active } => (
+            format!(
+                "{} ({backend})",
+                if *active { "active" } else { "inactive" }
+            ),
+            "is inactive",
+            Health::Neutral,
+        ),
+        LoopTimer::Unavailable { error } => (
+            format!("unavailable ({error})"),
+            "is unavailable",
+            Health::Warn,
+        ),
+    };
+    let mut kv = KeyVals::new().indent(2);
+    kv.push("loop timer", verdict(tally, health, label));
+    kv.render(w)?;
+    if !loop_tasks.unscheduled.is_empty() {
+        note(
+            tally,
+            w,
+            Health::Warn,
+            &format!(
+                "{}: no room is open for their root and the loop timer {cause}; run `rimz loop timer install`, then `rimz loop timer status`, or `rimz start` in the task's root",
+                loop_tasks.unscheduled.join(", "),
+            ),
+        )?;
+    }
     note(
         tally,
         w,
         Health::Neutral,
-        "`rimz loop list` shows room-open state",
+        "`rimz loop list` shows next fire and run history",
     )
 }
 
