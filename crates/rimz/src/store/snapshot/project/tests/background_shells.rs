@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn registration_clears_shells_before_applying_its_report() {
+    let shell = |id| json!({"id": id, "command": "sleep 30", "started_at": epoch()});
+    let events = [
+        lifecycle(
+            0,
+            json!({"signal": {"signal": "registered"}, "background_shells": {"kind": "started", "shell": shell("old")}}),
+        ),
+        lifecycle(
+            1,
+            json!({"signal": {"signal": "registered"}, "background_shells": {"kind": "started", "shell": shell("new")}}),
+        ),
+    ];
+    assert_eq!(
+        ids(&reduce_agent_states(&events[..1])[0]),
+        vec![("old", epoch().as_second())]
+    );
+    assert_eq!(
+        ids(&reduce_agent_states(&events)[0]),
+        vec![("new", epoch().as_second())]
+    );
+}
+
 fn lifecycle(secs: i64, params: serde_json::Value) -> EventEnvelope {
     let mut params = params;
     params["agent_id"] = json!("sess-1");
