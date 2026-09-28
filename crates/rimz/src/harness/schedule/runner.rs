@@ -10,6 +10,7 @@ use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -29,7 +30,7 @@ use crate::agents::{
     HookPreflightErr, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed, WindowSurplus,
     find_definition, preflight_hooks,
 };
-use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, WatchSpec};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
@@ -38,7 +39,9 @@ use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     RunTransition, SignalRecord,
 };
-use crate::harness::schedule::signal::{Signal as TriggerSignal, WAIT_TAIL_CAP, WatchVerdict};
+use crate::harness::schedule::signal::{
+    Signal as TriggerSignal, WAIT_TAIL_CAP, WatchOutcome, WatchVerdict,
+};
 use crate::harness::schedule::{TaskAction, Trigger};
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::RunRecord;
@@ -353,19 +356,19 @@ impl<'a> TaskFire<'a> {
             if self.mode == LoopRunMode::Scheduled {
                 self.remove_schedule()?;
             }
-            return Ok(TaskFirePlan::Done(self.record_terminal(
+            return Ok(TaskFirePlan::Done(self.record_terminal_with(
                 LoopRunResult::Expired,
                 LoopRunPresentation::default(),
                 TaskFireNotice::None,
                 None,
+                |_| {},
             )));
         }
 
-        let fired_check = self.prepare_check(before_check)?;
-        if let Some(done) = fired_check.done {
-            return Ok(TaskFirePlan::Done(done));
-        }
-        let fired_check = fired_check.fire;
+        let fired_check = match self.prepare_check(before_check)? {
+            ControlFlow::Break(done) => return Ok(TaskFirePlan::Done(done)),
+            ControlFlow::Continue(check) => check,
+        };
         match self
             .context
             .as_ref()
@@ -522,36 +525,11 @@ impl<'a> TaskFire<'a> {
     fn prepare_check(
         &mut self,
         before_check: &mut dyn FnMut(&Path) -> Result<()>,
-    ) -> Result<PreparedCheck> {
-        let watch_command =
-            self.task
-                .trigger()
-                .as_ref()
-                .ok()
-                .and_then(|parsed| match &parsed.trigger {
-                    Trigger::Watch(spec) => Some(spec.describe()),
-                    Trigger::Schedule(_) | Trigger::Signal { .. } => None,
-                });
-        let supplied_watch = watch_command.as_ref().zip(
-            self.signal
-                .as_ref()
-                .and_then(|signal| signal.watch.as_ref()),
-        );
-        if let Some((command, watch)) = supplied_watch
-            && !watch.verdict.is_terminal()
+    ) -> Result<ControlFlow<TaskFireFinished, Option<FiredCheck>>> {
+        let watch_command = self.watch_spec().map(WatchSpec::describe);
+        let (command, outcome, duration_ms) = if let Some((command, outcome)) =
+            watch_command.as_ref().zip(self.watch_outcome())
         {
-            return Ok(PreparedCheck::fire(Some(FiredCheck {
-                command: command.clone(),
-                outcome: CheckOutcome::new(false, false, watch.output.clone(), None),
-                record: CheckRecord {
-                    code: None,
-                    timed_out: false,
-                    output: watch.output.clone(),
-                    output_path: watch.output_path.clone(),
-                },
-            })));
-        }
-        let (command, outcome, duration_ms) = if let Some((command, outcome)) = supplied_watch {
             (
                 command.clone(),
                 outcome.to_check_outcome(),
@@ -577,77 +555,58 @@ impl<'a> TaskFire<'a> {
             )?;
             (command, outcome, elapsed_millis(check_started))
         } else {
-            return Ok(PreparedCheck::fire(None));
+            return Ok(ControlFlow::Continue(None));
         };
+        let supplied_watch = watch_command.as_ref().and(self.watch_outcome());
         let mut record = check_record(&outcome);
-        record.output_path = supplied_watch.and_then(|(_, watch)| watch.output_path.clone());
-        if outcome.interrupted {
-            return Ok(PreparedCheck::done(self.record_terminal_with(
-                LoopRunResult::Canceled,
+        record.output_path = supplied_watch.and_then(|watch| watch.output_path.clone());
+        if supplied_watch.is_some_and(|watch| !watch.verdict.is_terminal()) {
+            return Ok(ControlFlow::Continue(Some(FiredCheck {
+                command,
+                outcome,
+                record,
+            })));
+        }
+        let terminal = if outcome.interrupted {
+            Some((LoopRunResult::Canceled, false))
+        } else if self
+            .context
+            .as_ref()
+            .is_some_and(|context| context.action.is_check_only())
+        {
+            Some((check_only_result(&outcome), self.ephemeral))
+        } else if !polarity_fires(self.entry.on, &outcome) {
+            Some((LoopRunResult::CheckSkipped, self.watch_spec().is_some()))
+        } else {
+            None
+        };
+        if let Some((result, consume)) = terminal {
+            if self.mode == LoopRunMode::Scheduled && consume {
+                self.remove_schedule()?;
+            }
+            return Ok(ControlFlow::Break(self.record_terminal_with(
+                result,
                 LoopRunPresentation {
                     check_duration_ms: Some(duration_ms),
-                    exit_code: Some(130),
+                    exit_code: outcome.interrupted.then_some(130),
                     ..LoopRunPresentation::default()
                 },
                 TaskFireNotice::None,
                 None,
                 |run| {
                     run.check = Some(record);
-                    run.error = Some("check interrupted".to_owned());
+                    run.error = outcome.interrupted.then(|| "check interrupted".to_owned());
                 },
             )));
-        }
-        if self
-            .context
-            .as_ref()
-            .is_some_and(|context| context.action.is_check_only())
-        {
-            if self.mode == LoopRunMode::Scheduled && self.ephemeral {
-                self.remove_schedule()?;
-            }
-            let result = check_only_result(&outcome);
-            let finished = self.record_terminal_with(
-                result,
-                LoopRunPresentation {
-                    check_duration_ms: Some(duration_ms),
-                    ..LoopRunPresentation::default()
-                },
-                TaskFireNotice::None,
-                None,
-                |run| run.check = Some(record),
-            );
-            return Ok(PreparedCheck::done(finished));
-        }
-        if !polarity_fires(self.entry.on, &outcome) {
-            if self.mode == LoopRunMode::Scheduled
-                && self
-                    .task
-                    .trigger()
-                    .as_ref()
-                    .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch(_)))
-            {
-                self.remove_schedule()?;
-            }
-            let finished = self.record_terminal_with(
-                LoopRunResult::CheckSkipped,
-                LoopRunPresentation {
-                    check_duration_ms: Some(duration_ms),
-                    ..LoopRunPresentation::default()
-                },
-                TaskFireNotice::None,
-                None,
-                |run| run.check = Some(record),
-            );
-            return Ok(PreparedCheck::done(finished));
         }
         if self.mode == LoopRunMode::Manual {
             self.check_trip = Some(CheckTrip {
                 record: record.clone(),
-                watch: supplied_watch.map(|(_, watch)| watch.verdict.clone()),
+                watch: supplied_watch.map(|watch| watch.verdict.clone()),
                 duration_ms,
             });
         }
-        Ok(PreparedCheck::fire(Some(FiredCheck {
+        Ok(ControlFlow::Continue(Some(FiredCheck {
             command,
             outcome,
             record,
@@ -784,15 +743,9 @@ impl<'a> TaskFire<'a> {
     }
 
     fn consume_ephemeral(&self) -> Result<()> {
-        if self
-            .task
-            .trigger()
-            .as_ref()
-            .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch(_)))
+        if self.watch_spec().is_some()
             && self
-                .signal
-                .as_ref()
-                .and_then(|signal| signal.watch.as_ref())
+                .watch_outcome()
                 .is_some_and(|watch| !watch.verdict.is_terminal())
         {
             return Ok(());
@@ -801,6 +754,19 @@ impl<'a> TaskFire<'a> {
             self.remove_schedule()?;
         }
         Ok(())
+    }
+
+    fn watch_spec(&self) -> Option<&WatchSpec> {
+        match &self.task.trigger().as_ref().ok()?.trigger {
+            Trigger::Watch(spec) => Some(spec),
+            _ => None,
+        }
+    }
+
+    fn watch_outcome(&self) -> Option<&WatchOutcome> {
+        self.signal
+            .as_ref()
+            .and_then(|signal| signal.watch.as_ref())
     }
 
     fn context_root(&self) -> Result<PathBuf> {
@@ -841,11 +807,7 @@ impl<'a> TaskFire<'a> {
     fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {
         let mut record =
             LoopRunRecord::new(&self.name, result, self.mode, elapsed_millis(self.started));
-        record.watch = self
-            .signal
-            .as_ref()
-            .and_then(|signal| signal.watch.as_ref())
-            .map(|watch| watch.verdict.clone());
+        record.watch = self.watch_outcome().map(|watch| watch.verdict.clone());
         record.signal = self.signal.as_ref().map(|signal| SignalRecord {
             name: signal.name.clone(),
             payload: signal.payload.clone(),
@@ -863,17 +825,6 @@ impl<'a> TaskFire<'a> {
             Some(self.now),
             |record| record.error = Some(reason),
         )
-    }
-
-    fn record_terminal(
-        &mut self,
-        result: LoopRunResult,
-        presentation: LoopRunPresentation,
-        notice: TaskFireNotice,
-        at: Option<Timestamp>,
-    ) -> TaskFireFinished {
-        let record = self.terminal_record(result);
-        self.finish_record(record, presentation, notice, at)
     }
 
     fn record_terminal_with(
@@ -951,27 +902,6 @@ fn finish_spawn_effect(
                 LoopRunPresentation::default(),
                 TaskFireNotice::Gate { reason },
             )
-        }
-    }
-}
-
-struct PreparedCheck {
-    done: Option<TaskFireFinished>,
-    fire: Option<FiredCheck>,
-}
-
-impl PreparedCheck {
-    fn done(finished: TaskFireFinished) -> Self {
-        Self {
-            done: Some(finished),
-            fire: None,
-        }
-    }
-
-    fn fire(check: Option<FiredCheck>) -> Self {
-        Self {
-            done: None,
-            fire: check,
         }
     }
 }
