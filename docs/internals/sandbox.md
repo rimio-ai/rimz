@@ -55,6 +55,10 @@ Under sandbox isolation the RimZ view is the agent's one sandbox. A provider tha
 
 Codex replaces every `--sandbox`/`-s` flag and `sandbox_mode` override with `--sandbox danger-full-access`, which switches off the command sandbox and leaves the approval flags the mode chose; `--approve-for-me`, which clap refuses beside `--sandbox`, becomes its approval-only expansion. The flags keep their values but not all their effect: with nothing sandboxed, an `on-request` approval policy no longer prompts for commands that would have needed a sandbox escalation, such as network access or writes outside the workspace, and only commands it classifies as dangerous still prompt. Every other adapter, process plugins included, keeps the no-op default until a native switch is verified: Claude runs without a command sandbox by default, and Cursor's `--sandbox disabled` is passed only by its Yolo mode.
 
+### Toolchain homes
+
+The view neither pins nor binds `CARGO_HOME` or `RUSTUP_HOME`. The agent keeps the host `HOME`, so the root bind shows the host toolchain at its host paths: an exported `CARGO_HOME` and `RUSTUP_HOME`, or `~/.cargo` and `~/.rustup` when they are unset. Both stay read-write on purpose, because cargo writes its registry, git checkouts, and installed binaries under `CARGO_HOME` during a build, and rustup writes toolchains and components under `RUSTUP_HOME` when it installs them. The view is not containment here: a sandboxed agent can modify the host toolchain as it can any other host file it can write. An exported `CARGO_HOME` or `RUSTUP_HOME` below host `/tmp` is not itself a [reachable host path](#reachable-host-paths) candidate, so room tmp hides it unless a rebound candidate such as HOME or the worktree contains it; a default `~/.cargo` under a rebound HOME stays visible.
+
 ## Mount order
 
 `sandbox::bwrap_argv` emits `bwrap --bind / / --dev-bind /dev /dev --die-with-parent`, then the plan's mounts in this order, then `--chdir <cwd> -- <provider argv>`:
