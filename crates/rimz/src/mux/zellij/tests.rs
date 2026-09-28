@@ -577,6 +577,140 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn split_pane_defaults_to_command_title_and_prefixes_environment() {
+    let (temp, shim) = support::logging_shim();
+    ZellijBackend::with_program_for_test(&shim)
+        .split_pane(SplitPaneOptions {
+            focus: true,
+            command: Some(vec!["/usr/bin/sleep".to_owned(), "600".to_owned()]),
+            env: [("RIMZ_TEST_VALUE".to_owned(), "present".to_owned())].into(),
+            ..Default::default()
+        })
+        .expect("command split");
+    assert_eq!(
+        shim_log(&temp).trim(),
+        "action new-pane --direction right --name sleep -- env RIMZ_TEST_VALUE=present /usr/bin/sleep 600"
+    );
+}
+
+#[cfg(unix)]
+fn assert_companion_boundary_resizes(stacked: bool, whole_boundary: bool) {
+    let pane = |id, x, y, cols, rows| {
+        serde_json::json!({"id": id, "tab_id": 42, "pane_x": x, "pane_y": y,
+            "pane_columns": cols, "pane_rows": rows})
+    };
+    let (before, opened, resized) = if stacked {
+        (
+            vec![pane(7, 30, 0, 120, 40), pane(9, 30, 40, 120, 40)],
+            vec![
+                pane(7, 30, 0, 80, 40),
+                pane(9, 30, 40, 80, 40),
+                pane(8, 110, 0, 40, 80),
+            ],
+            vec![
+                pane(7, 30, 0, 60, 40),
+                pane(9, 30, 40, if whole_boundary { 60 } else { 80 }, 40),
+                pane(8, 90, 0, 60, 80),
+            ],
+        )
+    } else {
+        (
+            vec![pane(7, 30, 0, 120, 80)],
+            vec![pane(7, 30, 0, 65, 80), pane(8, 95, 0, 55, 80)],
+            vec![pane(7, 30, 0, 50, 80), pane(8, 80, 0, 70, 80)],
+        )
+    };
+    let balanced = vec![
+        pane(7, 30, 0, 60, 40),
+        pane(9, 30, 40, 60, 40),
+        pane(8, 90, 0, 60, 80),
+    ];
+    let (temp, shim) = zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
+case " $* " in
+  *" new-pane "*) touch "$dir/opened" ;;
+  *" resize "*)
+    if [ -f "$dir/resized" ]; then touch "$dir/balanced"; fi
+    touch "$dir/resized" ;;
+  *" list-panes "*)
+    if [ -f "$dir/balanced" ]; then printf '%s\n' '{balanced}';
+    elif [ -f "$dir/resized" ]; then printf '%s\n' '{resized}';
+    elif [ -f "$dir/opened" ]; then printf '%s\n' '{opened}';
+    else printf '%s\n' '{before}'; fi ;;
+esac
+"#,
+        before = serde_json::to_string(&before).unwrap(),
+        opened = serde_json::to_string(&opened).unwrap(),
+        resized = serde_json::to_string(&resized).unwrap(),
+        balanced = serde_json::to_string(&balanced).unwrap(),
+    ));
+    let result = ZellijBackend::with_program_for_test(&shim)
+        .append_companion_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            ..Default::default()
+        })
+        .expect("companion append");
+    assert_eq!(result, crate::mux::CompanionPaneAppend::Opened);
+    let log = shim_log(&temp);
+    let actions = log
+        .lines()
+        .filter(|line| line.contains("action resize") || line.contains("action list-panes"))
+        .collect::<Vec<_>>();
+    let list = "--session rimz-test action list-panes --all --json";
+    let decrease = "--session rimz-test action resize decrease right --pane-id terminal_7";
+    let expected = if !stacked {
+        vec![
+            list,
+            list,
+            decrease,
+            list,
+            "--session rimz-test action resize increase right --pane-id terminal_7",
+        ]
+    } else if whole_boundary {
+        vec![list, list, decrease, list, list]
+    } else {
+        vec![
+            list,
+            list,
+            decrease,
+            list,
+            "--session rimz-test action resize decrease right --pane-id terminal_9",
+            list,
+        ]
+    };
+    assert_eq!(actions, expected, "{log}");
+    assert_eq!(command_count(&log, "action new-pane"), 1, "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_balance_undoes_overshoot_on_the_same_pane_and_stops() {
+    // fec66d600: preserve the closer grid when a native resize overshoots.
+    assert_companion_boundary_resizes(false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_balance_walks_both_boundary_segments_after_rereading() {
+    // fec66d600: each independently resizable segment needs its own native step.
+    assert_companion_boundary_resizes(true, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_balance_skips_a_boundary_segment_already_moved() {
+    // fec66d600: do not resize twice when the native step moved the whole boundary.
+    assert_companion_boundary_resizes(true, true);
+}
+
+#[cfg(unix)]
+#[test]
 fn companion_append_counts_held_terminals_before_spawning() {
     let panes = (0..8)
         .map(|id| {
@@ -893,6 +1027,49 @@ fn reconcile_sidebars_rejects_topology_before_the_liveness_floor() {
     backend
         .reconcile_sidebars(&room.sidebar_options(200), &live)
         .expect_err("a repair pass cannot judge geometry from pre-floor topology");
+}
+
+#[cfg(unix)]
+#[test]
+fn reconcile_sidebars_defers_detached_adds_and_geometry_repairs() {
+    // fa15860b2: detached geometry repairs defer alongside missing-sidebar adds.
+    let room = TestRoom::new();
+    let produced_at_ms = unix_now_ms();
+    room.write_cache(
+        produced_at_ms,
+        None,
+        None,
+        vec![
+            terminal_pane(1, 0, 150, 0, "rimz-sidebar"),
+            terminal_pane(2, 0, 50, 150, "work"),
+            terminal_pane(3, 1, 200, 0, "work"),
+        ],
+    );
+    let (temp, shim) = support::logging_shim();
+    let live = SidebarLiveness {
+        claimed_panes: [PaneId::from_parts(crate::MuxName::Zellij, "terminal_1")].into(),
+        topology_floor_ms: Some(produced_at_ms),
+        ..Default::default()
+    };
+    let mut opts = room.sidebar_options(200);
+    opts.rimz_bin = shim.clone();
+    let report = room
+        .backend(&shim)
+        .reconcile_sidebars(&opts, &live)
+        .expect("detached reconcile");
+    assert_eq!(
+        report,
+        crate::mux::SidebarRecovery {
+            deferred: 2,
+            ..Default::default()
+        }
+    );
+    let log = shim_log(&temp);
+    assert!(log.contains("action list-clients"), "{log}");
+    assert!(
+        !log.contains("new-pane") && !log.contains("resize"),
+        "{log}"
+    );
 }
 
 #[cfg(unix)]
@@ -1731,6 +1908,98 @@ exit 0
     assert!(!log.contains("layout-missing-before-materialized"), "{log}");
     assert!(!log.contains("query-tab-names"), "{log}");
     assert_eq!(command_count(&log, "action new-tab "), 1, "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn open_tab_does_not_move_when_focus_never_confirms() {
+    assert_open_tab_move_confirmation(false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn open_tab_stops_after_first_unconfirmed_move() {
+    assert_open_tab_move_confirmation(true, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn open_tab_moves_after_anchor_with_new_pane_context() {
+    assert_open_tab_move_confirmation(true, true);
+}
+
+#[cfg(unix)]
+fn assert_open_tab_move_confirmation(focus_confirms: bool, move_confirms: bool) {
+    // ef12dabd3: placing the new tab requires confirmed focus and each confirmed move.
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+case " $* " in
+  *" action move-tab "*) printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log" ;;
+  *) printf '%s\n' "$*" >> "$dir/zellij.log" ;;
+esac
+case " $* " in
+  *" action new-tab "*) touch "$dir/opened" ;;
+  *" action move-tab "*)
+    position=$(cat "$dir/position" 2>/dev/null || printf 3)
+    printf '%s' "$((position - 1))" > "$dir/position" ;;
+  *" action list-clients "*) printf '1 terminal_{focused} work\n' ;;
+  *" action list-tabs "*)
+    printf '[{{"name":"main","selectable_tiled_panes_count":1}},{{"name":"two","selectable_tiled_panes_count":1}},{{"name":"three","selectable_tiled_panes_count":1}}'
+    if [ -f "$dir/opened" ]; then printf ',{{"name":"new","selectable_tiled_panes_count":1}}'; fi
+    printf ']\n' ;;
+  *" action list-panes "*)
+    position=3
+    if {move_confirms}; then position=$(cat "$dir/position" 2>/dev/null || printf 3); fi
+    printf '[{{"id":7,"tab_id":42,"tab_position":0,"pane_columns":120,"pane_x":0}},{{"id":8,"tab_id":45,"tab_position":%s,"pane_columns":120,"pane_x":0}}]\n' "$position" ;;
+esac
+exit 0
+"#,
+        focused = if focus_confirms { 8 } else { 7 },
+    ));
+    room.backend(&shim)
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: "new".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![LayoutColumn {
+                    panes: vec![PaneCmd {
+                        argv: vec!["sleep".to_owned(), "600".to_owned()],
+                        name: None,
+                    }],
+                    stacked: false,
+                }],
+                focused_pane: 0,
+            },
+            focus: true,
+            dock_sidebar: false,
+            after: Some(PaneId::from_parts(crate::MuxName::Zellij, "terminal_7")),
+            sidebar: room.sidebar_options(120),
+        })
+        .expect("tab opens even when placement fails");
+    let log = shim_log(&temp);
+    let actions = log
+        .lines()
+        .skip_while(|line| !line.contains("action focus-pane-id"))
+        .collect::<Vec<_>>();
+    let attempts = usize::try_from(FOCUS_RESTORE_ATTEMPTS).unwrap();
+    let mut expected = [
+        "--session rimz-test action focus-pane-id terminal_8",
+        "--session rimz-test action list-clients",
+    ]
+    .repeat(if focus_confirms { 1 } else { attempts });
+    if focus_confirms {
+        let move_tab = "--session rimz-test action move-tab left | pane=8";
+        let list = "--session rimz-test action list-panes --all --json";
+        if move_confirms {
+            expected.extend([move_tab, list].repeat(2));
+        } else {
+            expected.push(move_tab);
+            expected.extend(std::iter::repeat_n(list, attempts));
+        }
+    }
+    assert_eq!(actions, expected, "{log}");
 }
 
 #[cfg(unix)]
