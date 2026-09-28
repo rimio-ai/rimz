@@ -956,7 +956,7 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
     if team.is_some() {
         writeln!(w, "launched {subject}{lane}")?;
         writeln!(w, "  path      {}", cwd.display())?;
-        writeln!(w, "  board     blackboard.md")?;
+        writeln!(w, "  board     {}", rimz::harness::board::BOARD_FILE)?;
     } else {
         writeln!(w, "launched {subject}{lane} ({})", cwd.display())?;
     }

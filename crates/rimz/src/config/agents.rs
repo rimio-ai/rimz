@@ -331,8 +331,8 @@ pub struct Team {
 
 pub const DONE_STAGE: &str = "Done";
 
-/// Memory files a staged team keeps when it declares no `scratch-files`.
-const DEFAULT_SCRATCH_FILES: [&str; 2] = ["/blackboard.md", "/*-notes.md"];
+/// Notes files a staged team keeps beside its board when it declares no `scratch-files`.
+const DEFAULT_NOTES_PATTERN: &str = "/*-notes.md";
 
 impl Team {
     pub fn idle_compact(
@@ -390,7 +390,10 @@ impl Team {
     pub fn scratch_patterns(&self) -> Vec<String> {
         match &self.scratch_files {
             Some(patterns) => patterns.clone(),
-            None if self.staged() => DEFAULT_SCRATCH_FILES.map(str::to_owned).to_vec(),
+            None if self.staged() => vec![
+                format!("/{}", crate::harness::board::BOARD_FILE),
+                DEFAULT_NOTES_PATTERN.to_owned(),
+            ],
             None => Vec::new(),
         }
     }

@@ -752,7 +752,8 @@ fn hands_off(by: &Flipper<'_>, team: &Team, from: Option<&str>, owner: Option<&s
 fn uncommitted_paths(worktree: &Path) -> Result<Vec<String>, FlipErr> {
     let status = crate::proc::git_command(worktree)
         .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
-        .args(["--", ".", ":(exclude)blackboard.md"])
+        .args(["--", "."])
+        .arg(format!(":(exclude){}", super::board::BOARD_FILE))
         .env("LC_ALL", "C")
         .output()
         .map_err(|source| FlipErr::Io {

@@ -320,6 +320,7 @@ path = "crates/rimz/src/harness"
 # IdleWindow carries the cache-expiry bound through that shared decision.
 # Deadline rungs, channel policy and locked claims serve the CLI and producer.
 # Locked board records expose their section, request, receipt, and typed errors to the CLI.
+# BOARD_FILE names the board file once for the harness, config defaults, and CLI readers.
 # Room GC reaps only its instance rows; unattended GC elects and stamps machine sweeps.
 # GC scope is shared by the helper, durable assists, and stats projection.
 # Cache keepalive shares its request, helper recheck, prompt and producer entry across the CLI/sidebar seam.
@@ -328,7 +329,7 @@ path = "crates/rimz/src/harness"
 # The peer-run interface serves launch, hook enrollment, and terminal backstops.
 # Lifecycle hooks share the detached fleet-digest helper with the orphan sweep.
 # The team run's open, reopen and settle calls let `rimz teams flip` send TEAM_REPORT.
-surface-budget = 578
+surface-budget = 579
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
