@@ -213,8 +213,9 @@ An unread card also rests on a soft wash, the selection blue lifted a step, the 
 | --- | --- | --- |
 | `refresh_ms` | `100` | the animation and paint grid in milliseconds, clamped to 16 through 1000. Data polling keeps its own cadence |
 | `pixel` | `auto` | `auto` lets kitty-graphics pets and context meters paint where the terminal supports them; `off` keeps both drawn out of text cells |
-| `width_percent` | unset | a fixed sidebar share of each view, clamped to 10 through 90. Unset means 30% on views wider than 240 columns or whenever pets are on, and 25% otherwise |
-| `max_cols` | `72` | column cap on the sidebar's share |
+| `width_percent` | unset | a fixed sidebar share of each view, clamped to 10 through `max_percent`. Unset means 30% on views wider than 240 columns or whenever pets are on, and 25% otherwise, also bounded by `max_percent` |
+| `max_cols` | `72` | column cap on the unpinned sidebar default |
+| `max_percent` | `50` | maximum sidebar share, including widths you set with keys or dragging; clamped to 10 through 90. The 24-column minimum wins on narrow views |
 | `scrollbar` | `auto` | `auto` shows the overflow indicator only while the view moves; `always` and `never` pin it |
 | `card_density` | `auto` | `auto` keeps the standard card; `expanded` opens every card's subagents and waits; `compact` trims resting cards |
 | `recent_subagent_secs` | `900` | how long, in seconds, a finished subagent stays in a card's recent list before it moves behind `+K older`. `0` moves every finished child there at once, though a card with nothing newer to show lists them directly |
@@ -230,7 +231,7 @@ card_density = "compact"
 provider_list = ["claude", "codex", "all"]
 ```
 
-Width is the one setting here a running sidebar does not pick up. `width_percent` and `max_cols` are read when a sidebar starts, so a live room keeps its current width until the sidebar restarts. Inside the room, `a` and `d` resize it immediately and outrank both keys for the life of the session ([sidebar](./sidebar.md#setting-the-width)).
+Width is the one setting here a running sidebar does not pick up. `width_percent`, `max_cols`, and `max_percent` are read when a sidebar starts, so a live room keeps its current width until the sidebar restarts. Inside the room, `a` and `d` resize it immediately and outrank the default percentage and column cap, but never `max_percent` ([sidebar](./sidebar.md#setting-the-width)).
 
 The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client, either directly or through tmux 3.6 or later with `allow-passthrough` on. Zellij and every other path draw the half-cell bar instead, as does `NO_COLOR`. Setting `pixel = "off"` opts out of both the pixel meter and pixel pets.
 

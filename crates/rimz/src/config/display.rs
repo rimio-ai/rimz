@@ -109,15 +109,17 @@ pub struct DisplayConfig {
     pub provider_list: Vec<String>,
     /// Sidebar pane width as a percentage of each view, capped by `max_cols`.
     /// Unset uses 30% above 240 view columns or when pets are enabled, and 25%
-    /// otherwise; an explicit value stays fixed and is clamped to 10-90 when
-    /// used. A room-wide `a`/`d` width selection outranks this percentage and
-    /// the cap.
+    /// otherwise; an explicit value stays fixed and is clamped to 10 through
+    /// `max_percent` when used. A room-wide `a`/`d` width selection outranks
+    /// this percentage and `max_cols`, but never `max_percent`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width_percent: Option<u16>,
     /// Cap on the sidebar pane width in columns. Reconcile converges live panes
     /// toward the configured percentage up to this cap unless a room-wide
     /// `a`/`d` width selection is present.
     pub max_cols: NonZeroU16,
+    /// Maximum sidebar share, including user selections; clamped to 10-90.
+    pub max_percent: u16,
     /// How the agent-cards scrollbar shows when the cards overflow. `auto`
     /// (default) paints it only while the viewport moves and hides it once the
     /// view settles; `always` keeps it up; `never` removes it. Resolved
@@ -159,6 +161,7 @@ impl Default for DisplayConfig {
             provider_list: Vec::new(),
             width_percent: None,
             max_cols: default_sidebar_max_cols(),
+            max_percent: 50,
             scrollbar: ScrollbarMode::default(),
             card_density: CardDensityMode::default(),
             recent_subagent_secs: 900,

@@ -58,11 +58,12 @@ fn resolve_loaded(
     width: SidebarWidth,
     view_cols: Option<NonZeroU16>,
 ) -> crate::mux::SidebarTarget {
+    let cap = WidthPermille::from_percent(width.max_percent.clamp(10, 90));
     if view_cols.is_none()
         && let Some(file) = stored
     {
         return crate::mux::SidebarTarget {
-            share: file.permille,
+            share: file.permille.min(cap),
             max_cols: width.max_cols,
             pinned: file.pinned,
         };
@@ -86,7 +87,7 @@ fn resolve_loaded(
         ),
     };
     crate::mux::SidebarTarget {
-        share: permille,
+        share: permille.min(cap),
         max_cols: width.max_cols,
         pinned,
     }
@@ -112,9 +113,10 @@ pub(crate) fn adopt(
     target
 }
 
-/// Pin a user-selected room target as its exact measured share of the view.
+/// Pin a user-selected room target as its measured share, bounded by policy.
 pub(crate) fn pin(
     runtime: &RuntimePaths,
+    width: SidebarWidth,
     cols: NonZeroU16,
     view_cols: u16,
 ) -> atomic::Result<WidthPermille> {
@@ -125,7 +127,8 @@ pub(crate) fn pin(
             "sidebar width target needs nonzero view geometry",
         ),
     })?;
-    let permille = WidthPermille::from_cols(cols, view_cols);
+    let permille = WidthPermille::from_cols(cols, view_cols)
+        .min(WidthPermille::from_percent(width.max_percent.clamp(10, 90)));
     write_and_broadcast(
         runtime,
         WidthTargetFile {
@@ -169,6 +172,53 @@ mod tests {
             dir,
         )
         .expect("runtime paths")
+    }
+
+    #[test]
+    fn share_cap_bounds_stored_pins_and_heals_only_on_adopt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = runtime(dir.path());
+        fs::create_dir_all(runtime.sidebar_width_path().parent().unwrap()).unwrap();
+        for (configured, cap) in [(50, 50), (35, 35), (0, 10), (100, 90)] {
+            let mut theme = crate::config::ThemeConfig::default();
+            theme.display.max_percent = configured;
+            let width = SidebarWidth::from_config(&theme);
+            let original = br#"{"permille":983,"pinned":true}"#;
+            fs::write(runtime.sidebar_width_path(), original).unwrap();
+            for geometry in [Some(239), None] {
+                let resolved = resolve(&runtime, width, geometry);
+                assert_eq!(resolved.share, WidthPermille::from_percent(cap));
+                assert!(resolved.pinned);
+                assert_eq!(resolved.percent(), cap);
+            }
+            assert_eq!(fs::read(runtime.sidebar_width_path()).unwrap(), original);
+            let adopted = adopt(&runtime, width, NonZeroU16::new(239).unwrap());
+            assert_eq!(load_file(&runtime).unwrap().permille, adopted.share);
+            assert!(load_file(&runtime).unwrap().pinned);
+        }
+    }
+
+    #[test]
+    fn pin_and_policy_respect_the_configured_share_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = runtime(dir.path());
+        for cap in [35, 50] {
+            let mut theme = crate::config::ThemeConfig::default();
+            theme.display.max_percent = cap;
+            theme.display.width_percent = Some(90);
+            theme.display.max_cols = NonZeroU16::MAX;
+            let width = SidebarWidth::from_config(&theme);
+            clear(&runtime).unwrap();
+            for geometry in [Some(200), None] {
+                assert_eq!(
+                    resolve(&runtime, width, geometry).share,
+                    WidthPermille::from_percent(cap)
+                );
+            }
+            let share = pin(&runtime, width, NonZeroU16::new(235).unwrap(), 239).unwrap();
+            assert_eq!(share, WidthPermille::from_percent(cap));
+            assert_eq!(pinned(&runtime), Some(share));
+        }
     }
 
     #[test]
@@ -224,11 +274,11 @@ mod tests {
     }
 
     #[test]
-    fn pin_preserves_the_measured_width_and_scales_with_the_view() {
+    fn pin_below_the_share_cap_preserves_width_and_exceeds_max_cols() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
         let cols = NonZeroU16::new(81).expect("nonzero");
-        let share = pin(&runtime, cols, 200).expect("pin width target");
+        let share = pin(&runtime, SidebarWidth::default(), cols, 200).expect("pin width target");
         assert_eq!(share, WidthPermille::try_from(405).expect("valid share"));
         assert_eq!(pinned(&runtime), Some(share));
         assert_eq!(
@@ -243,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn max_cols_clamps_unpinned_policy_but_not_a_pin() {
+    fn pin_exceeds_max_cols_but_not_max_percent() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
         let width = SidebarWidth::default();
@@ -252,7 +302,13 @@ mod tests {
             width.max_cols,
         );
 
-        pin(&runtime, NonZeroU16::new(100).expect("nonzero"), 200).expect("pin width target");
+        pin(
+            &runtime,
+            SidebarWidth::default(),
+            NonZeroU16::new(190).expect("nonzero"),
+            200,
+        )
+        .expect("pin width target");
         assert_eq!(
             resolve(&runtime, width, Some(400)).cols(Some(400)),
             NonZeroU16::new(200).expect("nonzero"),
@@ -315,7 +371,13 @@ mod tests {
     fn clear_removes_a_target_and_accepts_a_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runtime = runtime(dir.path());
-        pin(&runtime, NonZeroU16::new(81).expect("nonzero"), 200).expect("pin target");
+        pin(
+            &runtime,
+            SidebarWidth::default(),
+            NonZeroU16::new(81).expect("nonzero"),
+            200,
+        )
+        .expect("pin target");
         clear(&runtime).expect("clear target");
         assert_eq!(load_file(&runtime), None);
         clear(&runtime).expect("clear missing target");
