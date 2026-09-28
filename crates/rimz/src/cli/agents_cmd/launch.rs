@@ -526,17 +526,28 @@ fn write_peer_receipt(
             name,
             &run.run_id,
         ));
-        writeln!(
-            w,
-            "@{name}'s response lands at {} when this turn settles. An AGENT_REPORT from @rimz arrives at your next turn boundary when your fleet settles, and again after each turn your message opens. The peer keeps its pane. To block instead: rimz agents wait {}",
-            response.display(),
-            run.run_id
-        )?;
+        if let Some(team) = run.team.as_ref() {
+            writeln!(
+                w,
+                "@{name} leads {instance}. When its board reaches Done, a TEAM_REPORT from @rimz arrives at your next turn boundary with the leader's final response at {}; the seats do not report their turns. The team keeps its panes. To block instead: rimz teams wait {instance}",
+                response.display(),
+                instance = team.instance,
+            )?;
+        } else {
+            writeln!(
+                w,
+                "@{name}'s response lands at {} when this turn settles. An AGENT_REPORT from @rimz arrives at your next turn boundary when your fleet settles, and again after each turn your message opens. The peer keeps its pane. To block instead: rimz agents wait {}",
+                response.display(),
+                run.run_id
+            )?;
+        }
     }
-    for identity in identities
-        .iter()
-        .filter(|identity| identity.launch.launched_by.is_some())
-    {
+    // A team reports through its prompted leader alone, so only that seat's
+    // missing hooks cost the launcher its report.
+    for identity in identities.iter().filter(|identity| {
+        identity.launch.launched_by.is_some()
+            && (identity.launch.team.is_none() || identity.prompt.is_some())
+    }) {
         if let Some(adapter) = rimz::agents::find_definition(identity.kind.as_str())
             && !rimz::harness::run::peer_can_report(adapter)
         {

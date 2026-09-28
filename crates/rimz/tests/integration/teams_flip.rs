@@ -343,6 +343,49 @@ impl Fixture {
             .unwrap();
     }
 
+    /// Seed a live row launched by the agent `launched_by`: a team seat when
+    /// `role` is set, a plain agent otherwise.
+    fn seed_launched(&self, name: &str, role: Option<&str>, launched_by: Option<&str>) {
+        let workspace = rimz::WorkspaceResolver::resolve(&self.env.project_root, None).unwrap();
+        self.env
+            .store()
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id,
+                &workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    agent_id: AgentSessionId::from(format!("launch_{name}")),
+                    launch_id: Some(AgentSessionId::from(format!("launch_{name}"))),
+                    agent_name: name.to_owned(),
+                    agent_name_explicit: true,
+                    launch: rimz::agents::LaunchParams {
+                        team: role.map(|_| "forge".to_owned()),
+                        role: role.map(ToOwned::to_owned),
+                        channel: Some("feature-team".to_owned()),
+                        launch_depth: launched_by.map(|_| 1),
+                        launched_by: launched_by.map(|launcher| {
+                            Box::new(rimz::agents::LaunchedBy {
+                                kind: AgentKind::new_unchecked("claude"),
+                                agent_id: AgentSessionId::from(format!("launch_{launcher}")),
+                            })
+                        }),
+                        ..Default::default()
+                    },
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: Some(self.env.project_root.display().to_string()),
+                    worktree_branch: Some("feature-team".to_owned()),
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+        self.hook(name, "SessionStart", None);
+        self.hook(name, "UserPromptSubmit", None);
+    }
+
     fn hook(&self, role: &str, event: &str, pane: Option<&str>) {
         let mut command = self.command();
         command
@@ -1411,4 +1454,124 @@ fn absent_owner_is_rewoken_when_its_root_session_registers() {
             .contains("The team resumed at stage Review, which is yours.")
     );
     assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), board);
+}
+
+#[test]
+fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
+    let fixture = Fixture::new();
+    fixture.seed_launched("boss", None, None);
+    fixture.seed_launched("coder", Some("coder"), Some("boss"));
+    fixture.seed_launched("reviewer", Some("reviewer"), Some("boss"));
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let store = fixture.env.store();
+    let leader = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|agent| agent.name.as_deref() == Some("coder"))
+        .unwrap();
+    let adapter = rimz::agents::registry::definition_by_kind("claude").unwrap();
+    let run = rimz::harness::run::create_peer_prompt(
+        store.paths(),
+        &leader,
+        adapter,
+        "Ship the feature.",
+        &fixture.env.project_root,
+    )
+    .unwrap()
+    .expect("the prompted leader of an agent-launched team holds a team run");
+    let answer = |text: &str| {
+        let open = rimz::harness::run::open_team_run_for(store.paths(), "forge#feature-team")
+            .unwrap()
+            .unwrap();
+        rimz::harness::run::record_assistant_message(
+            store.paths(),
+            &open.run_id,
+            "claude",
+            &leader.agent_id,
+            text.to_owned(),
+        )
+        .unwrap();
+    };
+    let team_reports = || {
+        store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                message.sender
+                    == MessageSender::Harness {
+                        notice: HarnessNotice::TeamReport,
+                    }
+            })
+            .collect::<Vec<_>>()
+    };
+    answer("Shipped: PR #1.");
+
+    let review = success(fixture.flip("Review", None, Some("Ready for review.")));
+    assert!(!review.contains("TEAM_REPORT"), "{review}");
+    assert!(team_reports().is_empty(), "only Done reports");
+
+    let done = success(fixture.flip("Done", None, Some("Finished.")));
+    assert!(
+        done.contains("report   TEAM_REPORT to @boss, at its next turn boundary"),
+        "{done}"
+    );
+    let reports = team_reports();
+    assert_eq!(reports.len(), 1);
+    let report = &reports[0];
+    assert_eq!(report.agent_id.as_str(), "boss");
+    assert_eq!(report.gate, DeliveryGate::Done);
+    let response = store
+        .paths()
+        .subagents_dir
+        .join(format!("coder.{}.output", run.run_id));
+    assert_eq!(
+        std::fs::read_to_string(&response).unwrap(),
+        "Shipped: PR #1.\n"
+    );
+    assert!(
+        report.text.starts_with(
+            "Team forge#feature-team reached Done; its leader reports:\n- @coder: completed in "
+        ),
+        "{}",
+        report.text
+    );
+    assert!(
+        report.text.contains("task: \"Ship the feature.\""),
+        "{}",
+        report.text
+    );
+    assert!(
+        report.text.contains(&response.display().to_string()),
+        "{}",
+        report.text
+    );
+    assert!(
+        store
+            .list_messages()
+            .unwrap()
+            .iter()
+            .all(|message| message.sender
+                != MessageSender::Harness {
+                    notice: HarnessNotice::SubagentReport
+                }),
+        "team seats stay out of the launcher's AGENT_REPORT"
+    );
+
+    let reopened = success(fixture.flip("Review", None, Some("One more pass.")));
+    assert!(
+        reopened.contains("report   TEAM_REPORT again at the next Done"),
+        "{reopened}"
+    );
+    answer("Fixed the review finding.");
+    success(fixture.flip("Done", None, Some("Finished again.")));
+    let reports = team_reports();
+    assert_eq!(reports.len(), 2, "every Done reports");
+    assert!(
+        reports
+            .iter()
+            .any(|report| report.text != reports[0].text && report.agent_id.as_str() == "boss")
+    );
 }

@@ -1211,3 +1211,137 @@ fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
     agent.registered_at = Some(Timestamp::UNIX_EPOCH);
     agent
 }
+
+fn team_record(paths: &StatePaths, instance: &str) -> RunRecord {
+    let mut record = RunRecord::new(
+        paths.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "ship the feature".to_owned(),
+        Path::new("/tmp/rimz-run").to_path_buf(),
+    );
+    record.agent_name = Some("lead".into());
+    record.team = Some(crate::store::run::TeamRun {
+        launch_id: "lead-launch".into(),
+        instance: instance.to_owned(),
+    });
+    create(paths, &record).unwrap();
+    record
+}
+
+fn turn_end(agent: &str) -> AgentLifecycleObservation {
+    AgentLifecycleObservation::new(
+        Some(agent.into()),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    )
+}
+
+#[test]
+fn team_run_keeps_the_leaders_last_message_across_turns_and_rows() {
+    let (_dir, paths, _) = setup();
+    let record = team_record(&paths, "forge#x");
+    for (agent, answer) in [("lead-1", "first"), ("lead-2", "second")] {
+        let terminal = record_lifecycle(
+            &paths,
+            &record.run_id,
+            "claude",
+            &turn_end(agent),
+            Some(answer.into()),
+            || None,
+        )
+        .unwrap();
+        assert!(terminal.is_none(), "a turn end leaves a team run open");
+        let stored = load(&paths, &record.run_id).unwrap();
+        assert_eq!(stored.status, RunStatus::Running);
+        assert_eq!(stored.last_message.as_deref(), Some(answer));
+        assert_eq!(stored.agent_id.as_ref().map(|id| id.as_str()), Some(agent));
+    }
+    // A failed turn end is still one turn of the leader's, not the team's end.
+    let errored = AgentLifecycleObservation::new(
+        Some("lead-2".into()),
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    record_lifecycle(&paths, &record.run_id, "claude", &errored, None, || None).unwrap();
+    record_assistant_message(
+        &paths,
+        &record.run_id,
+        "claude",
+        &"lead-3".into(),
+        "third".into(),
+    )
+    .unwrap();
+    let stored = load(&paths, &record.run_id).unwrap();
+    assert!(!stored.status.is_terminal());
+    assert_eq!(stored.last_message.as_deref(), Some("third"));
+}
+
+#[test]
+fn team_run_settles_once_per_done_and_reopens_for_the_next() {
+    let (_dir, paths, _) = setup();
+    let first = team_record(&paths, "forge#x");
+    let other = team_record(&paths, "forge#y");
+    record_assistant_message(
+        &paths,
+        &first.run_id,
+        "claude",
+        &"lead-1".into(),
+        "done".into(),
+    )
+    .unwrap();
+    assert_eq!(
+        open_team_run_for(&paths, "forge#x")
+            .unwrap()
+            .map(|run| run.run_id),
+        Some(first.run_id.clone())
+    );
+    assert!(
+        reopen_team_run(&paths, "forge#x").unwrap().is_none(),
+        "one open run per cohort"
+    );
+
+    let report = crate::ids::MessageId::new();
+    let settled = complete_team_run(&paths, &first.run_id, Some(&report))
+        .unwrap()
+        .expect("first Done settles the run");
+    assert_eq!(settled.status, RunStatus::Completed);
+    assert_eq!(settled.report_message_id.as_ref(), Some(&report));
+    assert!(
+        complete_team_run(&paths, &first.run_id, Some(&report))
+            .unwrap()
+            .is_none()
+    );
+    let response = paths
+        .subagents_dir
+        .join(format!("lead.{}.output", first.run_id));
+    assert_eq!(std::fs::read_to_string(response).unwrap(), "done\n");
+    assert!(open_team_run_for(&paths, "forge#x").unwrap().is_none());
+
+    let reopened = reopen_team_run(&paths, "forge#x")
+        .unwrap()
+        .expect("leaving Done opens the next stretch");
+    assert_ne!(reopened.run_id, first.run_id);
+    assert_eq!(reopened.team, first.team);
+    assert_eq!(reopened.prompt, first.prompt);
+    assert_eq!(reopened.last_message, None);
+    assert_eq!(
+        open_team_run_for(&paths, "forge#x")
+            .unwrap()
+            .map(|run| run.run_id),
+        Some(reopened.run_id)
+    );
+    assert_eq!(
+        open_team_run_for(&paths, "forge#y")
+            .unwrap()
+            .map(|run| run.run_id),
+        Some(other.run_id),
+        "cohorts settle independently"
+    );
+}

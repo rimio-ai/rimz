@@ -1785,7 +1785,11 @@ fn launched_fleet_joins_children_and_own_peers_once() {
         kind: launcher.kind.clone(),
         agent_id: "someone-else".into(),
     });
-    let agents = [launcher.clone(), child, peer, foreign];
+    // A team seat reports through its team run at Done, not this fleet.
+    let mut seat = peer.clone();
+    seat.agent_id = "team-seat".into();
+    seat.team = Some("forge".into());
+    let agents = [launcher.clone(), child, peer, foreign, seat];
 
     let fleet = launched_fleet(&agents, &launcher)
         .into_iter()

@@ -1,10 +1,12 @@
-//! Supervised and launcher-opened peer run transitions, responses, and cancellation.
+//! Supervised, launcher-opened peer, and team-long leader run transitions, responses, and cancellation.
 
 mod peer;
 pub mod report;
+mod team;
 pub use peer::{
     create_peer_prompt, enroll_peer_run, fail_peer_run, open_peer_run, peer_can_report,
 };
+pub use team::{complete_team_run, open_team_run, open_team_run_for, reopen_team_run};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,7 +65,7 @@ pub fn publish_response(
     let Some(name) = record.agent_name.as_deref() else {
         return Ok(None);
     };
-    let path = if record.peer.is_some() {
+    let path = if record.peer.is_some() || record.team.is_some() {
         peer_response_path(paths, name, &record.run_id)
     } else {
         response_path(paths, name)
@@ -351,7 +353,7 @@ fn update_record<T>(
             // Waiters read the record unlocked, so a terminal record must imply its file.
             if !was_terminal
                 && record.status.is_terminal()
-                && (record.subagent || record.peer.is_some())
+                && (record.subagent || record.peer.is_some() || record.team.is_some())
                 && let Err(err) = publish_response(paths, &record)
             {
                 tracing::warn!(run_id = %record.run_id, error = %err, "publishing subagent response failed");
@@ -640,6 +642,9 @@ fn fold_lifecycle(
     if record.kind.as_str() != kind || (record.status.is_terminal() && !reopen) {
         return LifecycleFold::Ignored;
     }
+    if record.team.is_some() {
+        return fold_team_lifecycle(record, observation, last_message);
+    }
     match (&record.agent_id, &observation.agent_id) {
         (Some(bound), Some(observed)) if observed != bound => return LifecycleFold::Ignored,
         (Some(_), None) => return LifecycleFold::Ignored,
@@ -711,6 +716,46 @@ fn fold_lifecycle(
     LifecycleFold::Updated
 }
 
+/// A team run spans every turn of its leader until the board flips to Done:
+/// a turn end keeps the leader's final message and leaves the run open, and
+/// the run follows the leader onto a new conversation row of the same launch,
+/// since `session_run_id` routed the observation here by launch id.
+fn fold_team_lifecycle(
+    record: &mut RunRecord,
+    observation: &AgentLifecycleObservation,
+    last_message: Option<String>,
+) -> LifecycleFold {
+    let Some(observed) = observation.agent_id.as_ref() else {
+        return LifecycleFold::Ignored;
+    };
+    let mut changed = record.agent_id.as_ref() != Some(observed);
+    record.agent_id = Some(observed.clone());
+    if let Some(name) = observation.agent_name.clone() {
+        record.agent_name = Some(name);
+    }
+    if let Some(path) = observation.transcript_path.as_ref()
+        && record.transcript_path.as_ref() != Some(path)
+    {
+        record.transcript_path = Some(path.clone());
+        changed = true;
+    }
+    if observation.signal.terminal_disposition().is_some()
+        && let Some(message) = last_message.filter(|message| !message.is_empty())
+    {
+        record.last_message = Some(message);
+        changed = true;
+    }
+    if record.status == RunStatus::Pending {
+        record.status = RunStatus::Running;
+        changed = true;
+    }
+    if changed {
+        LifecycleFold::Updated
+    } else {
+        LifecycleFold::Ignored
+    }
+}
+
 /// Store provider-declared final visible output without ending the run.
 pub fn record_assistant_message(
     paths: &StatePaths,
@@ -722,6 +767,10 @@ pub fn record_assistant_message(
     update_record(paths, run_id, |record, _| {
         if record.kind.as_str() != kind || record.status.is_terminal() {
             return Ok(RecordMutation::Keep(()));
+        }
+        // A team run follows its leader across conversation rows of one launch.
+        if record.team.is_some() {
+            record.agent_id = Some(agent_id.clone());
         }
         match &record.agent_id {
             Some(bound) if bound != agent_id => return Ok(RecordMutation::Keep(())),

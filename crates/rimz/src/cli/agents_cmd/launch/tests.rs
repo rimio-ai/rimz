@@ -157,6 +157,33 @@ fn peer_receipt_uses_launcher_row_or_host_fallback() {
     )
     .unwrap();
     assert!(receipt.is_empty());
+
+    let (peer, mut run) = peer_prompt;
+    run.team = Some(rimz::store::run::TeamRun {
+        launch_id: "leader-launch".into(),
+        instance: "forge#feat-x".into(),
+    });
+    let team_prompt = (peer, run);
+    let mut receipt = Vec::new();
+    write_placed_peer_receipt(
+        &mut receipt,
+        &[],
+        Some(&team_prompt),
+        &[],
+        rimz::config::Isolation::Host,
+        &paths,
+    )
+    .unwrap();
+    let receipt = String::from_utf8(receipt).unwrap();
+    assert!(
+        receipt.starts_with("@peer leads forge#feat-x. When its board reaches Done, a TEAM_REPORT"),
+        "{receipt}"
+    );
+    assert!(
+        receipt.contains("rimz teams wait forge#feat-x"),
+        "{receipt}"
+    );
+    assert!(!receipt.contains("AGENT_REPORT"), "{receipt}");
 }
 
 #[test]

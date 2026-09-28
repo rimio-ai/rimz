@@ -54,9 +54,9 @@ pub(super) enum ReportErr {
     },
 }
 
-struct ResponseFile {
-    path: PathBuf,
-    summary: FileSummary,
+pub(super) struct ResponseFile {
+    pub(super) path: PathBuf,
+    pub(super) summary: FileSummary,
 }
 
 pub(super) fn report_fleet(
@@ -324,7 +324,7 @@ fn compose_digest(rows: &[(&AgentState, &RunRecord, Option<&ResponseFile>)]) -> 
     format!("{heading}\n{rows}")
 }
 
-fn compose_digest_row(
+pub(super) fn compose_digest_row(
     child: &AgentState,
     run: &RunRecord,
     response: Option<&ResponseFile>,

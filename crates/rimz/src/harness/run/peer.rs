@@ -25,6 +25,9 @@ pub fn create_peer_prompt(
     prompt: &str,
     cwd: &Path,
 ) -> Result<Option<RunRecord>> {
+    if peer.is_team_seat() {
+        return super::team::create_team_run(paths, peer, adapter, prompt, cwd);
+    }
     let Some(launch_id) = peer_launch_id(peer) else {
         return Ok(None);
     };
@@ -118,7 +121,11 @@ pub fn enroll_peer_run(
 }
 
 pub fn fail_peer_run(store: &Store, peer: &AgentState, reason: &str) -> Result<Option<RunRecord>> {
-    let Some(record) = open_peer_run(store.paths(), peer)? else {
+    let open = match open_peer_run(store.paths(), peer)? {
+        Some(record) => Some(record),
+        None => super::team::open_team_run(store.paths(), peer)?,
+    };
+    let Some(record) = open else {
         return Ok(None);
     };
     let (record, wrote) = super::update_record(store.paths(), &record.run_id, |record, now| {
@@ -136,7 +143,7 @@ pub fn fail_peer_run(store: &Store, peer: &AgentState, reason: &str) -> Result<O
 }
 
 fn peer_launch_id(peer: &AgentState) -> Option<&AgentSessionId> {
-    if peer.launched_by.is_none() || peer.parent_agent_id.is_some() {
+    if peer.launched_by.is_none() || peer.parent_agent_id.is_some() || peer.is_team_seat() {
         return None;
     }
     peer.launch_id.as_ref()

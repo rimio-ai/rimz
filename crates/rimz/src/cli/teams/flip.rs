@@ -7,6 +7,7 @@ use jiff::Timestamp;
 
 use rimz::harness::team_stage::{self, Compaction, Delivery, FlipRequest, Flipper};
 
+use super::super::agents_cmd::team_report::TeamReportOutcome;
 use super::super::{Ctx, GlobalFlags, render};
 use super::FlipArgs;
 
@@ -179,6 +180,36 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         Compaction::Sent { .. } => writeln!(out, "  compact  sent")?,
         Compaction::Skipped { reason } => writeln!(out, "  compact  skipped: {reason}")?,
         Compaction::BelowThreshold | Compaction::NotConfigured | Compaction::Ineligible => {}
+    }
+    // The board already flipped; a report that cannot be queued warns rather than
+    // failing a flip that has landed.
+    let instance = format!("{team_name}#{}", cohort.channel);
+    match super::super::agents_cmd::team_report::on_flip(
+        &ctx.workspace,
+        &ctx.store,
+        &instance,
+        receipt.from.as_deref(),
+        &receipt.to,
+    ) {
+        Ok(TeamReportOutcome::Queued {
+            launcher,
+            delivered,
+        }) => {
+            let timing = if delivered {
+                "sent now"
+            } else {
+                "at its next turn boundary"
+            };
+            writeln!(out, "  report   TEAM_REPORT to @{launcher}, {timing}")?;
+        }
+        Ok(TeamReportOutcome::Reopened) => {
+            writeln!(out, "  report   TEAM_REPORT again at the next Done")?;
+        }
+        Ok(TeamReportOutcome::NotOwed) => {}
+        Err(error) => {
+            tracing::warn!(%error, %instance, "team report failed");
+            writeln!(out, "  report   TEAM_REPORT failed: {error}")?;
+        }
     }
     Ok(())
 }

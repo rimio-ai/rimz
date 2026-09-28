@@ -118,7 +118,8 @@ upward-dependencies = ["address"]
 # Native post-tool context attachment crosses the adapter/CLI hook seam.
 # A sanitized-prompt newtype and the RimZ prompt-block registry are the adapters' and the CLI's only way to hand over prompt text.
 # AgentState::last_request_at shares one request clock with producer and helper timers.
-surface-budget = 896
+# `is_team_seat` keeps team seats out of peer runs and the launcher's fleet digest.
+surface-budget = 897
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -324,7 +325,8 @@ path = "crates/rimz/src/harness"
 # Peer launch receipts share the per-run response path with the publisher.
 # The peer-run interface serves launch, hook enrollment, and terminal backstops.
 # Lifecycle hooks share the detached fleet-digest helper with the orphan sweep.
-surface-budget = 573
+# The team run's open, reopen and settle calls let `rimz teams flip` send TEAM_REPORT.
+surface-budget = 577
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -471,7 +473,8 @@ path = "crates/rimz/src/store"
 # append_signal moved from writer/signal.rs into writer.rs; atlas now counts the method it under-counted there (pass 27b); real visibility unchanged.
 # Peer turn metadata and exact run-to-agent matching are shared with CLI consumers.
 # Delivery selection provenance crosses the locked acknowledgment callback seam.
-surface-budget = 332
+# `TeamRun` marks the leader's team-long run record.
+surface-budget = 333
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -818,7 +821,8 @@ allowed-dependencies = [
 # Response paths, the publisher and its typed error cross the CLI/library boundary.
 # Hook and pane consumers claim each deadline rung through the same locked CAS.
 # Peer creation, lookup, enrollment, failure and adapter gating are shared with the CLI.
-surface-budget = 42
+# Team runs: the hook finds the leader's open run; the flip settles or reopens it per Done.
+surface-budget = 46
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

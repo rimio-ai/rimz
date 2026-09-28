@@ -556,10 +556,15 @@ fn session_run_id(
             .into_iter()
             .find(|peer| peer.kind == agent.spec().kind && peer.agent_id == *agent_id)
     })?;
-    match rimz::harness::run::open_peer_run(store.paths(), &peer) {
+    let open = if peer.is_team_seat() {
+        rimz::harness::run::open_team_run(store.paths(), &peer)
+    } else {
+        rimz::harness::run::open_peer_run(store.paths(), &peer)
+    };
+    match open {
         Ok(record) => record.map(|record| record.run_id),
         Err(error) => {
-            warn!(%error, "lifecycle: failed to find peer run");
+            warn!(%error, "lifecycle: failed to find peer or team run");
             None
         }
     }

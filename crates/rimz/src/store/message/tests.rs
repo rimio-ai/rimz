@@ -274,6 +274,7 @@ fn message_header_parser_strips_only_a_valid_label() {
     for (header, kind) in [
         ("AGENT_MESSAGE", HeaderKind::Agent),
         ("AGENT_REPORT", HeaderKind::Subagent),
+        ("TEAM_REPORT", HeaderKind::Subagent),
         ("AGENT_REPORT", HeaderKind::Subagent),
         ("SUBAGENT_REPORT", HeaderKind::Subagent),
     ] {
@@ -1269,6 +1270,7 @@ fn align_submitted_prompt_consumes_harness_report_header() {
     let recipient = agent("session-recipient", None);
     for (notice, header_type) in [
         (HarnessNotice::SubagentReport, "AGENT_REPORT"),
+        (HarnessNotice::TeamReport, "TEAM_REPORT"),
         (HarnessNotice::Wait, "WAIT"),
         (HarnessNotice::Signal, "SIGNAL"),
         (HarnessNotice::Stage, "STAGE"),

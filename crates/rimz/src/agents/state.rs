@@ -1223,6 +1223,13 @@ impl AgentState {
         })
     }
 
+    /// Whether this row is a seat of a team cohort. An agent-launched team
+    /// reports once, through its leader's team run at Done, so its seats
+    /// open no per-turn peer runs and stay out of the launcher's fleet.
+    pub fn is_team_seat(&self) -> bool {
+        self.team.as_deref().is_some_and(|team| !team.is_empty()) && !self.is_launched_child()
+    }
+
     /// Match the parent link to a candidate session or launch of the right kind.
     pub fn parent_is(&self, candidate: &AgentState) -> bool {
         self.parent_agent_id

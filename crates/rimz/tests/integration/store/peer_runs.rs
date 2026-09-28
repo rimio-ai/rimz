@@ -100,6 +100,7 @@ fn ack(h: &Harness, peer: &AgentState, ack: DeliveryAck<'_>) -> Vec<MessageRecor
                 )
                 .unwrap();
                 if selection == DeliveryAckMatch::PromptCorrelated
+                    && !peer.is_team_seat()
                     && records.iter().any(|record| record.sender == launcher())
                 {
                     assert!(
@@ -314,4 +315,59 @@ fn peer_launch_prompt_is_pending_and_failure_is_terminal() {
             .is_none()
     );
     assert_eq!(run::list(h.store.paths()).unwrap(), vec![failed]);
+}
+
+#[test]
+fn team_seat_launch_prompt_opens_a_team_run_and_no_peer_turns() {
+    let h = Harness::new();
+    let mut leader = peer();
+    leader.team = Some("forge".into());
+    leader.channel = Some("feat-x".into());
+    let adapter = rimz::agents::registry::definition_by_kind("claude").unwrap();
+    let record = run::create_peer_prompt(
+        h.store.paths(),
+        &leader,
+        adapter,
+        "build the feature",
+        Path::new("/repo"),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(record.peer.is_none(), "a team seat opens no peer turn");
+    let team = record.team.as_ref().expect("the leader holds the team run");
+    assert_eq!(team.instance, "forge#feat-x");
+    assert_eq!(team.launch_id.as_str(), "peer-launch");
+    assert_eq!(
+        run::open_team_run(h.store.paths(), &leader)
+            .unwrap()
+            .map(|run| run.run_id),
+        Some(record.run_id.clone())
+    );
+    assert!(
+        run::open_peer_run(h.store.paths(), &leader)
+            .unwrap()
+            .is_none()
+    );
+
+    // A launcher message to any seat opens no per-turn report.
+    let messages = sent(&h, &leader, &["next"], launcher(), MessageBody::Prompt);
+    let prompt = "Type: AGENT_MESSAGE\nFrom: @launcher\nContent:\nnext";
+    assert_eq!(
+        ack(
+            &h,
+            &leader,
+            DeliveryAck::TurnStarted {
+                prompt: Some(prompt)
+            }
+        )
+        .len(),
+        messages.len()
+    );
+    assert_eq!(run::list(h.store.paths()).unwrap(), vec![record.clone()]);
+
+    let failed = run::fail_peer_run(&h.store, &leader, "team launch failed")
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.run_id, record.run_id);
+    assert_eq!(failed.status, RunStatus::Failed);
 }
