@@ -380,6 +380,30 @@ fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
 }
 
 #[test]
+fn settled_resize_probe_dirties_the_frame_when_only_the_cell_aspect_changed() {
+    let mut rig = Rig::new();
+    let probed = crate::sidebar_pane::pets::probe_cell_aspect();
+    let stale = match probed {
+        Some(_) => None,
+        None => crate::config::CellAspect::from_ratio(2.0),
+    };
+    rig.state.paint.set_probed_aspect(stale);
+    rig.state
+        .on_resize(&mut rig.fetch, &mut rig.terminal, Some(40))
+        .unwrap();
+    rig.state.dirty = false;
+    let caps = rig.state.paint.caps();
+
+    assert!(rig.state.refresh_pet_render_caps_if_stale_with(
+        crate::MuxName::Tmux,
+        "rimz-test",
+        Instant::now() + Duration::from_millis(510),
+        |_, _, _| caps,
+    ));
+    assert!(rig.state.dirty);
+}
+
+#[test]
 fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
     let caps = crate::sidebar_pane::pixel::detect_pixel_render_caps(
         crate::MuxName::Zellij,

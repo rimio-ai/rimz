@@ -377,6 +377,23 @@ fn width_target_pin_broadcasts_without_a_producer_fetch() {
 }
 
 #[test]
+fn relative_press_never_moves_a_converging_target_against_its_direction() {
+    let (_dir, _runtime, mut controller) = controller(MuxName::Zellij);
+    controller.current_view_cols = Some(200);
+    controller
+        .convergence
+        .seed_native_step(native_step(10, false));
+
+    controller.convergence.retarget(Some(target(40)));
+    controller.adjust(80, WidthAdjust::Narrower);
+    assert_eq!(controller.convergence.target(), Some(target(40)));
+
+    controller.convergence.retarget(Some(target(80)));
+    controller.adjust(40, WidthAdjust::Wider);
+    assert_eq!(controller.convergence.target(), Some(target(80)));
+}
+
+#[test]
 fn zellij_uses_live_step_and_clamps_floor_crossing() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
