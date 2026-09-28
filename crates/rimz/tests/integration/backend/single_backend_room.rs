@@ -7,7 +7,7 @@ use std::process::Command;
 
 use rimz::workspace::WorkspaceResolver;
 
-use crate::common::{CommandTimeoutExt, Env, ROOM_WORKFLOW_TIMEOUT, ScrubSessionEnvExt};
+use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
 #[test]
 fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
@@ -65,11 +65,7 @@ fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
         String::from_utf8_lossy(&agents.stderr)
     );
     for args in [vec!["start"], vec!["attach", "--print"]] {
-        let output = room
-            .rimz()
-            .args(args)
-            .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
-            .unwrap();
+        let output = room.rimz().args(args).bounded_output().unwrap();
         assert!(
             output.status.success(),
             "{}",
@@ -94,7 +90,7 @@ fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
     let reset = room
         .rimz()
         .args(["--mux", "tmux", "reset", "--yes"])
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .unwrap();
     assert!(
         reset.status.success(),
@@ -136,7 +132,7 @@ fn start_refuses_when_rival_backend_runs_room() {
     let output = room
         .rimz()
         .args(["--mux", "zellij", "start"])
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run rival zellij start");
 
     assert!(
@@ -169,7 +165,7 @@ fn attach_from_cwd_uses_live_backend_over_ambient_backend() {
         .rimz()
         .arg("attach")
         .env("ZELLIJ", "1")
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run attach from cwd");
 
     assert!(
@@ -199,7 +195,7 @@ fn start_auto_attaches_to_live_zellij_room() {
     let output = room
         .rimz()
         .arg("start")
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run auto start");
 
     assert!(
@@ -240,7 +236,7 @@ fn attach_purges_corrupt_zellij_resurrection_cache() {
     let output = room
         .rimz()
         .args(["attach", "--print"])
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run printed attach");
 
     assert!(
@@ -269,7 +265,7 @@ fn reset_targets_live_backend_and_rebirths_on_default() {
     let output = room
         .rimz()
         .args(["reset", "--yes"])
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run auto reset");
 
     assert!(
@@ -304,7 +300,7 @@ fn reset_explicit_rival_refuses_before_teardown() {
     let output = room
         .rimz()
         .args(["--mux", "tmux", "reset", "--yes"])
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run rival reset");
 
     assert!(
@@ -356,7 +352,7 @@ fn reset_refuses_an_unbirthable_default_rebirth_before_teardown() {
         .rimz()
         .args(["reset", "--yes"])
         .env("ZELLIJ_SOCKET_DIR", format!("/tmp/{}", "x".repeat(140)))
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run reset");
 
     assert!(
@@ -402,7 +398,7 @@ impl TmuxRoom {
             let mut cmd = env.rimz();
             cmd.args(["--mux", "tmux", "start"])
                 .env("TMUX_TMPDIR", &tmux_tmpdir)
-                .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+                .bounded_output()
                 .expect("run tmux start")
         };
         assert!(
@@ -477,7 +473,7 @@ impl ZellijRoom {
             pin_zellij_shared_env(&env, &mut cmd);
             cmd.args(["--mux", "zellij", "start"])
                 .env("TMUX_TMPDIR", &tmux_tmpdir)
-                .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+                .bounded_output()
                 .expect("run zellij start")
         };
         assert!(

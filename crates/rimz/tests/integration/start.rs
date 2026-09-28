@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::workspace::WorkspaceResolver;
 
-use crate::common::{CommandTimeoutExt, Env, ROOM_WORKFLOW_TIMEOUT};
+use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
 
 const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
 
@@ -83,7 +83,7 @@ fn seed_sidebar_heartbeat(env: &Env, session_name: &str, label: &str) -> PathBuf
     std::fs::File::options()
         .write(true)
         .open(&path)
-        .and_then(|file| file.set_modified(std::time::SystemTime::now() + ROOM_WORKFLOW_TIMEOUT))
+        .and_then(|file| file.set_modified(std::time::SystemTime::now() + COMMAND_TIMEOUT))
         .expect("date heartbeat past the run");
     path
 }
@@ -461,7 +461,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let mut birth_command = birth.rimz();
     configure_actionable_hooks(&mut birth_command, &birth, &birth_bin, &birth_trace, "");
     let birth_output = birth_command
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run absent-room start");
     assert!(
         birth_output.status.success(),
@@ -507,9 +507,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let live_trace = live.project_root.join("zellij-live.log");
     let mut live_command = live.rimz();
     configure_actionable_hooks(&mut live_command, &live, &live_bin, &live_trace, &sessions);
-    let live_output = live_command
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
-        .expect("run live-room start");
+    let live_output = live_command.bounded_output().expect("run live-room start");
     assert!(
         live_output.status.success(),
         "reattach failed: {}",
@@ -591,7 +589,7 @@ fn reconnect_marker_keeps_pty_start_unattended() {
         let _ = reader.read_to_end(&mut output);
         output
     });
-    let deadline = Instant::now() + ROOM_WORKFLOW_TIMEOUT;
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll reconnect start") {
             break Some(status);
@@ -607,7 +605,7 @@ fn reconnect_marker_keeps_pty_start_unattended() {
     let output =
         String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
     let status = status.unwrap_or_else(|| {
-        panic!("reconnect start did not finish within {ROOM_WORKFLOW_TIMEOUT:?}:\n{output}")
+        panic!("reconnect start did not finish within {COMMAND_TIMEOUT:?}:\n{output}")
     });
     assert!(status.success(), "reconnect start failed: {output}");
     assert!(
@@ -695,9 +693,7 @@ fn start_with_accounts(env: &Env, sessions: &str, accounts: &[&str]) -> std::pro
     for account in accounts {
         command.args(["--account", account]);
     }
-    command
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
-        .expect("run rimz start")
+    command.bounded_output().expect("run rimz start")
 }
 
 fn write_machine_config(env: &Env, text: &str) {
@@ -805,7 +801,7 @@ fn start_takes_project_accounts_only_under_trust() {
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &attach_log)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
-        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .bounded_output()
         .expect("run rimz attach");
     let stderr = String::from_utf8_lossy(&attach.stderr);
     assert!(!attach.status.success(), "{stderr}");
