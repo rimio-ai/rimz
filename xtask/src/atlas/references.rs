@@ -265,9 +265,17 @@ pub(super) fn has_role(occurrence: &Occurrence, role: SymbolRole) -> bool {
 }
 
 pub(super) fn descriptor_tail_matches(symbol: &str, name: &str) -> bool {
-    ["().", "#", ".", "/"]
-        .iter()
-        .any(|suffix| symbol.ends_with(&format!("{name}{suffix}")))
+    ["().", "#", ".", "/"].iter().any(|suffix| {
+        symbol
+            .strip_suffix(suffix)
+            .and_then(|head| head.strip_suffix(name))
+            .is_some_and(|before| {
+                before
+                    .chars()
+                    .next_back()
+                    .is_none_or(|boundary| "/#.] `".contains(boundary))
+            })
+    })
 }
 
 #[cfg(test)]
@@ -496,7 +504,10 @@ mod tests {
         for symbol in ["item().", "item#", "item.", "item/"] {
             assert!(descriptor_tail_matches(symbol, "item"));
         }
-        assert!(!descriptor_tail_matches("other().", "item"));
+        assert!(descriptor_tail_matches("crate impl#[Ctx]item().", "item"));
+        for symbol in ["other().", "should_item().", "Sample#payitem."] {
+            assert!(!descriptor_tail_matches(symbol, "item"), "{symbol}");
+        }
     }
 
     #[test]

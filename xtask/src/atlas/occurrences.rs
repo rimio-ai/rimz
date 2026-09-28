@@ -217,7 +217,7 @@ fn build_report(index: &Index, query: &Query) -> Report {
         }
         for occurrence in &document.occurrences {
             if occurrence.symbol.starts_with("local ") {
-                if list_document {
+                if list_document && query.symbol.is_none() {
                     report.unlisted.locals += 1;
                 }
                 continue;
@@ -433,6 +433,7 @@ mod tests {
                     vec![
                         occurrence(1, name, 0),
                         occurrence(2, "ensure_revision().", 0),
+                        occurrence(2, "demo/should_ensure().", 0),
                         occurrence(3, "local 3", 0),
                         Occurrence {
                             symbol: name.into(),
@@ -451,7 +452,7 @@ mod tests {
         assert_eq!(symbol.display_name.as_deref(), Some("ensure"));
         assert_eq!(symbol.kind.as_deref(), Some("Function"));
         assert_eq!(symbol.enclosing_symbol.as_deref(), Some("owner#"));
-        assert_eq!((result.unlisted.locals, result.unlisted.no_line), (1, 1));
+        assert_eq!((result.unlisted.locals, result.unlisted.no_line), (0, 1));
         assert_eq!(
             result.occurrences[2].path,
             Path::new("generated/untracked.rs")
