@@ -376,7 +376,11 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         .prepare_check(&mut |_| Ok(()))
         .expect("run poll check");
     assert_eq!(
-        poll_check.done.expect("skipped poll result").record.result,
+        poll_check
+            .break_value()
+            .expect("skipped poll result")
+            .record
+            .result,
         LoopRunResult::CheckSkipped
     );
 
@@ -404,8 +408,12 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         let check = fire
             .prepare_check(&mut |_| panic!("supplied watch runs no check"))
             .expect("running watch always delivers");
-        assert!(check.done.is_none());
-        let record = check.fire.expect("watch evidence").record;
+        assert!(check.is_continue());
+        let record = check
+            .continue_value()
+            .unwrap()
+            .expect("watch evidence")
+            .record;
         assert_eq!(record.code, None);
         assert!(!record.timed_out);
         assert_eq!(record.output, "still running");
@@ -423,7 +431,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     let watch_check = watch_fire
         .prepare_check(&mut |_| panic!("supplied watch runs no check"))
         .expect("read watch check");
-    let finished = watch_check.done.expect("skipped watch result");
+    let finished = watch_check.break_value().expect("skipped watch result");
     assert_eq!(finished.record.result, LoopRunResult::CheckSkipped);
     assert_eq!(
         finished.record.watch,
@@ -464,7 +472,11 @@ fn check_only_terminals_consume_only_one_shots() {
         crate::harness::schedule::instances::insert(&state, name, &entry).unwrap();
         let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
         let mut fire = skipped_fire(name, &catalog, None);
-        let finished = fire.prepare_check(&mut |_| Ok(())).unwrap().done.unwrap();
+        let finished = fire
+            .prepare_check(&mut |_| Ok(()))
+            .unwrap()
+            .break_value()
+            .unwrap();
         assert_eq!(finished.record.result, result);
         assert_eq!(finished.presentation.exit_code, None);
         assert_eq!(finished.record.error, None);
