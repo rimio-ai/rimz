@@ -202,12 +202,9 @@ pub(super) fn record_conversation(
     };
     let kind = agent.spec().kind_id();
     let snapshot = store.snapshot_cached().ok();
-    let state = snapshot.as_ref().and_then(|snapshot| {
-        snapshot
-            .agents
-            .iter()
-            .find(|state| state.kind == kind && state.agent_id == agent_id)
-    });
+    let state = snapshot
+        .as_ref()
+        .and_then(|snapshot| find_agent(&snapshot.agents, &kind, &agent_id));
     let channel = rimz::transcript::entry_channel(
         observation.launch.channel.as_deref(),
         observation.worktree_path.as_deref(),
@@ -497,12 +494,8 @@ pub(super) fn agent_state(
     agent: &AgentDefinition,
     agent_id: &rimz::ids::AgentSessionId,
 ) -> Option<rimz::agents::AgentState> {
-    store.snapshot_cached().ok().and_then(|snapshot| {
-        snapshot
-            .agents
-            .into_iter()
-            .find(|state| state.kind == agent.spec().kind && state.agent_id == *agent_id)
-    })
+    let snapshot = store.snapshot_cached().ok()?;
+    find_agent(&snapshot.agents, agent.spec().kind, agent_id).cloned()
 }
 
 fn stamp_parent(

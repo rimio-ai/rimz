@@ -110,10 +110,7 @@ fn context_window_is_unset(
     let Ok(snapshot) = store.snapshot_cached() else {
         return false;
     };
-    snapshot
-        .agents
-        .iter()
-        .find(|state| state.kind.as_str() == kind && state.agent_id == *agent_id)
+    find_agent(&snapshot.agents, kind, agent_id)
         .is_none_or(|state| state.usage.context_window.is_none())
 }
 
@@ -132,10 +129,7 @@ pub(in crate::cli::hooks) fn root_identity_rollup(
     let Ok(snapshot) = store.snapshot_cached() else {
         return ((false, false), None);
     };
-    let state = snapshot
-        .agents
-        .iter()
-        .find(|state| state.kind.as_str() == kind && state.agent_id == *agent_id);
+    let state = find_agent(&snapshot.agents, kind, agent_id);
     let seed = (
         observation.launch.model.is_none() && state.is_none_or(|state| state.model.is_none()),
         observation.launch.effort.is_none() && state.is_none_or(|state| state.effort.is_none()),
@@ -299,10 +293,7 @@ fn correlate_subagent_observation(
             return;
         }
     };
-    let prior_state = snapshot
-        .agents
-        .iter()
-        .find(|state| state.kind.as_str() == agent.spec().kind && state.agent_id == *child_id);
+    let prior_state = find_agent(&snapshot.agents, agent.spec().kind, child_id);
     // Pane-backed launched children keep ordinary multi-turn lifecycle and run
     // completion semantics. Their durable parent stamp is carried by the
     // rollup; only provider-native children normalize root turn signals into

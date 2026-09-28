@@ -487,7 +487,8 @@ path = "crates/rimz/src/store"
 # `TeamRun` marks the leader's team-long run record.
 # Subagent context percent shares the parent gauge's arithmetic with the renderer.
 # Fleet digest matching is shared by batching, delivery cancellation, and reply waits.
-surface-budget = 335
+# One rollup agent lookup shared by hooks and runtime-projection readers.
+surface-budget = 336
 
 [[module]]
 path = "crates/rimz/src/theme"
