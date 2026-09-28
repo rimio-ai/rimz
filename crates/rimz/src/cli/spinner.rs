@@ -22,6 +22,9 @@ pub(crate) struct Spinner {
 struct SpinnerInner {
     label: Arc<Mutex<String>>,
     paused: Arc<AtomicBool>,
+    /// Set once the worker draws a frame; a clear erases only a line the
+    /// spinner wrote, never one it found.
+    drawn: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -38,7 +41,9 @@ impl Spinner {
 
         let label = Arc::new(Mutex::new(label.into()));
         let paused = Arc::new(AtomicBool::new(false));
+        let drawn = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
+        let worker_drawn = Arc::clone(&drawn);
         let worker_label = Arc::clone(&label);
         let worker_paused = Arc::clone(&paused);
         let worker_stop = Arc::clone(&stop);
@@ -60,6 +65,7 @@ impl Spinner {
                         *label
                     );
                     let _ = stderr.flush();
+                    worker_drawn.store(true, Ordering::SeqCst);
                     frame += 1;
                 }
                 thread::sleep(SPINNER_TICK);
@@ -70,6 +76,7 @@ impl Spinner {
             inner: Some(SpinnerInner {
                 label,
                 paused,
+                drawn,
                 stop,
                 worker: Some(worker),
             }),
@@ -91,7 +98,7 @@ impl Spinner {
         };
         inner.paused.store(true, Ordering::SeqCst);
         let _label = inner.label.lock();
-        let _ = Self::clear();
+        Self::clear_drawn(&inner.drawn);
     }
 
     pub(crate) fn resume(&self) {
@@ -99,6 +106,12 @@ impl Spinner {
             return;
         };
         inner.paused.store(false, Ordering::SeqCst);
+    }
+
+    fn clear_drawn(drawn: &AtomicBool) {
+        if drawn.swap(false, Ordering::SeqCst) {
+            let _ = Self::clear();
+        }
     }
 
     fn clear() -> io::Result<()> {
@@ -148,7 +161,7 @@ impl Drop for Spinner {
         if let Some(worker) = inner.worker.take() {
             let _ = worker.join();
         }
-        let _ = Self::clear();
+        Self::clear_drawn(&inner.drawn);
     }
 }
 
