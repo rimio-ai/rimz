@@ -118,10 +118,9 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         args.bg,
         rimz::mux::ambient_pane_id().is_some(),
     )?;
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let room = RoomContext::from_resolved(workspace, config.clone(), mux, RoomSizing::OrdinaryTab)?;
+    let room = RoomContext::live_tab(workspace, config.clone(), globals.mux)?;
+    let mux = room.mux_name();
     let backend = room.backend();
-    rimz::room::require_live_session(backend, &workspace.session_name)?;
 
     let request = AgentLaunchRequest {
         kind: seed.kind.clone(),
@@ -176,7 +175,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let title = channel
         .as_deref()
         .map_or_else(|| seed.kind.to_string(), |channel| format!("#{channel}"));
-    let sidebar = room.sidebar_options(&seed.cwd, Vec::new(), None);
+    let sidebar = room.sidebar_options(&seed.cwd);
     let in_place = placement == Placement::SamePane;
     if in_place {
         report_fork(&seed, &source_name, &launch.name);

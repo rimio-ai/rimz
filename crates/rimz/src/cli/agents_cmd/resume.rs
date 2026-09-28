@@ -224,7 +224,7 @@ fn discover_lane_sessions(
 }
 
 fn open_resume_tab(room: &RoomContext, tab: ResumeTab, bg: bool) -> Result<()> {
-    let sidebar = room.sidebar_options(&tab.cwd, Vec::new(), None);
+    let sidebar = room.sidebar_options(&tab.cwd);
     room.backend()
         .open_tab(&TabOptions {
             env: tab.env,

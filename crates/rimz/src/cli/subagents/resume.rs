@@ -141,7 +141,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     if supervised::pane::launch_has_bound_pane(&current.agents, &child.kind, launch_id) {
         return Ok(());
     }
-    let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
+    let sidebar = room.sidebar_options(&cwd);
     match supervised::pane::split_into_subagent_zone(
         room.backend(),
         store,

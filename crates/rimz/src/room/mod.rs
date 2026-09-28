@@ -57,7 +57,7 @@ pub fn require_live_mux(
 }
 
 /// Require one managed room session on an already-selected backend.
-pub fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> LiveRoomResult<()> {
+fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> LiveRoomResult<()> {
     let sessions = backend.list_sessions()?;
     if sessions.iter().any(|session| session == session_name) {
         Ok(())
@@ -144,6 +144,13 @@ pub enum RoomSizing {
     OrdinaryTab,
 }
 
+/// Identity source for a managed room birth.
+#[derive(Clone, Copy)]
+pub enum RoomBirthSource<'a> {
+    Resolved(&'a ResolvedWorkspace),
+    Recorded(&'a WorkspaceRecord),
+}
+
 /// Owned managed-room identity and runtime configuration.
 pub struct RoomContext {
     workspace: ResolvedWorkspace,
@@ -158,6 +165,42 @@ pub struct RoomContext {
 }
 
 impl RoomContext {
+    /// Prepare birth identity, claiming only freshly resolved workspaces.
+    pub fn prepare_birth(
+        source: RoomBirthSource<'_>,
+        machine_config: Arc<MachineConfig>,
+        mux: MuxName,
+        logins: Option<&crate::ids::RoomLogins>,
+    ) -> Result<Self> {
+        let context = match source {
+            RoomBirthSource::Resolved(workspace) => {
+                let mut context =
+                    Self::from_resolved(workspace, machine_config, mux, RoomSizing::Birth)?;
+                context.claim_owner()?;
+                context
+            }
+            RoomBirthSource::Recorded(record) => {
+                Self::from_record(record, machine_config, mux, RoomSizing::Birth)?
+            }
+        };
+        if let Some(logins) = logins {
+            context.freeze_logins(logins)?;
+        }
+        Ok(context)
+    }
+
+    /// Open an ordinary tab context, requiring its room to be live.
+    pub fn live_tab(
+        workspace: &ResolvedWorkspace,
+        machine_config: Arc<MachineConfig>,
+        explicit: Option<MuxName>,
+    ) -> Result<Self> {
+        let mux = crate::mux::auto_detect_backend(explicit)?;
+        let context = Self::from_resolved(workspace, machine_config, mux, RoomSizing::OrdinaryTab)?;
+        require_live_session(context.backend(), &workspace.session_name)?;
+        Ok(context)
+    }
+
     /// Build context from freshly resolved workspace identity.
     pub fn from_resolved(
         workspace: &ResolvedWorkspace,
@@ -247,7 +290,7 @@ impl RoomContext {
     }
 
     /// Claim this room for the running RimZ binary and durably record it.
-    pub fn claim_owner(&mut self) -> Result<()> {
+    fn claim_owner(&mut self) -> Result<()> {
         let staged = crate::reload::stage_current_build().context("staging room binary")?;
         let paths = StatePaths::for_project_root(&self.workspace.project_root)
             .context("preparing store paths")?;
@@ -331,7 +374,11 @@ impl RoomContext {
     }
 
     /// Build options for an ordinary tab inside this room.
-    pub fn sidebar_options(
+    pub fn sidebar_options(&self, cwd: &Path) -> SidebarPaneOptions {
+        self.sidebar_options_with_resume(cwd, Vec::new(), None)
+    }
+
+    fn sidebar_options_with_resume(
         &self,
         cwd: &Path,
         resume_tabs: Vec<crate::mux::ResumeTab>,
@@ -469,7 +516,11 @@ impl RoomContext {
                 worktree_root: &self.workspace.worktree_root,
                 codex_present: which::which("codex").is_ok(),
             }),
-            sidebar: self.sidebar_options(&self.workspace.worktree_root, Vec::new(), refresh_ms),
+            sidebar: self.sidebar_options_with_resume(
+                &self.workspace.worktree_root,
+                Vec::new(),
+                refresh_ms,
+            ),
         }
     }
 }

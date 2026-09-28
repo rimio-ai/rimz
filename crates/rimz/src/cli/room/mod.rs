@@ -17,7 +17,9 @@ use rimz::room::session::{
     MissingSessionReport, ensure_single_backend_room, pick_mux_for_session,
     session_probe_retry_timeout, session_probe_timeout, workspace_record_for_session,
 };
-use rimz::room::{AttendedRecovery, NormalRebirth, RoomBirth, RoomContext, RoomSizing};
+use rimz::room::{
+    AttendedRecovery, NormalRebirth, RoomBirth, RoomBirthSource, RoomContext, RoomSizing,
+};
 use rimz::{RuntimePaths, workspace::record::WorkspaceRecord};
 
 use crate::cli::hooks::ensure_detected_agent_hooks;
@@ -451,30 +453,15 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
     let mux = match &entry {
         RoomEntry::Start { mux, .. } | RoomEntry::StartDetached { mux, .. } => *mux,
-        RoomEntry::WebSession { record, .. } => {
-            render::room::present_mux_pick(pick_mux_for_session(
-                &record.session_name,
-                globals.mux,
-                MissingSessionReport::Silent,
-            ))?
-        }
-        RoomEntry::AttachCwd { workspace, .. } => {
-            render::room::present_mux_pick(pick_mux_for_session(
-                &workspace.session_name,
-                globals.mux,
-                MissingSessionReport::Silent,
-            ))?
-        }
-        RoomEntry::AttachSession {
-            session, record, ..
-        } => {
-            let missing_report = if matches!(record, Ok(Some(_))) {
-                MissingSessionReport::Silent
-            } else {
-                MissingSessionReport::Warn
+        _ => {
+            let missing_report = match &entry {
+                RoomEntry::AttachSession { record, .. } if !matches!(record, Ok(Some(_))) => {
+                    MissingSessionReport::Warn
+                }
+                _ => MissingSessionReport::Silent,
             };
             render::room::present_mux_pick(pick_mux_for_session(
-                session,
+                entry.session_name(),
                 globals.mux,
                 missing_report,
             ))?
@@ -592,118 +579,57 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         None
     };
 
-    let ready = match &entry {
-        RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
-            let mut context = RoomContext::from_resolved(
-                workspace,
-                machine_config.clone(),
-                mux,
-                RoomSizing::Birth,
-            )?;
-            context.claim_owner()?;
-            if let Some(logins) = &logins {
-                context.freeze_logins(logins)?;
-            }
-            birth_managed_room(
-                &mut context,
-                preflight_health,
-                entry.no_resume(),
-                entry.resume_prompt_mode(),
-                entry.refresh_ms(),
-                background_view,
-                workspace.worktree_root.clone(),
-            )?;
-            ReadyRoom::Managed(Box::new(context))
-        }
-        RoomEntry::AttachCwd { workspace, .. } => {
-            let mut context = RoomContext::from_resolved(
-                workspace,
-                machine_config.clone(),
-                mux,
-                RoomSizing::Birth,
-            )?;
-            context.claim_owner()?;
-            if let Some(logins) = &logins {
-                context.freeze_logins(logins)?;
-            }
-            birth_managed_room(
-                &mut context,
-                preflight_health,
-                entry.no_resume(),
-                entry.resume_prompt_mode(),
-                entry.refresh_ms(),
-                None,
-                workspace.worktree_root.clone(),
-            )?;
-            ReadyRoom::Managed(Box::new(context))
-        }
-        RoomEntry::WebSession { record, .. } => {
-            let mut context =
-                RoomContext::from_record(record, machine_config.clone(), mux, RoomSizing::Birth)?;
-            if let Some(logins) = &logins {
-                context.freeze_logins(logins)?;
-            }
-            birth_managed_room(
-                &mut context,
-                preflight_health,
-                entry.no_resume(),
-                entry.resume_prompt_mode(),
-                entry.refresh_ms(),
-                None,
-                record.project_root.clone(),
-            )?;
-            ReadyRoom::Managed(Box::new(context))
-        }
+    let source = match &entry {
+        RoomEntry::Start { workspace, .. }
+        | RoomEntry::StartDetached { workspace, .. }
+        | RoomEntry::AttachCwd { workspace, .. } => Some(RoomBirthSource::Resolved(workspace)),
+        RoomEntry::WebSession { record, .. } => Some(RoomBirthSource::Recorded(record)),
+        // Only a session RimZ owns (a matching record) is force-reset; a bare
+        // external session by this name is never torn down.
+        RoomEntry::AttachSession {
+            record: Ok(Some(record)),
+            ..
+        } => Some(RoomBirthSource::Recorded(record)),
         RoomEntry::AttachSession {
             session, record, ..
-        } => match record {
-            Ok(Some(record)) => {
-                // Only a session RimZ owns (a matching record) is force-reset; a bare
-                // external session by this name is never torn down.
-                let mut context = RoomContext::from_record(
-                    record,
-                    machine_config.clone(),
-                    mux,
-                    RoomSizing::Birth,
-                )?;
-                if let Some(logins) = &logins {
-                    context.freeze_logins(logins)?;
-                }
-                birth_managed_room(
-                    &mut context,
-                    preflight_health,
-                    entry.no_resume(),
-                    entry.resume_prompt_mode(),
-                    entry.refresh_ms(),
-                    None,
-                    record.project_root.clone(),
-                )?;
-                ReadyRoom::Managed(Box::new(context))
-            }
-            Ok(None) => {
-                tracing::warn!(
+        } => {
+            match record {
+                Ok(_) => tracing::warn!(
                     session = %session,
                     "no workspace record matches session; emitting attach command only",
-                );
-                ReadyRoom::External {
-                    session_name: session.clone(),
-                    mux_config: rimz::config::MultiplexerConfig::from(machine_config.as_ref()),
-                    mux,
-                }
-            }
-            Err(err) => {
-                tracing::warn!(
+                ),
+                Err(err) => tracing::warn!(
                     session = %session,
                     error = %err,
                     "workspace record lookup failed; emitting attach command only",
-                );
-                ReadyRoom::External {
-                    session_name: session.clone(),
-                    mux_config: rimz::config::MultiplexerConfig::from(machine_config.as_ref()),
-                    mux,
-                }
+                ),
             }
-        },
+            None
+        }
+    };
+    let ready = if let Some(source) = source {
+        let mut context =
+            RoomContext::prepare_birth(source, machine_config.clone(), mux, logins.as_ref())?;
+        let cwd = match source {
+            RoomBirthSource::Resolved(workspace) => workspace.worktree_root.clone(),
+            RoomBirthSource::Recorded(record) => record.project_root.clone(),
+        };
+        birth_managed_room(
+            &mut context,
+            preflight_health,
+            entry.no_resume(),
+            entry.resume_prompt_mode(),
+            entry.refresh_ms(),
+            background_view,
+            cwd,
+        )?;
+        ReadyRoom::Managed(Box::new(context))
+    } else {
+        ReadyRoom::External {
+            session_name: entry.session_name().to_owned(),
+            mux_config: rimz::config::MultiplexerConfig::from(machine_config.as_ref()),
+            mux,
+        }
     };
 
     if matches!(&entry, RoomEntry::Start { .. }) && machine_config.web.enabled {

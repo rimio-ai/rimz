@@ -199,7 +199,7 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
     {
         return;
     }
-    let sidebar = room.sidebar_options(&workspace.worktree_root, Vec::new(), None);
+    let sidebar = room.sidebar_options(&workspace.worktree_root);
     let _ = backend.open_tab(&TabOptions {
         env: rimz::room::pane_identity_env(
             workspace,
