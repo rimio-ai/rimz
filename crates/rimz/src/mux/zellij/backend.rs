@@ -158,6 +158,18 @@ fn split_direction(direction: SplitDirection) -> &'static str {
     }
 }
 
+fn confirm_tab_action(mut probe: impl FnMut() -> Result<bool>) -> Result<bool> {
+    for attempt in 0..super::FOCUS_RESTORE_ATTEMPTS {
+        if probe()? {
+            return Ok(true);
+        }
+        if attempt + 1 < super::FOCUS_RESTORE_ATTEMPTS {
+            std::thread::sleep(super::FOCUS_RESTORE_RETRY_DELAY);
+        }
+    }
+    Ok(false)
+}
+
 fn companion_grid_preserved(
     before: &[GridPane],
     chrome: &[GridPane],
@@ -699,23 +711,15 @@ impl ZellijBackend {
             .map(|pane| pane.id)
             .ok_or_else(|| output_error("new tab has no live work pane"))?;
         let new_pane = PaneId::from(ZellijPaneId::Terminal(new_pane_id));
-        let mut focused = false;
-        for attempt in 0..super::FOCUS_RESTORE_ATTEMPTS {
+        let focused = confirm_tab_action(|| {
             self.focus_pane(&new_pane, Some(session))?;
-            if self
+            Ok(self
                 .client_view(ClientFocusOptions {
                     session_name: Some(session.to_owned()),
                     command_timeout: None,
                 })
-                .is_ok_and(|view| view.viewed_panes.contains(&new_pane))
-            {
-                focused = true;
-                break;
-            }
-            if attempt + 1 < super::FOCUS_RESTORE_ATTEMPTS {
-                std::thread::sleep(super::FOCUS_RESTORE_RETRY_DELAY);
-            }
-        }
+                .is_ok_and(|view| view.viewed_panes.contains(&new_pane)))
+        })?;
         if !focused {
             return Err(output_error("new tab did not accept focus before its move"));
         }
@@ -726,22 +730,18 @@ impl ZellijBackend {
                 .args(["move-tab", "left"])
                 .run()?;
             let expected_position = last_position - completed - 1;
-            for attempt in 0..super::FOCUS_RESTORE_ATTEMPTS {
-                let moved = self
+            let moved = confirm_tab_action(|| {
+                Ok(self
                     .raw_listed_panes(session, RECONCILE_LIST_TIMEOUT)?
                     .into_iter()
                     .map(PaneTopologyPane::from)
                     .find(|pane| pane.id == new_pane_id && pane.is_live_terminal())
-                    .is_some_and(|pane| pane.tab_position == expected_position);
-                if moved {
-                    break;
-                }
-                if attempt + 1 == super::FOCUS_RESTORE_ATTEMPTS {
-                    return Err(output_error(
-                        "new tab did not move to the requested position",
-                    ));
-                }
-                std::thread::sleep(super::FOCUS_RESTORE_RETRY_DELAY);
+                    .is_some_and(|pane| pane.tab_position == expected_position))
+            })?;
+            if !moved {
+                return Err(output_error(
+                    "new tab did not move to the requested position",
+                ));
             }
         }
         Ok(())
