@@ -8,6 +8,90 @@ use super::super::super::references::References;
 use super::super::testkit::{commit, crate_with_files, occurrence, run, selector};
 use super::*;
 
+fn testkit_fixture() -> (tempfile::TempDir, Facts) {
+    let root = crate_with_files(&[
+        ("src/lib.rs", "pub mod render;\nmod app;\n"),
+        (
+            "src/render.rs",
+            "pub fn cap() {}\npub fn render(alert: Option<u8>) {}\n",
+        ),
+        (
+            "src/app.rs",
+            "#[cfg(feature = \"testkit\")]\nmod demo;\nfn frame() { crate::render::render(None); }\n#[cfg(feature = \"testkit\")]\nfn fixture() { crate::render::cap(); crate::render::render(None); }\n#[cfg(test)]\nfn test() { crate::render::render(Some(1)); }\n",
+        ),
+        ("src/app/demo.rs", "fn demo() { crate::render::cap(); }\n"),
+    ]);
+    let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let cap = "rust-analyzer cargo probe 0.0.0 cap().";
+    let render = "rust-analyzer cargo probe 0.0.0 render().";
+    let index = Index {
+        documents: [
+            (
+                "src/render.rs",
+                vec![occurrence(0, cap, true), occurrence(1, render, true)],
+            ),
+            (
+                "src/app.rs",
+                vec![
+                    occurrence(2, render, false),
+                    occurrence(4, cap, false),
+                    occurrence(4, render, false),
+                    occurrence(6, render, false),
+                ],
+            ),
+            ("src/app/demo.rs", vec![occurrence(0, cap, false)]),
+        ]
+        .into_iter()
+        .map(|(path, occurrences)| scip::types::Document {
+            relative_path: path.to_owned(),
+            occurrences,
+            ..Default::default()
+        })
+        .collect(),
+        ..Index::default()
+    };
+    let index_path = root.path().join("index.scip");
+    scip::write_message_to_file(&index_path, index).unwrap();
+    facts.references = Some(References::load(&index_path, &facts.syntax, &facts.sources).unwrap());
+    (root, facts)
+}
+
+#[test]
+fn testkit_readers_floor_surface_without_production_counts() {
+    let (root, facts) = testkit_fixture();
+    let (surface, _) = surface_section(&facts, &selector("render"));
+    let cap = surface.items.iter().find(|row| row.name == "cap").unwrap();
+    assert_eq!(cap.narrow_to, "pub(crate)");
+    assert_eq!(
+        (cap.outside_sites, cap.internal_sites, cap.test_sites),
+        (0, 0, 0)
+    );
+    assert_eq!(serde_json::to_value(cap).unwrap()["testkit_sites"], 2);
+    assert!(
+        vestigial_items(root.path(), &surface.items)
+            .unwrap()
+            .is_empty()
+    );
+    let mut rendered = String::new();
+    render_surface(&mut rendered, &surface, 20);
+    assert!(rendered.contains("| internal | testkit | tests |"));
+}
+
+#[test]
+fn testkit_calls_join_constant_flags_but_tests_do_not() {
+    let (_root, facts) = testkit_fixture();
+    let target = selector("render");
+    let (surface, _) = surface_section(&facts, &target);
+    let flags = super::super::flags::flag_section(&facts, &target, &surface);
+    assert_eq!(flags.rows.len(), 1);
+    let row = &flags.rows[0];
+    assert_eq!(
+        (row.param.as_str(), row.finding, row.finding_value.as_str()),
+        ("alert", "constant", "None")
+    );
+    assert_eq!(row.values[0].1, 2);
+}
+
 #[test]
 fn surface_measures_outside_reach_and_the_unreferenced_rest() {
     let root = crate_with_files(&[
@@ -138,6 +222,7 @@ fn vestigial_items_need_zero_production_sites_and_keep_optional_blame() {
         outside_files: outside_sites,
         callers: Vec::new(),
         internal_sites,
+        testkit_sites: 0,
         test_sites: 0,
         reexport_of: None,
         definition: (

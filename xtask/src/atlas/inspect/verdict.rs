@@ -161,7 +161,7 @@ pub(super) fn render_verdict(out: &mut String, verdict: &InspectVerdict) {
     }
     writeln!(
         out,
-        "{} items without production sites, {} pin a fix",
+        "{} items without production or testkit sites, {} pin a fix",
         verdict.vestigial_candidates, verdict.pins_fix
     )
     .expect("writing to a String cannot fail");

@@ -46,6 +46,7 @@ pub(super) struct SurfaceRow {
     pub(super) outside_files: usize,
     pub(super) callers: Vec<String>,
     pub(super) internal_sites: usize,
+    pub(super) testkit_sites: usize,
     pub(super) test_sites: usize,
     /// The defining module when the escaping declaration is a `pub use`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,7 +56,7 @@ pub(super) struct SurfaceRow {
     pub(super) definition: EdgeTarget,
 }
 
-/// An escaping item with no production referrers.
+/// An escaping item with no production or testkit referrers.
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct VestigialItem {
     pub(super) module: String,
@@ -156,7 +157,7 @@ fn parent_module(module: &str) -> &str {
     module.rsplit_once("::").map_or("", |(parent, _)| parent)
 }
 
-/// The narrowest visibility that still covers every production caller:
+/// The narrowest visibility that still covers every production or testkit caller:
 /// `private` when only the item's module and its descendants reach it, or
 /// nothing does. A caller in a binary-only module sits outside the library
 /// crate, so the item must stay as visible as it is.
@@ -333,8 +334,12 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
                 narrow_to: narrow_to(
                     &item.id.module,
                     &effective_reach,
-                    &item_refs.production,
-                    item_refs.production_count,
+                    &item_refs
+                        .production
+                        .union(&item_refs.testkit)
+                        .cloned()
+                        .collect(),
+                    item_refs.production_count + item_refs.testkit_count,
                     &facts.bin_modules,
                 ),
                 path: def_file.path.clone(),
@@ -345,6 +350,7 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
                 outside_files: reached.files.len(),
                 callers: reached.modules.into_iter().collect(),
                 internal_sites: item_refs.production_count - reached.sites,
+                testkit_sites: item_refs.testkit_count,
                 test_sites: test_sites.get(&key).map_or(0, Vec::len),
                 reexport_of,
                 definition: key,
@@ -446,15 +452,15 @@ fn pins(rows: &[SurfaceRow], test_sites: &BTreeMap<EdgeTarget, Vec<TestSite>>) -
     pins
 }
 
-/// Escaping items with no production sites. A definition whose lines all
-/// blame to one commit carries that commit as evidence. One `git blame` per
-/// file that holds a candidate.
+/// Escaping items with no production or testkit sites. A definition whose
+/// lines all blame to one commit carries that commit as evidence. One
+/// `git blame` per file that holds a candidate.
 pub(super) fn vestigial_items(root: &Path, rows: &[SurfaceRow]) -> Result<Vec<VestigialItem>> {
     let mut blames = BTreeMap::<PathBuf, Vec<BlameCommit>>::new();
     let mut vestigial = Vec::new();
     for row in rows
         .iter()
-        .filter(|row| row.outside_sites + row.internal_sites == 0)
+        .filter(|row| row.outside_sites + row.internal_sites + row.testkit_sites == 0)
     {
         if !blames.contains_key(&row.path) {
             blames.insert(row.path.clone(), history::blame_lines(root, &row.path)?);
@@ -515,13 +521,13 @@ fn definition_for_escaping<'a>(
 pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: usize) {
     out.push_str("\n# Escaping surface\n\n");
     out.push_str(
-        "| item | kind | sloc | reach | narrow to | outside sites | files | internal | tests | callers |\n",
+        "| item | kind | sloc | reach | narrow to | outside sites | files | internal | testkit | tests | callers |\n",
     );
-    out.push_str("|---|---|---:|---|---|---:|---:|---:|---:|---|\n");
+    out.push_str("|---|---|---:|---|---|---:|---:|---:|---:|---:|---|\n");
     for row in surface.items.iter().take(top) {
         writeln!(
             out,
-            "| `{}::{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| `{}::{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             row.module,
             row.name,
             row.kind,
@@ -531,6 +537,7 @@ pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: us
             row.outside_sites,
             row.outside_files,
             row.internal_sites,
+            row.testkit_sites,
             row.test_sites,
             bounded_names(&row.callers, 4)
         )

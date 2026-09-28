@@ -152,6 +152,7 @@ struct ItemEvidence {
     declared: String,
     effective_reach: String,
     production_referrers: Vec<String>,
+    testkit_referrers: Vec<String>,
     test_referrers: Vec<String>,
     #[serde(serialize_with = "serialize_commits")]
     commits: Vec<Commit>,
@@ -878,6 +879,13 @@ fn item_evidence(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    let testkit_referrers = matching
+        .clone()
+        .filter(|edge| edge.site_kind == SourceKind::TestSupport)
+        .map(referrer)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     let test_referrers = matching
         .filter(|edge| edge.site_kind == SourceKind::Test)
         .map(referrer)
@@ -897,6 +905,7 @@ fn item_evidence(
         },
         effective_reach: facts.mod_index.effective_reach(declared_file, declared),
         production_referrers,
+        testkit_referrers,
         test_referrers,
         commits,
         markers,
@@ -1194,6 +1203,10 @@ fn render_item(out: &mut String, item: &ItemEvidence, top: usize) {
         .expect("writing to a String cannot fail");
     out.push_str("- production referrers:\n");
     for referrer in item.production_referrers.iter().take(top) {
+        writeln!(out, "  - `{referrer}`").expect("writing to a String cannot fail");
+    }
+    out.push_str("- testkit referrers:\n");
+    for referrer in item.testkit_referrers.iter().take(top) {
         writeln!(out, "  - `{referrer}`").expect("writing to a String cannot fail");
     }
     out.push_str("- test referrers:\n");
