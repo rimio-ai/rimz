@@ -468,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn painter_wraps_each_payload_for_tmux() {
+    fn painter_wraps_each_image_in_one_tmux_envelope() {
         let mut painter = MeterPainter::new(true);
         let mut bytes = Vec::new();
         painter
