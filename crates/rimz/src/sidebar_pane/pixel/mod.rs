@@ -12,7 +12,6 @@ pub use probe::{PixelRenderCaps, detect_env as detect_pixel_render_env};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::style::Color;
 
@@ -22,10 +21,61 @@ const ESC: u8 = 0x1b;
 pub(super) const BEGIN_SYNC: &[u8] = b"\x1b[?2026h";
 pub(super) const END_SYNC: &[u8] = b"\x1b[?2026l";
 const CHUNK_SIZE: usize = 4096;
+const MAX_PIXEL_SLOTS: usize = 256;
+const SLOT_ORIGIN: u32 = 0x520000;
+const SLOT_STRIDE: u32 = 0x200;
+pub(super) const METER_ID_OFFSET: u32 = 0x100;
+pub(super) const METER_ID_CAPACITY: u32 = 256;
 pub(super) const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
 pub(super) const RESIDENT_REFRESH_MS: u64 = 2000;
 pub(super) const MIN_RESEND_SPACING_MS: u64 = 250;
 
+/// Cross-version image-id layout. Moving it orphans images from older workers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PixelSlot(u8);
+
+impl PixelSlot {
+    pub(super) fn new(index: u8) -> Self {
+        Self(index)
+    }
+
+    pub(super) fn base(self) -> u32 {
+        SLOT_ORIGIN + u32::from(self.0) * SLOT_STRIDE
+    }
+
+    pub(super) fn sweep<W: Write>(self, writer: &mut W, wrap: bool) -> io::Result<()> {
+        write_synchronized_pixel_output(writer, |writer| {
+            for image_id in self.base()..self.base() + SLOT_STRIDE {
+                writer.write_all(&wrap_pixel_payload(&delete(image_id), wrap))?;
+            }
+            Ok(())
+        })
+    }
+}
+
+pub(super) struct PixelLease {
+    pub(super) slot: PixelSlot,
+    _guard: crate::disk::lock::WorkspaceLock,
+}
+
+impl PixelLease {
+    pub(super) fn acquire(
+        runtime: &crate::disk::paths::RuntimePaths,
+    ) -> crate::disk::lock::Result<Option<Self>> {
+        for index in 0..MAX_PIXEL_SLOTS {
+            let slot = PixelSlot::new(index as u8);
+            if let Some(guard) = crate::disk::lock::WorkspaceLock::try_acquire(
+                &runtime.shared_pixel_slot_lock(slot.0),
+            )? {
+                return Ok(Some(Self {
+                    slot,
+                    _guard: guard,
+                }));
+            }
+        }
+        Ok(None)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RgbaImage {
     pub(super) width: u32,
@@ -120,7 +170,7 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
                 writer.write_all(&wrap_pixel_payload(&chunk, self.wrap))?;
             }
             writer.write_all(&wrap_pixel_payload(
-                &virtual_place(image_id, cols, rows, 2),
+                &resident_place(image_id, cols, rows),
                 self.wrap,
             ))
         };
@@ -155,6 +205,9 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
     }
 
     pub(super) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        if self.resident_ids.is_empty() {
+            return Ok(());
+        }
         write_synchronized_pixel_output(writer, |writer| {
             for image_id in std::mem::take(&mut self.resident_ids) {
                 writer.write_all(&wrap_pixel_payload(&delete(image_id), self.wrap))?;
@@ -219,15 +272,8 @@ pub fn write_synchronized_pixel_output<W: Write>(
     body_result.and(end_result)
 }
 
-pub(super) fn runtime_image_id_base() -> u32 {
-    let pid = std::process::id();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.subsec_nanos())
-        .unwrap_or(0);
-    let mixed = pid.rotate_left(8) ^ nanos;
-    let base = mixed & IMAGE_ID_COLOR_MASK;
-    if base == 0 { 0x520000 } else { base }
+pub(super) fn meter_image_id(id_base: u32, index: u32) -> u32 {
+    id_base + METER_ID_OFFSET + index
 }
 
 pub(super) fn sprite_image_id(id_base: u32, sprite_index: usize) -> u32 {
@@ -265,8 +311,15 @@ pub fn virtual_place(image_id: u32, cols: u16, rows: u16, quiet: u8) -> Vec<u8> 
     )
 }
 
+fn resident_place(image_id: u32, cols: u16, rows: u16) -> Vec<u8> {
+    kitty_escape(
+        &format!("a=p,U=1,i={image_id},p=1,c={cols},r={rows},q=2"),
+        &[],
+    )
+}
+
 fn delete(image_id: u32) -> Vec<u8> {
-    kitty_escape(&format!("a=d,d=i,i={image_id},q=2"), &[])
+    kitty_escape(&format!("a=d,d=I,i={image_id},q=2"), &[])
 }
 
 fn kitty_escape(control: &str, payload: &[u8]) -> Vec<u8> {
@@ -395,10 +448,10 @@ mod tests {
     #[test]
     fn place_delete_and_passthrough_encode_protocol_bytes() {
         assert_eq!(
-            virtual_place(42, 12, 6, 2),
-            b"\x1b_Ga=p,U=1,i=42,c=12,r=6,q=2;\x1b\\".to_vec()
+            resident_place(42, 12, 6),
+            b"\x1b_Ga=p,U=1,i=42,p=1,c=12,r=6,q=2;\x1b\\".to_vec()
         );
-        assert_eq!(delete(42), b"\x1b_Ga=d,d=i,i=42,q=2;\x1b\\".to_vec());
+        assert_eq!(delete(42), b"\x1b_Ga=d,d=I,i=42,q=2;\x1b\\".to_vec());
         assert_eq!(
             tmux_passthrough(b"\x1b_Ga=p;\x1b\\"),
             b"\x1bPtmux;\x1b\x1b_Ga=p;\x1b\x1b\\\x1b\\".to_vec()

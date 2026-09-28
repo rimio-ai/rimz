@@ -170,6 +170,7 @@ function createHarness({ cols, rows, width = cols * 10, height = rows * 10 }) {
     bitmapRequests,
     handlers,
     place,
+    writeApc,
     transmit,
     setPlaceholder,
     setPlacementCells,
@@ -458,7 +459,31 @@ async function scanSkipsPlaceholderFreeRows() {
   );
 }
 
+async function deleteFormsRetireImageAndPlacement() {
+  for (const selector of ["i", "I"]) {
+    const harness = createHarness({ cols: 2, rows: 2 });
+    harness.setPlaceholder(0, 0, 42, 0, 0);
+    harness.transmit(42);
+    harness.place(42, 1, 1);
+    await harness.resolveNext(10, 10);
+    harness.pumpFrames();
+    assert.equal(draws(harness.takeOps()).length, 1);
+    harness.writeApc(`a=d,d=${selector},i=42`);
+    harness.pumpFrames();
+    assert.equal(draws(harness.takeOps()).length, 0, `${selector} removes the image`);
+    harness.place(42, 1, 1);
+    harness.pumpFrames();
+    assert.equal(draws(harness.takeOps()).length, 0, `${selector} does not retain image data`);
+    harness.writeApc(`a=d,d=${selector},i=42`);
+    harness.transmit(42);
+    await harness.resolveNext(10, 10);
+    harness.pumpFrames();
+    assert.equal(draws(harness.takeOps()).length, 0, `${selector} removes the placement`);
+  }
+}
+
 const scenarios = [
+  deleteFormsRetireImageAndPlacement,
   placeholderClustersAreConcealedSafely,
   petStopsAtPaneBorder,
   petPreservesAspect,

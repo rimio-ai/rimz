@@ -12,11 +12,17 @@ use crate::sidebar_pane::pets::{
     PetAssets, PetBody, PetViewFrame, PixelPainter, effective_render_tier, probe_cell_aspect,
 };
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
-use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps};
+use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, PixelSlot};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
 
 const CAPS_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+
+enum PixelSession {
+    Disabled,
+    Pending(PixelSlot),
+    Ready,
+}
 
 pub(super) struct FramePainter {
     assets: PetAssets,
@@ -25,11 +31,18 @@ pub(super) struct FramePainter {
     caps: PixelRenderCaps,
     last_caps_refresh: Instant,
     probed_aspect: Option<CellAspect>,
+    pixel_session: PixelSession,
+    pixel_wrap: bool,
 }
 
 impl FramePainter {
-    pub(super) fn new(caps: PixelRenderCaps, pixel_wrap: bool) -> Self {
-        let painter = PixelPainter::new(pixel_wrap);
+    #[cfg(test)]
+    pub(super) fn with_slot(slot: Option<PixelSlot>, caps: PixelRenderCaps) -> Self {
+        Self::new(caps, false, slot)
+    }
+
+    pub(super) fn new(caps: PixelRenderCaps, pixel_wrap: bool, slot: Option<PixelSlot>) -> Self {
+        let painter = PixelPainter::with_slot(slot.unwrap_or(PixelSlot::new(0)), pixel_wrap);
         let meter_painter = MeterPainter::new(pixel_wrap);
         Self {
             assets: PetAssets::default(),
@@ -38,18 +51,8 @@ impl FramePainter {
             caps,
             last_caps_refresh: Instant::now(),
             probed_aspect: probe_cell_aspect(),
-        }
-    }
-
-    #[cfg(feature = "testkit")]
-    pub(super) fn with_id_base(id_base: u32, pixel_wrap: bool, caps: PixelRenderCaps) -> Self {
-        Self {
-            assets: PetAssets::default(),
-            painter: PixelPainter::with_id_base(id_base, pixel_wrap),
-            meter_painter: MeterPainter::new(pixel_wrap),
-            caps,
-            last_caps_refresh: Instant::now(),
-            probed_aspect: probe_cell_aspect(),
+            pixel_session: slot.map_or(PixelSession::Disabled, PixelSession::Pending),
+            pixel_wrap,
         }
     }
 
@@ -57,11 +60,13 @@ impl FramePainter {
     pub(super) fn with_assets(assets: PetAssets, caps: PixelRenderCaps, pixel_wrap: bool) -> Self {
         Self {
             assets,
-            painter: PixelPainter::with_id_base(0x120000, pixel_wrap),
+            painter: PixelPainter::with_slot(PixelSlot::new(0), pixel_wrap),
             meter_painter: MeterPainter::new(pixel_wrap),
             caps,
             last_caps_refresh: Instant::now(),
             probed_aspect: None,
+            pixel_session: PixelSession::Pending(PixelSlot::new(0)),
+            pixel_wrap,
         }
     }
 
@@ -120,11 +125,12 @@ impl FramePainter {
         let action = render::selected_pet_action(snapshot, ui);
         let theme = ui.theme(&snapshot.theme);
         let pet_body_enabled = theme.pet_body_enabled();
+        let leased = !matches!(self.pixel_session, PixelSession::Disabled);
         let tier = effective_render_tier(
             snapshot.theme.pets.glyphs,
             snapshot.theme.display.pixel,
             self.caps,
-            !snapshot.providers.is_empty() && pet_body_enabled,
+            leased && !snapshot.providers.is_empty() && pet_body_enabled,
         );
         let body =
             (render::pets_on_dashboard(snapshot, alert_active) && pet_body_enabled).then_some(tier);
@@ -153,10 +159,11 @@ impl FramePainter {
                 unread_triggered,
             },
         );
-        if !snapshot.theme.pets.enabled {
+        if !snapshot.theme.pets.enabled || tier != crate::sidebar_pane::pets::PetRenderTier::Pixel {
             self.painter.release_process_payload();
         }
-        let meter_enabled = self.caps.pixel_transport
+        let meter_enabled = leased
+            && self.caps.pixel_transport
             && self.caps.kitty_clients
             && snapshot.theme.display.pixel == PixelMode::Auto;
         if meter_enabled {
@@ -195,6 +202,18 @@ impl FramePainter {
         ui: &UiState,
         now_ms: u64,
     ) -> io::Result<()> {
+        if matches!(self.pixel_session, PixelSession::Disabled) {
+            return Ok(());
+        }
+        if self.painter.pet_id.is_none() {
+            self.painter.clear(writer)?;
+        }
+        if matches!(
+            ui.pet.as_ref().and_then(|view| view.body.as_ref()),
+            Some(PetBody::Pixel(_))
+        ) {
+            self.sweep_if_pending(writer)?;
+        }
         if let Some(PetBody::Pixel(pixel)) = ui.pet.as_ref().and_then(|view| view.body.as_ref())
             && let Some(frame) = self.assets.pixel_frame(&pixel.pet_id, pixel.sprite_index)
         {
@@ -210,17 +229,31 @@ impl FramePainter {
         ui: &UiState,
         now_ms: u64,
     ) -> io::Result<()> {
+        if matches!(self.pixel_session, PixelSession::Disabled) {
+            return Ok(());
+        }
         if let Some(pixels) = &ui.meter_pixels {
+            self.sweep_if_pending(writer)?;
             for (image_id, raster) in pixels.visible_rasters() {
                 self.meter_painter
                     .ensure_transmitted(writer, image_id, raster, now_ms)?;
             }
+        } else {
+            self.meter_painter.clear(writer)?;
+        }
+        Ok(())
+    }
+
+    fn sweep_if_pending<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        if let PixelSession::Pending(slot) = self.pixel_session {
+            slot.sweep(writer, self.pixel_wrap)?;
+            self.pixel_session = PixelSession::Ready;
         }
         Ok(())
     }
 
     pub(super) fn clear<W: Write>(&mut self, backend: &mut W) -> io::Result<()> {
-        self.painter.clear(backend)?;
-        self.meter_painter.clear(backend)
+        let pets = self.painter.clear(backend);
+        pets.and(self.meter_painter.clear(backend))
     }
 }

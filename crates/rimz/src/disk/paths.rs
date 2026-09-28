@@ -838,6 +838,10 @@ impl RuntimePaths {
         self.shared_root.join("accounts.lock")
     }
 
+    pub(crate) fn shared_pixel_slot_lock(&self, slot: u8) -> PathBuf {
+        self.shared_root.join(format!("pixel-slot-{slot}.lock"))
+    }
+
     pub(crate) fn shared_auto_gc_lock(&self) -> PathBuf {
         self.shared_root.join("auto-gc.lock")
     }

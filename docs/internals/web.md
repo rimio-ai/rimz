@@ -233,7 +233,7 @@ Adding `rimzdebug=1` to the page URL exposes the pacing state and the last 256 d
 
 ### The pixel layer
 
-`pixel_layer.js` renders the sidebar's Kitty graphics in the browser. It wraps `term.write`, so it sees output before xterm parses it, and consumes RimZ's subset of the Kitty protocol: PNG transmits (`a=t`, `f=100`, including chunked continuations), virtual placements (`a=p`, `U=1`), and deletes by image id (`a=d`, `d=i`). It keeps at most 128 decoded images, and each image is limited to 4 MiB of payload.
+`pixel_layer.js` renders the sidebar's Kitty graphics in the browser. It wraps `term.write`, so it sees output before xterm parses it, and consumes RimZ's subset of the Kitty protocol: PNG transmits (`a=t`, `f=100`, including chunked continuations), virtual placements (`a=p`, `U=1`), and deletes by image id (`a=d`, `d=i` or `d=I`). Both delete forms remove the image and its placement. It keeps at most 128 decoded images, and each image is limited to 4 MiB of payload.
 
 Each placeholder cell (U+10EEEE plus the row and column combining marks) is wrapped in SGR 8 and 28 as it enters xterm. xterm keeps the full cluster and the RGB image id in its buffer, while its WebGL renderer paints the cell's real background instead of a fallback glyph. A DPR-scaled canvas above the screen draws each image clipped to the cells of its placement, preserving the image's aspect and origin.
 

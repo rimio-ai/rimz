@@ -7,8 +7,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-use crate::sidebar_pane::pets::PixelPainter;
-use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, detect_pixel_render_env};
+use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelSlot, detect_pixel_render_env};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
@@ -30,7 +29,7 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
 
     let mut ui = UiState::default();
     let (caps, wrap_pixels) = detect_pixel_render_env();
-    let mut paint = FramePainter::new(caps, wrap_pixels);
+    let mut paint = FramePainter::new(caps, wrap_pixels, Some(PixelSlot::new(0)));
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
 
@@ -68,7 +67,6 @@ pub fn serve_gallery(
     columns.truncate(cap);
 
     let (caps, wrap_pixels) = detect_pixel_render_env();
-    let id_base = PixelPainter::runtime_id_base();
     let mut states = columns
         .into_iter()
         .enumerate()
@@ -78,10 +76,10 @@ pub fn serve_gallery(
                 ..UiState::default()
             },
             snapshot,
-            paint: FramePainter::with_id_base(
-                id_base.wrapping_add((index as u32) << 12),
-                wrap_pixels,
+            paint: FramePainter::new(
                 caps,
+                wrap_pixels,
+                u8::try_from(index).ok().map(PixelSlot::new),
             ),
         })
         .collect::<Vec<_>>();

@@ -71,6 +71,7 @@ impl Rig {
                 None,
                 observe_tx,
                 PixelRenderCaps::default(),
+                Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
             ),
             result_tx,
             fetch: FetchDispatcher::new(request_tx),

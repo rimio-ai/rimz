@@ -18,6 +18,339 @@ use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, placehol
 use crate::sidebar_pane::render::{self, UiState};
 use jiff::Timestamp;
 
+fn kitty_commands(bytes: &[u8]) -> Vec<std::collections::BTreeMap<String, String>> {
+    String::from_utf8_lossy(bytes)
+        .split("\x1b_G")
+        .skip(1)
+        .map(|command| {
+            command
+                .split(';')
+                .next()
+                .unwrap()
+                .split(',')
+                .map(|field| {
+                    let (key, value) = field.split_once('=').expect("kitty control field");
+                    (key.to_owned(), value.to_owned())
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn compose_test_meters(ui: &mut UiState, frame: u32) {
+    let pixels = ui.meter_pixels.as_mut().expect("pixels enabled");
+    let lines = (0..4)
+        .map(|meter| {
+            let id = pixels
+                .intern(crate::sidebar_pane::pixel::meter::MeterRaster::new(
+                    8,
+                    f64::from((frame + meter) % 64 + 1) / 65.0,
+                    [frame as u8, (frame >> 8) as u8, meter as u8],
+                    Vec::new(),
+                    [1, 2, 3],
+                ))
+                .expect("room for visible meters");
+            ratatui::text::Line::from(ratatui::text::Span::styled(
+                placeholder_cluster(0, 0),
+                ratatui::style::Style::default().fg(crate::sidebar_pane::pixel::image_id_color(id)),
+            ))
+        })
+        .collect::<Vec<_>>();
+    pixels.observe_visible(&lines);
+}
+
+#[test]
+fn pixel_churn_and_restarts_stay_in_one_slot_with_one_placement() {
+    use crate::sidebar_pane::pixel::PixelSlot;
+    let snapshot = snapshot(&workspace());
+    let mut ids = std::collections::BTreeSet::new();
+    let mut puts = std::collections::BTreeSet::new();
+    for restart in 0..4 {
+        let mut painter = paint::FramePainter::with_slot(
+            Some(PixelSlot::new(7)),
+            PixelRenderCaps {
+                pixel_transport: true,
+                kitty_clients: true,
+            },
+        );
+        let mut ui = UiState::default();
+        for frame in 0..800 {
+            painter.refresh_view(&mut ui, &snapshot, false);
+            compose_test_meters(&mut ui, restart * 800 + frame);
+            let mut bytes = Vec::new();
+            painter
+                .ensure_meters_transmitted(&mut bytes, &ui, u64::from(frame) * 2500)
+                .unwrap();
+            painter
+                .ensure_meters_transmitted(&mut bytes, &ui, u64::from(frame) * 2500 + 2000)
+                .unwrap();
+            for command in kitty_commands(&bytes) {
+                let id: u32 = command["i"].parse().unwrap();
+                assert!(
+                    (0x520e00..0x521000).contains(&id),
+                    "id outside leased slot: {id:x}"
+                );
+                ids.insert(id);
+                if command["a"] == "p" {
+                    assert_eq!(command.get("p").map(String::as_str), Some("1"));
+                    puts.insert((id, command["p"].clone()));
+                }
+            }
+        }
+    }
+    assert!(puts.len() <= ids.len());
+    assert!(puts.len() <= 256);
+}
+
+#[test]
+fn pixel_slot_sweep_precedes_first_transmit_once() {
+    use crate::sidebar_pane::pixel::PixelSlot;
+    for _restart in 0..2 {
+        let mut painter = paint::FramePainter::with_slot(
+            Some(PixelSlot::new(0)),
+            PixelRenderCaps {
+                pixel_transport: true,
+                kitty_clients: true,
+            },
+        );
+        let snapshot = snapshot(&workspace());
+        let mut ui = UiState::default();
+        painter.refresh_view(&mut ui, &snapshot, false);
+        compose_test_meters(&mut ui, 1);
+        let mut bytes = Vec::new();
+        painter
+            .ensure_meters_transmitted(&mut bytes, &ui, 0)
+            .unwrap();
+        let commands = kitty_commands(&bytes);
+        let sweep = commands
+            .iter()
+            .take_while(|command| command["a"] == "d")
+            .collect::<Vec<_>>();
+        assert_eq!(sweep.len(), 512);
+        for (index, command) in sweep.iter().enumerate() {
+            assert_eq!(command["d"], "I");
+            assert_eq!(
+                command["i"].parse::<u32>().unwrap(),
+                0x520000 + index as u32
+            );
+        }
+        let end = bytes
+            .windows(END_SYNC.len())
+            .position(|window| window == END_SYNC)
+            .unwrap();
+        assert_eq!(kitty_commands(&bytes[..end]).len(), 512);
+        assert!(bytes.starts_with(BEGIN_SYNC));
+        let mut repeat = Vec::new();
+        painter
+            .ensure_meters_transmitted(&mut repeat, &ui, 2500)
+            .unwrap();
+        assert!(
+            kitty_commands(&repeat)
+                .iter()
+                .all(|command| command["a"] != "d")
+        );
+    }
+}
+
+#[test]
+fn pixel_leases_are_exclusive_reused_and_exhaustion_disables_pixels() {
+    use crate::sidebar_pane::pixel::PixelLease;
+    let root = tempfile::tempdir().unwrap();
+    let runtime = crate::disk::paths::RuntimePaths::under(workspace(), root.path()).unwrap();
+    let mut leases = (0..256)
+        .map(|_| PixelLease::acquire(&runtime).unwrap().expect("free slot"))
+        .collect::<Vec<_>>();
+    let bases = leases
+        .iter()
+        .map(|lease| lease.slot.base())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(bases.len(), 256);
+    assert_eq!(leases[0].slot.base(), 0x520000);
+    let exhausted = PixelLease::acquire(&runtime).unwrap();
+    assert!(exhausted.is_none());
+    let mut painter = paint::FramePainter::with_slot(
+        exhausted.map(|lease| lease.slot),
+        PixelRenderCaps {
+            pixel_transport: true,
+            kitty_clients: true,
+        },
+    );
+    let mut ui = UiState::default();
+    let mut snapshot = snapshot(&workspace());
+    snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
+        "codex",
+        vec![crate::agents::RateLimitWindow {
+            used_percentage: Some(50),
+            duration_mins: Some(300),
+            resets_at: Some(Timestamp::from_second(3600).unwrap()),
+            ..Default::default()
+        }],
+    )];
+    painter.refresh_view(&mut ui, &snapshot, false);
+    assert!(ui.meter_pixels.is_none(), "exhaustion selects cell meters");
+    let mut bytes = Vec::new();
+    painter
+        .ensure_meters_transmitted(&mut bytes, &ui, 0)
+        .unwrap();
+    assert!(bytes.is_empty());
+    let draw = |painter: &mut paint::FramePainter,
+                snapshot: &crate::store::snapshot::SidebarSnapshot,
+                ui: &mut UiState| {
+        let mut output = Vec::new();
+        let mut terminal = Terminal::with_options(
+            CrosstermBackend::new(&mut output),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 44, 30)),
+            },
+        )
+        .unwrap();
+        painter
+            .draw_and_paint(&mut terminal, snapshot, None, ui)
+            .unwrap();
+        drop(terminal);
+        output
+    };
+    let exhausted_frame = draw(&mut painter, &snapshot, &mut ui);
+    snapshot.theme.display.pixel = crate::config::PixelMode::Off;
+    let mut cell_painter = paint::FramePainter::with_slot(
+        Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
+        PixelRenderCaps {
+            pixel_transport: true,
+            kitty_clients: true,
+        },
+    );
+    let mut cell_ui = UiState::default();
+    cell_painter.refresh_view(&mut cell_ui, &snapshot, false);
+    assert_eq!(
+        exhausted_frame,
+        draw(&mut cell_painter, &snapshot, &mut cell_ui)
+    );
+    assert!(
+        String::from_utf8_lossy(&exhausted_frame).contains("5h"),
+        "the budget bar is rendered: {:?}",
+        String::from_utf8_lossy(&exhausted_frame)
+    );
+    drop(leases.remove(0));
+    assert_eq!(
+        PixelLease::acquire(&runtime).unwrap().unwrap().slot.base(),
+        0x520000
+    );
+}
+
+#[test]
+fn pixel_disable_and_clear_retire_resident_meter_ids() {
+    use crate::sidebar_pane::pixel::PixelSlot;
+    let mut painter = paint::FramePainter::with_slot(
+        Some(PixelSlot::new(0)),
+        PixelRenderCaps {
+            pixel_transport: true,
+            kitty_clients: true,
+        },
+    );
+    let mut snapshot = snapshot(&workspace());
+    let mut ui = UiState::default();
+    for disable in [true, false] {
+        snapshot.theme.display.pixel = crate::config::PixelMode::Auto;
+        painter.refresh_view(&mut ui, &snapshot, false);
+        compose_test_meters(&mut ui, 1);
+        let mut bytes = Vec::new();
+        painter
+            .ensure_meters_transmitted(&mut bytes, &ui, 0)
+            .unwrap();
+        let ids = kitty_commands(&bytes)
+            .into_iter()
+            .filter(|command| command["a"] == "t")
+            .map(|command| command["i"].clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(ids.len(), 4, "re-enable transmits afresh");
+        bytes.clear();
+        if disable {
+            snapshot.theme.display.pixel = crate::config::PixelMode::Off;
+            painter.refresh_view(&mut ui, &snapshot, false);
+            painter
+                .ensure_meters_transmitted(&mut bytes, &ui, 1)
+                .unwrap();
+        } else {
+            painter.clear(&mut bytes).unwrap();
+        }
+        let commands = kitty_commands(&bytes);
+        assert!(
+            commands
+                .iter()
+                .all(|command| command["a"] == "d" && command["d"] == "I")
+        );
+        assert_eq!(
+            commands
+                .into_iter()
+                .map(|command| command["i"].clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            ids
+        );
+    }
+}
+
+#[test]
+fn pixel_pet_disable_retires_sprite_on_next_paint() {
+    let mut painter = paint::FramePainter::with_assets(
+        PetAssets::test_loaded_pixel_frame("codex"),
+        PixelRenderCaps {
+            pixel_transport: true,
+            kitty_clients: true,
+        },
+        false,
+    );
+    let mut snapshot = snapshot(&workspace());
+    snapshot.theme.pets.enabled = true;
+    let mut ui = UiState {
+        pet: Some(crate::sidebar_pane::pets::PetView {
+            body: Some(crate::sidebar_pane::pets::PetBody::Pixel(PetPixelView {
+                pet_id: "codex".to_owned(),
+                sprite_index: 0,
+                image_id: 0x520000,
+                size: crate::sidebar_pane::pets::PetGridSize { cols: 2, rows: 1 },
+            })),
+            caption: None,
+            frame_interval: None,
+        }),
+        ..Default::default()
+    };
+    let mut bytes = Vec::new();
+    painter
+        .ensure_pixel_transmitted(&mut bytes, &ui, 0)
+        .unwrap();
+    let ids = kitty_commands(&bytes)
+        .into_iter()
+        .filter(|command| command["a"] == "t")
+        .map(|command| command["i"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ids.len(), 1);
+    snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
+        "codex",
+        Vec::new(),
+    )];
+    let saved_pet = ui.pet.clone();
+    painter.refresh_view(&mut ui, &snapshot, true);
+    bytes.clear();
+    painter
+        .ensure_pixel_transmitted(&mut bytes, &ui, 1)
+        .unwrap();
+    assert!(
+        bytes.is_empty(),
+        "an alert hiding the pet keeps its sprites"
+    );
+    ui.pet = saved_pet;
+    snapshot.theme.pets.enabled = false;
+    painter.refresh_view(&mut ui, &snapshot, false);
+    bytes.clear();
+    painter
+        .ensure_pixel_transmitted(&mut bytes, &ui, 1)
+        .unwrap();
+    let commands = kitty_commands(&bytes);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0]["d"], "I");
+    assert_eq!(commands[0]["i"], ids[0]);
+}
+
 #[test]
 fn deferred_fetch_deadline_caps_event_loop_timeout() {
     let now = Instant::now();
@@ -95,7 +428,11 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
     let mut ui = UiState::default();
-    let mut painter = paint::FramePainter::new(PixelRenderCaps::default(), true);
+    let mut painter = paint::FramePainter::new(
+        PixelRenderCaps::default(),
+        true,
+        Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
+    );
 
     painter.refresh_view(&mut ui, &snapshot, false);
 
@@ -124,6 +461,7 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
             kitty_clients: true,
         },
         false,
+        Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
     );
 
     painter.refresh_view(&mut ui, &snapshot, false);
@@ -167,6 +505,7 @@ fn meter_transmission_paints_visible_rasters_once() {
             kitty_clients: true,
         },
         false,
+        Some(crate::sidebar_pane::pixel::PixelSlot::new(0)),
     );
 
     painter.refresh_view(&mut ui, &snapshot, false);
@@ -210,7 +549,10 @@ fn meter_transmission_paints_visible_rasters_once() {
     painter
         .ensure_meters_transmitted(&mut disabled, &ui, 2)
         .expect("skip disabled meters");
-    assert!(disabled.is_empty());
+    let commands = kitty_commands(&disabled);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0]["d"], "I");
+    assert_eq!(commands[0]["i"], image_id.to_string());
 }
 
 #[test]
@@ -227,7 +569,7 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
     let pixel = PetPixelView {
         pet_id: "codex".to_owned(),
         sprite_index: 0,
-        image_id: 0x120000,
+        image_id: 0x520000,
         size: crate::sidebar_pane::pets::PetGridSize { cols: 2, rows: 1 },
     };
     let mut ui = UiState {
@@ -313,22 +655,22 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         !steady.contains("\u{1b}_G"),
         "unchanged frame emits no kitty graphics bytes"
     );
+    assert!(
+        !String::from_utf8_lossy(&output[first_len..]).contains("a=d,d=I"),
+        "layout shifts must keep resident kitty images alive"
+    );
     let output = String::from_utf8_lossy(&output);
     assert_eq!(
         output
             .matches(std::str::from_utf8(BEGIN_SYNC).unwrap())
             .count(),
-        3
+        4
     );
     assert_eq!(
         output
             .matches(std::str::from_utf8(END_SYNC).unwrap())
             .count(),
-        3
-    );
-    assert!(
-        !output.contains("a=d,d=i"),
-        "layout shifts must keep resident kitty images alive"
+        4
     );
 }
 

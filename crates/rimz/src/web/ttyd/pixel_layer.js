@@ -167,7 +167,7 @@ const installPixelLayer=term=>{
       if(id!==null&&id>0&&id<=0xffffff&&cols!==null&&cols>0&&cols<=RIMZ_PIXEL_DIACRITICS.length&&rows!==null&&rows>0&&rows<=RIMZ_PIXEL_DIACRITICS.length){
         rememberPlacement(id,cols,rows);
       }
-    }else if(fields.a==="d"&&fields.d==="i"){
+    }else if(fields.a==="d"&&(fields.d==="i"||fields.d==="I")){
       const id=integer(fields.i);
       if(id!==null)deleteImage(id);
       scheduleDraw();
