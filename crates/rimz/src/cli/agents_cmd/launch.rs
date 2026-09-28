@@ -6,6 +6,12 @@ use crate::cli::{machine_config, render, report_unknown_config_keys};
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
+const LAUNCH_PLACEMENT_ERRORS: PlacementErrors = PlacementErrors {
+    new_tab: "opening agent tab",
+    new_pane: "splitting the agent into a new pane",
+    same_pane: "running the agent in the current pane",
+};
+
 pub(super) enum ResumeEntrance {
     Flag,
     Reconcile,
@@ -132,10 +138,11 @@ pub(super) fn launch_layout(
         layout,
         team_name,
     } = resolved;
+    let team = team_name.as_deref().and_then(|name| teams.0.get(name));
     if !args.launch.cohort.resume
         && args.launch.cohort.from_pr.is_none()
         && let Some(name) = team_name.as_deref()
-        && let Some(team) = teams.0.get(name)
+        && let Some(team) = team
     {
         rimz::harness::schedule::team::validate_launch(
             name,
@@ -155,21 +162,13 @@ pub(super) fn launch_layout(
         .prompt
         .as_deref()
         .filter(|prompt| !prompt.trim().is_empty());
-    let prompt_agent_index = prompt
-        .map(|_| {
-            rimz::harness::spec::prompt_leader(
-                &layout,
-                team_name.as_deref().and_then(|name| teams.0.get(name)),
-            )
-        })
-        .transpose()?;
-    let receipt_leader_index = prompt_agent_index.or_else(|| {
-        rimz::harness::spec::prompt_leader(
-            &layout,
-            team_name.as_deref().and_then(|name| teams.0.get(name)),
-        )
-        .ok()
-    });
+    let leader = rimz::harness::spec::prompt_leader(&layout, team);
+    let receipt_leader_index = if prompt.is_some() {
+        Some(leader?)
+    } else {
+        leader.ok()
+    };
+    let prompt_agent_index = prompt.and(receipt_leader_index);
     if !args.launch.cohort.resume {
         for (index, cell) in layout.agent_cells().enumerate() {
             preflight_cell(
@@ -286,16 +285,10 @@ pub(super) fn launch_layout(
     else {
         return Ok(());
     };
-    if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
+    if let Some(team) = team {
         rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_patterns());
     }
     crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
-    if let Some(reason) = launch.review_only_reason.as_deref() {
-        writeln!(
-            std::io::stderr(),
-            "review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
-        )?;
-    }
     if let Some(channel) = args.launch.cohort.channel.as_deref() {
         rimz::channel::register(workspace, store.paths(), channel)?;
     }
@@ -317,10 +310,7 @@ pub(super) fn launch_layout(
         args.launch.name.as_deref(),
         launch.generated_name(),
         team_name.as_deref(),
-        team_name
-            .as_deref()
-            .and_then(|name| teams.0.get(name))
-            .map(|team| team.roles.as_slice()),
+        team.map(|team| team.roles.as_slice()),
         room_channel.as_deref(),
         prompt.zip(prompt_agent_index),
         None,
@@ -385,10 +375,7 @@ pub(super) fn launch_layout(
         let _ = store.fail_agent_launch_batch(&launch_batch);
         fail_peer_prompt();
     })?;
-    panes.focused_pane = team_leader_pane(
-        &layout,
-        team_name.as_deref().and_then(|name| teams.0.get(name)),
-    );
+    panes.focused_pane = team_leader_pane(&layout, team);
     super::placement::execute(
         backend,
         store,
@@ -407,11 +394,7 @@ pub(super) fn launch_layout(
                 !worktree_launch,
             ),
             background: args.launch.cohort.bg,
-            errors: PlacementErrors {
-                new_tab: "opening agent tab",
-                new_pane: "splitting the agent into a new pane",
-                same_pane: "running the agent in the current pane",
-            },
+            errors: LAUNCH_PLACEMENT_ERRORS,
         },
     )
     .inspect_err(|_| fail_peer_prompt())?;
@@ -419,9 +402,7 @@ pub(super) fn launch_layout(
         write_launch_receipt(
             &mut render::out(),
             &LaunchReceipt {
-                team: team_name
-                    .as_deref()
-                    .and_then(|name| teams.0.get(name).map(|team| (name, team))),
+                team: team_name.as_deref().zip(team),
                 channel: room_channel.as_deref(),
                 cwd: &cwd,
                 identities: launch_batch.identities(),
@@ -764,11 +745,7 @@ fn launch_resume_layout(
             sidebar,
             identity_env: rimz::room::pane_identity_env(workspace, &cwd, channel.as_deref(), false),
             background: args.launch.cohort.bg,
-            errors: PlacementErrors {
-                new_tab: "opening agent tab",
-                new_pane: "splitting the agent into a new pane",
-                same_pane: "running the agent in the current pane",
-            },
+            errors: LAUNCH_PLACEMENT_ERRORS,
         },
     )?;
     if !in_place {

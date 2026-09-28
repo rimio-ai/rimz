@@ -769,24 +769,34 @@ fn resolve_launch_checkout(
         require_worktree_config(config)?;
     }
     let config = &config.agents.worktree;
-    let name =
-        match rimz::worktree::resolve_launch_checkout(workspace, config, worktree, from_pr, cwd) {
-            Ok(launch) => return Ok(Some(launch)),
-            Err(rimz::worktree::WorktreeErr::Unmarked { name, .. }) if from_pr.is_none() => name,
-            Err(err) => return Err(err.into()),
-        };
-    let launch = rimz::worktree::resolve_unmanaged_launch_checkout(workspace, config, &name)?;
-    if !std::io::stdin().is_terminal() {
-        anyhow::bail!(
-            "worktree `{name}` is not RimZ-managed; rerun in a terminal to confirm entering it"
-        );
-    }
-    if !confirm(&format!(
-        "Worktree `{name}` at {} is not RimZ-managed. Enter it without adopting it or enabling automatic cleanup?",
-        launch.cwd.display(),
-    ))? {
-        writeln!(render::err(), "Launch aborted; nothing changed.")?;
-        return Ok(None);
+    let launch = match rimz::worktree::resolve_launch_checkout(
+        workspace, config, worktree, from_pr, cwd,
+    ) {
+        Ok(launch) => launch,
+        Err(rimz::worktree::WorktreeErr::Unmarked { name, .. }) if from_pr.is_none() => {
+            let launch =
+                rimz::worktree::resolve_unmanaged_launch_checkout(workspace, config, &name)?;
+            if !std::io::stdin().is_terminal() {
+                anyhow::bail!(
+                    "worktree `{name}` is not RimZ-managed; rerun in a terminal to confirm entering it"
+                );
+            }
+            if !confirm(&format!(
+                "Worktree `{name}` at {} is not RimZ-managed. Enter it without adopting it or enabling automatic cleanup?",
+                launch.cwd.display(),
+            ))? {
+                writeln!(render::err(), "Launch aborted; nothing changed.")?;
+                return Ok(None);
+            }
+            launch
+        }
+        Err(err) => return Err(err.into()),
+    };
+    if let Some(reason) = launch.review_only_reason.as_deref() {
+        writeln!(
+            std::io::stderr(),
+            "review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
+        )?;
     }
     Ok(Some(launch))
 }

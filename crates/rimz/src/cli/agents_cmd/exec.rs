@@ -58,6 +58,11 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         envelope.request().isolation_default,
         machine_config.agents.isolation,
     );
+    invocation.effective_isolation = Some(isolation);
+    let fail = || {
+        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+        fail_run_on_exec_precondition(run_context.as_ref());
+    };
     let adapter = rimz::agents::find_definition(envelope.request().kind.as_str());
     let bwrap = rimz::sandbox::preflight_launch(
         isolation,
@@ -67,26 +72,15 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             adapter.manual_skill()
         }),
     )
-    .inspect_err(|_| {
-        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-        fail_run_on_exec_precondition(run_context.as_ref());
-    })?;
-    invocation.effective_isolation = Some(isolation);
-    let request = match envelope.materialize() {
-        Ok(request) => request,
-        Err(err) => {
-            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-            fail_run_on_exec_precondition(run_context.as_ref());
-            return Err(err).context("materializing launch prompt");
-        }
-    };
+    .inspect_err(|_| fail())?;
+    let request = envelope
+        .materialize()
+        .inspect_err(|_| fail())
+        .context("materializing launch prompt")?;
     let attach_target = exec_attach_target(&request);
     let (runtime, state) = rimz::StatePaths::for_project_root(&workspace.project_root)
         .and_then(|state| rimz::RuntimePaths::for_state(&state).map(|runtime| (runtime, state)))
-        .inspect_err(|_| {
-            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-            fail_run_on_exec_precondition(run_context.as_ref());
-        })?;
+        .inspect_err(|_| fail())?;
     let ambient_env = rimz::agents::ambient_env();
     let plan = rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
         request: &request,
@@ -101,10 +95,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         bwrap: bwrap.as_deref(),
         ambient_env: &ambient_env,
     })
-    .inspect_err(|_| {
-        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-        fail_run_on_exec_precondition(run_context.as_ref());
-    })?;
+    .inspect_err(|_| fail())?;
     for warning in &plan.warnings {
         let _ = writeln!(crate::cli::render::err(), "rimz: {warning}");
     }
@@ -118,10 +109,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             let _ = writeln!(crate::cli::render::err(), "rimz: {skipped}");
         }
     }
-    let skill_links = rimz::harness::launch_plan::apply(&plan).inspect_err(|_| {
-        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-        fail_run_on_exec_precondition(run_context.as_ref());
-    })?;
+    let skill_links = rimz::harness::launch_plan::apply(&plan).inspect_err(|_| fail())?;
     if let Some((links, outcome)) = plan.skill_links.as_ref().zip(skill_links)
         && let Some(report) = links.shadowed_report(&outcome.shadowed)
     {
@@ -132,10 +120,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .as_deref()
         .map(enter_worktree)
         .transpose()
-        .inspect_err(|_| {
-            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-            fail_run_on_exec_precondition(run_context.as_ref());
-        })?;
+        .inspect_err(|_| fail())?;
     let process = plan.process();
     if let Err(error) = rimz::lsp::registry::register_lease(
         &invocation.cwd,
@@ -148,10 +133,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         let (program, rest) = argv
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("finalized Qwen launch produced an empty command"))?;
-        exec_agent_command(program, rest, &process.env, &process.unset).inspect_err(|_| {
-            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-            fail_run_on_exec_precondition(run_context.as_ref());
-        })?;
+        exec_agent_command(program, rest, &process.env, &process.unset).inspect_err(|_| fail())?;
         return Ok(());
     }
     if let Some(context) = run_context.as_ref() {

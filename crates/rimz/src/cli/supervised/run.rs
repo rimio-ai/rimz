@@ -563,31 +563,24 @@ fn prepare_supervised(
     else {
         return Ok(None);
     };
-    if let Some(reason) = launch.review_only_reason.as_deref() {
-        writeln!(
-            std::io::stderr(),
-            "review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
-        )?;
-    }
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
-    let mut launch_invocation =
-        rimz::harness::launch::ExecRequest::bare_launch(agent_cell.kind.clone(), Vec::new());
-    launch_invocation.action = rimz::harness::launch::ExecAction::Launch {
-        prompt: Some(prompt.to_string()),
-        extra_args: agent_cell.args.clone(),
+    let launch_invocation = rimz::harness::launch::ExecRequest {
+        action: rimz::harness::launch::ExecAction::Launch {
+            prompt: Some(prompt.to_string()),
+            extra_args: agent_cell.args.clone(),
+        },
+        subagent: request.subagent,
+        ..rimz::harness::launch::ExecRequest::fresh(
+            agent_cell,
+            rimz::harness::launch::ExecIdentity {
+                params: preflight_launch,
+                ..Default::default()
+            },
+            None,
+            false,
+        )
     };
-    launch_invocation.system_prompt_file = agent_cell.system_prompt_file.clone();
-    launch_invocation.skills.clone_from(&agent_cell.skills);
-    launch_invocation.isolation_default = agent_cell.isolation_default;
-    launch_invocation
-        .append_system_prompt_files
-        .clone_from(&agent_cell.append_system_prompt_files);
-    launch_invocation
-        .team_prompt
-        .clone_from(&agent_cell.team_prompt);
-    launch_invocation.subagent = request.subagent;
-    launch_invocation.identity.params = preflight_launch;
     let (process, managed_launch) = rimz::harness::launch::compile_managed_agent_process(
         &workspace.project_root,
         &launch_invocation,
@@ -953,15 +946,15 @@ pub(in crate::cli) fn run_supervised(
         &prepared.machine_config.accounts,
     )
     .key(prepared.kind.as_str());
-    if let Some(binding) = prepared.managed_launch.binding()
-        && let Some(key) = login_key.as_ref()
-        && let Some(reason) = rimz::agents::provider_budget_gate(
+    let provider_budget_gate = || {
+        rimz::agents::provider_budget_gate(
             prepared.store.runtime_paths(),
-            key,
-            binding,
+            login_key.as_ref()?,
+            prepared.managed_launch.binding()?,
             jiff::Timestamp::now(),
         )
-    {
+    };
+    if let Some(reason) = provider_budget_gate() {
         return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
     }
     render::room::present_birth_outcome(
@@ -982,15 +975,7 @@ pub(in crate::cli) fn run_supervised(
     let mut retry_of = None;
     let mut attempt = 0;
     loop {
-        if let Some(binding) = prepared.managed_launch.binding()
-            && let Some(key) = login_key.as_ref()
-            && let Some(reason) = rimz::agents::provider_budget_gate(
-                prepared.store.runtime_paths(),
-                key,
-                binding,
-                jiff::Timestamp::now(),
-            )
-        {
+        if let Some(reason) = provider_budget_gate() {
             return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
         }
         if let Some(reason) = rimz::harness::budget::scope_gate(
