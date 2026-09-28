@@ -1,24 +1,27 @@
-//! Team stage transitions: locked board edits, durable signals, owner delivery, and hand-off compaction; the typed `StageSignal` payload and `stage_flips`, the read side `rimz transcript` renders.
+//! Team lifecycle reactions and stage transitions: subscription retirement and arming, lifecycle signals, locked board edits, owner delivery, and hand-off compaction; the typed `StageSignal` payload and `stage_flips`, the read side `rimz transcript` renders.
 
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use tracing::{debug, warn};
 
 use crate::Store;
-use crate::agents::AgentState;
+use crate::agents::{AgentState, LifecycleSignal};
 use crate::config::{DONE_STAGE, MachineConfig, Team};
 use crate::ids::{EventId, MessageId, MuxName, PaneId};
 use crate::message::compact::{self, CompactErr, CompactOutcome, CompactRequest};
 use crate::message::dispatch::{self, DispatchMode, DispatchOutcome, DispatchRequest};
 use crate::store::event::{EventKind, SignalSource};
 use crate::store::message::{AutoCompact, DeliveryGate, HarnessNotice, MessageSender};
+use crate::store::writer::AgentLifecycleReceipt;
 use crate::workspace::ResolvedWorkspace;
 
 use super::assist_log::{self, Assist, AssistRecord};
 use super::board::{BoardErr, LockedBoard, rewrite_board, stamp};
-use super::schedule::signal::{Signal, fire_signal};
+use super::schedule::signal::{Signal, fire_signal, lifecycle_signal, team_lifecycle_signals};
+use super::schedule::{arm, catalog::TaskCatalog, pending::pending_waits_by_session, team};
 use super::scratch::parse_board_stage;
 
 const STAGE_SIGNAL: &str = "team.stage";
@@ -272,7 +275,7 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn rewake(
+fn rewake(
     workspace: &ResolvedWorkspace,
     store: &Store,
     team_name: &str,
@@ -330,6 +333,185 @@ pub fn rewake(
         compaction: Compaction::Ineligible,
         signal_event,
     }))
+}
+
+/// React to a committed lifecycle receipt: retire subscriptions, arm registered members, fire signals, and re-wake stage owners.
+pub fn react_to_lifecycle(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    receipt: &AgentLifecycleReceipt,
+    mux: Option<MuxName>,
+) {
+    // The receipt's commit publishes and runs the session reaper only when it
+    // appended an event, and it appends one exactly when the receipt carries a
+    // primary id or a derived event. So an observation with neither found no
+    // end that was not already there, and pays for neither the projection nor
+    // the reconcile below: the repeat side-conversation hook and the read-only
+    // tool use, the two frequent ones, both land here.
+    if receipt.primary_event_id.is_none() && receipt.events.is_empty() {
+        return;
+    }
+    let audit = store
+        .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+        .inspect_err(|err| {
+            warn!(error = %err, "lifecycle: failed to read team member state");
+        })
+        .ok();
+    // Every durable end in this workspace retires its rows here, whichever
+    // producer stamped it: the store reaper, the exec wrapper, and rebirth
+    // append `Ended` without ever reaching a hook. It sits above the side
+    // conversation's return because that conversation's own first hook appends
+    // its registration, and that commit reaps like any other.
+    if let Some(audit) = &audit
+        && let Err(err) = arm::retire_ended_sessions(&workspace.project_root, || {
+            std::borrow::Cow::Borrowed(&audit.agents)
+        })
+    {
+        warn!(error = %err, "lifecycle: failed to retire ended session deliveries");
+    }
+    if receipt.side_conversation.is_some() {
+        return;
+    }
+    let pending = store
+        .list_pending_messages()
+        .inspect_err(|err| {
+            warn!(error = %err, "lifecycle: failed to read team signal state");
+        })
+        .ok();
+    for event in &receipt.events {
+        if matches!(event.signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
+            && let Err(err) = arm::retire_session(
+                &workspace.project_root,
+                &event.kind,
+                &event.agent_id,
+                arm::RetireScope::Session,
+            )
+        {
+            warn!(error = %err, "lifecycle: failed to retire session deliveries");
+        }
+        let member = audit
+            .as_ref()
+            .and_then(|audit| {
+                audit
+                    .agents
+                    .iter()
+                    .find(|member| member.kind == event.kind && member.agent_id == event.agent_id)
+            })
+            .filter(|member| member.team.is_some());
+        let registered_member = member.filter(|member| {
+            matches!(event.signal, LifecycleSignal::Registered)
+                && event.parent_agent_id.is_none()
+                && member.parent_agent_id.is_none()
+        });
+        let registered_team = registered_member.and_then(|member| {
+            load_member_team(workspace, member.team.as_deref()?)
+                .inspect_err(|err| {
+                    warn!(error = %err, "lifecycle: failed to load team configuration");
+                })
+                .ok()
+        });
+        if let (Some(audit), Some(member), Some(team)) =
+            (&audit, registered_member, registered_team.as_ref())
+            && let Err(err) = team::arm_member(workspace, &audit.agents, member, team)
+        {
+            warn!(error = %err, "lifecycle: failed to arm team signal bindings");
+        }
+        let mut signals: Vec<_> = lifecycle_signal(event).into_iter().collect();
+        let live_members = audit
+            .as_ref()
+            .zip(member)
+            .map(|(audit, member)| {
+                let channel = member.channel().unwrap_or_else(|| "external".to_owned());
+                crate::address::team_cohorts(&audit.agents)
+                    .into_iter()
+                    .find(|cohort| {
+                        Some(cohort.team) == member.team.as_deref() && cohort.channel == channel
+                    })
+                    .map(|cohort| cohort.members)
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        if let (Some(member), Some(pending)) = (member, &pending) {
+            let sleeping = pending_waits_by_session(
+                &TaskCatalog::load_lenient(Some(&workspace.project_root)),
+                &workspace.project_root,
+                &event.at.to_zoned(MachineConfig::load_lenient().time_zone()),
+            )
+            .into_keys()
+            .collect();
+            for signal in team_lifecycle_signals(event, member, &live_members, pending, &sleeping) {
+                match store.append_signal(&workspace.session_name, (&signal).into()) {
+                    Ok(_) => signals.push(signal),
+                    Err(err) => {
+                        warn!(signal = %signal.name, error = %err, "lifecycle: failed to append team signal")
+                    }
+                }
+            }
+        }
+        for signal in signals {
+            if let Err(err) = fire_signal(store.runtime_paths(), &workspace.project_root, &signal) {
+                warn!(
+                    signal = %signal.name,
+                    error = %err,
+                    "lifecycle: failed to fire matching loop tasks",
+                );
+            }
+        }
+        if let (Some(member), Some(team)) = (registered_member, registered_team.as_ref())
+            && let (Some(name), Some(worktree)) =
+                (member.team.as_deref(), member.worktree_path.as_deref())
+        {
+            let members = live_members
+                .iter()
+                .map(|member| (*member).clone())
+                .collect::<Vec<_>>();
+            match rewake(
+                workspace,
+                store,
+                name,
+                team,
+                member,
+                &members,
+                Path::new(worktree),
+                mux,
+                event.at,
+            ) {
+                Ok(Some(receipt)) => {
+                    debug!(delivery = ?receipt.delivery, "lifecycle: re-woke team stage owner");
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    warn!(error = %err, "lifecycle: failed to re-wake team stage owner");
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum MemberTeamErr {
+    #[error(transparent)]
+    Machine(#[from] crate::config::ConfigErr),
+    #[error(transparent)]
+    Effective(#[from] crate::config::effective::EffectiveConfigErr),
+}
+
+fn load_member_team(workspace: &ResolvedWorkspace, name: &str) -> Result<Team, MemberTeamErr> {
+    let machine = MachineConfig::load()?;
+    let effective = crate::config::effective::load(&machine, &workspace.project_root)?;
+    effective.block_untrusted_reference(
+        crate::config::effective::ProfileScope::Agents,
+        Some(name),
+        &machine.agents.commands,
+    )?;
+    let team = effective.teams.0.get(name).ok_or_else(|| {
+        crate::config::effective::EffectiveConfigErr::FailedDefinition(
+            machine
+                .definition_failure_for(name)
+                .unwrap_or_else(|| format!("team `{name}` is no longer configured")),
+        )
+    })?;
+    Ok(team.clone())
 }
 
 /// The pipeline as every human surface prints it: `A → [current] → Done`, terminal stage included.

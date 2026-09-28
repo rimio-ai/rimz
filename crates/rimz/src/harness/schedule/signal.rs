@@ -1,7 +1,7 @@
 //! Signal vocabulary shared by event ingress, lifecycle hooks, and loop firing.
 
 mod team;
-pub use team::team_lifecycle_signals;
+pub(crate) use team::team_lifecycle_signals;
 
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -251,7 +251,7 @@ pub(super) fn match_value(value: &Value) -> String {
     }
 }
 
-pub fn lifecycle_signal(event: &crate::agents::LifecycleEvent) -> Option<Signal> {
+pub(crate) fn lifecycle_signal(event: &crate::agents::LifecycleEvent) -> Option<Signal> {
     if !matches!(
         event.signal,
         crate::agents::LifecycleSignal::Ended | crate::agents::LifecycleSignal::Lost

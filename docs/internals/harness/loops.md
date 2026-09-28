@@ -351,7 +351,7 @@ A signal is a name, a JSON object payload, a source, and, for watched commands, 
 
 ### Team signals
 
-`team_lifecycle_signals` derives cohort edges from the same event, right after the `agent.*` derivation and only when the transitioning agent has a `team`. It is pure. The hook passes the member row from the audit projection (which retains ended rows), the live cohort from `team_cohorts`, the complete pending message queue, and the set of sessions holding a pending one-shot wait.
+`team_lifecycle_signals` derives cohort edges from the same event, right after the `agent.*` derivation and only when the transitioning agent has a `team`. It is pure. The hook calls `team_stage::react_to_lifecycle`, which passes the member row from the audit projection (which retains ended rows), the live cohort from `team_cohorts`, the complete pending message queue, and the set of sessions holding a pending one-shot wait.
 
 | Name | Edge |
 | --- | --- |
@@ -469,7 +469,7 @@ A team role declares standing subscriptions for its own seat. Each `[[agents.tea
 
 A fresh `launch_layout` refuses a team binding scoped implicitly to the root checkout's CI or PR state, before any pane or worktree side effect, and names the fixes: an explicit branch or path match, or `-w <worktree>`. A launch from a linked worktree passes, a `--from-pr` launch skips the check, and resume does not apply it.
 
-After a committed lifecycle `Registered`, the hook reads the strict effective trusted config and calls `schedule::team::arm_member` for a root team member, never a subagent. It uses the member's adopted session identity, role, channel, and worktree, so launch, resume, restart, and role re-add share one registration path. All binding specs are built before anything persists. The rows carry `TaskEntry.team = "<team>#<channel>"`, target the member's exact kind and session, and deliver at the next `done` boundary.
+After a committed lifecycle `Registered`, the hook calls `team_stage::react_to_lifecycle`, which reads the strict effective trusted config and calls `schedule::team::arm_member` for a root team member, never a subagent. It uses the member's adopted session identity, role, channel, and worktree, so launch, resume, restart, and role re-add share one registration path. All binding specs are built before anything persists. The rows carry `TaskEntry.team = "<team>#<channel>"`, target the member's exact kind and session, and deliver at the next `done` boundary.
 
 Row names are `team-<team>-<channel>-<role>-<signal slug>`, lowercased, with dots and any character outside `[a-z0-9_-]` replaced by `-`. Repeated or colliding slugs within a role get a declaration-order `-<n>` suffix; a collision between lanes in one room is accepted. Repeated registration deduplicates, and an already-subscribed manual row is not relabeled as a team row. Automatic arming never replaces machine or project configuration: a generated name that collides with a configured task is reported in hook diagnostics, and the user renames that task before the member re-arms.
 

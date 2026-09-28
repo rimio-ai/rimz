@@ -16,7 +16,7 @@ use crate::store::message::MessageRecord;
 /// Derive team signals from the transitioning audit row and its live cohort members.
 /// `pending` is the complete pending queue, including delayed and resume-gated messages.
 /// `sleeping` contains sessions with a pending one-shot wait in this workspace.
-pub fn team_lifecycle_signals(
+pub(crate) fn team_lifecycle_signals(
     event: &LifecycleEvent,
     member: &AgentState,
     live_cohort: &[&AgentState],
