@@ -115,8 +115,70 @@ fn missing_source_does_not_discard_locations() {
         Scope::Checkout.into(),
         &BTreeSet::new(),
         |_, _| Err(LspErr::Protocol("missing line".into())),
+        |_| panic!("no flag must not request symbols"),
     );
     assert_eq!(result.unwrap(), "gone.rs\n  2:3\n");
+}
+
+#[test]
+fn no_tests_filters_before_limit_and_looks_up_each_surviving_file_once() {
+    for (verb, noun) in [(Verb::Refs, "references"), (Verb::Callers, "callers")] {
+        let span = |start, end| json!({"start":{"line":start,"character":0},"end":{"line":end,"character":0}});
+        let mut items = Vec::new();
+        for (path, line) in [
+            ("tests/a.rs", 0),
+            ("src/tests.rs", 0),
+            ("src/client_tests.rs", 0),
+            ("src/lib.rs", 10),
+            ("src/lib.rs", 19),
+            ("src/lib.rs", 20),
+            ("src/lib.rs", 30),
+            ("src/contest.rs", 0),
+        ] {
+            let uri = format!("file:///checkout/{path}");
+            let range = span(line, line + 1);
+            items.push(if verb == Verb::Refs {
+                json!({"uri":uri,"range":range})
+            } else {
+                json!({"from":{"uri":uri,"range":range,"selectionRange":range,"name":"work","kind":12}})
+            });
+        }
+        let mut looked_up = Vec::new();
+        let output = render_with_source(
+            verb,
+            Path::new("/checkout"),
+            None,
+            json!(items),
+            ListOptions {
+                scope: Scope::Checkout,
+                limit: NonZeroUsize::new(1),
+                no_tests: true,
+            },
+            &BTreeSet::new(),
+            |_, _| Ok("source".into()),
+            |uri| {
+                looked_up.push(uri.to_owned());
+                Ok(json!([{"name":"outer","kind":2,"range":span(0, 40),"selectionRange":span(0, 1),"children":[{"name":"unit_tests","kind":2,"range":span(10, 20),"selectionRange":span(10, 11)}]}]))
+            },
+        ).unwrap();
+        assert!(
+            output.starts_with(&format!("3 {noun} (showing 1)\n")),
+            "{output}"
+        );
+        assert!(
+            output.ends_with(&format!(
+                "5 test {noun} hidden; drop --no-tests to show them\n"
+            )),
+            "{output}"
+        );
+        assert_eq!(
+            looked_up,
+            [
+                "file:///checkout/src/contest.rs",
+                "file:///checkout/src/lib.rs"
+            ]
+        );
+    }
 }
 
 #[test]
@@ -135,6 +197,7 @@ fn dirty_locations_never_read_disk_source() {
                 consulted.push(uri.to_owned());
                 Ok("disk source".into())
             },
+            |_| panic!("no flag must not request symbols"),
         )
         .unwrap();
         assert_eq!(
@@ -147,6 +210,77 @@ fn dirty_locations_never_read_disk_source() {
         );
         assert_eq!(consulted, ["file:///checkout/clean.rs"]);
     }
+}
+
+#[test]
+fn no_tests_keeps_scope_and_module_kind_and_handles_flat_outlines() {
+    let location = |uri: &str| json!({"uri":uri,"range":range()});
+    for external in [false, true] {
+        let mut looked_up = Vec::new();
+        let output = render_with_source(
+            Verb::Refs,
+            Path::new("/checkout"),
+            None,
+            json!([location("file:///outside/tests/a.rs"), location("file:///checkout/lib.rs"), location("file:///checkout/functions.rs")]),
+            ListOptions {
+                scope: if external { Scope::External } else { Scope::Checkout },
+                limit: None,
+                no_tests: true,
+            },
+            &BTreeSet::new(),
+            |_, _| Ok("source".into()),
+            |uri| {
+                looked_up.push(uri.to_owned());
+                Ok(json!([{"name":"tests","kind":if uri.ends_with("/lib.rs") {2} else {12},"location":location(uri)}]))
+            },
+        ).unwrap();
+        assert!(
+            output.starts_with("functions.rs\n  2:3  source\n"),
+            "{output}"
+        );
+        assert!(
+            output.ends_with(&format!(
+                "{} test references hidden; drop --no-tests to show them\n",
+                if external { 2 } else { 1 }
+            )),
+            "{output}"
+        );
+        assert_eq!(output.contains("outside the checkout hidden"), !external);
+        assert_eq!(looked_up.len(), 2);
+    }
+    let output = render_with_source(
+        Verb::Refs,
+        Path::new("/checkout"),
+        None,
+        json!([location("file:///checkout/tests/a.rs")]),
+        ListOptions {
+            no_tests: true,
+            ..Scope::Checkout.into()
+        },
+        &BTreeSet::new(),
+        |_, _| panic!("hidden source"),
+        |_| panic!("path excluded"),
+    )
+    .unwrap();
+    assert_eq!(
+        output,
+        "no results\n1 test references hidden; drop --no-tests to show them\n"
+    );
+    let output = render_with_source(
+        Verb::Refs,
+        Path::new("/srv/tests/checkout"),
+        None,
+        json!([location("file:///srv/tests/checkout/lib.rs")]),
+        ListOptions {
+            no_tests: true,
+            ..Scope::Checkout.into()
+        },
+        &BTreeSet::new(),
+        |_, _| Ok("source".into()),
+        |_| Ok(json!(null)),
+    )
+    .unwrap();
+    assert_eq!(output, "lib.rs\n  2:3  source\n");
 }
 
 #[test]
@@ -193,6 +327,7 @@ fn dirty_locations_match_equivalent_uri_spellings() {
                 Scope::Checkout.into(),
                 &BTreeSet::from([dirty.to_owned()]),
                 |_, _| panic!("dirty location must not read disk"),
+                |_| panic!("no flag must not request symbols"),
             )
             .unwrap();
             assert!(rendered.contains("(unsaved in editor)"));
@@ -391,7 +526,8 @@ fn find_ranks_exact_prefix_contains_then_other() {
             None,
             result,
             Scope::Checkout.into(),
-            &BTreeSet::new()
+            &BTreeSet::new(),
+            |_| panic!("no flag must not request symbols")
         )
         .unwrap(),
         "function work  lib.rs:2:3\nfunction worker  lib.rs:2:3\nfunction rework  lib.rs:2:3\nfunction unrelated  lib.rs:2:3\n"
@@ -736,12 +872,14 @@ fn list_caps_count_locations_and_only_read_displayed_source() {
                 ListOptions {
                     scope: Scope::Checkout,
                     limit,
+                    no_tests: false,
                 },
                 &BTreeSet::new(),
                 |uri, line| {
                     reads.push((uri.to_owned(), line));
                     Ok("source".into())
                 },
+                |_| panic!("no flag must not request symbols"),
             )
             .unwrap();
             if shown < 52 {
@@ -779,6 +917,7 @@ fn list_caps_count_locations_and_only_read_displayed_source() {
             json!(items),
             Scope::External.into(),
             &BTreeSet::new(),
+            |_| panic!("no flag must not request symbols"),
         )
         .unwrap();
         assert!(rendered.starts_with(&format!("53 {noun} (showing 50)\n")));
@@ -803,6 +942,7 @@ fn grouped_locations_trim_unicode_snippets_and_sort_positions() {
         Scope::External.into(),
         &BTreeSet::new(),
         |_, _| Ok(text.clone()),
+        |_| panic!("no flag must not request symbols"),
     )
     .unwrap();
     let snippet = format!("{}é…", "a".repeat(98));
@@ -826,6 +966,7 @@ fn verb_text_renderers() {
             Scope::Checkout.into(),
             &BTreeSet::new(),
             |_, _| Ok("  fn work() {}  ".into()),
+            |_| panic!("no flag must not request symbols"),
         )
         .unwrap()
     };
@@ -913,7 +1054,8 @@ fn list_verbs_hide_external_items() {
                 None,
                 calls.clone(),
                 Scope::Checkout.into(),
-                &BTreeSet::new()
+                &BTreeSet::new(),
+                |_| panic!("no flag must not request symbols")
             )
             .unwrap(),
             format!(
@@ -928,7 +1070,8 @@ fn list_verbs_hide_external_items() {
                 None,
                 calls,
                 Scope::External.into(),
-                &BTreeSet::new()
+                &BTreeSet::new(),
+                |_| panic!("no flag must not request symbols")
             )
             .unwrap(),
             if verb == Verb::Find {
@@ -955,7 +1098,8 @@ fn list_verbs_hide_external_items() {
                 None,
                 json!([outside]),
                 Scope::Checkout.into(),
-                &BTreeSet::new()
+                &BTreeSet::new(),
+                |_| panic!("no flag must not request symbols")
             )
             .unwrap(),
             "no results\n1 outside the checkout hidden; add --external to show them\n"
@@ -986,7 +1130,8 @@ fn find_scope_preserves_ranked_order() {
             None,
             ranked.clone(),
             Scope::External.into(),
-            &BTreeSet::new()
+            &BTreeSet::new(),
+            |_| panic!("no flag must not request symbols")
         )
         .unwrap(),
         "function work  lib.rs:2:3\nfunction worker  lib.rs:2:3\nfunction rework  lib.rs:2:3\nfunction work  /outside/lib.rs:2:3\n"
@@ -998,7 +1143,8 @@ fn find_scope_preserves_ranked_order() {
             None,
             ranked,
             Scope::Checkout.into(),
-            &BTreeSet::new()
+            &BTreeSet::new(),
+            |_| panic!("no flag must not request symbols")
         )
         .unwrap(),
         "function work  lib.rs:2:3\nfunction worker  lib.rs:2:3\nfunction rework  lib.rs:2:3\n1 outside the checkout hidden; add --external to show them\n"
@@ -1025,7 +1171,8 @@ fn single_answer_verbs_ignore_scope() {
                     None,
                     result.clone(),
                     scope.into(),
-                    &BTreeSet::new()
+                    &BTreeSet::new(),
+                    |_| panic!("no flag must not request symbols")
                 )
                 .unwrap(),
                 expected

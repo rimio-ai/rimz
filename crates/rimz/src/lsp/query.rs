@@ -513,7 +513,7 @@ fn render_find(root: &Path, symbols: &[SymbolInformation], options: ListOptions)
     let total = lines.len();
     let shown = options.shown(total);
     lines.truncate(shown);
-    Ok(finish_list(lines, hidden, total, shown, "symbols"))
+    Ok(finish_list(lines, hidden, total, shown, "symbols", 0))
 }
 
 fn rank_find(root: &Path, query: &str, result: Value) -> Result<Value> {
@@ -702,12 +702,19 @@ fn finish_list(
     total: usize,
     shown: usize,
     noun: &str,
+    tests: usize,
 ) -> String {
     if shown < total {
         lines.insert(0, format!("{total} {noun} (showing {shown})"));
         lines.push(format!("{} more; add --limit N or --all", total - shown));
     }
-    finish_scoped(lines, hidden)
+    let mut output = finish_scoped(lines, hidden);
+    if tests > 0 {
+        output.push_str(&format!(
+            "{tests} test {noun} hidden; drop --no-tests to show them\n"
+        ));
+    }
+    output
 }
 
 #[derive(Deserialize)]
@@ -751,6 +758,7 @@ const LIST_CAP: usize = 50;
 pub struct ListOptions {
     pub scope: Scope,
     pub limit: Option<NonZeroUsize>,
+    pub no_tests: bool,
 }
 
 impl From<Scope> for ListOptions {
@@ -758,6 +766,7 @@ impl From<Scope> for ListOptions {
         Self {
             scope,
             limit: NonZeroUsize::new(LIST_CAP),
+            no_tests: false,
         }
     }
 }
@@ -776,6 +785,7 @@ pub fn render(
     result: Value,
     options: ListOptions,
     dirty: &BTreeSet<String>,
+    mut symbols: impl FnMut(&Path) -> Result<Value>,
 ) -> Result<String> {
     let mut files = BTreeMap::new();
     render_with_source(
@@ -798,6 +808,7 @@ pub fn render(
                 .cloned()
                 .ok_or_else(|| LspErr::Protocol("location is past the end of the file".into()))
         },
+        |uri| symbols(&file_path(uri)?),
     )
 }
 
@@ -824,6 +835,77 @@ fn grouped_position(
     format!("  {}:{}", position.line + 1, position.character + 1)
 }
 
+fn is_test_name(name: &str) -> bool {
+    name == "tests" || name.ends_with("_tests")
+}
+
+fn test_ranges(uri: &str, result: Value) -> Result<Vec<Range>> {
+    if result.is_null() {
+        return Ok(Vec::new());
+    }
+    match serde_json::from_value(result)? {
+        Symbols::Flat(symbols) => Ok(symbols
+            .into_iter()
+            .filter(|symbol| {
+                symbol.kind == 2
+                    && is_test_name(&symbol.name)
+                    && DocumentKey::new(&symbol.location.uri) == DocumentKey::new(uri)
+            })
+            .map(|symbol| symbol.location.range)
+            .collect()),
+        Symbols::Tree(mut pending) => {
+            let mut ranges = Vec::new();
+            while let Some(symbol) = pending.pop() {
+                if symbol.kind == 2 && is_test_name(&symbol.name) {
+                    ranges.push(symbol.range);
+                }
+                pending.extend(symbol.children);
+            }
+            Ok(ranges)
+        }
+    }
+}
+
+fn filter_tests<K: Ord, V>(
+    root: &Path,
+    items: &mut BTreeMap<K, V>,
+    location: impl Fn(&V) -> (&str, Position),
+    symbols: &mut impl FnMut(&str) -> Result<Value>,
+) -> Result<usize> {
+    let total = items.len();
+    let mut ranges = BTreeMap::new();
+    for (key, item) in std::mem::take(items) {
+        let (uri, position) = location(&item);
+        let path = PathBuf::from(displayed_path(root, uri)?);
+        if path.components().any(|part| part.as_os_str() == "tests")
+            || path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(is_test_name)
+        {
+            continue;
+        }
+        let ranges = match ranges.entry(DocumentKey::new(uri)) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(test_ranges(uri, symbols(uri)?)?)
+            }
+        };
+        if ranges
+            .iter()
+            .any(|range| range.start <= position && position < range.end)
+        {
+            continue;
+        }
+        items.insert(key, item);
+    }
+    Ok(total - items.len())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "source and document symbols are independently injected for rendering tests"
+)]
 fn render_with_source(
     verb: Verb,
     root: &Path,
@@ -832,6 +914,7 @@ fn render_with_source(
     options: ListOptions,
     dirty: &BTreeSet<String>,
     mut source: impl FnMut(&str, u32) -> Result<String>,
+    mut symbols: impl FnMut(&str) -> Result<Value>,
 ) -> Result<String> {
     let scope = options.scope;
     if result.is_null() {
@@ -873,6 +956,16 @@ fn render_with_source(
             let total = sorted.len();
             sorted.retain(|(_, path, _), _| scope.includes(path));
             let hidden = total - sorted.len();
+            let tests = if options.no_tests && verb == Verb::Refs {
+                filter_tests(
+                    root,
+                    &mut sorted,
+                    |location| (&location.uri, location.range.start),
+                    &mut symbols,
+                )?
+            } else {
+                0
+            };
             let total = sorted.len();
             let shown = options.shown(total);
             let mut lines = Vec::new();
@@ -886,7 +979,7 @@ fn render_with_source(
             } else {
                 "implementations"
             };
-            Ok(finish_list(lines, hidden, total, shown, noun))
+            Ok(finish_list(lines, hidden, total, shown, noun, tests))
         }
         Verb::Hover => {
             #[derive(Deserialize)]
@@ -908,6 +1001,7 @@ fn render_with_source(
                 ListOptions {
                     scope: Scope::External,
                     limit: None,
+                    no_tests: false,
                 },
             ),
             Symbols::Tree(symbols) => {
@@ -964,6 +1058,16 @@ fn render_with_source(
             let total = sorted.len();
             sorted.retain(|(_, path, _, _), _| scope.includes(path));
             let hidden = total - sorted.len();
+            let tests = if options.no_tests && verb == Verb::Callers {
+                filter_tests(
+                    root,
+                    &mut sorted,
+                    |item| (&item.uri, item.selection_range.start),
+                    &mut symbols,
+                )?
+            } else {
+                0
+            };
             let total = sorted.len();
             let shown = options.shown(total);
             let mut lines = Vec::new();
@@ -977,7 +1081,7 @@ fn render_with_source(
             } else {
                 "callees"
             };
-            Ok(finish_list(lines, hidden, total, shown, noun))
+            Ok(finish_list(lines, hidden, total, shown, noun, tests))
         }
     }
 }
