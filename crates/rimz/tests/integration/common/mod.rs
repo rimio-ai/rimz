@@ -15,6 +15,8 @@ mod command;
 mod env;
 mod harness;
 mod payloads;
+#[cfg(unix)]
+pub(crate) mod room;
 mod shim;
 #[cfg(unix)]
 pub(crate) mod ssh_trace;
