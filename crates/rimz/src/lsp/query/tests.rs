@@ -129,10 +129,14 @@ fn no_tests_filters_before_limit_and_looks_up_each_surviving_file_once() {
             ("tests/a.rs", 0),
             ("src/tests.rs", 0),
             ("src/client_tests.rs", 0),
+            ("src/testkit/mod.rs", 0),
+            ("src/sidebar/test_support.rs", 0),
             ("src/lib.rs", 10),
             ("src/lib.rs", 19),
             ("src/lib.rs", 20),
             ("src/lib.rs", 30),
+            ("src/lib.rs", 32),
+            ("src/lib.rs", 36),
             ("src/contest.rs", 0),
         ] {
             let uri = format!("file:///checkout/{path}");
@@ -158,7 +162,7 @@ fn no_tests_filters_before_limit_and_looks_up_each_surviving_file_once() {
             |_, _| Ok("source".into()),
             |uri| {
                 looked_up.push(uri.to_owned());
-                Ok(json!([{"name":"outer","kind":2,"range":span(0, 40),"selectionRange":span(0, 1),"children":[{"name":"unit_tests","kind":2,"range":span(10, 20),"selectionRange":span(10, 11)}]}]))
+                Ok(json!([{"name":"outer","kind":2,"range":span(0, 40),"selectionRange":span(0, 1),"children":[{"name":"unit_tests","kind":2,"range":span(10, 20),"selectionRange":span(10, 11)},{"name":"testkit","kind":2,"range":span(31, 34),"selectionRange":span(31, 32)},{"name":"test_support","kind":2,"range":span(35, 38),"selectionRange":span(35, 36)}]}]))
             },
         ).unwrap();
         assert!(
@@ -167,7 +171,7 @@ fn no_tests_filters_before_limit_and_looks_up_each_surviving_file_once() {
         );
         assert!(
             output.ends_with(&format!(
-                "5 test {noun} hidden; drop --no-tests to show them\n"
+                "9 test {noun} hidden; drop --no-tests to show them\n"
             )),
             "{output}"
         );

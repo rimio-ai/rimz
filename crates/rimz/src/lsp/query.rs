@@ -836,7 +836,7 @@ fn grouped_position(
 }
 
 fn is_test_name(name: &str) -> bool {
-    name == "tests" || name.ends_with("_tests")
+    matches!(name, "tests" | "testkit" | "test_support") || name.ends_with("_tests")
 }
 
 fn test_ranges(uri: &str, result: Value) -> Result<Vec<Range>> {
@@ -877,7 +877,9 @@ fn filter_tests<K: Ord, V>(
     for (key, item) in std::mem::take(items) {
         let (uri, position) = location(&item);
         let path = PathBuf::from(displayed_path(root, uri)?);
-        if path.components().any(|part| part.as_os_str() == "tests")
+        if path
+            .components()
+            .any(|part| part.as_os_str().to_str().is_some_and(is_test_name))
             || path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
