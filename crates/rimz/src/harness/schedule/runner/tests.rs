@@ -365,8 +365,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         watch: Some(crate::config::WatchSpec::Command("false".to_owned())),
         ..TaskEntry::default()
     };
-    let state =
-        StatePaths::for_workspace(WorkspaceId::from_project_root(dir.path())).expect("state paths");
+    let state = StatePaths::for_project_root(dir.path()).expect("state paths");
     crate::harness::schedule::instances::insert(&state, poll_name, &poll).expect("insert poll");
     crate::harness::schedule::instances::insert(&state, watch_name, &watch).expect("insert watch");
     let catalog = TaskCatalog::load(Some(dir.path())).expect("load task catalog");
@@ -456,7 +455,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
 #[test]
 fn check_only_terminals_consume_only_one_shots() {
     let dir = tempfile::tempdir().unwrap();
-    let state = StatePaths::for_workspace(WorkspaceId::from_project_root(dir.path())).unwrap();
+    let state = StatePaths::for_project_root(dir.path()).unwrap();
     for (name, once, command, result) in [
         ("once-pass", true, "true", LoopRunResult::Completed),
         ("standing-pass", false, "true", LoopRunResult::Completed),
