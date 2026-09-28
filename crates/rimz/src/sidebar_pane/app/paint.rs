@@ -12,7 +12,7 @@ use crate::sidebar_pane::pets::{
     PetAssets, PetBody, PetViewFrame, PixelPainter, effective_render_tier, probe_cell_aspect,
 };
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
-use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, detect_pixel_render_caps};
+use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -75,28 +75,17 @@ impl FramePainter {
         self.caps = caps;
     }
 
-    pub(super) fn refresh_caps(&mut self, mux: MuxName, session_name: &str) {
-        self.refresh_caps_with(mux, session_name, detect_pixel_render_caps);
-        self.probed_aspect = probe_cell_aspect();
-    }
-
     pub(super) fn refresh_caps_with(
         &mut self,
         mux: MuxName,
         session_name: &str,
         detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
-    ) {
+    ) -> bool {
+        let previous = self.caps;
         self.caps = detect(mux, session_name, self.caps);
         self.last_caps_refresh = Instant::now();
-    }
-
-    pub(super) fn refresh_caps_if_stale(
-        &mut self,
-        mux: MuxName,
-        session_name: &str,
-        now: Instant,
-    ) -> bool {
-        self.refresh_caps_if_stale_with(mux, session_name, now, detect_pixel_render_caps)
+        self.probed_aspect = probe_cell_aspect();
+        self.caps != previous
     }
 
     pub(super) fn refresh_caps_if_stale_with(

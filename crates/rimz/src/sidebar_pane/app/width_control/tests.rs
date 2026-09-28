@@ -266,7 +266,9 @@ fn fullscreen_hold_rejects_width_intent_without_pinning_the_room_share() {
     let held_at_ms = write_zellij_fullscreen_topology(&runtime, true);
 
     controller.backstop(Some(200), Some(1), Some(held_at_ms), &diag);
-    controller.adjust(200, WidthAdjust::Wider, &diag);
+    controller.adjust(200, WidthAdjust::Wider);
+    std::thread::sleep(Duration::from_millis(510));
+    controller.backstop(Some(200), Some(1), Some(held_at_ms), &diag);
 
     assert!(controller.convergence.is_fullscreen_held());
     assert_eq!(crate::mux::width_target::pinned(&runtime), None);
@@ -380,23 +382,22 @@ fn zellij_uses_live_step_and_clamps_floor_crossing() {
     write_zellij_topology(&runtime);
     let diag = crate::diag::DiagSink::disabled();
 
-    controller.adjust(80, WidthAdjust::Wider, &diag);
-    assert_eq!(
-        crate::mux::width_target::pinned(&runtime),
-        Some(crate::mux::WidthPermille::from_percent(45)),
-    );
-    controller.adjust(80, WidthAdjust::Wider, &diag);
-    assert_eq!(
-        crate::mux::width_target::pinned(&runtime),
-        Some(crate::mux::WidthPermille::from_percent(50)),
-        "repeated keys compound on persisted pending intent",
-    );
+    controller.adjust(80, WidthAdjust::Wider);
+    assert_eq!(controller.convergence.target(), Some(target(90)));
+    controller.adjust(80, WidthAdjust::Wider);
+    assert_eq!(controller.convergence.target(), Some(target(90)));
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
+    std::thread::sleep(Duration::from_millis(510));
+    controller.backstop(Some(90), None, None, &diag);
     let prior = NonZeroU16::new(30).expect("prior target");
     let prior_share =
         crate::mux::width_target::pin(&runtime, crate::mux::SidebarWidth::default(), prior, 200)
             .expect("pin prior target");
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
-    controller.adjust(30, WidthAdjust::Narrower, &diag);
+    controller.adjust(30, WidthAdjust::Narrower);
+    assert_eq!(controller.convergence.target(), Some(target(24)));
+    std::thread::sleep(Duration::from_millis(510));
+    controller.backstop(Some(24), None, None, &diag);
     assert_eq!(
         crate::mux::width_target::pinned(&runtime),
         Some(crate::mux::WidthPermille::from_percent(12)),
@@ -409,14 +410,109 @@ fn zellij_uses_live_step_and_clamps_floor_crossing() {
 }
 
 #[test]
+fn width_key_burst_saves_and_broadcasts_only_the_last_target_once() {
+    let (dir, runtime, mut controller) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let diag = crate::diag::DiagSink::under(
+        dir.path().to_path_buf(),
+        runtime.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
+    controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+    controller
+        .convergence
+        .seed_native_step(native_step(10, true));
+    let socket_path = runtime.sock_dir.join("burst.sock");
+    let socket = UnixDatagram::bind(&socket_path).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    crate::wakeup::heartbeat::write_heartbeat(
+        &runtime,
+        runtime.workspace_id.clone(),
+        &SidebarInstanceId::new(),
+        MuxName::Zellij,
+        "rimz-test",
+        &socket_path,
+        None,
+        None,
+    )
+    .unwrap();
+    for _ in 0..30 {
+        controller.adjust(50, WidthAdjust::Wider);
+    }
+    assert_eq!(controller.convergence.target(), Some(target(100)));
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
+    let mut payload = [0_u8; 1024];
+    assert_eq!(
+        socket.recv(&mut payload).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    controller.backstop(Some(50), None, None, &diag);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
+    std::thread::sleep(Duration::from_millis(510));
+    controller.backstop(Some(100), None, None, &diag);
+    assert_eq!(
+        crate::mux::width_target::pinned(&runtime),
+        Some(crate::mux::WidthPermille::from_percent(50))
+    );
+    let received = socket.recv(&mut payload).unwrap();
+    let envelope: SidebarEventEnvelope = serde_json::from_slice(&payload[..received]).unwrap();
+    assert_eq!(envelope.event, SidebarEvent::WidthTargetChanged);
+    controller.backstop(Some(100), None, None, &diag);
+    assert_eq!(
+        socket.recv(&mut payload).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    let text = std::fs::read_to_string(diag.log_path().unwrap()).unwrap();
+    let intents: Vec<_> = text
+        .lines()
+        .filter_map(|line| {
+            match serde_json::from_str::<crate::diag::record::DiagEnvelope>(line)
+                .unwrap()
+                .event
+            {
+                crate::diag::record::DiagEvent::SidebarWidthIntent {
+                    base_cols,
+                    target_cols,
+                    verdict,
+                    ..
+                } => Some((base_cols, target_cols, verdict)),
+                _ => None,
+            }
+        })
+        .collect();
+    assert_eq!(
+        intents,
+        vec![(50, Some(100), SidebarWidthIntentVerdict::Accepted)]
+    );
+}
+
+#[test]
 fn zellij_intent_without_topology_never_pins_a_phantom_share() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
-    let diag = crate::diag::DiagSink::disabled();
 
-    controller.adjust(80, WidthAdjust::Narrower, &diag);
+    controller.adjust(80, WidthAdjust::Narrower);
     assert_eq!(crate::mux::width_target::pinned(&runtime), None);
-    controller.adjust(80, WidthAdjust::Wider, &diag);
+    controller.adjust(80, WidthAdjust::Wider);
     assert_eq!(crate::mux::width_target::pinned(&runtime), None);
+}
+
+#[test]
+fn burst_commit_caps_against_a_view_resized_during_the_hold() {
+    let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
+    let diag = crate::diag::DiagSink::disabled();
+    write_zellij_topology_for_view(&runtime, 240);
+    controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+    controller.adjust(60, WidthAdjust::Wider);
+    assert_eq!(controller.convergence.target(), Some(target(72)));
+    write_zellij_topology_for_view(&runtime, 100);
+    std::thread::sleep(Duration::from_millis(510));
+    controller.backstop(Some(72), None, None, &diag);
+    assert_eq!(controller.convergence.target(), Some(target(50)));
+    assert_eq!(
+        crate::mux::width_target::pinned(&runtime),
+        Some(crate::mux::WidthPermille::from_percent(50))
+    );
 }
 
 #[test]

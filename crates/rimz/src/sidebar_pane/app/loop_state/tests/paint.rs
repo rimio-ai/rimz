@@ -345,6 +345,41 @@ fn stale_tmux_caps_reprobe_is_bounded_and_adopts_changes() {
 }
 
 #[test]
+fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
+    let mut rig = Rig::new();
+    for _ in 0..3 {
+        rig.state
+            .on_resize(&mut rig.fetch, &mut rig.terminal, Some(40))
+            .unwrap();
+        rig.state.refresh_pet_render_caps_if_stale_with(
+            crate::MuxName::Tmux,
+            "rimz-test",
+            Instant::now(),
+            |_, _, _| panic!("resize burst must not probe yet"),
+        );
+    }
+    rig.state.dirty = false;
+    let enabled = PixelRenderCaps {
+        pixel_transport: true,
+        kitty_clients: true,
+    };
+    let settled = Instant::now() + Duration::from_millis(510);
+    assert!(rig.state.refresh_pet_render_caps_if_stale_with(
+        crate::MuxName::Tmux,
+        "rimz-test",
+        settled,
+        |_, _, _| enabled,
+    ));
+    assert!(rig.state.dirty);
+    assert!(!rig.state.refresh_pet_render_caps_if_stale_with(
+        crate::MuxName::Tmux,
+        "rimz-test",
+        settled,
+        |_, _, _| panic!("settled burst must probe only once"),
+    ));
+}
+
+#[test]
 fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
     let caps = crate::sidebar_pane::pixel::detect_pixel_render_caps(
         crate::MuxName::Zellij,

@@ -64,6 +64,8 @@ use super::timing::{
 use super::width_control::WidthController;
 use super::{Result, ServeConfig};
 
+const RESIZE_CAPS_SETTLE: Duration = Duration::from_millis(300);
+
 /// Compact projection of the glanceable sidebar content an off-screen pane
 /// keeps fresh. It deliberately skips animation state, turn phase, gauges,
 /// process metrics, spend, and git facts.
@@ -188,6 +190,7 @@ pub(super) struct LoopState {
     last_self_close_check: Instant,
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
+    caps_refresh_deadline: Option<Instant>,
     width_control: WidthController,
     pub(super) should_exit: bool,
     pub(super) exit_cause: Option<RendererExitCause>,
@@ -299,6 +302,7 @@ impl LoopState {
             last_self_close_check: now,
             last_heartbeat: None,
             prev_width: initial_width,
+            caps_refresh_deadline: None,
             width_control,
             should_exit: false,
             exit_cause: None,
@@ -346,7 +350,13 @@ impl LoopState {
                     .max(FRAME_MIN_TIMEOUT),
             );
         }
-        if let Some(deadline) = self.width_control.feedback_deadline() {
+        if let Some(deadline) = self
+            .width_control
+            .feedback_deadline()
+            .into_iter()
+            .chain(self.caps_refresh_deadline)
+            .min()
+        {
             timeout = timeout.min(
                 deadline
                     .saturating_duration_since(Instant::now())
@@ -442,16 +452,7 @@ impl LoopState {
             // idle backstop interval elapsed. It carries no state of its own —
             // the frame phase below advances the spin and paints, and the
             // backstop poll runs there too.
-            Wakeup::Tick => {
-                if self.paint.refresh_caps_if_stale(
-                    self.config.mux,
-                    &self.config.session_name,
-                    Instant::now(),
-                ) {
-                    self.dirty = true;
-                }
-                Ok(LoopFlow::Continue)
-            }
+            Wakeup::Tick => Ok(LoopFlow::Continue),
             Wakeup::Resize => {
                 let settled_width = terminal.size().map(|s| s.width).ok();
                 self.on_resize(fetch, terminal, settled_width)?;
@@ -852,8 +853,7 @@ impl LoopState {
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         settled_width: Option<u16>,
     ) -> Result<()> {
-        self.paint
-            .refresh_caps(self.config.mux, &self.config.session_name);
+        self.caps_refresh_deadline = Some(Instant::now() + RESIZE_CAPS_SETTLE);
         // Once a sibling has been seen, hold only a grow beyond the configured
         // cap or room override: that is the shape of space freed by a closing
         // sibling. Startup and attach relayouts land at the legitimate width
@@ -926,7 +926,6 @@ impl LoopState {
         self.paint.refresh_caps_with(mux, session_name, detect);
     }
 
-    #[cfg(test)]
     fn refresh_pet_render_caps_if_stale_with(
         &mut self,
         mux: MuxName,
@@ -934,8 +933,18 @@ impl LoopState {
         now: Instant,
         detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
     ) -> bool {
-        self.paint
-            .refresh_caps_if_stale_with(mux, session_name, now, detect)
+        let changed = if let Some(deadline) = self.caps_refresh_deadline {
+            if now < deadline {
+                return false;
+            }
+            self.caps_refresh_deadline = None;
+            self.paint.refresh_caps_with(mux, session_name, detect)
+        } else {
+            self.paint
+                .refresh_caps_if_stale_with(mux, session_name, now, detect)
+        };
+        self.dirty |= changed;
+        changed
     }
 
     pub(super) fn on_input(
@@ -970,7 +979,7 @@ impl LoopState {
                 let Ok(size) = terminal.size() else {
                     return Ok(());
                 };
-                self.width_control.adjust(size.width, dir, &self.diag);
+                self.width_control.adjust(size.width, dir);
             }
             Some(InputEffect::MarkRead(row_id)) => self.mark_row_read(fetch, &row_id),
             Some(InputEffect::MarkUnread(row_id)) => self.mark_row_unread(fetch, &row_id),
@@ -1123,6 +1132,12 @@ impl LoopState {
     }
 
     pub(super) fn run_maintenance(&mut self, fetch: &mut FetchDispatcher) {
+        self.refresh_pet_render_caps_if_stale_with(
+            self.config.mux,
+            &self.config.session_name.clone(),
+            Instant::now(),
+            crate::sidebar_pane::pixel::detect_pixel_render_caps,
+        );
         // Snapshot wakeups are a latency hint, not the only correctness path.
         // `rimz reload` replaces the renderer in place and a ready-result
         // datagram can be lost around socket teardown/rebind; the frame/tick
