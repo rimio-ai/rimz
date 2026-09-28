@@ -38,7 +38,6 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
                 session_name: "room".into(),
                 cwd: dir.path().to_owned(),
                 branch: None,
-                channel: None,
                 description: None,
             },
         )

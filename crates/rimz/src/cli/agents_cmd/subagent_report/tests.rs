@@ -298,7 +298,6 @@ fn backstop_settles_dead_and_stranded_peer_turns_before_reporting() {
                     session_name: "report-test".into(),
                     cwd: workspace.worktree_root.clone(),
                     branch: None,
-                    channel: None,
                     description: None,
                 },
             )
