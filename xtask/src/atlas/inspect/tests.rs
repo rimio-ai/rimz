@@ -228,7 +228,7 @@ fn target_rule_rows_use_each_rules_files_and_resolved_admissions() {
         defined_names: super::super::facts::defined_names(&syntax),
         unique_fields: super::super::facts::unique_fields(&syntax),
         defining_modules: super::super::facts::defining_modules(&syntax),
-        bin_modules: super::super::facts::bin_modules(&syntax),
+        binaries: super::super::modules::BinaryTargets::new(&syntax.files),
         syntax,
         sources: sources.to_vec(),
         crate_names: BTreeSet::new(),
