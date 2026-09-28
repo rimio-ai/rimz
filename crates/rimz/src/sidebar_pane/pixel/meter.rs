@@ -295,8 +295,7 @@ impl MeterPainter {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        BEGIN_SYNC, END_SYNC, MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS, transmit_png_chunks,
-        wrap_pixel_payload,
+        BEGIN_SYNC, END_SYNC, MIN_RESEND_SPACING_MS, RESIDENT_REFRESH_MS, wrap_pixel_payload,
     };
     use super::*;
     use ratatui::style::Style;
@@ -470,15 +469,6 @@ mod tests {
 
     #[test]
     fn painter_wraps_each_payload_for_tmux() {
-        let expected_payloads = {
-            let image = rasterize(&raster(0.5));
-            transmit_png_chunks(
-                meter_image_id(0x120000, 0),
-                &encode_png(image.width, image.height, &image.data),
-            )
-            .len()
-                + 3
-        };
         let mut painter = MeterPainter::new(true);
         let mut bytes = Vec::new();
         painter
@@ -489,7 +479,7 @@ mod tests {
                 .windows(b"\x1bPtmux;".len())
                 .filter(|window| *window == b"\x1bPtmux;")
                 .count(),
-            expected_payloads
+            3
         );
         assert!(!bytes.starts_with(super::super::BEGIN_SYNC));
         assert!(bytes.starts_with(&wrap_pixel_payload(BEGIN_SYNC, true)));

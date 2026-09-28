@@ -165,13 +165,9 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
 
         let write_image = |writer: &mut W| -> io::Result<()> {
             let png = png();
-            for chunk in transmit_png_chunks(image_id, &png) {
-                writer.write_all(&wrap_pixel_payload(&chunk, self.wrap))?;
-            }
-            writer.write_all(&wrap_pixel_payload(
-                &resident_place(image_id, cols, rows),
-                self.wrap,
-            ))
+            let mut payload = transmit_png(image_id, &png);
+            payload.extend_from_slice(&resident_place(image_id, cols, rows));
+            writer.write_all(&wrap_pixel_payload(&payload, self.wrap))
         };
         if synchronized {
             writer.write_all(&wrap_pixel_payload(BEGIN_SYNC, self.wrap))?;
@@ -276,13 +272,10 @@ pub(super) fn sprite_image_id(id_base: u32, sprite_index: usize) -> u32 {
     id.max(1)
 }
 
-pub fn transmit_png_chunks(image_id: u32, png: &[u8]) -> Vec<Vec<u8>> {
+pub fn transmit_png(image_id: u32, png: &[u8]) -> Vec<u8> {
     let payload = base64(png);
     if payload.len() <= CHUNK_SIZE {
-        return vec![kitty_escape(
-            &format!("a=t,f=100,i={image_id},q=2"),
-            payload.as_bytes(),
-        )];
+        return kitty_escape(&format!("a=t,f=100,i={image_id},q=2"), payload.as_bytes());
     }
 
     let mut out = Vec::new();
@@ -294,7 +287,7 @@ pub fn transmit_png_chunks(image_id: u32, png: &[u8]) -> Vec<Vec<u8>> {
         } else {
             format!("m={more}")
         };
-        out.push(kitty_escape(&control, chunk));
+        out.extend_from_slice(&kitty_escape(&control, chunk));
     }
     out
 }
@@ -424,7 +417,7 @@ mod tests {
 
     #[test]
     fn transmit_encodes_png_image() {
-        let bytes = transmit_png_chunks(42, &encode_png(1, 1, &[0, 1, 2, 3])).concat();
+        let bytes = transmit_png(42, &encode_png(1, 1, &[0, 1, 2, 3]));
         let text = String::from_utf8(bytes).expect("ascii kitty escapes");
 
         assert!(text.contains("a=t,f=100,i=42,q=2;iVBORw0KGgo"));
@@ -432,12 +425,63 @@ mod tests {
 
     #[test]
     fn transmit_chunks_large_payload() {
-        let chunks = transmit_png_chunks(7, &vec![1_u8; 4096]);
-        let text = String::from_utf8(chunks.concat()).expect("ascii kitty escapes");
+        let png = vec![1_u8; 8192];
+        let text = String::from_utf8(transmit_png(7, &png)).expect("ascii kitty escapes");
+        let chunks: Vec<_> = text.split_terminator("\x1b\\").collect();
+        assert_eq!(chunks.len(), 3);
+        let mut payload = String::new();
+        for (chunk, control) in
+            chunks
+                .iter()
+                .zip(["\x1b_Ga=t,f=100,i=7,q=2,m=1", "\x1b_Gm=1", "\x1b_Gm=0"])
+        {
+            let (actual_control, data) = chunk.split_once(';').expect("kitty APC");
+            assert_eq!(actual_control, control);
+            assert!(data.len() <= 4096);
+            payload.push_str(data);
+        }
+        assert_eq!(payload, base64(&png));
+    }
 
-        assert_eq!(chunks.len(), 2);
-        assert!(text.contains("a=t,f=100,i=7,q=2,m=1;"));
-        assert!(text.contains("\u{1b}_Gm=0;"));
+    #[test]
+    fn residency_wraps_whole_image_for_tmux() {
+        let png: Arc<[u8]> = vec![1_u8; 6144].into();
+        let expected = format!(
+            "\x1b_Ga=t,f=100,i=7,q=2,m=1;{}\x1b\\\x1b_Gm=0;{}\x1b\\\x1b_Ga=p,U=1,i=7,p=1,c=12,r=6,q=2;\x1b\\",
+            "AQEB".repeat(1024),
+            "AQEB".repeat(1024),
+        );
+        for wrap in [false, true] {
+            let mut residency = ImageResidency::new(wrap);
+            let mut bytes = Vec::new();
+            residency
+                .ensure(
+                    &mut bytes,
+                    ImageRequest {
+                        key: 7,
+                        image_id: 7,
+                        content: (),
+                        now_ms: 0,
+                        cols: 12,
+                        rows: 6,
+                        synchronized: false,
+                    },
+                    || png.clone(),
+                )
+                .expect("transmit");
+            let text = String::from_utf8(bytes).expect("ascii kitty escapes");
+            assert_eq!(text.matches("\x1bPtmux;").count(), usize::from(wrap));
+            let unwrapped = if wrap {
+                text.strip_prefix("\x1bPtmux;")
+                    .expect("envelope")
+                    .strip_suffix("\x1b\\")
+                    .expect("envelope end")
+                    .replace("\x1b\x1b", "\x1b")
+            } else {
+                text
+            };
+            assert_eq!(unwrapped, expected);
+        }
     }
 
     #[test]

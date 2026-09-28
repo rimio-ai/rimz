@@ -13,7 +13,7 @@ pub(crate) mod pixel;
 pub use pixel::probe::{ZellijKittySupport, probe_zellij_kitty};
 pub use pixel::{
     LiveGraphicsPacer, PixelRenderCaps, detect_pixel_render_env, encode_png,
-    inline_placeholder_row, transmit_png_chunks, virtual_place, wrap_pixel_payload,
+    inline_placeholder_row, transmit_png, virtual_place, wrap_pixel_payload,
     write_synchronized_pixel_output,
 };
 pub mod render;
