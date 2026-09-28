@@ -54,13 +54,12 @@ pub(in crate::cli) fn restart_resolved(
         posture.launch.isolation_default,
         machine_config.agents.isolation,
     );
-    rimz::sandbox::preflight_skills(
+    rimz::sandbox::preflight_launch(
         isolation,
         &agent.kind,
         posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    rimz::sandbox::preflight(isolation)?;
     let cell = restart_cell(agent, &posture);
 
     // Fail at the entry point if this project's configured launch environment

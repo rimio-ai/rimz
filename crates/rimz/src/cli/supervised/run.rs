@@ -543,13 +543,12 @@ fn prepare_supervised(
         agent_cell.isolation_default,
         machine_config.agents.isolation,
     );
-    rimz::sandbox::preflight_skills(
+    rimz::sandbox::preflight_launch(
         isolation,
         &agent_cell.kind,
         agent_cell.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    rimz::sandbox::preflight(isolation)?;
     let prompt = supervised_prompt(request, adapter);
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {
         return Ok(None);

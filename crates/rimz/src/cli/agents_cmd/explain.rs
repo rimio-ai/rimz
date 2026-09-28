@@ -191,13 +191,12 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         request.isolation_default,
         machine.agents.isolation,
     );
-    rimz::sandbox::preflight_skills(
+    let bwrap = rimz::sandbox::preflight_launch(
         isolation,
         &request.kind,
         request.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    let bwrap = rimz::sandbox::preflight(isolation)?;
     let ambient_env = rimz::agents::ambient_env();
     if Isolation::ambient(&ambient_env) == Some(Isolation::Sandbox) {
         warnings.push("the rendered skill view is planned from this pane's sandbox view and can differ from the host's".to_owned());

@@ -570,7 +570,7 @@ fn preflight_cell(
 ) -> Result<()> {
     let adapter = rimz::agents::find_definition(cell.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", cell.kind))?;
-    rimz::sandbox::preflight_skills(
+    rimz::sandbox::preflight_launch(
         isolation,
         &cell.kind,
         cell.skills.is_some(),
@@ -590,7 +590,6 @@ fn preflight_cell(
         &workspace.worktree_root,
         (isolation == rimz::config::Isolation::Host).then_some(runtime),
     )?;
-    rimz::sandbox::preflight(isolation)?;
     Ok(())
 }
 

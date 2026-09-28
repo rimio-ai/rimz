@@ -248,21 +248,18 @@ pub struct SandboxDiagnostic {
     pub error: Option<String>,
 }
 
-pub fn preflight_skills(
+pub fn preflight_launch(
     isolation: Isolation,
     kind: &AgentKind,
-    configured: bool,
+    skills_configured: bool,
     manual: ManualSkill,
-) -> Result<(), SandboxErr> {
-    if isolation == Isolation::Host || !configured {
-        return Ok(());
-    }
-    if manual == ManualSkill::Unsupported {
+) -> Result<Option<PathBuf>, SandboxErr> {
+    if isolation != Isolation::Host && skills_configured && manual == ManualSkill::Unsupported {
         return Err(SandboxErr::ManualSkillsUnsupported {
             kind: kind.to_string(),
         });
     }
-    Ok(())
+    preflight(isolation)
 }
 
 pub fn preflight(isolation: Isolation) -> Result<Option<PathBuf>, SandboxErr> {
@@ -477,6 +474,49 @@ pub fn bwrap_argv(bwrap: &Path, plan: &MountPlan, cwd: &Path, inner: &[String]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_preflight_host_skips_unsupported_skills() {
+        assert_eq!(
+            preflight_launch(
+                Isolation::Host,
+                &AgentKind::new_unchecked("codex"),
+                true,
+                ManualSkill::Unsupported,
+            )
+            .map_err(|err| err.to_string()),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn launch_preflight_rejects_unsupported_skills_before_probing() {
+        assert!(matches!(
+            preflight_launch(
+                Isolation::Sandbox,
+                &AgentKind::new_unchecked("codex"),
+                true,
+                ManualSkill::Unsupported,
+            ),
+            Err(SandboxErr::ManualSkillsUnsupported { kind }) if kind == "codex"
+        ));
+    }
+
+    #[test]
+    fn launch_preflight_without_skills_preserves_the_probe_result() {
+        for isolation in [Isolation::Host, Isolation::Sandbox] {
+            assert_eq!(
+                preflight_launch(
+                    isolation,
+                    &AgentKind::new_unchecked("codex"),
+                    false,
+                    ManualSkill::Unsupported,
+                )
+                .map_err(|err| err.to_string()),
+                preflight(isolation).map_err(|err| err.to_string())
+            );
+        }
+    }
 
     #[test]
     fn skipped_skill_explains_the_omission() {

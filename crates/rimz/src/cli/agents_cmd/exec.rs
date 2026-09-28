@@ -59,7 +59,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         machine_config.agents.isolation,
     );
     let adapter = rimz::agents::find_definition(envelope.request().kind.as_str());
-    let bwrap = rimz::sandbox::preflight_skills(
+    let bwrap = rimz::sandbox::preflight_launch(
         isolation,
         &envelope.request().kind,
         envelope.request().skills.is_some(),
@@ -67,7 +67,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             adapter.manual_skill()
         }),
     )
-    .and_then(|()| rimz::sandbox::preflight(isolation))
     .inspect_err(|_| {
         mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
         fail_run_on_exec_precondition(run_context.as_ref());
