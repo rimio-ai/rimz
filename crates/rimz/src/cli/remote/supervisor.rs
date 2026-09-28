@@ -91,13 +91,27 @@ pub(super) struct LinkSupervisor {
     master: Option<MasterGuard>,
     held_screen: Option<rimz::tui::TerminalModeGuard>,
     host: String,
+    handoff_stage: HandoffStage,
+}
+
+pub(super) enum LinkLoss<'a> {
+    WebTunnel,
+    Zombie,
+    Dropped {
+        summary: Option<String>,
+        session_link: &'a mut SessionLinkState,
+    },
 }
 
 impl LinkSupervisor {
     /// Establish the initial batch-mode master. `None` means the user
     /// interrupted the recovery panel; a supervisor without a control path
     /// requests the initial interactive fallback.
-    pub(super) fn connect(plan: SshAttachPlan, control_path: PathBuf) -> Result<Option<Self>> {
+    pub(super) fn connect(
+        plan: SshAttachPlan,
+        control_path: PathBuf,
+        handoff_stage: HandoffStage,
+    ) -> Result<Option<Self>> {
         let dial_plan = resolve_dial_plan(plan.target().ssh_destination().as_str());
         let host = plan.target().host_display().to_owned();
         let mut supervisor = Self {
@@ -109,12 +123,13 @@ impl LinkSupervisor {
             master: None,
             held_screen: None,
             host,
+            handoff_stage,
         };
         let mut ui = OutageUi::auto(ConnectStage::Initial, &supervisor.host);
         ui.report_connecting();
         let mut outage = OutageState::new(
             ConnectStage::Initial,
-            HandoffStage::WebTunnel,
+            handoff_stage,
             &supervisor.host,
             internet_probe_for_wait(&ui),
             supervisor.dial_plan.as_ref(),
@@ -140,12 +155,12 @@ impl LinkSupervisor {
         }
     }
 
-    pub(super) fn recover(&mut self) -> Result<bool> {
+    pub(super) fn recover(&mut self, loss: LinkLoss<'_>) -> Result<bool> {
         self.release_screen();
         drop(self.master.take());
         let mut ui = OutageUi::auto(ConnectStage::Recovery, &self.host);
         let outage = self.outage.get_or_insert_with(|| {
-            if ui.is_plain() {
+            if matches!(loss, LinkLoss::WebTunnel) && ui.is_plain() {
                 let _ = writeln!(
                     std::io::stderr().lock(),
                     "rimz: web tunnel to {} lost — reconnecting in the background; Ctrl-C stops",
@@ -154,12 +169,33 @@ impl LinkSupervisor {
             }
             OutageState::new(
                 ConnectStage::Recovery,
-                HandoffStage::WebTunnel,
+                self.handoff_stage,
                 &self.host,
                 internet_probe_for_wait(&ui),
                 self.dial_plan.as_ref(),
             )
         });
+        if let LinkLoss::Dropped {
+            summary,
+            session_link,
+        } = loss
+        {
+            outage.panel.note_ssh_error(summary.clone());
+            if ui.is_plain() {
+                let detail = summary
+                    .as_deref()
+                    .map(|summary| format!(" — {summary}"))
+                    .unwrap_or_default();
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: link to {} lost{detail} — reconnecting in the background; Ctrl-C stops",
+                    self.host,
+                );
+            }
+            if let Some(action) = session_link.transport_lost() {
+                render_session_link_action(&self.host, action);
+            }
+        }
         match wait_for_master(
             &self.plan,
             &self.control_path,
@@ -177,7 +213,7 @@ impl LinkSupervisor {
                 Ok(true)
             }
             WaitOutcome::Interrupted => Ok(false),
-            WaitOutcome::NeedsInteractive => unreachable!("web recovery stays in batch mode"),
+            WaitOutcome::NeedsInteractive => unreachable!("recovery stays in batch mode"),
         }
     }
 
@@ -209,73 +245,54 @@ impl Drop for LinkSupervisor {
 }
 
 pub(super) fn supervise_remote(
-    plan: &SshAttachPlan,
-    control_path: &Path,
+    plan: SshAttachPlan,
+    control_path: PathBuf,
     setup_hint: &str,
     auto_forward: bool,
 ) -> Result<()> {
-    use rimz::remote::{ReconnectPolicy, ReconnectState, Verdict};
+    use rimz::remote::{ReconnectState, Verdict};
 
-    let policy = ReconnectPolicy::from_env();
     let mut reconnect = ReconnectState::default();
-    let target = plan.target();
+    let target = plan.target().clone();
     let host = target.host_display();
-    let dial_plan = resolve_dial_plan(target.ssh_destination().as_str());
-    let zombie_interval = dial_plan.as_ref().and_then(|_| dial_interval_from_env());
-    let mut session_link = SessionLinkState::new(policy.gatetime, zombie_interval);
     let mut first_attempt = true;
     let guard = super::tty::TtyGuard::acquire();
-    let mut initial_ui = OutageUi::auto(ConnectStage::Initial, host);
     let port_sync = auto_forward.then(|| Arc::new(Mutex::new(PortSync::default())));
-    initial_ui.report_connecting();
-    let mut initial_outage = OutageState::new(
-        ConnectStage::Initial,
-        HandoffStage::Multiplexer,
-        host,
-        internet_probe_for_wait(&initial_ui),
-        dial_plan.as_ref(),
-    );
-    let (mut ready_master, mut held_screen) = match wait_for_master(
-        plan,
-        control_path,
-        dial_plan.as_ref(),
-        &policy,
-        &mut initial_outage,
-        &mut initial_ui,
-    )? {
-        WaitOutcome::Connected {
-            master,
-            held_screen,
-        } => (Some(master), held_screen),
-        WaitOutcome::NeedsInteractive => (None, None),
-        WaitOutcome::Interrupted => return Ok(()),
+    let Some(mut supervisor) =
+        LinkSupervisor::connect(plan, control_path, HandoffStage::Multiplexer)?
+    else {
+        return Ok(());
     };
-    let mut outage = None;
+    let zombie_interval = supervisor
+        .dial_plan
+        .as_ref()
+        .and_then(|_| dial_interval_from_env());
+    let mut session_link = SessionLinkState::new(supervisor.policy.gatetime, zombie_interval);
     loop {
         let (events_tx, events_rx) = mpsc::channel();
-        let confirmed_master = ready_master.is_some();
+        let confirmed_master = supervisor.master.is_some();
         let probe = if confirmed_master {
             ProbeHandle::start_preestablished(
                 target.clone(),
-                control_path.to_path_buf(),
+                supervisor.control_path.clone(),
                 events_tx,
                 port_sync.clone(),
             )
         } else {
             ProbeHandle::start(
                 target.clone(),
-                control_path.to_path_buf(),
+                supervisor.control_path.clone(),
                 events_tx,
                 port_sync.clone(),
             )
         };
         let replacement = !first_attempt;
         let attempt = if first_attempt {
-            plan.initial()
+            supervisor.plan.initial()
         } else {
-            plan.retry()
+            supervisor.plan.retry()
         }
-        .with_mark(held_screen.is_some() && !rimz::tui::no_color());
+        .with_mark(supervisor.held_screen.is_some() && !rimz::tui::no_color());
         first_attempt = false;
         let spec = probe.attach_spec(&attempt);
         if replacement {
@@ -286,11 +303,11 @@ pub(super) fn supervise_remote(
             host,
             &events_rx,
             &mut session_link,
-            dial_plan.as_ref(),
+            supervisor.dial_plan.as_ref(),
             confirmed_master,
         );
         guard.restore();
-        let mut handoff = HandoffScreen::take(&mut held_screen);
+        let mut handoff = HandoffScreen::take(&mut supervisor.held_screen);
         let mut outcome = outcome?;
         outcome.established |= confirmed_master;
         if outcome
@@ -308,16 +325,16 @@ pub(super) fn supervise_remote(
             confirmed_master,
         );
         drop(probe);
-        let attach_evidence = ready_master
+        let attach_evidence = supervisor
+            .master
             .as_mut()
             .map(MasterGuard::is_running)
             .transpose()?
             .map(|control_alive| (control_alive, outcome.lived_past_gatetime));
         if outcome.established {
-            outage = None;
+            supervisor.outage = None;
         }
         let retry_cause = if outcome.killed_zombie {
-            drop(ready_master.take());
             handoff.release();
             guard.reset_emulator();
             let _ = writeln!(
@@ -325,7 +342,7 @@ pub(super) fn supervise_remote(
                 "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
             );
             reconnect.settle_zombie_kill();
-            RetryCause::Zombie
+            LinkLoss::Zombie
         } else {
             match reconnect.settle(outcome.status.code(), outcome.established, attach_evidence) {
                 Verdict::CleanExit => {
@@ -354,10 +371,12 @@ pub(super) fn supervise_remote(
                     bail!("{message}")
                 }
                 Verdict::Retry => {
-                    drop(ready_master.take());
                     handoff.release();
                     guard.reset_emulator();
-                    RetryCause::Dropped
+                    LinkLoss::Dropped {
+                        summary,
+                        session_link: &mut session_link,
+                    }
                 }
                 Verdict::Reattach => {
                     handoff.release();
@@ -374,60 +393,10 @@ pub(super) fn supervise_remote(
                 }
             }
         };
-        let mut ui = OutageUi::auto(ConnectStage::Recovery, host);
-        let outage = outage.get_or_insert_with(|| {
-            OutageState::new(
-                ConnectStage::Recovery,
-                HandoffStage::Multiplexer,
-                host,
-                internet_probe_for_wait(&ui),
-                dial_plan.as_ref(),
-            )
-        });
-        if matches!(retry_cause, RetryCause::Dropped) {
-            outage.panel.note_ssh_error(summary.clone());
-            if ui.is_plain() {
-                let detail = summary
-                    .as_deref()
-                    .map(|summary| format!(" — {summary}"))
-                    .unwrap_or_default();
-                let _ = writeln!(
-                    std::io::stderr().lock(),
-                    "rimz: link to {host} lost{detail} — reconnecting in the background; Ctrl-C stops",
-                );
-            }
-            if let Some(action) = session_link.transport_lost() {
-                render_session_link_action(host, action);
-            }
-        }
-        match wait_for_master(
-            plan,
-            control_path,
-            dial_plan.as_ref(),
-            &policy,
-            outage,
-            &mut ui,
-        )? {
-            WaitOutcome::Connected {
-                master,
-                held_screen: next_held_screen,
-            } => {
-                ready_master = Some(master);
-                held_screen = next_held_screen;
-            }
-            WaitOutcome::Interrupted => {
-                return Ok(());
-            }
-            // `wait_for_master` only requests an interactive fallback for an
-            // initial connection.
-            WaitOutcome::NeedsInteractive => unreachable!("recovery stays in batch mode"),
+        if !supervisor.recover(retry_cause)? {
+            return Ok(());
         }
     }
-}
-
-enum RetryCause {
-    Zombie,
-    Dropped,
 }
 
 pub(super) fn fatal_session_message(

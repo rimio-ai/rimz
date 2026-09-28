@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use super::RemoteConnect;
-use super::supervisor::LinkSupervisor;
+use super::supervisor::{LinkLoss, LinkSupervisor};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct RemoteWebOptions {
@@ -175,7 +175,12 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
     let plan = remote.attach_plan(client_size)?;
     let mut reconnect = rimz::remote::ReconnectState::default();
     let host = remote.target.host_display();
-    let Some(mut supervisor) = LinkSupervisor::connect(plan, control)? else {
+    let Some(mut supervisor) = LinkSupervisor::connect(
+        plan,
+        control,
+        rimz::remote::recovery::HandoffStage::WebTunnel,
+    )?
+    else {
         return Ok(());
     };
     let mut first_prep = true;
@@ -214,7 +219,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
                 )? {
                     WebExitAction::Done => return Ok(()),
                     WebExitAction::Retry => {
-                        if !supervisor.recover()? {
+                        if !supervisor.recover(LinkLoss::WebTunnel)? {
                             return Ok(());
                         }
                         continue;
@@ -275,7 +280,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
                 )? {
                     WebExitAction::Done => return Ok(()),
                     WebExitAction::Retry => {
-                        if !supervisor.recover()? {
+                        if !supervisor.recover(LinkLoss::WebTunnel)? {
                             return Ok(());
                         }
                         continue;
@@ -309,7 +314,7 @@ fn run_supervised_web(remote: &RemoteConnect, client_size: Option<(u16, u16)>) -
         )? {
             WebExitAction::Done => return Ok(()),
             WebExitAction::Retry => {
-                if !supervisor.recover()? {
+                if !supervisor.recover(LinkLoss::WebTunnel)? {
                     return Ok(());
                 }
             }
