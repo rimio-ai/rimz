@@ -3313,7 +3313,7 @@ reason = "The binary crate's parked-monitor unit test names the variants (cli/ag
 [[verdict]]
 kind = "item"
 key = "harness::team_stage::FlipErr"
-reason = "Error type of pub flip and rewake (team_stage.rs:223-224,276-287); atlas caveat 13 (pass 23b)."
+reason = "Error type of pub flip; atlas caveat 13 (pass 23b, registration re-wake made private in pass 28g)."
 
 [[verdict]]
 kind = "item"

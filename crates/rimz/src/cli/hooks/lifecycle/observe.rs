@@ -2,7 +2,6 @@
 
 use super::*;
 use rimz::agents::{HookIngressOwner, SubagentCorrelationInput, SubagentSpawnInput};
-use rimz::harness::schedule::{catalog::TaskCatalog, pending::pending_waits_by_session};
 
 const MAX_SUBAGENT_PARENT_CANDIDATES: usize = 64;
 
@@ -264,172 +263,7 @@ fn record_mapped_lifecycle_observation(
     } else {
         log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
     }
-    // The commit above publishes and runs the session reaper only when it
-    // appended an event, and it appends one exactly when the receipt carries a
-    // primary id or a derived event. So an observation with neither found no
-    // end that was not already there, and pays for neither the projection nor
-    // the reconcile below: the repeat side-conversation hook and the read-only
-    // tool use, the two frequent ones, both land here.
-    let appended_an_event = receipt.primary_event_id.is_some() || !receipt.events.is_empty();
-    let audit = appended_an_event
-        .then(|| {
-            store
-                .runtime_projection(rimz::store::runtime::RuntimeScope::Audit)
-                .inspect_err(|err| {
-                    warn!(error = %err, "lifecycle: failed to read team member state");
-                })
-                .ok()
-        })
-        .flatten();
-    // Every durable end in this workspace retires its rows here, whichever
-    // producer stamped it: the store reaper, the exec wrapper, and rebirth
-    // append `Ended` without ever reaching a hook. It sits above the side
-    // conversation's return because that conversation's own first hook appends
-    // its registration, and that commit reaps like any other.
-    if let Some(audit) = &audit
-        && let Err(err) =
-            rimz::harness::schedule::arm::retire_ended_sessions(&workspace.project_root, || {
-                std::borrow::Cow::Borrowed(&audit.agents)
-            })
-    {
-        warn!(error = %err, "lifecycle: failed to retire ended session deliveries");
-    }
-    if side_conversation {
-        return RecordedLifecycle {
-            model_hint,
-            observation,
-            primary_event_id: receipt.primary_event_id,
-            events: receipt.events,
-            rotation_due: receipt.rotation_due,
-            waiting_cleared: receipt.waiting_cleared,
-            side_conversation: receipt.side_conversation,
-        };
-    }
-    let pending = store
-        .list_pending_messages()
-        .inspect_err(|err| {
-            warn!(error = %err, "lifecycle: failed to read team signal state");
-        })
-        .ok();
-    for event in &receipt.events {
-        if matches!(event.signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
-            && let Err(err) = rimz::harness::schedule::arm::retire_session(
-                &workspace.project_root,
-                &event.kind,
-                &event.agent_id,
-                rimz::harness::schedule::arm::RetireScope::Session,
-            )
-        {
-            warn!(error = %err, "lifecycle: failed to retire session deliveries");
-        }
-        let registered_member = audit.as_ref().and_then(|audit| {
-            audit.agents.iter().find(|member| {
-                matches!(event.signal, LifecycleSignal::Registered)
-                    && event.parent_agent_id.is_none()
-                    && member.kind == event.kind
-                    && member.agent_id == event.agent_id
-                    && member.team.is_some()
-                    && member.parent_agent_id.is_none()
-            })
-        });
-        let registered_team = registered_member.and_then(|member| {
-            load_member_team(workspace, member)
-                .inspect_err(|err| {
-                    warn!(error = %err, "lifecycle: failed to load team configuration");
-                })
-                .ok()
-                .flatten()
-        });
-        if let (Some(audit), Some(member), Some(team)) =
-            (&audit, registered_member, registered_team.as_ref())
-            && let Err(err) =
-                rimz::harness::schedule::team::arm_member(workspace, &audit.agents, member, team)
-        {
-            warn!(error = %err, "lifecycle: failed to arm team signal bindings");
-        }
-        let mut signals: Vec<_> = rimz::harness::schedule::signal::lifecycle_signal(event)
-            .into_iter()
-            .collect();
-        if let (Some(audit), Some(pending)) = (&audit, &pending)
-            && let Some(member) = audit
-                .agents
-                .iter()
-                .find(|member| member.kind == event.kind && member.agent_id == event.agent_id)
-            && member.team.is_some()
-        {
-            let cohorts = rimz::address::team_cohorts(&audit.agents);
-            let channel = member.channel().unwrap_or_else(|| "external".to_owned());
-            let live = cohorts
-                .iter()
-                .find(|cohort| {
-                    Some(cohort.team) == member.team.as_deref() && cohort.channel == channel
-                })
-                .map_or(&[][..], |cohort| cohort.members.as_slice());
-            let sleeping = pending_waits_by_session(
-                &TaskCatalog::load_lenient(Some(&workspace.project_root)),
-                &workspace.project_root,
-                &event
-                    .at
-                    .to_zoned(rimz::config::MachineConfig::load_lenient().time_zone()),
-            )
-            .into_keys()
-            .collect();
-            for signal in rimz::harness::schedule::signal::team_lifecycle_signals(
-                event, member, live, pending, &sleeping,
-            ) {
-                match store.append_signal(&workspace.session_name, (&signal).into()) {
-                    Ok(_) => signals.push(signal),
-                    Err(err) => {
-                        warn!(signal = %signal.name, error = %err, "lifecycle: failed to append team signal")
-                    }
-                }
-            }
-        }
-        for signal in signals {
-            if let Err(err) = rimz::harness::schedule::signal::fire_signal(
-                store.runtime_paths(),
-                &workspace.project_root,
-                &signal,
-            ) {
-                warn!(
-                    signal = %signal.name,
-                    error = %err,
-                    "lifecycle: failed to fire matching loop tasks",
-                );
-            }
-        }
-        if let (Some(audit), Some(member), Some(team)) =
-            (&audit, registered_member, registered_team.as_ref())
-            && let (Some(name), Some(worktree)) =
-                (member.team.as_deref(), member.worktree_path.as_deref())
-        {
-            let channel = member.channel().unwrap_or_else(|| "external".to_owned());
-            let members = rimz::address::team_cohorts(&audit.agents)
-                .into_iter()
-                .find(|cohort| cohort.team == name && cohort.channel == channel)
-                .map(|cohort| cohort.members.into_iter().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
-            match rimz::harness::team_stage::rewake(
-                workspace,
-                store,
-                name,
-                team,
-                member,
-                &members,
-                Path::new(worktree),
-                globals.mux,
-                event.at,
-            ) {
-                Ok(Some(receipt)) => {
-                    debug!(delivery = ?receipt.delivery, "lifecycle: re-woke team stage owner");
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    warn!(error = %err, "lifecycle: failed to re-wake team stage owner");
-                }
-            }
-        }
-    }
+    rimz::harness::team_stage::react_to_lifecycle(workspace, store, &receipt, globals.mux);
     RecordedLifecycle {
         model_hint,
         observation,
@@ -439,30 +273,6 @@ fn record_mapped_lifecycle_observation(
         waiting_cleared: receipt.waiting_cleared,
         side_conversation: receipt.side_conversation,
     }
-}
-
-fn load_member_team(
-    workspace: &ResolvedWorkspace,
-    member: &rimz::agents::AgentState,
-) -> anyhow::Result<Option<rimz::config::Team>> {
-    let Some(name) = member.team.as_deref() else {
-        return Ok(None);
-    };
-    let machine = rimz::config::MachineConfig::load()?;
-    let effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
-    effective.block_untrusted_reference(
-        rimz::config::effective::ProfileScope::Agents,
-        Some(name),
-        &machine.agents.commands,
-    )?;
-    let team = effective.teams.0.get(name).ok_or_else(|| {
-        anyhow::anyhow!(
-            machine
-                .definition_failure_for(name)
-                .unwrap_or_else(|| format!("team `{name}` is no longer configured"))
-        )
-    })?;
-    Ok(Some(team.clone()))
 }
 
 fn correlate_subagent_observation(

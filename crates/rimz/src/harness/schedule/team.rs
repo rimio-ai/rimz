@@ -77,7 +77,7 @@ pub fn validate_launch(
     Ok(())
 }
 
-pub fn arm_member(
+pub(crate) fn arm_member(
     workspace: &ResolvedWorkspace,
     agents: &[AgentState],
     member: &AgentState,
