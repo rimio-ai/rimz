@@ -52,7 +52,10 @@ pub fn seed_sidebar_heartbeat(
 /// purge), and answer topology requests as the presence plugin would.
 pub struct ShimRoom {
     stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    writer: Option<std::thread::JoinHandle<()>>,
+    writer: Option<std::thread::JoinHandle<usize>>,
+    trace: std::path::PathBuf,
+    expected: String,
+    require_trigger: bool,
 }
 
 impl ShimRoom {
@@ -68,14 +71,18 @@ impl ShimRoom {
             clients: None,
             panes: serde_json::from_str(panes).expect("shim room panes"),
         };
-        Self::watch_trace(trace, move |line| {
+        let expected = "\\tattach\\t--create-background\\t or \\trimz:dump_topology\\t".to_owned();
+        Self::watch_trace(trace, expected, move |line| {
             if line.contains("\tattach\t--create-background\t") {
                 seed_live_zellij_room(&runtime, &workspace.session_name, topology.panes.clone());
             } else if line.contains("\trimz:dump_topology\t") {
                 topology.produced_at_ms = rimz::utils::time::unix_now_ms();
                 rimz::mux::zellij::pane_topology::write_pane_topology_cache(&runtime, &topology)
                     .expect("publish shim room topology");
+            } else {
+                return false;
             }
+            true
         })
     }
 
@@ -85,7 +92,8 @@ impl ShimRoom {
         trace: &std::path::Path,
     ) -> Self {
         let session_name = session_name.to_owned();
-        Self::watch_trace(trace, move |line| {
+        let expected = format!("split-window with sidebar serve and --session-name {session_name}");
+        Self::watch_trace(trace, expected, move |line| {
             let args = line.split_whitespace().collect::<Vec<_>>();
             if args.first() == Some(&"split-window")
                 && args.windows(2).any(|pair| pair == ["sidebar", "serve"])
@@ -94,13 +102,16 @@ impl ShimRoom {
                     .any(|pair| pair == ["--session-name", &session_name])
             {
                 seed_sidebar_heartbeat(&runtime, MuxName::Tmux, &session_name, "seeded");
+                return true;
             }
+            false
         })
     }
 
     fn watch_trace(
         trace: &std::path::Path,
-        mut publish: impl FnMut(&str) + Send + 'static,
+        expected: String,
+        mut publish: impl FnMut(&str) -> bool + Send + 'static,
     ) -> Self {
         let trace = trace.to_owned();
         let mut consumed = std::fs::read_to_string(&trace)
@@ -109,21 +120,32 @@ impl ShimRoom {
             .count();
         let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop = stopped.clone();
+        let trace_path = trace.clone();
         let writer = std::thread::spawn(move || {
+            let mut matched = 0;
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                 let log = std::fs::read_to_string(&trace).unwrap_or_default();
                 let log = &log[..log.rfind('\n').map_or(0, |end| end + 1)];
                 for line in log.lines().skip(consumed) {
-                    publish(line);
+                    matched += usize::from(publish(line));
                 }
                 consumed = log.lines().count();
                 std::thread::sleep(Duration::from_millis(10));
             }
+            matched
         });
         Self {
             stopped,
             writer: Some(writer),
+            trace: trace_path,
+            expected,
+            require_trigger: true,
         }
+    }
+
+    pub fn allow_no_trigger(&mut self, reason: &str) {
+        assert!(!reason.is_empty(), "name why this room need not fire");
+        self.require_trigger = false;
     }
 }
 
@@ -134,7 +156,13 @@ impl Drop for ShimRoom {
         if let Some(writer) = self.writer.take() {
             let result = writer.join();
             if !std::thread::panicking() {
-                result.expect("shim room writer");
+                let matched = result.expect("shim room writer");
+                assert!(
+                    !self.require_trigger || matched > 0,
+                    "shim room trace {} matched no trigger; expected {}",
+                    self.trace.display(),
+                    self.expected,
+                );
             }
         }
     }
@@ -199,4 +227,9 @@ pub fn bind_child_panes(
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    assert!(
+        !bound.is_empty(),
+        "child pane trace {} bound no panes; expected \\tnew-pane\\t with --name matching a child run",
+        trace_path.display(),
+    );
 }

@@ -168,7 +168,7 @@ exit 0
 
 #[cfg(unix)]
 struct WebFixture {
-    _room: crate::common::room::ShimRoom,
+    room: crate::common::room::ShimRoom,
     env: Env,
     workspace: rimz::ResolvedWorkspace,
     bin_dir: PathBuf,
@@ -202,7 +202,7 @@ impl WebFixture {
             &tmux_log,
         );
         Self {
-            _room: room,
+            room,
             env,
             workspace,
             bin_dir,
@@ -306,7 +306,10 @@ fn auth_users_without_auth_header_refuses_start() {
 #[cfg(unix)]
 #[test]
 fn offline_url_and_status_use_configured_shared_port_without_spawning() {
-    let fixture = WebFixture::new("ttyd-offline.log");
+    let mut fixture = WebFixture::new("ttyd-offline.log");
+    fixture
+        .room
+        .allow_no_trigger("URL and status inspection never starts a room");
     write_machine_config(
         &fixture.env,
         "[web]\nport = 9123\nbase_url = \"https://devbox.example/rimz\"\n",
@@ -353,7 +356,10 @@ fn offline_url_and_status_use_configured_shared_port_without_spawning() {
 #[cfg(unix)]
 #[test]
 fn offline_token_operations_keep_one_singular_credential() {
-    let fixture = WebFixture::new("ttyd-offline-token.log");
+    let mut fixture = WebFixture::new("ttyd-offline-token.log");
+    fixture
+        .room
+        .allow_no_trigger("offline credentials never start a room");
     let credential_path = fixture.env.rimz_home().join("web/web-ttyd-credential.json");
     let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
 
@@ -431,7 +437,10 @@ fn offline_token_operations_keep_one_singular_credential() {
 #[test]
 fn web_restart_starts_offline_and_replaces_online_daemons_with_the_current_profile() {
     let _guard = daemon_test_guard();
-    let fixture = WebFixture::new("ttyd-restart.log");
+    let mut fixture = WebFixture::new("ttyd-restart.log");
+    fixture
+        .room
+        .allow_no_trigger("shared daemon lifecycle does not start a room");
     write_machine_config(
         &fixture.env,
         &format!("[web]\nport = {}\nstyle_client = false\n", fixture.web_port),
@@ -685,7 +694,10 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
 #[test]
 fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
     let _guard = daemon_test_guard();
-    let fixture = WebFixture::new("ttyd-broadcast.log");
+    let mut fixture = WebFixture::new("ttyd-broadcast.log");
+    fixture
+        .room
+        .allow_no_trigger("broadcast sharing uses existing rooms without starting a sidebar");
     write_machine_config(
         &fixture.env,
         &format!(
@@ -850,7 +862,10 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
 #[test]
 fn broadcast_revocation_stops_old_daemon_before_replacement_validation() {
     let _guard = daemon_test_guard();
-    let fixture = WebFixture::new("ttyd-broadcast-revocation.log");
+    let mut fixture = WebFixture::new("ttyd-broadcast-revocation.log");
+    fixture
+        .room
+        .allow_no_trigger("broadcast sharing uses existing rooms without starting a sidebar");
     let second_root = fixture.env.project_root.join("broadcast-revocation-second");
     std::fs::create_dir_all(&second_root).expect("mkdir second room");
     fixture.env.record(&second_root);
@@ -908,7 +923,10 @@ fn broadcast_revocation_stops_old_daemon_before_replacement_validation() {
 #[test]
 fn web_stop_stops_writable_and_broadcast_daemons() {
     let _guard = daemon_test_guard();
-    let fixture = WebFixture::new("ttyd-stop-both.log");
+    let mut fixture = WebFixture::new("ttyd-stop-both.log");
+    fixture
+        .room
+        .allow_no_trigger("broadcast sharing uses existing rooms without starting a sidebar");
     write_machine_config(
         &fixture.env,
         &format!(
@@ -957,7 +975,10 @@ fn web_stop_stops_writable_and_broadcast_daemons() {
 
 #[test]
 fn read_only_token_error_points_to_broadcast_sharing() {
-    let fixture = WebFixture::new("ttyd-read-only-token.log");
+    let mut fixture = WebFixture::new("ttyd-read-only-token.log");
+    fixture
+        .room
+        .allow_no_trigger("invalid token arguments refuse before room birth");
     let output = fixture
         .command()
         .args(["web", "token", "create", "--read-only"])
@@ -1133,7 +1154,10 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
 #[test]
 fn trusted_proxy_gate_forwards_loopback_and_stops_both_processes() {
     let _guard = daemon_test_guard();
-    let fixture = WebFixture::new("ttyd-trusted-proxy.log");
+    let mut fixture = WebFixture::new("ttyd-trusted-proxy.log");
+    fixture
+        .room
+        .allow_no_trigger("shared daemon lifecycle does not start a room");
     write_machine_config(
         &fixture.env,
         &format!(
@@ -1212,7 +1236,10 @@ fn stale_gated_daemon_terminates_its_surviving_gate_and_can_restart() {
     use nix::unistd::Pid;
 
     let _guard = daemon_test_guard();
-    let fixture = WebFixture::new("ttyd-stale-gate.log");
+    let mut fixture = WebFixture::new("ttyd-stale-gate.log");
+    fixture
+        .room
+        .allow_no_trigger("shared daemon lifecycle does not start a room");
     write_machine_config(
         &fixture.env,
         &format!(
@@ -1326,7 +1353,10 @@ fn markerless_stock_index_keeps_daemon_pixel_incapable() {
 #[test]
 fn concurrent_start_calls_create_one_shared_daemon() {
     let _guard = daemon_test_guard();
-    let fixture = WebFixture::new("ttyd-concurrent.log");
+    let mut fixture = WebFixture::new("ttyd-concurrent.log");
+    fixture
+        .room
+        .allow_no_trigger("shared daemon lifecycle does not start a room");
     let mut first = fixture.command();
     first.args(["web", "start"]);
     let mut second = fixture.command();
@@ -1423,7 +1453,10 @@ fn stale_daemon_record_never_signals_a_reused_non_ttyd_pid() {
 #[cfg(unix)]
 #[test]
 fn web_exec_rejects_unknown_session_and_lists_live_rimz_rooms() {
-    let fixture = WebFixture::new("ttyd-exec-reject.log");
+    let mut fixture = WebFixture::new("ttyd-exec-reject.log");
+    fixture
+        .room
+        .allow_no_trigger("unknown session refuses before attach");
     let hostile = "not-a-rimz-room;--create";
     let output = fixture
         .command()
@@ -1446,7 +1479,10 @@ fn web_exec_rejects_unknown_session_and_lists_live_rimz_rooms() {
 #[cfg(unix)]
 #[test]
 fn web_exec_rejects_known_stopped_session_before_attach() {
-    let fixture = WebFixture::new("ttyd-exec-stopped.log");
+    let mut fixture = WebFixture::new("ttyd-exec-stopped.log");
+    fixture
+        .room
+        .allow_no_trigger("stopped session refuses before attach");
     let stopped_root = fixture.env.project_root.join("stopped-room");
     std::fs::create_dir_all(&stopped_root).expect("mkdir stopped room");
     fixture.env.record(&stopped_root);

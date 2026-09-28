@@ -182,7 +182,7 @@ fn start_names_a_broken_definition_and_still_opens_the_room() {
         "description: Broken\nagent: missing-parent",
         "",
     );
-    let output = start_with_accounts(&env, "", &[]);
+    let output = start_with_accounts(&env, "", &[], None);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert!(
@@ -205,7 +205,7 @@ fn start_names_a_broken_theme_and_still_opens_the_room() {
     let env = Env::new();
     let path = env.rimz_home().join("theme.toml");
     std::fs::write(&path, "[theme]\nscheme = 'missing scheme'\n").unwrap();
-    let output = start_with_accounts(&env, "", &[]);
+    let output = start_with_accounts(&env, "", &[], None);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert!(
@@ -431,7 +431,7 @@ fn start_opens_the_room_when_the_invalid_notifications_table_is_switched_off() {
         "[notifications]\nenabled = false\n\n[[notifications.handler]]\nname = \"bad\"\ncommand = \"\"\n",
     );
 
-    let output = start_with_accounts(&env, "", &[]);
+    let output = start_with_accounts(&env, "", &[], None);
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
@@ -649,7 +649,7 @@ fn start_replaces_an_old_layout_room_before_birth() {
     std::fs::write(paths.root.join("events.log.jsonl"), b"old history").unwrap();
     std::fs::write(paths.root.join("messages/messages.jsonl"), b"old messages").unwrap();
 
-    let output = start_with_accounts(&env, "", &[]);
+    let output = start_with_accounts(&env, "", &[], None);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     let notice = format!(
@@ -681,10 +681,18 @@ fn start_replaces_an_old_layout_room_before_birth() {
     }
 }
 
-fn start_with_accounts(env: &Env, sessions: &str, accounts: &[&str]) -> std::process::Output {
+fn start_with_accounts(
+    env: &Env,
+    sessions: &str,
+    accounts: &[&str],
+    no_trigger_reason: Option<&str>,
+) -> std::process::Output {
     let bin_dir = seed_actionable_agent(env);
     let trace = env.project_root.join("zellij-accounts.log");
-    let _room = ShimRoom::watch(env, &trace, MATERIALIZED_ROOM_PANES);
+    let mut room = ShimRoom::watch(env, &trace, MATERIALIZED_ROOM_PANES);
+    if let Some(reason) = no_trigger_reason {
+        room.allow_no_trigger(reason);
+    }
     let mut command = env.rimz();
     configure_actionable_hooks(&mut command, env, &bin_dir, &trace, sessions);
     for account in accounts {
@@ -708,7 +716,12 @@ fn start_refuses_named_accounts_it_cannot_launch_into() {
         &format!("[accounts.claude.work]\nhome = \"{}\"\n", home.display()),
     );
 
-    let unknown = start_with_accounts(&env, "", &["claude=travel"]);
+    let unknown = start_with_accounts(
+        &env,
+        "",
+        &["claude=travel"],
+        Some("unknown account refuses before room birth"),
+    );
     let stderr = String::from_utf8_lossy(&unknown.stderr);
     assert!(!unknown.status.success(), "{stderr}");
     assert!(
@@ -716,7 +729,12 @@ fn start_refuses_named_accounts_it_cannot_launch_into() {
         "{stderr}"
     );
 
-    let missing = start_with_accounts(&env, "", &["claude=work"]);
+    let missing = start_with_accounts(
+        &env,
+        "",
+        &["claude=work"],
+        Some("missing account home refuses before room birth"),
+    );
     let stderr = String::from_utf8_lossy(&missing.stderr);
     assert!(!missing.status.success(), "{stderr}");
     assert!(
@@ -725,7 +743,12 @@ fn start_refuses_named_accounts_it_cannot_launch_into() {
     );
 
     std::fs::create_dir_all(&home).expect("account home");
-    let unhooked = start_with_accounts(&env, "", &["claude=work"]);
+    let unhooked = start_with_accounts(
+        &env,
+        "",
+        &["claude=work"],
+        Some("missing account hooks refuse before room birth"),
+    );
     let stderr = String::from_utf8_lossy(&unhooked.stderr);
     assert!(!unhooked.status.success(), "{stderr}");
     assert!(
@@ -739,7 +762,7 @@ fn start_refuses_named_accounts_it_cannot_launch_into() {
 fn start_freezes_room_accounts_until_reset() {
     let env = Env::new();
     write_machine_config(&env, "[accounts.claude.work]\n");
-    let born = start_with_accounts(&env, "", &["claude=default"]);
+    let born = start_with_accounts(&env, "", &["claude=default"], None);
     assert!(
         born.status.success(),
         "birth failed: {}",
@@ -751,7 +774,12 @@ fn start_freezes_room_accounts_until_reset() {
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
     let live = format!("{} [Created 1m ago]\n", workspace.session_name);
     for sessions in ["", live.as_str()] {
-        let refused = start_with_accounts(&env, sessions, &["claude=work"]);
+        let refused = start_with_accounts(
+            &env,
+            sessions,
+            &["claude=work"],
+            Some("frozen room accounts refuse before room birth"),
+        );
         let stderr = String::from_utf8_lossy(&refused.stderr);
         assert!(!refused.status.success(), "{stderr}");
         assert!(
@@ -760,7 +788,12 @@ fn start_freezes_room_accounts_until_reset() {
         );
     }
 
-    let reborn = start_with_accounts(&env, "", &[]);
+    let reborn = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("cached live topology needs neither room birth nor a topology dump"),
+    );
     assert!(
         reborn.status.success(),
         "rebirth failed: {}",
@@ -777,7 +810,12 @@ fn start_takes_project_accounts_only_under_trust() {
         .expect("mkdir .rimz");
     std::fs::write(&project_config, "[accounts]\ncodex = \"default\"\n").expect("project config");
 
-    let untrusted = start_with_accounts(&env, "", &[]);
+    let untrusted = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("untrusted project accounts refuse before room birth"),
+    );
     let stderr = String::from_utf8_lossy(&untrusted.stderr);
     assert!(!untrusted.status.success(), "{stderr}");
     assert!(
@@ -812,7 +850,7 @@ fn start_takes_project_accounts_only_under_trust() {
         .args(["trust", "grant"])
         .bounded_output()
         .expect("trust grant");
-    let trusted = start_with_accounts(&env, "", &[]);
+    let trusted = start_with_accounts(&env, "", &[], None);
     assert!(
         trusted.status.success(),
         "trusted start failed: {}",
