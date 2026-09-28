@@ -33,10 +33,7 @@ pub fn pixel_layer_config_json() -> String {
     serde_json::json!({
         "protocol": crate::web::TTYD_PIXEL_PROTOCOL,
         "placeholder": u32::from(crate::pixel_wire::PLACEHOLDER),
-        "diacritics": crate::pixel_wire::ROW_COLUMN_DIACRITICS
-            .iter()
-            .map(char::to_string)
-            .collect::<Vec<_>>(),
+        "diacritics": &crate::pixel_wire::ROW_COLUMN_DIACRITICS[..],
     })
     .to_string()
 }

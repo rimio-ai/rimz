@@ -276,11 +276,7 @@ fn inject_client_profile(stock: &str, family: Option<&str>, faces: &[FontFace]) 
 
 fn client_bootstrap(family: Option<&str>) -> String {
     let family = family.map_or_else(|| "null".to_owned(), js_string);
-    let diacritics = ROW_COLUMN_DIACRITICS
-        .iter()
-        .map(char::to_string)
-        .collect::<Vec<_>>();
-    let diacritics = serde_json::to_string(&diacritics)
+    let diacritics = serde_json::to_string(&ROW_COLUMN_DIACRITICS[..])
         .expect("serializing the static pixel diacritic table cannot fail");
     let mouse_flow = include_str!("mouse_flow.js");
     let ws_url = include_str!("ws_url.js");
