@@ -134,12 +134,14 @@ fn pixel_slot_sweep_precedes_first_transmit_once() {
                 0x520000 + index as u32
             );
         }
-        let end = bytes
-            .windows(END_SYNC.len())
-            .position(|window| window == END_SYNC)
-            .unwrap();
-        assert_eq!(kitty_commands(&bytes[..end]).len(), 512);
-        assert!(bytes.starts_with(BEGIN_SYNC));
+        assert_eq!(
+            commands[512]["a"], "t",
+            "the sweep precedes the first transmit"
+        );
+        assert!(
+            !bytes.starts_with(BEGIN_SYNC),
+            "the frame's bracket carries the sweep"
+        );
         let mut repeat = Vec::new();
         painter
             .ensure_meters_transmitted(&mut repeat, &ui, 2500)
@@ -272,6 +274,7 @@ fn pixel_disable_and_clear_retire_resident_meter_ids() {
                 .unwrap();
         } else {
             painter.clear(&mut bytes).unwrap();
+            assert!(bytes.starts_with(BEGIN_SYNC) && bytes.ends_with(END_SYNC));
         }
         let commands = kitty_commands(&bytes);
         assert!(
@@ -664,13 +667,13 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
         output
             .matches(std::str::from_utf8(BEGIN_SYNC).unwrap())
             .count(),
-        4
+        3
     );
     assert_eq!(
         output
             .matches(std::str::from_utf8(END_SYNC).unwrap())
             .count(),
-        4
+        3
     );
 }
 

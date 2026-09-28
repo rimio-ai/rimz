@@ -7,7 +7,8 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelSlot, detect_pixel_render_env};
+use crate::RuntimePaths;
+use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelLease, detect_pixel_render_env};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
@@ -18,6 +19,13 @@ struct GalleryState {
     snapshot: SidebarSnapshot,
     ui: UiState,
     paint: FramePainter,
+    _pixel_lease: Option<PixelLease>,
+}
+
+/// Demo painters lease like live workers, so a demo never sweeps a live
+/// sidebar's slot on a shared terminal surface.
+fn lease_demo_slot(runtime: &RuntimePaths) -> Option<PixelLease> {
+    PixelLease::acquire(runtime).ok().flatten()
 }
 
 pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Result<()> {
@@ -29,7 +37,12 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
 
     let mut ui = UiState::default();
     let (caps, wrap_pixels) = detect_pixel_render_env();
-    let mut paint = FramePainter::new(caps, wrap_pixels, Some(PixelSlot::new(0)));
+    let pixel_lease = lease_demo_slot(&RuntimePaths::shared());
+    let mut paint = FramePainter::new(
+        caps,
+        wrap_pixels,
+        pixel_lease.as_ref().map(|lease| lease.slot),
+    );
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
 
@@ -67,20 +80,24 @@ pub fn serve_gallery(
     columns.truncate(cap);
 
     let (caps, wrap_pixels) = detect_pixel_render_env();
+    let runtime = RuntimePaths::shared();
     let mut states = columns
         .into_iter()
-        .enumerate()
-        .map(|(index, (snapshot, selected_index))| GalleryState {
-            ui: UiState {
-                selected_index,
-                ..UiState::default()
-            },
-            snapshot,
-            paint: FramePainter::new(
-                caps,
-                wrap_pixels,
-                u8::try_from(index).ok().map(PixelSlot::new),
-            ),
+        .map(|(snapshot, selected_index)| {
+            let pixel_lease = lease_demo_slot(&runtime);
+            GalleryState {
+                ui: UiState {
+                    selected_index,
+                    ..UiState::default()
+                },
+                snapshot,
+                paint: FramePainter::new(
+                    caps,
+                    wrap_pixels,
+                    pixel_lease.as_ref().map(|lease| lease.slot),
+                ),
+                _pixel_lease: pixel_lease,
+            }
         })
         .collect::<Vec<_>>();
     let anim_start = Instant::now();
