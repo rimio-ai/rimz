@@ -4,15 +4,15 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-Survey at `52b2358b0` (2026-09-28, pass 27b); pass 26b rows re-stamped at `be91f3434`. Rewrite this section whenever a pass ends.
+Survey on the pass 28a tree (base `427cacfc9`, 2026-09-28): no ledger problems, no stale verdict keys, no open families; every row SHA is on trunk. Rewrite this section whenever a pass ends.
 
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
 - **Reopened** (churn past the row's count): none; pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`, pass 26b `sidebar_pane/app` and `sidebar_pane/render/sections`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
-- **Atlas gap:** `ledger.rs::commits_since` resolves an off-trunk SHA without an ancestry check, so a rebased-away row SHA reports no problem (reported in pass 27b).
-- **Unjudged families:** the install shape family `PendingWrite::optional+report_files+settings_json::commit_pair+…` (`agents/adapters/{copilot,cursor}/install.rs`), newly over the finding gate; guard families `RunStatus::Completed` (four sites), `wait_for_required` (lsp, with 26a), `Isolation::Host`, and `degraded`.
+- **Row SHAs:** the survey reports a row whose SHA `HEAD` does not reach as a ledger problem and leaves its module unheld; pass 28a re-stamped 29 rebased-away SHAs, passes 14 to 27, to their trunk commits. A PR that writes rows names them so the merge re-stamps them to the landed commit.
+- **Unjudged families:** none; pass 28a judged the copilot/cursor install shape and the `RunStatus::Completed`, `wait_for_required`, `Isolation::Host` and `degraded` guards.
 
 ## Module verdicts
 

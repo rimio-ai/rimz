@@ -4249,3 +4249,28 @@ reason = "Queue outcome remains distinct from policy and the memory fit predicat
 kind = "shape"
 key = "kind+path+std::fs::read_dir"
 reason = "The four share only a missing root read as empty; each maps errors into its own type (SkillErr, anyhow, SandboxErr, io::Error) and keeps its own entry policy: agents::skills keys SKILL.md dirs first-root-wins, room::session warns past unreadable records to match a session, sandbox::skills canonicalizes and skips broken links with an optional preserved symlink, workspace dedups parsed WorkspaceDirName records. A disk helper needs a per-caller error mapper and saves no lines (pass 26c)."
+
+[[verdict]]
+kind = "shape"
+key = "PendingWrite::optional+report_files+settings_json::commit_pair+settings_json::read_optional_bytes+settings_json::render_json"
+reason = "Two uninstall policies over the shared settings_json pair commit: copilot deletes its whole hooks file through the managed source and rolls the stripped settings back when that fails; cursor strips its owned entries in place, restores the displaced statusline from a state record it removes only after the last config file. A shared body would take both policies as parameters and shorten neither (pass 28a)."
+
+[[verdict]]
+kind = "guard"
+key = "$0.status!=RunStatus::Completed"
+reason = "Four decisions on one terminal status: reply prints a turn-failure line, supervised output prints run forensics, supervised run skips the verify loop, harness::run returns RunStoreErr::InvalidStatus. A shared predicate would rename equality and hide none of them (pass 28a)."
+
+[[verdict]]
+kind = "guard"
+key = "$0.wait_for_required.is_empty()"
+reason = "One admission outcome read three ways: lsp::admission releases the queue ticket, cli/lsp_admission skips the wait report, cli/lsp bails with no matching root-markers before polling; each site owns what an empty wait list means (pass 28a, after pass 26a's review of lsp)."
+
+[[verdict]]
+kind = "guard"
+key = "$0==Isolation::Host"
+reason = "sandbox::preflight returns no probe for host; agents restart and subagents resume run the host-only process preflight on requests each builds differently. Moving the check into a helper still needs the request, cwd and store at each caller and saves no lines (pass 28a)."
+
+[[verdict]]
+kind = "guard"
+key = "$0Some($1)=&$2.degraded"
+reason = "A degraded posture is advisory in explain (a warning row), a stderr note in fork, and fatal in subagents resume; the reason string is shared and the outcome is each command's (pass 28a)."
