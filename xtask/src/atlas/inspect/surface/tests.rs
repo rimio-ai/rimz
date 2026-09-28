@@ -325,6 +325,62 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
 }
 
 #[test]
+fn alias_declaration_reach_floors_rhs_types_beyond_alias_readers() {
+    for (visibility, expected) in [
+        ("pub(super)", "pub(super)"),
+        ("pub(crate)", "pub(crate)"),
+        ("pub", "keep"),
+    ] {
+        let app = format!(
+            "pub enum AppErr {{ Failed }}\n{visibility} type Result<T> = std::result::Result<T, AppErr>;\n"
+        );
+        let root = crate_with_files(&[
+            ("src/lib.rs", "pub mod parent;\n"),
+            ("src/parent.rs", "pub mod app;\nmod supervise;\n"),
+            ("src/parent/app.rs", &app),
+            (
+                "src/parent/supervise.rs",
+                "fn run() -> super::app::Result<()> { Ok(()) }\n",
+            ),
+        ]);
+        let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+        let error = "rust-analyzer cargo probe 0.0.0 AppErr#";
+        let alias = "rust-analyzer cargo probe 0.0.0 Result#";
+        let index = Index {
+            documents: vec![
+                scip::types::Document {
+                    relative_path: "src/parent/app.rs".to_owned(),
+                    occurrences: vec![
+                        occurrence(0, error, true),
+                        occurrence(1, alias, true),
+                        occurrence(1, error, false),
+                    ],
+                    ..Default::default()
+                },
+                scip::types::Document {
+                    relative_path: "src/parent/supervise.rs".to_owned(),
+                    occurrences: vec![occurrence(0, alias, false)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let index_path = root.path().join("index.scip");
+        scip::write_message_to_file(&index_path, index).unwrap();
+        facts.references =
+            Some(References::load(&index_path, &facts.syntax, &facts.sources).unwrap());
+        let (surface, _) = surface_section(&facts, &selector("parent::app"));
+        let error = surface
+            .items
+            .iter()
+            .find(|row| row.name == "AppErr")
+            .unwrap();
+        assert_eq!(error.narrow_to, expected, "{visibility} alias");
+        assert_eq!((error.outside_sites, error.internal_sites), (0, 1));
+    }
+}
+
+#[test]
 fn cross_target_readers_keep_visibility_for_every_site_class() {
     let sites = [
         (
