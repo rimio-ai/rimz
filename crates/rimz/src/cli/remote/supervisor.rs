@@ -399,17 +399,31 @@ pub(super) fn supervise_remote(
     }
 }
 
-pub(super) fn fatal_session_message(
+fn fatal_session_message(
     code: i32,
     host: &str,
     remote_path: Option<&str>,
     setup_hint: &str,
     summary: Option<&str>,
 ) -> String {
-    match code {
-        rimz::remote::REMOTE_PATH_MISSING_EXIT => {
-            remote_path_missing_message(host, remote_path, None)
-        }
+    if let Some(message) = known_remote_exit_message(code, host, remote_path, setup_hint) {
+        return message;
+    }
+    let message = format!("ssh to {host} exited with status {code}; not reconnecting");
+    match summary {
+        Some(summary) => format!("{message} — {summary}"),
+        None => message,
+    }
+}
+
+pub(super) fn known_remote_exit_message(
+    code: i32,
+    host: &str,
+    remote_path: Option<&str>,
+    setup_hint: &str,
+) -> Option<String> {
+    Some(match code {
+        rimz::remote::REMOTE_PATH_MISSING_EXIT => remote_path_missing_message(host, remote_path),
         rimz::remote::REMOTE_RIMZ_MISSING_EXIT => format!(
             "rimz is not installed on {host}; install it over SSH with:\n    \
              rimz remote setup {setup_hint}"
@@ -423,27 +437,19 @@ pub(super) fn fatal_session_message(
             "your rimz and {host}'s rimz differ by a major version; upgrade required — \
              `rimz remote setup {setup_hint}` upgrades the remote"
         ),
-        _ => {
-            let message = format!("ssh to {host} exited with status {code}; not reconnecting");
-            match summary {
-                Some(summary) => format!("{message} — {summary}"),
-                None => message,
-            }
-        }
-    }
+        _ => return None,
+    })
 }
 
-fn remote_path_missing_message(host: &str, path: Option<&str>, summary: Option<&str>) -> String {
-    let error = summary.map_or_else(
-        || match path {
-            Some(path) => format!("remote path does not exist on {host}: {path}"),
-            None => format!("remote path does not exist on {host}"),
-        },
-        str::to_owned,
-    );
-    format!(
-        "{error}\ncheck the target with `rimz remote list`, then correct the alias or remote path"
-    )
+const REMOTE_PATH_FIX: &str =
+    "check the target with `rimz remote list`, then correct the alias or remote path";
+
+fn remote_path_missing_message(host: &str, path: Option<&str>) -> String {
+    let error = match path {
+        Some(path) => format!("remote path does not exist on {host}: {path}"),
+        None => format!("remote path does not exist on {host}"),
+    };
+    format!("{error}\n{REMOTE_PATH_FIX}")
 }
 
 fn interrupted_message(
@@ -693,10 +699,10 @@ fn wait_for_master(
                     && let Some((spec, path)) = plan.path_preflight(control_path)
                     && run_path_preflight(&spec)
                 {
-                    let fix = "check the target with `rimz remote list`, then correct the alias or remote path".to_owned();
+                    let fix = REMOTE_PATH_FIX.to_owned();
                     let details = [format!("{}: {path}", plan.target().host_display()), fix];
                     let message =
-                        remote_path_missing_message(plan.target().host_display(), Some(path), None);
+                        remote_path_missing_message(plan.target().host_display(), Some(path));
                     outage.panel.note_ssh_error(Some(message.clone()));
                     ui.fail_hold("Remote path does not exist", &details)?;
                     drop(guard);
