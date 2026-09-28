@@ -4,6 +4,8 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
+Pass 29d records source tip `bf47c4ab8` (base `221c53578`, rebased onto trunk `eb03b2204`): both supervisors share master ownership, each web round settles once, and recovery frames own the panel rows. `cli/remote` cx falls from 34.0 to 1.4; `remote` remains 0.0. The four hotspots' base/final cx are `run_supervised_web` 12.0/0.0, `supervise_remote` 9.8/0.8, `display_rows` 6.7/0.0 and `wait_for_master` 5.5/0.6. The two residuals are SLOC-only, held by item verdicts; ordered screen teardown and shared tty restoration retain pass-through verdicts. Production SLOC falls by 154 against the contract's ceiling of −80. Binary modules receive no ledger row.
+
 Pass 29e records source tip `2251c6f2e` (base `c42d760e8`): shared rate-limit fusion and producer bookkeeping reduce `sidebar/refresh` cx from 27.1 to 16.7; collapsed worktree header, pipeline and tail representations reduce `sidebar_pane/render/sections` cx from 42.1 to 30.5. Both modules were deliberately reopened for this complexity review, not churned past their rows' count. Production SLOC falls by 47 against the contract's 30-line reduction floor, with no stored/wire or snapshot changes. The four target functions retain item verdicts for their distinct pinned policies; the untouched finished roster retains cx 1.2. The two reviewed modules have no individual surface-budget rules to tighten; their parent budgets stay unchanged.
 
 Pass 29c records `cli/doctor` on `66bc4cffe` (rebased base `c42d760e8`): cx 33.0 → 15.4, with `scan_tail` 13.1 → 0.4 and `collect_remote_control` 4.9 → 0; unchanged residuals are `render_lsp` 9.7, `render_mux` 1.8, `collect_mux` 1.1, `diagnose_zellij_log_record` 1.6, `presence_plugins_view` 0.4 and `classify_diagnostic` 0.4. Production SLOC falls by 85 against the contract's −50 ceiling. Seven item verdicts hold the residuals; binary modules receive no ledger row. Providers were judged and left untouched because they already own their probes and doctor owns grouping and presentation. `collect_loop` was deferred as fresh (`f13109387`).
@@ -21,7 +23,8 @@ Survey on the pass 29a tree (merge base `b426db4f4` plus pass 29a, 2026-09-28): 
 - **Reopened** (churn past the row's count): none; all 11 repaired modules are held.
 - **Never reviewed:** no production library module is unheld; binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
-- **Row SHAs:** the survey resolves an unreachable SHA to the oldest trunk commit that changed its occurrence count in this ledger; `survey --restamp` writes the resolved cells. An unresolved SHA remains a ledger problem and leaves its module unheld. Pass 29a repairs 11 rows from passes 28b to 28f to their landed record commits. Pass 29e's `sidebar/refresh` and `sidebar_pane/render/sections` rows carry branch parent `2251c6f2e`; the merge must re-stamp both.
+- **Row SHAs:** the survey resolves an unreachable SHA to the oldest trunk commit that changed its occurrence count in this ledger; `survey --restamp` writes the resolved cells. An unresolved SHA remains a ledger problem and leaves its module unheld. Pass 29a repairs 11 rows from passes 28b to 28f to their landed record commits. Pass 29e's `sidebar/refresh` and `sidebar_pane/render/sections` rows carry branch parent `2251c6f2e`; the merge must re-stamp both. Pass 29d's `remote` row carries branch parent `bf47c4ab8`; the merge must re-stamp it.
+- **Pass 29d verdict diagnostics:** `inspect` reports the private `wait_for_master` item verdict as stale because its validator searches only visibility-qualified items. Drop verdict keys omit the owner to match the validator, unlike the owner-qualified names printed by `inspect`.
 - **Unjudged families:** none; no stale verdict keys.
 
 ## Module verdicts
@@ -186,7 +189,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `pane` | holds; landed pass-24a | `2a9ec66e5` | 30 | owns `ClientPaneView`; `proc` cycle by intent. |
 | `proc` | holds; landed pass-25 | `4a82d6b28` | 30 | platform seams, bounded execution and pane-probe abstention hold. |
 | `reload` | holds; landed pass-23c | `1830bd0c6` | 30 | one durable staged-build path. |
-| `remote` | holds; landed pass-21a | `e204ceebd` | 30 | pure transitions here, drivers in `cli/remote`. |
+| `remote` | holds; landed pass-21a; pass-29d | `bf47c4ab8` | 30 | pure transitions here, drivers in `cli/remote`; recovery frame owns the panel's row model. |
 | `remote_control` | holds; landed pass-15c | `944c8120e` | 30 | one enable preflight; typed snapshot and batch toggle. |
 | `room` | holds; landed pass-28f | `f4084e548` | 30 | owns live-tab admission and managed birth with source-specific ownership. |
 | `sandbox` | holds; landed pass-28f | `f4084e548` | 30 | launch preflight admits skills before probing isolation. |
