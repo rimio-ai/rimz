@@ -18,8 +18,8 @@ expression: rendered
 ▌  ⧉ subagents (2)                              $0.46▐
 ▌    ⠁ Plan · run focused nextest               $0.12▐
 ▌      ▤ 18k · Haiku · xhigh                    ◔  3m▐
-▌    ✓ Explore · audit auth watcher chang ◔ <1m $0.34▐
-▌      ◇ 22k · Haiku · xhigh                         ▐
+▌    ✓ Explore · audit auth watcher changes     $0.34▐
+▌      ◇ 22k · Haiku · xhigh                    ◔ <1m▐
 
  ⑂ remote-link              ⇡1 ⇣1  +1240 -380  ⑂ main
  ? codex · GPT 5.5 · xhigh · 272k               $3.71

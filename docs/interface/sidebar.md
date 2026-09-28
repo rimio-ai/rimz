@@ -291,8 +291,8 @@ Selecting a card only appends lines below it. When the selected agent belongs to
 ▌  ⧉ subagents (2)                              $0.42▐
 ▌    ⠁ review · audit the trust hash                 ▐
 ▌      ◇  3k · Haiku 4.5                        ◔ <1m▐
-▌    ✓ Explore · locate the render seam   ◔ <1m $0.42▐
-▌      ▤ 12k · Opus 4.8  · high                      ▐
+▌    ✓ Explore · locate the render seam         $0.42▐
+▌      ▤ 12k · Opus 4.8  · high                 ◔ <1m▐
 ```
 
 A card with waits uses the same entry layout:
@@ -315,7 +315,7 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 | entry | lead | type · headline | right side | second line |
 |-------|------|------|------------|-------------|
 | running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and elapsed time |
-| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | time since it finished, then cost | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model and effort |
+| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after the time since it finished when there is no second line | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and time since it finished |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
 | PID | working spinner | `pid · 16776` | time since armed | never |
 | command | working spinner | `command · cargo` (program name) | time since armed | full command, with the program path trimmed |
