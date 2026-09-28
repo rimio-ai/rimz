@@ -25,6 +25,7 @@
 //! `$RIMZ_TEST_SSH_MASTER_EXIT_PLAN` and `$RIMZ_TEST_SSH_MASTER_EXIT_MS`
 //! script established ControlMaster exits.
 //! `$RIMZ_TEST_SSH_PATH_PREFLIGHT_PLAN` scripts remote `test -d` probes.
+//! `$RIMZ_TEST_SSH_WEB_PREP_PLAN` scripts web-prep exits, overriding `$RIMZ_TEST_SSH_WEB_PREP_STATUS`.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -185,6 +186,9 @@ fn exit_web_prep() -> ! {
         .write_all(output.as_bytes())
         .expect("write prep stdout");
     stdout.flush().expect("flush prep stdout");
+    if env::var_os("RIMZ_TEST_SSH_WEB_PREP_PLAN").is_some() {
+        exit_from_plan("RIMZ_TEST_SSH_WEB_PREP_PLAN");
+    }
     let code = env::var("RIMZ_TEST_SSH_WEB_PREP_STATUS")
         .ok()
         .and_then(|value| value.parse::<i32>().ok())
