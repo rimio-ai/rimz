@@ -50,19 +50,6 @@ enum LogSeverity {
     Panic,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LogState {
-    Investigate,
-    Expected,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LogImpact {
-    Alarm,
-    Warn,
-    Info,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct LogRecordStart {
     severity: Option<LogSeverity>,
@@ -90,23 +77,10 @@ struct LogicalRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LogDiagnosis {
     key: String,
-    state: LogState,
-    impact: LogImpact,
+    state: model::DoctorState,
+    impact: model::DoctorImpact,
     summary: LogSummary,
     sample: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct LogIssue {
-    severity: LogSeverity,
-    state: LogState,
-    impact: LogImpact,
-    summary: String,
-    occurrences: usize,
-    first_occurrence: Option<Timestamp>,
-    last_occurrence: Option<Timestamp>,
-    samples: Vec<String>,
-    evidence_truncated: bool,
 }
 
 /// How much of the tail to read and which records count.
@@ -121,7 +95,7 @@ struct LogWindow {
     since: Option<Timestamp>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 struct LogScan {
     size_bytes: u64,
     scanned_bytes: u64,
@@ -130,7 +104,7 @@ struct LogScan {
     records_before_cutoff: usize,
     problem_records: usize,
     omitted_issue_groups: usize,
-    issues: Vec<LogIssue>,
+    issues: Vec<model::MuxLogIssue>,
 }
 
 pub(super) fn collect(mux: MuxName, since: Option<Timestamp>, log_text: LogText) -> model::MuxLog {
@@ -201,28 +175,7 @@ fn scan(
             problem_records: scan.problem_records,
             omitted_issue_groups: scan.omitted_issue_groups,
             log_text_omitted: log_text == LogText::Omit,
-            issues: scan
-                .issues
-                .into_iter()
-                .map(|issue| model::MuxLogIssue {
-                    source_severity: severity_label(issue.severity).to_owned(),
-                    state: match issue.state {
-                        LogState::Investigate => model::DoctorState::Investigate,
-                        LogState::Expected => model::DoctorState::Expected,
-                    },
-                    impact: match issue.impact {
-                        LogImpact::Alarm => model::DoctorImpact::Alarm,
-                        LogImpact::Warn => model::DoctorImpact::Warn,
-                        LogImpact::Info => model::DoctorImpact::Info,
-                    },
-                    summary: issue.summary,
-                    occurrences: issue.occurrences,
-                    first_occurrence: issue.first_occurrence,
-                    last_occurrence: issue.last_occurrence,
-                    samples: issue.samples,
-                    evidence_truncated: issue.evidence_truncated,
-                })
-                .collect(),
+            issues: scan.issues,
         },
         Err(err) => model::MuxLog::Unavailable {
             error: format!("{}: {err}", path.display()),
@@ -314,7 +267,7 @@ fn scan_tail(
     });
     let records_before_cutoff = logical_records - records.len();
     let mut problem_records = 0usize;
-    let mut groups = Vec::<(String, usize, LogIssue)>::new();
+    let mut groups = Vec::<(String, usize, model::MuxLogIssue)>::new();
     let mut by_key = HashMap::<String, usize>::new();
     for (record_index, record) in records.iter().enumerate() {
         let Some(diagnosis) = diagnose(
@@ -358,8 +311,8 @@ fn scan_tail(
         groups.push((
             group_key,
             record_index,
-            LogIssue {
-                severity,
+            model::MuxLogIssue {
+                source_severity: severity_label(severity).to_owned(),
                 state: diagnosis.state,
                 impact: diagnosis.impact,
                 summary: diagnosis.summary.resolve(log_text),
@@ -594,8 +547,8 @@ fn diagnose_zellij_log_record(
     if subject.contains("timed out") && subject.contains("for plugin") {
         return Some(LogDiagnosis {
             key: "plugin_pane_query_timeout".to_owned(),
-            state: LogState::Investigate,
-            impact: LogImpact::Warn,
+            state: model::DoctorState::Investigate,
+            impact: model::DoctorImpact::Warn,
             summary: LogSummary::Authored(
                 "plugin pane queries timed out — pane discovery lags behind the room".to_owned(),
             ),
@@ -610,8 +563,8 @@ fn diagnose_zellij_log_record(
     {
         return Some(LogDiagnosis {
             key: "client_protocol_mismatch".to_owned(),
-            state: LogState::Investigate,
-            impact: LogImpact::Warn,
+            state: model::DoctorState::Investigate,
+            impact: model::DoctorImpact::Warn,
             summary: LogSummary::Authored("a client sent messages zellij could not read — usually a client/server version mismatch"
                 .to_owned()),
             sample: None,
@@ -623,8 +576,8 @@ fn diagnose_zellij_log_record(
     if let Some(cwd) = missing_pane_cwd(subject) {
         return Some(LogDiagnosis {
             key: normalized_issue_key(&format!("missing_pane_cwd:{cwd}")),
-            state: LogState::Investigate,
-            impact: LogImpact::Warn,
+            state: model::DoctorState::Investigate,
+            impact: model::DoctorImpact::Warn,
             summary: LogSummary::FromLog {
                 text: format!(
                     "a pane's configured directory is missing ({cwd}) — zellij started it in the inherited directory"
@@ -636,8 +589,8 @@ fn diagnose_zellij_log_record(
     }
 
     let impact = match severity {
-        LogSeverity::Warn => LogImpact::Warn,
-        LogSeverity::Error | LogSeverity::Panic => LogImpact::Alarm,
+        LogSeverity::Warn => model::DoctorImpact::Warn,
+        LogSeverity::Error | LogSeverity::Panic => model::DoctorImpact::Alarm,
     };
     // Naming the whole cause chain keeps unrelated failures in separate groups;
     // keyed on the wrapper alone they collapse into one meaningless bucket.
@@ -648,7 +601,7 @@ fn diagnose_zellij_log_record(
     };
     Some(LogDiagnosis {
         key: normalized_issue_key(&format!("{target}:{summary}")),
-        state: LogState::Investigate,
+        state: model::DoctorState::Investigate,
         impact,
         summary: LogSummary::FromLog {
             text: summary,
@@ -675,8 +628,8 @@ fn expected_zellij_lifecycle(
 ) -> Option<LogDiagnosis> {
     let expected = |key: &str, summary: &str, sample: Option<String>| LogDiagnosis {
         key: key.to_owned(),
-        state: LogState::Expected,
-        impact: LogImpact::Info,
+        state: model::DoctorState::Expected,
+        impact: model::DoctorImpact::Info,
         summary: LogSummary::Authored(summary.to_owned()),
         sample,
     };
@@ -693,8 +646,8 @@ fn expected_zellij_lifecycle(
     if let Some(action) = action_ack_timeout(subject) {
         return Some(LogDiagnosis {
             key: format!("action_ack_timeout:{action}"),
-            state: LogState::Expected,
-            impact: LogImpact::Info,
+            state: model::DoctorState::Expected,
+            impact: model::DoctorImpact::Info,
             summary: LogSummary::FromLog {
                 text: format!("zellij acknowledged {action} late (the action still ran)"),
                 without_text: "zellij acknowledged an action late (the action still ran)"
@@ -834,11 +787,11 @@ fn diagnose_tmux_log_record(
     let severity = record.start.severity?;
     Some(LogDiagnosis {
         key: normalized_issue_key(&record.start.message),
-        state: LogState::Investigate,
+        state: model::DoctorState::Investigate,
         impact: if severity == LogSeverity::Panic {
-            LogImpact::Alarm
+            model::DoctorImpact::Alarm
         } else {
-            LogImpact::Warn
+            model::DoctorImpact::Warn
         },
         summary: LogSummary::FromLog {
             text: record.start.message.clone(),
