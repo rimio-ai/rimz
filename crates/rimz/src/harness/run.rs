@@ -72,6 +72,11 @@ pub fn publish_response(
     };
     let path = if record.peer.is_some() || record.team.is_some() {
         peer_response_path(paths, name, &record.run_id)
+    } else if record.follow_ups > 0 {
+        response_path(
+            paths,
+            &format!("{name}.{}", u64::from(record.follow_ups) + 1),
+        )
     } else {
         response_path(paths, name)
     };
@@ -726,6 +731,7 @@ fn fold_lifecycle(
         (None, None) | (Some(_), Some(_)) => {}
     }
     if reopen {
+        record.follow_ups += 1;
         record.deadline_at = record.timeout.map(|timeout| now + timeout).or_else(|| {
             record
                 .deadline_at

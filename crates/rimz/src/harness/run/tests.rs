@@ -139,7 +139,7 @@ fn response_lands_before_the_terminal_record() {
 }
 
 #[test]
-fn reopened_response_replaces_or_removes_previous_answer() {
+fn reopened_response_preserves_previous_answers() {
     for message in [Some("second answer"), Some(""), None] {
         let (_dir, paths, mut record) = setup();
         record.subagent = true;
@@ -187,10 +187,40 @@ fn reopened_response_replaces_or_removes_previous_answer() {
             || None,
         )
         .unwrap();
-        if message.is_some_and(|message| !message.is_empty()) {
-            assert_eq!(std::fs::read_to_string(path).unwrap(), "second answer\n");
-        } else {
-            assert!(!path.exists());
+        for ordinal in [2, 3] {
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "first answer\n");
+            let second = paths.subagents_dir.join("child.2.output");
+            if message.is_some_and(|message| !message.is_empty()) {
+                assert_eq!(std::fs::read_to_string(second).unwrap(), "second answer\n");
+            } else {
+                assert!(!second.exists());
+            }
+            if ordinal == 3 {
+                assert_eq!(
+                    std::fs::read_to_string(paths.subagents_dir.join("child.3.output")).unwrap(),
+                    "third answer\n"
+                );
+                break;
+            }
+            observation.signal = LifecycleSignal::TurnStarted { turn_id: None };
+            record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+                None
+            })
+            .unwrap();
+            observation.signal = LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            };
+            record_lifecycle(
+                &paths,
+                &record.run_id,
+                "claude",
+                &observation,
+                Some("third answer".into()),
+                || None,
+            )
+            .unwrap();
         }
     }
 }
@@ -225,6 +255,7 @@ fn terminal_subagent_reopens_for_its_next_turn() {
         })
         .unwrap();
         let reopened = load(&paths, &record.run_id).unwrap();
+        assert_eq!(reopened.follow_ups, u32::from(subagent));
         if !subagent {
             assert_eq!(reopened, record);
             continue;
@@ -653,6 +684,7 @@ fn parked_run_resumes_and_completes_once() {
     .unwrap();
     let running = load(&paths, &record.run_id).unwrap();
     assert_eq!(running.parked_at, None);
+    assert_eq!(running.follow_ups, record.follow_ups);
     assert_eq!(running.status, RunStatus::Running);
 
     let completed = record_lifecycle(
@@ -882,6 +914,7 @@ fn verify_transitions_reopen_completed_runs_and_finish_once() {
     };
 
     let reopened = reopen_for_verify(&paths, &record.run_id, first.clone()).unwrap();
+    assert_eq!(reopened.follow_ups, record.follow_ups);
     assert_eq!(reopened.status, RunStatus::Running);
     assert_eq!(reopened.completed_at, None);
     assert_eq!(reopened.verify.as_ref(), Some(&first));

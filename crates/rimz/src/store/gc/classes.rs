@@ -208,6 +208,7 @@ fn collect_tmp(
                     source,
                 })?
             } else {
+                let name = name.split_once('.').map_or(name, |(owner, _)| owner);
                 runs.iter()
                     .any(|run| !run.status.is_terminal() && run.agent_name.as_deref() == Some(name))
             };
@@ -302,6 +303,11 @@ mod tests {
             temp.path().to_owned(),
         );
         run.agent_name = Some("live".to_owned());
+        let follow_up = paths.subagents_dir.join("live.2.output");
+        fs::File::create(&follow_up)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
         crate::store::run::write(&paths.runs_dir, &run).unwrap();
         let watcher = |name: &str| Ok(name == "live");
         let mut preview = GcReport::default();
@@ -311,6 +317,7 @@ mod tests {
         let mut actual = GcReport::default();
         collect_tmp(&paths, &watcher, &mut Sweep::new(false), &mut actual).unwrap();
         assert_eq!(preview, actual);
+        assert!(follow_up.exists());
         for dir in [&paths.waits_dir, &paths.subagents_dir] {
             assert!(!dir.join("old.output").exists());
             for name in ["recent.output", "live.output", "unrelated.txt"] {
