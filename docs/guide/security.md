@@ -24,6 +24,8 @@ A room running Copilot gets one more file. RimZ points Copilot's own telemetry e
 
 Inside a workspace, plenty already runs as you: hooks, postinstall scripts, generated binaries, test runners, and the agents themselves. Same-user isolation is no real boundary there, so RimZ does not lean on it. Instead it makes command execution an explicit choice, and three things in your configuration can make that choice for you: a repository's config, which stays inert until you trust it, and your own notification handlers and worktree hooks, which a repository cannot supply.
 
+RimZ gives Claude a curated launch-only permission list for [routine coordination](./configuration.md#routine-rimz-commands), on by default with a machine-only opt-out; Claude still makes permission decisions.
+
 ### Project trust
 
 A cloned repository can ship a `.rimz/config.toml` that declares agents, profiles, teams, loop tasks, hooks, environment variables, and which provider account a fresh room launches into. Each of those can run a command or redirect your credentials, so RimZ keeps the whole file inert until you trust the workspace. On an untrusted clone nothing the file declares can launch; RimZ parses it only far enough to tell you what it is asking for.

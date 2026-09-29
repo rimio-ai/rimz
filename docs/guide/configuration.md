@@ -642,6 +642,19 @@ env-reminder = false
 
 A trusted room's `.rimz/config.toml` can set the same key to override the machine value in either direction. Team members still receive cwd and their memory-file listing, and a configured language server still appears. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for the full reminder.
 
+#### Routine RimZ commands
+
+Claude can otherwise pause for permission just to coordinate with another agent. RimZ defaults `allow-routine-rimz` to `true`, adding a curated set of command permissions and the launch's scratch/shared directories through Claude's `--settings`, plus auto-mode context describing those commands and directories. Your Claude settings are preserved; RimZ does not edit `~/.claude/settings.json`. See [permission modes](./fleet.md#set-a-permission-mode) for what this covers.
+
+To keep Claude launches free of these additions, set this in `~/.rimz/config.toml`:
+
+```toml
+[agents]
+allow-routine-rimz = false
+```
+
+This key is machine-only: project config cannot override it. It applies to every RimZ-launched Claude agent, including subagents, restarts, resumes, and forks, under host or sandbox isolation and in every permission mode. Other providers are unchanged. `rimz agents explain claude` shows the launch settings without starting an agent.
+
 #### Subagent launches
 
 ```toml

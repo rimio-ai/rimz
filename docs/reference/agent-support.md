@@ -187,6 +187,18 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
+Claude additionally receives routine-command permissions by default through one merged `--settings`, independent of permission mode. Each prefix below gets one `Bash(<prefix> *)` rule, matching the bare command and its arguments:
+
+- `rimz message`, `rimz agents`, `rimz subagents`
+- `rimz teams show`, `rimz teams wait`, `rimz teams flip`, `rimz teams record`
+- `rimz asks`, `rimz answer`, `rimz wait --in`
+- `rimz pane list`, `rimz pane capture`, `rimz loop show`, `rimz loop logs`
+- `rimz lsp def`, `rimz lsp refs`, `rimz lsp hover`, `rimz lsp impl`, `rimz lsp callers`, `rimz lsp callees`, `rimz lsp symbols`, `rimz lsp find`, `rimz lsp check`, `rimz lsp list`, `rimz lsp status`
+
+There is no blanket RimZ grant. `pane send`, `wait --run`, `loop add`, `events emit`, and `lsp shim`, `attach`, or `stop` are not added. The settings also union the agent-visible scratch/shared directories into `permissions.additionalDirectories` and add an `autoMode.environment` entry retaining `$defaults`; profile entries remain. Opt out with machine-only [`[agents] allow-routine-rimz = false`](../guide/configuration.md#routine-rimz-commands). These are Claude permission settings, not permission hooks; Claude's managed policy and explicit ask/deny rules still apply.
+
+Codex receives no RimZ permission rules. Users may add their own `~/.codex/rules/rimz.rules` (or `$CODEX_HOME/rules/rimz.rules`) using, for example, `prefix_rule(pattern = ["rimz", "agents"], decision = "allow")`. The [upstream rule contract](../externals/agent-adapter/codex-reference.md#execution-policy-rules) covers matching and precedence; RimZ does not create or modify that file.
+
 Under `agents.isolation = "sandbox"` a Codex launch replaces any `--sandbox` choice with `--sandbox danger-full-access`, because the RimZ view is its sandbox; approval flags stay as listed, though an `on-request` policy then prompts only for commands Codex judges dangerous ([sandbox internals](../internals/sandbox.md#provider-command-sandboxes)).
 
 Grok Plan adds no arguments because Grok's `/plan` is an interactive command, and a session launched with `--permission-mode plan` does not start in plan mode.
