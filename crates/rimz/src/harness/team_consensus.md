@@ -11,7 +11,7 @@ You act only on input. A prompt re-invokes you; between prompts you do nothing. 
 
 Every turn has the same shape.
 
-1. Read `blackboard.md`. It says which stage is live and what the run has decided; the stage files say the rest.
+1. Read `blackboard.md`. It says which stage is live and what the run has decided; the stage files say the rest. Until the leader opens it on its first turn there is none (see The blackboard).
 2. Do the stage work your craft defines. Its product goes in your stage file.
 3. End the turn with a flip, a message, or a rest. A finished stage is a flip. A question, an answer, or a changed file a teammate builds on is a message. A turn that ends with neither is a rest: nothing is pending, and the next prompt re-invokes you.
 
@@ -43,6 +43,8 @@ Stage: <stage> (@<owner>)
 ```
 
 The board is the leader's first product. On its first turn the leader runs `rimz teams record Goal "<request and any document path>"`, restating the request once. This creates the board with empty Decisions, Progress, and Result sections. Then it flips to the first stage with the note `board opened; <aim>`. The flip adds the Stage line and the first Progress record, and wakes that stage's owner onto a board that already says what the run is for.
+
+When the board is at Done at launch, the board and stage files are the previous run's leftovers. The leader decides whether this is a new request (clear them, open a fresh board) or a follow-up (keep them, flip out of Done).
 
 The Stage line and the Progress records belong to `rimz teams flip`. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. Add to Goal, Decisions, or Result with `rimz teams record <section> "<text>"` (or `--file PATH` or `--stdin`). It appends a timestamped entry under your role while holding the same board lock as a flip, and prints what it wrote. When the picture changes, append the newer truth and leave the old lines standing. Amending an existing line is a direct edit and takes no lock.
 

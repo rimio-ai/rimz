@@ -185,18 +185,15 @@ fn team() -> crate::harness::launch_reminders::TeamReminder {
         append_system_prompt_files: Vec::new(),
         args: None,
     };
-    crate::harness::launch_reminders::TeamReminder::new(
-        crate::config::Team {
-            roles: vec![role("planner", "claude"), role("coder", "codex")],
-            leader: Some("planner".to_owned()),
-            layout: None,
-            scratch_files: Some(vec!["blackboard.md".to_owned()]),
-            consensus_file: None,
-            append_system_prompt_files: Vec::new(),
-            stages: Vec::new(),
-        },
-        &crate::config::ProfilesConfig::default(),
-    )
+    crate::harness::launch_reminders::TeamReminder::new(crate::config::Team {
+        roles: vec![role("planner", "claude"), role("coder", "codex")],
+        leader: Some("planner".to_owned()),
+        layout: None,
+        scratch_files: Some(vec!["blackboard.md".to_owned()]),
+        consensus_file: None,
+        append_system_prompt_files: Vec::new(),
+        stages: Vec::new(),
+    })
 }
 
 fn team_request(kind: &str) -> ExecRequest {
@@ -633,7 +630,7 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
 fn process_compiler_appends_team_context_for_native_adapters() {
     let project = tempfile::tempdir().expect("project");
     let team = team();
-    // Each adapter carries the reminder its own launch renders: the seat runs on this kind.
+    // Each adapter carries the same team facts, without provider or model names.
     let rendered = |invocation: &ExecRequest| {
         crate::harness::launch_reminders::render(
             invocation,
@@ -672,7 +669,7 @@ fn process_compiler_appends_team_context_for_native_adapters() {
     let invocation = team_request("codex");
     let reminder = rendered(&invocation);
     assert!(
-        reminder.contains("Seats: @planner runs on Claude; @coder (you) runs on Codex."),
+        reminder.contains("Members: @planner, @coder (you)."),
         "{reminder}"
     );
     let process = compile_agent_process_with_extra_env(
@@ -733,7 +730,10 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
             .trim_start_matches("<system_reminder>\n")
             .trim_end_matches("\n</system_reminder>")
             .to_owned();
-        assert!(team_reminder.contains("(you) runs on "), "{team_reminder}");
+        assert!(
+            team_reminder.contains("Members: @planner, @coder (you)."),
+            "{team_reminder}"
+        );
         let process = compile_agent_process_with_extra_env(
             None,
             project.path(),
@@ -843,7 +843,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 let text = parse_toml_string_or_raw(&occurrences[0].value);
                 assert_eq!(text.matches("<system_reminder>").count(), 1);
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
-                assert_eq!(text.contains("GPT 6 Astra."), model);
+                assert_eq!(text.contains("GPT 6 Astra."), subagent && model);
                 assert!(!text.contains("high effort"));
                 assert_eq!(text.contains("You are a subagent:"), subagent);
                 assert_eq!(text.contains("team `forge`"), !subagent);

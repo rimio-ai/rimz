@@ -310,7 +310,7 @@ fn reminders(
         if team.is_none() {
             warnings.push(LaunchPlanWarning::MissingTeam(name.to_owned()));
         }
-        team.map(|team| TeamReminder::new(team, &effective.profiles))
+        team.map(TeamReminder::new)
     });
     (
         LaunchReminders {

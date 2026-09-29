@@ -509,7 +509,7 @@ Each provider needs a [kind base](../reference/definitions.md#kind-bases) in `ag
 
 A profile is a named agent preset, loaded from `agents/<name>.md` for one you launch directly or `subagents/<name>.md` for a supervised child. Its `agent:` chain stays inside its own tree, and a field the child sets explicitly replaces the inherited one. Parent craft bodies come before the child's; `description` and `traits` are local to each file, and `model-reminder` is inherited. Where profiles live and how you use one are the [agents guide](./fleet.md#profiles-shape-an-agent-for-one-job); every field, default, model alias, and composition rule is the [definition reference](../reference/definitions.md#chains-and-defaults).
 
-`subagents: [explorer, designer]` on a direct definition limits which children RimZ will delegate to; drop the native `Agent` tool at the same time. Omitting the field leaves delegation unrestricted, `[]` permits none, and a child definition cannot set it at all. The launch reminder names the available children and, by default, the selected model; `model-reminder: false` removes only that model line.
+`subagents: [explorer, designer]` on a direct definition limits which children RimZ will delegate to; drop the native `Agent` tool at the same time. Omitting the field leaves delegation unrestricted, `[]` permits none, and a child definition cannot set it at all. The launch reminder names the available children and, for solo agents and subagents, the selected model by default; `model-reminder: false` removes only that model line. Team members never show model names, regardless of this setting.
 
 `auto-compact` sets the provider's own native compaction window, a token count from `100k` through `1M`, never a percentage. Markdown definitions default it to `258k` on the kinds that support it ([provider support](../reference/agent-support.md#auto-compaction-window)). A role's `flip-compact` is a different field, covered under [hand-off compaction](#hand-off-compaction).
 
@@ -583,14 +583,14 @@ An agent that runs `rimz agents` or `rimz teams` launches independent top-level 
 
 #### Environment at launch
 
-Agents receive their launch cwd and the kind of their pane shell (`zsh`, `bash`) by default, so they can start with their environment in view. Git state is left out: it can change between launch and the agent's first turn, so agents read it themselves. To turn the whole environment paragraph off for your machine, set this in `~/.rimz/config.toml`:
+Agents receive their launch cwd and the kind of their pane shell (`zsh`, `bash`) by default, so they can start with their environment in view. Git state is left out: it can change between launch and the agent's first turn, so agents read it themselves. To omit these optional environment bullets for your machine, set this in `~/.rimz/config.toml`:
 
 ```toml
 [agents]
 env-reminder = false
 ```
 
-A trusted room's `.rimz/config.toml` can set the same key to override the machine value in either direction. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for the full reminder.
+A trusted room's `.rimz/config.toml` can set the same key to override the machine value in either direction. Team members still receive cwd and their memory-file listing, and a configured language server still appears. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for the full reminder.
 
 #### Subagent launches
 
