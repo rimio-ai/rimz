@@ -75,7 +75,7 @@ pub enum SkillErr {
 pub enum LaunchSettingsErr {
     #[error(transparent)]
     Skills(#[from] SkillErr),
-    #[error("invalid host skill settings at {path}: {reason}")]
+    #[error("invalid launch settings at {path}: {reason}")]
     Settings { path: PathBuf, reason: String },
     #[error("skills sharing provider name {name:?} have conflicting invocation policies; list all of their directories or none", name = .key.as_str())]
     ConflictingKey { key: ProviderSkillKey },
