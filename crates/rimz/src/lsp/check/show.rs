@@ -1,0 +1,350 @@
+//! Batched source reads using the notes anchor grammar and outline.
+
+use super::super::protocol::{Position, Range};
+use super::*;
+
+pub fn show(
+    arguments: &[String],
+    full: bool,
+    root: &Path,
+    entries: &[registry::Entry],
+    servers: &BTreeMap<String, crate::config::LspServerConfig>,
+) -> super::super::Result<Vec<(String, i32)>> {
+    let anchors = arguments
+        .iter()
+        .map(|argument| parse_argument(argument))
+        .collect::<super::super::Result<Vec<_>>>()?;
+    let mut context = match Context::new(root, entries, servers) {
+        Ok(context) => context,
+        Err(error) => {
+            return Ok(arguments
+                .iter()
+                .map(|argument| failure(argument, "error", &error.to_string(), error.exit_code()))
+                .collect());
+        }
+    };
+    let mut sources = BTreeMap::new();
+    let mut blocks = Vec::new();
+    for (argument, (anchor, position)) in arguments.iter().zip(anchors) {
+        let needs_outline = anchor.symbol.is_some() || position.is_some();
+        let (anchor, path) = match context.resolve(anchor) {
+            Ok(resolved) => resolved,
+            Err(verdict) => {
+                let (status, code) = match verdict.status {
+                    Status::External => ("external", 5),
+                    Status::AmbiguousPath => ("ambiguous-path", 6),
+                    _ => ("missing-path", 5),
+                };
+                blocks.push(failure(argument, status, &verdict.detail, code));
+                continue;
+            }
+        };
+        let (nodes, dirty) = if needs_outline {
+            match context.outline(&path) {
+                Ok(Some(file)) => (file.nodes.as_slice(), file.dirty),
+                Ok(None) => {
+                    blocks.push(failure(argument, "unchecked", &unchecked_detail(&path), 3));
+                    continue;
+                }
+                Err(error) => {
+                    blocks.push(failure(
+                        argument,
+                        "error",
+                        &error.to_string(),
+                        error.exit_code(),
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            match context.is_dirty(&path) {
+                Ok(dirty) => (&[][..], dirty),
+                Err(error) => {
+                    blocks.push(failure(argument, "error", &error.to_string(), 1));
+                    continue;
+                }
+            }
+        };
+        let source = match sources.entry(path.clone()) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                match std::fs::read_to_string(root.join(&path)) {
+                    Ok(source) => entry.insert(source),
+                    Err(error) => {
+                        blocks.push(failure(argument, "error", &error.to_string(), 1));
+                        continue;
+                    }
+                }
+            }
+        };
+        blocks.push(render_item(
+            &anchor, position, &path, nodes, source, dirty, full,
+        ));
+    }
+    Ok(blocks)
+}
+
+fn parse_argument(argument: &str) -> super::super::Result<(Anchor, Option<Position>)> {
+    if let Ok(query::Target::Position { path, position }) =
+        query::Target::parse(query::Verb::Def, argument)
+    {
+        return Ok((
+            Anchor {
+                qualifier: None,
+                line: 1,
+                text: argument.into(),
+                path: path.display().to_string(),
+                symbol: None,
+                hint: None,
+            },
+            Some(position),
+        ));
+    }
+    let mut anchors = extract(&format!("`{argument}`"));
+    if anchors.len() == 1 && anchors[0].text == argument {
+        return Ok((anchors.remove(0), None));
+    }
+    Err(LspErr::Protocol(format!(
+        "invalid anchor {argument}; use path::Symbol, path:line:col, or path:start-end"
+    )))
+}
+
+fn failure(argument: &str, status: &str, detail: &str, code: i32) -> (String, i32) {
+    (format!("{argument}  {status}  {detail}\n"), code)
+}
+
+fn contains(range: Range, position: Position) -> bool {
+    range.start <= position && position < range.end
+}
+
+fn render_item(
+    anchor: &Anchor,
+    position: Option<Position>,
+    path: &Path,
+    nodes: &[Candidate],
+    source: &str,
+    dirty: bool,
+    full: bool,
+) -> (String, i32) {
+    let argument = &anchor.text;
+    let selected = if let Some(position) = position {
+        nodes
+            .iter()
+            .filter(|node| contains(node.selection, position))
+            .min_by_key(|node| (std::cmp::Reverse(node.extent.start), node.extent.end))
+            .or_else(|| {
+                nodes
+                    .iter()
+                    .filter(|node| contains(node.extent, position))
+                    .min_by_key(|node| (std::cmp::Reverse(node.extent.start), node.extent.end))
+            })
+    } else if let Some(chain) = &anchor.symbol {
+        let hits = symbol_hits(nodes, chain);
+        let selected = anchor
+            .hint
+            .and_then(|hint| hits.iter().copied().find(|node| overlaps(node, hint)))
+            .or_else(|| if hits.len() == 1 { Some(hits[0]) } else { None });
+        if selected.is_none() {
+            let (status, code) = if hits.is_empty() {
+                ("missing-symbol", 5)
+            } else {
+                ("ambiguous-symbol", 6)
+            };
+            let (_, detail) = candidate_details(nodes, chain, hits.into_iter().cloned().collect());
+            return failure(argument, status, &detail, code);
+        }
+        selected
+    } else {
+        None
+    };
+    if (position.is_some() || anchor.symbol.is_some()) && selected.is_none() {
+        return failure(argument, "missing-symbol", "no matching outline symbol", 5);
+    }
+    let [start, end] = selected
+        .map(|node| node.range)
+        .or(anchor.hint)
+        .expect("line anchor has a hint");
+    let lines: Vec<_> = source.lines().collect();
+    if start == 0 || start > end || end as usize > lines.len() {
+        return failure(
+            argument,
+            "line-outside",
+            &format!("file has {} lines", lines.len()),
+            5,
+        );
+    }
+    let mut text = format!(
+        "{}:{start}-{end}{}",
+        path.display(),
+        if dirty { "  (unsaved in editor)" } else { "" }
+    );
+    let index =
+        selected.and_then(|selected| nodes.iter().position(|node| std::ptr::eq(node, selected)));
+    let children: Vec<_> = nodes
+        .iter()
+        .filter(|node| index.is_some() && node.parent == index)
+        .collect();
+    if !full && end - start + 1 > 200 && !children.is_empty() {
+        text.push_str(&format!(
+            "  (outline: {} lines; --full prints the body)\n",
+            end - start + 1
+        ));
+        for child in children {
+            let line = child.selection.start.line as usize;
+            let Some(source) = lines.get(line) else {
+                return failure(
+                    argument,
+                    "line-outside",
+                    &format!("file has {} lines", lines.len()),
+                    5,
+                );
+            };
+            text.push_str(&format!(
+                "{:>6}\t{} ({}-{})\n",
+                line + 1,
+                query::snippet(source),
+                child.range[0],
+                child.range[1]
+            ));
+        }
+    } else {
+        text.push('\n');
+        for line in start..=end {
+            text.push_str(&format!("{line:>6}\t{}\n", lines[line as usize - 1]));
+        }
+    }
+    (text, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn nodes() -> Vec<Candidate> {
+        outline(json!([
+            {"name":"Parent","kind":5,
+             "range":{"start":{"line":0,"character":0},"end":{"line":204,"character":1}},
+             "selectionRange":{"start":{"line":1,"character":3},"end":{"line":1,"character":9}},
+             "children":[
+                {"name":"child","kind":6,
+                 "range":{"start":{"line":2,"character":0},"end":{"line":4,"character":1}},
+                 "selectionRange":{"start":{"line":3,"character":3},"end":{"line":3,"character":8}}}
+             ]},
+            {"name":"child","kind":12,
+             "range":{"start":{"line":207,"character":0},"end":{"line":208,"character":1}},
+             "selectionRange":{"start":{"line":207,"character":3},"end":{"line":207,"character":8}}}
+        ]))
+        .unwrap()
+    }
+
+    fn source() -> String {
+        (1..=210).map(|n| format!("  line {n}\n")).collect()
+    }
+
+    fn read(argument: &str, dirty: bool, full: bool) -> (String, i32) {
+        let (anchor, position) = parse_argument(argument).unwrap();
+        render_item(
+            &anchor,
+            position,
+            Path::new("src/lib.rs"),
+            &nodes(),
+            &source(),
+            dirty,
+            full,
+        )
+    }
+
+    #[test]
+    fn show_symbol_positions_and_pasted_spans_read_the_same_body() {
+        let expected = "src/lib.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n";
+        for argument in [
+            "src/lib.rs::Parent::child",
+            "src/lib.rs::Parent::child ~100",
+            "src/lib.rs:4:4",
+            "src/lib.rs:5:1",
+            "src/lib.rs:4:4 (3-5)",
+            "src/lib.rs:3-5",
+        ] {
+            assert_eq!(
+                read(argument, false, false),
+                (expected.into(), 0),
+                "{argument}"
+            );
+        }
+        assert_eq!(
+            read("src/lib.rs::Parent::child", true, false).0,
+            expected.replace(":3-5\n", ":3-5  (unsaved in editor)\n")
+        );
+    }
+
+    #[test]
+    fn show_zoom_uses_child_selection_and_full_never_truncates() {
+        assert_eq!(read("src/lib.rs::Parent", true, false), ("src/lib.rs:1-205  (unsaved in editor)  (outline: 205 lines; --full prints the body)\n     4\tline 4 (3-5)\n".into(), 0));
+        let body = read("src/lib.rs::Parent", false, true);
+        assert_eq!(body.1, 0);
+        assert_eq!(body.0.lines().count(), 206);
+        assert!(body.0.ends_with("   205\t  line 205\n"));
+        let mut leaf = nodes();
+        leaf.truncate(1);
+        assert_eq!(
+            render_item(
+                &parse_argument("src/lib.rs::Parent").unwrap().0,
+                None,
+                Path::new("src/lib.rs"),
+                &leaf,
+                &source(),
+                false,
+                false
+            ),
+            body
+        );
+    }
+
+    #[test]
+    fn show_reports_ambiguous_missing_and_outside() {
+        let argument = "src/lib.rs::Parent::chld";
+        let (anchor, _) = parse_argument(argument).unwrap();
+        let checked = check_symbol(anchor, PathBuf::from("src/lib.rs"), &nodes());
+        assert_eq!(checked.detail, "class Parent is at 1-205");
+        assert_eq!(
+            read(argument, false, false),
+            (
+                format!("{argument}  missing-symbol  {}\n", checked.detail),
+                5
+            )
+        );
+        let (text, exit) = read("src/lib.rs::child", false, false);
+        assert_eq!(exit, 6);
+        assert_eq!(
+            text,
+            "src/lib.rs::child  ambiguous-symbol  method Parent::child is at 3-5; function child is at 208-209\n"
+        );
+        assert_eq!(
+            read("src/lib.rs::child ~4", false, false).0,
+            read("src/lib.rs::Parent::child", false, false).0
+        );
+        for argument in [
+            "src/lib.rs::absent",
+            "src/lib.rs:210:50",
+            "src/lib.rs:209-211",
+            "src/lib.rs:0-2",
+        ] {
+            assert_eq!(read(argument, false, false).1, 5, "{argument}");
+        }
+    }
+
+    #[test]
+    fn show_validates_the_whole_batch_before_reading() {
+        assert!(
+            show(
+                &["src/lib.rs::Parent".into(), "not-an-anchor".into()],
+                false,
+                Path::new("/does-not-exist"),
+                &[],
+                &BTreeMap::new()
+            )
+            .is_err()
+        );
+    }
+}

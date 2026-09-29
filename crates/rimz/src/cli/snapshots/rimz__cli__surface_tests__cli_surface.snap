@@ -1079,6 +1079,8 @@ rimz help lsp serve [hidden]
 
 rimz help lsp shim
 
+rimz help lsp show
+
 rimz help lsp status
 
 rimz help lsp stop
@@ -1768,6 +1770,8 @@ rimz lsp help serve [hidden]
 
 rimz lsp help shim
 
+rimz lsp help show
+
 rimz lsp help status
 
 rimz lsp help stop
@@ -1840,6 +1844,16 @@ rimz lsp shim
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --server <SERVER>  [action=set takes=1..=1 required]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz lsp show
+    <anchors>  [action=append takes=1..=inf required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --full  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 

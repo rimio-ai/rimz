@@ -44,7 +44,7 @@ pub struct Shortfall {
 }
 
 impl Shortfall {
-    pub fn fits(&self) -> bool {
+    fn fits(&self) -> bool {
         self.committed_bytes
             .checked_add(self.estimate_bytes)
             .and_then(|used| used.checked_add(self.reserve_bytes))

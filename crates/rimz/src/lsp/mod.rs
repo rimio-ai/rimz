@@ -35,4 +35,4 @@ pub enum LspErr {
     Server { code: i64, message: String },
 }
 
-pub type Result<T> = std::result::Result<T, LspErr>;
+type Result<T> = std::result::Result<T, LspErr>;

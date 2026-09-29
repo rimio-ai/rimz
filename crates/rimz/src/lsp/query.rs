@@ -827,12 +827,22 @@ pub fn render(
 
 const SNIPPET_WIDTH: usize = 100;
 
-fn snippet(text: &str) -> String {
+pub(super) fn snippet(text: &str) -> String {
     let text = text.trim();
     if text.chars().count() <= SNIPPET_WIDTH {
         return text.to_owned();
     }
     text.chars().take(SNIPPET_WIDTH - 1).chain(['…']).collect()
+}
+
+pub fn dirty_documents(entry: &super::registry::Entry) -> BTreeSet<String> {
+    entry
+        .attached
+        .iter()
+        .flat_map(|editor| &editor.open)
+        .filter(|document| document.owner && document.dirty)
+        .map(|document| document.uri.clone())
+        .collect()
 }
 
 fn grouped_position(

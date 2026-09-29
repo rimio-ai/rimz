@@ -27,6 +27,7 @@ rimz lsp find MuxBackend --server rust --json
 | `symbols` | file path | document symbol outline |
 | `find` | search string | workspace symbols matching the server's search, inside the checkout by default |
 | `check` | Markdown notes file | anchor verdicts and coverage summary |
+| `show` | one or more file anchors or positions | numbered source blocks from disk |
 
 Positions are `path:line:col`, with one-based line and column; omitting the column is an error. Paths are checkout-relative or absolute. `def` prints `path:line:col (start-end)` followed by the trimmed source snippet when available. The position points at the name; the span covers the full definition, with both server range lines converted to one-based lines. The span is omitted for single-line, empty, or absent full ranges and plain Location answers. `refs`, `impl`, `callers`, and `callees` group entries under a path line, then indent each `line:col` by two spaces, followed by two spaces and the source snippet or call item name when available. Checkout files precede external files, then sort by path and position (call items break ties by name). Source snippets are trimmed to 100 characters, ending with `…` when shortened. Outlines indent children, and hover prints markup. Empty answers for resolved targets print `no results`.
 
@@ -58,6 +59,19 @@ All eight verbs require one or more targets. Targets run sequentially in argumen
 `find --external` shows everything the server's search returned; it does not widen the search itself. Rust-analyzer's default search covers the workspace and its path dependencies, not registry crates or the standard library.
 
 The checkout comes from cwd or the global `--root`, using the most deeply enclosing registered checkout when present. Different worktrees have different servers even though they share a room. Queries wait up to 30 seconds for indexing; there is no CLI wait-duration flag.
+
+## Read source by anchor
+
+```sh
+rimz lsp show crates/rimz/src/lsp/check.rs::run crates/rimz/src/lsp/query.rs::render_with_source
+rimz lsp show 'crates/rimz/src/lsp/check.rs::run ~20' --full
+```
+
+`show <ANCHOR>... [--full]` accepts positions (`path:line:col`) and the [check anchor grammar](#check-anchors-in-a-notes-file), including `path::Type::method`, line ranges, and repository qualifiers. Quote anchors containing spaces. A pasted `path:line:col (start-end)` reads the stated lines. Positions select the item whose name contains the position, otherwise the innermost enclosing item. Symbol hints select the first matching outline item overlapping the hint within three lines; a unique symbol still resolves when its hint has drifted. Several hits without a selecting hint report `ambiguous-symbol` with candidates.
+
+Each block starts with checkout-relative `path:START-END`, then disk lines numbered with a right-aligned six-character line number and a tab. Blocks follow argument order, separated by one blank line. Items longer than 200 lines show their direct children's name-line snippets and spans instead, under `(outline: N lines; --full prints the body)`. `--full` prints the body; items without children and line-only anchors always print their bodies. An unsaved owning editor adds `(unsaved in editor)` after the header range; the body still comes from disk.
+
+Failures print `<argument>  <status>  <detail>` and do not omit later arguments. Missing files or symbols, external anchors, and lines outside the file exit 5; ambiguous paths or symbols exit 6; missing server configuration is `unchecked`, exit 3. Server errors retain query exit codes. Mixed failures use query severity (3, 4, 1, 6, 5, 0). An invalid argument exits 2 before any query. `show` has no `--json` flag.
 
 ## Check anchors in a notes file
 

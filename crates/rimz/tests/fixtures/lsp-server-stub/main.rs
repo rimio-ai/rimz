@@ -180,6 +180,29 @@ fn main() {
             "textDocument/documentSymbol"
                 if message["params"]["textDocument"]["uri"]
                     .as_str()
+                    .is_some_and(|uri| uri.ends_with("/show.rs")) =>
+            {
+                let symbol = |name, kind, start, end, selection, children| {
+                    json!({"name":name,"kind":kind,
+                        "range":{"start":{"line":start,"character":0},"end":{"line":end,"character":1}},
+                        "selectionRange":{"start":{"line":selection,"character":3},"end":{"line":selection,"character":8}},
+                        "children":children})
+                };
+                json!([
+                    symbol(
+                        "Parent",
+                        5,
+                        0,
+                        204,
+                        1,
+                        json!([symbol("child", 6, 2, 4, 3, json!([]))])
+                    ),
+                    symbol("child", 12, 207, 208, 207, json!([]))
+                ])
+            }
+            "textDocument/documentSymbol"
+                if message["params"]["textDocument"]["uri"]
+                    .as_str()
                     .is_some_and(|uri| uri.ends_with("/lib.rs")) =>
             {
                 let symbol = |name, kind, start, end, children| {
