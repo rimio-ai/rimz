@@ -356,6 +356,23 @@ type PinScan<'a> = &'a dyn Fn(&Path) -> Vec<PathBuf>;
 const NO_SCAN: PinScan<'static> = &|_| Vec::new();
 
 impl WorkspaceResolver {
+    /// Resolve a room choice using an explicit RimZ home for fixture isolation.
+    #[cfg(feature = "testkit")]
+    pub fn resolve_under(
+        start: impl AsRef<Path>,
+        root_override: Option<PathBuf>,
+        home: &Path,
+    ) -> Result<ResolvedWorkspace> {
+        Self::resolve_with_home(
+            ResolveMode::Create,
+            start.as_ref(),
+            root_override,
+            &|key: &str| std::env::var_os(key),
+            NO_SCAN,
+            home,
+        )
+    }
+
     /// Resolve a room choice from a starting path. `root_override` corresponds
     /// to the `--root` CLI flag and `[workspace] root` in `.rimz/config.toml`.
     ///
@@ -446,6 +463,24 @@ impl WorkspaceResolver {
         env: EnvReader,
         scan: PinScan,
     ) -> Result<ResolvedWorkspace> {
+        Self::resolve_with_home(
+            mode,
+            start_in,
+            root_override,
+            env,
+            scan,
+            &crate::disk::paths::rimz_home(),
+        )
+    }
+
+    fn resolve_with_home(
+        mode: ResolveMode,
+        start_in: &Path,
+        root_override: Option<PathBuf>,
+        env: EnvReader,
+        scan: PinScan,
+        home: &Path,
+    ) -> Result<ResolvedWorkspace> {
         let start = start_in
             .canonicalize()
             .unwrap_or_else(|_| start_in.to_path_buf());
@@ -453,7 +488,7 @@ impl WorkspaceResolver {
         let (project_root, cwd_project_root, worktree_root, root_class) =
             if let Some(root) = root_override {
                 let root = root.canonicalize().unwrap_or(root);
-                let class = classify_root(&root)?;
+                let class = classify_root(&root, home)?;
                 let cwd_project_root = (class == RootClass::Repo).then(|| root.clone());
                 (root.clone(), cwd_project_root, root, class)
             } else if mode == ResolveMode::Create && !start.exists() {
@@ -475,10 +510,10 @@ impl WorkspaceResolver {
                     Some((project, worktree)) => (Some(project), worktree),
                     None => (
                         None,
-                        resolve_marker(&start).unwrap_or_else(|| start.clone()),
+                        resolve_marker(&start, home).unwrap_or_else(|| start.clone()),
                     ),
                 };
-                let class = classify_root(&pinned)?;
+                let class = classify_root(&pinned, home)?;
                 (pinned, cwd_project_root, worktree_root, class)
             } else if let Some((project_root, worktree_root)) = resolve_git(&start)? {
                 (
@@ -487,7 +522,7 @@ impl WorkspaceResolver {
                     worktree_root,
                     RootClass::Repo,
                 )
-            } else if let Some(marker) = resolve_marker(&start) {
+            } else if let Some(marker) = resolve_marker(&start, home) {
                 (marker.clone(), None, marker, RootClass::Marker)
             } else {
                 (start.clone(), None, start.clone(), RootClass::Directory)
@@ -497,7 +532,7 @@ impl WorkspaceResolver {
         let worktree_root = normalized_root(worktree_root)?;
 
         let workspace_id = WorkspaceId::from_project_root(&project_root);
-        let paths = crate::StatePaths::for_project_root(&project_root)?;
+        let paths = crate::StatePaths::for_project_root_under(&project_root, home)?;
         let session_name = recorded_session_name(&paths);
         let worktree_branch = current_branch(&worktree_root)?;
 
@@ -600,11 +635,11 @@ fn recover_pinned_root(start: &Path, scan: PinScan) -> Option<PathBuf> {
 
 /// Classify a root that resolution did not derive itself (an explicit
 /// `--root`, the env pin): the richest tier the directory satisfies.
-fn classify_root(root: &Path) -> Result<RootClass> {
+fn classify_root(root: &Path, home: &Path) -> Result<RootClass> {
     if git_output(root, ["rev-parse", "--show-toplevel"])?.is_some() {
         return Ok(RootClass::Repo);
     }
-    if has_project_marker(root) {
+    if has_project_marker(root, home) {
         return Ok(RootClass::Marker);
     }
     Ok(RootClass::Directory)
@@ -685,18 +720,17 @@ fn current_branch(worktree_root: &Path) -> Result<Option<String>> {
     }
 }
 
-fn resolve_marker(start: &Path) -> Option<PathBuf> {
+fn resolve_marker(start: &Path, home: &Path) -> Option<PathBuf> {
     start
         .ancestors()
-        .find(|dir| has_project_marker(dir))
+        .find(|dir| has_project_marker(dir, home))
         .map(Path::to_path_buf)
 }
 
-fn has_project_marker(dir: &Path) -> bool {
-    let home = crate::disk::paths::rimz_home();
+fn has_project_marker(dir: &Path, home: &Path) -> bool {
     PROJECT_MARKERS.iter().any(|marker| {
         dir.join(marker).exists()
-            && !(marker.starts_with(".rimz/") && crate::disk::paths::holds_rimz_home(dir, &home))
+            && !(marker.starts_with(".rimz/") && crate::disk::paths::holds_rimz_home(dir, home))
     })
 }
 
