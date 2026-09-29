@@ -278,7 +278,7 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
 
 fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<Value> {
     let _: QueryRequest = serde_json::from_value(json!({"method": method, "params": params}))?;
-    let deadline = Instant::now() + Duration::from_millis(wait_ms.min(30_000));
+    let deadline = Instant::now() + Duration::from_millis(wait_ms.min(110_000));
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
     let refusal_epoch = model.refusal_epoch;
     let stop_epoch = model.stop_epoch;

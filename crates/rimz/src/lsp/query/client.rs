@@ -134,8 +134,9 @@ pub fn select(
 fn request(entry: &Entry, method: &str, params: Value) -> std::result::Result<Value, QueryErr> {
     let response = registry::request(
         entry,
-        &json!({"op": "query", "method": method, "params": params, "wait_ms": 30_000}),
-        Duration::from_secs(95),
+        &json!({"op": "query", "method": method, "params": params, "wait_ms": 110_000}),
+        // Outlasts the broker's 110s bound so exit 4 reports before a 120s agent shell timeout.
+        Duration::from_secs(115),
     )?;
     if response.get("refused").is_some() {
         return Err(QueryErr::Unavailable {

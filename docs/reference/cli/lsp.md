@@ -58,7 +58,7 @@ All eight verbs require one or more targets. Targets run sequentially in argumen
 
 `find --external` shows everything the server's search returned; it does not widen the search itself. Rust-analyzer's default search covers the workspace and its path dependencies, not registry crates or the standard library.
 
-The checkout comes from cwd or the global `--root`, using the most deeply enclosing registered checkout when present. Different worktrees have different servers even though they share a room. Queries wait up to 30 seconds for indexing; there is no CLI wait-duration flag.
+The checkout comes from cwd or the global `--root`, using the most deeply enclosing registered checkout when present. Different worktrees have different servers even though they share a room. Queries wait up to 110 seconds for indexing, which stays under a 120-second agent shell timeout; there is no CLI wait-duration flag.
 
 ## Read source by anchor
 

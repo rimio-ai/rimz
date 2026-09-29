@@ -66,7 +66,7 @@ Housekeeping runs every five seconds whether dormant or running. A ready server 
 
 ### Readiness
 
-Launch admission waits up to five seconds under the admission lock for the broker's entry, not its index. After `initialize`/`initialized`, open progress tokens mean `indexing`. The server becomes `ready` when all tokens close, at least one has ended, and two seconds have passed since the last progress event; without any progress, the fallback is ten seconds after initialization. The settle window prevents a short initial token from claiming readiness before indexing begins. Later progress can return it to `indexing`. Each lifetime resets readiness and start/ready timestamps. A query waits at most 30 seconds for startup and readiness, then reports elapsed time for this server lifetime rather than an empty result for an unfinished index.
+Launch admission waits up to five seconds under the admission lock for the broker's entry, not its index. After `initialize`/`initialized`, open progress tokens mean `indexing`. The server becomes `ready` when all tokens close, at least one has ended, and two seconds have passed since the last progress event; without any progress, the fallback is ten seconds after initialization. The settle window prevents a short initial token from claiming readiness before indexing begins. Later progress can return it to `indexing`. Each lifetime resets readiness and start/ready timestamps. A query waits at most 110 seconds for startup and readiness (the client's socket timeout is 115 seconds, so exit 4 lands before a 120-second agent shell timeout), then reports elapsed time for this server lifetime rather than an empty result for an unfinished index.
 
 ## Memory pressure
 
