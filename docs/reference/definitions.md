@@ -53,7 +53,7 @@ Follow the project's instructions and report what you verified.
 | `effort` | Provider-specific effort string. |
 | `auto-compact` | Native compaction window: integer or string token count from `100k` through `1M`, inclusive; no percentages or decimals. |
 | `budget` | Dollar cap as string or number; a string such as `20/day` selects a daily cap. |
-| `model-reminder` | Boolean controlling the model identity in the launch reminder. Defaults on. |
+| `model-reminder` | Boolean controlling the model identity in the launch reminder for solo agents and subagents. Defaults on; team members never show model names. |
 | `traits` | Trait names substituted into this definition's body. |
 | `tools` | Tool-name list, translated to provider arguments below. |
 | `subagents` | Direct profiles only: allowed RimZ child profiles; `[]` permits none. |

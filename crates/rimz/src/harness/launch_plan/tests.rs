@@ -307,7 +307,7 @@ fn resolves_team_for_launch_context_from_effective_config() {
         ["planner", "coder"]
     );
     assert_eq!(team.team.scratch_patterns(), ["blackboard.md"]);
-    // Every seat's agent is resolved here, where the effective profiles are in hand.
+    // The effective team supplies the member identities, not model names.
     let context = crate::harness::launch_context::team_launch_context(
         &request.identity.params,
         &request.action,
@@ -315,11 +315,9 @@ fn resolves_team_for_launch_context_from_effective_config() {
         project.path(),
     )
     .expect("team context");
-    assert!(
-        crate::harness::launch_context::reminder(&context, Some("Codex GPT 6 Astra")).contains(
-            "Seats: @planner runs on Claude; @coder (you) runs on Codex GPT 6 Astra. Resumed session"
-        )
-    );
+    assert!(crate::harness::launch_context::reminder(&context).contains(
+        "Resumed session; your earlier context continues.\n\nMembers: @planner, @coder (you)."
+    ));
 }
 
 #[test]

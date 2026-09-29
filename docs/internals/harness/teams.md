@@ -10,7 +10,7 @@ A team's memory files are gitignore patterns for the ephemeral records its membe
 
 `scratch::scan(root, patterns)` resolves the patterns against the checkout root for two consumers, the member launch reminder and `rimz teams show`, so both see the same files. It strips a leading `/` before rooting each glob, matches files only, and returns absolute paths sorted and deduplicated across patterns. Each file carries its line count (zero when unreadable) and its modification time when metadata allows. An invalid glob or a failed traversal sets `probe_failed` instead of failing the scan.
 
-The reminder presents relative paths and line counts as a launch-time snapshot. `teams show` scans again on every call and reports line counts and modification ages; its human output shows paths relative to the worktree, and its JSON keeps them absolute.
+The reminder ends its Environment section with a code block showing `$ ls` followed by the declared patterns without leading `/`, then the matching paths relative to cwd, or `(no such files)`. It omits line counts and omits the block when no patterns are declared. A failed probe adds the factual line that RimZ could not inspect every pattern. `teams show` scans again on every call and reports line counts and modification ages; its human output shows paths relative to the worktree, and its JSON keeps them absolute.
 
 ## The board and its stage
 

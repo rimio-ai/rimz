@@ -80,25 +80,22 @@ pub fn subagent_reminder() -> String {
 pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &Path) -> String {
     let mut paragraphs = Vec::new();
     let params = &request.identity.params;
-    if !request.subagent
-        && let Some(team) = reminders.team.as_ref()
-        && let Some(context) =
-            launch_context::team_launch_context(params, &request.action, team, cwd)
-    {
-        // The member's own seat runs what this process runs, not what config resolves to.
-        let runs_on = reminders
-            .model
-            .then(|| launch_context::runs_on(Some(request.kind.as_str()), params.model.as_deref()))
-            .flatten();
-        paragraphs.push(launch_context::reminder(&context, runs_on.as_deref()));
+    let team_context = reminders
+        .team
+        .as_ref()
+        .filter(|_| !request.subagent)
+        .and_then(|team| launch_context::team_launch_context(params, &request.action, team, cwd));
+    if let Some(context) = &team_context {
+        paragraphs.push(format!("### Team\n\n{}", launch_context::reminder(context)));
     } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
         paragraphs.push(model_line(params, &model));
     }
-    if reminders.env.is_some() || !reminders.lsp_servers.is_empty() {
+    if reminders.env.is_some() || !reminders.lsp_servers.is_empty() || team_context.is_some() {
         paragraphs.push(env_paragraph(
             reminders.env.as_ref(),
             cwd,
             &reminders.lsp_servers,
+            team_context.as_ref(),
         ));
     }
     paragraphs.push(if reminders.sandbox {
@@ -122,19 +119,27 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     wrap(&paragraphs.join("\n\n"))
 }
 
-fn env_paragraph(env: Option<&LaunchEnv>, cwd: &Path, lsp_servers: &[String]) -> String {
+fn env_paragraph(
+    env: Option<&LaunchEnv>,
+    cwd: &Path,
+    lsp_servers: &[String],
+    team: Option<&launch_context::TeamLaunchContext>,
+) -> String {
     let mut lines = vec!["### Environment\n".to_owned()];
-    if let Some(env) = env {
+    if env.is_some() || team.is_some() {
         lines.push(format!(
             "- cwd: {}",
             escape_reminder_text(&cwd.to_string_lossy())
         ));
-        if let Some(kind) = env.shell.as_deref().and_then(Path::file_name) {
-            lines.push(format!(
-                "- shell: {}",
-                escape_reminder_text(&kind.to_string_lossy())
-            ));
-        }
+    }
+    if let Some(kind) = env
+        .and_then(|env| env.shell.as_deref())
+        .and_then(Path::file_name)
+    {
+        lines.push(format!(
+            "- shell: {}",
+            escape_reminder_text(&kind.to_string_lossy())
+        ));
     }
     if !lsp_servers.is_empty() {
         lines.push(format!(
@@ -145,6 +150,9 @@ fn env_paragraph(env: Option<&LaunchEnv>, cwd: &Path, lsp_servers: &[String]) ->
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+    }
+    if let Some(files) = team.and_then(launch_context::files_block) {
+        lines.push(format!("\n{files}"));
     }
     lines.join("\n")
 }
@@ -171,7 +179,7 @@ fn model_line(params: &LaunchParams, fragment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ProfilesConfig, Team};
+    use crate::config::Team;
 
     #[test]
     fn shared_lsp_reminder_is_in_environment_for_peers_and_children() {
@@ -203,7 +211,7 @@ mod tests {
     }
 
     fn team_reminder(team: Team) -> TeamReminder {
-        TeamReminder::new(team, &ProfilesConfig::default())
+        TeamReminder::new(team)
     }
 
     #[test]
@@ -334,11 +342,12 @@ When a skill's description matches the work in hand, invoke it, even when you kn
         assert_eq!(text.matches("<system_reminder>").count(), 1);
         assert_eq!(text.matches("</system_reminder>").count(), 1);
         assert!(text.contains(
-            "no run state and no board; you open it with the Goal, then flip to the first stage."
+            "### Team\n\nYou are @coder, leader of team `forge`.\n\nPipeline: Implement (you) → Done"
         ));
         request.subagent = true;
         let text = render(&request, &reminders, Path::new("/worktree"));
-        assert!(!text.contains("rimz teams flip"));
+        assert!(!text.contains("### Team"));
+        assert!(!text.contains("$ ls"));
     }
 
     #[test]
@@ -381,9 +390,12 @@ When a skill's description matches the work in hand, invoke it, even when you kn
                 assert_eq!(text.contains("team `forge`"), !subagent);
                 assert_eq!(text.matches("<system_reminder>").count(), 1);
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
-                let model = text.find("GPT 6 Astra").expect("model line");
+                let identity = text
+                    .find(if subagent { "GPT 6 Astra" } else { "### Team" })
+                    .expect("identity");
+                assert_eq!(text.contains("GPT 6 Astra"), subagent);
                 let env = text.find("- shell: sh").expect("environment paragraph");
-                assert!(model < env);
+                assert!(identity < env);
                 assert!(
                     env < text
                         .find(if sandbox {
@@ -401,11 +413,6 @@ When a skill's description matches the work in hand, invoke it, even when you kn
                     })
                     .expect("policy paragraph");
                 assert!(env < policy);
-                if !subagent {
-                    // The fragment rides inside the team paragraph's first sentence.
-                    assert!(text.find("team `forge`").unwrap() < model);
-                    assert!(model < text.find("Fresh session").unwrap());
-                }
                 let view = text
                     .find(if sandbox {
                         SANDBOX_REMINDER_BODY
@@ -413,7 +420,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
                         HOST_SCRATCH_REMINDER_BODY
                     })
                     .expect("view paragraph");
-                assert!(model < view && view < policy);
+                assert!(identity < view && view < policy);
             }
         }
     }
@@ -471,13 +478,13 @@ When a skill's description matches the work in hand, invoke it, even when you kn
     }
 
     #[test]
-    fn team_paragraph_names_every_seat_and_runs_the_launch_on_its_own() {
+    fn team_paragraph_names_every_seat_without_models() {
         let mut request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
         request.identity.params = LaunchParams {
             team: Some("forge".to_owned()),
             role: Some("planner".to_owned()),
-            // The launch overrides the profile's model; the seat follows the launch.
+            // Neither the launch model nor the configured model appears for a team.
             model: Some("claude-fable-5-1".to_owned()),
             effort: Some("high".to_owned()),
             ..LaunchParams::default()
@@ -493,19 +500,63 @@ When a skill's description matches the work in hand, invoke it, even when you kn
         let text = render(&request, &reminders, Path::new("/worktree"));
         assert!(
             text.starts_with(
-                "<system_reminder>\nYou are @planner, leader of team `forge`. Seats: @planner (you) runs on Claude Fable 5.1; @coder runs on Codex. Fresh session in worktree /worktree."
+                "<system_reminder>\n### Team\n\nYou are @planner, leader of team `forge`.\n\nMembers: @planner (you), @coder."
             ),
             "{text}"
         );
-        assert_eq!(text.matches("Fable 5.1").count(), 1);
+        assert!(!text.contains("Fable 5.1"));
         assert!(!text.contains("Opus 4.8"));
 
-        // `model-reminder = false` unnames every seat, the member's own and its teammates'.
+        // The model toggle has no effect for team members.
+        let with_model_enabled = text;
         reminders.model = false;
         let text = render(&request, &reminders, Path::new("/worktree"));
-        assert!(
-            text.contains("Seats: @planner (you); @coder. Fresh session"),
-            "{text}"
-        );
+        assert_eq!(text, with_model_enabled);
+    }
+
+    #[test]
+    fn team_files_finish_environment_after_bullets() {
+        let worktree = tempfile::tempdir().unwrap();
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        request.identity.params.team = Some("forge".to_owned());
+        request.identity.params.role = Some("planner".to_owned());
+        let team: Team = toml::from_str(
+            "leader = 'planner'\n[[roles]]\nrole = 'planner'\nprofile = 'claude'\nowns = ['Plan']",
+        )
+        .unwrap();
+        let mut reminders = LaunchReminders {
+            env: Some(LaunchEnv {
+                shell: Some("/bin/zsh".into()),
+            }),
+            lsp_servers: vec!["rust".to_owned()],
+            team: Some(team_reminder(team)),
+            ..Default::default()
+        };
+        for present in [false, true] {
+            if present {
+                std::fs::write(worktree.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+            }
+            let text = render(&request, &reminders, worktree.path());
+            let listing = if present {
+                "blackboard.md"
+            } else {
+                "(no such files)"
+            };
+            assert!(text.contains(&format!("- shell: zsh\n- lsp: rust, via Skill(rimz-lsp)\n\n```\n$ ls blackboard.md *-notes.md\n{listing}\n```\n\n### Files")));
+            assert_eq!(text.matches(worktree.path().to_str().unwrap()).count(), 1);
+            assert_eq!(text.contains("[Done]"), present);
+        }
+        reminders.env = None;
+        reminders.lsp_servers.clear();
+        let text = render(&request, &reminders, worktree.path());
+        assert!(text.contains(&format!(
+            "### Environment\n\n- cwd: {}\n\n```",
+            worktree.path().display()
+        )));
+        reminders.team.as_mut().unwrap().team.scratch_files = Some(Vec::new());
+        let text = render(&request, &reminders, worktree.path());
+        assert!(!text.contains("$ ls"));
+        assert!(!text.contains("no memory files"));
     }
 }
