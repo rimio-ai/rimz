@@ -1,4 +1,4 @@
-//! Enrollment and settlement of launcher-opened persistent peer turns.
+//! Run delivery stamping and enrollment and settlement of launcher-opened persistent peer turns.
 
 use std::path::Path;
 
@@ -57,15 +57,24 @@ pub fn open_peer_run(paths: &StatePaths, peer: &AgentState) -> Result<Option<Run
     }))
 }
 
+/// Record confirmed delivery: stamp the answer of the hook's subagent run, or enroll a peer turn
+/// for any other card (a foreground `-p` peer carries a non-subagent hook run id).
 /// Called inside `Store::confirm_delivered_for_card_with`'s workspace lock; never takes the lock itself.
-pub fn enroll_peer_run(
+pub fn record_run_delivery(
     paths: &StatePaths,
     peer: &AgentState,
     adapter: &AgentDefinition,
     records: &[MessageRecord],
     selection: DeliveryAckMatch,
     cwd: &Path,
+    run_id: Option<&crate::ids::RunId>,
 ) -> Result<Option<RunRecord>> {
+    if let Some(run_id) = run_id {
+        let record = super::load(paths, run_id)?;
+        if record.subagent {
+            return stamp_subagent_delivery(paths, record, peer, records);
+        }
+    }
     if selection != DeliveryAckMatch::PromptCorrelated || !peer_can_report(adapter) {
         return Ok(None);
     }
@@ -110,6 +119,53 @@ pub fn enroll_peer_run(
     for opener in openers {
         if !turn.opened_by.contains(&opener.message_id) {
             turn.opened_by.push(opener.message_id.clone());
+            changed = true;
+        }
+    }
+    if changed {
+        record.updated_at = jiff::Timestamp::now();
+        crate::store::run::write(&paths.runs_dir, &record)?;
+    }
+    Ok(Some(record))
+}
+
+fn stamp_subagent_delivery(
+    paths: &StatePaths,
+    mut record: RunRecord,
+    card: &AgentState,
+    records: &[MessageRecord],
+) -> Result<Option<RunRecord>> {
+    let openers = records
+        .iter()
+        .filter(|record| record.sender.is_conversation())
+        .collect::<Vec<_>>();
+    if openers.is_empty() {
+        return Ok(None);
+    }
+    if record.status.is_terminal()
+        || record.peer.is_some()
+        || record.team.is_some()
+        || record.kind != card.kind
+        || record.agent_id.as_ref() != Some(&card.agent_id)
+    {
+        return Ok(None);
+    }
+    let mut changed = false;
+    if let Some(turn) = record.follow_up.as_mut()
+        && turn.prompt.is_none()
+    {
+        turn.prompt = Some(
+            openers
+                .iter()
+                .map(|opener| opener.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
+        changed = true;
+    }
+    for opener in openers {
+        if !record.opened_by.contains(&opener.message_id) {
+            record.opened_by.push(opener.message_id.clone());
             changed = true;
         }
     }

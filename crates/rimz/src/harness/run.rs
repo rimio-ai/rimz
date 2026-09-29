@@ -4,7 +4,7 @@ mod peer;
 pub mod report;
 mod team;
 pub use peer::{
-    create_peer_prompt, enroll_peer_run, fail_peer_run, open_peer_run, peer_can_report,
+    create_peer_prompt, fail_peer_run, open_peer_run, peer_can_report, record_run_delivery,
 };
 pub use team::{complete_team_run, open_team_run, open_team_run_for, reopen_team_run};
 

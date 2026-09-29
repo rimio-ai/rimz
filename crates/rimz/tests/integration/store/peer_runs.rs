@@ -3,7 +3,7 @@ use std::path::Path;
 use rimz::agents::{AgentCardRef, AgentState, AgentStatus, LaunchedBy};
 use rimz::disk::lock::WorkspaceLock;
 use rimz::harness::run;
-use rimz::ids::AgentKind;
+use rimz::ids::{AgentKind, RunId};
 use rimz::store::message::{
     DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender, MessageStatus,
 };
@@ -60,6 +60,15 @@ fn sent(
 }
 
 fn ack(h: &Harness, peer: &AgentState, ack: DeliveryAck<'_>) -> Vec<MessageRecord> {
+    ack_in_run(h, peer, ack, None)
+}
+
+fn ack_in_run(
+    h: &Harness,
+    peer: &AgentState,
+    ack: DeliveryAck<'_>,
+    run_id: Option<&RunId>,
+) -> Vec<MessageRecord> {
     let adapter = rimz::agents::registry::definition_by_kind("claude").unwrap();
     let mut observed = false;
     let delivered = h
@@ -90,13 +99,14 @@ fn ack(h: &Harness, peer: &AgentState, ack: DeliveryAck<'_>) -> Vec<MessageRecor
                             .any(|selected| selected.message_id == record.message_id))
                         .all(|record| record.status == MessageStatus::Sent)
                 );
-                run::enroll_peer_run(
+                run::record_run_delivery(
                     h.store.paths(),
                     peer,
                     adapter,
                     records,
                     selection,
                     Path::new("/repo"),
+                    run_id,
                 )
                 .unwrap();
                 if selection == DeliveryAckMatch::PromptCorrelated
@@ -117,6 +127,32 @@ fn ack(h: &Harness, peer: &AgentState, ack: DeliveryAck<'_>) -> Vec<MessageRecor
         "ack consumer receives the selected records"
     );
     delivered
+}
+
+#[test]
+fn foreground_peer_with_its_own_run_id_still_enrolls_launcher_turns() {
+    let h = Harness::new();
+    let peer = peer();
+    let foreground = rimz::store::run::RunRecord::new(
+        h.workspace_id.clone(),
+        peer.kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "foreground".into(),
+        Path::new("/repo").into(),
+    );
+    run::create(h.store.paths(), &foreground).unwrap();
+    sent(&h, &peer, &["first"], launcher(), MessageBody::Prompt);
+    ack_in_run(
+        &h,
+        &peer,
+        DeliveryAck::TurnStarted {
+            prompt: Some("Type: AGENT_MESSAGE\nFrom: @launcher\nContent:\nfirst"),
+        },
+        Some(&foreground.run_id),
+    );
+    let enrolled = run::open_peer_run(h.store.paths(), &peer).unwrap().unwrap();
+    assert_ne!(enrolled.run_id, foreground.run_id);
+    assert_eq!(enrolled.prompt, "first");
 }
 
 #[test]
