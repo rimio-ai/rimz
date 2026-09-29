@@ -609,6 +609,7 @@ fn accounts_section_alarms_only_for_the_room_account_it_cannot_launch_into() {
         name: name.to_owned(),
         home: (name != "default").then(|| format!("/srv/{name}")),
         room,
+        machine_default: false,
         problem: problem.map(str::to_owned),
     };
     let accounts = Probe::Ready(Accounts {

@@ -1474,7 +1474,7 @@ fn render_accounts(
         }
     };
     section(w, tally, "ACCOUNTS")?;
-    let mut table = Table::new(["", "KIND", "NAME", "HOME", "STATUS"]);
+    let mut table = Table::new(["", "KIND", "NAME", "HOME", "STATUS", "NEW ROOMS"]);
     for row in &accounts.rows {
         let (health, status) = match (&row.problem, row.room) {
             (Some(problem), true) => (Health::Alarm, problem.as_str()),
@@ -1493,6 +1493,7 @@ fn render_accounts(
             )
             .dash(),
             cell(status).fg(style_of(health)),
+            cell(if row.machine_default { "yes" } else { "-" }),
         ]);
     }
     table.render(w)

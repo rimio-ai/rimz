@@ -517,6 +517,7 @@ pub(super) struct AccountRow {
     pub(super) home: Option<String>,
     /// The current room launches this kind under this account.
     pub(super) room: bool,
+    pub(super) machine_default: bool,
     /// Why a room cannot launch into this account, with the fix.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) problem: Option<String>,
