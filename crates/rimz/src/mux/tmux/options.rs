@@ -363,6 +363,11 @@ mod tests {
 
     fn sidebar_opts(refresh_ms: Option<u16>) -> SidebarPaneOptions {
         SidebarPaneOptions {
+            runtime: crate::disk::paths::RuntimePaths::under(
+                WorkspaceId::from_project_root(Path::new("/tmp/rimz-tmux-refresh")),
+                tempfile::tempdir().expect("runtime root").path(),
+            )
+            .expect("runtime paths"),
             session_name: "room".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tmux-refresh")),
             project_root: PathBuf::from("/tmp/rimz-tmux-refresh"),

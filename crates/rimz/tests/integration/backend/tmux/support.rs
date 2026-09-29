@@ -33,6 +33,7 @@ pub(super) fn tiled_column(panes: Vec<PaneCmd>) -> LayoutColumn {
 }
 
 pub(super) fn sidebar_opts(
+    runtime_root: &Path,
     session: &str,
     stub: PathBuf,
     detected_cols: Option<u16>,
@@ -53,6 +54,14 @@ pub(super) fn sidebar_opts(
             },
         );
     SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(
+                WorkspaceId::from_project_root(&workspace_root),
+                runtime_root,
+            )
+            .expect("fixture state"),
+            runtime_root,
+        ),
         session_name: session.to_owned(),
         workspace_id: WorkspaceId::from_project_root(&workspace_root),
         project_root: std::env::temp_dir(),

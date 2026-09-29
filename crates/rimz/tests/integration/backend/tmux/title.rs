@@ -38,7 +38,12 @@ fn window_names_keep_literal_hashes() {
             focus: true,
             dock_sidebar: true,
             after: None,
-            sidebar: sidebar_opts(session, PathBuf::from("/bin/true"), Some(120)),
+            sidebar: sidebar_opts(
+                server._tempdir.path(),
+                session,
+                PathBuf::from("/bin/true"),
+                Some(120),
+            ),
         })
         .expect("open named tab");
     assert!(
@@ -152,7 +157,12 @@ fn named_layout_pane_drives_the_terminal_title_format() {
             focus: true,
             dock_sidebar: true,
             after: None,
-            sidebar: sidebar_opts(session, PathBuf::from("/bin/true"), Some(120)),
+            sidebar: sidebar_opts(
+                server._tempdir.path(),
+                session,
+                PathBuf::from("/bin/true"),
+                Some(120),
+            ),
         })
         .expect("open named pane tab");
 

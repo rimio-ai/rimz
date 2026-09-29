@@ -24,6 +24,11 @@ fn sidebar_opts(
         pinned: false,
     };
     SidebarPaneOptions {
+        runtime: crate::disk::paths::RuntimePaths::under(
+            WorkspaceId::from_project_root(Path::new("/proj/root")),
+            tempfile::tempdir().expect("runtime root").path(),
+        )
+        .expect("runtime paths"),
         session_name: session_name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
         project_root: PathBuf::from("/proj/root"),

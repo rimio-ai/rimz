@@ -509,6 +509,11 @@ mod tests {
     fn sidebar_serve_args_match_recovery_process_detection() {
         let root = PathBuf::from("/tmp/rimz-recovery-serve");
         let opts = crate::mux::SidebarPaneOptions {
+            runtime: crate::disk::paths::RuntimePaths::under(
+                WorkspaceId::from_project_root(&root),
+                tempfile::tempdir().expect("runtime root").path(),
+            )
+            .expect("runtime paths"),
             session_name: SESSION.to_owned(),
             workspace_id: WorkspaceId::from_project_root(&root),
             project_root: root.clone(),

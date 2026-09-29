@@ -193,6 +193,14 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(
+                WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
+                cwd.path(),
+            )
+            .expect("fixture state"),
+            cwd.path(),
+        ),
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
         project_root: cwd.path().to_path_buf(),
@@ -265,6 +273,14 @@ fn ensure_clean_session_births_resume_panes_under_the_pane_pin() {
     let (_stub_dir, stub) = sidebar_command_stub();
     let tab = super::super::identity_marker_tab(work.path(), "feature", &[2, 1]);
     let opts = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(
+                WorkspaceId::from_project_root(Path::new("/tmp/rimz-resumepin")),
+                cwd.path(),
+            )
+            .expect("fixture state"),
+            cwd.path(),
+        ),
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-resumepin")),
         project_root: cwd.path().to_path_buf(),

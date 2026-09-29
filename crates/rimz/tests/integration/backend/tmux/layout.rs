@@ -10,7 +10,7 @@ fn tab_injects_env_into_every_column_and_row() {
     ensure_rimz_session(&server, session, Some((200, 60)));
     let cwd = TempDir::new().unwrap();
     let (_stub_dir, stub) = delayed_sidebar_title_command_stub();
-    let mut sidebar = sidebar_opts(session, stub, Some(200));
+    let mut sidebar = sidebar_opts(server._tempdir.path(), session, stub, Some(200));
     sidebar.cwd = cwd.path().to_owned();
     let columns = (0..2)
         .map(|column| {
@@ -70,7 +70,7 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
     // Hook-born sidebars must be recognized from their spawn command, before
     // their process publishes the title used by the other chrome signals.
     let (_stub_dir, stub) = delayed_sidebar_title_command_stub();
-    let sidebar = sidebar_opts(session, stub, Some(290));
+    let sidebar = sidebar_opts(server._tempdir.path(), session, stub, Some(290));
     server
         .backend
         .open_sidebar(&sidebar, None)
@@ -242,7 +242,7 @@ fn open_background_view_births_columns_and_is_idempotent() {
     let server = TmuxServer::new();
     server.ensure_with_shell("rimz-bgview");
     let (_stub_dir, stub) = sidebar_command_stub();
-    let sidebar = sidebar_opts("rimz-bgview", stub, Some(80));
+    let sidebar = sidebar_opts(server._tempdir.path(), "rimz-bgview", stub, Some(80));
     // Install the `after-new-window` sidebar hook the way `rimz start` does
     // before launching the host.
     server
@@ -446,7 +446,7 @@ fn repair_daemon_view_recreates_missing_runtime_panes_in_one_column() {
     let server = TmuxServer::new();
     server.ensure_with_shell("rimz-bg-repair");
     let (_stub_dir, stub) = sidebar_command_stub();
-    let sidebar = sidebar_opts("rimz-bg-repair", stub, Some(80));
+    let sidebar = sidebar_opts(server._tempdir.path(), "rimz-bg-repair", stub, Some(80));
     server
         .backend
         .open_sidebar(&sidebar, None)
@@ -562,10 +562,15 @@ fn open_tab_builds_multi_column_layout() {
         .expect("ensure_session");
     let (_stub_dir, stub) = sidebar_command_stub();
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(WorkspaceId::from_project_root(cwd.path()), cwd.path())
+                .expect("fixture state"),
+            cwd.path(),
+        ),
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        ..sidebar_opts("rimz-tab", stub, Some(300))
+        ..sidebar_opts(server._tempdir.path(), "rimz-tab", stub, Some(300))
     };
     // Installs the `after-new-window` hook so the new tab is born with a sidebar.
     server
@@ -698,10 +703,15 @@ fn stacked_splits_tile_the_column_evenly() {
         .expect("ensure_session");
     let (_stub_dir, stub) = sidebar_command_stub();
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(WorkspaceId::from_project_root(cwd.path()), cwd.path())
+                .expect("fixture state"),
+            cwd.path(),
+        ),
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        ..sidebar_opts("rimz-stacked", stub, Some(120))
+        ..sidebar_opts(server._tempdir.path(), "rimz-stacked", stub, Some(120))
     };
     server
         .backend
@@ -820,10 +830,15 @@ fn open_tab_after_anchor_inserts_next_to_it() {
         .expect("ensure_session");
     let (_stub_dir, stub) = sidebar_command_stub();
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(WorkspaceId::from_project_root(cwd.path()), cwd.path())
+                .expect("fixture state"),
+            cwd.path(),
+        ),
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        ..sidebar_opts(session, stub, Some(120))
+        ..sidebar_opts(server._tempdir.path(), session, stub, Some(120))
     };
     server
         .backend
@@ -886,10 +901,15 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
     // Dock suppression must not depend on the renderer's async title escape.
     let (_stub_dir, stub) = delayed_sidebar_title_command_stub();
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(WorkspaceId::from_project_root(cwd.path()), cwd.path())
+                .expect("fixture state"),
+            cwd.path(),
+        ),
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        ..sidebar_opts("rimz-gallery", stub, Some(240))
+        ..sidebar_opts(server._tempdir.path(), "rimz-gallery", stub, Some(240))
     };
     server
         .backend
@@ -959,10 +979,15 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
         .expect("ensure_session");
     let (_stub_dir, stub) = sidebar_command_stub();
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(WorkspaceId::from_project_root(cwd.path()), cwd.path())
+                .expect("fixture state"),
+            cwd.path(),
+        ),
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
         cwd: cwd.path().to_path_buf(),
-        ..sidebar_opts("rimz-narrow-tab", stub, Some(300))
+        ..sidebar_opts(server._tempdir.path(), "rimz-narrow-tab", stub, Some(300))
     };
     server
         .backend
