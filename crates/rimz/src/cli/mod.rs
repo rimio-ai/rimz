@@ -337,24 +337,19 @@ pub(crate) fn resolve_open_ask<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     current_channel: Option<&str>,
-    awaiting_only: bool,
 ) -> Result<Option<&'a AgentState>> {
     if raw.starts_with("ask_") {
         let ask_id = AskId::parse(raw)?;
-        return Ok(find_open_ask(snapshot, &ask_id, awaiting_only));
+        return Ok(find_open_ask(snapshot, &ask_id));
     }
     resolve_agent_one(store, snapshot, raw, None, current_channel).map(Some)
 }
 
-fn find_open_ask<'a>(
-    snapshot: &'a SidebarSnapshot,
-    ask_id: &AskId,
-    awaiting_only: bool,
-) -> Option<&'a AgentState> {
-    snapshot.agents.iter().find(|agent| {
-        (!awaiting_only || agent.is_awaiting_input())
-            && agent.open_ask.as_ref().is_some_and(|ask| &ask.id == ask_id)
-    })
+fn find_open_ask<'a>(snapshot: &'a SidebarSnapshot, ask_id: &AskId) -> Option<&'a AgentState> {
+    snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.actionable_asks().any(|(ask, _)| &ask.id == ask_id))
 }
 
 /// Resolve a ref to every matching live agent pane for `message --steer` and
@@ -569,9 +564,9 @@ enum Subcmd {
     Wait(Box<wait::WaitCommand>),
     /// Discover, inspect, install, launch, and resume named teams.
     Teams(Box<teams::TeamsArgs>),
-    /// Inspect the blocking prompts agents currently have open.
+    /// Inspect the prompts agents currently have open.
     Asks(asks::AsksArgs),
-    /// Answer one current blocking prompt in its agent pane.
+    /// Answer one current prompt in its agent pane.
     Answer(answer::AnswerArgs),
     /// Schedule supervised agent turns.
     ///

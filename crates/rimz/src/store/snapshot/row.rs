@@ -301,6 +301,8 @@ pub enum RowCard {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentCard {
     pub status: AgentStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued_asks: Vec<crate::agents::QueuedAsk>,
     /// Every armed one-shot delivery, soonest first, copied from the enriched rollup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_waits: Vec<PendingWait>,
@@ -408,6 +410,7 @@ impl Default for AgentCard {
     fn default() -> Self {
         Self {
             status: AgentStatus::Idle,
+            queued_asks: Vec::new(),
             pending_waits: Vec::new(),
             background_shells: Vec::new(),
             phase: TurnPhase::Idle,

@@ -1,6 +1,6 @@
 # Asks and answers
 
-An ask is a blocking prompt that owns an agent's input: a permission prompt, a plan approval, or a question. `rimz asks` reads the open asks as structured data, and `rimz answer` answers one by typing into the agent's own prompt UI, the same keys you would press in the pane. Every agent whose questions reach RimZ shows up in `rimz asks`; `rimz answer` works for Claude, Codex, and Pi, within the limits in [What each agent accepts](#what-each-agent-accepts). The workflow is taught in [the messaging guide](../../guide/messaging.md#asks-and-answers), and which agents surface their asks at all is in [agent support](../agent-support.md).
+An ask is a permission prompt, a plan approval, or a question. Blocking asks own an agent's input; async questions leave the agent working. `rimz asks` reads the open asks as structured data, and `rimz answer` answers a supported blocking ask by typing into the agent's own prompt UI, the same keys you would press in the pane. Every agent whose questions reach RimZ shows up in `rimz asks`; `rimz answer` works for Claude, Codex, and Pi, within the limits in [What each agent accepts](#what-each-agent-accepts). The workflow is taught in [the messaging guide](../../guide/messaging.md#asks-and-answers), and which agents surface their asks at all is in [agent support](../agent-support.md).
 
 ## List open asks
 
@@ -57,6 +57,7 @@ The context lines render as Markdown under the [agent prose](../cli.md#agent-pro
   "ask_id": "ask_0123456789abcdef",
   "agent": { "handle": "@planner#auth", "kind": "claude", "channel": "auth" },
   "kind": "question",
+  "delivery": "blocking",
   "since": "2026-07-09T12:00:00Z",
   "detail": "Choose a rollout",
   "context": "A staged rollout limits the blast radius.",
@@ -81,6 +82,7 @@ The context lines render as Markdown under the [agent prose](../cli.md#agent-pro
 | `agent.kind` | The agent kind, such as `claude`. |
 | `agent.channel` | The agent's channel. Absent when it has none. |
 | `kind` | `permission`, `plan_approval`, or `question`. |
+| `delivery` | `blocking` owns the agent's input; `async` is a question the agent asks while continuing its turn. |
 | `since` | When the prompt opened. |
 | `detail` | A one-line summary of the prompt, such as a permission ask's tool call. `null` when the agent recorded none. |
 | `context` | The message the agent wrote just before raising the prompt. Absent when it wrote none, and always absent on permission asks. |
@@ -92,6 +94,14 @@ The context lines render as Markdown under the [agent prose](../cli.md#agent-pro
 | `questions[].multi_select` | Whether the question takes several options. |
 
 Permission and plan asks carry one question whose options are only the actions `answer` can deliver for that agent. A Codex permission ask carries no options, because none can be answered from outside the pane.
+
+### Questions while Codex works
+
+Codex async questions appear individually, with `delivery: "async"` and `kind: "question"`. The human list marks them `question (async)`. An agent address selects its blocking ask first, otherwise its oldest async question; an ask id selects that exact question. Async questions do not pause work or park messages. An answer removes only its question; any unanswered questions disappear when the turn closes. A question skipped locally with Ctrl+] may remain listed until then.
+
+`rimz answer` refuses async questions with exit `3`, sends no keys, and records no answer. Focus the Codex pane and press Shift+Left to answer in its question editor.
+
+Codex may hold an answer given in the pane until a later tool boundary. The question stays listed until RimZ observes that answer or the turn closes.
 
 ## Answer an ask
 
@@ -138,9 +148,9 @@ Structured input is a JSON array with one object per question, in order. Use it 
 2. Wait up to 30 seconds for any other RimZ write to the same pane (a message, another answer) to finish, then hold the pane until the answer is sent. `--no-wait` does not skip this wait.
 3. Check that the ask read in step 1 is still the agent's open ask. A prompt answered or replaced in the meantime gets no keys, and the command exits `2`. This check runs for an address target too.
 4. Send the keys. A provider subagent's answer goes to its root agent's pane.
-5. Wait for confirmation: the ask closes, or the agent records an answer for it. `--no-wait` stops before this step.
+5. Wait for confirmation: the blocking ask closes or the agent records an answer for it. `--no-wait` stops before this step.
 
-On success `answer` prints `answered <ask_id> for <handle>`, or `sent answer for <ask_id> to <handle>` with `--no-wait`. Errors print `error: <message>` on stderr. An ask that closes during step 5 for any reason, including being dismissed in the pane, counts as confirmed.
+On success `answer` prints `answered <ask_id> for <handle>`, or `sent answer for <ask_id> to <handle>` with `--no-wait`. Errors print `error: <message>` on stderr. A blocking ask that closes during step 5 for any reason, including being dismissed in the pane, counts as confirmed.
 
 ### Exit codes
 
@@ -151,8 +161,8 @@ On success `answer` prints `answered <ask_id> for <handle>`, or `sent answer for
 | `0` | The agent confirmed the answer, or `--no-wait` sent it. |
 | `1` | No room, or the store could not be read or written. |
 | `2` | The target is not an agent or not asking, the ask is no longer current, the agent has no live pane, the pane stayed busy for 30 seconds, or sending failed. A send that fails partway may leave some keys in the pane. An invalid command line (such as `--wait 5d`) also exits `2`. |
-| `3` | The answer is invalid for the ask, the `--json` input cannot be read or parsed, or the agent does not support the answer. |
-| `4` | The keys were sent, but the agent did not confirm before the `--wait` deadline. |
+| `3` | The answer is invalid for the ask, the `--json` input cannot be read or parsed, or the agent does not support the answer (including Codex async questions). |
+| `4` | A blocking ask's keys were sent, but the agent did not confirm before the `--wait` deadline. |
 
 `rimz asks` follows the [CLI-wide exit codes](../cli.md#exit-codes).
 
@@ -163,7 +173,7 @@ On success `answer` prints `answered <ask_id> for <handle>`, or `sent answer for
 | Agent | Question | Permission | Plan approval |
 | --- | --- | --- | --- |
 | Claude | Single picks, multi-select picks, and free text. Picks and text together only on a multi-select question, through `--json`. | `allow`, which approves the current tool call once. | `approve`, which approves the plan and turns on auto-accept edits. |
-| Codex | One pick per question. Multi-select questions, free text, and `Other` or `None of the above` options are refused. | Refused. | `implement`, which picks "Yes, implement this plan" and switches Codex from Plan mode to Default mode. |
+| Codex | Blocking questions: one pick per question; free text and custom options are refused. Async questions: refused; focus the pane and press Shift+Left. No multi-select. | Refused. | `implement`, which picks "Yes, implement this plan" and switches Codex from Plan mode to Default mode. |
 | Pi | Single picks, multi-select picks, and free text, on every question shape. Picks and text together are refused. | Not raised. | Not raised. |
 
 Pi asks come from the [`@juicesharp/rpiv-ask-user-question`](https://github.com/juicesharp/rpiv-mono/tree/v2.7.1/packages/rpiv-ask-user-question) extension's questionnaire; Pi raises no permission or plan prompts of its own. Cancel and "Chat about this" stay in the Pi pane.

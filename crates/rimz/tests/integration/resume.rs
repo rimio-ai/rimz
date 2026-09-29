@@ -34,6 +34,7 @@ fn registered(
     branch: &str,
 ) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
+        ask_queue: None,
         agent_id: Some(agent_id.into()),
         agent_name: Some(name.to_owned()),
         launch: LaunchParams::default(),

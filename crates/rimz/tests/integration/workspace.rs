@@ -292,6 +292,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 
 fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
+        ask_queue: None,
         agent_id: Some(AgentSessionId::from("claude-1")),
         agent_name: None,
         launch: LaunchParams::default(),

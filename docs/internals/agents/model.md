@@ -1,5 +1,7 @@
 # The agent model
 
+Non-blocking questions are separate from the blocking `open_ask`: the observation's optional `ask_queue` edit maintains an ordered `queued_asks` list. The lifecycle fold removes answered native keys, appends new questions, and clears the list when the resulting status is neither running nor waiting. `AgentState::actionable_asks` lists the blocking prompt first, then queued questions, with their delivery mode. Ask readers use that accessor; status, message parking, active time, keepalive, and idle compaction continue to use the unchanged blocking predicate. Structured details stay in the transcript and are materialized by exact AskId. The sidebar copies the queue into its card without changing the displayed status.
+
 This page owns how RimZ turns an agent's native events into one durable state per session, how that state moves, and how the status a reader sees is projected from it. An adapter turns each native event into an [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) ([adapter.md](./adapter.md)); the rollup described here folds those observations into one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per session; the sidebar projects that state into a row ([sidebar.md](../sidebar/sidebar.md)).
 
 ```text

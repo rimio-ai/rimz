@@ -10,6 +10,102 @@ use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 const REQUEST_USER_INPUT_TOOL: &str = "request_user_input";
 const SUBMITTED_PROMPT_MAX_CHARS: usize = 1_000;
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsyncQuestions {
+    questions: Vec<AsyncQuestion>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsyncQuestion {
+    title: String,
+    #[serde(default)]
+    options: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AsyncAccepted {
+    accepted: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestionReply {
+    question_item_id: String,
+    answer: String,
+}
+
+pub(super) fn queued_questions(
+    tool: &super::payloads::CodexPostToolUse,
+) -> Option<crate::agents::AskQueueEdit> {
+    if tool.tool_name.as_deref()? != "request_user_input_async" {
+        return None;
+    }
+    let response: AsyncAccepted =
+        serde_json::from_str(tool.tool_response.as_ref()?.as_str()?).ok()?;
+    if !response.accepted {
+        return None;
+    }
+    let call_id = tool.tool_use_id.as_deref()?;
+    let input: AsyncQuestions = serde_json::from_value(tool.tool_input.clone()?).ok()?;
+    if input.questions.is_empty() {
+        return None;
+    }
+    Some(crate::agents::AskQueueEdit {
+        queued: input
+            .questions
+            .into_iter()
+            .enumerate()
+            .map(|(index, question)| crate::agents::QueuedQuestion {
+                ask_id: None,
+                native_key: serde_json::json!(["request_user_input_async", call_id, index])
+                    .to_string(),
+                detail: question.title.lines().next().unwrap_or_default().to_owned(),
+                question: AskQuestion {
+                    question: question.title,
+                    options: question
+                        .options
+                        .into_iter()
+                        .map(|label| AskOption {
+                            label,
+                            description: None,
+                            caution: None,
+                        })
+                        .collect(),
+                    multi_select: false,
+                    has_option_previews: false,
+                },
+            })
+            .collect(),
+        answered: Vec::new(),
+    })
+}
+
+pub(super) fn answered_questions(prompt: &str) -> Option<crate::agents::AskQueueEdit> {
+    let body = prompt
+        .trim()
+        .strip_prefix("<send_user_message_question_reply>")?
+        .strip_suffix("</send_user_message_question_reply>")?;
+    let replies: Vec<QuestionReply> = serde_json::from_str(body).unwrap_or_default();
+    let answered = replies
+        .into_iter()
+        .filter_map(|reply| {
+            let (tool, _call_id, _index): (String, String, usize) =
+                serde_json::from_str(&reply.question_item_id).ok()?;
+            (tool == "request_user_input_async").then_some(crate::agents::AnsweredQuestion {
+                ask_id: None,
+                native_key: reply.question_item_id,
+                answer: reply.answer,
+            })
+        })
+        .collect();
+    Some(crate::agents::AskQueueEdit {
+        queued: Vec::new(),
+        answered,
+    })
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct CodexQuestionResponse {
@@ -86,6 +182,9 @@ pub(super) fn answer_detail(
 }
 
 pub(super) fn submitted_prompt_answer(prompt: &str) -> Option<Vec<AskAnswer>> {
+    if answered_questions(prompt).is_some() {
+        return None;
+    }
     let prompt = non_empty(Some(prompt))?;
     let prompt = prompt.chars().take(SUBMITTED_PROMPT_MAX_CHARS).collect();
     Some(vec![AskAnswer {

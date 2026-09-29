@@ -297,6 +297,7 @@ fn archive_paths(dir: &Path) -> Vec<PathBuf> {
 
 fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
+        ask_queue: None,
         agent_id: Some(AgentSessionId::from("claude-1")),
         agent_name: None,
         launch: LaunchParams::default(),

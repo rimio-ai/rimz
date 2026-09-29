@@ -728,7 +728,7 @@ fn read_open_ask_rejects_ineligible_state_before_external_reads() {
         since: jiff::Timestamp::now(),
     });
     assert_eq!(
-        rimz::agents::read_open_ask(store.paths(), &not_waiting).expect("eligible read"),
+        rimz::agents::read_open_ask(store.paths(), &not_waiting, None).expect("eligible read"),
         None
     );
 
@@ -736,7 +736,7 @@ fn read_open_ask_rejects_ineligible_state_before_external_reads() {
     missing_open.waiting_since = Some(missing_open.last_activity);
     assert!(missing_open.is_awaiting_input());
     assert_eq!(
-        rimz::agents::read_open_ask(store.paths(), &missing_open).expect("eligible read"),
+        rimz::agents::read_open_ask(store.paths(), &missing_open, None).expect("eligible read"),
         None
     );
     assert!(!store.paths().transcript_dir.exists());
@@ -1142,6 +1142,91 @@ fn answer_codex_questions_sends_verified_option_choreography() {
     let sent = std::fs::read_to_string(&log).unwrap();
     assert_eq!(sent.matches("send-keys -t %7 Down").count(), 3, "{sent}");
     assert_eq!(sent.matches("send-keys -t %7 Enter").count(), 2, "{sent}");
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_async_asks_list_each_question_and_confirm_native_answers() {
+    let env = Env::new();
+    let payload = json!({"hook_event_name":"PostToolUse", "session_id":"sess-async", "tool_name":"request_user_input_async", "tool_use_id":"call-async", "tool_response":"{\"accepted\":true}", "tool_input":{"questions":[{"title":"First?","options":["A","B"]},{"title":"Second?","options":["X","Y"]},{"title":"Third?"}]}});
+    assert!(
+        env.run_installed_hook_in_pane("codex", &payload.to_string(), &[("TMUX_PANE", "%7")])
+            .status
+            .success()
+    );
+    let asks = listed_asks(&env);
+    assert_eq!(asks.as_array().unwrap().len(), 3);
+    assert_eq!(asks[0]["delivery"], "async");
+    assert_eq!(asks[0]["kind"], "question");
+    assert_eq!(asks[0]["questions"][0]["question"], "First?");
+    assert_eq!(asks[1]["questions"][0]["options"][1]["label"], "Y");
+    assert_eq!(
+        env.store().snapshot_cached().unwrap().agents[0].status,
+        AgentStatus::Running
+    );
+    let ask_id = asks[1]["ask_id"].as_str().unwrap();
+    let shown = env
+        .rimz()
+        .args(["asks", "show", ask_id, "--json"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&shown.stdout).unwrap()["questions"][0]["question"],
+        "Second?"
+    );
+    let pane_fixture = env.write_pane_fixture(&[tmux_pane("%7", "codex", &env.project_root)]);
+    let (bin, log) = fake_tmux(&env);
+    for target in [ask_id, "@codex"] {
+        let output = env
+            .rimz()
+            .args(["answer", target, "1", "--no-wait", "--mux", "tmux"])
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_TEST_MUX_LOG", &log)
+            .env("PATH", path_with_front(&bin))
+            .bounded_output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("answered in the pane"), "{error}");
+        assert!(error.contains("focus @codex"), "{error}");
+        assert!(error.contains("shift+←"), "{error}");
+    }
+    assert!(
+        !std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains("send-keys")
+    );
+    assert!(
+        !rimz::transcript::read_all(env.store().paths())
+            .unwrap()
+            .iter()
+            .any(|entry| entry.entry == TranscriptKind::Answer)
+    );
+    assert_eq!(listed_asks(&env).as_array().unwrap().len(), 3);
+    let reply = json!([{"answer":"Y","question":"Second?","questionItemId":"[\"request_user_input_async\",\"call-async\",1]"}]);
+    let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"sess-async","prompt":format!("<send_user_message_question_reply>\n{reply}\n</send_user_message_question_reply>")});
+    assert!(env.run_hook("codex", &payload.to_string()).status.success());
+    let remaining = listed_asks(&env);
+    assert_eq!(remaining.as_array().unwrap().len(), 2);
+    assert_eq!(remaining[0]["ask_id"], asks[0]["ask_id"]);
+    assert_eq!(remaining[1]["ask_id"], asks[2]["ask_id"]);
+    let entries = rimz::transcript::read_all(env.store().paths()).unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.entry == TranscriptKind::Answer
+                && entry.id.as_ref().is_some_and(|id| id.as_str() == ask_id)
+                && entry.answers[0].chosen == ["Y"])
+    );
+    assert!(
+        env.run_hook(
+            "codex",
+            &json!({"hook_event_name":"Stop","session_id":"sess-async"}).to_string()
+        )
+        .status
+        .success()
+    );
+    assert_eq!(listed_asks(&env), json!([]));
 }
 
 #[test]

@@ -107,8 +107,9 @@ pub use login::{
 };
 pub use managed_source::ManagedIntegration;
 pub use observation::{
-    AgentLifecycleObservation, AgentUsageSummary, LaunchParams, LaunchedBy, SessionOrigin,
-    SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput,
+    AgentLifecycleObservation, AgentUsageSummary, AnsweredQuestion, AskQueueEdit, LaunchParams,
+    LaunchedBy, QueuedQuestion, SessionOrigin, SpawnedSubagent, SubagentCorrelation,
+    SubagentCorrelationInput, SubagentSpawnInput,
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
 use payload::{CONTROL_TAG_PREFIXES, optional_payload_string, stop_payload_errored};
@@ -122,12 +123,12 @@ pub use registry::{
 pub(crate) use registry::{resumed_session_id_for_root, resumed_session_id_from_cmdline};
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
 pub use state::{
-    ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, BudgetPark, BudgetScope,
-    BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, DEFAULT_ACTIVE_GRACE_SECS,
+    ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, AskDelivery, BudgetPark,
+    BudgetScope, BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, DEFAULT_ACTIVE_GRACE_SECS,
     DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS, DEFAULT_STALL_AFTER_SECS,
     DEFAULT_TOOL_REPEAT_ATTENTION_AFTER, DEFAULT_TOOL_REPEAT_WARN_AFTER, OpenAsk, PendingWait,
-    PendingWaitTrigger, TurnCompletion, is_stalled, is_tool_looping, is_turn_dead, settled_outcome,
-    single_line_description,
+    PendingWaitTrigger, QueuedAsk, TurnCompletion, is_stalled, is_tool_looping, is_turn_dead,
+    settled_outcome, single_line_description,
 };
 pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_description};
 use tools::ToolErr;

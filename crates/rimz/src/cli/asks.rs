@@ -1,4 +1,4 @@
-//! `rimz asks` — structured reads of currently blocking agent prompts.
+//! `rimz asks` — structured reads of actionable agent prompts.
 
 use std::io::Write;
 
@@ -65,6 +65,7 @@ struct AskJsonView<'a> {
     ask_id: &'a AskId,
     agent: &'a AskAgentView,
     kind: AskKind,
+    delivery: &'static str,
     since: jiff::Timestamp,
     detail: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,6 +94,7 @@ impl<'a> From<&'a OpenAskView> for AskJsonView<'a> {
             ask_id: &view.detail.open.id,
             agent: &view.agent,
             kind: view.detail.open.kind,
+            delivery: view.detail.delivery.label(),
             since: view.detail.open.since,
             detail: view.detail.open.detail.as_deref(),
             context: view.detail.context.as_deref(),
@@ -136,11 +138,13 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     let mut views = snapshot
         .agents
         .iter()
-        .filter(|agent| agent.is_awaiting_input() && agent.open_ask.is_some())
         .filter(|agent| {
             all || channel.is_none_or(|channel| agent.channel().as_deref() == Some(channel))
         })
-        .map(|agent| view_for_agent(store.paths(), agent, &snapshot.agents, &peers))
+        .flat_map(|agent| agent.actionable_asks().map(move |(ask, _)| (agent, ask.id)))
+        .map(|(agent, id)| {
+            view_for_agent(store.paths(), agent, &snapshot.agents, &peers, Some(&id))
+        })
         .filter_map(Result::transpose)
         .collect::<Result<Vec<_>>>()?;
     views.sort_by_key(|view| view.detail.open.since);
@@ -162,7 +166,13 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         table.row([
             render::cell(view.detail.open.id.as_str()).fg(render::palette::accent()),
             render::cell(view.agent.display_name()),
-            render::cell(view.detail.open.kind.short_label()),
+            render::cell(
+                if view.detail.delivery == rimz::agents::AskDelivery::Blocking {
+                    view.detail.open.kind.short_label()
+                } else {
+                    "question (async)"
+                },
+            ),
             render::cell(render::age_short(view.detail.open.since, now)),
             render::cell(question),
         ]);
@@ -190,16 +200,28 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    let agent = resolve_open_ask(&ctx.store, &snapshot, target, ctx.channel(), true)?
+    let agent = resolve_open_ask(&ctx.store, &snapshot, target, ctx.channel())?
         .ok_or_else(|| anyhow::anyhow!("ask `{target}` is no longer open"))?;
-    if !agent.is_awaiting_input() || agent.open_ask.is_none() {
+    if agent.actionable_asks().next().is_none() {
         bail!(
             "{} is not asking anything",
             rimz::address::agent_handle(agent, &peers, true)
         );
     }
-    let view = view_for_agent(store.paths(), agent, &snapshot.agents, &peers)?
-        .ok_or_else(|| anyhow::anyhow!("ask `{target}` has no live root agent"))?;
+    let ask_id = target
+        .starts_with("ask_")
+        .then(|| AskId::parse(target))
+        .transpose()?;
+    let view = view_for_agent(
+        store.paths(),
+        agent,
+        &snapshot.agents,
+        &peers,
+        ask_id.as_ref(),
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!("ask `{target}` is no longer actionable or has no live root agent")
+    })?;
     if json {
         return render::json_pretty(&AskJsonView::from(&view));
     }
@@ -215,7 +237,11 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             render::palette::muted(),
             &format!(
                 "{} · {}",
-                view.detail.open.kind.short_label(),
+                if view.detail.delivery == rimz::agents::AskDelivery::Blocking {
+                    view.detail.open.kind.short_label()
+                } else {
+                    "question (async)"
+                },
                 render::age_short(view.detail.open.since, now)
             )
         )
@@ -260,9 +286,11 @@ fn view_for_agent(
     agent: &AgentState,
     agents: &[AgentState],
     peers: &[&AgentState],
+    ask_id: Option<&AskId>,
 ) -> Result<Option<OpenAskView>> {
-    let detail = read_open_ask(paths, agent)?
-        .ok_or_else(|| anyhow::anyhow!("agent is not asking anything"))?;
+    let Some(detail) = read_open_ask(paths, agent, ask_id)? else {
+        return Ok(None);
+    };
     let (handle, name) = if agent.is_provider_subagent() {
         let parent_kind = agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind);
         let Some(parent) = agent

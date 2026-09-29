@@ -36,6 +36,30 @@ pub struct OpenAsk {
     pub since: Timestamp,
 }
 
+/// A question that remains actionable without owning the agent's input.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedAsk {
+    pub id: AskId,
+    pub detail: String,
+    pub native_key: String,
+    pub since: Timestamp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AskDelivery {
+    Blocking,
+    Async,
+}
+
+impl AskDelivery {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Blocking => "blocking",
+            Self::Async => "async",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetWindow {
@@ -816,6 +840,8 @@ pub struct AgentState {
     /// no identity and therefore replay with this field absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_ask: Option<OpenAsk>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued_asks: Vec<QueuedAsk>,
     /// Provider turn id of the session's most recent turn start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_turn_id: Option<String>,
@@ -961,6 +987,8 @@ struct AgentStateWire {
     #[serde(default)]
     open_ask: Option<OpenAsk>,
     #[serde(default)]
+    queued_asks: Vec<QueuedAsk>,
+    #[serde(default)]
     started_turn_id: Option<String>,
     #[serde(default)]
     superseded_turn_id: Option<String>,
@@ -1048,6 +1076,7 @@ impl From<AgentStateWire> for AgentState {
             user_turn_started_at: wire.user_turn_started_at,
             waiting_since: wire.waiting_since,
             open_ask: wire.open_ask,
+            queued_asks: wire.queued_asks,
             started_turn_id: wire.started_turn_id,
             superseded_turn_id: wire.superseded_turn_id,
             interrupted_turn_id: wire.interrupted_turn_id,
@@ -1168,6 +1197,7 @@ impl AgentState {
             user_turn_started_at: None,
             waiting_since: None,
             open_ask: None,
+            queued_asks: Vec::new(),
             started_turn_id: None,
             superseded_turn_id: None,
             interrupted_turn_id: None,
@@ -1462,6 +1492,27 @@ impl AgentState {
                     self.agent_id.cmp(&other.agent_id)
                 }
             })
+    }
+
+    /// Actionable prompts, blocking first and then non-blocking questions in queue order.
+    pub fn actionable_asks(&self) -> impl Iterator<Item = (OpenAsk, AskDelivery)> + '_ {
+        self.open_ask
+            .as_ref()
+            .filter(|_| self.is_awaiting_input())
+            .map(|ask| (ask.clone(), AskDelivery::Blocking))
+            .into_iter()
+            .chain(self.queued_asks.iter().map(|ask| {
+                (
+                    OpenAsk {
+                        id: ask.id.clone(),
+                        kind: AskKind::Question,
+                        detail: Some(ask.detail.clone()),
+                        native_key: Some(ask.native_key.clone()),
+                        since: ask.since,
+                    },
+                    AskDelivery::Async,
+                )
+            }))
     }
 
     /// True when the row must reserve pane input for a native prompt. Durable

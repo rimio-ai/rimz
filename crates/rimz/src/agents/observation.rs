@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agents::PermissionMode;
-use crate::ids::{AgentSessionId, PaneId};
+use crate::ids::{AgentSessionId, AskId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwner};
 
 use super::background_shell::BackgroundShellReport;
@@ -248,6 +248,32 @@ impl AgentUsageSummary {
     }
 }
 
+/// Non-blocking questions queued or answered alongside a lifecycle signal.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskQueueEdit {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued: Vec<QueuedQuestion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answered: Vec<AnsweredQuestion>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedQuestion {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_id: Option<AskId>,
+    pub native_key: String,
+    pub detail: String,
+    pub question: crate::transcript::AskQuestion,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnsweredQuestion {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_id: Option<AskId>,
+    pub native_key: String,
+    pub answer: String,
+}
+
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
 /// event carries plus the enrichment it reports. A definition's hook capability attaches it
 /// to the decoded hook so the Store can record an `agent.lifecycle` event
@@ -271,6 +297,8 @@ pub struct AgentLifecycleObservation {
     /// the ingestion path fold it onto the rollup through the one `step` table;
     /// the adapter no longer decides a final [`AgentStatus`](crate::agents::AgentStatus).
     pub signal: LifecycleSignal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_queue: Option<AskQueueEdit>,
     /// Process identity observed by the hook runner. The sidebar uses this
     /// best-effort liveness marker to suppress stale store overlays when the
     /// process disappears.
@@ -353,6 +381,7 @@ impl AgentLifecycleObservation {
             agent_name: None,
             launch: LaunchParams::default(),
             signal,
+            ask_queue: None,
             agent_pid: None,
             account_key: None,
             agent_process_start: None,

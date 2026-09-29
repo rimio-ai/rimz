@@ -759,6 +759,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.event.timestamp,
         input.signal,
         input.observation.prompt.as_deref(),
+        input.observation.ask_queue.as_ref(),
     );
     // A reaper's end stamp is a liveness guess, not a failed-turn verdict.
     // Resting at Idle lets later activity recover a session that raced the reap.
@@ -987,6 +988,7 @@ fn fold_lifecycle(
     timestamp: Timestamp,
     signal: lifecycle::LifecycleSignal,
     prompt: Option<&str>,
+    ask_queue: Option<&crate::agents::AskQueueEdit>,
 ) {
     let turn_ids = prior.map(AgentState::turn_ids).unwrap_or_default();
     let Transition {
@@ -1086,6 +1088,36 @@ fn fold_lifecycle(
         _ if next.status == AgentStatus::Waiting => prior.and_then(|p| p.open_ask.clone()),
         _ => None,
     };
+    state.queued_asks = prior
+        .map(|state| state.queued_asks.clone())
+        .unwrap_or_default();
+    if let Some(edit) = ask_queue {
+        state.queued_asks.retain(|ask| {
+            !edit
+                .answered
+                .iter()
+                .any(|answer| answer.native_key == ask.native_key)
+        });
+        for question in &edit.queued {
+            let Some(id) = &question.ask_id else { continue };
+            if state
+                .queued_asks
+                .iter()
+                .any(|ask| ask.native_key == question.native_key)
+            {
+                continue;
+            }
+            state.queued_asks.push(crate::agents::QueuedAsk {
+                id: id.clone(),
+                detail: question.detail.clone(),
+                native_key: question.native_key.clone(),
+                since: timestamp,
+            });
+        }
+    }
+    if !matches!(next.status, AgentStatus::Running | AgentStatus::Waiting) {
+        state.queued_asks.clear();
+    }
     (
         state.started_turn_id,
         state.superseded_turn_id,

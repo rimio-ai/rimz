@@ -38,6 +38,7 @@ Every hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex`, and 
 | `PreToolUse`, tool `request_user_input` | `.*` | `AwaitingInput { Question }` |
 | `PreToolUse`, any other tool | `.*` | `ToolUsed` with no name, `mutates` and `edits` false |
 | `PostToolUse` | `.*` | `ToolUsed` with the tool name, `mutates`, `edits`, and `turn_id` |
+| `PostToolUse`, accepted `request_user_input_async` | `.*` | Same `ToolUsed`, plus one queued question per input question |
 | `PreCompact` | `.*` | `Compacting` |
 | `PostCompact` | `.*` | `CompactionEnded` with the auto or manual trigger |
 
@@ -61,9 +62,12 @@ On `Stop` and `SubagentStop`, `decode_hook` scans the rollout tail once with [`s
 | --- | --- | --- | --- |
 | Permission | `PermissionRequest` | the agent's next activity ([waiting and asks](./model.md#waiting-and-asks)) | refused: "permission answers require the Codex pane" |
 | Question | `PreToolUse` for `request_user_input`, with question ids, headings, labels, and descriptions parsed into options | `PostToolUse` for the same tool, carrying the id-keyed answers | one option per question: Down to the option, then Enter, which advances to the next question and submits after the last |
+| Async question | Accepted `PostToolUse` for `request_user_input_async`; one ask per title with optional string options | A `UserPromptSubmit` reply envelope names the question, or the turn closes | Refused with a pane pointer; answer in Codex's question editor with Shift+Left |
 | Plan approval | `Stop` resting on a rollout plan | `UserPromptSubmit`, which records the submitted prompt (capped at 1000 characters) as the answer | the single option `implement`: Enter on the default "Yes, implement this plan" row, which also switches Codex from Plan mode to Default mode |
 
-[`ask.rs`](../../../crates/rimz/src/agents/adapters/codex/ask.rs) drives the subset verified against Codex 0.144.3. Multi-select questions, free-text and "other" options, plan refinement text, and alternate plan actions stay in the pane. `update_plan` is a todo tracker and opens no ask. Leaving Plan mode with Shift+Tab without submitting a prompt leaves the plan ask open until the next hook.
+[`ask.rs`](../../../crates/rimz/src/agents/adapters/codex/ask.rs) drives blocking questions verified against Codex 0.144.3 and decodes async questions observed on 0.158.0. Multi-select questions, blocking free-text and "other" options, plan refinement text, and alternate plan actions stay in the pane. `update_plan` is a todo tracker and opens no ask. Leaving Plan mode with Shift+Tab without submitting a prompt leaves the plan ask open until the next hook.
+
+The async decoder accepts the hook's JSON-string response only when it reports `accepted: true`. It attaches an `ask_queue` edit to the ordinary `ToolUsed` observation, not a waiting signal. Reply envelopes attach answered keys to `TurnStarted` and are excluded from the card prompt. The ingestion path mints AskIds and joins answered keys before folding; transcript entries join each question by its exact AskId. The `AskUserQuestion` profile switch does not disable the async tool: upstream exposes no switch for it. Pane answering and delayed observation limits are in [the asks reference](../../reference/cli/asks.md#questions-while-codex-works).
 
 ### Install
 

@@ -20,6 +20,27 @@ pub(super) fn record_lifecycle_observation(
             *detail = decoded.ask_detail().map(ToOwned::to_owned);
         }
     }
+    if let Some(edit) = &mut observation.ask_queue {
+        let prior = observation
+            .agent_id
+            .as_ref()
+            .and_then(|id| agent_state(store, agent, id));
+        let find_id = |key: &str| {
+            prior
+                .as_ref()?
+                .queued_asks
+                .iter()
+                .find(|ask| ask.native_key == key)
+                .map(|ask| ask.id.clone())
+        };
+        for question in &mut edit.queued {
+            question.ask_id =
+                Some(find_id(&question.native_key).unwrap_or_else(rimz::ids::AskId::new));
+        }
+        for answer in &mut edit.answered {
+            answer.ask_id = find_id(&answer.native_key);
+        }
+    }
     if observation.usage.context_window.is_none()
         && let Some(model) = observation.launch.model.as_deref()
         && context_window_is_unset(store, agent.spec().kind, observation.agent_id.as_ref())
