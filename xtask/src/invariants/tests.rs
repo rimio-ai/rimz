@@ -3,6 +3,35 @@ use std::path::{Path, PathBuf};
 use super::*;
 
 #[test]
+fn integration_identity_requires_fixture_home() {
+    let root = temp_repo_root("fixture-home");
+    let tests = root.join("crates/rimz/tests");
+    std::fs::create_dir_all(tests.join("integration")).unwrap();
+    for relative in ["integration/caller.rs", "AGENTS.md"] {
+        let path = tests.join(relative);
+        for bypass in [
+            concat!("WorkspaceResolver::", "resolve("),
+            concat!("StatePaths::", "for_project_root("),
+        ] {
+            std::fs::write(&path, bypass).unwrap();
+            let err =
+                ensure_integration_fixture_home(&root, std::slice::from_ref(&path)).unwrap_err();
+            assert!(err.to_string().contains("common::Env::resolve_workspace"));
+        }
+        std::fs::write(
+            &path,
+            "WorkspaceResolver::resolve_under(root, None, home);\nStatePaths::for_project_root_under(root, home);\n",
+        )
+        .unwrap();
+        ensure_integration_fixture_home(&root, &[path]).unwrap();
+    }
+    let outside = root.join("caller.rs");
+    std::fs::write(&outside, concat!("WorkspaceResolver::", "resolve(")).unwrap();
+    ensure_integration_fixture_home(&root, &[outside]).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn classed_paths_rejects_caller_bypass_and_allows_path_owner_and_tests() {
     let root = temp_repo_root("classed-paths");
     let source = root.join("crates/rimz/src");
