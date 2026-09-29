@@ -4,6 +4,8 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
+Pass 29g records source tip `59a304ec1` (base `1b77ddd4f`): `SectionOrigin` and its `(TranscriptKind, from)` entry encoding move from `store/message` and the turn-start hook into `transcript`, beside the `TranscriptEntry::origin` read side, with the first round-trip test of the origin invariant. Production SLOC +0 against a +5 seam ceiling (the method's signature and doc and store's new import, paid for by the hook's inline table); test SLOC +47. Escaping surface: `store` budget 335 → 334 (`store/message.rs` 86 → 85), `transcript.rs` 22 → 24. The `store → transcript` edge is downward, 0 → 1 site, with no admission.
+
 Pass 29d records source tip `bf47c4ab8` (base `221c53578`, rebased onto trunk `eb03b2204`): both supervisors share master ownership, each web round settles once, and recovery frames own the panel rows. `cli/remote` cx falls from 34.0 to 1.4; `remote` remains 0.0. The four hotspots' base/final cx are `run_supervised_web` 12.0/0.0, `supervise_remote` 9.8/0.8, `display_rows` 6.7/0.0 and `wait_for_master` 5.5/0.6. The two residuals are SLOC-only, held by item verdicts; ordered screen teardown and shared tty restoration retain pass-through verdicts. Production SLOC falls by 154 against the contract's ceiling of −80. Binary modules receive no ledger row.
 
 Pass 29e records source tip `2251c6f2e` (base `c42d760e8`): shared rate-limit fusion and producer bookkeeping reduce `sidebar/refresh` cx from 27.1 to 16.7; collapsed worktree header, pipeline and tail representations reduce `sidebar_pane/render/sections` cx from 42.1 to 30.5. Both modules were deliberately reopened for this complexity review, not churned past their rows' count. Production SLOC falls by 47 against the contract's 30-line reduction floor, with no stored/wire or snapshot changes. The four target functions retain item verdicts for their distinct pinned policies; the untouched finished roster retains cx 1.2. The two reviewed modules have no individual surface-budget rules to tighten; their parent budgets stay unchanged.
@@ -238,7 +240,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `store/snapshot` | holds; landed pass-28d | `b93ab174a` | 30 | view model crate-wide because the renderer decodes it; local-bind cascade and lifecycle fold inherent. |
 | `store/writer` | holds; landed pass-27b | `52b2358b0` | 30 | one log boundary; one queue terminal step; one lifecycle staging path. |
 | `store/event` | holds; landed pass-21b | `5e6580fb0` | 30 | legacy `message.removed` parse holds. |
-| `store/message` | holds; landed pass-21b | `5e6580fb0` | 30 | status aliases hold for mixed-binary workspaces; header grammar and codec hold. |
+| `store/message` | holds; landed pass-21b; pass-29g | `59a304ec1` | 30 | submitted-prompt classifier, header grammar and codec hold; author vocabulary lives in `transcript`. |
 | `store/gc` | holds; landed pass-21b | `5e6580fb0` | 30 | exporter check pinned by `b58b6594c`. |
 | `store/event_log` | holds; landed pass-25 | `4a82d6b28` | 30 | the store's own write path; incremental read `pub(crate)` for the reply poll. |
 | `store/sidecar` | holds; landed pass-23a | `250f10820` | 30 | store-internal; digest `pub(crate)` for the harness. |
@@ -251,7 +253,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `store/run` | holds | `250f10820` | 30 | `WakeupFrame` is the pinned run-wake wire. |
 | `store/active_time` | holds | `250f10820` | 30 | floored by `read_for_keys`. |
 | `theme` | holds; landed pass-22b | `339310452` | 30 | every re-export has an outside reader; OKLab blends private. |
-| `transcript` | holds; landed pass-24a | `2a9ec66e5` | 30 | `TranscriptLogErr` carried by the public signatures. |
+| `transcript` | holds; landed pass-24a; pass-29g | `59a304ec1` | 30 | `SectionOrigin` and its entry encoding sit beside `origin()`. |
 | `trust` | holds; landed pass-22b | `339310452` | 30 | `_with_roots` seams private except `grant_with_roots`. |
 | `wakeup` | holds; landed pass-24a | `2a9ec66e5` | 30 | the sidebar wire at L2 below `store`. |
 | `web` | holds; landed pass-28b | `83b184ffb` | 30 | `pixel_ttyd_pids` is the renderer's one read of current-page ttyd daemons. |
