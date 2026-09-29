@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use super::{RepoGroup, Target};
-use crate::forge::RemoteRepo;
 use crate::forge::pr_state::{PrLink, PrStateCache, TargetStamp};
+use crate::forge::{ForgeSignal, RemoteRepo};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
 pub(super) fn transitions(
@@ -34,8 +34,8 @@ pub(super) fn transitions(
         }
         if prior_link.state == WorktreePrState::Open {
             let name = match next_link.state {
-                WorktreePrState::Merged => Some("pr.merged"),
-                WorktreePrState::Closed => Some("pr.closed"),
+                WorktreePrState::Merged => Some(ForgeSignal::PrMerged.as_str()),
+                WorktreePrState::Closed => Some(ForgeSignal::PrClosed.as_str()),
                 WorktreePrState::Open => None,
             };
             if let Some(name) = name {
@@ -121,8 +121,8 @@ fn successful_repo<'a>(cache: &'a PrStateCache, path: &str) -> Option<&'a str> {
 
 fn final_verdict_name(ci: Option<WorktreeCi>) -> Option<&'static str> {
     match ci {
-        Some(WorktreeCi::Passing) => Some("ci.passed"),
-        Some(WorktreeCi::Failing) => Some("ci.failed"),
+        Some(WorktreeCi::Passing) => Some(ForgeSignal::CiPassed.as_str()),
+        Some(WorktreeCi::Failing) => Some(ForgeSignal::CiFailed.as_str()),
         Some(WorktreeCi::Pending) | None => None,
     }
 }
