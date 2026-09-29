@@ -394,6 +394,13 @@ fn parse_hint(raw: &str, line_only: bool) -> Option<([u32; 2], usize)> {
     } else if let Some(rest) = tail.strip_prefix(':') {
         let (_, end) = number(rest)?;
         tail = &rest[end..];
+        if line_only && tail.trim_start().starts_with('(') {
+            let (hint, consumed) = parse_hint(tail, false)?;
+            if !tail[consumed..].trim().is_empty() {
+                return None;
+            }
+            return Some((hint, raw.len() - tail.len() + consumed));
+        }
     }
     if parenthesized {
         tail = tail.strip_prefix(')')?;
@@ -460,10 +467,7 @@ fn outline(value: serde_json::Value) -> super::Result<Vec<Candidate>> {
                     name: path.join("::"),
                     path,
                     kind: query::kind_name(symbol.kind),
-                    range: [
-                        symbol.location.range.start.line + 1,
-                        symbol.location.range.end.line + 1,
-                    ],
+                    range: query::span_lines(symbol.location.range),
                 });
             }
         }
@@ -479,7 +483,7 @@ fn outline(value: serde_json::Value) -> super::Result<Vec<Candidate>> {
                     name: path.join("::"),
                     path: path.clone(),
                     kind: query::kind_name(symbol.kind),
-                    range: [symbol.range.start.line + 1, symbol.range.end.line + 1],
+                    range: query::span_lines(symbol.range),
                 });
                 pending.extend(
                     symbol

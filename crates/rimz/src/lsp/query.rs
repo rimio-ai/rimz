@@ -658,10 +658,23 @@ enum LocationResult {
         uri: String,
         #[serde(rename = "targetSelectionRange")]
         range: Range,
+        #[serde(rename = "targetRange")]
+        span: Option<Range>,
     },
 }
 
 fn locations(result: Value) -> Result<Vec<Location>> {
+    Ok(locations_with_spans(result)?
+        .into_iter()
+        .map(|(location, _)| location)
+        .collect())
+}
+
+pub(super) fn span_lines(range: Range) -> [u32; 2] {
+    [range.start.line + 1, range.end.line + 1]
+}
+
+fn locations_with_spans(result: Value) -> Result<Vec<(Location, Option<Range>)>> {
     let values = match result {
         Value::Null => return Ok(Vec::new()),
         Value::Array(values) => values,
@@ -671,8 +684,8 @@ fn locations(result: Value) -> Result<Vec<Location>> {
         .into_iter()
         .map(|value| {
             Ok(match serde_json::from_value::<LocationResult>(value)? {
-                LocationResult::Location(location) => location,
-                LocationResult::Link { uri, range } => Location { uri, range },
+                LocationResult::Location(location) => (location, None),
+                LocationResult::Link { uri, range, span } => (Location { uri, range }, span),
             })
         })
         .collect()
@@ -935,15 +948,21 @@ fn render_with_source(
     match verb {
         Verb::Def => {
             let mut sorted = BTreeMap::new();
-            for location in locations(result)? {
+            for (location, span) in locations_with_spans(result)? {
                 sorted.insert(
                     (displayed_path(root, &location.uri)?, location.range.start),
-                    location,
+                    (location, span),
                 );
             }
             let mut lines = Vec::new();
-            for location in sorted.into_values() {
-                let line = position_text(root, &location.uri, location.range.start)?;
+            for (location, span) in sorted.into_values() {
+                let mut line = position_text(root, &location.uri, location.range.start)?;
+                if let Some(span) = span.filter(|span| span.start != span.end) {
+                    let [start, end] = span_lines(span);
+                    if start != end {
+                        line.push_str(&format!(" ({start}-{end})"));
+                    }
+                }
                 lines.push(format!("{line}{}", source_suffix(&location)));
             }
             Ok(finish(lines))

@@ -214,7 +214,7 @@ fn main() {
                 let range =
                     json!({"start":{"line":0,"character":0},"end":{"line":0,"character":3}});
                 if capabilities["textDocument"]["definition"]["linkSupport"] == true {
-                    json!([{"targetUri":uri,"targetRange":range,"targetSelectionRange":range}])
+                    json!([{"targetUri":uri,"targetRange":{"start":{"line":0,"character":0},"end":{"line":2,"character":1}},"targetSelectionRange":range}])
                 } else {
                     json!([{"uri":uri,"range":range}])
                 }

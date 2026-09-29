@@ -60,6 +60,16 @@ fn symbols() -> Vec<Candidate> {
 }
 
 #[test]
+fn pasted_definition_span_is_a_line_anchor() {
+    let anchors = extract("`src/lib.rs:124:12 (120-184)`");
+    assert_eq!(anchors.len(), 1, "pasted definition must be recognized");
+    let parsed = &anchors[0];
+    assert_eq!(parsed.symbol, None);
+    assert_eq!(parsed.hint, Some([120, 184]));
+    assert_eq!(anchor("src/lib.rs:124:12").hint, Some([124, 124]));
+}
+
+#[test]
 fn sample_anchors_match_the_hand_read_grammar() {
     let text = include_str!("../../../tests/fixtures/lsp-check/explore-sample.md");
     let expected = [
