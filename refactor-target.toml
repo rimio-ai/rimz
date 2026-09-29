@@ -70,7 +70,9 @@ path = "crates/rimz/src/address.rs"
 # claimed-wins rule from here instead of matching roles a second time.
 # `is_launch_row` reopened it by one: the peer-turn settle and its orphan
 # backstop share one current-row filter instead of spelling it twice.
-surface-budget = 35
+# `TeamCohort::contains` reopened it by one: team CLI and delivery scope
+# share one membership test instead of spelling the pair five times.
+surface-budget = 36
 
 [[module]]
 path = "crates/rimz/src/pixel_wire.rs"

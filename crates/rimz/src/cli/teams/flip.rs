@@ -50,20 +50,10 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let team_name = cohort.team;
     let caller = super::board_context::caller(&snapshot.agents)?;
-    let member = caller.filter(|caller| {
-        cohort
-            .members
-            .iter()
-            .any(|member| member.kind == caller.kind && member.agent_id == caller.agent_id)
-    });
+    let member = caller.filter(|caller| cohort.contains(caller));
     if member.is_none()
         && let Some(caller) = caller
-        && cohorts.iter().any(|cohort| {
-            cohort
-                .members
-                .iter()
-                .any(|member| member.kind == caller.kind && member.agent_id == caller.agent_id)
-        })
+        && cohorts.iter().any(|cohort| cohort.contains(caller))
     {
         bail!(
             "calling agent belongs to a different team cohort; selected {team_name}#{} in worktree {}",

@@ -29,21 +29,11 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.resolution_snapshot_with_context()?;
     let caller = board_context::caller(&snapshot.agents)?;
     let cohorts = rimz::address::team_cohorts(&snapshot.agents);
-    let member = caller.filter(|caller| {
-        cohorts.iter().any(|cohort| {
-            cohort
-                .members
-                .iter()
-                .any(|member| member.kind == caller.kind && member.agent_id == caller.agent_id)
-        })
-    });
+    let member = caller.filter(|caller| cohorts.iter().any(|cohort| cohort.contains(caller)));
     let by = if let Some(member) = member {
-        let local = cohorts.iter().any(|cohort| {
-            board_context::in_worktree(cohort, &worktree)
-                && cohort.members.iter().any(|candidate| {
-                    candidate.kind == member.kind && candidate.agent_id == member.agent_id
-                })
-        });
+        let local = cohorts
+            .iter()
+            .any(|cohort| board_context::in_worktree(cohort, &worktree) && cohort.contains(member));
         if !local {
             bail!("calling agent belongs to a team cohort in another worktree");
         }
