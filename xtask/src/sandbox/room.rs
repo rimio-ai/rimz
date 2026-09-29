@@ -11,33 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use super::{HostSandbox, RoomRecord};
-
-#[derive(Deserialize)]
-struct Panes {
-    session: String,
-    tabs: Vec<Tab>,
-}
-
-#[derive(Deserialize)]
-struct Tab {
-    view_id: Option<String>,
-    name: Option<String>,
-    panes: Vec<Pane>,
-}
-
-#[derive(Deserialize)]
-struct Pane {
-    pane_id: String,
-    kind: String,
-    agent: Option<Agent>,
-    pid: Option<u32>,
-}
-
-#[derive(Deserialize)]
-struct Agent {
-    handle: String,
-}
+use super::{HostSandbox, Panes, RoomRecord, Tab};
 
 #[derive(Deserialize)]
 struct Renderer {
@@ -202,6 +176,7 @@ pub(super) fn run(workspace: &Path, args: &[String]) -> Result<()> {
         worktree: room.cwd.clone(),
         repo,
         stub_dir,
+        binary: binary.clone(),
     };
     let (panes, renderers, snapshot) = room.ready()?;
     // Warm every tab, the team's last, so each sidebar has been watched once and hands over
@@ -411,7 +386,7 @@ impl Room<'_> {
     }
 }
 
-fn output(step: &str, command: &mut Command) -> Result<Vec<u8>> {
+pub(super) fn output(step: &str, command: &mut Command) -> Result<Vec<u8>> {
     let result = command
         .output()
         .with_context(|| format!("{step}: {command:?}"))?;
@@ -438,7 +413,7 @@ fn verify_stub(path: &OsStr, stub: &Path, executable: impl Fn(&Path) -> bool) ->
     Ok(())
 }
 
-fn quote(value: &OsStr) -> String {
+pub(super) fn quote(value: &OsStr) -> String {
     format!("'{}'", value.to_string_lossy().replace('\'', "'\\''"))
 }
 
@@ -549,6 +524,14 @@ fn render_card(
                     .pid
                     .map_or_else(|| "-".to_owned(), |pid| pid.to_string());
                 writeln!(card, "Role: {}  {}  pid {pid}", agent.handle, pane.pane_id)?;
+                writeln!(
+                    card,
+                    "  As: target/debug/xtask sandbox in {} --as {} -- {} --{}",
+                    quote(root.as_os_str()),
+                    quote(OsStr::new(&agent.handle)),
+                    quote(binary.as_os_str()),
+                    record.mux
+                )?;
             }
         }
     }
@@ -622,6 +605,7 @@ mod tests {
             repo: "/room".into(),
             worktree: "/room-worktrees/probe".into(),
             stub_dir: "/bin".into(),
+            binary: "/dev/rimz".into(),
         };
         let card = render_card(
             Path::new("/sandbox"),
@@ -636,6 +620,7 @@ mod tests {
         assert!(card.contains("Sidebar: tmux:%3  Tab: #probe  producer"));
         assert!(card.contains("Stage: Build  Owner: coder"));
         assert!(card.contains("Role: @coder#probe  tmux:%4  pid 4242"));
+        assert!(card.contains("  As: target/debug/xtask sandbox in '/sandbox' --as '@coder#probe' -- '/dev/rimz' --tmux"));
         assert!(card.contains(
             "target/debug/xtask sandbox in '/sandbox' -- '/dev/rimz' --tmux pane capture 'tmux:%3'"
         ));

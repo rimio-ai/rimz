@@ -24,6 +24,33 @@ pub(crate) struct RoomRecord {
     pub(crate) worktree: PathBuf,
     pub(crate) repo: PathBuf,
     pub(crate) stub_dir: PathBuf,
+    pub(crate) binary: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct Panes {
+    session: String,
+    tabs: Vec<Tab>,
+}
+
+#[derive(Deserialize)]
+struct Tab {
+    view_id: Option<String>,
+    name: Option<String>,
+    panes: Vec<Pane>,
+}
+
+#[derive(Deserialize)]
+struct Pane {
+    pane_id: String,
+    kind: String,
+    agent: Option<Agent>,
+    pid: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct Agent {
+    handle: String,
 }
 
 impl RoomRecord {

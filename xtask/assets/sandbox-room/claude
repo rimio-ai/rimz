@@ -4,4 +4,14 @@ case "$1" in
   auth) echo '{"loggedIn":true,"authMethod":"api","subscriptionType":"max"}'; exit 0 ;;
 esac
 # Outlive any held room: a seat whose command exits looks like a crashed agent.
-exec sleep 86400
+seat="$TMPDIR/agent-seats/$$"
+mkdir -p "$seat"
+mkfifo "$seat/requests"
+# Keep a reader across requests, including while another runner is starting.
+exec 3<>"$seat/requests"
+while :; do
+  if IFS= read -r request <&3; then
+    # Exec a new shell: a forked copy retains comm=claude and misattributes hooks.
+    sh "$request/run" 3<&- &
+  fi
+done
