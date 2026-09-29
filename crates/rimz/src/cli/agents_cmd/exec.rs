@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::{open_store, worktree};
+use rimz::store::snapshot::find_agent;
 use std::cell::RefCell;
 use std::sync::mpsc;
 
@@ -791,9 +792,11 @@ impl RunExecContext {
             }
         }
         let snapshot = self.store.snapshot_cached()?;
-        let Some(child) = snapshot.agents.iter().find(|agent| {
-            agent.kind == record.kind && Some(&agent.agent_id) == record.agent_id.as_ref()
-        }) else {
+        let Some(child) = record
+            .agent_id
+            .as_ref()
+            .and_then(|id| find_agent(&snapshot.agents, &record.kind, id))
+        else {
             return Ok(false);
         };
         if child.holds_open_turn()
