@@ -167,6 +167,8 @@ With `--interrupt --wait`, the turn the prompt starts is the reply. RimZ waits f
 
 Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting` or `paused` is still in progress, so a script that needs a bound passes a deadline. With `--steer --wait`, the rest of the live turn is the reply.
 
+After printing a subagent or launched peer's reply, `--wait` claims that answer for its launcher during an open turn, or for a human shell. Other agents and unattended callers claim nothing. Only the answer opened by the sent message is claimed; earlier unread answers still reach the fleet report. If the answer has not settled before the wait's deadline, it remains eligible for reporting. An already queued report containing other unread answers can still repeat a claimed row.
+
 Each `--json` value carries `status`, `reply` (a string or `null`), and `message_id`, plus `error` when delivery failed, the agent stopped, or the wait aborted:
 
 ```json

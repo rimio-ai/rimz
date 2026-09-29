@@ -221,7 +221,7 @@ Stopping a parent with `rimz agents stop`, or through `rimz teams stop`, stops i
 
 ## Follow-up messages
 
-A child is addressable as `@<petname>` for `rimz message` and `rimz pane`. The parent can message a live interactive child for another turn in the same session. If the child has ended, a message from its parent resumes the same session in the subagent zone and delivers the message as its next prompt. Each follow-up keeps its own response file, leaving earlier answers readable at the paths already reported. The next result can produce another fleet report; `rimz message --wait` also supports the exchange.
+A child is addressable as `@<petname>` for `rimz message` and `rimz pane`. The parent can message a live interactive child for another turn in the same session. If the child has ended, a message from its parent resumes the same session in the subagent zone and delivers the message as its next prompt. Each follow-up keeps its own response file, leaving earlier answers readable at the paths already reported. The next result can produce another fleet report; [`rimz message --wait`](./message.md#wait-for-replies) prints and claims its own reply instead, leaving earlier unread answers for the report.
 
 Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory, conversation, login, profile and provider resume support to remain usable; otherwise the miss names the reason. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
 

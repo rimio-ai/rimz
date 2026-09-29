@@ -351,7 +351,8 @@ path = "crates/rimz/src/harness"
 # Posture-owned exec request construction shared by relaunch doorways (pass 28f).
 # Launch finalization shares the tier table and profile-preference context with CLI doorways.
 # Caller-aware launch focus crosses the harness/CLI boundary.
-surface-budget = 584
+# `message --wait` claims the answer its printed reply came from through the run report ledger.
+surface-budget = 585
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -888,14 +889,16 @@ surface-budget = 46
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
+# `message --wait` claims the answer its printed reply came from, for the launcher resolved through ancestry.
 allowed-dependencies = [
     "disk::lock",
     "disk::paths",
+    "harness::ancestry",
     "harness::run",
     "ids",
     "store",
 ]
-surface-budget = 3
+surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/harness/run_wake.rs"
