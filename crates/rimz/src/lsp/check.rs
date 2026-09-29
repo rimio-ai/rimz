@@ -766,6 +766,13 @@ fn overlaps(node: &Candidate, [start, end]: [u32; 2]) -> bool {
         && end >= node.range[0].saturating_sub(LINE_SLACK)
 }
 
+fn hinted<'a>(hits: &[&'a Candidate], hint: Option<[u32; 2]>) -> Vec<&'a Candidate> {
+    hits.iter()
+        .copied()
+        .filter(|node| hint.is_some_and(|hint| overlaps(node, hint)))
+        .collect()
+}
+
 fn check_lines(anchor: Anchor, path: PathBuf, lines: usize) -> Verdict {
     let valid = anchor
         .hint

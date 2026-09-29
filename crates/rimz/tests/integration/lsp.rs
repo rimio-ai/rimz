@@ -869,8 +869,8 @@ fn lsp_show_batches_source_and_failures() {
             "show.rs::child",
         ])
         .assert()
-        .code(6)
-        .stdout(predicates::str::contains("ambiguous-symbol"));
+        .code(5)
+        .stdout(predicates::str::contains("show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n\nshow.rs:208-209\n   208\t  line 208\n   209\t  line 209\n"));
     env.rimz()
         .args([
             "lsp",
@@ -959,8 +959,8 @@ fn lsp_check_fixes_hints_without_rewriting_other_notes() {
         std::fs::metadata(&notes).unwrap().modified().unwrap(),
         modified
     );
-    let skipped = "`show.rs:999`\n`gone.rs::x ~99`\n`dup.rs::x ~99`\n`show.rs::absent ~99`\n`show.rs::child ~4`\n`o/r@v1:show.rs::Parent ~99`\n`notes.py::x ~99`\n`show.rs::Parent`\n";
-    std::fs::write(&notes, format!("{source}{skipped}")).unwrap();
+    let skipped = "`show.rs:999`\n`gone.rs::x ~99`\n`dup.rs::x ~99`\n`show.rs::absent ~99`\n`show.rs::child ~4-208`\n`show.rs::child ~100`\n`o/r@v1:show.rs::Parent ~99`\n`notes.py::x ~99`\n`show.rs::Parent`\n";
+    std::fs::write(&notes, format!("{source}`show.rs::child ~4`\n{skipped}")).unwrap();
     let output = env
         .rimz()
         .args(["lsp", "check", "notes.md", "--fix", "--json"])
@@ -968,7 +968,11 @@ fn lsp_check_fixes_hints_without_rewriting_other_notes() {
         .unwrap();
     assert_eq!(output.status.code(), Some(7));
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["fixes"].as_array().unwrap().len(), 2);
+    assert_eq!(value["fixes"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        value["fixes"][2],
+        serde_json::json!({"line":3,"before":"show.rs::child ~4","after":"show.rs::child ~3"})
+    );
     assert_eq!(
         value["fixes"][0],
         serde_json::json!({"line":1,"before":"show.rs::Parent::child (~90-99)","after":"show.rs::Parent::child (~3-5)"})

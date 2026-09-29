@@ -32,7 +32,11 @@ pub(super) fn rewrite(
             continue;
         };
         let hits = symbol_hits(&file.nodes, chain);
-        let [node] = hits.as_slice() else { continue };
+        let selected = hinted(&hits, anchor.hint);
+        let node = match (selected.as_slice(), hits.as_slice()) {
+            ([node], _) | (_, [node]) => node,
+            _ => continue,
+        };
         let (Some(source_range), Some(text_range)) = (anchor.hint_source, anchor.hint_text) else {
             continue;
         };

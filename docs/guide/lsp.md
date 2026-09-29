@@ -156,7 +156,7 @@ When a symbol still exists but its line hint has drifted, refresh the hint inste
 rimz lsp check notes.md --fix
 ```
 
-This rewrites only existing hint digits for uniquely resolved symbols, then checks the updated notes. It preserves hint syntax and leaves ambiguous symbols, line-only anchors, and files with unsaved editor changes alone. Review the notes diff to keep or undo the changed hints. A second run with no changed hints leaves the file untouched.
+This rewrites only existing hint digits, then checks the updated notes. When several items match a symbol, the hint must select exactly one within three lines; a unique item can be fixed even when its hint has drifted farther. It preserves hint syntax and leaves hints that cannot select one item, line-only anchors, and files with unsaved editor changes alone. Review the notes diff to keep or undo the changed hints. A second run with no changed hints leaves the file untouched.
 
 Fix remaining flagged paths, symbols, or lines and rerun. A path suffix that names several files needs more of the path. The summary counts what passed, failed, remained unchecked, or was external; `unchecked` means no server covers that language, so verify those anchors by hand. Cite another repository with `owner/repo@ref:path::Symbol` or `owner/repo@ref:path:~N`: these count as `external`, without being verified or flagged as failures. The [reference](../reference/cli/lsp.md#check-anchors-in-a-notes-file) defines the accepted anchors and JSON output.
 
