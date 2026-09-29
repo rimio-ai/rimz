@@ -150,7 +150,7 @@ The switch affects new launches, not existing panes. Profile `skills` lists can 
 
 ### A Rust build in a sandboxed pane fails through sccache
 
-A Cargo build that uses sccache as its `rustc-wrapper` fails in a sandboxed pane with `error writing dependencies ... No such file or directory` or `exit status: 254`. The sccache server is shared by every pane and normally compiles in the view of whichever process started it, where the sandboxed pane's `/tmp` paths do not exist. RimZ sets `SCCACHE_CLIENT_SIDE=1` in sandboxed panes so each build compiles in its own pane and still shares one cache, but sccache only honors it from version 0.17.
+A Cargo build that uses sccache as its `rustc-wrapper` fails in a sandboxed pane with `error writing dependencies ... No such file or directory` or `exit status: 254`. The sccache server is shared by every pane and normally compiles in the view of whichever process started it, where the sandboxed pane's `/tmp` paths do not exist. RimZ sets `SCCACHE_CLIENT_SIDE=1` in sandboxed panes so each build compiles in its own pane and still shares one cache, but sccache only honors it from version 0.17, and ignores it while `SCCACHE_LOG` is set or distributed compilation is configured. Unset `SCCACHE_LOG` before you rebuild, even when debugging this failure.
 
 Upgrade sccache, then stop the old server so the next build starts a new one:
 
