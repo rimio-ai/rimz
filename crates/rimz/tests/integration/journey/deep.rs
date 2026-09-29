@@ -556,7 +556,8 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
     // This geometry is load-bearing: below the 240-column policy breakpoint,
     // the correct automatic target aliases the 24-column safety floor closely
     // enough that a sidebar-only viewport bug is invisible.
-    let client = AttachedZellijScreen::new(&cleanup.namespace, name, 320, 80);
+    let view_cols = 320;
+    let mut client = AttachedZellijScreen::new(&cleanup.namespace, name, view_cols, 80);
     let screen = client.wait_until(|screen| screen.contains("codex"), CAPTURE_BUDGET);
     assert!(
         screen.contains("codex"),
@@ -567,18 +568,39 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
     // converge against it, then publish the completed tab without a target
     // broadcast. The next keypress must resolve against this proven viewport.
     std::thread::sleep(Duration::from_secs(3));
+    let layout_width =
+        wait_for_rendered_sidebar_width(&mut client, |_| true, "layout sidebar width");
     write_zellij_topology(&cleanup.namespace, &runtime_paths, name, false);
 
     let backend = ZellijBackend::with_runtime_dir(runtime);
     let pane = wait_for_zellij_sidebar_pane(&backend, &runtime_paths, name);
-    std::thread::sleep(Duration::from_secs(3));
-    let initial = wait_for_rendered_sidebar_width(&client, |_| true, "initial sidebar width");
+    // The sidebar-only extent never nudges, so the first nudge measured
+    // against the whole tab is the controller acting on the proven viewport.
+    // The key must land after the frame repainted at that nudge's width.
+    env.wait_for_diag(
+        name,
+        |record| {
+            matches!(
+                record.event,
+                DiagEvent::SidebarWidthNudge { view_cols: nudged, .. } if nudged == view_cols
+            )
+        },
+        CAPTURE_BUDGET,
+    );
+    let initial = wait_for_rendered_sidebar_width(
+        &mut client,
+        |width| width != layout_width,
+        "sidebar frame at the automatic width",
+    );
 
     backend.send_keys(&pane, "d").expect("send wider key");
-    let wider =
-        wait_for_rendered_sidebar_width(&client, |width| width > initial, "wider sidebar frame");
+    let wider = wait_for_rendered_sidebar_width(
+        &mut client,
+        |width| width > initial,
+        "wider sidebar frame",
+    );
     std::thread::sleep(Duration::from_secs(3));
-    let held_wider = wait_for_rendered_sidebar_width(&client, |_| true, "settled wider frame");
+    let held_wider = wait_for_rendered_sidebar_width(&mut client, |_| true, "settled wider frame");
     let diag = env.diag_tail(name, DIAG_EVIDENCE_RECORDS);
     assert_eq!(
         held_wider, wider,
@@ -587,13 +609,13 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
 
     backend.send_keys(&pane, "a").expect("send narrower key");
     let narrower = wait_for_rendered_sidebar_width(
-        &client,
+        &mut client,
         |width| width < held_wider,
         "narrower sidebar frame",
     );
     std::thread::sleep(Duration::from_secs(3));
     let held_narrower =
-        wait_for_rendered_sidebar_width(&client, |_| true, "settled narrower frame");
+        wait_for_rendered_sidebar_width(&mut client, |_| true, "settled narrower frame");
     let diag = env.diag_tail(name, DIAG_EVIDENCE_RECORDS);
     assert_eq!(
         held_narrower, narrower,
@@ -2499,55 +2521,50 @@ fn wait_for_named_terminal_run(
 
 /// A persistent `portable-pty` client whose parser exposes the composited
 /// screen while width actions run against the attached Zellij session.
+///
+/// A loaded Zellij server can turn an attach away with "No session with the
+/// name ... found" while the session is alive, so an exited client is
+/// re-attached on the next read, as the backend suite's attached client does.
 struct AttachedZellijScreen {
+    namespace: PathBuf,
+    session: String,
+    parser: Arc<Mutex<vt100::Parser>>,
+    client: AttachProcess,
+}
+
+struct AttachProcess {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     master: Option<Box<dyn portable_pty::MasterPty + Send>>,
-    parser: Arc<Mutex<vt100::Parser>>,
     reader: Option<std::thread::JoinHandle<()>>,
 }
 
 impl AttachedZellijScreen {
     fn new(namespace: &ZellijNamespace, session: &str, cols: u16, rows: u16) -> Self {
-        let pair = native_pty_system()
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .expect("openpty");
-        let mut cmd = CommandBuilder::new("zellij");
-        cmd.args(["attach", session]);
-        namespace.pin_pty(&mut cmd);
-        let child = pair.slave.spawn_command(cmd).expect("attach zellij");
-        drop(pair.slave);
-
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
-        let mut reader = pair.master.try_clone_reader().expect("clone reader");
-        let sink = Arc::clone(&parser);
-        let reader = std::thread::spawn(move || {
-            let mut chunk = [0u8; 4096];
-            loop {
-                match reader.read(&mut chunk) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => sink.lock().expect("parser").process(&chunk[..n]),
-                }
-            }
-        });
-
+        let client = AttachProcess::spawn(namespace.path(), session, &parser);
         Self {
-            child,
-            master: Some(pair.master),
+            namespace: namespace.path().to_path_buf(),
+            session: session.to_owned(),
             parser,
-            reader: Some(reader),
+            client,
         }
     }
 
-    fn contents(&self) -> String {
+    fn contents(&mut self) -> String {
+        if matches!(self.client.child.try_wait(), Ok(Some(_))) {
+            self.reattach();
+        }
         self.parser.lock().expect("parser").screen().contents()
     }
 
-    fn wait_until(&self, mut ready: impl FnMut(&str) -> bool, budget: Duration) -> String {
+    fn reattach(&mut self) {
+        self.client.stop();
+        let (rows, cols) = self.parser.lock().expect("parser").screen().size();
+        *self.parser.lock().expect("parser") = vt100::Parser::new(rows, cols, 0);
+        self.client = AttachProcess::spawn(&self.namespace, &self.session, &self.parser);
+    }
+
+    fn wait_until(&mut self, mut ready: impl FnMut(&str) -> bool, budget: Duration) -> String {
         let deadline = Instant::now() + budget;
         let mut text = String::new();
         while Instant::now() < deadline {
@@ -2561,14 +2578,55 @@ impl AttachedZellijScreen {
     }
 }
 
-impl Drop for AttachedZellijScreen {
-    fn drop(&mut self) {
+impl AttachProcess {
+    fn spawn(namespace: &Path, session: &str, parser: &Arc<Mutex<vt100::Parser>>) -> Self {
+        let (rows, cols) = parser.lock().expect("parser").screen().size();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("zellij");
+        cmd.args(["attach", session]);
+        ZellijNamespace::pin_pty_at(namespace, &mut cmd);
+        let child = pair.slave.spawn_command(cmd).expect("attach zellij");
+        drop(pair.slave);
+
+        let mut reader = pair.master.try_clone_reader().expect("clone reader");
+        let sink = Arc::clone(parser);
+        let reader = std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => sink.lock().expect("parser").process(&chunk[..n]),
+                }
+            }
+        });
+
+        Self {
+            child,
+            master: Some(pair.master),
+            reader: Some(reader),
+        }
+    }
+
+    fn stop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
         drop(self.master.take());
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
+    }
+}
+
+impl Drop for AttachProcess {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -2585,9 +2643,24 @@ fn write_zellij_topology(
             .args(["--session", session, "action", "list-panes", "--json"])
             .bounded_output()
             .expect("list Zellij panes for topology fixture");
-        assert!(output.status.success(), "list-panes failed for {session}");
-        let mut values: Vec<serde_json::Value> =
-            serde_json::from_slice(&output.stdout).expect("decode Zellij pane list");
+        // A session under load can fail a listing or answer it with empty
+        // stdout while it is alive; retry within the budget like any poll.
+        let values = output
+            .status
+            .success()
+            .then(|| serde_json::from_slice::<Vec<serde_json::Value>>(&output.stdout).ok())
+            .flatten();
+        let Some(mut values) = values else {
+            assert!(
+                Instant::now() < deadline,
+                "list-panes never answered for {session}: {}; stdout: {}; stderr: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        };
         for value in &mut values {
             let Some(object) = value.as_object_mut() else {
                 continue;
@@ -2669,16 +2742,22 @@ fn wait_for_zellij_sidebar_pane(
     }
 }
 
+/// The width of the frame the renderer painted, read off its right-aligned
+/// footer. Only a footer beside the pane's right border counts: after a resize
+/// and before the renderer repaints, Zellij shows the old frame rewrapped (a
+/// shrink leaves the footer's tail mid-row) or unpadded (a grow leaves it short
+/// of the border), and neither is a width the sidebar chose.
 fn rendered_sidebar_width(screen: &str) -> Option<usize> {
     const FOOTER: &str = "? for help";
     screen
         .lines()
-        .find_map(|line| line.split_once(FOOTER).map(|(prefix, _)| prefix))
-        .map(|prefix| prefix.chars().count() + FOOTER.chars().count())
+        .filter_map(|line| line.split_once(FOOTER))
+        .find(|(_, rest)| rest.strip_prefix(' ').unwrap_or(rest).starts_with('│'))
+        .map(|(prefix, _)| prefix.chars().count() + FOOTER.chars().count())
 }
 
 fn wait_for_rendered_sidebar_width(
-    client: &AttachedZellijScreen,
+    client: &mut AttachedZellijScreen,
     mut ready: impl FnMut(usize) -> bool,
     label: &str,
 ) -> usize {
