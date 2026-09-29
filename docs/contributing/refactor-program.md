@@ -106,7 +106,7 @@ A review fix after the record commit means re-measuring and amending it.
 
 ## Concurrency
 
-Two module passes may run at once when their contract `paths` are disjoint (callers included), they share no `crates/rimz/tests/integration/<suite>.rs`, they sit in different layers, and neither touches an in-flight seam's `paths`. Three is the practical ceiling. Every plan names the merge order and the other passes' `paths`; before merging, a pass rebases, re-pins `base`, and reruns `diff --expect` and `gate`. The later pass resolves ledger and `refactor-target.toml` conflicts.
+Two module passes may run at once when their contract `paths` are disjoint (callers included), they share no `crates/rimz/tests/integration/<suite>.rs`, they sit in different layers, and neither touches an in-flight seam's `paths`. Three is the practical ceiling. Take the pass number from the ledger and from open PRs (`gh pr list --search 'pass <N>'`, with `<N>` the ledger's current pass): a pass in flight holds its number before the ledger records it. Every plan names the merge order and the other passes' `paths`; before merging, a pass rebases, re-pins `base`, and reruns `diff --expect` and `gate`. The later pass resolves ledger and `refactor-target.toml` conflicts.
 
 ## Tests inside a pass
 
