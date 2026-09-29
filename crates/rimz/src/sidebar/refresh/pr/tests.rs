@@ -571,16 +571,21 @@ fn github_query_plans_chunk_at_the_alias_bound() {
     assert_eq!(
         plans
             .iter()
-            .map(|plan| plan.pr_targets.len() + plan.oids.len() + usize::from(plan.include_open))
+            .map(|plan| plan.query.matches("pullRequests(").count()
+                + plan.query.matches(": object(").count())
             .sum::<usize>(),
-        target_count * 2 + 1
+        target_count * 3 + 1
     );
-    assert!(plans.iter().all(|plan| plan.pr_targets.len()
+    assert!(plans.iter().all(|plan| plan.pr_targets.len() * 2
         + plan.oids.len()
         + usize::from(plan.include_open)
         <= GH_BULK_MAX_ALIASES));
     assert!(plans[0].include_open);
     assert!(!plans[1].include_open);
+    assert_eq!(plans[0].pr_targets.len(), 49);
+    assert_eq!(plans[0].oids.len(), 1);
+    assert_eq!(plans[1].pr_targets.len(), 2);
+    assert_eq!(plans[1].oids.len(), 50);
     let mut trunk = target("/repo/main", "main");
     trunk.trunk = true;
     let trunk_plans = plan_github_queries(&repo_group(vec![trunk]));

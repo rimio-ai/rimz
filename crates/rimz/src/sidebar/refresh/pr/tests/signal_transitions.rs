@@ -112,7 +112,7 @@ fn open_reading(prior: &PrStateCache, head: &str, behind: u64, mergeable: &str) 
     let plan = plan_github_queries(&group).remove(0);
     let raw = json!({"data": {"repository": {
         "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
-        "facts0": {"nodes": [{"number": 42, "headRefOid": head, "mergeable": mergeable,
+        "facts0": {"nodes": [{"number": 42, "headRefOid": head, "mergeable": mergeable, "isCrossRepository": false,
             "baseRef": {"name": "main", "compare": {"behindBy": behind}}}]}
     }}});
     let response = forge::parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
