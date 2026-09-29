@@ -133,7 +133,8 @@ upward-dependencies = ["address"]
 # Async-ask observation edits, queue projections and actionable access cross the adapter/store/CLI seams.
 # ToolRules declares per-launch permission-rule support for launch and validation (+1).
 # LoginCatalog::select_machine names the [accounts.use] source for birth, accounts list, and doctor (+1).
-surface-budget = 916
+# Account-scoped model alias resolution shares request, catalog source, outcome, and cache membership with launch orchestration (+10).
+surface-budget = 926
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -274,6 +275,7 @@ allowed-dependencies = [
     "utils",
 ]
 # Pane writers share one user-scoped lock path across workspace boundaries.
+# Model alias resolution shares per-login persistent catalog and runtime lock paths (+2).
 # Room lifecycle owns private tmp and rewritten-skill directory creation and removal.
 # Wait and subagent reports share streaming output-file measurements.
 # Stage flips share a canonical-worktree board lock across rooms.
@@ -296,7 +298,7 @@ allowed-dependencies = [
 # StatePaths::remove_root and RuntimePaths::remove_root let room replacement remove both whole trees.
 # Checked executable copying shares the durable publication funnel.
 # Sidebar workers lease account-global pixel slots through one classed lock accessor.
-surface-budget = 202
+surface-budget = 204
 
 [[module]]
 path = "crates/rimz/src/forge"

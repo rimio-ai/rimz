@@ -90,6 +90,8 @@ struct ResetCreditWire {
 pub(super) struct ModelListResponse {
     #[serde(default)]
     pub(super) data: Vec<RawModel>,
+    #[serde(default)]
+    pub(super) next_cursor: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -101,6 +103,18 @@ pub(super) struct RawModel {
     pub(super) model: String,
     #[serde(default)]
     pub(super) display_name: String,
+    #[serde(default)]
+    pub(super) hidden: bool,
+    #[serde(default)]
+    pub(super) upgrade: Option<String>,
+    #[serde(default)]
+    pub(super) supported_reasoning_efforts: Vec<ReasoningEffort>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ReasoningEffort {
+    pub(super) reasoning_effort: String,
 }
 
 /// A model from `model/list` matched to the session's model hint.

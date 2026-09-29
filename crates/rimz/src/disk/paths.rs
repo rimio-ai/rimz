@@ -866,6 +866,15 @@ impl RuntimePaths {
             .join(format!("auto_redeem.{key}.json"))
     }
 
+    pub(crate) fn shared_model_catalog_path(&self, key: &crate::ids::LoginKey) -> PathBuf {
+        self.persistent_shared_root
+            .join(format!("model_catalog.{key}.json"))
+    }
+
+    pub(crate) fn shared_model_catalog_lock(&self, key: &crate::ids::LoginKey) -> PathBuf {
+        self.shared_root.join(format!("model_catalog.{key}.lock"))
+    }
+
     pub(crate) fn shared_auto_redeem_rate_path(&self, key: &crate::ids::LoginKey) -> PathBuf {
         self.persistent_shared_root
             .join(format!("auto_redeem_rate.{key}.json"))

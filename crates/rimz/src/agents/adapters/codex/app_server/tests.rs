@@ -108,6 +108,27 @@ fn model_list_result() -> Value {
     })
 }
 
+#[test]
+fn model_catalog_follows_pages_and_preserves_resolution_fields() {
+    let transport = CannedTransport::new().with_sequence("model/list", vec![
+        json!({"data": [{"id": "gpt-6-sol", "hidden": false, "upgrade": "gpt-6.1-sol", "supportedReasoningEfforts": [{"reasoningEffort": "ultra", "description": "maximum"}]}], "nextCursor": "page2"}),
+        json!({"data": [{"id": "gpt-6.1-sol", "hidden": false}, {"id": "gpt-reserve", "hidden": true}], "nextCursor": null}),
+    ]);
+    let mut client = CodexAppServer::new(transport);
+    let entries = client.model_catalog().unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].upgrade.as_deref(), Some("gpt-6.1-sol"));
+    assert_eq!(entries[0].efforts, ["ultra"]);
+    assert!(entries[2].hidden);
+    assert_eq!(
+        client.transport.params,
+        [
+            json!({"includeHidden": true}),
+            json!({"includeHidden": true, "cursor": "page2"})
+        ]
+    );
+}
+
 fn ts() -> Timestamp {
     Timestamp::from_second(1_780_000_000).unwrap()
 }
@@ -573,18 +594,18 @@ fn assert_daemon_ws(attempt: &ConnectAttempt, expected: &Path) {
 
 #[test]
 fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
-    let attempts = attempts_for(None, None);
+    let attempts = attempts_for(None, None, APP_SERVER_DEADLINE);
     assert_eq!(attempts.len(), 1);
     assert_spawn(&attempts[0], APP_SERVER_DEADLINE);
 
     let daemon = Path::new("/run/codex/app-server-control.sock");
-    let attempts = attempts_for(None, Some(daemon));
+    let attempts = attempts_for(None, Some(daemon), APP_SERVER_DEADLINE);
     assert_eq!(attempts.len(), 2);
     assert_daemon_ws(&attempts[0], daemon);
     assert_spawn(&attempts[1], APP_SERVER_DEADLINE);
 
     let broker = Path::new("/run/user/1000/rimz/w/sock/codex-app-server.sock");
-    let attempts = attempts_for(Some(broker), Some(daemon));
+    let attempts = attempts_for(Some(broker), Some(daemon), APP_SERVER_DEADLINE);
     assert_eq!(attempts.len(), 3);
     match &attempts[0] {
         ConnectAttempt::Broker(path) => assert_eq!(path, broker),
@@ -593,13 +614,19 @@ fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
     assert_daemon_ws(&attempts[1], daemon);
     assert_spawn(&attempts[2], APP_SERVER_DEADLINE);
 
-    let attempts = attempts_for(Some(broker), None);
+    let attempts = attempts_for(Some(broker), None, APP_SERVER_DEADLINE);
     assert_eq!(attempts.len(), 2);
     match &attempts[0] {
         ConnectAttempt::Broker(path) => assert_eq!(path, broker),
         other => panic!("broker must come first, got {other:?}"),
     }
     assert_spawn(&attempts[1], APP_SERVER_DEADLINE);
+}
+
+#[test]
+fn launch_catalog_allows_a_longer_cold_spawn() {
+    let attempts = attempts_for(None, None, Duration::from_secs(15));
+    assert_spawn(&attempts[0], Duration::from_secs(15));
 }
 
 #[test]
