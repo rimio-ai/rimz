@@ -31,6 +31,7 @@ mod ask;
 pub(in crate::agents) mod broker;
 mod install;
 mod local_sessions;
+mod model_alias;
 pub(in crate::agents) mod oauth_usage;
 mod payloads;
 mod process;
@@ -854,6 +855,22 @@ impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
+    fn resolve_model_alias(
+        &self,
+        request: crate::agents::capabilities::ModelAliasRequest<'_>,
+        source: Option<&mut dyn crate::agents::capabilities::ModelCatalogSource>,
+    ) -> Option<crate::agents::capabilities::ModelAliasResolution> {
+        model_alias::resolve(request, source)
+    }
+
+    fn known_catalog_model(
+        &self,
+        paths: &crate::RuntimePaths,
+        login: &crate::ids::LoginKey,
+        id: &str,
+    ) -> Option<bool> {
+        model_alias::known_model(paths, login, id)
+    }
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["CODEX_HOME"]
     }
@@ -1774,7 +1791,7 @@ fn refresh_app_server_enrichment(
     broker_socket: Option<&Path>,
     login_env: &BTreeMap<String, String>,
 ) -> Option<AppServerObservation> {
-    let mut client = CodexAppServer::connect(broker_socket, login_env)?;
+    let mut client = CodexAppServer::connect(broker_socket, login_env, None)?;
     Some(client.observe("codex", session_id, model_hint, Timestamp::now()))
 }
 

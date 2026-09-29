@@ -247,6 +247,26 @@ pub enum ManualSkill {
 
 #[doc(hidden)]
 pub trait LaunchCapability: CoreCapability {
+    /// Resolve a provider alias under the selected account; pins and unknown names abstain.
+    /// With no injected source, use the adapter's native catalog client.
+    fn resolve_model_alias(
+        &self,
+        _request: ModelAliasRequest<'_>,
+        _source: Option<&mut dyn ModelCatalogSource>,
+    ) -> Option<ModelAliasResolution> {
+        None
+    }
+
+    /// Cache-only membership check. An absent catalog is not evidence of absence.
+    fn known_catalog_model(
+        &self,
+        _paths: &crate::RuntimePaths,
+        _login: &crate::ids::LoginKey,
+        _id: &str,
+    ) -> Option<bool> {
+        None
+    }
+
     /// The directory the provider reads its user-level config and credentials from, as the launch env will resolve it. Never reads the ambient env.
     ///
     /// Providers with separate config and credential stores declare their config root; this is not an inventory of every provider-owned path.
@@ -389,6 +409,63 @@ pub trait LaunchCapability: CoreCapability {
     fn room_env(&self, _runtime: &crate::disk::paths::RuntimePaths) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
+}
+
+/// Account-scoped inputs to launch-time alias resolution.
+pub struct ModelAliasRequest<'a> {
+    pub alias: &'a str,
+    pub effort: Option<&'a str>,
+    pub login: &'a ProviderLogin,
+    pub login_env: &'a BTreeMap<String, String>,
+    pub paths: &'a crate::RuntimePaths,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ModelCatalogEntry {
+    pub id: String,
+    pub hidden: bool,
+    pub upgrade: Option<String>,
+    #[serde(rename = "supportedReasoningEfforts")]
+    pub efforts: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ModelCatalogErr {
+    #[error("{0}")]
+    Unavailable(String),
+}
+
+/// Injectable account-scoped catalog read; production uses the adapter's native client.
+pub trait ModelCatalogSource {
+    fn fetch(
+        &mut self,
+        paths: &crate::RuntimePaths,
+        login_env: &BTreeMap<String, String>,
+    ) -> std::result::Result<Vec<ModelCatalogEntry>, ModelCatalogErr>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelAliasRung {
+    /// A catalog fetched within the freshness window, including a cache hit.
+    FreshCatalog,
+    /// An older catalog used after a refresh could not resolve the alias.
+    CachedCatalog,
+    Baked,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ModelAliasMove {
+    pub alias: String,
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug)]
+pub struct ModelAliasResolution {
+    pub id: String,
+    pub rung: ModelAliasRung,
+    pub warnings: Vec<String>,
+    pub movement: Option<ModelAliasMove>,
 }
 
 #[doc(hidden)]

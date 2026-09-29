@@ -212,9 +212,14 @@ impl CodexAppServer<Transport> {
     pub(crate) fn connect(
         broker_socket: Option<&Path>,
         login_env: &BTreeMap<String, String>,
+        spawn_deadline: Option<Duration>,
     ) -> Option<Self> {
         let bin = codex_bin();
-        for attempt in connect_attempts(broker_socket, login_env) {
+        for attempt in connect_attempts(
+            broker_socket,
+            login_env,
+            spawn_deadline.unwrap_or(APP_SERVER_DEADLINE),
+        ) {
             let transport = match &attempt {
                 ConnectAttempt::Broker(path) => {
                     FramedTransport::connect(path, DAEMON_PROBE_DEADLINE).map(Transport::Framed)
@@ -261,12 +266,14 @@ impl CodexAppServer<WsTransport> {
 fn connect_attempts(
     broker_socket: Option<&Path>,
     login_env: &BTreeMap<String, String>,
+    spawn_deadline: Duration,
 ) -> Vec<ConnectAttempt> {
     attempts_for(
         broker_socket.filter(|path| path.exists()),
         daemon_socket(login_env)
             .filter(|path| path.exists())
             .as_deref(),
+        spawn_deadline,
     )
 }
 
@@ -275,7 +282,11 @@ fn connect_attempts(
 /// disk), order the attempts — broker (warm) first, then the daemon WebSocket,
 /// always followed by a cold-spawned `app-server` fallback so enrichment never
 /// depends on either being up.
-fn attempts_for(broker: Option<&Path>, daemon: Option<&Path>) -> Vec<ConnectAttempt> {
+fn attempts_for(
+    broker: Option<&Path>,
+    daemon: Option<&Path>,
+    spawn_deadline: Duration,
+) -> Vec<ConnectAttempt> {
     let mut attempts = Vec::new();
     if let Some(broker) = broker {
         attempts.push(ConnectAttempt::Broker(broker.to_path_buf()));
@@ -283,7 +294,7 @@ fn attempts_for(broker: Option<&Path>, daemon: Option<&Path>) -> Vec<ConnectAtte
     if let Some(daemon) = daemon {
         attempts.push(ConnectAttempt::DaemonWs(daemon.to_path_buf()));
     }
-    attempts.push(ConnectAttempt::Spawn(APP_SERVER_DEADLINE));
+    attempts.push(ConnectAttempt::Spawn(spawn_deadline));
     attempts
 }
 
@@ -371,6 +382,40 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
                 display_name: model.display_name,
             })
             .filter(|model| !model.display_name.is_empty()))
+    }
+
+    pub(super) fn model_catalog(
+        &mut self,
+    ) -> Result<Vec<crate::agents::capabilities::ModelCatalogEntry>, AppServerErr> {
+        let mut entries = Vec::new();
+        let mut params = json!({ "includeHidden": true });
+        let mut cursors = std::collections::HashSet::new();
+        loop {
+            let result = self.transport.request("model/list", params.clone())?;
+            let page: ModelListResponse = serde_json::from_value(result)
+                .map_err(|err| AppServerErr::Protocol(err.to_string()))?;
+            entries.extend(page.data.into_iter().map(|entry| {
+                crate::agents::capabilities::ModelCatalogEntry {
+                    id: entry.id,
+                    hidden: entry.hidden,
+                    upgrade: entry.upgrade,
+                    efforts: entry
+                        .supported_reasoning_efforts
+                        .into_iter()
+                        .map(|effort| effort.reasoning_effort)
+                        .collect(),
+                }
+            }));
+            let Some(cursor) = page.next_cursor else {
+                return Ok(entries);
+            };
+            if !cursors.insert(cursor.clone()) {
+                return Err(AppServerErr::Protocol(
+                    "model/list repeated a pagination cursor".into(),
+                ));
+            }
+            params["cursor"] = json!(cursor);
+        }
     }
 
     /// Read the thread's short metadata without resuming or subscribing to it.

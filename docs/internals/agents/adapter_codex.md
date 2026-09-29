@@ -102,6 +102,16 @@ Host skill lists render `-c skills.config` entries with `enabled=false` for unli
 
 The descriptor also sets `registers_lazily`, `ThreadKey::PerFile`, the `KeepPrimary` same-pane policy, and process names `codex` and `node`.
 
+### Model catalog resolution
+
+`crates/rimz/src/agents/capabilities.rs::LaunchCapability::resolve_model_alias` is the account-scoped domain seam; the default abstains. Codex recognizes only baked aliases whose name differs from their id. Full ids and unknown names never read or fetch a catalog. This seam is not yet called by the exec wrapper; load-time expansion remains in place until wrapper integration lands.
+
+`crates/rimz/src/agents/adapters/codex/model_alias.rs::select` matches exact `gpt-<numeric-version>-<family>` ids, excluding hidden entries and suffixed variants, and orders version components numerically. Each candidate follows visible, present upgrade targets with a cycle guard. The newest chain end supporting the requested effort wins; skipping the newest or finding no supporting model returns a warning. Without an effort, the newest wins.
+
+`crates/rimz/src/agents/adapters/codex/app_server.rs::CodexAppServer::model_catalog` follows `nextCursor` with `includeHidden: true`, using the existing account-scoped broker, daemon, and cold-spawn connection ladder. One versioned JSON file per login under the persistent shared cache stores the trimmed catalog, fetch time, and last catalog-derived alias targets. RuntimePaths mints both cache and lock paths. A per-login advisory lock encloses read, fetch, resolution, and atomic durable publication. Catalogs stay fresh for one hour; unreadable and wrong-version files count as missing.
+
+Resolution falls back from a fresh catalog to the cached catalog at any age, then to the baked id. Each lower rung returns a warning naming the fallback and a fix. Only catalog-derived targets update the remembered alias and return a move, once under the lock; baked fallbacks never record a move. The adapter prints nothing and appends no assist. The capability also offers a cache-only membership query for configured pins; no cached catalog returns unknown, not absent.
+
 ### Directory trust preflight
 
 An undecided launch directory stops Codex at its trust screen before the first prompt, so a supervised `rimz agents -p` run started there would sit in `Pending` until its deadline. [`preflight_agent`](../../../crates/rimz/src/cli/supervised.rs) therefore checks Codex's `[projects]` trust for the resolved checkout after the hook preflight and before the run record, the store append, and any mux action; a `--worktree` launch has already created its tree by then. Interactive `rimz agents codex` launches skip the check, because a human at the pane can answer the screen.
