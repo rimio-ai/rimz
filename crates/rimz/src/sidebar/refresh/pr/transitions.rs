@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use super::{RepoGroup, Target};
-use crate::forge::pr_state::{PrLink, PrStateCache, TargetStamp};
+use crate::forge::pr_state::{PrLink, PrStateCache, SettledMergeability, TargetStamp};
 use crate::forge::{ForgeSignal, RemoteRepo};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
@@ -26,28 +26,44 @@ pub(super) fn transitions(
         if !stamp.owns_link(next_link) {
             continue;
         }
-        let Some(prior_link) = prior.states.get(path) else {
-            continue;
-        };
-        if !stamp.owns_link(prior_link) {
-            continue;
-        }
-        if prior_link.state == WorktreePrState::Open {
-            let name = match next_link.state {
-                WorktreePrState::Merged => Some(ForgeSignal::PrMerged.as_str()),
-                WorktreePrState::Closed => Some(ForgeSignal::PrClosed.as_str()),
-                WorktreePrState::Open => None,
-            };
-            if let Some(name) = name {
+        let prior_link = prior.states.get(path).filter(|link| stamp.owns_link(link));
+        for signal in [ForgeSignal::PrBehind, ForgeSignal::PrConflicted] {
+            if let Some(key) = open_key(Some(next_link), signal)
+                && Some(key) != open_key(prior_link, signal)
+            {
                 signals.push((
-                    name,
+                    signal.as_str(),
                     payload(
                         next,
                         path,
                         stamp,
                         repo,
                         Some(next_link),
-                        Some(next_link.state),
+                        Some(signal),
+                        remote,
+                    ),
+                ));
+            }
+        }
+        let Some(prior_link) = prior_link else {
+            continue;
+        };
+        if prior_link.state == WorktreePrState::Open {
+            let signal = match next_link.state {
+                WorktreePrState::Merged => Some(ForgeSignal::PrMerged),
+                WorktreePrState::Closed => Some(ForgeSignal::PrClosed),
+                WorktreePrState::Open => None,
+            };
+            if let Some(signal) = signal {
+                signals.push((
+                    signal.as_str(),
+                    payload(
+                        next,
+                        path,
+                        stamp,
+                        repo,
+                        Some(next_link),
+                        Some(signal),
                         remote,
                     ),
                 ));
@@ -87,6 +103,24 @@ pub(super) fn transitions(
         signals.push((name, payload(next, path, stamp, repo, None, None, remote)));
     }
     signals
+}
+
+fn open_key(link: Option<&PrLink>, signal: ForgeSignal) -> Option<&str> {
+    let facts = link
+        .filter(|link| link.state == WorktreePrState::Open)?
+        .open
+        .as_ref()?;
+    match signal {
+        ForgeSignal::PrBehind if facts.behind_by.is_some_and(|behind| behind > 0) => {
+            Some(facts.head.as_str())
+        }
+        ForgeSignal::PrConflicted => match &facts.mergeability {
+            Some(SettledMergeability::Conflicting(head)) => Some(head.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+    .filter(|head| !head.is_empty())
 }
 
 fn target_for_path<'a>(
@@ -133,7 +167,7 @@ fn payload(
     stamp: &TargetStamp,
     repo: &str,
     link: Option<&PrLink>,
-    state: Option<WorktreePrState>,
+    signal: Option<ForgeSignal>,
     remote: Option<&RemoteRepo>,
 ) -> Map<String, Value> {
     let mut payload = Map::from_iter([
@@ -155,13 +189,28 @@ fn payload(
             payload.insert("checks_url".to_owned(), Value::String(url));
         }
     }
+    let state = match signal {
+        Some(ForgeSignal::PrMerged) => Some("merged"),
+        Some(ForgeSignal::PrClosed) => Some("closed"),
+        Some(ForgeSignal::PrBehind | ForgeSignal::PrConflicted) => Some("open"),
+        _ => None,
+    };
     if let Some(state) = state {
-        let state = match state {
-            WorktreePrState::Merged => "merged",
-            WorktreePrState::Closed => "closed",
-            WorktreePrState::Open => "open",
-        };
         payload.insert("state".to_owned(), Value::String(state.to_owned()));
+    }
+    if let Some(signal) = signal
+        && let Some(head) = open_key(link, signal)
+        && let Some(facts) = link.and_then(|link| link.open.as_ref())
+    {
+        payload.insert("pr_head".to_owned(), Value::String(head.to_owned()));
+        if let Some(base) = &facts.base {
+            payload.insert("base".to_owned(), Value::String(base.clone()));
+        }
+        if signal == ForgeSignal::PrBehind
+            && let Some(behind) = facts.behind_by
+        {
+            payload.insert("behind_by".to_owned(), Value::Number(behind.into()));
+        }
     }
     payload
 }

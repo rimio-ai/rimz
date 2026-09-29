@@ -10,6 +10,118 @@ const PATH: &str = "/repo/worktree";
 const REPO: &str = "gh:github.com:org/repo";
 
 #[test]
+fn behind_signals_follow_head_and_state_entries() {
+    for sequence in [
+        vec![("a", 1, true), ("a", 2, false), ("a", 2, false)],
+        vec![("a", 1, true), ("b", 1, true)],
+        vec![("a", 1, true), ("a", 0, false), ("a", 1, true)],
+    ] {
+        let mut prior = pr_cache(WorktreePrState::Open, None);
+        for (head, behind, fires) in sequence {
+            let next = open_reading(&prior, head, behind, "MERGEABLE");
+            assert_eq!(
+                signal_names(&production_transitions(&prior, &next)),
+                if fires { vec!["pr.behind"] } else { vec![] },
+                "head={head}, behind={behind}"
+            );
+            prior = next;
+        }
+    }
+}
+
+#[test]
+fn conflict_signals_wait_for_settled_heads() {
+    for sequence in [
+        vec![
+            ("a", "CONFLICTING", true),
+            ("a", "UNKNOWN", false),
+            ("a", "CONFLICTING", false),
+        ],
+        vec![
+            ("a", "CONFLICTING", true),
+            ("b", "UNKNOWN", false),
+            ("b", "CONFLICTING", true),
+        ],
+    ] {
+        let mut prior = pr_cache(WorktreePrState::Open, None);
+        for (head, mergeable, fires) in sequence {
+            let next = open_reading(&prior, head, 0, mergeable);
+            assert_eq!(
+                signal_names(&production_transitions(&prior, &next)),
+                if fires { vec!["pr.conflicted"] } else { vec![] },
+                "head={head}, mergeable={mergeable}"
+            );
+            prior = next;
+        }
+    }
+}
+
+#[test]
+fn first_seen_adverse_prs_require_continuity_ownership_and_success() {
+    let prior = base_cache();
+    let next = open_reading(&prior, "a", 1, "CONFLICTING");
+    assert_eq!(
+        signal_names(&production_transitions(&prior, &next)),
+        vec!["pr.behind", "pr.conflicted"]
+    );
+    assert!(production_transitions(&PrStateCache::default(), &next).is_empty());
+
+    let mut failed = next.clone();
+    failed.repos.get_mut(REPO).unwrap().ok = false;
+    assert!(production_transitions(&prior, &failed).is_empty());
+    let mut unowned = next.clone();
+    unowned.states.get_mut(PATH).unwrap().branch = Some("other".into());
+    assert!(production_transitions(&prior, &unowned).is_empty());
+    assert_eq!(
+        signal_names(&production_transitions(&unowned, &next)),
+        vec!["pr.behind", "pr.conflicted"]
+    );
+
+    let mut merged = next.clone();
+    merged.states.get_mut(PATH).unwrap().state = WorktreePrState::Merged;
+    assert_eq!(
+        signal_names(&production_transitions(&next, &merged)),
+        vec!["pr.merged"]
+    );
+    assert_eq!(
+        signal_names(&production_transitions(&merged, &next)),
+        vec!["pr.behind", "pr.conflicted"]
+    );
+}
+
+#[test]
+fn adverse_pr_payloads_distinguish_forge_and_local_heads() {
+    let prior = pr_cache(WorktreePrState::Open, None);
+    let next = open_reading(&prior, "forge-head", 3, "CONFLICTING");
+    let signals = production_transitions(&prior, &next);
+    assert_eq!(signal_names(&signals), vec!["pr.behind", "pr.conflicted"]);
+    let expected = json!({
+        "path": PATH, "branch": "feature", "repo": REPO,
+        "number": 42, "url": "https://github.com/org/repo/pull/42",
+        "head": "head-2", "checks_url": "https://github.com/org/repo/commit/head-2/checks",
+        "state": "open", "pr_head": "forge-head", "base": "main", "behind_by": 3,
+    });
+    assert_eq!(Value::Object(signals[0].1.clone()), expected);
+    let mut conflict = expected.as_object().unwrap().clone();
+    conflict.remove("behind_by");
+    assert_eq!(signals[1].1, conflict);
+}
+
+fn open_reading(prior: &PrStateCache, head: &str, behind: u64, mergeable: &str) -> PrStateCache {
+    let group = super::repo_group(vec![super::target(PATH, "feature")]);
+    let plan = plan_github_queries(&group).remove(0);
+    let raw = json!({"data": {"repository": {
+        "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
+        "facts0": {"nodes": [{"number": 42, "headRefOid": head, "mergeable": mergeable,
+            "baseRef": {"name": "main", "compare": {"behindBy": behind}}}]}
+    }}});
+    let response = forge::parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+    let mut cache = base_cache();
+    cache.states = project_github_group(&group, &[(plan, response)], &prior.states).0;
+    cache
+}
+
+#[test]
 fn open_pr_emits_only_its_terminal_transition() {
     for (state, expected_name) in [
         (WorktreePrState::Merged, "pr.merged"),

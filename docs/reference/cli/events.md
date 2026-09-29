@@ -84,7 +84,7 @@ $ rimz events follow --replay
 | `source` | Appended by | Names |
 | --- | --- | --- |
 | `cli` | `rimz events emit` | Any valid name outside the reserved families. |
-| `forge` | The room's sidebar, when a worktree branch's CI or pull request changes state | `ci.passed`, `ci.failed`, `pr.merged`, `pr.closed` |
+| `forge` | The room's sidebar, when a worktree branch's CI or pull request changes state | `ci.passed`, `ci.failed`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted` |
 | `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort | `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
 | `team` | A team stage flip, and the re-wake of the stage owner when it registers | `team.stage` |
 | `watch` | The watcher of a `rimz wait` command, check, PID, or file watch, at a check-in and its final outcome | `wait.<task-name>` |
@@ -142,7 +142,9 @@ error: signal name `ci.passed` is reserved for RimZ
 | `team` | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | `lifecycle` |
 | `team` | `team.stage` ([payload](./teams.md#the-teamstage-signal)) | `team` |
 | `ci` | `ci.passed`, `ci.failed` | `forge` |
-| `pr` | `pr.merged`, `pr.closed` | `forge` |
+| `pr` | `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted` | `forge` |
 | `wait` | `wait.<task-name>` | `watch` |
 
-The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the four `ci` and `pr` names above. The flag performs no caller check, so the reserved families keep scripts from colliding with RimZ's names but do not authenticate a forge signal. What each built-in signal's payload carries is in [the loops guide](../../guide/loops.md#signals-the-rooms-event-bus) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
+The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the six `ci` and `pr` names above. The flag performs no caller check, so the reserved families keep scripts from colliding with RimZ's names but do not authenticate a forge signal. What each built-in signal's payload carries is in [the loops guide](../../guide/loops.md#signals-the-rooms-event-bus) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
+
+`pr.behind` and `pr.conflicted` are GitHub-only signals for open PRs. They fire on entry (first sight included), or when the PR head changes while still behind or confirmed conflicting; repeated readings of the same head do not repeat the signal. Conflict detection waits for GitHub's settled mergeability reading. Both carry the `pr.merged` payload with `state: "open"`, plus `pr_head` (the forge head, or the head where conflicts were confirmed), `base` when known, and `behind_by` for `pr.behind` only. `head` remains the local worktree HEAD. Match them by `branch` or `path` just like `pr.merged`.

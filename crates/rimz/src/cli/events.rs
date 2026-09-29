@@ -204,13 +204,33 @@ mod tests {
     fn reserved_families_reject_custom_emit_but_accept_internal_forge() {
         use rimz::store::event::SignalSource;
 
-        for raw in ["ci.passed", "ci.failed", "pr.merged", "pr.closed"] {
+        for raw in [
+            "ci.passed",
+            "ci.failed",
+            "pr.merged",
+            "pr.closed",
+            "pr.behind",
+            "pr.conflicted",
+        ] {
             let name = raw.parse().unwrap();
             assert!(validate_emit_source(&name, "cli").is_err(), "{raw}");
             assert_eq!(
                 validate_emit_source(&name, "forge").unwrap(),
                 SignalSource::Forge
             );
+        }
+        let refusal = validate_emit_source(&"pr.unknown".parse().unwrap(), "forge")
+            .unwrap_err()
+            .to_string();
+        for raw in [
+            "ci.passed",
+            "ci.failed",
+            "pr.merged",
+            "pr.closed",
+            "pr.behind",
+            "pr.conflicted",
+        ] {
+            assert!(refusal.contains(raw), "{refusal}");
         }
         for raw in [
             "agent.idle",

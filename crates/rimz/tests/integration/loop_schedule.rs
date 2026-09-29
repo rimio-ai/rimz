@@ -27,6 +27,59 @@ use crate::common::{Env, ScrubSessionEnvExt, canonical};
 use crate::common::{path_with_front, write_fake_login_shell, write_path_shim};
 
 #[test]
+fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
+    let env = Env::new();
+    for (name, signal) in [("behind", "pr.behind"), ("merged", "pr.merged")] {
+        loop_ok(
+            &env,
+            &[
+                "loop",
+                "add",
+                name,
+                "--signal",
+                signal,
+                "--match",
+                "branch=feature",
+                "--check",
+                "true",
+            ],
+        );
+    }
+    for branch in ["feature", "other"] {
+        loop_ok(
+            &env,
+            &[
+                "events",
+                "emit",
+                "pr.behind",
+                "--source",
+                "forge",
+                "--json",
+                &json!({"branch": branch}).to_string(),
+            ],
+        );
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).len() < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(
+        records
+            .iter()
+            .any(|record| record.task == "behind" && record.result == LoopRunResult::Completed),
+        "{records:?}"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record.task == "merged" && record.result == LoopRunResult::SignalSkipped),
+        "{records:?}"
+    );
+}
+
+#[test]
 fn team_signal_binding_registers_delivers_and_retires() {
     let env = Env::new();
     let Some(cwd) = team_signal_fixture(&env) else {
