@@ -52,6 +52,10 @@ pub enum LaunchPlanWarning {
         "{kind} has no per-launch skill switch; profile skills are not enforced under host isolation"
     )]
     HostSkillsUnenforced { kind: crate::ids::AgentKind },
+    #[error(
+        "{kind} has no per-launch permission rules; allowed-tools is not applied and the agent prompts as usual: remove allowed-tools from the definition or run it on claude"
+    )]
+    ToolRulesUnsupported { kind: crate::ids::AgentKind },
     #[error("launching with default RimZ launch reminders")]
     DefaultReminders,
     #[error("team `{0}` is no longer configured; launching without the team context reminder")]
@@ -102,6 +106,19 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     )?;
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
+    if request
+        .allowed_tools
+        .as_ref()
+        .is_some_and(|rules| !rules.is_empty())
+        && matches!(
+            adapter.spec().tool_rules,
+            crate::agents::skills::ToolRules::Unsupported
+        )
+    {
+        warnings.push(LaunchPlanWarning::ToolRulesUnsupported {
+            kind: request.kind.clone(),
+        });
+    }
     match crate::lsp::registry::live_server_names(inputs.cwd) {
         Ok(servers) => reminders.lsp_servers = servers,
         Err(error) => tracing::debug!(%error, "language-server launch reminder unavailable"),

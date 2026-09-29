@@ -326,6 +326,113 @@ fn listed_skills_union_private_artifact_and_empty_rules() {
 }
 
 #[test]
+fn allowed_tools_union_profile_skill_and_routine_rules_in_private_artifacts() {
+    use crate::agents::capabilities::LaunchCapability;
+    let root = tempfile::tempdir().unwrap();
+    let profile = json!({"env":{"TOKEN":"private-secret"}, "permissions":{"allow":["Read", "Skill(commit)", "Bash(rimz agents *)"]}});
+    std::fs::write(root.path().join("profile.json"), profile.to_string()).unwrap();
+    let rules =
+        ["Bash(git *)", "Skill(commit)", "Bash(rimz agents *)"].map(|rule| rule.parse().unwrap());
+    for file in [false, true] {
+        let mut args = vec![
+            "--settings".into(),
+            if file {
+                "profile.json".into()
+            } else {
+                profile.to_string()
+            },
+        ];
+        let mut artifact = None;
+        ClaudeAdapter
+            .allow_listed_skill_args(
+                &["commit".parse().unwrap()],
+                (root.path(), root.path()),
+                &mut args,
+                &mut artifact,
+            )
+            .unwrap();
+        render_tool_rules(&rules, (root.path(), root.path()), &mut args, &mut artifact).unwrap();
+        let value = if file {
+            let (path, value, _) = artifact.as_ref().unwrap();
+            assert_eq!(args, ["--settings", path.to_str().unwrap()]);
+            assert!(!args.join(" ").contains("private-secret"));
+            value.clone()
+        } else {
+            serde_json::from_str(&args[1]).unwrap()
+        };
+        assert_eq!(
+            value["permissions"]["allow"],
+            json!([
+                "Read",
+                "Skill(commit)",
+                "Bash(rimz agents *)",
+                "Bash(git *)"
+            ])
+        );
+        assert_eq!(value["env"], profile["env"]);
+        let before = (args.clone(), artifact.clone());
+        render_tool_rules(&rules, (root.path(), root.path()), &mut args, &mut artifact).unwrap();
+        assert_eq!((args.clone(), artifact.clone()), before);
+        ClaudeAdapter
+            .allow_routine_rimz_args(
+                (root.path(), root.path()),
+                (None, None),
+                &[root.path().join("scratch"), root.path().join("shared")],
+                &mut args,
+                &mut artifact,
+            )
+            .unwrap();
+        let merged = artifact
+            .as_ref()
+            .map(|(_, value, _)| value.clone())
+            .unwrap_or_else(|| serde_json::from_str(&args[1]).unwrap());
+        let allow = merged["permissions"]["allow"].as_array().unwrap();
+        for rule in [
+            "Read",
+            "Skill(commit)",
+            "Bash(rimz agents *)",
+            "Bash(git *)",
+        ] {
+            assert_eq!(
+                allow.iter().filter(|value| **value == json!(rule)).count(),
+                1
+            );
+        }
+    }
+}
+
+#[test]
+fn allowed_tools_invalid_settings_refuse_with_own_fix_and_empty_is_inert() {
+    let root = tempfile::tempdir().unwrap();
+    for profile in [
+        r#"{"permissions":false}"#,
+        r#"{"permissions":{"allow":false}}"#,
+    ] {
+        std::fs::write(root.path().join("profile.json"), profile).unwrap();
+        let mut args = vec!["--settings".into(), "profile.json".into()];
+        let before = args.clone();
+        render_tool_rules(&[], (root.path(), root.path()), &mut args, &mut None).unwrap();
+        assert_eq!(args, before);
+        let error = render_tool_rules(
+            &["Read".parse().unwrap()],
+            (root.path(), root.path()),
+            &mut args,
+            &mut None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("profile.json") && error.contains("permissions"),
+            "{error}"
+        );
+        assert!(
+            error.ends_with("correct that key, or remove the definition's allowed-tools list"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn listed_skills_invalid_settings_refuse_with_own_fix() {
     use crate::agents::capabilities::LaunchCapability;
     let root = tempfile::tempdir().unwrap();

@@ -744,6 +744,16 @@ fn compile_agent_process_with_extra_env(
             &mut settings_artifact,
         )?;
     }
+    if let (Some(rules), Some((artifact_dir, _))) = (&request.allowed_tools, &reminders.settings)
+        && let crate::agents::skills::ToolRules::Settings { render } = adapter.spec().tool_rules
+    {
+        render(
+            rules,
+            (cwd, artifact_dir),
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?;
+    }
     if let Some((artifact_dir, dirs)) = &reminders.routine_rimz {
         adapter.allow_routine_rimz_args(
             (cwd, artifact_dir),

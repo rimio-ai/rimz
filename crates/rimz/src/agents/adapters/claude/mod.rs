@@ -73,6 +73,9 @@ use crate::transcript::AskQuestion;
 /// Everything `const` about Claude Code, in one place. See
 /// [`AgentSpec`] for the spec-vs-trait split.
 static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
+    tool_rules: crate::agents::skills::ToolRules::Settings {
+        render: render_tool_rules,
+    },
     host_skills: crate::agents::skills::HostSkills::Switch {
         flag: "--settings skillOverrides",
         effect: "user-only",
@@ -590,6 +593,43 @@ fn union_settings_array(
         unique.push(value.clone());
         true
     });
+    Ok(())
+}
+
+fn render_tool_rules(
+    rules: &[crate::config::ToolRule],
+    (cwd, artifact_dir): (&Path, &Path),
+    extra_args: &mut Vec<String>,
+    artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+    use crate::agents::skills::LaunchSettingsErr;
+    if rules.is_empty() {
+        return Ok(());
+    }
+    *artifact = merge_settings(
+        cwd,
+        artifact_dir,
+        extra_args,
+        artifact.as_ref(),
+        false,
+        |object| {
+            union_settings_array(
+                object,
+                "permissions",
+                "allow",
+                rules.iter().map(ToString::to_string),
+            )
+        },
+    )
+    .map_err(|error| match error {
+        LaunchSettingsErr::Settings { path, reason } => LaunchSettingsErr::Settings {
+            path,
+            reason: format!(
+                "{reason}; correct that key, or remove the definition's allowed-tools list"
+            ),
+        },
+        error => error,
+    })?;
     Ok(())
 }
 

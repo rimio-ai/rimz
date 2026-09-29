@@ -199,6 +199,8 @@ There is no blanket RimZ grant. `pane send`, `wait --run`, `loop add`, `events e
 
 Claude's same `--settings` adds exact `Skill(<name>)` rules for every profile-listed skill, independent of that switch, and for installed `rimz-*` skills when the switch is on. Names are directory names, not frontmatter names, from the provider skill root or RimZ library; names containing `*` receive no rule. Profile rules stay first, and additions are deduplicated.
 
+Markdown definitions can also supply [`allowed-tools`](definitions.md#tools-to-provider-arguments) permission rules. Claude merges them into the same `permissions.allow`, in both isolations and independently of the routine switch. Other kinds warn in `agents validate` and at launch and do not apply the list. Claude auto mode drops some broad rules; the definition reference describes that limit.
+
 Codex receives no RimZ permission rules. Users may add their own `~/.codex/rules/rimz.rules` (or `$CODEX_HOME/rules/rimz.rules`) using, for example, `prefix_rule(pattern = ["rimz", "agents"], decision = "allow")`. The [upstream rule contract](../externals/agent-adapter/codex-reference.md#execution-policy-rules) covers matching and precedence; RimZ does not create or modify that file.
 
 Under `agents.isolation = "sandbox"` a Codex launch replaces any `--sandbox` choice with `--sandbox danger-full-access`, because the RimZ view is its sandbox; approval flags stay as listed, though an `on-request` policy then prompts only for commands Codex judges dangerous ([sandbox internals](../internals/sandbox.md#provider-command-sandboxes)).
