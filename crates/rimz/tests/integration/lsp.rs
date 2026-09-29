@@ -465,7 +465,7 @@ impl Editor {
 }
 
 #[test]
-fn lsp_editors_receive_negotiated_shapes_and_agents_keep_locations() {
+fn lsp_editors_receive_negotiated_shapes_and_agents_keep_links() {
     let env = Env::new();
     let (mut broker, directory) = editor_broker_modes(&env, "10m", &["--adaptable-replies"]);
     let path = env.project_root.join("lib.rs");
@@ -510,8 +510,13 @@ fn lsp_editors_receive_negotiated_shapes_and_agents_keep_locations() {
     let locations: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         locations,
-        json!([{"uri":uri,"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}}}])
+        json!([{"targetUri":uri,"targetRange":{"start":{"line":0,"character":0},"end":{"line":2,"character":1}},"targetSelectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}}}])
     );
+    env.rimz()
+        .args(["lsp", "def", "lib.rs:1:4"])
+        .assert()
+        .success()
+        .stdout("lib.rs:1:1 (1-3)  fn example() {}\n");
     editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}));
     broker.wait().unwrap();
 }

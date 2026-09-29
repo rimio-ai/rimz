@@ -186,6 +186,50 @@ fn no_tests_filters_before_limit_and_looks_up_each_surviving_file_once() {
 }
 
 #[test]
+fn definition_link_spans_preserve_selection_and_fallbacks() {
+    let selection = json!({"start":{"line":123,"character":11},"end":{"line":123,"character":15}});
+    for (span, suffix) in [
+        (
+            Some(json!({"start":{"line":119,"character":0},"end":{"line":183,"character":1}})),
+            " (120-184)",
+        ),
+        (Some(selection.clone()), ""),
+        (
+            Some(json!({"start":{"line":0,"character":0},"end":{"line":0,"character":0}})),
+            "",
+        ),
+        (None, ""),
+    ] {
+        let mut link =
+            json!({"targetUri":"file:///checkout/lib.rs","targetSelectionRange":selection});
+        if let Some(span) = span {
+            link["targetRange"] = span;
+        }
+        for verb in [Verb::Def, Verb::Impl] {
+            let rendered = render_with_source(
+                verb,
+                Path::new("/checkout"),
+                None,
+                link.clone(),
+                Scope::Checkout.into(),
+                &BTreeSet::new(),
+                |_, _| Ok("fn work() {".into()),
+                |_| panic!("no symbols needed"),
+            )
+            .unwrap();
+            assert_eq!(
+                rendered,
+                if verb == Verb::Def {
+                    format!("lib.rs:124:12{suffix}  fn work() {{\n")
+                } else {
+                    "lib.rs\n  124:12  fn work() {\n".into()
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn dirty_locations_never_read_disk_source() {
     let dirty = BTreeSet::from(["file:///checkout/gone.rs".to_owned()]);
     for verb in [Verb::Def, Verb::Refs, Verb::Impl] {
@@ -194,7 +238,7 @@ fn dirty_locations_never_read_disk_source() {
             verb,
             Path::new("/checkout"),
             None,
-            json!([{"uri": "file:///checkout/clean.rs", "range": range()}, {"uri": "file:///checkout/gone.rs", "range": range()}]),
+            json!([{"uri": "file:///checkout/clean.rs", "range": range()}, {"targetUri": "file:///checkout/gone.rs", "targetSelectionRange": range(), "targetRange":{"start":{"line":0,"character":0},"end":{"line":9,"character":1}}}]),
             Scope::Checkout.into(),
             &dirty,
             |uri, _| {
@@ -207,7 +251,7 @@ fn dirty_locations_never_read_disk_source() {
         assert_eq!(
             rendered,
             if verb == Verb::Def {
-                "clean.rs:2:3  disk source\ngone.rs:2:3  (unsaved in editor)\n"
+                "clean.rs:2:3  disk source\ngone.rs:2:3 (1-10)  (unsaved in editor)\n"
             } else {
                 "clean.rs\n  2:3  disk source\ngone.rs\n  2:3  (unsaved in editor)\n"
             }
