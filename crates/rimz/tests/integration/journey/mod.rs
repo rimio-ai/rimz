@@ -111,10 +111,8 @@ impl<'a> RoomHarness<'a> {
         let bin = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
         assert!(bin.exists(), "rimz binary missing: {}", bin.display());
 
-        // Materialize the workspace store so a never-used room answers
-        // `sidebar snapshot` with an empty-but-valid snapshot (Phase 0), not a
-        // degraded "store not found" banner.
-        let _ = env.store();
+        // Record the room before its id-only renderer resolves state and runtime paths.
+        env.record(&env.project_root);
 
         let runtime = tempfile::Builder::new()
             .prefix("rz")

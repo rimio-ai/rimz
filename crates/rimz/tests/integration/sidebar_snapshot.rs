@@ -34,6 +34,7 @@ fn agent_birth_argv_returned_to_shell_renders_process_row() {
 }
 
 fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
+    env.record(&env.project_root);
     let obs = AgentLifecycleObservation {
         ask_queue: None,
         agent_id: Some(agent_id.into()),
@@ -326,6 +327,7 @@ fn codex_identity_enrichment_preserves_hook_owned_question() {
 #[test]
 fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
     let env = Env::new();
+    env.record(&env.project_root);
     let session_id = "sess_11111111-1111-4111-8111-111111111111";
     let bucket = &hex::encode(Sha256::digest(
         env.project_root.as_os_str().as_encoded_bytes(),

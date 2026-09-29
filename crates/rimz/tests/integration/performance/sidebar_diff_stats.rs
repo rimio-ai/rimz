@@ -51,9 +51,12 @@ impl Fixture {
         assert!(count > 0, "fixture needs at least one worktree");
         let env = Env::new();
         let real_git = find_git()?;
-        // Birth creates the workspace and lock dirs before any sidebar runs; the
-        // id-only `--workspace-id` snapshot resolves its runtime dir by that
-        // name, record or not.
+        // Keep this fixture unrecorded so pane cwd, not a room root class, drives git probes.
+        // Create the id-only fallback first so root-based fixture helpers use the same store.
+        rimz::StatePaths::under(env.workspace_id.clone(), &env.rimz_home())
+            .expect("id-only state paths")
+            .ensure_dirs()
+            .expect("state dirs");
         let _ = env.store();
 
         // Pane cwd is the worktree. With no recorded workspace, the snapshot's
