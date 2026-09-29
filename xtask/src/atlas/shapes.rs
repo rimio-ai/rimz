@@ -845,6 +845,7 @@ mod tests {
     #[test]
     fn cross_module_clusters_rank_before_larger_single_file_clusters() {
         let function = |path: &str, line, sloc| FnBody {
+            module: String::new(),
             name: format!("function_{line}"),
             owner: None,
             path: PathBuf::from(path),

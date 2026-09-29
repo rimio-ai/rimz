@@ -9,6 +9,28 @@ fn analyze_sources(sources: &[Source]) -> SyntaxReport {
 }
 
 #[test]
+fn functions_carry_their_enclosing_inline_modules() {
+    let report = analyze_sources(&[source(
+        "mod a { mod b { fn f() {} } struct Owner; impl Owner { fn new() {} } }
+         mod external;
+         fn top() { mod local { fn inner() {} } }",
+    )]);
+    assert_eq!(
+        report.files[0]
+            .fns
+            .iter()
+            .map(|function| (function.module.as_str(), function.label()))
+            .collect::<Vec<_>>(),
+        [
+            ("cli::demo::a::b", "f".into()),
+            ("cli::demo::a", "Owner::new".into()),
+            ("cli::demo", "top".into()),
+            ("cli::demo::local", "inner".into()),
+        ]
+    );
+}
+
+#[test]
 fn extracts_boundary_items_imports_params_and_callees() {
     let report = analyze_sources(&[source(
         r#"
