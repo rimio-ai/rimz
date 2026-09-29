@@ -20,6 +20,8 @@ pub enum EffectiveConfigErr {
     FailedDefinition(String),
     #[error("project config cannot set lsp.{0}; move it to ~/.rimz/config.toml")]
     ProjectLspPolicy(String),
+    #[error("project config cannot set [tiers]; move it to ~/.rimz/config.toml")]
+    ProjectTiers,
     #[error(transparent)]
     Trust(#[from] trust::TrustErr),
     #[error("cannot access {path}: {source}")]
@@ -169,6 +171,12 @@ pub fn load_with_roots(
     };
     if let Some(key) = repo_value.as_ref().and_then(project_lsp_policy_key) {
         return Err(EffectiveConfigErr::ProjectLspPolicy(key.to_owned()));
+    }
+    if repo_value
+        .as_ref()
+        .is_some_and(|value| value.get("tiers").is_some())
+    {
+        return Err(EffectiveConfigErr::ProjectTiers);
     }
     if report.state != TrustState::Trusted {
         let untrusted_lsp_servers = repo_value
@@ -659,13 +667,39 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         .map(toml::Value::try_into)
         .transpose()?
         .unwrap_or_default();
-    Ok(RepoConfig {
+    let config = RepoConfig {
         env_reminder,
         lsp_servers,
         profiles,
         subagent_profiles,
         teams,
-    })
+    };
+    for (scope, profiles) in [
+        ("profiles", &config.profiles),
+        ("subagents.profiles", &config.subagent_profiles),
+    ] {
+        for (name, profile) in &profiles.0 {
+            reject_project_tier(&format!("{scope}.{name}.model"), profile.model.as_deref())?;
+        }
+    }
+    for (name, team) in &config.teams.0 {
+        for role in &team.roles {
+            reject_project_tier(
+                &format!("agents.teams.{name}.roles.{}.model", role.role),
+                role.model.as_deref(),
+            )?;
+        }
+    }
+    Ok(config)
+}
+
+fn reject_project_tier(key: &str, model: Option<&str>) -> std::result::Result<(), toml::de::Error> {
+    if let Some(tier) = model.and_then(super::tiers::ModelTier::from_model) {
+        return Err(serde::de::Error::custom(format!(
+            "project {key} = '{tier}': model tiers resolve in Markdown definitions; name a concrete model"
+        )));
+    }
+    Ok(())
 }
 
 fn profile_names(value: &toml::Value, scope: ProfileScope) -> BTreeSet<String> {

@@ -319,6 +319,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
     crate::agents::definition::DefinitionSpec {
         mode: None,
         effort: Some("xhigh"),
+        effort_ladder: &[],
         models: &[],
         prefixes: &[],
         tools: crate::agents::definition::DefinitionTools::Ignored,

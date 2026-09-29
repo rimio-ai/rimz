@@ -451,6 +451,8 @@ mod tests {
 
     fn profile(agent: &str) -> rimz::config::Profile {
         rimz::config::Profile {
+            preferred_family: None,
+            model_tier: None,
             isolation: None,
             auto_compact: None,
             agent: agent.to_owned(),

@@ -1043,6 +1043,8 @@ fn team_machine() -> MachineConfig {
     machine.agents.profiles.0.insert(
         "claude-plan".to_owned(),
         Profile {
+            preferred_family: None,
+            model_tier: None,
             isolation: None,
             auto_compact: None,
             agent: "claude".to_owned(),
@@ -1062,6 +1064,8 @@ fn team_machine() -> MachineConfig {
     machine.agents.profiles.0.insert(
         "codex-code".to_owned(),
         Profile {
+            preferred_family: None,
+            model_tier: None,
             isolation: None,
             auto_compact: None,
             agent: "codex".to_owned(),

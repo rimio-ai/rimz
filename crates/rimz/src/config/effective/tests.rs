@@ -6,6 +6,31 @@ use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]
+fn model_tiers_are_machine_only_and_project_models_are_concrete() {
+    let profile: Profile = toml::from_str("agent = 'claude'\npreferred_family = 'codex'\nmodel_tier = {tier = 'principal', preferred_family = 'codex', fell_back = true}").unwrap();
+    assert!(profile.preferred_family.is_none());
+    assert!(profile.model_tier.is_none());
+    for text in [
+        "[profiles.worker]\nagent = 'claude'\nmodel = 'senior'",
+        "[subagents.profiles.worker]\nagent = 'codex'\nmodel = 'intern'",
+        "[agents.teams.work]\nroles = [{role = 'worker', profile = 'claude', model = 'junior'}]",
+    ] {
+        let value: toml::Value = toml::from_str(text).unwrap();
+        let result = repo_config_from_value(&value);
+        assert!(result.is_err(), "{text}");
+        let error = result.err().unwrap().to_string();
+        assert!(error.contains("Markdown definitions"), "{error}");
+    }
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    write_project_config(&project, "[tiers]");
+    assert!(matches!(
+        load(&AgentsConfig::default(), project.path(), config.path()),
+        Err(EffectiveConfigErr::ProjectTiers)
+    ));
+}
+
+#[test]
 fn env_reminder_overlay_requires_trust_and_wins_in_both_directions() {
     for machine_value in [false, true] {
         let project = tempdir().unwrap();
@@ -95,6 +120,8 @@ fn load(machine: &AgentsConfig, project_root: &Path, config_root: &Path) -> Resu
 
 fn profile(agent: &str, args: Option<&str>) -> Profile {
     Profile {
+        preferred_family: None,
+        model_tier: None,
         agent: agent.to_owned(),
         isolation: None,
         description: None,

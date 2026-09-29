@@ -1,6 +1,56 @@
 use super::*;
 use crate::config::MachineConfigFileKind as Kind;
 
+#[test]
+fn model_tier_cell_can_be_rebound_with_config_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    editor.set("tiers.senior.claude.model", "fable").unwrap();
+    editor.set("tiers.senior.claude.effort", "medium").unwrap();
+    assert_eq!(
+        editor
+            .get(Some("tiers.senior.claude.model"))
+            .unwrap()
+            .as_str(),
+        Some("fable")
+    );
+    assert_eq!(
+        editor
+            .get(Some("tiers.senior.claude.effort"))
+            .unwrap()
+            .as_str(),
+        Some("medium")
+    );
+    assert!(editor.set("tiers.senior.claude.effort", "invalid").is_err());
+}
+
+#[test]
+fn model_tier_effort_edit_keeps_the_unwritten_row_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    editor.set("tiers.senior.claude.effort", "medium").unwrap();
+    assert_eq!(
+        editor
+            .get(Some("tiers.senior.claude.model"))
+            .unwrap()
+            .as_str(),
+        Some("opus")
+    );
+    assert_eq!(
+        editor
+            .get(Some("tiers.senior.codex.model"))
+            .unwrap()
+            .as_str(),
+        Some("astra")
+    );
+}
+
 fn test_files() -> MachineConfigFiles {
     MachineConfigFiles::from_paths("/tmp/rimz/config.toml", "/tmp/rimz/agents-home")
 }

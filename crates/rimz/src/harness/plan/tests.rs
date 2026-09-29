@@ -299,6 +299,8 @@ fn configured_profile(
     args: Option<&str>,
 ) -> Profile {
     Profile {
+        preferred_family: None,
+        model_tier: None,
         agent: agent.to_owned(),
         isolation: None,
         description: None,

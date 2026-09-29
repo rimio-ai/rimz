@@ -4,6 +4,50 @@
 use super::*;
 
 #[test]
+fn resume_reresolves_a_rebound_model_tier() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("definitions");
+    std::fs::create_dir_all(home.join("agents")).unwrap();
+    std::fs::write(
+        home.join("agents/claude.md"),
+        "---\ndescription: Base.\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("agents/planner.md"),
+        "---\ndescription: Planner.\nagent: claude\nmodel: senior\ntools: [Bash]\n---\nPlan.",
+    )
+    .unwrap();
+    let path = root.path().join("config.toml");
+    let load = |tiers: &crate::config::tiers::TierConfig| {
+        crate::config::definitions::load(
+            &home,
+            crate::config::definitions::SkillCheck::Skip,
+            &crate::config::CommandsConfig::default(),
+            tiers,
+        )
+    };
+    let initial = load(&crate::config::tiers::TierConfig::default());
+    assert!(initial.errors.is_empty(), "{:?}", initial.errors);
+    assert_eq!(
+        initial.agent_profiles.0["planner"].model.as_deref(),
+        Some("opus")
+    );
+    std::fs::write(
+        &path,
+        "[tiers.senior]\nclaude = {model = 'fable', effort = 'medium'}",
+    )
+    .unwrap();
+    let config: crate::config::MachineConfig =
+        toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let rebound = load(&config.tiers);
+    let posture = posture_for("claude", Some("planner"), None, &rebound.agent_profiles);
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    assert_eq!(posture.launch.model.as_deref(), Some("fable"));
+    assert_eq!(posture.launch.effort.as_deref(), Some("medium"));
+}
+
+#[test]
 fn resume_replays_the_profile_declared_posture() {
     // A session that launched as `@planner` comes back as a planner: the
     // profile's model, effort, and system prompt ride the resume request,

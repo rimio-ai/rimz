@@ -21,6 +21,10 @@ Run `cargo xtask test 'agents::tools'`, `cargo xtask test 'harness::spec'`, and 
 
 No migration is needed. `config/definitions/agent.rs` expands the alias on every definition load, and resume, restart, and fork re-resolve the stored profile name through `resume::resolve_posture`, so every seat naming the alias moves to the new id at its next launch, restart, or resume. That includes a live agent's next restart, which switches its model mid-thread. A definition that names a full model id is a pin and stays where it is.
 
+## Model tier bindings
+
+For definitions naming a model tier, rebind the corresponding cell's model and default effort in machine config; see [model tiers](../guide/configuration.md#model-tiers). To change RimZ's shipped bindings, update the defaults in `config/tiers.rs`, the commented template, and that guide together.
+
 ## Pricing, for either provider
 
 Usually nothing. An unpriced model resolves to no price, never to its predecessor's: `PriceBook::price` rejects a purely numeric version bump ([Resolving a model](../internals/agents/spending.md#resolving-a-model)). Once the spend walk records the model, the unknown-model chase refetches LiteLLM and models.dev on a 30-minute gate, and `cargo xtask dist` refreshes the embedded snapshot before every release build ([The refresh](../internals/agents/spending.md#the-refresh)). Run `cargo xtask pricing-refresh` by hand only to ship a price before the next release.

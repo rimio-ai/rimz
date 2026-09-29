@@ -2,6 +2,156 @@ use super::*;
 use crate::config::{CommandsConfig, SkillName};
 
 #[test]
+fn model_tiers_preserve_chain_preference_and_shift_effort() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "agent: codex\nmodel: principal\ntools: [Bash]",
+        "Parent.",
+    );
+    definition(
+        root.path(),
+        "agents/child.md",
+        "agent: parent\nmodel: senior\neffort: -1",
+        "Child.",
+    );
+    definition(
+        root.path(),
+        "agents/claude-tier.md",
+        "agent: claude\nmodel: junior\neffort: '+1'\ntools: [Bash]",
+        "Claude.",
+    );
+    definition(
+        root.path(),
+        "agents/claude-integer.md",
+        "agent: claude\nmodel: principal\neffort: +1\ntools: [Bash]",
+        "Integer.",
+    );
+    let loaded = clean(root.path());
+    let parent = &loaded.agent_profiles.0["parent"];
+    assert_eq!(parent.agent, "claude");
+    let provenance = parent.model_tier.as_ref().unwrap();
+    assert_eq!(provenance.tier.to_string(), "principal");
+    assert_eq!(provenance.preferred_family, "codex");
+    assert!(provenance.fell_back);
+    assert_eq!(
+        parent.model,
+        Some(crate::agents::expand_model_alias("claude", "fable"))
+    );
+    let child = &loaded.agent_profiles.0["child"];
+    assert_eq!(child.agent, "codex");
+    assert!(!child.model_tier.as_ref().unwrap().fell_back);
+    assert_eq!(
+        child.model,
+        Some(crate::agents::expand_model_alias("codex", "astra"))
+    );
+    assert_eq!(child.effort.as_deref(), Some("high"));
+    assert_eq!(
+        loaded.agent_profiles.0["claude-tier"].effort.as_deref(),
+        Some("max")
+    );
+    assert_eq!(
+        loaded.agent_profiles.0["claude-integer"].effort.as_deref(),
+        Some("xhigh")
+    );
+}
+
+#[test]
+fn model_tiers_are_identity_migrations() {
+    for (family, tier, model) in [
+        ("claude", "senior", "opus"),
+        ("codex", "senior", "astra"),
+        ("claude", "junior", "sonnet"),
+        ("codex", "junior", "sol"),
+        ("claude", "intern", "haiku"),
+        ("codex", "intern", "luna"),
+    ] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/concrete.md",
+            &format!("model: {model}\ntools: [Bash]"),
+            "Craft.",
+        );
+        definition(
+            root.path(),
+            "agents/tiered.md",
+            &format!("agent: {family}\nmodel: {tier}\ntools: [Bash]"),
+            "Craft.",
+        );
+        let loaded = clean(root.path());
+        let a = &loaded.agent_profiles.0["concrete"];
+        let b = &loaded.agent_profiles.0["tiered"];
+        assert_eq!(
+            (&a.agent, &a.model, &a.effort, &a.args),
+            (&b.agent, &b.model, &b.effort, &b.args)
+        );
+    }
+}
+
+#[test]
+fn model_tiers_refuse_missing_or_unsupported_family_and_unbased_shift() {
+    for (fields, message) in [
+        ("model: senior", "preferred family"),
+        ("agent: grok\nmodel: senior", "claude or codex"),
+        (
+            "model: opus\neffort: '+1'\ntools: [Bash]",
+            "effort +1 shifts a tier's default",
+        ),
+        (
+            "agent: codex\nmodel: principal\ntools: ['Agent(Unknown)']",
+            "tier principal resolved to claude fable because codex has no model at that tier",
+        ),
+    ] {
+        let root = fixture();
+        definition(root.path(), "agents/probe.md", fields, "Craft.");
+        error(root.path(), message);
+    }
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/tiered.md",
+        "agent: codex\nmodel: senior\neffort: -1\ntools: [Bash]",
+        "Craft.",
+    );
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: tiered\nmodel: gpt-6-sol",
+        "Craft.",
+    );
+    error(root.path(), "effort -1 (inherited from 'tiered') shifts");
+}
+
+#[test]
+fn model_tiers_seats_resolve_from_root_family() {
+    for (family, model) in [("claude", "sonnet"), ("codex", "sol")] {
+        let root = team_fixture();
+        definition(
+            root.path(),
+            "agents/worker.md",
+            &format!("agent: {family}\nmodel: principal\ntools: [Bash]"),
+            "Craft.",
+        );
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!("{TEAM_ROLES}\n    model: junior\n    effort: -1"),
+            "Pipeline.",
+        );
+        let loaded = clean(root.path());
+        let seat = &loaded.agent_profiles.0["probe.judge"];
+        assert_eq!(seat.agent, family);
+        assert_eq!(
+            seat.model,
+            Some(crate::agents::expand_model_alias(family, model))
+        );
+        assert_eq!(seat.effort.as_deref(), Some("high"));
+    }
+}
+
+#[test]
 fn isolation_defaults_inherit_but_roles_cannot_set_them() {
     let root = fixture();
     definition(
@@ -398,7 +548,12 @@ fn invalid_teams_publish_neither_roster_nor_seats() {
         let root = team_fixture();
         team_definition(root.path(), fields, &roles, body);
         error(root.path(), needle);
-        let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &crate::config::tiers::TierConfig::default(),
+        );
         assert!(loaded.teams.0.is_empty(), "{needle}");
         assert!(
             !loaded
@@ -449,16 +604,26 @@ fn malformed_signals_fail_before_the_team_can_be_published() {
         );
         error(root.path(), needle);
         assert!(
-            load(root.path(), SkillCheck::Skip, &CommandsConfig::default())
-                .errors
-                .iter()
-                .any(|error| error.path == root.path().join("teams/probe.md"))
+            load(
+                root.path(),
+                SkillCheck::Skip,
+                &CommandsConfig::default(),
+                &crate::config::tiers::TierConfig::default()
+            )
+            .errors
+            .iter()
+            .any(|error| error.path == root.path().join("teams/probe.md"))
         );
         assert!(
-            load(root.path(), SkillCheck::Skip, &CommandsConfig::default())
-                .teams
-                .0
-                .is_empty()
+            load(
+                root.path(),
+                SkillCheck::Skip,
+                &CommandsConfig::default(),
+                &crate::config::tiers::TierConfig::default()
+            )
+            .teams
+            .0
+            .is_empty()
         );
     }
 }
@@ -511,7 +676,12 @@ fn unsupported_preset_fields_fail_at_the_definition() {
             "",
         );
         definition(root.path(), "agents/child.md", "agent: parent", "");
-        let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &crate::config::tiers::TierConfig::default(),
+        );
         let expected =
             crate::agents::PresetErr::UnsupportedField { agent: kind, field }.to_string();
         assert!(
@@ -537,7 +707,12 @@ fn duplicate_team_names_remove_all_seats_and_sources() {
         &format!("---\nname: probe\n{TEAM_STAGES}\nroles:\n{TEAM_ROLES}\n---\nPipeline."),
     );
     error(root.path(), "declared twice");
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert!(loaded.teams.0.is_empty());
     assert!(loaded.sources.team("probe").is_none());
     let paths = BTreeSet::from([
@@ -572,7 +747,12 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
         &TEAM_ROLES.replace("agent: worker", "agent: missing"),
         "Pipeline.",
     );
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     let path = root.path().join("teams/probe.md");
     for name in ["renamed", "renamed.lead", "renamed.judge"] {
         assert_eq!(loaded.failed[name], BTreeSet::from([path.clone()]));
@@ -585,7 +765,12 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
         "teams/probe.md",
         "---\nroles: [\n---\nPipeline.",
     );
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert_eq!(loaded.failed["probe"], BTreeSet::from([path]));
 }
 
@@ -594,7 +779,12 @@ fn team_roles_distinguish_failed_agents_from_unknown_agents() {
     let root = team_fixture();
     definition(root.path(), "agents/worker.md", "agent: missing", "Worker.");
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     let errors: Vec<_> = loaded
         .errors
         .iter()
@@ -623,7 +813,12 @@ fn duplicate_agent_names_record_both_sources_in_one_namespace() {
             "",
         );
     }
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert!(!loaded.agent_profiles.0.contains_key("duplicate"));
     assert_eq!(
         loaded.failed["duplicate"],
@@ -684,7 +879,12 @@ fn even_a_bodyless_seat_needs_its_runtime_base() {
     definition(root.path(), "agents/worker.md", "agent: pi", "");
     std::fs::remove_file(root.path().join("agents/pi.md")).unwrap();
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert!(!loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.is_empty());
     let base = root.path().join("agents/pi.md");
@@ -718,6 +918,7 @@ fn load_checked(root: &Path) -> LoadedDefinitions {
             machine_isolation: crate::config::Isolation::Sandbox,
         },
         &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
     )
 }
 
@@ -736,13 +937,23 @@ fn definition(root: &Path, name: &str, fields: &str, body: &str) {
 }
 
 fn clean(root: &Path) -> LoadedDefinitions {
-    let loaded = load(root, SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root,
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
     loaded
 }
 
 fn error(root: &Path, needle: &str) {
-    let loaded = load(root, SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root,
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert!(
         loaded
             .errors
@@ -924,7 +1135,12 @@ fn failed_parents_exclude_dependents_and_keep_independent_profiles() {
     );
     definition(root.path(), "agents/child.md", "agent: parent", "Child.");
     definition(root.path(), "agents/independent.md", "agent: pi", "");
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert_eq!(loaded.errors.len(), 2);
     assert!(loaded.errors.iter().any(|error| error.message
         == "follows `parent`, which failed to load"
@@ -1021,9 +1237,14 @@ fn names_and_kind_bases_are_validated() {
             "",
         );
         assert!(
-            !load(root.path(), SkillCheck::Skip, &CommandsConfig::default())
-                .errors
-                .is_empty()
+            !load(
+                root.path(),
+                SkillCheck::Skip,
+                &CommandsConfig::default(),
+                &crate::config::tiers::TierConfig::default()
+            )
+            .errors
+            .is_empty()
         );
     }
     definition(
@@ -1038,7 +1259,12 @@ fn names_and_kind_bases_are_validated() {
         "name: duplicate\nagent: pi",
         "",
     );
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert!(
         loaded
             .errors
@@ -1066,7 +1292,12 @@ fn names_and_kind_bases_are_validated() {
         "---\ndescription: Base\n---",
     );
     error(root.path(), "no prompt body");
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert_eq!(
         loaded.failed["claude"],
         BTreeSet::from([root.path().join("agents/claude.md")])
@@ -1119,7 +1350,12 @@ fn agents_and_seats_allow_loaded_subagents_and_commands() {
     );
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
     let commands: CommandsConfig = toml::from_str("vim = \"nvim\"").unwrap();
-    let loaded = load(root.path(), SkillCheck::Skip, &commands);
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &commands,
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
     assert!(loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.contains_key("probe"));
@@ -1136,7 +1372,12 @@ fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
         "agent: claude\ntools: [Bash]\nsubagents: [helper]",
         "",
     );
-    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
     assert!(!loaded.agent_profiles.0.contains_key("planner"));
     assert!(loaded.errors.iter().any(|error| {
         error.path.ends_with("agents/planner.md")

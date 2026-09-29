@@ -481,6 +481,56 @@ This section works only in a RimZ built with the non-default `sentry` feature, w
 
 `RIMZ_SENTRY_DSN` and `RIMZ_SENTRY_ENVIRONMENT` override the file for one invocation. `environment` defaults by build profile: an installed release reports as `production`, a dev or CI build as `development`. The DSN is per-machine and never goes in committed project config, so a clone never inherits it, and each event carries only low-cardinality tags (workspace, command, build, fault class, and the agent or session when RimZ knows it), with the hostname and personal data withheld. What leaves the box is [security → off-box error reporting](./security.md#off-box-error-reporting).
 
+## Model tiers
+
+A model tier lets a definition name the capability it needs rather than a particular model. Bind each tier and family once in `~/.rimz/config.toml`, then rebind a cell when you want all definitions using it to change together. Existing definitions naming a concrete model keep working unchanged. See [choosing a model tier](#choosing-a-model-tier) for the four levels and family guidance.
+
+These are the defaults; the generated template leaves them commented:
+
+```toml
+[tiers.principal]
+claude = { model = "fable", effort = "high" }
+
+[tiers.senior]
+claude = { model = "opus", effort = "xhigh" }
+codex = { model = "astra", effort = "xhigh" }
+
+[tiers.junior]
+claude = { model = "sonnet", effort = "xhigh" }
+codex = { model = "sol", effort = "xhigh" }
+
+[tiers.intern]
+claude = { model = "haiku", effort = "xhigh" }
+codex = { model = "luna", effort = "xhigh" }
+```
+
+Each cell requires `model`, an alias or provider model ID. Omit `effort` to use that model's RimZ default. A written `[tiers.<tier>]` replaces the whole row: omitting one family leaves that cell empty, and an empty row leaves both empty. Unwritten rows retain their defaults. Only the four tier names and the families `claude` and `codex` are accepted. A recognized model must belong to its cell's family; an unfamiliar model ID uses the family named by the cell.
+
+In an agent or subagent Markdown definition, replace the concrete model with a tier and name its preferred family:
+
+```yaml
+agent: codex
+model: senior
+effort: -1
+```
+
+Resolution tries the preferred family at that tier, then the other family at the same tier, then each higher tier in turn. It never moves down. The default `principal` on a Codex-rooted definition therefore runs Claude. Descendants still prefer Codex, and all tools and skills must be valid for the runtime actually selected. Both runtimes need their usual kind bases when selected.
+
+The optional `effort` shift moves from the selected cell's default, clamping at the ends. Both families step along `low, medium, high, xhigh, max`, the levels every default tier model supports. A cell's effort must be on its family's ladder. Definitions can instead use an absolute effort, passed to the provider unchanged. The [definitions reference](../reference/definitions.md#chains-and-defaults) specifies inheritance and team roles.
+
+Rebind a model or effort with `rimz config set tiers.senior.claude.model fable` or `rimz config set tiers.senior.claude.effort high`. Editing one field of an unwritten row first preserves that row's defaults; an already-written row keeps its empty cells. Changes apply when definitions are next loaded, including restart and resume within the same runtime family. A restart that would change providers is refused; choose a fresh launch instead. The table is machine-only; project TOML profiles and roles must name concrete models, not tiers.
+
+### Choosing a model tier
+
+| Model tier | Use it for |
+| --- | --- |
+| `principal` | Designs without precedent, or supplying structure the request left out. |
+| `senior` | Most real work: planning, orchestration, review, implementation, and debugging. |
+| `junior` | Clear, bounded work that a more capable parent checks. |
+| `intern` | Sweeps over a large corpus that return a target, map, or excerpt. The parent owns every conclusion. |
+
+Prefer Claude for people and loose intent, and Codex for literal briefs. Put a reviewer on a different family from the coder whose work it reads. A Claude planner can weigh its design against a Codex designer's proposal before settling the plan.
+
 ## Agent definitions and launch preferences
 
 Reusable agents and teams are Markdown files with YAML frontmatter, one per definition. The `[agents]` tables in `config.toml` hold this machine's launch preferences alongside them: isolation, placement, command shortcuts, worktree defaults, and the two launch limits.

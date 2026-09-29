@@ -134,6 +134,18 @@ impl ConfigEditor {
         let text = read_config_or_template(file.path(), file.template())?;
         let mut doc = parse_document(file.path(), &text)?;
         let doc_key = document_key_for_set(&key);
+        if let [root, tier, _, _] = doc_key.as_slice()
+            && root == "tiers"
+            && item_at(&doc, &doc_key[..2]).is_none()
+        {
+            // Editing one leaf of an unwritten row must keep its effective defaults.
+            let defaults = toml::to_string(&super::tiers::TierConfig::default())
+                .map_err(|source| ConfigEditErr::Serialize { source })?;
+            let defaults = parse_document(file.path(), &defaults)?;
+            if let Some(row) = defaults.get(tier).and_then(item_to_value) {
+                set_document_value(&mut doc, &doc_key[..2], row)?;
+            }
+        }
         if item_at(&doc, &doc_key).is_none()
             && let Some(uncommented) = uncomment_template_default(&text, &doc_key)
             && let Ok(uncommented) = uncommented.parse::<DocumentMut>()

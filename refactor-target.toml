@@ -126,7 +126,8 @@ upward-dependencies = ["address"]
 # `is_team_seat` keeps team seats out of peer runs and the launcher's fleet digest.
 # Auto-continue shares model-aware reset and capacity queries with agents policy.
 # AgentState::transition and AgentState::turn_ids hand one row's lifecycle inputs to the snapshot fold and the writer.
-surface-budget = 901
+# Model tiers use the adapter-owned effort ladders.
+surface-budget = 902
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -235,7 +236,8 @@ upward-dependencies = [
 # Watch kinds and bare subjects serve type-led wait listings.
 # Pass 26a: tightened config surface; config/lsp reopens after 30 scoped commits.
 # Pass 26c: the prompt-cache margin moved in from harness::idle_compact (+1).
-surface-budget = 169
+# Machine tiers expose the shared resolver and definition provenance to launch consumers.
+surface-budget = 177
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
