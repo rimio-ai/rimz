@@ -16,6 +16,8 @@ TASK_DIR = Path(__file__).resolve().parent
 ROOT = TASK_DIR.parents[1]
 PREFIX = "deps/repair-"
 MARKER = "rimz-dependabot-repair:v1 sources="
+# Every Skill(...) prompt.md names; the worker must be able to call each one.
+WORKER_SKILLS = ("pr", "commit", "fix-ci", "rimz-wait")
 
 
 def command(*args, root=None):
@@ -272,6 +274,23 @@ def occupied_repair_lane(report):
             if (agent["placement"]["branch"] or "").startswith(PREFIX) and agent["placement"]["pane"]]
 
 
+def require_worker_skills(worker_profile):
+    """Refuse a worker profile that cannot call a skill prompt.md requires.
+
+    A worker that finds a skill disabled can only stop, and nobody can fix a profile from
+    inside the run, so the gap fails the fire here with the fix instead.
+    """
+    report = json.loads(rimz("agents", "explain", worker_profile, "--yolo", "--json"))
+    callable_skills = report["skills"]["callable"]
+    if callable_skills is None:  # No list in the profile chain: native discovery, all callable.
+        return
+    missing = sorted(set(WORKER_SKILLS) - set(callable_skills))
+    if missing:
+        raise RuntimeError(
+            f"Worker profile {worker_profile} cannot call required skills {', '.join(missing)}; "
+            f"add them to the profile's `skills` list or pass --worker-profile with one that has them")
+
+
 def launch(plan, worker_timeout=None, worker_profile="astra"):
     prompt = (TASK_DIR / "prompt.md").read_text()
     prompt += "\n\nDependency repair plan (JSON):\n" + json.dumps(plan)
@@ -327,6 +346,8 @@ def run(worker_timeout=None, worker_profile="astra"):
         print(json.dumps(plan), flush=True)
         if plan["action"] != "repair":
             return
+        # Before open_checkout publishes the batch branch, so a refused fire leaves nothing behind.
+        require_worker_skills(worker_profile)
         print(json.dumps(open_checkout(plan)), flush=True)
         try:
             launch(plan, worker_timeout, worker_profile)

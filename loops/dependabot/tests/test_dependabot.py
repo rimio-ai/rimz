@@ -50,14 +50,17 @@ def git(cwd, *args):
 class FakeRimz:
     """Records rimz argv and performs the Git effect the real CLI would."""
 
-    def __init__(self, root, roster=(), refusal=None):
+    def __init__(self, root, roster=(), refusal=None, skills=repair.WORKER_SKILLS):
         self.root, self.roster, self.refusal, self.calls = root, list(roster), refusal, []
+        self.skills = None if skills is None else list(skills)
 
     def __call__(self, *args):
         self.calls.append(args)
         match args:
             case ("agents", "list", *_):
                 return json.dumps(dict(schema=1, agents=self.roster))
+            case ("agents", "explain", _profile, "--yolo", "--json"):
+                return json.dumps(dict(skills=dict(callable=self.skills, applied=True, host=None)))
             case ("worktree", "new", branch, "--base", base):
                 git(self.root, "worktree", "add", "-b", branch, str(self.root.parent / branch.replace("/", "-")), base)
                 return f"created {branch}"
@@ -139,7 +142,8 @@ class CheckoutFixture(unittest.TestCase):
             self.run_quietly(repair.run)
         launch.assert_not_called()
         self.assertEqual(self.remote_branch(), remote)
-        self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json")])
+        self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json"),
+                                           ("agents", "explain", "astra", "--yolo", "--json")])
 
     def test_hand_deleted_checkout_directory_does_not_fail_the_fire(self):
         self.publish_batch()
@@ -260,6 +264,23 @@ class CheckoutFixture(unittest.TestCase):
         self.assertIn("not proven landed", settled["reason"])
         self.assertEqual(self.rimz.calls[-1], ("worktree", "remove", "deps/repair-1"))
         self.assertTrue((self.root / ".git" / "rimz-dependabot-repair.lock").is_file())
+
+    def test_worker_profile_missing_a_required_skill_refuses_before_publish_or_launch(self):
+        self.rimz.skills = ["commit", "rimz-wait"]
+        with self.planned(), patch.object(repair, "launch") as launch, \
+             self.assertRaisesRegex(RuntimeError, "cannot call required skills fix-ci, pr"):
+            self.run_quietly(repair.run)
+        launch.assert_not_called()
+        self.assertEqual(self.remote_branch(), "")
+        self.assertFalse(self.tree().exists())
+
+    def test_worker_profile_without_a_skill_list_is_admitted(self):
+        self.rimz.skills = None
+        with self.planned(), patch.object(repair, "launch") as launch, \
+             patch.object(repair, "github", return_value=[]), \
+             patch.object(repair, "verify_result", return_value="pending"):
+            self.run_quietly(repair.run)
+        launch.assert_called_once()
 
     def test_failed_launch_still_settles_and_fails_the_run(self):
         failure = subprocess.CalledProcessError(124, "rimz")

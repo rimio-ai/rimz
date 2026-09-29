@@ -16,5 +16,5 @@ every = "5m"
 # The worker is Claude: Codex auto-resolves a question empty after 120s, Claude's waits for the answer.
 check = "uv run --no-project --script loops/dependabot/dependabot.py run --worker-profile opus"
 timeout = "7d"
-every = "8h"
+every = "1h"
 max-strikes = 3
