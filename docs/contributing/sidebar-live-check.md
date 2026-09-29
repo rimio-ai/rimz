@@ -12,65 +12,67 @@ cargo build -p rimz --bin rimz --features testkit
 
 `cargo xtask sandbox room --mux <tmux|zellij> [--for <duration>]` holds a disposable room and prints its room card; the room verb is Linux-only. Keep it running while you check the room. The room dies after 30 minutes unless `--for` says otherwise (`--for 45m`, or `--for off` to hold it until you stop it).
 
-`cargo xtask sandbox in <root> -- <command>` runs one command inside that held room. Every command on the card spells that verb `target/debug/xtask` instead: the held room's own `cargo xtask` owns the target-directory lock for as long as it runs, so a joined `cargo` command waits for it rather than doing anything. Use the ready-to-paste commands from your own card; the cards below record real runs, so their roots, pane IDs, and the long absolute `rimz` path — one machine's resolved `target/debug/rimz` — are not reusable.
+`cargo xtask sandbox in <root> [--cwd <dir>] [--as <@handle> | --as-ancestor <@handle>] [--] <command>` runs one command inside that held room. `--as` uses the agent's launch environment; `--as-ancestor` runs beneath its stub with no agent or pane keys, exercising caller detection by ancestry. Both need Linux. The cwd and identity flags may come in either order before the command. Use a qualified handle (`@coder#probe`) if the short form (`@coder`) is ambiguous.
+
+Every command on the card spells that verb `target/debug/xtask` instead: the held room's own `cargo xtask` owns the target-directory lock for as long as it runs, so a joined `cargo` command waits for it rather than doing anything. Use the ready-to-paste commands from your own card; the cards below record real runs, so their roots, pane IDs, and the long absolute `rimz` path (one machine's resolved `target/debug/rimz`) are not reusable.
 
 ## Room cards
 
-The root identifies the held sandbox; the mux and session identify its private multiplexer, and Worktree names the team's checkout. Each Sidebar block names its pane, tab, and producer or consumer role, followed by Look, Capture, and Click commands. A tab can carry more than one sidebar pane, so read the role labels rather than counting blocks. The Role lines map agent roles to panes and give each pane's process ID (`pid -` when the multiplexer reported none). Stage and Owner give the initial board state; Flip changes the stage, and Focus reads focus from the multiplexer.
+The root identifies the held sandbox; the mux and session identify its private multiplexer, and Worktree names the team's checkout. Each Sidebar block names its pane, tab, and producer or consumer role, followed by Look, Capture, and Click commands. A tab can carry more than one sidebar pane, so read the role labels rather than counting blocks. The Role lines map agent roles to panes and give each pane's process ID (`pid -` when the multiplexer reported none). Each As line is a command prefix for that agent: append a RimZ command, or swap `--as` for `--as-ancestor` to exercise ancestry. Stage and Owner give the initial board state; Flip changes the stage, and Focus reads focus from the multiplexer.
 
 ### tmux
 
 ```text
-Sandbox root: /tmp/rimz-sandbox-BcOEKE
-Mux: tmux  Session: room-2f4c
-Worktree: /tmp/rimz-sandbox-BcOEKE/home/room-worktrees/probe
+Sandbox root: /tmp/rimz-sandbox-FYlgGi
+Mux: tmux  Session: room-fdab
+Worktree: /tmp/rimz-sandbox-FYlgGi/home/room-worktrees/probe
 Sidebar: tmux:%3  Tab: rimzd  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%3'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux pane capture 'tmux:%3'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux sidebar click 'tmux:%3' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%3'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux pane capture 'tmux:%3'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux sidebar click 'tmux:%3' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
 Sidebar: tmux:%0  Tab: zsh  producer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%0'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux pane capture 'tmux:%0'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux sidebar click 'tmux:%0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%0'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux pane capture 'tmux:%0'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux sidebar click 'tmux:%0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
 Sidebar: tmux:%9  Tab: #probe  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%9'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux pane capture 'tmux:%9'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux sidebar click 'tmux:%9' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Sidebar: tmux:%7  Tab: #probe  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%7'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux pane capture 'tmux:%7'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux sidebar click 'tmux:%7' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Role: @coder#probe  tmux:%6  pid 1930429
-Role: @reviewer#probe  tmux:%8  pid 1930467
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%9'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux pane capture 'tmux:%9'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux sidebar click 'tmux:%9' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+Role: @coder#probe  tmux:%6  pid 2593482
+  As: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' --as '@coder#probe' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux
+Role: @reviewer#probe  tmux:%8  pid 2593536
+  As: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' --as '@reviewer#probe' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux
 Stage: Build  Owner: coder
-Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux teams flip Review 'live check' --team forge
-Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- tmux -S '/tmp/rimz-sandbox-BcOEKE/runtime/rimz/tmux/server' display -p '#{pane_id}'
+Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --tmux teams flip Review 'live check' --team forge
+Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-FYlgGi' -- tmux -S '/tmp/rimz-sandbox-FYlgGi/runtime/rimz/tmux/server' display -p '#{pane_id}'
 Run a sidebar's Look first, then capture or click it: an unwatched sidebar can hold a stale frame.
 ```
 
 ### Zellij
 
 ```text
-Sandbox root: /tmp/rimz-sandbox-CmV7r2
-Mux: zellij  Session: room-8597
-Worktree: /tmp/rimz-sandbox-CmV7r2/home/room-worktrees/probe
+Sandbox root: /tmp/rimz-sandbox-wsZYXO
+Mux: zellij  Session: room-1828
+Worktree: /tmp/rimz-sandbox-wsZYXO/home/room-worktrees/probe
 Sidebar: zellij:terminal_0  Tab: rimzd  producer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- 'zellij' '--session' 'room-8597' 'action' 'go-to-tab' '1'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij pane capture 'zellij:terminal_0'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij sidebar click 'zellij:terminal_0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- 'zellij' '--session' 'room-1828' 'action' 'go-to-tab' '1'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij pane capture 'zellij:terminal_0'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij sidebar click 'zellij:terminal_0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
 Sidebar: zellij:terminal_4  Tab: zsh  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- 'zellij' '--session' 'room-8597' 'action' 'go-to-tab' '2'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij pane capture 'zellij:terminal_4'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij sidebar click 'zellij:terminal_4' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- 'zellij' '--session' 'room-1828' 'action' 'go-to-tab' '2'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij pane capture 'zellij:terminal_4'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij sidebar click 'zellij:terminal_4' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
 Sidebar: zellij:terminal_6  Tab: #probe  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- 'zellij' '--session' 'room-8597' 'action' 'go-to-tab' '3'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij pane capture 'zellij:terminal_6'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij sidebar click 'zellij:terminal_6' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Role: @coder#probe  zellij:terminal_7  pid 1948379
-Role: @reviewer#probe  zellij:terminal_8  pid 1948382
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- 'zellij' '--session' 'room-1828' 'action' 'go-to-tab' '3'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij pane capture 'zellij:terminal_6'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij sidebar click 'zellij:terminal_6' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+Role: @coder#probe  zellij:terminal_7  pid 2600984
+  As: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' --as '@coder#probe' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij
+Role: @reviewer#probe  zellij:terminal_8  pid 2600987
+  As: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' --as '@reviewer#probe' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij
 Stage: Build  Owner: coder
-Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij teams flip Review 'live check' --team forge
-Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- zellij --session 'room-8597' action list-panes -a -j
+Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- '/mnt/data/build/marvin/cargo/rimz/15280db74799f67c8255/debug/rimz' --zellij teams flip Review 'live check' --team forge
+Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- zellij --session 'room-1828' action list-panes -a -j
 Run a sidebar's Look first, then capture or click it: an unwatched sidebar can hold a stale frame.
 ```
 
@@ -181,14 +183,14 @@ jq '.worktree_groups[].rows[] | select(.handle == "coder")' /tmp/snap.json
 
 Two rules for a check whose subject is time:
 
-- A room's own agents are the only real delegating parents available. A sandbox room's agents are synthetic and launch no children, so a scenario that needs a parent waiting on live subagents runs in the room you are working in: launch a child that keeps working, then observe the parent. A Claude-native child line whose check needs no live wait replays in the sandbox instead ([Native subagent replay](#native-subagent-replay)).
+- A room's own agents are the only real delegating parents available. A sandbox room's agents are synthetic and do not delegate work to provider subagents, so a scenario that needs a parent waiting on live subagents runs in the room you are working in: launch a child that keeps working, then observe the parent. A Claude-native child line whose check needs no live wait replays in the sandbox instead ([Native subagent replay](#native-subagent-replay)).
 - Put the wait in a background script (`sleep <secs>` followed by the capture commands, run detached) rather than a foreground sleep. An agent harness refuses a long foreground sleep, and any tool call you make during the window stamps the very activity clock you are trying to age.
 
 ## Native subagent replay
 
 The sandbox's `claude` is a stub (`xtask/assets/sandbox-room/claude`), so no real Claude child ever starts in a held room. A change to a Claude-native child line (its tokens, model, status, or clock) is still checkable in one pass: copy a real parent and child transcript into the room, then feed the parent's hooks and the child's `subagentStatusLine` payload by hand, in the order Claude would send them.
 
-**Setup.** Hold a tmux room from the testkit build (see [Hold a room and join it](#hold-a-room-and-join-it)). From its card note the root, the `@coder#probe` Role pane (`%6` in the tmux card above), and a `#probe` consumer sidebar. The hooks also want the parent pane's process as `RIMZ_AGENT_PID`: take `PARENT_PID` from the same Role line (`pid 1930429` in the tmux card above).
+**Setup.** Hold a tmux room from the testkit build (see [Hold a room and join it](#hold-a-room-and-join-it)). From its card note the root, the `@coder#probe` As prefix, and a `#probe` consumer sidebar. `--as` supplies the agent's session keys and hook owner pid; no process-environment copy is needed.
 
 **Transcripts.** Pick one Claude session that launched a subagent and copy exactly two files from `~/.claude/projects/<project>/` into the room's `tmp/replay/`, keeping their relative layout: `<session>.jsonl` and `<session>/subagents/agent-<child>.jsonl`. The adapter derives the child directory from the parent transcript's path (`subagents_dir` in `agents/adapters/claude/subagents.rs`), so a flattened copy reads no child. Copy nothing else from `~/.claude`: no credentials, no settings.
 
@@ -210,7 +212,7 @@ cp ~/.claude/projects/<project>/"$SESSION"/subagents/agent-"$CHILD".jsonl "$ROOT
 **Feed.** Run each as the parent pane, with the built binary by its absolute path (`$PWD/target/debug/rimz` from the worktree root). `SubagentStop` is the one that carries `agent_transcript_path`, so check the running line between the third and fourth feeds.
 
 ```sh
-x() { target/debug/xtask sandbox in "$ROOT" -- env RIMZ_AGENT_PID="$PARENT_PID" TMUX_PANE="$PARENT_PANE" "$PWD/target/debug/rimz" --tmux "$@"; }
+x() { target/debug/xtask sandbox in "$ROOT" --as '@coder#probe' -- "$PWD/target/debug/rimz" --tmux "$@"; }
 x hooks feed --source claude < parent-start.json
 x hooks feed --source claude < child-start.json
 x statusline feed --source claude --subagent < child-feed.json
@@ -247,42 +249,52 @@ In the recorded run (2026-09-26, tmux) that sum was `2 + 118420 + 2589 = 121011`
 
 The replay proves the adapter and renderer path from hook to frame. It does not prove that Claude sends these payloads in this order or shape; that contract lives in [claude-reference.md](../externals/agent-adapter/claude-reference.md). It has run on tmux only.
 
-The `x()` helper is enough for hooks, but not for a command that acts as the calling agent: for that, see [Run a command as an agent](#run-a-command-as-an-agent).
+After SessionStart, the same `x()` helper also identifies the caller for commands such as `wait` ([Run a command as an agent](#run-a-command-as-an-agent)).
 
 ## Run a command as an agent
 
-`rimz wait`, and any other command that acts as its caller, identifies that caller from the launch environment (`CallerIdentity::from_env` in `harness/ancestry.rs`). It needs `RIMZ_AGENT_KIND` and reads the other `RIMZ_AGENT_*` launch keys, and never reads `RIMZ_AGENT_PID`. Its fallback walks the caller's process ancestors, and a `sandbox in` process does not descend from the pane. So the replay's `x()` identifies nobody:
+Plain `sandbox in` scrubs the caller's session keys and does not descend from a room agent. A caller-sensitive command such as `rimz wait --check true` therefore refuses:
 
 ```console
 error: arming a wait is only available to an agent RimZ can identify; run this command from an agent pane
 ```
 
-The launch keys live on the pane's child (the stub's `sleep`), not on the pane process, which carries only `TMUX_PANE`. With them passed but no session registered, `wait` stops one step later (`cli/wait/add.rs` rejects a provisional agent ID), because the stub never sends a SessionStart:
+`--as` copies the selected agent's session keys while retaining the sandbox roots, and sets `RIMZ_AGENT_PID` to the stub for hook attribution. It runs the command directly with inherited stdio, like plain `in`. Neither flag sends SessionStart: before an explicit feed, `wait` refuses the provisional session:
 
 ```console
 error: the calling agent has not registered a real session yet
 ```
 
-**Recipe.** Run it in zsh from the worktree root. Take `ROOT` and the `@coder#probe` Role pane and pid from your card (`%6` and `pid 284191` in the recorded run). Copy the child's `RIMZ_AGENT_*` into an array, feed one SessionStart as that agent, then run the command:
+**Recipe.** From the checkout root, set `ROOT` to the card's sandbox root and `MUX` to its backend (`tmux` or `zellij`). Feed one SessionStart as the selected agent, then run the command. For a transcript replay, use its chosen session id instead of minting one here.
 
 ```sh
-PANE=%6 PID=284191 BIN="$PWD/target/debug/rimz"
-AENV=(${(f)"$(tr '\0' '\n' < /proc/$(pgrep -P "$PID")/environ | rg '^RIMZ_AGENT_')"})
-a() { target/debug/xtask sandbox in "$ROOT" -- env RIMZ_AGENT_PID="$PID" TMUX_PANE="$PANE" $AENV "$BIN" --tmux "$@"; }
-print -r -- "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"cwd\":\"$ROOT/home/room-worktrees/probe\",\"source\":\"startup\"}" > "$ROOT/tmp/session-start.json"
+BIN="$PWD/target/debug/rimz"
+a() { target/debug/xtask sandbox in "$ROOT" --as '@coder' -- "$BIN" "--$MUX" "$@"; }
+jq -n --arg session "$(cat /proc/sys/kernel/random/uuid)" --arg cwd "$ROOT/home/room-worktrees/probe" '{hook_event_name:"SessionStart",session_id:$session,cwd:$cwd,source:"startup"}' > "$ROOT/tmp/session-start.json"
 a hooks feed --source claude < "$ROOT/tmp/session-start.json"
 a wait --check true
+target/debug/xtask sandbox in "$ROOT" --as-ancestor '@coder' -- "$BIN" "--$MUX" wait --check true
 ```
 
-The feed exits 0 with no output. In the recorded run (2026-09-27, tmux) the wait armed against the Role:
+`--as-ancestor` starts the command below the stub, with exactly plain `in`'s environment: no `RIMZ_AGENT_*` or pane key. It relays stdin, stdout, and stderr through pipes, not a tty, and reports a failed command's exit status. An absent or dead serving seat refuses with the instruction to hold a fresh room with this build. Both modes default to the card's Worktree; `--cwd` overrides it. A relative program path containing `/` resolves from your checkout, as it does for plain `in`.
+
+The feed exits 0 with no output. Both backends resolved the caller to `@coder#probe`. These arming-line excerpts show `--as` followed by `--as-ancestor`, first on tmux:
 
 ```console
-armed wait-patient-meter: check: true → @coder#probe
-NAME                STATE                TARGET        AGE  TRIGGER
-wait-patient-meter  watching pid 290923  @coder#probe  0s   check: true · in ~/room-worktrees/probe
+armed wait-still-marker: check: true → @coder#probe
+armed wait-simple-lane: check: true → @coder#probe
 ```
 
-The listing that follows `armed` can read `watcher lost` with AGE `-` right after arming; `wait list` two seconds later reads `watching pid`, so treat it as a listing race, not a failed arm. The feed only needs to run once per room; later `a` calls reuse the registered session. The run proved arming only, not delivery of the wait's result to the agent, and it has run on tmux only.
+And on Zellij:
+
+```console
+armed wait-fair-nova: check: true → @coder#probe
+armed wait-kind-brook: check: true → @coder#probe
+```
+
+This check proves caller resolution, not wait completion. To inspect hook attribution, use `sidebar snapshot --json` and read the selected agent's `runtime_owner` under `agents`; `agents show --json` does not expose that field. Before the feed, both rooms still showed idle `○ coder` and `○ reviewer` rows, as before the serving stub.
+
+The listing that follows `armed` can read `watcher lost` with AGE `-` right after arming; `wait list` two seconds later reads `watching pid`, so treat it as a listing race, not a failed arm. The feed only needs to run once per room; later `a` calls reuse the registered session. The run proved arming only, not delivery of the wait's result to the agent.
 
 ## Capture kitty graphics
 
@@ -440,7 +452,6 @@ The first build compiles Ghostty's test binary (1 minute 46 seconds on a machine
 - `sidebar click` is testkit-only. It uses the renderer's wakeup socket, exercising hit testing and focus routing but skipping terminal input and its parsing.
 - The pipeline line renders no owner name; the click's focus target is the evidence for ownership.
 - Read focus from the mux using the card's Focus command, not `rimz pane list`, which reports no focus on Zellij. Zellij's `is_focused` is per-tab and non-unique ([zellij-reference.md](../externals/mux-adapter/zellij-reference.md#types)): the check reads focus among the team tab's panes, so it proves pane focus inside that tab and not which tab the client is viewing.
-- A command inside `sandbox in` does not resolve a relative binary path against your worktree: `target/debug/rimz` fails with `env: 'target/debug/rimz': No such file or directory` and exit 127. Pass the binary by absolute path.
-- zsh does not word-split an unquoted `$VAR`, so launch keys joined into one string reach `env` as a single `RIMZ_AGENT_ROLE="coder RIMZ_AGENT_NAME=..."`. The hook feed still exits 0 and stores that role, which then shows in handles (`@coder RIMZ_AGENT_NAME=...#probe`). Keep the keys in an array, as in [Run a command as an agent](#run-a-command-as-an-agent) (bash: `mapfile`).
+- A relative program path passed directly to `sandbox in` resolves from your checkout. A path nested inside `env` or `sh -c` belongs to that command instead; pass the RimZ binary by absolute path in those cases.
 - Wrapping `sandbox room` in your own `bwrap` (to keep its files in a scratch directory) needs `--dev-bind /dev /dev`; without it the room exits before starting with `starting sandbox cleanup reaper` / `Permission denied (os error 13)`.
 - Stop the room by letting `--for` expire or killing the `xtask sandbox room` PID itself. Killing a wrapper shell leaves the room running. Kill by PID from `pgrep`, not with `pkill -f <pattern>`: the pattern matches the invoking shell's own command line, so `pkill` kills the shell that ran it.
