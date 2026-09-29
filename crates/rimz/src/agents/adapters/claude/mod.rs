@@ -455,6 +455,35 @@ fn render_host_skills(
     Option<crate::agents::skills::HostSkillArtifact>,
     crate::agents::skills::HostSkillArgErr,
 > {
+    merge_settings(cwd, artifact_dir, args, None, true, |object| {
+        let overrides = object
+            .entry("skillOverrides")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| "skillOverrides must be an object".to_owned())?;
+        for key in keys {
+            overrides.insert(
+                key.as_str().to_owned(),
+                serde_json::json!("user-invocable-only"),
+            );
+        }
+        Ok(())
+    })
+}
+
+fn merge_settings(
+    cwd: &Path,
+    artifact_dir: &Path,
+    args: &mut Vec<String>,
+    pending: Option<&crate::agents::skills::HostSkillArtifact>,
+    private_inline: bool,
+    merge: impl FnOnce(
+        &mut serde_json::Map<String, serde_json::Value>,
+    ) -> std::result::Result<(), String>,
+) -> std::result::Result<
+    Option<crate::agents::skills::HostSkillArtifact>,
+    crate::agents::skills::HostSkillArgErr,
+> {
     use crate::agents::skills::HostSkillArgErr;
     let matcher = crate::agents::PresetArgMatcher::Flag(vec!["--settings".into()]);
     let value = matcher
@@ -471,34 +500,28 @@ fn render_host_skills(
         path: path.clone(),
         reason,
     };
-    let user_settings = value.is_some();
-    let mut settings: serde_json::Value = match value {
-        Some(value) => {
+    let private = value
+        .as_ref()
+        .is_some_and(|value| private_inline || !value.trim_start().starts_with('{'));
+    let mut settings: serde_json::Value = match (value, pending) {
+        (Some(value), Some((path, settings))) if path == Path::new(&value) => settings.clone(),
+        (Some(value), _) => {
             let bytes = if value.trim_start().starts_with('{') {
                 value.into_bytes()
             } else {
                 std::fs::read(&path).map_err(|error| invalid(error.to_string()))?
             };
-            crate::agents::jsonc::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?
+            crate::agents::jsonc::from_slice(&bytes)
+                .map_err(|error| invalid(format!("invalid JSON: {error}")))?
         }
-        None => serde_json::json!({}),
+        (None, _) => serde_json::json!({}),
     };
     let object = settings
         .as_object_mut()
         .ok_or_else(|| invalid("expected a JSON object".into()))?;
-    let overrides = object
-        .entry("skillOverrides")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .ok_or_else(|| invalid("skillOverrides must be an object".into()))?;
-    for key in keys {
-        overrides.insert(
-            key.as_str().to_owned(),
-            serde_json::json!("user-invocable-only"),
-        );
-    }
+    merge(object).map_err(invalid)?;
     matcher.remove_occurrences(args);
-    if user_settings {
+    if private {
         use sha2::{Digest, Sha256};
         let digest = hex::encode(Sha256::digest(settings.to_string().as_bytes()));
         let path = artifact_dir.join(format!("settings.{digest}.json"));
@@ -507,6 +530,62 @@ fn render_host_skills(
     }
     args.extend(["--settings".into(), settings.to_string()]);
     Ok(None)
+}
+
+const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
+    "rimz message",
+    "rimz agents",
+    "rimz subagents",
+    "rimz teams show",
+    "rimz teams wait",
+    "rimz teams flip",
+    "rimz teams record",
+    "rimz asks",
+    "rimz answer",
+    "rimz wait --in",
+    "rimz pane list",
+    "rimz pane capture",
+    "rimz loop show",
+    "rimz loop logs",
+    "rimz lsp def",
+    "rimz lsp refs",
+    "rimz lsp hover",
+    "rimz lsp impl",
+    "rimz lsp callers",
+    "rimz lsp callees",
+    "rimz lsp symbols",
+    "rimz lsp find",
+    "rimz lsp check",
+    "rimz lsp list",
+    "rimz lsp status",
+];
+
+fn union_settings_array(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    section: &str,
+    key: &str,
+    additions: impl IntoIterator<Item = String>,
+) -> std::result::Result<(), String> {
+    let section_value = object
+        .entry(section)
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| format!("{section} must be an object"))?;
+    let values = section_value
+        .entry(key)
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| format!("{section}.{key} must be an array"))?;
+    values.extend(additions.into_iter().map(serde_json::Value::String));
+    let mut unique = Vec::new();
+    values.retain(|value| {
+        if unique.contains(value) {
+            return false;
+        }
+        unique.push(value.clone());
+        true
+    });
+    Ok(())
 }
 
 fn render_definition_tools(
@@ -646,6 +725,57 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
 
     fn lockdown_subagent_args(&self, extra_args: &mut Vec<String>) {
         deny_native_tool(extra_args, "Agent");
+    }
+
+    fn allow_routine_rimz_args(
+        &self,
+        cwd: &Path,
+        artifact_dir: &Path,
+        dirs: &[PathBuf; 2],
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::HostSkillArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::HostSkillArgErr> {
+        use crate::agents::skills::HostSkillArgErr;
+        let [scratch, shared] = dirs.each_ref().map(|path| path.display().to_string());
+        let allow = ROUTINE_RIMZ_PREFIXES
+            .iter()
+            .map(|prefix| format!("Bash({prefix} *)"));
+        let environment = format!(
+            "rimz is this machine's agent-coordination CLI. These subcommands are routine \
+             coordination: {}. $RIMZ_SCRATCH ({scratch}) and $RIMZ_SHARED ({shared}) are this \
+             agent's own scratch space, including for redirected command output.",
+            ROUTINE_RIMZ_PREFIXES.join(", "),
+        );
+        let merged = merge_settings(
+            cwd,
+            artifact_dir,
+            extra_args,
+            artifact.as_ref(),
+            false,
+            |object| {
+                union_settings_array(object, "permissions", "allow", allow)?;
+                union_settings_array(
+                    object,
+                    "permissions",
+                    "additionalDirectories",
+                    [scratch.clone(), shared.clone()],
+                )?;
+                union_settings_array(
+                    object,
+                    "autoMode",
+                    "environment",
+                    ["$defaults".to_owned(), environment],
+                )
+            },
+        );
+        *artifact = merged.map_err(|error| match error {
+            HostSkillArgErr::Settings { path, reason } => HostSkillArgErr::Settings {
+                path,
+                reason: format!("{reason}; correct that key, or set allow-routine-rimz = false"),
+            },
+            error => error,
+        })?;
+        Ok(())
     }
 
     fn disable_native_lsp_args(&self, extra_args: &mut Vec<String>) {

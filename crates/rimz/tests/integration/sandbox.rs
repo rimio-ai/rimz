@@ -1419,8 +1419,11 @@ fn sandbox_skills_under_host_use_provider_switches() {
                     std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
                     0o600
                 );
-                let settings: serde_json::Value =
+                let mut settings: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                let routine = settings.as_object_mut().unwrap();
+                assert!(routine.remove("permissions").is_some(), "{routine:?}");
+                assert!(routine.remove("autoMode").is_some(), "{routine:?}");
                 assert_eq!(
                     settings,
                     serde_json::json!({"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":{"kept":"enabled", "unlisted-dir":"user-invocable-only"}})

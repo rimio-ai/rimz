@@ -73,6 +73,9 @@ pub struct AgentsConfig {
     /// Carry the launch cwd, shell, and git state in the launch reminder.
     #[serde(rename = "env-reminder")]
     pub env_reminder: bool,
+    /// Allow routine RimZ coordination through provider launch settings.
+    #[serde(rename = "allow-routine-rimz")]
+    pub allow_routine_rimz: bool,
     pub worktree: WorktreeConfig,
     pub attention: AttentionConfig,
     #[serde(default)]
@@ -92,6 +95,7 @@ impl Default for AgentsConfig {
             isolation: Isolation::default(),
             max_chain_length: default_max_chain_length(),
             env_reminder: true,
+            allow_routine_rimz: true,
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
             subagents: SubagentsConfig::default(),

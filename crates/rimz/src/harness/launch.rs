@@ -149,7 +149,7 @@ type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
 #[derive(Clone, PartialEq, Eq)]
 pub struct CompiledAgentProcess {
     pub host_skills: Option<crate::agents::skills::HostSkillPlan>,
-    pub(super) host_skill_artifact: Option<crate::agents::skills::HostSkillArtifact>,
+    pub(super) settings_artifact: Option<crate::agents::skills::HostSkillArtifact>,
     /// Provider command before shell startup wrapping.
     pub provider_argv: Vec<String>,
     /// Provider executable used by PATH preflight.
@@ -712,7 +712,7 @@ fn compile_agent_process_with_extra_env(
     let trusted_env = trusted_agent_env(project_root, kind)?;
     let secret_keys = trusted_env.keys().cloned().collect();
     let mut env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
-    let (host_skills, host_skill_artifact) =
+    let (host_skills, mut settings_artifact) =
         if let (Some(runtime), Some(listed)) = (host_runtime, &request.skills) {
             let mut skill_env = crate::agents::ambient_env();
             skill_env.extend(env.clone());
@@ -728,6 +728,15 @@ fn compile_agent_process_with_extra_env(
         } else {
             (None, None)
         };
+    if let Some((artifact_dir, dirs)) = &reminders.routine_rimz {
+        adapter.allow_routine_rimz_args(
+            cwd,
+            artifact_dir,
+            dirs,
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?;
+    }
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     let provider_program =
         provider_argv
@@ -743,7 +752,7 @@ fn compile_agent_process_with_extra_env(
     let argv = login_shell_argv(&env, &unset, &provider_argv);
     Ok(CompiledAgentProcess {
         host_skills,
-        host_skill_artifact,
+        settings_artifact,
         provider_argv,
         provider_program,
         argv,

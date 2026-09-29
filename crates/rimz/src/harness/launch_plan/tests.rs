@@ -50,6 +50,121 @@ fn action_with_args(action: &str, args: Vec<String>) -> ExecAction {
 }
 
 #[test]
+fn routine_permissions_cover_actions_children_and_isolations() {
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    for enabled in [true, false] {
+        let machine: crate::config::MachineConfig =
+            toml::from_str(&format!("[agents]\nallow-routine-rimz = {enabled}")).unwrap();
+        let effective =
+            crate::config::effective::load_with_roots(&machine, project.path(), config.path())
+                .unwrap();
+        for action in ["launch", "resume", "fork"] {
+            for sandboxed in [false, true] {
+                for subagent in [false, true] {
+                    let mut request = request("claude", action_with_args(action, Vec::new()));
+                    request.subagent = subagent;
+                    request.identity.name = Some("otter".into());
+                    let plan = compile(LaunchPlanInputs {
+                        request: &request,
+                        cwd: project.path(),
+                        project_root: project.path(),
+                        rimz_bin: Path::new("/bin/rimz"),
+                        runtime: &runtime,
+                        state: &state,
+                        effective: Some(&effective),
+                        commands: &machine.agents.commands,
+                        accounts: &machine.accounts,
+                        bwrap: sandboxed.then_some(Path::new("/bin/bwrap")),
+                        ambient_env: &BTreeMap::new(),
+                    })
+                    .unwrap();
+                    let settings = plan
+                        .process()
+                        .provider_argv
+                        .windows(2)
+                        .find(|pair| pair[0] == "--settings");
+                    assert_eq!(
+                        settings.is_some(),
+                        enabled,
+                        "{action} sandbox={sandboxed} child={subagent}"
+                    );
+                    if let Some(settings) = settings {
+                        let value: serde_json::Value = serde_json::from_str(&settings[1]).unwrap();
+                        let dirs = if sandboxed {
+                            vec![
+                                PathBuf::from("/tmp/scratchpad"),
+                                PathBuf::from("/tmp/shared"),
+                            ]
+                        } else {
+                            vec![state.scratch_dir(Some("otter")), state.shared_dir.clone()]
+                        };
+                        assert_eq!(
+                            value["permissions"]["additionalDirectories"],
+                            serde_json::json!(dirs)
+                        );
+                        assert!(
+                            value["permissions"]["allow"]
+                                .as_array()
+                                .unwrap()
+                                .contains(&serde_json::json!("Bash(rimz agents *)"))
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sandbox_settings_artifact_is_written_only_on_apply() {
+    let project = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    std::fs::write(
+        project.path().join("profile.json"),
+        r#"{"env":{"TOKEN":"private-secret"}}"#,
+    )
+    .unwrap();
+    let request = request(
+        "claude",
+        action_with_args("launch", vec!["--settings".into(), "profile.json".into()]),
+    );
+    let plan = compile(LaunchPlanInputs {
+        request: &request,
+        cwd: project.path(),
+        project_root: project.path(),
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: None,
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        bwrap: Some(Path::new("/bin/bwrap")),
+        ambient_env: &BTreeMap::new(),
+    })
+    .unwrap();
+    let args = &plan.process().provider_argv;
+    let settings = args
+        .windows(2)
+        .find(|pair| pair[0] == "--settings")
+        .unwrap();
+    let path = Path::new(&settings[1]);
+    assert_eq!(path.parent(), Some(runtime.prompt_dir().as_path()));
+    assert!(!path.exists());
+    assert!(!args.join(" ").contains("private-secret"));
+    apply(&plan).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(value["env"]["TOKEN"], "private-secret");
+    assert!(value["permissions"]["allow"].is_array());
+}
+
+#[test]
 fn host_settings_are_private_artifacts_written_only_on_apply() {
     use std::os::unix::fs::PermissionsExt;
     let project = tempfile::tempdir().unwrap();
