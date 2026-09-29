@@ -98,17 +98,9 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
 
     let live = ctx.resolution_snapshot()?;
     let target = live
-        .agent_panes
-        .iter()
-        .find(|pane| {
-            pane.kind == pane_kind
-                && pane
-                    .agent_id
-                    .as_ref()
-                    .is_some_and(|id| id == &pane_agent_id)
-        })
+        .live_agent_pane(&pane_kind, &pane_agent_id)
         .unwrap_or_else(|| answer_exit(2, &format!("{handle} has no live bound pane")));
-    let writer = PaneWriter::open(store.runtime_paths(), &target.pane_id)
+    let writer = PaneWriter::open(store.runtime_paths(), &target)
         .unwrap_or_else(|err| answer_exit(2, &format!("sending answer to {handle}: {err}")));
 
     // Re-read immediately before the first keystroke. This is the compare half

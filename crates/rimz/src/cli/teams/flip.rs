@@ -89,13 +89,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
                 .role
                 .as_deref()
                 .context("calling team member has no role")?;
-            let pane = snapshot
-                .agent_panes
-                .iter()
-                .find(|pane| {
-                    pane.kind == agent.kind && pane.agent_id.as_ref() == Some(&agent.agent_id)
-                })
-                .map(|pane| pane.pane_id.clone());
+            let pane = snapshot.live_agent_pane(&agent.kind, &agent.agent_id);
             Flipper::Member { role, agent, pane }
         }
         None => Flipper::User,
