@@ -452,8 +452,8 @@ fn render_host_skills(
     artifact_dir: &Path,
     args: &mut Vec<String>,
 ) -> std::result::Result<
-    Option<crate::agents::skills::HostSkillArtifact>,
-    crate::agents::skills::HostSkillArgErr,
+    Option<crate::agents::skills::LaunchSettingsArtifact>,
+    crate::agents::skills::LaunchSettingsErr,
 > {
     merge_settings(cwd, artifact_dir, args, None, true, |object| {
         let overrides = object
@@ -475,16 +475,16 @@ fn merge_settings(
     cwd: &Path,
     artifact_dir: &Path,
     args: &mut Vec<String>,
-    pending: Option<&crate::agents::skills::HostSkillArtifact>,
+    pending: Option<&crate::agents::skills::LaunchSettingsArtifact>,
     private_inline: bool,
     merge: impl FnOnce(
         &mut serde_json::Map<String, serde_json::Value>,
     ) -> std::result::Result<(), String>,
 ) -> std::result::Result<
-    Option<crate::agents::skills::HostSkillArtifact>,
-    crate::agents::skills::HostSkillArgErr,
+    Option<crate::agents::skills::LaunchSettingsArtifact>,
+    crate::agents::skills::LaunchSettingsErr,
 > {
-    use crate::agents::skills::HostSkillArgErr;
+    use crate::agents::skills::LaunchSettingsErr;
     let matcher = crate::agents::PresetArgMatcher::Flag(vec!["--settings".into()]);
     let value = matcher
         .occurrences(args)
@@ -496,7 +496,7 @@ fn merge_settings(
         .filter(|value| !value.trim_start().starts_with('{'))
         .map(|value| cwd.join(value))
         .unwrap_or_else(|| PathBuf::from("--settings"));
-    let invalid = |reason: String| HostSkillArgErr::Settings {
+    let invalid = |reason: String| LaunchSettingsErr::Settings {
         path: path.clone(),
         reason,
     };
@@ -733,9 +733,9 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         artifact_dir: &Path,
         dirs: &[PathBuf; 2],
         extra_args: &mut Vec<String>,
-        artifact: &mut Option<crate::agents::skills::HostSkillArtifact>,
-    ) -> std::result::Result<(), crate::agents::skills::HostSkillArgErr> {
-        use crate::agents::skills::HostSkillArgErr;
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        use crate::agents::skills::LaunchSettingsErr;
         let [scratch, shared] = dirs.each_ref().map(|path| path.display().to_string());
         let allow = ROUTINE_RIMZ_PREFIXES
             .iter()
@@ -769,7 +769,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             },
         );
         *artifact = merged.map_err(|error| match error {
-            HostSkillArgErr::Settings { path, reason } => HostSkillArgErr::Settings {
+            LaunchSettingsErr::Settings { path, reason } => LaunchSettingsErr::Settings {
                 path,
                 reason: format!("{reason}; correct that key, or set allow-routine-rimz = false"),
             },

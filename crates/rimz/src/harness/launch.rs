@@ -107,7 +107,7 @@ pub enum ProgramLookupErr {
 #[derive(Debug, thiserror::Error)]
 pub enum AgentProcessCompileErr {
     #[error(transparent)]
-    HostSkills(#[from] crate::agents::skills::HostSkillArgErr),
+    LaunchSettings(#[from] crate::agents::skills::LaunchSettingsErr),
     #[error("unknown agent kind `{kind}`")]
     UnknownAgent { kind: String },
     #[error("agent `{kind}` has no launch command")]
@@ -149,7 +149,7 @@ type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
 #[derive(Clone, PartialEq, Eq)]
 pub struct CompiledAgentProcess {
     pub host_skills: Option<crate::agents::skills::HostSkillPlan>,
-    pub(super) settings_artifact: Option<crate::agents::skills::HostSkillArtifact>,
+    pub(super) settings_artifact: Option<crate::agents::skills::LaunchSettingsArtifact>,
     /// Provider command before shell startup wrapping.
     pub provider_argv: Vec<String>,
     /// Provider executable used by PATH preflight.
