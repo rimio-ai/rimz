@@ -227,13 +227,13 @@ fn reopened_response_preserves_previous_answers() {
 
 #[test]
 fn terminal_subagent_reopens_for_its_next_turn() {
-    for subagent in [false, true] {
+    for (subagent, joined) in [(false, true), (true, true), (true, false)] {
         let (_dir, paths, mut record) = setup();
         record.subagent = subagent;
         record.agent_id = Some("child".into());
         record.status = RunStatus::Completed;
         record.completed_at = Some(record.started_at);
-        record.joined_at = Some(record.started_at);
+        record.joined_at = joined.then_some(record.started_at);
         record.report_message_id = Some(crate::ids::MessageId::new());
         record.last_message = Some("first answer".into());
         record.failure_tail = Some("first failure".into());
@@ -267,6 +267,37 @@ fn terminal_subagent_reopens_for_its_next_turn() {
         assert_eq!(reopened.report_message_id, None);
         assert_eq!(reopened.last_message, None);
         assert_eq!(reopened.failure_tail, None);
+        let value = serde_json::to_value(&reopened).unwrap();
+        assert_eq!(
+            value["follow_up"]["started_at"],
+            serde_json::to_value(reopened.updated_at).unwrap()
+        );
+        assert!(value["follow_up"]["prompt"].is_null());
+        if joined {
+            assert!(value.get("earlier_answers").is_none());
+        } else {
+            let answers = value["earlier_answers"]
+                .as_array()
+                .expect("unjoined answer carried");
+            assert_eq!(answers.len(), 1);
+            assert_eq!(answers[0]["ordinal"], 1);
+            assert_eq!(answers[0]["failure_tail"], "first failure");
+            assert_eq!(
+                answers[0]["report_message_id"],
+                serde_json::to_value(&record.report_message_id).unwrap()
+            );
+            assert_eq!(
+                answers[0]["started_at"],
+                serde_json::to_value(record.started_at).unwrap()
+            );
+            assert_eq!(
+                answers[0]["completed_at"],
+                serde_json::to_value(record.completed_at).unwrap()
+            );
+            assert!(answers[0]["prompt"].is_null());
+            assert!(answers[0]["joined_at"].is_null());
+            assert!(answers[0].get("last_message").is_none());
+        }
         assert!(reopened.deadline_at.unwrap() >= before + std::time::Duration::from_secs(30));
         observation.signal = LifecycleSignal::TurnEnded {
             errored: false,
@@ -284,6 +315,16 @@ fn terminal_subagent_reopens_for_its_next_turn() {
             )
             .unwrap()
             .is_some()
+        );
+        observation.signal = LifecycleSignal::TurnStarted { turn_id: None };
+        record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+            None
+        })
+        .unwrap();
+        let third = load(&paths, &record.run_id).unwrap();
+        assert_eq!(
+            third.deadline_at.unwrap(),
+            third.updated_at + std::time::Duration::from_secs(30)
         );
     }
 }

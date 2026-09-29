@@ -3110,6 +3110,7 @@ fn assert_digest_joined_during_claim(cancel: bool) {
                 &store,
                 "session",
                 &run.run_id,
+                Some(run.follow_ups + 1),
                 "joined before delivery",
             )
             .unwrap();
@@ -3384,7 +3385,6 @@ fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
     digest.message_id = fixed_message_id(2);
     let at = jiff::Timestamp::from_second(1_000).expect("fixed timestamp");
-    let mut run_ids = Vec::new();
     for (index, joined) in joined.iter().enumerate() {
         let mut record = RunRecord::new(
             env.workspace_id.clone(),
@@ -3400,11 +3400,9 @@ fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
         record.updated_at = at;
         record.completed_at = Some(at);
         record.joined_at = joined.then_some(at);
+        record.report_message_id = Some(digest.message_id.clone());
         run::create(store.paths(), &record).expect("seed completed run");
-        run_ids.push(record.run_id);
     }
-    run::report::record_report_messages(store.paths(), &run_ids, Some(&digest.message_id))
-        .expect("link digest without canceling joined runs");
     (env, digest, pane_fixture)
 }
 

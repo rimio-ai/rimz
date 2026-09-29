@@ -774,6 +774,9 @@ impl RunExecContext {
         &self,
         record: &rimz::store::run::RunRecord,
     ) -> std::result::Result<bool, rimz::store::StoreErr> {
+        if record.owes_report() {
+            return Ok(false);
+        }
         // Pane send leaves a prompt Sent. The lifecycle hook records TurnStarted
         // before confirming Delivered; queue-before-snapshot preserves that order.
         let messages = self.store.list_messages()?;
@@ -875,10 +878,7 @@ impl RunMonitor {
         }
         self.next_receipt_check = now + PARENT_RECEIPT_POLL;
         // Files land per child; digest stamps wait for the fleet. Try once per record revision.
-        if record.report_message_id.is_none()
-            && record.joined_at.is_none()
-            && self.reported_revision != Some(record.updated_at)
-        {
+        if record.owes_report() && self.reported_revision != Some(record.updated_at) {
             self.reported_revision = Some(record.updated_at);
             report_settled_child_or_log(context);
         }

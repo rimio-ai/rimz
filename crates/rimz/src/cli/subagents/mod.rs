@@ -900,6 +900,7 @@ fn prepare_children_for_stop<'a>(
             store,
             session_name,
             &run.run_id,
+            None,
             "stopped by parent",
         ) {
             Ok(()) => prepared.push(child),

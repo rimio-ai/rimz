@@ -37,8 +37,7 @@ impl<'a> FleetRuns<'a> {
                         .chain(runs.iter().filter(move |run| {
                             run.peer.is_some()
                                 && run.matches_agent(child)
-                                && (!run.status.is_terminal()
-                                    || (run.report_message_id.is_none() && run.joined_at.is_none()))
+                                && (!run.status.is_terminal() || run.owes_report())
                         }))
                         .map(move |run| (child, run))
                 })
@@ -69,11 +68,7 @@ impl<'a> FleetRuns<'a> {
         self.0
             .iter()
             .copied()
-            .filter(|(_, run)| {
-                run.status.is_terminal()
-                    && run.report_message_id.is_none()
-                    && run.joined_at.is_none()
-            })
+            .filter(|(_, run)| run.owes_report())
             .collect()
     }
 }
