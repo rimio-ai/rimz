@@ -148,6 +148,38 @@ pub(super) fn analyze(
     })
 }
 
+pub(super) fn analyze_snapshot(
+    sources: &[Source],
+    syntax_files: &[FileSyntax],
+    paths: &[PathBuf],
+) -> Result<MetricsReport> {
+    let sources = sources
+        .iter()
+        .filter(|source| {
+            source.is_production()
+                && paths.iter().any(|path| {
+                    super::modules::path_in_scope(&source.path, path)
+                        || source.path == path.with_extension("rs")
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if sources.is_empty() {
+        return Ok(MetricsReport {
+            module_scores: BTreeMap::new(),
+            functions: Vec::new(),
+        });
+    }
+    let root = tempfile::tempdir().context("creating Atlas complexity snapshot")?;
+    for source in &sources {
+        let path = root.path().join(&source.path);
+        fs::create_dir_all(path.parent().context("snapshot source has no parent")?)?;
+        fs::write(&path, &source.text)
+            .with_context(|| format!("materializing {}", source.path.display()))?;
+    }
+    analyze(root.path(), Path::new("."), &sources, syntax_files)
+}
+
 fn ensure_prerequisite() -> Result<()> {
     let status = Command::new("rust-code-analysis-cli")
         .arg("--version")
