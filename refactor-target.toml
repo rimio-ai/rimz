@@ -558,6 +558,27 @@ path = "crates/rimz/src/worktree"
 # Attribution probes the selected checkout's branch through the shared resolver.
 surface-budget = 57
 
+# Ratchet CLI-to-CLI surfaces for future thin-cli workflow moves.
+[[module]]
+path = "crates/rimz/src/cli/supervised"
+surface-budget = 48
+
+[[module]]
+path = "crates/rimz/src/cli/agents_cmd/mod.rs"
+surface-budget = 24
+
+[[module]]
+path = "crates/rimz/src/cli/agents_cmd/exec.rs"
+surface-budget = 13
+
+[[module]]
+path = "crates/rimz/src/cli/transcript"
+surface-budget = 18
+
+[[module]]
+path = "crates/rimz/src/cli/room"
+surface-budget = 12
+
 [[module]]
 path = "crates/rimz/src/cli/remote.rs"
 surface-budget = 3
