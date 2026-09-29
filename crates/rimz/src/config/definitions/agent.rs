@@ -427,10 +427,7 @@ impl Resolver<'_> {
         let defaults = agents::definition_defaults(kind, fm.model.as_deref());
         profile.isolation = fm.isolation;
         profile.mode = fm.mode.or(defaults.mode);
-        profile.model = fm
-            .model
-            .as_ref()
-            .map(|model| agents::expand_model_alias(kind, model));
+        profile.model = fm.model.clone();
         profile.effort = fm.effort.clone().or_else(|| {
             agents::find_definition(kind)
                 .and_then(|definition| {

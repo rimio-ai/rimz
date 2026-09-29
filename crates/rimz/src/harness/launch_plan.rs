@@ -80,6 +80,8 @@ pub enum LaunchPlanErr {
     UnknownAgent(crate::ids::AgentKind),
     #[error(transparent)]
     Login(#[from] crate::agents::RoomLoginErr),
+    #[error(transparent)]
+    Preset(#[from] crate::agents::PresetErr),
 }
 
 impl LaunchPlan {
@@ -89,6 +91,83 @@ impl LaunchPlan {
             | AgentProcessStage::LoginShellReentry { process, .. } => process,
         }
     }
+}
+
+pub fn resolve_model(
+    request: &mut ExecRequest,
+    machine: &crate::config::MachineConfig,
+    runtime: &RuntimePaths,
+    login: &ProviderLogin,
+    recorded_model: Option<&str>,
+    source: Option<&mut dyn crate::agents::capabilities::ModelCatalogSource>,
+    ambient_env: &BTreeMap<String, String>,
+) -> Result<
+    (
+        Vec<String>,
+        Option<crate::agents::capabilities::ModelAliasMove>,
+    ),
+    LaunchPlanErr,
+> {
+    use crate::agents::{LaunchPreset, PresetField, capabilities::ModelAliasRequest};
+    let mut warnings = Vec::new();
+    let mut movement = None;
+    let Some(alias) = request.identity.params.model.as_deref() else {
+        return Ok((warnings, movement));
+    };
+    let adapter = crate::agents::find_definition(request.kind.as_str())
+        .ok_or_else(|| LaunchPlanErr::UnknownAgent(request.kind.clone()))?;
+    let pin = machine.model_alias(&request.kind, alias);
+    let is_alias = pin.is_some() || adapter.is_model_alias(alias);
+    if !is_alias {
+        return Ok((warnings, movement));
+    }
+    let replay = if matches!(request.action, launch::ExecAction::Launch { .. }) {
+        None
+    } else {
+        let recorded_model = recorded_model.filter(|model| {
+            machine.model_alias(&request.kind, model).is_none() && !adapter.is_model_alias(model)
+        });
+        if recorded_model.is_none() {
+            warnings.push(format!(
+                "{} alias {alias} has no recorded session model; resolving afresh",
+                request.kind
+            ));
+        }
+        recorded_model
+    };
+    let id = if let Some(model) = replay {
+        model.to_owned()
+    } else if let Some(pin) = pin {
+        if adapter.known_catalog_model(runtime, &login.key(), pin) == Some(false) {
+            warnings.push(format!("{} configured model {pin} is absent from the cached catalog; check the model pin in machine config", request.kind));
+        }
+        pin.to_owned()
+    } else if let Some(resolved) = adapter.resolve_model_alias(
+        ModelAliasRequest {
+            alias,
+            effort: request.identity.params.effort.as_deref(),
+            login,
+            login_env: &login.env(ambient_env),
+            paths: runtime,
+        },
+        source,
+    ) {
+        warnings.extend(resolved.warnings);
+        movement = resolved.movement;
+        resolved.id
+    } else {
+        return Ok((warnings, movement));
+    };
+    let args = adapter.spec().render_preset(&LaunchPreset {
+        model: Some(id.clone()),
+        ..LaunchPreset::default()
+    })?;
+    if let Some(matcher) = adapter.spec().launch.preset_arg_matcher(PresetField::Model) {
+        matcher.remove_occurrences(request.action.extra_args_mut());
+    }
+    request.action.extra_args_mut().extend(args);
+    request.identity.params.model = Some(id);
+    Ok((warnings, movement))
 }
 
 pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr> {

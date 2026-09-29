@@ -1066,6 +1066,14 @@ fn deserialize_model_aliases<'de, D: serde::Deserializer<'de>>(
                     "models.{kind}.{alias}: model ID must not be empty"
                 )));
             }
+            if aliases.contains_key(id)
+                || crate::agents::find_definition(kind.as_str())
+                    .is_some_and(|adapter| adapter.is_model_alias(id))
+            {
+                return Err(serde::de::Error::custom(format!(
+                    "models.{kind}.{alias}: {id} is an alias; pin a full model id"
+                )));
+            }
         }
     }
     Ok(models)

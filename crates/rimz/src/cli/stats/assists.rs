@@ -16,6 +16,7 @@ pub(super) struct AssistStats {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(super) struct AssistRollup {
+    pub(super) model_aliases: usize,
     pub(super) redeems: usize,
     pub(super) resets: usize,
     pub(super) resumes: usize,
@@ -31,6 +32,14 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
+    ModelAlias {
+        at: Timestamp,
+        kind: AgentKind,
+        login: rimz::ids::LoginKey,
+        alias: String,
+        from: String,
+        to: String,
+    },
     #[serde(rename = "auto_redeem")]
     Redeem {
         at: Timestamp,
@@ -164,6 +173,7 @@ impl AssistStats {
         let mut rollup = AssistRollup::default();
         for event in &events {
             match event {
+                AssistEvent::ModelAlias { .. } => rollup.model_aliases += 1,
                 AssistEvent::Redeem { outcome, .. } => {
                     rollup.redeems += 1;
                     rollup.resets += usize::from(outcome.as_deref() == Some("reset"));
@@ -218,6 +228,20 @@ impl AssistStats {
 impl AssistEvent {
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
+            Assist::ModelAlias {
+                kind,
+                login,
+                alias,
+                from,
+                to,
+            } => Self::ModelAlias {
+                at: record.at,
+                kind,
+                login,
+                alias,
+                from,
+                to,
+            },
             Assist::AutoRedeem {
                 kind,
                 reason,
@@ -386,7 +410,8 @@ impl AssistEvent {
 
     fn at(&self) -> Timestamp {
         match self {
-            Self::Redeem { at, .. }
+            Self::ModelAlias { at, .. }
+            | Self::Redeem { at, .. }
             | Self::Continue { at, .. }
             | Self::Compact { at, .. }
             | Self::IdleCompact { at, .. }
@@ -464,6 +489,9 @@ pub(super) fn category_rows(rollup: &AssistRollup) -> Vec<String> {
 
 fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     let mut rows = Vec::with_capacity(5);
+    if rollup.model_aliases > 0 {
+        rows.push(("Model aliases:", rollup.model_aliases.to_string()));
+    }
     if rollup.resumes > 0 {
         let mut value = rollup.resumes.to_string();
         if rollup.recovered_secs > 0 {
@@ -511,6 +539,13 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
     let at = event.at().to_zoned(zone.clone());
     let time = at.strftime("%H:%M");
     match event {
+        AssistEvent::ModelAlias {
+            kind,
+            alias,
+            from,
+            to,
+            ..
+        } => format!("{time} {kind} alias {alias} now resolves to {to} (was {from})"),
         AssistEvent::Redeem {
             kind,
             reason,
@@ -714,6 +749,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         .split_once(' ')
         .map_or_else(|| benefit_line(event, zone), |(_, rest)| rest.to_owned());
     match event {
+        AssistEvent::ModelAlias { login, .. } => format!("{at} {benefit} · login {login}"),
         AssistEvent::Redeem {
             request_id,
             credits,
@@ -878,6 +914,23 @@ fn first_line(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_alias_moves_fold_and_render() {
+        let record: AssistRecord = serde_json::from_value(serde_json::json!({
+            "at": "2026-01-01T00:00:00Z", "assist": "model_alias", "kind": "codex",
+            "login": "codex@default", "alias": "sol", "from": "gpt-6-sol", "to": "gpt-6.1-sol"
+        }))
+        .unwrap();
+        let stats = AssistStats::from_records("all", vec![record]);
+        assert!(
+            category_rows(&stats.rollup)
+                .iter()
+                .any(|row| row.contains("Model aliases:"))
+        );
+        let line = benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+        assert!(line.contains("sol now resolves to gpt-6.1-sol (was gpt-6-sol)"));
+    }
 
     #[test]
     fn keepalive_stats_count_deliveries_and_preserve_failures() {

@@ -24,7 +24,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().context("reading the agent pane cwd"))?;
     let mut invocation = ExecInvocationContext::new(&workspace, cwd);
     let run_context = run_exec_context(envelope.request(), &invocation)?;
-    let launch_identity = exec_launch_identity(envelope.request())?;
+    let provisional_identity = exec_launch_identity(envelope.request())?;
     let machine_config = crate::cli::machine_config();
     let effective = rimz::config::effective::load_with_roots(
         &machine_config,
@@ -37,7 +37,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if let Some(detail) =
         exec_definition_failure(envelope.request(), &machine_config, effective.as_ref().ok())
     {
-        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+        mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
         if let Some(context) = run_context.as_ref()
             && let Err(err) = rimz::harness::run::record_failure_tail(
                 context.store.paths(),
@@ -61,7 +61,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     );
     invocation.effective_isolation = Some(isolation);
     let fail = || {
-        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+        mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
         fail_run_on_exec_precondition(run_context.as_ref());
     };
     let adapter = rimz::agents::find_definition(envelope.request().kind.as_str());
@@ -74,7 +74,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         }),
     )
     .inspect_err(|_| fail())?;
-    let request = envelope
+    let mut request = envelope
         .materialize()
         .inspect_err(|_| fail())
         .context("materializing launch prompt")?;
@@ -83,6 +83,75 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .and_then(|state| rimz::RuntimePaths::for_state(&state).map(|runtime| (runtime, state)))
         .inspect_err(|_| fail())?;
     let ambient_env = rimz::agents::ambient_env();
+    let login = rimz::agents::room_login(
+        &state.workspace_record,
+        &machine_config.accounts,
+        &request.kind,
+    )
+    .inspect_err(|_| fail())?;
+    let recorded_model = match &request.action {
+        rimz::harness::launch::ExecAction::Launch { .. } => None,
+        rimz::harness::launch::ExecAction::Resume { session_id, .. }
+        | rimz::harness::launch::ExecAction::Fork { session_id, .. } => invocation
+            .store()
+            .and_then(|store| Ok(store.snapshot_cached()?))
+            .ok()
+            .and_then(|snapshot| {
+                find_agent(
+                    &snapshot.agents,
+                    &request.kind,
+                    &AgentSessionId::from(session_id.as_str()),
+                )
+                .and_then(|agent| agent.model.clone())
+            }),
+    };
+    let (warnings, movement) = rimz::harness::launch_plan::resolve_model(
+        &mut request,
+        &machine_config,
+        &runtime,
+        &login,
+        recorded_model.as_deref(),
+        None,
+        &ambient_env,
+    )
+    .inspect_err(|_| fail())?;
+    for warning in warnings {
+        let _ = writeln!(crate::cli::render::err(), "rimz: {warning}");
+    }
+    if let Some(movement) = movement {
+        let _ = writeln!(
+            crate::cli::render::err(),
+            "rimz: {} alias {} now resolves to {} (was {})",
+            request.kind,
+            movement.alias,
+            movement.to,
+            movement.from
+        );
+        if let Err(error) =
+            rimz::harness::assist_log::try_append(&rimz::harness::assist_log::AssistRecord {
+                at: jiff::Timestamp::now(),
+                assist: rimz::harness::assist_log::Assist::ModelAlias {
+                    kind: request.kind.clone(),
+                    login: login.key(),
+                    alias: movement.alias,
+                    from: movement.from,
+                    to: movement.to,
+                },
+            })
+        {
+            let _ = writeln!(
+                crate::cli::render::err(),
+                "rimz: could not record model alias move: {error}"
+            );
+        }
+    }
+    let mut launch_identity = provisional_identity.clone();
+    if let Some(identity) = &mut launch_identity {
+        identity
+            .launch
+            .model
+            .clone_from(&request.identity.params.model);
+    }
     let plan = rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
         request: &request,
         cwd: &invocation.cwd,

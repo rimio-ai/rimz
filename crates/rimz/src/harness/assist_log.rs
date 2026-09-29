@@ -26,6 +26,13 @@ pub struct AssistRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub enum Assist {
+    ModelAlias {
+        kind: AgentKind,
+        login: crate::ids::LoginKey,
+        alias: String,
+        from: String,
+        to: String,
+    },
     AutoRedeem {
         kind: String,
         reason: RedeemReason,
@@ -146,6 +153,10 @@ pub fn log_path(state_root: &Path) -> PathBuf {
 
 pub fn append(record: &AssistRecord) {
     append_to(&logs_dir(), record, MAX_BYTES);
+}
+
+pub fn try_append(record: &AssistRecord) -> std::io::Result<()> {
+    crate::disk::rotating::append_rotating_jsonl(&log_path(&logs_dir()), MAX_BYTES, record)
 }
 
 pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<AssistRecord> {
@@ -284,6 +295,16 @@ mod tests {
     #[test]
     fn variants_round_trip_through_the_wire_shape() {
         for record in [
+            AssistRecord {
+                at: ts(20),
+                assist: Assist::ModelAlias {
+                    kind: AgentKind::new_unchecked("codex"),
+                    login: "codex@default".parse().unwrap(),
+                    alias: "sol".into(),
+                    from: "gpt-6-sol".into(),
+                    to: "gpt-6.1-sol".into(),
+                },
+            },
             redeem(20, "request-1"),
             resumed(20),
             compacted(20),

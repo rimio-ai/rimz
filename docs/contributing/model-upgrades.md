@@ -10,16 +10,16 @@ A new family name, one that is not already an alias, needs an entry in that tabl
 
 ## Codex: astra, sol, luna, terra
 
-RimZ owns these aliases: `DEFINITIONS.models` in [`adapters/codex/mod.rs`](../../crates/rimz/src/agents/adapters/codex/mod.rs) expands each one to a pinned model id. A release means one commit:
+An existing family's new release needs no RimZ change. The exec wrapper resolves aliases from the selected account's Codex catalog at fresh launch, with a one-hour cache. The baked `DEFINITIONS.models` table in [`adapters/codex/mod.rs`](../../crates/rimz/src/agents/adapters/codex/mod.rs) is the offline fallback. See [catalog resolution](../internals/agents/adapter_codex.md#model-catalog-resolution) for version ordering and effort checks.
 
-1. Point the alias at the new id in `DEFINITIONS.models`, or add an entry for a new family name. A family without a successor keeps its old id.
+1. Add an entry in `DEFINITIONS.models` for a new family name, or update an existing family's offline fallback deliberately.
 2. Confirm the new model accepts `xhigh`, the Codex kind's default effort (`DEFINITIONS.effort`). If it does not, set `effort` on the entry. A seat whose effort the model rejects fails at every launch, so this is the step that breaks users when missed. The levels a Codex model accepts are its `supported_reasoning_levels` in `~/.codex/models_cache.json`, or `supportedReasoningEfforts` in the app-server [`model/list`](../externals/agent-adapter/codex-reference.md) response; the upstream `ReasoningEffort` enum is wider than any single model, so it cannot confirm a level.
 3. Update the alias rows in `model_catalog_and_defaults` in [`agents/tools.rs`](../../crates/rimz/src/agents/tools.rs).
 4. Update the alias sentence under [Chains and defaults](../reference/definitions.md#chains-and-defaults), the one home for the alias list.
 
 Run `cargo xtask test 'agents::tools'`, `cargo xtask test 'harness::spec'`, and `cargo xtask test 'config::definitions'`, then `cargo xtask docs-links`.
 
-No migration is needed. `config/definitions/agent.rs` expands the alias on every definition load, and resume, restart, and fork re-resolve the stored profile name through `resume::resolve_posture`, so every seat naming the alias moves to the new id at its next launch, restart, or resume. That includes a live agent's next restart, which switches its model mid-thread. A definition that names a full model id is a pin and stays where it is.
+Definitions and tier cells retain the requested alias. Resume, restart, and fork replay the session's last recorded model when their posture names an alias, including an observed `/model` switch. Without a recorded model they warn and resolve afresh. Full model ids pass through unchanged. Machine [model alias pins](../guide/configuration.md#model-aliases) override catalog resolution on fresh launches.
 
 ## Model tier bindings
 

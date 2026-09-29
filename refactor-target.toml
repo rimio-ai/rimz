@@ -299,7 +299,8 @@ allowed-dependencies = [
 # StatePaths::remove_root and RuntimePaths::remove_root let room replacement remove both whole trees.
 # Checked executable copying shares the durable publication funnel.
 # Sidebar workers lease account-global pixel slots through one classed lock accessor.
-surface-budget = 204
+# Assist logging exposes the checked rotating append for launch-time warnings (+1).
+surface-budget = 205
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -357,7 +358,8 @@ path = "crates/rimz/src/harness"
 # Launch finalization shares the tier table and profile-preference context with CLI doorways.
 # Caller-aware launch focus crosses the harness/CLI boundary.
 # `message --wait` claims the answer its printed reply came from through the run report ledger.
-surface-budget = 585
+# Exec resolves model postures and reports checked assist appends (+2).
+surface-budget = 587
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -865,7 +867,8 @@ allowed-dependencies = [
 # The exec wrapper and inspection share one read-only compiler and write boundary.
 # Apply refreshes the built-in consensus copy as best-effort enrichment.
 # Compile probes the provider cwd's shell and git state read-only for the launch reminder.
-surface-budget = 7
+# The exec wrapper resolves model aliases before the read-only compiler (+1).
+surface-budget = 8
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"

@@ -37,7 +37,7 @@ pub(crate) fn visit_records<T: DeserializeOwned>(path: &Path, mut visit: impl Fn
     }
 }
 
-fn append_rotating_jsonl<T: Serialize>(
+pub(crate) fn append_rotating_jsonl<T: Serialize>(
     path: &Path,
     max_bytes: u64,
     record: &T,

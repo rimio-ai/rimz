@@ -119,20 +119,10 @@ pub fn definition_model_kind(model: &str) -> Option<&'static str> {
         .map(|definition| definition.spec().kind)
 }
 
-pub(crate) fn expand_model_alias(kind: &str, model: &str) -> String {
-    definitions(kind)
-        .models
-        .iter()
-        .find(|entry| entry.name == model)
-        .map_or(model, |entry| entry.id)
-        .to_owned()
-}
-
 pub(crate) fn definition_defaults(kind: &str, requested_model: Option<&str>) -> DefinitionDefaults {
     let spec = definitions(kind);
     let effort = requested_model
         .and_then(|model| {
-            let expanded = expand_model_alias(kind, model);
             spec.models
                 .iter()
                 .find(|entry| entry.name == model)
@@ -140,7 +130,7 @@ pub(crate) fn definition_defaults(kind: &str, requested_model: Option<&str>) -> 
                 .or_else(|| {
                     spec.models
                         .iter()
-                        .find(|entry| entry.id == expanded)
+                        .find(|entry| entry.id == model)
                         .and_then(|entry| entry.effort)
                 })
         })
@@ -294,10 +284,14 @@ mod tests {
             ("luna", "gpt-6-luna"),
             ("terra", "gpt-5.6-terra"),
         ] {
-            assert_eq!(expand_model_alias("codex", alias), id);
+            assert!(
+                definitions("codex")
+                    .models
+                    .iter()
+                    .any(|entry| entry.name == alias && entry.id == id)
+            );
             assert_eq!(definition_model_kind(id), Some("codex"));
         }
-        assert_eq!(expand_model_alias("pi", "astra"), "astra");
         assert_eq!(
             definition_defaults("claude", Some("fable")),
             DefinitionDefaults {

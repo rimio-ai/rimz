@@ -104,7 +104,7 @@ The descriptor also sets `registers_lazily`, `ThreadKey::PerFile`, the `KeepPrim
 
 ### Model catalog resolution
 
-`crates/rimz/src/agents/capabilities.rs::LaunchCapability::resolve_model_alias` is the account-scoped domain seam; the default abstains. Codex recognizes only baked aliases whose name differs from their id. Full ids and unknown names never read or fetch a catalog. This seam is not yet called by the exec wrapper; load-time expansion remains in place until wrapper integration lands.
+`crates/rimz/src/agents/capabilities.rs::LaunchCapability::resolve_model_alias` is the account-scoped domain seam; the default abstains. Codex recognizes only baked aliases whose name differs from their id. Full ids and unknown names never read or fetch a catalog. The exec wrapper calls it after selecting the room login and before compiling the process and binding its launch identity; config load preserves the requested name. Machine pins take precedence. Resume and fork replay the session's recorded model for alias postures, resolving afresh with a warning only when none is recorded.
 
 `crates/rimz/src/agents/adapters/codex/model_alias.rs::select` matches exact `gpt-<numeric-version>-<family>` ids, excluding hidden entries and suffixed variants, and orders version components numerically. Each candidate follows visible, present upgrade targets with a cycle guard. The newest chain end supporting the requested effort wins; skipping the newest or finding no supporting model returns a warning. Without an effort, the newest wins.
 
