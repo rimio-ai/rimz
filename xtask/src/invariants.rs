@@ -691,13 +691,24 @@ fn ensure_integration_fixture_home(root: &Path, files: &[PathBuf]) -> Result<()>
     for needle in [
         concat!("WorkspaceResolver::", "resolve("),
         concat!("Paths::", "for_project_root("),
+        concat!("Paths::", "for_workspace("),
         concat!("persisted_", "project_root("),
         concat!("resolve_", "participant"),
     ] {
         ensure_no_match(
             files,
             needle,
-            |path| !path.starts_with(&tests_root),
+            |path| {
+                !path.starts_with(&tests_root)
+                    || (needle == concat!("Paths::", "for_workspace(")
+                        && (
+                            // Fixture binaries inherit their caller's pinned home.
+                            path.starts_with(tests_root.join("fixtures"))
+                                // The heartbeat stub must mirror the mount proof's ambient lookup
+                                // until that proof takes runtime paths; it creates only heartbeats.
+                                || path == tests_root.join("integration/backend/tmux/reconcile.rs")
+                        ))
+            },
             "integration identity must use the fixture home because the child runs under the fixture's RIMZ_HOME — use common::Env::resolve_workspace, or pass the fixture home to resolve_under / StatePaths::for_project_root_under",
         )?;
     }
