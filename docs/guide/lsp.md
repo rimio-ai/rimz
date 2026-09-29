@@ -150,7 +150,15 @@ A note can name a symbol that does not exist or point at an old line. Before han
 rimz lsp check notes.md
 ```
 
-Fix each flagged path, symbol, or line and rerun. A path suffix that names several files needs more of the path. The summary counts what passed, failed, remained unchecked, or was external; `unchecked` means no server covers that language, so verify those anchors by hand. Cite another repository with `owner/repo@ref:path::Symbol` or `owner/repo@ref:path:~N`: these count as `external`, without being verified or flagged as failures. The [reference](../reference/cli/lsp.md#check-anchors-in-a-notes-file) defines the accepted anchors and JSON output.
+When a symbol still exists but its line hint has drifted, refresh the hint instead of editing each number by hand:
+
+```sh
+rimz lsp check notes.md --fix
+```
+
+This rewrites only existing hint digits for uniquely resolved symbols, then checks the updated notes. It preserves hint syntax and leaves ambiguous symbols, line-only anchors, and files with unsaved editor changes alone. Review the notes diff to keep or undo the changed hints. A second run with no changed hints leaves the file untouched.
+
+Fix remaining flagged paths, symbols, or lines and rerun. A path suffix that names several files needs more of the path. The summary counts what passed, failed, remained unchecked, or was external; `unchecked` means no server covers that language, so verify those anchors by hand. Cite another repository with `owner/repo@ref:path::Symbol` or `owner/repo@ref:path:~N`: these count as `external`, without being verified or flagged as failures. The [reference](../reference/cli/lsp.md#check-anchors-in-a-notes-file) defines the accepted anchors and JSON output.
 
 ## See what is running, and stop it
 

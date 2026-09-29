@@ -5,6 +5,72 @@ fn anchor(text: &str) -> Anchor {
     extract(&format!("`{text}`")).pop().unwrap()
 }
 
+fn rewrite_hints(source: &str, dirty: bool) -> String {
+    let servers = BTreeMap::from([(
+        "rust".into(),
+        serde_json::from_value(json!({
+            "command": ["stub"], "extensions": ["rs"], "root-markers": []
+        }))
+        .unwrap(),
+    )]);
+    let mut nodes = symbols();
+    nodes[3].selection.start.line = 11;
+    nodes[3].selection.start.character = 4;
+    let mut context = Context {
+        checkout: Path::new("/checkout"),
+        entries: &[],
+        servers: &servers,
+        files: vec!["a.rs".into()],
+        outlines: BTreeMap::from([("a.rs".into(), FileOutline { nodes, dirty })]),
+    };
+    fix::rewrite(source, &mut context).unwrap().0
+}
+
+#[test]
+fn fix_preserves_hint_forms_and_every_other_byte() {
+    for old in [1, 12] {
+        for (before, after) in [
+            (format!("~{old}"), "~11"),
+            (format!(":{old}"), ":11"),
+            (format!("({old})"), "(11)"),
+            (format!("~{old}-{}", old + 1), "~11-16"),
+            (format!("({old}-{})", old + 1), "(11-16)"),
+            (format!(":{old}:99"), ":12:5"),
+            (format!("({old}:99)"), "(12:5)"),
+        ] {
+            for (source, expected) in [
+                (
+                    format!("é `a.rs::Type::method {before}` tail\r\n"),
+                    format!("é `a.rs::Type::method {after}` tail\r\n"),
+                ),
+                (
+                    format!("é `a.rs::Type::method` {before} tail\n"),
+                    format!("é `a.rs::Type::method` {after} tail\n"),
+                ),
+                (
+                    format!("é `` a.rs::Type::method {before} `` tail\n"),
+                    format!("é `` a.rs::Type::method {after} `` tail\n"),
+                ),
+            ] {
+                assert_eq!(rewrite_hints(&source, false), expected, "{source}");
+                assert_eq!(rewrite_hints(&expected, false), expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn fix_skips_dirty_ambiguous_and_unmappable_anchors() {
+    let source = "`a.rs::Type::method ~90`";
+    assert_eq!(rewrite_hints(source, true), source);
+    let source = "`a.rs::load ~93` `a.rs::absent ~99` `a.rs::Type::method` `a.rs:99` `o/r@v1:a.rs::Type::method ~99` `a.rs::Type::method\n~99`";
+    assert_eq!(rewrite_hints(source, false), source);
+    assert_eq!(
+        rewrite_hints("``a.rs::Type::method()`` (~99-100)", false),
+        "``a.rs::Type::method()`` (~11-16)"
+    );
+}
+
 fn node(
     name: &str,
     kind: u32,
@@ -57,6 +123,14 @@ fn symbols() -> Vec<Candidate> {
         )
     ]))
     .unwrap()
+}
+
+#[test]
+fn bare_ranges_after_symbol_anchors_remain_prose() {
+    let anchors = extract("`a.rs::X` 2020-2024");
+    assert_eq!(anchors.len(), 1);
+    assert_eq!(anchors[0].hint, None);
+    assert_eq!(anchors[0].text, "a.rs::X");
 }
 
 #[test]
@@ -292,7 +366,7 @@ fn external_only_report_needs_no_server_or_checkout_path() {
     let notes = root.path().join("notes.md");
     let text = "o/r@v1:absent.rs::f (~12)";
     std::fs::write(&notes, format!("`{text}`")).unwrap();
-    let report = run(&notes, root.path(), &[], &BTreeMap::new()).unwrap();
+    let report = run(&notes, root.path(), &[], &BTreeMap::new(), false).unwrap();
     assert_eq!(report.exit_code(), 0);
     let rendered = report.render(false).unwrap();
     assert_eq!(rendered.lines().count(), 1);

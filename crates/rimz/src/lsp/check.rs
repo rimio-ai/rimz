@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 const LINE_SLACK: u32 = 3;
 
+mod fix;
 mod show;
 pub use show::show;
 
@@ -17,6 +18,7 @@ pub fn run(
     root: &Path,
     entries: &[registry::Entry],
     servers: &BTreeMap<String, crate::config::LspServerConfig>,
+    fix: bool,
 ) -> Result<Report, query::QueryErr> {
     let source = std::fs::read_to_string(notes)
         .map_err(|error| {
@@ -27,6 +29,17 @@ pub fn run(
         })
         .map_err(LspErr::from)?;
     let mut context = Context::new(root, entries, servers)?;
+    let (source, fixes) = if fix {
+        let (updated, fixes) = fix::rewrite(&source, &mut context)?;
+        if !fixes.is_empty() {
+            let target = std::fs::canonicalize(notes).map_err(LspErr::from)?;
+            crate::disk::atomic::write_bytes_atomically(&target, updated.as_bytes())
+                .map_err(LspErr::from)?;
+        }
+        (updated, Some(fixes))
+    } else {
+        (source, None)
+    };
     let mut lengths = BTreeMap::new();
     let mut verdicts = Vec::new();
     for anchor in extract(&source) {
@@ -58,7 +71,9 @@ pub fn run(
         };
         verdicts.push(check_symbol(anchor, path, &file.nodes));
     }
-    Ok(Report::new(notes, root, verdicts))
+    let mut report = Report::new(notes, root, verdicts);
+    report.fixes = fixes;
+    Ok(report)
 }
 
 struct Context<'a> {
@@ -217,6 +232,8 @@ struct Anchor {
     path: String,
     symbol: Option<Vec<String>>,
     hint: Option<[u32; 2]>,
+    hint_text: Option<std::ops::Range<usize>>,
+    hint_source: Option<std::ops::Range<usize>>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -266,6 +283,8 @@ pub struct Report {
     checkout: PathBuf,
     anchors: Vec<Verdict>,
     summary: Summary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fixes: Option<Vec<fix::Fix>>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -299,6 +318,7 @@ impl Report {
             checkout: checkout.into(),
             anchors,
             summary,
+            fixes: None,
         }
     }
 
@@ -311,6 +331,15 @@ impl Report {
             return Ok(format!("{}\n", serde_json::to_string_pretty(self)?));
         }
         let mut text = String::new();
+        for fix in self.fixes.iter().flatten() {
+            text.push_str(&format!(
+                "{}:{}  fixed  {}  {}\n",
+                self.notes.display(),
+                fix.line,
+                fix.before,
+                fix.after
+            ));
+        }
         for anchor in &self.anchors {
             let status = match anchor.status {
                 Status::Ok | Status::External => continue,
@@ -373,11 +402,32 @@ fn extract(notes: &str) -> Vec<Anchor> {
         let Some(mut anchor) = qualified.or_else(|| parse_anchor(&code, line)) else {
             continue;
         };
+        let raw = &notes[offset.clone()];
+        let delimiter = raw.bytes().take_while(|byte| *byte == b'`').count();
+        let content = &raw[delimiter..raw.len() - delimiter];
+        let padding = usize::from(
+            content
+                .strip_prefix(' ')
+                .and_then(|text| text.strip_suffix(' '))
+                == Some(code.as_ref()),
+        );
+        let mapped = content.get(padding..content.len() - padding) == Some(code.as_ref());
+        if mapped && anchor.qualifier.is_none() {
+            let start = offset.start + delimiter + padding;
+            anchor.hint_source = anchor
+                .hint_text
+                .as_ref()
+                .map(|hint| start + hint.start..start + hint.end);
+        }
         if anchor.hint.is_none()
-            && let Some((Event::Text(following), _)) = events.peek()
+            && let Some((Event::Text(following), following_offset)) = events.peek()
             && let Some((found, end)) = parse_hint(following, false)
         {
             anchor.hint = Some(found);
+            anchor.hint_text = Some(anchor.text.len()..anchor.text.len() + end);
+            if mapped && notes[following_offset.clone()].starts_with(&following[..end]) {
+                anchor.hint_source = Some(following_offset.start..following_offset.start + end);
+            }
             anchor.text.push_str(&following[..end]);
         }
         anchors.push(anchor);
@@ -394,7 +444,7 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
     {
         return None;
     }
-    let (symbol, hint) = if let Some(raw) = rest.strip_prefix(':') {
+    let (symbol, hint, hint_text) = if let Some(raw) = rest.strip_prefix(':') {
         let mut depth = 0_u32;
         let end = raw
             .char_indices()
@@ -424,16 +474,20 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
         }
         let tail = &raw[end..];
         let hint = parse_hint(tail, false)
+            .map(|hint| (tail, hint))
             .or_else(|| {
                 tail.strip_prefix('(')
                     .and_then(|tail| tail.split_once(')'))
-                    .and_then(|(_, tail)| parse_hint(tail, false))
-            })
-            .map(|(hint, _)| hint);
-        (Some(chain), hint)
+                    .and_then(|(_, tail)| parse_hint(tail, false).map(|hint| (tail, hint)))
+            });
+        let hint_text = hint.map(|(tail, (_, consumed))| {
+            let start = code.len() - tail.len();
+            start..start + consumed
+        });
+        (Some(chain), hint.map(|(_, (lines, _))| lines), hint_text)
     } else {
         let (hint, _) = parse_hint(rest, true)?;
-        (None, Some(hint))
+        (None, Some(hint), None)
     };
     Some(Anchor {
         qualifier: None,
@@ -442,6 +496,8 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
         path: path.into(),
         symbol,
         hint,
+        hint_text,
+        hint_source: None,
     })
 }
 
