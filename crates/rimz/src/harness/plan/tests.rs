@@ -35,8 +35,9 @@ fn cli_model_tiers_resolve_each_family_and_refuse_a_runtime_switch() {
     .unwrap_err()
     .to_string();
     assert!(
-        error.contains("codex has no model at that tier")
-            && error.contains("`--agent claude --model principal`"),
+        error.contains(
+            "only claude has a principal model (fable); codex tiers are senior (astra), junior (sol), intern (luna). To run fable, use `--agent claude --model principal`"
+        ),
         "{error}"
     );
     for (kind, tier, effort, expected_kind, model, expected_effort) in [

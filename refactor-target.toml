@@ -237,7 +237,8 @@ upward-dependencies = [
 # Pass 26a: tightened config surface; config/lsp reopens after 30 scoped commits.
 # Pass 26c: the prompt-cache margin moved in from harness::idle_compact (+1).
 # Machine tiers expose the shared resolver and definition provenance to launch consumers.
-surface-budget = 177
+# TierConfig::family_tiers lists a family's tiers for the CLI cross-family refusal (+1).
+surface-budget = 178
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

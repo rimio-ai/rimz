@@ -656,14 +656,39 @@ fn resolve_tier_override(
         // A rebase would drop the definition's rendered tool limits, so the
         // runtime switch stays an explicit `--agent`.
         if cell.kind.as_str() != resolved.kind {
-            let reason = if resolved.kind == preferred {
-                format!("the profile prefers {preferred}")
+            let fix = format!("`--agent {} --model {tier}`", resolved.kind);
+            if resolved.kind == preferred {
+                return Err(fail(format!(
+                    "resolves to {} {}, but this agent runs on {} (the profile prefers {preferred}); to switch runtimes, run with {fix}",
+                    resolved.kind, resolved.model, cell.kind
+                )));
+            }
+            let has_tier = |family: &str| {
+                context
+                    .table
+                    .family_tiers(family)
+                    .iter()
+                    .any(|(cell_tier, _)| *cell_tier == tier)
+            };
+            let supplier = if has_tier(&resolved.kind) {
+                format!("only {} has a {tier} model", resolved.kind)
             } else {
-                format!("{preferred} has no model at that tier")
+                format!("only {} has a model at {tier} or above", resolved.kind)
+            };
+            let listed = context
+                .table
+                .family_tiers(preferred)
+                .iter()
+                .map(|(cell_tier, model)| format!("{cell_tier} ({model})"))
+                .collect::<Vec<_>>();
+            let own = if listed.is_empty() {
+                format!("{preferred} has no tiers configured")
+            } else {
+                format!("{preferred} tiers are {}", listed.join(", "))
             };
             return Err(fail(format!(
-                "resolves to {} {}, but this agent runs on {} ({reason}); to switch runtimes, run with `--agent {} --model {tier}`",
-                resolved.kind, resolved.model, cell.kind, resolved.kind
+                "{supplier} ({}); {own}. To run {}, use {fix}",
+                resolved.model, resolved.model
             )));
         }
         preset.model = Some(resolved.model);

@@ -165,6 +165,19 @@ impl<'de> Deserialize<'de> for TierConfig {
 pub struct TierError(String);
 
 impl TierConfig {
+    /// The tiers `family` has a model for, highest first, as written in config.
+    pub fn family_tiers(&self, family: &str) -> Vec<(ModelTier, &str)> {
+        self.0
+            .iter()
+            .rev()
+            .filter_map(|(tier, row)| {
+                row.iter()
+                    .find(|(cell_family, _)| cell_family.kind() == family)
+                    .map(|(_, cell)| (*tier, cell.model.as_str()))
+            })
+            .collect()
+    }
+
     pub fn resolve(
         &self,
         tier: ModelTier,
