@@ -18,7 +18,7 @@ sleep 600
     let mut opts = sidebar_opts("rimz-replace-width", stub, Some(240));
     opts.workspace_id = WorkspaceId::from_project_root(room.path());
     let runtime = RuntimePaths::for_workspace(opts.workspace_id.clone()).unwrap();
-    runtime.ensure_dirs().unwrap();
+    std::fs::create_dir_all(&runtime.heartbeat_dir).unwrap();
     let mut heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
         opts.workspace_id.clone(),
         SidebarInstanceId::new(),

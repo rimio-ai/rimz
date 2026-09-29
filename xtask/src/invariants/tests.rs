@@ -48,6 +48,8 @@ fn integration_identity_requires_fixture_home() {
             concat!("WorkspaceResolver::", "resolve("),
             concat!("StatePaths::", "for_project_root("),
             concat!("RuntimePaths::", "for_project_root("),
+            concat!("StatePaths::", "for_workspace("),
+            concat!("RuntimePaths::", "for_workspace("),
             concat!("WorkspaceResolver::", "persisted_project_root("),
             concat!(
                 "WorkspaceResolver::",
@@ -69,6 +71,17 @@ fn integration_identity_requires_fixture_home() {
     let outside = root.join("caller.rs");
     std::fs::write(&outside, concat!("WorkspaceResolver::", "resolve(")).unwrap();
     ensure_integration_fixture_home(&root, &[outside]).unwrap();
+    for relative in [
+        "fixtures/zellij-trace/main.rs",
+        "integration/backend/tmux/reconcile.rs",
+    ] {
+        let path = tests.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, concat!("RuntimePaths::", "for_workspace(")).unwrap();
+        ensure_integration_fixture_home(&root, std::slice::from_ref(&path)).unwrap();
+        std::fs::write(&path, concat!("RuntimePaths::", "for_project_root(")).unwrap();
+        assert!(ensure_integration_fixture_home(&root, &[path]).is_err());
+    }
     std::fs::remove_dir_all(root).unwrap();
 }
 
