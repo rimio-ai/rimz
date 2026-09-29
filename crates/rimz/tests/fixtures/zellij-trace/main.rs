@@ -3,6 +3,7 @@
 //! Writes one `argv0\targv1\t...\n` line per invocation to `$RIMZ_TEST_ZELLIJ_LOG`, then returns a small zellij-shaped response or applies stateful filesystem side effects.
 //! Tests set `$RIMZ_TEST_ZELLIJ_MODE` for injected write and session-birth failures.
 //! `$RIMZ_TEST_ZELLIJ_VERSION` overrides the default 0.44.3 version.
+//! `$RIMZ_TEST_ZELLIJ_TRACE_CONTEXT` prefixes each trace with its pane context; `list-tabs` reflects recorded tab launches.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -31,6 +32,7 @@ enum Invocation<'a> {
 enum ActionQuery {
     Clients,
     Panes,
+    Tabs,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,12 +48,18 @@ fn main() {
     let log_path = env::var_os("RIMZ_TEST_ZELLIJ_LOG").expect("RIMZ_TEST_ZELLIJ_LOG unset");
     let log_path = std::path::PathBuf::from(log_path);
     let args = env::args().collect::<Vec<_>>();
-    let line = args.join("\t");
+    let mut line = args.join("\t");
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
         .expect("open trace log");
+    if env::var_os("RIMZ_TEST_ZELLIJ_TRACE_CONTEXT").is_some() {
+        line = format!(
+            "pane={}\t{line}",
+            env::var("ZELLIJ_PANE_ID").unwrap_or_default()
+        );
+    }
     writeln!(file, "{line}").expect("write trace line");
 
     let cli = &args[1..];
@@ -61,7 +69,7 @@ fn main() {
             env::var("RIMZ_TEST_ZELLIJ_VERSION").unwrap_or_else(|_| "0.44.3".to_owned())
         )),
         Invocation::ListSessions => handle_list_sessions(&log_path),
-        Invocation::ActionQuery(query) => handle_action_query(query),
+        Invocation::ActionQuery(query) => handle_action_query(query, &log_path),
         Invocation::PresenceBoot {
             session,
             configuration,
@@ -100,6 +108,9 @@ fn classify_leading_invocation(cli: &[String]) -> Option<Invocation<'_>> {
 }
 
 fn classify_nested_invocation(cli: &[String]) -> Option<Invocation<'_>> {
+    if has_pair(cli, "action", "list-tabs") {
+        return Some(Invocation::ActionQuery(ActionQuery::Tabs));
+    }
     if has_pair(cli, "action", "list-clients") {
         return Some(Invocation::ActionQuery(ActionQuery::Clients));
     }
@@ -157,10 +168,22 @@ fn handle_list_sessions(log_path: &Path) {
     std::process::exit(1);
 }
 
-fn handle_action_query(query: ActionQuery) {
+fn handle_action_query(query: ActionQuery, log_path: &Path) {
     match query {
         ActionQuery::Clients => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_CLIENTS"),
         ActionQuery::Panes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
+        ActionQuery::Tabs => {
+            let trace = std::fs::read_to_string(log_path).expect("read tab launches");
+            let mut tabs =
+                vec![serde_json::json!({"name": "main", "selectable_tiled_panes_count": 1})];
+            tabs.extend(trace.lines().filter_map(|line| {
+                let args = line.split('\t').map(str::to_owned).collect::<Vec<_>>();
+                has_pair(&args, "action", "new-tab").then(|| {
+                    serde_json::json!({"name": arg_after(&args, "--name"), "selectable_tiled_panes_count": 1})
+                })
+            }));
+            write_stdout(&serde_json::to_string(&tabs).expect("serialize tabs"));
+        }
     }
 }
 

@@ -242,6 +242,8 @@ Room birth also carries one adapter-enrichment environment map through the mux s
 
 ### Placement
 
+`crates/rimz/src/harness/ancestry.rs::LaunchFocus` resolves the shared focus policy from `--bg` and the caller identity: `Keep` for either an agent caller or `--bg`, otherwise `Take`. Interactive launch shares its caller resolution with ancestry stamping; fork, lane resume, and restart resolve from their loaded agents, and team restart passes one decision to every member. `Keep` also suppresses already-live cohort and lane jumps and downgrades in-place launches to splits. Restart skips pre-focus and anchors its unfocused replacement to the old pane in the room session. The supervised `-p` return-now meaning of `--bg` is unchanged. See [multiplexer focus behavior](../multiplexers.md) for the Zellij 0.44 transient.
+
 A layout lands in a new tab, a split of the current tab, or, for a single non-worktree cell, the pane the user is already sitting in. Both backends receive the same `TabOptions` (session, title, cwd, focus flag, sidebar options, the pre-built pane argv, and the environment map for every command pane) and dock the global sidebar once before adding the layout cells; the per-backend split commands live in [`mux/`](../../../crates/rimz/src/mux/AGENTS.md).
 
 **Placement resolves before the launch touches the store or creates a worktree**, so a rejected placement leaves no provisional rows or orphan worktree behind. The CLI placement resolver takes explicit flags first, then falls back to the per-machine [`[agents] placement`](../../guide/configuration.md#agent-profiles-commands-and-teams) policy.
@@ -254,7 +256,7 @@ A layout lands in a new tab, a split of the current tab, or, for a single non-wo
 | policy `pane`, single non-worktree cell, inside a room | a split of the current tab |
 | policy `tab` | always a new tab |
 | any policy, with a named channel, a multi-cell layout, or a worktree | a new tab |
-| `--bg`, or create-on-miss | never in place: the caller's pane stays available, so an in-place choice downgrades to a split |
+| `--bg`, an agent caller, or create-on-miss | never in place: the caller's pane stays available, so an in-place choice downgrades to a split |
 
 An in-place launch resolves liveness from the pane instead of from an end trace, because no wrapper stays resident to write one.
 
@@ -271,7 +273,7 @@ It derives the named worktree path without creating it, reads the audit rollup f
 | History in that worktree | Outcome |
 | --- | --- |
 | none | continue into the ordinary launch path |
-| live members | focus the newest bound member and exit |
+| live members | focus the newest bound member and exit under `LaunchFocus::Take`; under `Keep`, report already running without a jump |
 | closed, with dirty or unproven work | offer resume / fresh / cancel, default resume |
 | closed, clean and content-landed | offer remove / fresh / cancel, default cancel |
 
@@ -346,6 +348,8 @@ The store remembers agents whose processes are gone, and resume turns those reco
 | Lane resume | `rimz agents resume <scope>` | one lane, resolved by `harness::resume` |
 
 Rebirth restores a named team in its declared layout, resuming members that can resume and fresh-launching missing or unsupported agent cells so the shape stays whole; other lanes restore as one column. Cohort resume scopes to one exact worktree with `-w <NAME>` or the caller's current worktree, while a resume from the project root takes the newest match for the spec.
+
+The CLI applies `LaunchFocus` to every lane action: `Keep` reports an already-live lane without a jump and opens restored tabs and splits unfocused.
 
 Lane resume picks one of four `LaneResumeAction` variants: `List` when no scope was given, `Focus` on the freshest pane when every member is live, `SplitClosed` to plan flat resume commands beside a surviving live member, and `RestoreClosed` to reuse the rebirth team and flat split when every member is closed. Discovery drops sessions the store records as children before selecting the newest concurrent set, for both listing and restoration. In every case the CLI preflights the planned provider kinds through `LaneResumeAction::agent_kinds_needing_preflight` before `LaneRestorePlan::materialize` allocates fresh team identities or any mux action runs, so a missing provider binary fails before it half-rebuilds a room.
 

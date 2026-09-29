@@ -152,6 +152,10 @@ pub(super) fn focus(
 pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
+    let focus = rimz::harness::ancestry::LaunchFocus::resolve(
+        false,
+        rimz::harness::ancestry::resolve_caller(&snapshot.agents).as_ref(),
+    );
     let mut cohort = select(team, worktree, ctx.channel(), &snapshot.agents)?;
     let peers = rimz::address::addressable_agents(&snapshot);
     cohort
@@ -161,7 +165,7 @@ pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags)
     let mut out = render::out();
     for agent in cohort.members.iter().copied() {
         let label = rimz::address::agent_handle(agent, &peers, true);
-        match agents_cmd::restart_resolved(&ctx, agent, &peers) {
+        match agents_cmd::restart_resolved(&ctx, agent, &peers, focus) {
             Ok(message) => writeln!(out, "{message}")?,
             Err(err) => {
                 failed = true;

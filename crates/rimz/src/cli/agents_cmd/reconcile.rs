@@ -1,4 +1,5 @@
 use super::*;
+use rimz::harness::ancestry::LaunchFocus;
 use std::io::IsTerminal;
 
 pub(super) enum Reconciled {
@@ -18,6 +19,7 @@ pub(super) fn reconcile_cohort_launch(
     team: Option<&str>,
     cells: &[rimz::harness::plan::CohortCell],
     fresh: bool,
+    focus: LaunchFocus,
 ) -> Result<Reconciled> {
     let path = cohort_worktree_path(workspace, &machine_config.agents.worktree, name)?;
     if !path.exists() {
@@ -28,7 +30,9 @@ pub(super) fn reconcile_cohort_launch(
     match rimz::harness::resume::inspect_cohort_relaunch(&projection.agents, &path, cells, team) {
         rimz::harness::resume::CohortRelaunchState::Absent => Ok(Reconciled::Continue),
         rimz::harness::resume::CohortRelaunchState::Present { focus_pane } => {
-            if let Some(pane_id) = focus_pane {
+            if focus.takes_focus()
+                && let Some(pane_id) = focus_pane
+            {
                 let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
                 rimz::mux::focus_anchor::execute_action(
                     backend,

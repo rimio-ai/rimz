@@ -6,6 +6,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use rimz::config::LaunchPlacement;
+use rimz::harness::ancestry::LaunchFocus;
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{
     LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, SplitPaneOptions, SplitPlacement,
@@ -63,7 +64,7 @@ pub(super) fn resolve_placement(
 pub(super) fn resolve_fork_placement(
     new_tab: bool,
     new_pane: bool,
-    bg: bool,
+    focus: LaunchFocus,
     has_launching_pane: bool,
 ) -> Result<Placement> {
     let placement = resolve_placement(
@@ -74,15 +75,15 @@ pub(super) fn resolve_fork_placement(
         true,
         has_launching_pane,
     )?;
-    Ok(apply_in_place_downgrade(placement, bg, true))
+    Ok(apply_in_place_downgrade(placement, focus, true))
 }
 
 pub(super) fn apply_in_place_downgrade(
     placement: Placement,
-    bg: bool,
+    focus: LaunchFocus,
     allow_in_place: bool,
 ) -> Placement {
-    if placement == Placement::SamePane && (bg || !allow_in_place) {
+    if placement == Placement::SamePane && (!focus.takes_focus() || !allow_in_place) {
         Placement::NewPane
     } else {
         placement
@@ -105,7 +106,7 @@ pub(super) struct PlacementRequest {
     pub panes: LayoutPanes,
     pub sidebar: SidebarPaneOptions,
     pub identity_env: BTreeMap<String, String>,
-    pub background: bool,
+    pub focus: LaunchFocus,
     pub errors: PlacementErrors,
 }
 
@@ -190,7 +191,7 @@ fn prepare_resolved(
         panes,
         sidebar,
         identity_env,
-        background,
+        focus,
         ..
     } = request;
     Ok(match placement {
@@ -198,7 +199,7 @@ fn prepare_resolved(
             env: identity_env,
             title,
             panes,
-            focus: !background,
+            focus: focus.takes_focus(),
             dock_sidebar: true,
             after: None,
             sidebar,
@@ -209,7 +210,7 @@ fn prepare_resolved(
                 target: target_pane_id.map_or(SplitTarget::Ambient, SplitTarget::Pane),
                 env: identity_env,
                 placement: SplitPlacement::Directional(direction),
-                focus: !background,
+                focus: focus.takes_focus(),
                 ..SplitPaneOptions::from_command(pane, &cwd)
             })
         }
@@ -297,7 +298,7 @@ mod tests {
                 refresh_ms: None,
             },
             identity_env: BTreeMap::from([("RIMZ_PROJECT_MODE".to_owned(), "1".to_owned())]),
-            background: true,
+            focus: LaunchFocus::Keep,
             errors: PlacementErrors {
                 new_tab: "tab context",
                 new_pane: "pane context",
@@ -308,42 +309,47 @@ mod tests {
 
     #[test]
     fn prepares_new_tab_options() {
-        let PreparedPlacement::NewTab(options) =
-            prepare_resolved(request(Placement::NewTab), Some((120, 40)), None).unwrap()
-        else {
-            panic!("new tab placement");
-        };
-        assert_eq!(options.sidebar.session_name, "room");
-        assert_eq!(options.title, "#lane");
-        assert_eq!(options.env["RIMZ_PROJECT_MODE"], "1");
-        assert_eq!(options.sidebar.cwd, Path::new("/work"));
-        assert_eq!(options.panes.columns[0].panes[0].argv, ["rimz", "agents"]);
-        assert!(!options.focus);
-        assert!(options.dock_sidebar);
-        assert_eq!(options.sidebar.session_name, "room");
+        for focus in [LaunchFocus::Keep, LaunchFocus::Take] {
+            let mut request = request(Placement::NewTab);
+            request.focus = focus;
+            let PreparedPlacement::NewTab(options) =
+                prepare_resolved(request, Some((120, 40)), None).unwrap()
+            else {
+                panic!("new tab placement");
+            };
+            assert_eq!(options.sidebar.session_name, "room");
+            assert_eq!(options.title, "#lane");
+            assert_eq!(options.env["RIMZ_PROJECT_MODE"], "1");
+            assert_eq!(options.sidebar.cwd, Path::new("/work"));
+            assert_eq!(options.panes.columns[0].panes[0].argv, ["rimz", "agents"]);
+            assert_eq!(options.focus, focus == LaunchFocus::Take);
+            assert!(options.dock_sidebar);
+            assert_eq!(options.sidebar.session_name, "room");
+        }
     }
 
     #[test]
     fn prepares_new_pane_options() {
-        let target = PaneId::from_parts(MuxName::Tmux, "%7");
-        let PreparedPlacement::NewPane(options) = prepare_resolved(
-            request(Placement::NewPane),
-            Some((120, 40)),
-            Some(target.clone()),
-        )
-        .unwrap() else {
-            panic!("new pane placement");
-        };
-        assert_eq!(options.target, SplitTarget::Pane(target));
-        assert_eq!(options.cwd.as_deref(), Some("/work"));
-        assert_eq!(
-            options.command.as_deref(),
-            Some(&["rimz".to_owned(), "agents".to_owned()][..])
-        );
-        assert_eq!(options.env["RIMZ_PROJECT_MODE"], "1");
-        assert_eq!(options.title.as_deref(), Some("codex"));
-        assert_eq!(options.placement, SplitPlacement::default());
-        assert!(!options.focus);
+        for focus in [LaunchFocus::Keep, LaunchFocus::Take] {
+            let mut request = request(Placement::NewPane);
+            request.focus = focus;
+            let target = PaneId::from_parts(MuxName::Tmux, "%7");
+            let PreparedPlacement::NewPane(options) =
+                prepare_resolved(request, Some((120, 40)), Some(target.clone())).unwrap()
+            else {
+                panic!("new pane placement");
+            };
+            assert_eq!(options.target, SplitTarget::Pane(target));
+            assert_eq!(options.cwd.as_deref(), Some("/work"));
+            assert_eq!(
+                options.command.as_deref(),
+                Some(&["rimz".to_owned(), "agents".to_owned()][..])
+            );
+            assert_eq!(options.env["RIMZ_PROJECT_MODE"], "1");
+            assert_eq!(options.title.as_deref(), Some("codex"));
+            assert_eq!(options.placement, SplitPlacement::default());
+            assert_eq!(options.focus, focus == LaunchFocus::Take);
+        }
     }
 
     #[test]
@@ -412,8 +418,18 @@ mod tests {
             resolve_placement(false, true, LaunchPlacement::Auto, true, true, true).unwrap(),
             NewPane
         );
-        assert_eq!(apply_in_place_downgrade(SamePane, true, true), NewPane);
-        assert_eq!(apply_in_place_downgrade(SamePane, false, false), NewPane);
+        assert_eq!(
+            apply_in_place_downgrade(SamePane, LaunchFocus::Keep, true),
+            NewPane
+        );
+        assert_eq!(
+            apply_in_place_downgrade(SamePane, LaunchFocus::Take, false),
+            NewPane
+        );
+        assert_eq!(
+            apply_in_place_downgrade(SamePane, LaunchFocus::Take, true),
+            SamePane
+        );
 
         let multi =
             resolve_placement(false, true, LaunchPlacement::Auto, false, false, true).unwrap_err();
@@ -435,7 +451,8 @@ mod tests {
             (false, false, false, false, NewTab),
         ] {
             assert_eq!(
-                resolve_fork_placement(new_tab, new_pane, bg, has_pane).unwrap(),
+                resolve_fork_placement(new_tab, new_pane, LaunchFocus::resolve(bg, None), has_pane)
+                    .unwrap(),
                 expected
             );
         }

@@ -346,7 +346,8 @@ path = "crates/rimz/src/harness"
 # The team run's open, reopen and settle calls let `rimz teams flip` send TEAM_REPORT.
 # Posture-owned exec request construction shared by relaunch doorways (pass 28f).
 # Launch finalization shares the tier table and profile-preference context with CLI doorways.
-surface-budget = 581
+# Caller-aware launch focus crosses the harness/CLI boundary.
+surface-budget = 584
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -735,7 +736,8 @@ allowed-dependencies = [
     "proc",
 ]
 # `check_launch_room` shares the pure pinned-room decision with the CLI launch entries.
-surface-budget = 11
+# `LaunchFocus` shares caller-aware focus policy across interactive launch doors.
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/harness/plan.rs"

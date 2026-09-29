@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::cli::machine_config;
+use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
@@ -43,6 +44,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     let snapshot = ctx.alive_snapshot()?;
+    let focus = LaunchFocus::resolve(args.bg, resolve_caller(&snapshot.agents).as_ref());
     let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
     let mut seed = validate_fork_source(
         &source,
@@ -115,7 +117,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let placement = resolve_fork_placement(
         args.new_tab,
         args.new_pane,
-        args.bg,
+        focus,
         rimz::mux::ambient_pane_id().is_some(),
     )?;
     let room = RoomContext::live_tab(workspace, config.clone(), globals.mux)?;
@@ -197,7 +199,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 channel.as_deref(),
                 false,
             ),
-            background: args.bg,
+            focus,
             errors: PlacementErrors {
                 new_tab: "opening agent fork tab",
                 new_pane: "splitting the agent fork into a new pane",

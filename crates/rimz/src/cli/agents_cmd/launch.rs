@@ -3,6 +3,7 @@
 use super::*;
 use crate::cli::ctx::Ctx;
 use crate::cli::{machine_config, render, report_unknown_config_keys};
+use rimz::harness::ancestry::{self, LaunchFocus};
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
@@ -152,8 +153,13 @@ pub(super) fn launch_layout(
         )?;
     }
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let ancestry = rimz::harness::ancestry::resolve_launch_ancestry_here(
-        &projection.agents,
+    let caller = ancestry::resolve_caller(&projection.agents);
+    let focus = LaunchFocus::resolve(args.launch.cohort.bg, caller.as_ref());
+    let ancestry = ancestry::resolve_launch_ancestry(
+        caller
+            .as_ref()
+            .map(|caller| ancestry::resolve_launch_caller(&projection.agents, caller))
+            .transpose()?,
         false,
         machine_config.agents.max_chain_length,
     )?;
@@ -214,6 +220,7 @@ pub(super) fn launch_layout(
             single_cell,
             worktree_filter.as_deref(),
             ancestry.as_ref(),
+            focus,
         );
     }
     let channel_launch = args.launch.cohort.channel.is_some();
@@ -226,7 +233,7 @@ pub(super) fn launch_layout(
             single_cell,
             rimz::mux::ambient_pane_id().is_some(),
         )?,
-        args.launch.cohort.bg,
+        focus,
         allow_in_place,
     );
     let in_place = placement == Placement::SamePane;
@@ -253,6 +260,7 @@ pub(super) fn launch_layout(
             team_name.as_deref(),
             &cells,
             args.launch.cohort.fresh,
+            focus,
         )? {
             reconcile::Reconciled::Done => return Ok(()),
             reconcile::Reconciled::Resume(path) => {
@@ -269,6 +277,7 @@ pub(super) fn launch_layout(
                     single_cell,
                     Some(&path),
                     ancestry.as_ref(),
+                    focus,
                 );
             }
             reconcile::Reconciled::Continue => {}
@@ -393,7 +402,7 @@ pub(super) fn launch_layout(
                 room_channel.as_deref(),
                 !worktree_launch,
             ),
-            background: args.launch.cohort.bg,
+            focus,
             errors: LAUNCH_PLACEMENT_ERRORS,
         },
     )
@@ -581,6 +590,7 @@ fn launch_resume_layout(
     single_cell: bool,
     worktree_filter: Option<&Path>,
     ancestry: Option<&rimz::harness::ancestry::LaunchAncestry>,
+    focus: LaunchFocus,
 ) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -664,7 +674,7 @@ fn launch_resume_layout(
                 single_cell,
                 rimz::mux::ambient_pane_id().is_some(),
             )?,
-            args.launch.cohort.bg,
+            focus,
             allow_in_place,
         )
     } else {
@@ -744,7 +754,7 @@ fn launch_resume_layout(
             panes,
             sidebar,
             identity_env: rimz::room::pane_identity_env(workspace, &cwd, channel.as_deref(), false),
-            background: args.launch.cohort.bg,
+            focus,
             errors: LAUNCH_PLACEMENT_ERRORS,
         },
     )?;

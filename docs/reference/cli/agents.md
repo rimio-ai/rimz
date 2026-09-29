@@ -174,9 +174,11 @@ Placement decides whether the launch takes over your pane, splits it, or opens a
 | --- | --- |
 | `--new-pane` | Split the current tab. Single agent cell only. |
 | `--new-tab` | Open a new tab (tmux window). |
-| `--bg` | Keep focus where it is: an in-place launch becomes a split. With `-p`, `--bg` instead returns from a supervised run at once; see [Supervised runs](#supervised-runs--p). |
+| `--bg` | Keep focus where it is: an in-place launch becomes a split, and an already-live cohort or lane does not get a focus jump. Agent callers always get this focus behavior, including fork, resume, and restart, without passing the flag. With `-p`, `--bg` instead returns from a supervised run at once; see [Supervised runs](#supervised-runs--p). |
 
 The split-versus-tab mechanics are in [fleet.md → Placement](../../internals/harness/fleet.md#placement).
+
+User-shell launches take focus unless `--bg` is passed. Agent callers cannot override focus preservation; explicit jump commands such as `agents focus` remain available. On Zellij 0.44.x, opening a background pane or tab can briefly move focus before returning it to the prior pane; tmux and Zellij 0.45+ open without that transient switch.
 
 ### Relaunch into a named worktree
 
@@ -184,7 +186,7 @@ Launching a named team, or an inline spec of two or more cells, into a named wor
 
 | Existing cohort | Result |
 | --- | --- |
-| live | Focuses its tab and exits, in any worktree. |
+| live | Focuses its tab and exits, in any worktree, unless `--bg` or an agent caller keeps focus where it is. |
 | closed, RimZ-owned worktree with work in progress | Prompts `(resume/fresh/cancel)`, default `resume`. |
 | closed, RimZ-owned worktree that is clean and merged | Prompts `(remove/fresh/cancel)`, default `cancel`. `remove` deletes the worktree and its branch, then launches. |
 | closed, worktree RimZ did not create | Asks to enter the worktree, as above; add `--resume` to resume the cohort. |
@@ -197,7 +199,7 @@ Two flags answer the prompt in advance. `--resume` (or `--continue`) resumes the
 rimz agents forge -w restore-living-team --fresh   # new sessions, same checkout and files
 ```
 
-`--fresh` removes nothing. The worktree, its branch, and every file survive, so the previous run's team scratch files still appear in each member's launch reminder where the adapter takes one. The closed members keep their store rows, the new members get new handles in the same channel, and messages still queued for the old members are archived by the next `rimz gc`. `--fresh` needs a named worktree (`-w NAME`), conflicts with `--resume` and `--from-pr`, is refused with `-p`, and never duplicates a live cohort: that case still focuses the running tab. The decision logic is in [fleet.md → Cohort relaunch reconciliation](../../internals/harness/fleet.md#cohort-relaunch-reconciliation).
+`--fresh` removes nothing. The worktree, its branch, and every file survive, so the previous run's team scratch files still appear in each member's launch reminder where the adapter takes one. The closed members keep their store rows, the new members get new handles in the same channel, and messages still queued for the old members are archived by the next `rimz gc`. `--fresh` needs a named worktree (`-w NAME`), conflicts with `--resume` and `--from-pr`, is refused with `-p`, and never duplicates a live cohort: that case reports the running cohort and follows the [focus rule](#channel-worktree-and-placement). The decision logic is in [fleet.md → Cohort relaunch reconciliation](../../internals/harness/fleet.md#cohort-relaunch-reconciliation).
 
 ### Supervised runs (`-p`)
 
@@ -276,7 +278,7 @@ Scope follows the worktree. `-w NAME` resumes that worktree's cohort; bare `-w`,
 
 A matched member that is still live refuses the command, so an address is never duplicated. Cleanly closed members still match while their worktree exists, and a cell with no resumable member launches fresh in the cohort's directory and channel. A spec that matches nothing fails and names the specs the same scope can resume.
 
-A single-cell resume run from the cohort's own directory takes over the current pane, so the hint an exiting team member leaves (`resume with rimz agents forge.coder --resume`) works from the shell it dropped into. Run from anywhere else, a lane-scoped resume opens its own tab.
+A single-cell resume run from the cohort's own directory takes over the current pane, so the hint an exiting team member leaves (`resume with rimz agents forge.coder --resume`) works from the shell it dropped into. An agent caller or `--bg` makes that a split instead, under the [focus rule](#channel-worktree-and-placement). Run from anywhere else, a lane-scoped resume opens its own tab.
 
 `--resume` and `--continue` accept `--isolation host|sandbox`, `--ask` or `--yolo`, `--model`, and `--effort`. Isolation replaces the member's recorded override and survives later relaunches and child launches. For a matched session, permission mode, model, and effort overrides apply only to this invocation; later resumes, restart, and rebirth return to their usual profile and recorded-value rules. Omitting a flag keeps the existing resume behavior. A member with no resumable session starts fresh and records its launch settings normally.
 
@@ -301,11 +303,11 @@ Members are root sessions: subagent children never come back through resume; the
 
 | Lane state | Result |
 | --- | --- |
-| every member live | Focuses the freshest member's pane and exits `0`. |
+| every member live | Focuses the freshest member's pane and exits `0`, or reports it already live without jumping for an agent caller or `--bg`. |
 | some members live | Splits only the closed members back into the live tab and reports each live handle it skipped. |
 | every member closed | Rebuilds team layouts in declared order and restores other agents as flat panes. |
 
-Each restored agent keeps its session id, role, team, channel, and working directory from the store, so a lane comes back under the same handles after a soft reset. Profiles and team layouts render from the current Markdown definitions. `--bg` keeps focus where it is.
+Each restored agent keeps its session id, role, team, channel, and working directory from the store, so a lane comes back under the same handles after a soft reset. Profiles and team layouts render from the current Markdown definitions. `--bg` and agent callers keep focus where it is, under the [focus rule](#channel-worktree-and-placement).
 
 `--fresh` starts new sessions for the lane's closed named teams, with new handles and the same roles, channel, and working directory, using current team layouts. No team name is needed. Members pick up from `blackboard.md`, the `<stage>-notes.md` files, and the code rather than old conversations. Like [fresh cohort relaunch](#relaunch-into-a-named-worktree), it preserves the checkout and files. Standalone roots are skipped with deduplicated relaunch commands: `-w <worktree>` for a worktree lane, `--channel <channel>` for a project-root channel lane, and no place flag otherwise. A lane with live root members, only provider-discovered sessions and no saved shape, or no restorable team is refused. On this verb `--fresh` works with every scope spelling and `--bg`; it does not inherit the cohort launch flag's conflicts.
 
@@ -640,7 +642,7 @@ rimz agents fork @coder --name twin
 
 The fork reuses the source profile's launch posture (system prompt files, model, effort, permission flags, and profile arguments), rendered from current configuration as `restart` does. A profile that no longer resolves forks without it and warns; a profile that now names a different provider refuses. The fork keeps the source's channel but not its team or role, so the role handle stays unique. Prompt caching is up to the provider and may start cold.
 
-The fork always opens in the source agent's worktree. By default it takes over the current pane; `--new-pane` splits the current tab, `--new-tab` opens a new one, and `--bg` splits and keeps focus where it is. `-n, --name <NAME>` sets its handle. It keeps the source's recorded `--isolation`, and `--isolation host|sandbox` replaces it. A fork takes no prompt: send the first instruction with `rimz message` once it opens.
+The fork always opens in the source agent's worktree. From a user shell it takes over the current pane by default; `--new-pane` splits the current tab, `--new-tab` opens a new one, and `--bg` splits and keeps focus where it is. Agent callers split by default and preserve focus under the [focus rule](#channel-worktree-and-placement). `-n, --name <NAME>` sets its handle. It keeps the source's recorded `--isolation`, and `--isolation host|sandbox` replaces it. A fork takes no prompt: send the first instruction with `rimz message` once it opens.
 
 | Agent | Native fork command |
 | --- | --- |
@@ -688,7 +690,7 @@ Stopping a parent first stops its live children launched with `rimz subagents`, 
 
 #### `restart`
 
-`rimz agents restart <REF>` replaces one live agent's pane and resumes its provider session. It focuses the pane, opens the replacement in the same layout position, and closes the old pane; focus follows the replacement on Zellij and tmux.
+`rimz agents restart <REF>` replaces one live agent's pane and resumes its provider session. From a user shell, it focuses the pane, opens the replacement in the same layout position, and closes the old pane; focus follows the replacement on Zellij and tmux. An agent caller opens the replacement beside the old pane without jumping to it, under the [focus rule](#channel-worktree-and-placement).
 
 A peer's open launcher-requested turn is failed before the replacement pane opens and becomes eligible for its launcher's fleet report. The replacement does not continue that turn's run.
 

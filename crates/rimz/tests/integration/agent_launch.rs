@@ -76,6 +76,204 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
 }
 
 #[test]
+fn agent_launch_tab_keeps_focus() {
+    assert_launch_focus(&["agents", "claude", "--new-tab"], true, "new-tab");
+}
+
+#[test]
+fn agent_launch_pane_keeps_focus() {
+    assert_launch_focus(&["agents", "claude", "--new-pane"], true, "new-pane");
+}
+
+#[test]
+fn agent_launch_pane_restores_client_on_zellij_044() {
+    assert_launch_focus_version(
+        &["agents", "claude", "--new-pane"],
+        true,
+        "new-pane",
+        "0.44.3",
+    );
+}
+
+#[test]
+fn agent_launch_auto_splits_without_focus() {
+    assert_launch_focus(&["agents", "claude"], true, "new-pane");
+}
+
+#[test]
+fn agent_team_launch_keeps_focus() {
+    assert_launch_focus(&["teams", "duo"], true, "new-tab");
+}
+
+#[test]
+fn user_launch_tab_takes_focus() {
+    assert_launch_focus(&["agents", "claude", "--new-tab"], false, "new-tab");
+}
+
+#[test]
+fn agent_restart_keeps_focus_on_another_pane() {
+    assert_launch_focus(&["agents", "restart", "@planner"], true, "new-pane");
+}
+
+#[test]
+fn agent_resume_live_lane_keeps_focus() {
+    assert_launch_focus(&["agents", "resume", "#review"], true, "live");
+}
+
+#[test]
+fn agent_reconcile_live_cohort_keeps_focus() {
+    assert_launch_focus(&["teams", "duo", "-w", "review"], true, "cohort");
+}
+
+fn assert_launch_focus(args: &[&str], agent: bool, action: &str) {
+    assert_launch_focus_version(args, agent, action, "0.45.1");
+}
+
+fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version: &str) {
+    let env = Env::new();
+    crate::common::wait::register_calling_agent(&env);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "duo",
+        "layout: lead,worker\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}\n  - {role: worker, agent: worker}",
+        "Complete the work.",
+    );
+    let shim = write_env_dump_shim(&env, "claude");
+    let workspace = env.resolve_workspace(&env.project_root);
+    if matches!(args[1], "restart" | "resume") || action == "cohort" {
+        let worktree = if action == "cohort" {
+            assert!(init_launch_repo(&env.project_root));
+            let path =
+                rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
+                    .unwrap();
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        } else {
+            env.project_root.clone()
+        };
+        let observation = AgentLifecycleObservation {
+            agent_id: Some("provider-session".into()),
+            pane_id: Some(rimz::ids::PaneId::from_parts(
+                rimz::ids::MuxName::Zellij,
+                "terminal_3",
+            )),
+            runtime_owner: Some(rimz::pane::RuntimeOwner::new(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "provider-session",
+                std::process::id(),
+                None,
+            )),
+            worktree_path: Some(worktree.display().to_string()),
+            launch: LaunchParams {
+                channel: Some("review".to_owned()),
+                team: (action == "cohort").then(|| "duo".to_owned()),
+                ..Default::default()
+            },
+            ..AgentLifecycleObservation::new(
+                Some("provider-session".into()),
+                LifecycleSignal::Registered,
+            )
+        };
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "test",
+                &observation,
+            ))
+            .unwrap();
+    }
+    let log = env.home_root.join("mux.log");
+    let mut command = env.rimz();
+    command.args(["--mux", "zellij"]).args(args)
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("PATH", path_with_front(&shim))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", env.home_root.join("agent-env"))
+        .env("RIMZ_TEST_ZELLIJ_TRACE_CONTEXT", "1")
+        .env("RIMZ_ZELLIJ_BIN", crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")))
+        .env("RIMZ_TEST_ZELLIJ_VERSION", version)
+        .env("RIMZ_TEST_ZELLIJ_LIST_CLIENTS", "1 terminal_3 claude\n")
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name));
+    if agent {
+        command
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "launch-session");
+    }
+    let output = command.bounded_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let trace = std::fs::read_to_string(log).unwrap();
+    if matches!(action, "live" | "cohort") {
+        let receipt = if action == "live" {
+            String::from_utf8_lossy(&output.stdout)
+        } else {
+            String::from_utf8_lossy(&output.stderr)
+        };
+        assert!(
+            receipt.contains(if action == "live" {
+                "is already live"
+            } else {
+                "is already running"
+            }),
+            "{receipt}"
+        );
+        assert!(!receipt.contains("focused"), "{receipt}");
+        assert!(
+            !trace
+                .split_whitespace()
+                .any(|arg| matches!(arg, "go-to-tab" | "focus-pane-id")),
+            "{trace}"
+        );
+        return;
+    }
+    let spawn = trace
+        .lines()
+        .find(|line| line.split('\t').any(|arg| arg == action));
+    assert!(spawn.is_some(), "missing {action}: {trace}");
+    if version == "0.44.3" {
+        assert!(trace.contains("focus-pane-id\tterminal_3"), "{trace}");
+        assert!(!trace.contains("focus-pane-id\tterminal_1"), "{trace}");
+        assert!(!trace.contains("--session\t\t"), "{trace}");
+        return;
+    }
+    assert_eq!(
+        spawn.unwrap().split('\t').any(|arg| arg == "--no-focus"),
+        agent,
+        "{trace}"
+    );
+    if args[1] == "restart" {
+        assert!(spawn.unwrap().starts_with("pane=3\t"), "{trace}");
+    }
+    if agent {
+        assert!(
+            !trace
+                .split_whitespace()
+                .any(|arg| matches!(arg, "go-to-tab" | "focus-pane-id" | "move-focus")),
+            "{trace}"
+        );
+    }
+}
+
+#[test]
 fn unsupported_plugin_peer_launch_explains_that_no_report_will_come() {
     let env = Env::new();
     crate::common::wait::register_calling_agent(&env);
