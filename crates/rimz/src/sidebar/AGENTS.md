@@ -8,6 +8,7 @@ Local contract for `crates/rimz/src/sidebar/` — the view-model the renderer dr
 - Event-log history enters through a `RollupCursor` fold. A direct whole-log or offset read is rejected here and in [`sidebar_pane/`](../sidebar_pane/AGENTS.md), which is what keeps snapshot cost bounded by the log tail rather than its length.
 - [`enrich.rs`](./enrich.rs) is the shared ordered projection spine both producer and consumer run: it forks no subprocess and writes no cache. The invariant rejects every subprocess-spawning path inside it; subprocess lanes live in [`refresh/`](./refresh/mod.rs).
 - The fold order is enforced: live panes land before project roots and worktree roots, so pane-derived identity is present when path enrichment reads it.
+- **Invariant.** The fold takes the room's state paths from its caller. The gate rejects ambient room-path resolution in enrichment and agent projection, keeping each tick out of the machine-wide workspace listing.
 
 ## Truth and latency
 
