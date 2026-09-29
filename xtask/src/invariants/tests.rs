@@ -3,6 +3,41 @@ use std::path::{Path, PathBuf};
 use super::*;
 
 #[test]
+fn sidebar_fold_requires_caller_state() {
+    let root = temp_repo_root("fold-state");
+    for relative in [
+        "crates/rimz/src/sidebar/enrich.rs",
+        "crates/rimz/src/sidebar/enrich/nested.rs",
+        "crates/rimz/src/sidebar/agent_projection.rs",
+        "crates/rimz/src/sidebar/refresh/accounts.rs",
+    ] {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for bypass in [
+            concat!("Paths::", "for_workspace("),
+            concat!("Paths::", "for_project_root("),
+            concat!("RoomLoginSet::", "for_runtime("),
+            concat!("DiagSink::", "for_workspace("),
+            concat!("rimz_", "home("),
+        ] {
+            std::fs::write(&path, bypass).unwrap();
+            let result = ensure_sidebar_fold_caller_state(&root, std::slice::from_ref(&path));
+            if relative.contains("/refresh/") {
+                result.unwrap();
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("take the room's StatePaths from the caller")
+                );
+            }
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn integration_identity_requires_fixture_home() {
     let root = temp_repo_root("fixture-home");
     let tests = root.join("crates/rimz/tests");

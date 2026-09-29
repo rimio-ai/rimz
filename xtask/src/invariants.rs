@@ -49,6 +49,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_sidebar_library_boundaries(root, &files)?;
     ensure_plan_owns_resume_argv(root, &files)?;
     ensure_sidebar_enrich_projection_only(root, &files)?;
+    ensure_sidebar_fold_caller_state(root, &files)?;
     ensure_no_zellij_runtime_list_panes(root, &files)?;
     ensure_sidebar_event_log_reads_through_rollup(root, &files)?;
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
@@ -534,6 +535,27 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
                         .any(|candidate| candidate == path)
             },
             "sidebar graph is read-only on the store: no writer, run-wake, or broker imports",
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_sidebar_fold_caller_state(root: &Path, files: &[PathBuf]) -> Result<()> {
+    for needle in [
+        concat!("Paths::", "for_workspace("),
+        concat!("Paths::", "for_project_root("),
+        concat!("RoomLoginSet::", "for_runtime("),
+        concat!("DiagSink::", "for_workspace("),
+        concat!("rimz_", "home("),
+    ] {
+        ensure_no_match(
+            files,
+            needle,
+            |path| {
+                !is_sidebar_enrich_source(root, path)
+                    && path != root.join("crates/rimz/src/sidebar/agent_projection.rs")
+            },
+            "sidebar fold must not resolve ambient room paths — take the room's StatePaths from the caller",
         )?;
     }
     Ok(())
