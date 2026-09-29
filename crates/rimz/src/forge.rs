@@ -92,6 +92,7 @@ pub(crate) struct PrCandidate {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GhBulkPr {
+    pub(crate) open: Option<pr_state::OpenPrFacts>,
     pub(crate) number: u64,
     pub(crate) state: WorktreePrState,
     pub(crate) created_at: Option<jiff::Timestamp>,
@@ -576,6 +577,11 @@ pub(crate) fn github_bulk_query(
             "pr{index}: pullRequests(first: 10, headRefName: {}, states: [OPEN, MERGED, CLOSED], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number state createdAt statusCheckRollup {{ state }} mergeCommit {{ oid statusCheckRollup {{ state }} }} }} }}",
             graphql_string(branch)
         ));
+        fields.push(format!(
+            "facts{index}: pullRequests(first: 1, headRefName: {}, states: [OPEN], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number headRefOid mergeable baseRef {{ name compare(headRef: {}) {{ behindBy }} }} }} }}",
+            graphql_string(branch),
+            graphql_string(branch)
+        ));
     }
     for (index, oid) in oids.iter().enumerate() {
         fields.push(format!(
@@ -617,6 +623,32 @@ pub(crate) fn parse_github_bulk_response(
     #[derive(Deserialize)]
     struct PullConnection {
         nodes: Vec<Pull>,
+    }
+
+    #[derive(Deserialize)]
+    struct FactsConnection {
+        nodes: Vec<FactsPull>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FactsPull {
+        number: u64,
+        head_ref_oid: String,
+        mergeable: String,
+        base_ref: Option<BaseRef>,
+    }
+
+    #[derive(Deserialize)]
+    struct BaseRef {
+        name: String,
+        compare: Option<Comparison>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Comparison {
+        behind_by: u64,
     }
 
     #[derive(Deserialize)]
@@ -678,7 +710,7 @@ pub(crate) fn parse_github_bulk_response(
             .ok_or_else(|| format!("github GraphQL response is missing alias `{alias}`"))?;
         let connection: PullConnection =
             serde_json::from_value(value.clone()).map_err(|err| err.to_string())?;
-        let best = connection
+        let mut best = connection
             .nodes
             .into_iter()
             .filter_map(|pull| {
@@ -687,6 +719,7 @@ pub(crate) fn parse_github_bulk_response(
                     .merge_commit
                     .filter(|_| state == WorktreePrState::Merged);
                 Some(GhBulkPr {
+                    open: None,
                     number: pull.number,
                     state,
                     created_at: pull
@@ -711,6 +744,35 @@ pub(crate) fn parse_github_bulk_response(
             .fold(None, |current, next| {
                 Some(prefer_github_bulk_pr(current, next))
             });
+        let alias = format!("facts{index}");
+        let value = repository
+            .get(&alias)
+            .ok_or_else(|| format!("github GraphQL response is missing alias `{alias}`"))?;
+        let facts: FactsConnection =
+            serde_json::from_value(value.clone()).map_err(|err| err.to_string())?;
+        if let Some(pr) = &mut best
+            && pr.state == WorktreePrState::Open
+            && let Some(facts) = facts
+                .nodes
+                .into_iter()
+                .find(|facts| facts.number == pr.number)
+            && let Some(head) = nonempty(&facts.head_ref_oid)
+        {
+            let mergeability = match facts.mergeable.as_str() {
+                "MERGEABLE" => Some(pr_state::SettledMergeability::Mergeable(head.clone())),
+                "CONFLICTING" => Some(pr_state::SettledMergeability::Conflicting(head.clone())),
+                _ => None,
+            };
+            pr.open = Some(pr_state::OpenPrFacts {
+                head,
+                base: facts.base_ref.as_ref().map(|base| base.name.clone()),
+                behind_by: facts
+                    .base_ref
+                    .and_then(|base| base.compare)
+                    .map(|compare| compare.behind_by),
+                mergeability,
+            });
+        }
         prs.push(best);
     }
 

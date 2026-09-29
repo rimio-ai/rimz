@@ -497,8 +497,60 @@ fn builds_github_bulk_query_with_ordered_escaped_aliases() {
     assert!(query.contains(r#"pr1: pullRequests(first: 10, headRefName: "quote\"branch""#));
     assert!(query.contains(r#"sha0: object(oid: "head-one")"#));
     assert!(query.contains(r#"sha1: object(oid: "head\"two")"#));
-    assert_eq!(query.matches("pullRequests(").count(), 2);
+    assert!(
+        query.contains(r#"facts0: pullRequests(first: 1, headRefName: "feature", states: [OPEN]"#)
+    );
+    assert!(query.contains(r#"baseRef { name compare(headRef: "quote\"branch") { behindBy } }"#));
+    assert_eq!(query.matches("headRefOid mergeable").count(), 2);
+    assert_eq!(query.matches("pullRequests(").count(), 4);
     assert_eq!(query.matches(": object(").count(), 2);
+}
+
+#[test]
+fn parses_github_open_pr_facts_and_unknown_bases() {
+    use pr_state::{OpenPrFacts, SettledMergeability};
+    use serde_json::json;
+
+    for (mergeable, expected) in [
+        (
+            "CONFLICTING",
+            Some(SettledMergeability::Conflicting("head-a".into())),
+        ),
+        (
+            "MERGEABLE",
+            Some(SettledMergeability::Mergeable("head-a".into())),
+        ),
+        ("UNKNOWN", None),
+    ] {
+        for (base_ref, base, behind_by) in [
+            (
+                json!({"name": "main", "compare": {"behindBy": 3}}),
+                Some("main".into()),
+                Some(3),
+            ),
+            (
+                json!({"name": "main", "compare": null}),
+                Some("main".into()),
+                None,
+            ),
+            (json!(null), None, None),
+        ] {
+            let raw = json!({"data": {"repository": {
+                "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
+                "facts0": {"nodes": [{"number": 42, "headRefOid": "head-a", "mergeable": mergeable, "baseRef": base_ref}]}
+            }}});
+            let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+            assert_eq!(
+                response.prs[0].as_ref().unwrap().open,
+                Some(OpenPrFacts {
+                    head: "head-a".into(),
+                    base,
+                    behind_by,
+                    mergeability: expected.clone(),
+                })
+            );
+        }
+    }
 }
 
 #[test]
@@ -507,6 +559,11 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
         r#"{
             "data": {
                 "repository": {
+                    "facts0": {"nodes": []},
+                    "facts1": {"nodes": []},
+                    "facts2": {"nodes": []},
+                    "facts3": {"nodes": []},
+                    "facts4": {"nodes": []},
                     "pr0": {"nodes": [
                         {"number": 10, "state": "CLOSED", "statusCheckRollup": null, "mergeCommit": null},
                         {"number": 11, "state": "MERGED", "statusCheckRollup": {"state": "FAILURE"}, "mergeCommit": {"oid": "old-merge", "statusCheckRollup": {"state": "SUCCESS"}}},
@@ -539,6 +596,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
         response.prs,
         vec![
             Some(GhBulkPr {
+                open: None,
                 number: 12,
                 state: WorktreePrState::Open,
                 created_at: Some("2026-07-18T01:25:14Z".parse().unwrap()),
@@ -547,6 +605,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                 merge_ci: None,
             }),
             Some(GhBulkPr {
+                open: None,
                 number: 20,
                 state: WorktreePrState::Merged,
                 created_at: Some("2026-07-18T01:26:14Z".parse().unwrap()),
@@ -555,6 +614,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                 merge_ci: Some(WorktreeCi::Passing),
             }),
             Some(GhBulkPr {
+                open: None,
                 number: 30,
                 state: WorktreePrState::Closed,
                 created_at: None,
@@ -564,6 +624,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
             }),
             None,
             Some(GhBulkPr {
+                open: None,
                 number: 40,
                 state: WorktreePrState::Merged,
                 created_at: None,

@@ -308,6 +308,7 @@ fn pr_cache(state: WorktreePrState, ci: Option<WorktreeCi>) -> PrStateCache {
     cache.states.insert(
         PATH.to_owned(),
         PrLink {
+            open: None,
             stack: Default::default(),
             branch: Some("feature".to_owned()),
             incarnation: None,
