@@ -1591,6 +1591,12 @@ mod launch_options {
         let warnings = rimz::harness::plan::finalize_launch_layout(
             &mut warning_layout,
             LaunchFinalizeOptions {
+                tiers: rimz::harness::plan::TierOverrideContext {
+                    table: &machine.tiers,
+                    profiles: &effective.profiles,
+                    cell_profiles: &effective.profiles,
+                    agent_override: None,
+                },
                 permission_mode: None,
                 isolation: None,
                 preset: &LaunchPreset::default(),

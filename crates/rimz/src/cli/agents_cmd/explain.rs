@@ -481,7 +481,13 @@ impl<'a> ExplainReport<'a> {
             launch_id: request.identity.launch_id.as_deref(),
             cwd: &plan.cwd,
             profile,
-            overrides: applied_overrides(args, &process.provider_argv),
+            overrides: applied_overrides(
+                args,
+                &process.provider_argv,
+                request.kind.as_str(),
+                params.model.as_deref(),
+                params.effort.as_deref(),
+            ),
             mode: params.mode,
             model: params.model.as_deref(),
             effort: params.effort.as_deref(),
@@ -533,7 +539,13 @@ fn channel_label(matcher: PresetArgMatcher) -> String {
     }
 }
 
-fn applied_overrides(args: &ExplainArgs, provider_argv: &[String]) -> Vec<String> {
+fn applied_overrides(
+    args: &ExplainArgs,
+    provider_argv: &[String],
+    kind: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Vec<String> {
     let mut flags = Vec::new();
     let overrides = &args.overrides;
     for (flag, value) in [
@@ -542,7 +554,17 @@ fn applied_overrides(args: &ExplainArgs, provider_argv: &[String]) -> Vec<String
         ("--effort", &overrides.effort),
     ] {
         if let Some(value) = value {
-            flags.push(format!("{flag} {value}"));
+            if flag == "--model"
+                && rimz::config::tiers::ModelTier::from_model(value.trim()).is_some()
+            {
+                flags.push(format!(
+                    "{flag} {value} → {kind} {} ({})",
+                    model.unwrap_or("-"),
+                    effort.unwrap_or("-")
+                ));
+            } else {
+                flags.push(format!("{flag} {value}"));
+            }
         }
     }
     if overrides.ask {
@@ -829,6 +851,17 @@ mod tests {
     }
 
     #[test]
+    fn explain_tier_override_names_its_resolution() {
+        let args = ParserArgs::try_parse_from(["explain", "coder", "--model", "principal"])
+            .unwrap()
+            .explain;
+        assert_eq!(
+            applied_overrides(&args, &[], "claude", Some("fable"), Some("high")),
+            ["--model principal → claude fable (high)"]
+        );
+    }
+
+    #[test]
     fn explain_accepts_shared_overrides_without_resume_argument() {
         for target in ["coder", "forge.coder", "@coder"] {
             let args = ParserArgs::try_parse_from(["explain", target])
@@ -851,7 +884,7 @@ mod tests {
         .explain;
         assert!(args.json);
         assert_eq!(
-            applied_overrides(&args, &["--foo".to_owned()]),
+            applied_overrides(&args, &["--foo".to_owned()], "claude", Some("opus"), None),
             ["--model opus", "--yolo", "-- --foo"]
         );
         let error = ParserArgs::try_parse_from(["explain", "coder", "--json", "--prompt"])

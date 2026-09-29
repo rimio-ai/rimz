@@ -35,6 +35,8 @@ fn model_tiers_preserve_chain_preference_and_shift_effort() {
     assert_eq!(provenance.tier.to_string(), "principal");
     assert_eq!(provenance.preferred_family, "codex");
     assert!(provenance.fell_back);
+    let row = loaded.rows.iter().find(|row| row.name == "parent").unwrap();
+    assert_eq!(serde_json::to_value(row).unwrap()["tier"], "principal");
     assert_eq!(
         parent.model,
         Some(crate::agents::expand_model_alias("claude", "fable"))

@@ -343,6 +343,51 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
 }
 
 #[test]
+fn tier_preference_uses_the_team_role_namespace_not_a_same_named_child() {
+    let mut machine = rimz::config::MachineConfig::default();
+    let mut role_profile: rimz::config::Profile =
+        toml::from_str("agent = 'claude'\nmodel = 'fable'").unwrap();
+    role_profile.preferred_family = Some("codex".into());
+    machine
+        .agents
+        .profiles
+        .0
+        .insert("worker".into(), role_profile);
+    let mut child_profile: rimz::config::Profile =
+        toml::from_str("agent = 'claude'\nmodel = 'opus'").unwrap();
+    child_profile.preferred_family = Some("claude".into());
+    machine
+        .subagents
+        .profiles
+        .0
+        .insert("worker".into(), child_profile);
+    machine.agents.teams.0.insert(
+        "probe".into(),
+        toml::from_str("roles = [{role = 'reviewer', profile = 'worker'}]").unwrap(),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let mut request = supervised_request("Read the brief.", true);
+    request.model = Some("senior".into());
+    let prepare = |spec| {
+        super::run::prepare_supervised_launch_layout(
+            &request,
+            spec,
+            &workspace,
+            &machine,
+            rimz::config::effective::ProfileScope::Subagents,
+            None,
+        )
+    };
+    let error = prepare("probe.reviewer").unwrap_err().to_string();
+    assert!(error.contains("the profile prefers codex"), "{error}");
+    let resolved = prepare("worker").unwrap();
+    let cell = resolved.layout.agent_cells().next().unwrap();
+    assert_eq!(cell.kind.as_str(), "claude");
+    assert_eq!(cell.launch.model.as_deref(), Some("opus"));
+}
+
+#[test]
 fn supervised_launch_normalizes_model_and_effort_overrides() {
     let mut request = supervised_request("fix-it", false);
     request.model = Some(" gpt-5 ".to_owned());

@@ -97,6 +97,10 @@ pub struct DefinitionRow {
     pub namespace: String,
     pub kind: String,
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<super::tiers::ModelTier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier_fallback: Option<bool>,
     pub effort: Option<String>,
     pub source: PathBuf,
     pub team: Option<String>,
@@ -340,6 +344,8 @@ impl LoadedDefinitions {
             namespace: namespace.to_owned(),
             kind: profile.agent.clone(),
             model: profile.model.clone(),
+            tier: profile.model_tier.as_ref().map(|tier| tier.tier),
+            tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
             effort: profile.effort.clone(),
             source: source.to_owned(),
             team: None,

@@ -79,6 +79,12 @@ pub(super) fn resolve_finalized_layout(
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            tiers: rimz::harness::plan::TierOverrideContext {
+                table: &machine_config.tiers,
+                profiles: &effective.profiles,
+                cell_profiles: &effective.profiles,
+                agent_override: overrides.agent.as_deref(),
+            },
             permission_mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?
                 .map(PermissionModeChoice::Explicit),
             isolation: overrides.isolation,

@@ -3,6 +3,32 @@ use rimz::agents::AgentStatus;
 use rimz::config::RoleBinding;
 
 #[test]
+fn tier_role_reports_keep_concrete_models_and_show_fallback() {
+    let tier = rimz::config::tiers::TierConfig::default()
+        .resolve(rimz::config::tiers::ModelTier::Principal, "codex", None)
+        .unwrap();
+    let mut profile: rimz::config::Profile = toml::from_str("agent = 'claude'").unwrap();
+    profile.model = Some(tier.model.clone());
+    profile.model_tier = Some(tier.provenance);
+    let profiles = ProfilesConfig(BTreeMap::from([("planner".into(), profile)]));
+    let mut team = team();
+    team.roles[0].profile = "planner".into();
+    team.roles[0].model = None;
+    let report = definition_report(
+        "forge",
+        &team,
+        &profiles,
+        &Default::default(),
+        None,
+        Vec::new(),
+    );
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["roles"][0]["tier"], "principal");
+    assert_eq!(json["roles"][0]["model"], tier.model);
+    assert_eq!(json["roles"][0]["tier_fallback"], true);
+}
+
+#[test]
 fn team_source_survives_an_unrelated_broken_definition() {
     let root = tempfile::tempdir().unwrap();
     for directory in ["agents", "teams"] {
