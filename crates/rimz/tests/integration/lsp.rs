@@ -892,6 +892,93 @@ fn lsp_show_batches_source_and_failures() {
 }
 
 #[test]
+fn lsp_check_fixes_hints_without_rewriting_other_notes() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    for file in ["show.rs", "one/dup.rs", "two/dup.rs", "notes.py"] {
+        let path = env.project_root.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "line\n".repeat(210)).unwrap();
+    }
+    let notes = env.project_root.join("notes.md");
+    let source = "é `show.rs::Parent::child (~90-99)`\n`show.rs::Parent::child`:90:99\n";
+    std::fs::write(&notes, source).unwrap();
+    std::os::unix::fs::symlink("notes.md", env.project_root.join("link.md")).unwrap();
+    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    let plain = env
+        .rimz()
+        .args(["lsp", "check", "notes.md", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(plain.status.code(), Some(7));
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&plain.stdout)
+            .unwrap()
+            .get("fixes")
+            .is_none()
+    );
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), source);
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "link.md", "--fix"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        text,
+        "link.md:1  fixed  show.rs::Parent::child (~90-99)  show.rs::Parent::child (~3-5)\nlink.md:2  fixed  show.rs::Parent::child:90:99  show.rs::Parent::child:4:4\n2 anchors in link.md: 2 ok, 0 failed, 0 unchecked, 0 external\n"
+    );
+    assert!(env.project_root.join("link.md").is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(&notes).unwrap(),
+        "é `show.rs::Parent::child (~3-5)`\n`show.rs::Parent::child`:4:4\n"
+    );
+    let modified = std::fs::metadata(&notes).unwrap().modified().unwrap();
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "link.md", "--fix", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["fixes"], serde_json::json!([]));
+    assert_eq!(
+        std::fs::metadata(&notes).unwrap().modified().unwrap(),
+        modified
+    );
+    let skipped = "`show.rs:999`\n`gone.rs::x ~99`\n`dup.rs::x ~99`\n`show.rs::absent ~99`\n`show.rs::child ~4`\n`o/r@v1:show.rs::Parent ~99`\n`notes.py::x ~99`\n`show.rs::Parent`\n";
+    std::fs::write(&notes, format!("{source}{skipped}")).unwrap();
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "notes.md", "--fix", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["fixes"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        value["fixes"][0],
+        serde_json::json!({"line":1,"before":"show.rs::Parent::child (~90-99)","after":"show.rs::Parent::child (~3-5)"})
+    );
+    assert!(std::fs::read_to_string(&notes).unwrap().ends_with(skipped));
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+}
+
+#[test]
 fn lsp_check_reports_anchor_failures_and_coverage() {
     use serde_json::{Value, json};
 

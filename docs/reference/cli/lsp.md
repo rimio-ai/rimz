@@ -75,7 +75,7 @@ Failures print `<argument>  <status>  <detail>` and do not omit later arguments.
 
 ## Check anchors in a notes file
 
-`rimz lsp check <FILE> [--json]` checks a note's file, symbol, and line references before hand-off. FILE is cwd-relative or absolute; anchors use the checkout enclosing cwd (or global `--root`). There is no `--server` flag.
+`rimz lsp check <FILE> [--json] [--fix]` checks a note's file, symbol, and line references before hand-off. FILE is cwd-relative or absolute; anchors use the checkout enclosing cwd (or global `--root`). There is no `--server` flag. Without `--fix`, the file is never changed.
 
 Only inline code spans count, never fenced blocks or prose. A path must have a filename extension holding at least one letter before the first colon, so `127.0.0.1:8080` is not an anchor. Bare paths, bare symbols, and module names such as `config::Error` are ignored. Accepted anchors are `src/config.rs::Type::method`, `src/config.rs::Type.field`, and line-only forms such as `src/config.rs:42`, `src/config.rs:~42`, `src/config.rs:42:3`, or `src/config.rs:42-45`.
 
@@ -98,6 +98,12 @@ Paths resolve exactly first, then by a unique component-boundary suffix among tr
 Text prints one line per failing or unchecked anchor: `<notes>:<line>  <status>  <anchor as written, hint included>  <detail>`. There is no per-anchor line for `ok` or `external`. Details show candidate files, near-miss symbols and ranges, file length, or the missing server. The last line is `<N> anchors in <notes>: <ok> ok, <failed> failed, <unchecked> unchecked, <external> external`, including zero counts. Exit 7 means at least one failure; exit 0 includes unchecked or external anchors and files with no anchors. An unreadable note or non-git checkout exits 1. A configured server that cannot answer aborts before printing any verdict, with the query's exit 1, 3, or 4.
 
 JSON includes every anchor, including `ok` and `external`. The fixed top-level keys are `notes`, `checkout`, `anchors`, and `summary`. Each anchor has `line`, `text`, `status`, `path`, `symbol`, `hint`, `range`, `candidates`, `files`, and `detail`. Paths are checkout-relative or null; symbols are segment arrays or null for line-only anchors. Hints and ranges are inclusive one-based `[start, end]` pairs or null. Candidates have `name`, `kind`, and `range`; files lists ambiguous paths. External anchors have null `path` and `range`, empty `candidates` and `files`, and the qualifier as written in `detail` (for example, `ghostty-org/ghostty@v1.3.1`); `symbol` and `hint` come from the local part, and `text` preserves the whole span and any absorbed trailing hint. Summary always has `anchors`, `ok`, `failed`, `unchecked`, and `external` counts; `anchors` is the sum of the other four counts.
+
+`--fix` updates existing symbol hints when exactly one checkout file and one outline node match. It changes only hint digits, including hints just after a code span. Single-line hints (`~N`, `:N`, `(N)`) use the full range's start; ranges (`~N-M`, `(N-M)`) use its start and end. Positions (`:N:C`) use the symbol's selection line and column, or the full range's start for flat outlines. Prefixes, parentheses, tildes, and dashes stay as written.
+
+Line-only anchors, external anchors, missing or ambiguous paths, missing or multiply matched symbols, unchecked files, hints based on an unsaved owning editor, and anchors without hints are left alone. Code spans whose normalized content cannot be mapped exactly to the notes source are also left alone. Hints within the three-line checking tolerance are still refreshed. The notes target is replaced atomically; a symlink stays a symlink. No changed hints means no write, including on a second run.
+
+Text prints changed hints first as `<notes>:<line>  fixed  <before>  <after>`, then the normal verdicts and summary for the updated notes. `--fix --json` adds `fixes`, an array of objects with `line`, `before`, and `after`; without `--fix` this key is absent. Exit codes reflect the updated notes, so fixing every failure exits 0.
 
 ## Attach
 

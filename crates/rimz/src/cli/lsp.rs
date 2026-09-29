@@ -68,6 +68,9 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         json: bool,
+        /// Rewrite existing hints for uniquely resolved saved symbols.
+        #[arg(long)]
+        fix: bool,
     },
     /// List the current room's shared servers.
     List {
@@ -198,10 +201,15 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             }
             return Ok(());
         }
-        Command::Check { file, json } => {
+        Command::Check { file, json, fix } => {
             let context = query_context(globals)?;
-            let report = match check::run(&file, &context.root, &context.entries, &context.servers)
-            {
+            let report = match check::run(
+                &file,
+                &context.root,
+                &context.entries,
+                &context.servers,
+                fix,
+            ) {
                 Ok(report) => report,
                 Err(error) => return query_error(error),
             };
