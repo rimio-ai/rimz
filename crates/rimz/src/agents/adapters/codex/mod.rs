@@ -502,11 +502,11 @@ fn host_skill_key(
     skill: &crate::agents::skills::SkillDir,
 ) -> std::result::Result<
     crate::agents::skills::ProviderSkillKey,
-    crate::agents::skills::HostSkillArgErr,
+    crate::agents::skills::LaunchSettingsErr,
 > {
-    use crate::agents::skills::{HostSkillArgErr, ProviderSkillKey};
+    use crate::agents::skills::{LaunchSettingsErr, ProviderSkillKey};
     let path = skill.source.join("SKILL.md");
-    let text = std::fs::read_to_string(&path).map_err(|error| HostSkillArgErr::Settings {
+    let text = std::fs::read_to_string(&path).map_err(|error| LaunchSettingsErr::Settings {
         path: path.clone(),
         reason: error.to_string(),
     })?;
@@ -533,8 +533,8 @@ fn render_host_skills(
     _artifact_dir: &Path,
     args: &mut Vec<String>,
 ) -> std::result::Result<
-    Option<crate::agents::skills::HostSkillArtifact>,
-    crate::agents::skills::HostSkillArgErr,
+    Option<crate::agents::skills::LaunchSettingsArtifact>,
+    crate::agents::skills::LaunchSettingsErr,
 > {
     crate::agents::PresetArgMatcher::ConfigKey {
         flags: vec!["-c".into(), "--config".into()],

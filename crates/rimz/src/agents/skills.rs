@@ -30,19 +30,19 @@ pub enum HostSkills {
     Switch {
         flag: &'static str,
         effect: &'static str,
-        key: fn(&SkillDir) -> Result<ProviderSkillKey, HostSkillArgErr>,
+        key: fn(&SkillDir) -> Result<ProviderSkillKey, LaunchSettingsErr>,
         render: RenderHostSkills,
     },
 }
 
-pub(crate) type HostSkillArtifact = (PathBuf, serde_json::Value);
+pub(crate) type LaunchSettingsArtifact = (PathBuf, serde_json::Value);
 
 type RenderHostSkills = fn(
     &[ProviderSkillKey],
     &Path,
     &Path,
     &mut Vec<String>,
-) -> Result<Option<HostSkillArtifact>, HostSkillArgErr>;
+) -> Result<Option<LaunchSettingsArtifact>, LaunchSettingsErr>;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum HostSkillPlan {
@@ -72,7 +72,7 @@ pub enum SkillErr {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum HostSkillArgErr {
+pub enum LaunchSettingsErr {
     #[error(transparent)]
     Skills(#[from] SkillErr),
     #[error("invalid host skill settings at {path}: {reason}")]
@@ -136,7 +136,7 @@ impl HostSkills {
         library: Option<&Path>,
         paths: (&Path, &Path),
         args: &mut Vec<String>,
-    ) -> Result<(HostSkillPlan, Option<HostSkillArtifact>), HostSkillArgErr> {
+    ) -> Result<(HostSkillPlan, Option<LaunchSettingsArtifact>), LaunchSettingsErr> {
         let Self::Switch {
             flag,
             effect,
@@ -170,7 +170,7 @@ impl HostSkills {
                 (&mut unlisted, &callable)
             };
             if other_policy.contains(&provider_key) {
-                return Err(HostSkillArgErr::ConflictingKey { key: provider_key });
+                return Err(LaunchSettingsErr::ConflictingKey { key: provider_key });
             }
             keys.push(provider_key);
         }

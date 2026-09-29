@@ -348,8 +348,8 @@ pub trait LaunchCapability: CoreCapability {
         _artifact_dir: &Path,
         _dirs: &[std::path::PathBuf; 2],
         _extra_args: &mut Vec<String>,
-        _artifact: &mut Option<super::skills::HostSkillArtifact>,
-    ) -> std::result::Result<(), super::skills::HostSkillArgErr> {
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
         Ok(())
     }
 
