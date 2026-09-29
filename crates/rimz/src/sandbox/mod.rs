@@ -337,6 +337,12 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         ENV_SHARED.to_owned(),
         EnvPin::Set(SANDBOX_SHARED.to_owned()),
     );
+    // A shared sccache server runs rustc in the view that spawned it; client-side
+    // mode (sccache >= 0.17) compiles in this view and uses the server for storage.
+    pins.insert(
+        "SCCACHE_CLIENT_SIDE".to_owned(),
+        EnvPin::Set("1".to_owned()),
+    );
     for key in root_keys {
         if let Some(value) = inputs.env.get(key).filter(|value| !value.is_empty()) {
             required.push(PathBuf::from(value));

@@ -873,6 +873,10 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
         plan.pins["TMPDIR"],
         rimz::sandbox::EnvPin::Set("/tmp".to_owned())
     );
+    assert_eq!(
+        plan.pins["SCCACHE_CLIENT_SIDE"],
+        rimz::sandbox::EnvPin::Set("1".to_owned())
+    );
     assert!(!plan.pins.contains_key("PATH"));
     let argv = rimz::sandbox::bwrap_argv(
         Path::new("/usr/bin/bwrap"),
@@ -1190,6 +1194,7 @@ printf '%s\n' "$TMPDIR" > /tmp/tmpdir
 printf '%s\n' "$HOME" > /tmp/provider-home
 printf '%s' "$RIMZ_TEST_NON_UTF8" > /tmp/non-utf8
 test "$CLAUDE_CONFIG_DIR" = "$HOME/elsewhere"
+test "$SCCACHE_CLIENT_SIDE" = 1
 test "${CODEX_HOME+x}" != x
 test ! -e "$HOME/.agents/skills/b/agents/openai.yaml"
 test "$(cat "$HOME/.agents/skills/c/agents/openai.yaml")" = 'policy:
@@ -1209,7 +1214,11 @@ printf '%s\n' shared > /tmp/team-file
 "#,
     )
     .unwrap();
-    let shell = write_fake_login_shell(&env, "sandbox-shell", &[("TMPDIR", "wrong-shell-tmp")]);
+    let shell = write_fake_login_shell(
+        &env,
+        "sandbox-shell",
+        &[("TMPDIR", "wrong-shell-tmp"), ("SCCACHE_CLIENT_SIDE", "0")],
+    );
     let shell_body = std::fs::read_to_string(&shell).unwrap();
     std::fs::write(&shell, shell_body.replacen("#!/bin/sh\n", "#!/bin/sh\nexport CLAUDE_CONFIG_DIR=$HOME/elsewhere\nexport CODEX_HOME=$HOME/elsewhere\nexport XDG_RUNTIME_DIR=/tmp/wrong-runtime\nexport HOME=/tmp/evil\n", 1)).unwrap();
     let host_tmp = tempfile::NamedTempFile::new_in("/tmp").unwrap();

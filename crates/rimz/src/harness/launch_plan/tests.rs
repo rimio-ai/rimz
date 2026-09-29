@@ -623,6 +623,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
         .unwrap();
         assert!(!root.exists(), "{kind} compilation must not write");
         assert!(plan.sandbox.is_none());
+        assert!(!plan.process().env.contains_key("SCCACHE_CLIENT_SIDE"));
         let scratch = state.scratch_dir(Some("swift-otter"));
         assert_eq!(
             plan.process().env.get(ENV_SCRATCH).map(PathBuf::from),
@@ -935,7 +936,10 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         bwrap: Some(Path::new("/usr/bin/bwrap")),
-        ambient_env: &BTreeMap::from([("HOME".to_owned(), project.path().display().to_string())]),
+        ambient_env: &BTreeMap::from([
+            ("HOME".to_owned(), project.path().display().to_string()),
+            ("SCCACHE_CLIENT_SIDE".to_owned(), "0".to_owned()),
+        ]),
     })
     .expect("compile");
 
@@ -956,6 +960,14 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
     assert_eq!(
         plan.process().env.get(ENV_SHARED).map(String::as_str),
         Some("/tmp/shared")
+    );
+    assert_eq!(
+        plan.process()
+            .env
+            .get("SCCACHE_CLIENT_SIDE")
+            .map(String::as_str),
+        Some("1"),
+        "the view compiles client-side over an ambient opt-out"
     );
     let sandbox = plan.sandbox.as_ref().expect("sandbox plan");
     let tmp_bind = sandbox
