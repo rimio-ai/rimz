@@ -244,7 +244,6 @@ pub(super) fn record_conversation(
             let mut run = None;
             for section in sections {
                 use rimz::transcript::SectionOrigin;
-                use rimz::transcript::TranscriptKind;
                 let mut origin = Cow::Borrowed(&section.origin);
                 if section.origin == SectionOrigin::Human
                     && section.record.is_none()
@@ -271,18 +270,7 @@ pub(super) fn record_conversation(
                         RunPromptOrigin::Human => SectionOrigin::Human,
                     });
                 }
-                let (kind, from) = match origin.as_ref() {
-                    SectionOrigin::Human => (TranscriptKind::Prompt, None),
-                    SectionOrigin::Agent(handle) => (TranscriptKind::Message, Some(handle.clone())),
-                    SectionOrigin::Subagent(handle) => {
-                        (TranscriptKind::SubagentReport, Some(handle.clone()))
-                    }
-                    SectionOrigin::Notice(handle) => (TranscriptKind::Wait, Some(handle.clone())),
-                    SectionOrigin::Harness => (
-                        TranscriptKind::Prompt,
-                        Some(rimz::transcript::HARNESS_FROM.to_owned()),
-                    ),
-                };
+                let (kind, from) = origin.entry_kind_and_from();
                 let mut entry = entry_base(kind, section.text.clone());
                 entry.from = from;
                 if let Some(message) = section.record {

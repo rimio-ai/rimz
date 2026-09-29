@@ -36,7 +36,9 @@ pub enum EntryOrigin {
     Harness,
 }
 
-/// Who authored one section of a submitted prompt.
+/// Who authored one section of a submitted prompt. The store's submitted-prompt
+/// classifier produces it; `entry_kind_and_from` writes it and
+/// `TranscriptEntry::origin` reads it back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SectionOrigin {
     Human,
@@ -44,6 +46,20 @@ pub enum SectionOrigin {
     Subagent(String),
     Notice(String),
     Harness,
+}
+
+impl SectionOrigin {
+    /// The entry kind and `from` this author is recorded as; `TranscriptEntry::origin`
+    /// projects them back, so only `Human` reads as the user.
+    pub fn entry_kind_and_from(&self) -> (TranscriptKind, Option<String>) {
+        match self {
+            Self::Human => (TranscriptKind::Prompt, None),
+            Self::Agent(handle) => (TranscriptKind::Message, Some(handle.clone())),
+            Self::Subagent(handle) => (TranscriptKind::SubagentReport, Some(handle.clone())),
+            Self::Notice(handle) => (TranscriptKind::Wait, Some(handle.clone())),
+            Self::Harness => (TranscriptKind::Prompt, Some(HARNESS_FROM.to_owned())),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
