@@ -668,7 +668,9 @@ fn ensure_integration_fixture_home(root: &Path, files: &[PathBuf]) -> Result<()>
     let tests_root = root.join("crates/rimz/tests");
     for needle in [
         concat!("WorkspaceResolver::", "resolve("),
-        concat!("StatePaths::", "for_project_root("),
+        concat!("Paths::", "for_project_root("),
+        concat!("persisted_", "project_root("),
+        concat!("resolve_", "participant"),
     ] {
         ensure_no_match(
             files,
