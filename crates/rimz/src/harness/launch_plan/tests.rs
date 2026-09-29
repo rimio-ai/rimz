@@ -56,7 +56,22 @@ fn routine_permissions_cover_actions_children_and_isolations() {
     let id = crate::WorkspaceId::from_project_root(project.path());
     let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
     let state = StatePaths::under(id, project.path()).unwrap();
-    for enabled in [true, false] {
+    let home = project.path().join("home");
+    std::fs::create_dir_all(home.join("skills/commit")).unwrap();
+    std::fs::write(
+        home.join("skills/commit/SKILL.md"),
+        "---\nname: commit\ndescription: test\n---\nSkill.",
+    )
+    .unwrap();
+    let ambient = BTreeMap::from([
+        ("CLAUDE_CONFIG_DIR".into(), home.display().to_string()),
+        (
+            "RIMZ_AGENTS_HOME".into(),
+            project.path().join("agents").display().to_string(),
+        ),
+        ("HOME".into(), home.display().to_string()),
+    ]);
+    for (enabled, listed) in [(false, false), (false, true), (true, false), (true, true)] {
         let machine: crate::config::MachineConfig =
             toml::from_str(&format!("[agents]\nallow-routine-rimz = {enabled}")).unwrap();
         let effective =
@@ -68,6 +83,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                     let mut request = request("claude", action_with_args(action, Vec::new()));
                     request.subagent = subagent;
                     request.identity.name = Some("otter".into());
+                    request.skills = listed.then(|| vec!["commit".parse().unwrap()]);
                     let plan = compile(LaunchPlanInputs {
                         request: &request,
                         cwd: project.path(),
@@ -79,7 +95,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         commands: &machine.agents.commands,
                         accounts: &machine.accounts,
                         bwrap: sandboxed.then_some(Path::new("/bin/bwrap")),
-                        ambient_env: &BTreeMap::new(),
+                        ambient_env: &ambient,
                     })
                     .unwrap();
                     let settings = plan
@@ -89,7 +105,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         .find(|pair| pair[0] == "--settings");
                     assert_eq!(
                         settings.is_some(),
-                        enabled,
+                        enabled || listed,
                         "{action} sandbox={sandboxed} child={subagent}"
                     );
                     if let Some(settings) = settings {
@@ -104,13 +120,24 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         };
                         assert_eq!(
                             value["permissions"]["additionalDirectories"],
-                            serde_json::json!(dirs)
+                            if enabled {
+                                serde_json::json!(dirs)
+                            } else {
+                                serde_json::Value::Null
+                            }
                         );
-                        assert!(
+                        assert_eq!(
                             value["permissions"]["allow"]
                                 .as_array()
-                                .unwrap()
-                                .contains(&serde_json::json!("Bash(rimz agents *)"))
+                                .is_some_and(|allow| allow
+                                    .contains(&serde_json::json!("Bash(rimz agents *)"))),
+                            enabled
+                        );
+                        assert_eq!(
+                            value["permissions"]["allow"].as_array().is_some_and(
+                                |allow| allow.contains(&serde_json::json!("Skill(commit)"))
+                            ),
+                            listed
                         );
                     }
                 }

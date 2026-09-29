@@ -31,6 +31,23 @@ fn deadline_context_reply_matches_native_post_tool_contract() {
 fn routine_rimz_settings_union_and_idempotence() {
     use crate::agents::capabilities::LaunchCapability;
     let root = tempfile::tempdir().unwrap();
+    let provider = root.path().join("provider");
+    let library = root.path().join("library");
+    for (base, name) in [
+        (&provider, "rimz-a"),
+        (&provider, "rimz-b"),
+        (&provider, "other"),
+        (&library, "rimz-d"),
+        (&provider, "rimz-*"),
+    ] {
+        std::fs::create_dir_all(base.join(name)).unwrap();
+        std::fs::write(
+            base.join(name).join("SKILL.md"),
+            "---\nname: different\n---\n",
+        )
+        .unwrap();
+    }
+    std::fs::create_dir(provider.join("rimz-c")).unwrap();
     let dirs = [root.path().join("scratch"), root.path().join("shared")];
     for profile in [
         None,
@@ -44,7 +61,13 @@ fn routine_rimz_settings_union_and_idempotence() {
             .unwrap_or_default();
         let mut artifact = None;
         ClaudeAdapter
-            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .allow_routine_rimz_args(
+                (root.path(), root.path()),
+                (Some(&provider), Some(&library)),
+                &dirs,
+                &mut args,
+                &mut artifact,
+            )
             .unwrap();
         assert_eq!(args.len(), 2);
         assert!(artifact.is_none());
@@ -83,6 +106,11 @@ fn routine_rimz_settings_union_and_idempotence() {
         if profile.is_some() {
             expected.insert(0, json!("Bash(custom *)"));
         }
+        expected.extend([
+            json!("Skill(rimz-a)"),
+            json!("Skill(rimz-b)"),
+            json!("Skill(rimz-d)"),
+        ]);
         assert_eq!(value["permissions"]["allow"], json!(expected));
         let env = value["autoMode"]["environment"].as_array().unwrap();
         assert_eq!(env.iter().filter(|entry| **entry == "$defaults").count(), 1);
@@ -109,7 +137,13 @@ fn routine_rimz_settings_union_and_idempotence() {
         );
         let before = args.clone();
         ClaudeAdapter
-            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .allow_routine_rimz_args(
+                (root.path(), root.path()),
+                (Some(&provider), Some(&library)),
+                &dirs,
+                &mut args,
+                &mut artifact,
+            )
             .unwrap();
         assert_eq!(args, before);
     }
@@ -119,6 +153,8 @@ fn routine_rimz_settings_union_and_idempotence() {
 fn routine_rimz_file_and_pending_skills_artifact() {
     use crate::agents::capabilities::LaunchCapability;
     let root = tempfile::tempdir().unwrap();
+    let provider = root.path().join("provider");
+    let library = root.path().join("library");
     std::fs::write(
         root.path().join("profile.json"),
         "{ // jsonc\n\"env\":{\"TOKEN\":\"private-secret\"},}",
@@ -137,9 +173,15 @@ fn routine_rimz_file_and_pending_skills_artifact() {
             None
         };
         ClaudeAdapter
-            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .allow_routine_rimz_args(
+                (root.path(), root.path()),
+                (Some(&provider), Some(&library)),
+                &dirs,
+                &mut args,
+                &mut artifact,
+            )
             .unwrap();
-        let (path, value) = artifact.as_ref().unwrap();
+        let (path, value, _) = artifact.as_ref().unwrap();
         assert_eq!(args, ["--settings", path.to_str().unwrap()]);
         assert!(!path.exists());
         assert!(!args.join(" ").contains("private-secret"));
@@ -148,16 +190,32 @@ fn routine_rimz_file_and_pending_skills_artifact() {
         assert!(value["permissions"]["allow"].is_array());
         let before = (args.clone(), artifact.clone());
         ClaudeAdapter
-            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .allow_routine_rimz_args(
+                (root.path(), root.path()),
+                (Some(&provider), Some(&library)),
+                &dirs,
+                &mut args,
+                &mut artifact,
+            )
             .unwrap();
         assert_eq!((&args, &artifact), (&before.0, &before.1));
-        let (path, value) = artifact.as_ref().unwrap();
+        let (path, value, _) = artifact.as_ref().unwrap();
         std::fs::write(path, value.to_string()).unwrap();
         artifact = None;
         ClaudeAdapter
-            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .allow_routine_rimz_args(
+                (root.path(), root.path()),
+                (Some(&provider), Some(&library)),
+                &dirs,
+                &mut args,
+                &mut artifact,
+            )
             .unwrap();
-        assert_eq!((args, artifact), before);
+        assert_eq!(args, before.0);
+        assert_eq!(
+            artifact.map(|(path, value, _)| (path, value)),
+            before.1.map(|(path, value, _)| (path, value))
+        );
     }
 }
 
@@ -184,8 +242,8 @@ fn routine_rimz_invalid_settings_refuse_with_fix() {
         let mut args = vec!["--settings".into(), "profile.json".into()];
         let error = ClaudeAdapter
             .allow_routine_rimz_args(
-                root.path(),
-                root.path(),
+                (root.path(), root.path()),
+                (None, None),
                 &[root.path().join("scratch"), root.path().join("shared")],
                 &mut args,
                 &mut None,
@@ -199,6 +257,126 @@ fn routine_rimz_invalid_settings_refuse_with_fix() {
             "{error}"
         );
     }
+}
+
+#[test]
+fn listed_skills_union_private_artifact_and_empty_rules() {
+    use crate::agents::capabilities::LaunchCapability;
+    let root = tempfile::tempdir().unwrap();
+    let listed = ["commit", "rimz-lsp", "bad*"].map(|name| name.parse().unwrap());
+    let profile = json!({"env":{"TOKEN":"private-secret"}, "permissions":{"allow":["Bash(custom *)", "Skill(rimz-lsp)"]}});
+    std::fs::write(root.path().join("profile.json"), profile.to_string()).unwrap();
+    for file in [false, true] {
+        let mut args = vec![
+            "--settings".into(),
+            if file {
+                "profile.json".into()
+            } else {
+                profile.to_string()
+            },
+        ];
+        let mut artifact = None;
+        ClaudeAdapter
+            .allow_listed_skill_args(
+                &listed,
+                (root.path(), root.path()),
+                &mut args,
+                &mut artifact,
+            )
+            .unwrap();
+        let value = if file {
+            let (path, value, _) = artifact.as_ref().unwrap();
+            assert_eq!(args, ["--settings", path.to_str().unwrap()]);
+            assert!(
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("settings.")
+            );
+            assert!(!args.join(" ").contains("private-secret"));
+            value.clone()
+        } else {
+            serde_json::from_str(&args[1]).unwrap()
+        };
+        assert_eq!(
+            value["permissions"]["allow"],
+            json!(["Bash(custom *)", "Skill(rimz-lsp)", "Skill(commit)"])
+        );
+        assert_eq!(value["env"], profile["env"]);
+        let before = (args.clone(), artifact.clone());
+        ClaudeAdapter
+            .allow_listed_skill_args(
+                &listed,
+                (root.path(), root.path()),
+                &mut args,
+                &mut artifact,
+            )
+            .unwrap();
+        assert_eq!((args, artifact), before);
+    }
+    for listed in [vec![], vec!["bad*".parse().unwrap()]] {
+        let mut args = vec!["--model".into(), "sonnet".into()];
+        let before = args.clone();
+        ClaudeAdapter
+            .allow_listed_skill_args(&listed, (root.path(), root.path()), &mut args, &mut None)
+            .unwrap();
+        assert_eq!(args, before);
+    }
+}
+
+#[test]
+fn listed_skills_invalid_settings_refuse_with_own_fix() {
+    use crate::agents::capabilities::LaunchCapability;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("profile.json"), r#"{"permissions":false}"#).unwrap();
+    for host in [false, true] {
+        let mut args = vec!["--settings".into(), "profile.json".into()];
+        let mut artifact = if host {
+            render_host_skills(&[], root.path(), root.path(), &mut args).unwrap()
+        } else {
+            None
+        };
+        let error = ClaudeAdapter
+            .allow_listed_skill_args(
+                &["commit".parse().unwrap()],
+                (root.path(), root.path()),
+                &mut args,
+                &mut artifact,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("profile.json"), "{error}");
+        assert!(error.contains("permissions"), "{error}");
+        assert!(
+            error.ends_with("correct that key, or remove the profile's skills list"),
+            "{error}"
+        );
+        assert!(!error.contains("allow-routine-rimz"), "{error}");
+    }
+}
+
+#[test]
+fn routine_skills_unreadable_root_refuses_with_fix() {
+    use crate::agents::capabilities::LaunchCapability;
+    let root = tempfile::tempdir().unwrap();
+    let bad = root.path().join("not-directory");
+    std::fs::write(&bad, "file").unwrap();
+    let error = ClaudeAdapter
+        .allow_routine_rimz_args(
+            (root.path(), root.path()),
+            (Some(&bad), None),
+            &[root.path().join("scratch"), root.path().join("shared")],
+            &mut vec![],
+            &mut None,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(bad.to_str().unwrap()), "{error}");
+    assert!(
+        error.ends_with("or set allow-routine-rimz = false"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -231,7 +409,7 @@ fn host_skills_merge_settings_once_and_use_directory_names() {
     let artifact = render(&[key], root.path(), root.path(), &mut args)
         .unwrap()
         .unwrap();
-    let (artifact_path, merged) = &artifact;
+    let (artifact_path, merged, _) = &artifact;
     assert!(!args.join(" ").contains("sk-secret-123"));
     assert_eq!(args, ["--settings", artifact_path.to_str().unwrap()]);
     assert!(!artifact_path.exists());
@@ -245,7 +423,10 @@ fn host_skills_merge_settings_once_and_use_directory_names() {
     );
     let mut inline = vec!["--settings".into(), merged.to_string()];
     let inline_artifact = render(&[], root.path(), root.path(), &mut inline).unwrap();
-    assert_eq!(inline_artifact, Some(artifact));
+    assert_eq!(
+        inline_artifact.map(|(path, value, _)| (path, value)),
+        Some((artifact.0, artifact.1))
+    );
     assert_eq!(inline, args);
     let mut bare = Vec::new();
     assert!(

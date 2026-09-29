@@ -31,6 +31,8 @@ RimZ also gives every Claude agent it launches a curated permission list for [ro
 
 To remove all of these rules, set `allow-routine-rimz = false` under `[agents]` in `~/.rimz/config.toml` ([routine RimZ commands](./configuration.md#routine-rimz-commands)). This is a machine setting, so a repository cannot turn it back on.
 
+Claude also receives exact `Skill(<name>)` permissions for profile-listed skills, plus installed `rimz-*` skills while the routine switch is on. A Skill permission lets that skill's `allowed-tools` apply unprompted for the invoking turn. Rules name only directories installed in your own provider skill root or RimZ library, not names discovered in the repository. Remove the profile's `skills:` list to remove its rules, and turn off `allow-routine-rimz` to remove the installed-`rimz-*` rules. If a name comes from both sources, remove both sources.
+
 ### Project trust
 
 A cloned repository can ship a `.rimz/config.toml` that declares agents, profiles, teams, loop tasks, hooks, environment variables, and which provider account a fresh room launches into. Each of those can run a command or redirect your credentials, so RimZ keeps the whole file inert until you trust the workspace. On an untrusted clone nothing the file declares can launch; RimZ parses it only far enough to tell you what it is asking for.

@@ -344,9 +344,20 @@ pub trait LaunchCapability: CoreCapability {
     /// Add launch-scoped permissions for routine RimZ coordination, where supported.
     fn allow_routine_rimz_args(
         &self,
-        _cwd: &Path,
-        _artifact_dir: &Path,
+        _paths: (&Path, &Path),
+        _skill_roots: (Option<&Path>, Option<&Path>),
         _dirs: &[std::path::PathBuf; 2],
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
+        Ok(())
+    }
+
+    /// Allow invoking profile-listed skills without a provider permission prompt.
+    fn allow_listed_skill_args(
+        &self,
+        _listed: &[crate::config::SkillName],
+        _paths: (&Path, &Path),
         _extra_args: &mut Vec<String>,
         _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {

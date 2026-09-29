@@ -712,10 +712,14 @@ fn compile_agent_process_with_extra_env(
     let trusted_env = trusted_agent_env(project_root, kind)?;
     let secret_keys = trusted_env.keys().cloned().collect();
     let mut env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
+    let mut skill_env = reminders
+        .settings
+        .as_ref()
+        .map(|(_, env)| env.clone())
+        .unwrap_or_else(crate::agents::ambient_env);
+    skill_env.extend(env.clone());
     let (host_skills, mut settings_artifact) =
         if let (Some(runtime), Some(listed)) = (host_runtime, &request.skills) {
-            let mut skill_env = crate::agents::ambient_env();
-            skill_env.extend(env.clone());
             let artifact_dir = runtime.prompt_dir();
             let (plan, artifact) = adapter.spec().host_skills.apply(
                 listed,
@@ -728,10 +732,21 @@ fn compile_agent_process_with_extra_env(
         } else {
             (None, None)
         };
+    if let (Some(listed), Some((artifact_dir, _))) = (&request.skills, &reminders.settings) {
+        adapter.allow_listed_skill_args(
+            listed,
+            (cwd, artifact_dir),
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?;
+    }
     if let Some((artifact_dir, dirs)) = &reminders.routine_rimz {
         adapter.allow_routine_rimz_args(
-            cwd,
-            artifact_dir,
+            (cwd, artifact_dir),
+            (
+                adapter.skills_home(&skill_env).as_deref(),
+                crate::disk::paths::skills_library_in(&skill_env).as_deref(),
+            ),
             dirs,
             action.extra_args_mut(),
             &mut settings_artifact,

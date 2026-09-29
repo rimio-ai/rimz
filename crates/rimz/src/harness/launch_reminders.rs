@@ -13,6 +13,11 @@ pub use super::launch_context::TeamReminder;
 
 pub(super) struct LaunchReminders {
     pub env: Option<LaunchEnv>,
+    /// Launch artifact directory and ambient environment; absent in preflight.
+    pub settings: Option<(
+        std::path::PathBuf,
+        std::collections::BTreeMap<String, String>,
+    )>,
     /// Routine RimZ permissions for the launch: the private settings-artifact
     /// dir, then the scratch and shared dirs as the agent sees them. `None` for
     /// preflight compiles and when `allow-routine-rimz` is off.
@@ -32,6 +37,7 @@ impl Default for LaunchReminders {
     fn default() -> Self {
         Self {
             env: None,
+            settings: None,
             routine_rimz: None,
             model: true,
             sandbox: false,
