@@ -51,6 +51,147 @@ fn action_with_args(action: &str, args: Vec<String>) -> ExecAction {
 }
 
 #[test]
+fn model_alias_resolution_at_the_process_boundary() {
+    use crate::agents::capabilities::{ModelCatalogEntry, ModelCatalogErr, ModelCatalogSource};
+    struct Catalog(usize, bool);
+    impl ModelCatalogSource for Catalog {
+        fn fetch(
+            &mut self,
+            _: &RuntimePaths,
+            _: &BTreeMap<String, String>,
+        ) -> Result<Vec<ModelCatalogEntry>, ModelCatalogErr> {
+            self.0 += 1;
+            if self.1 {
+                return Err(ModelCatalogErr::Unavailable("offline".into()));
+            }
+            Ok(vec![ModelCatalogEntry {
+                id: "gpt-6.1-sol".into(),
+                hidden: false,
+                upgrade: None,
+                efforts: vec!["high".into()],
+            }])
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(root.path());
+    let runtime = RuntimePaths::under(id.clone(), root.path()).unwrap();
+    let state = StatePaths::under(id, root.path()).unwrap();
+    let login = ProviderLogin::default_for(AgentKind::new_unchecked("codex"));
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::new();
+    let mut catalog = Catalog(0, false);
+    for (action, requested, recorded, expected) in [
+        ("launch", "sol", None, "gpt-6.1-sol"),
+        ("resume", "sol", Some("gpt-6-sol"), "gpt-6-sol"),
+        ("fork", "sol", Some("gpt-6-sol"), "gpt-6-sol"),
+        ("resume", "gpt-6-sol", Some("gpt-6.1-sol"), "gpt-6-sol"),
+        ("resume", "sol", None, "gpt-6.1-sol"),
+        ("resume", "sol", Some("sol"), "gpt-6.1-sol"),
+    ] {
+        let mut req = request(
+            "codex",
+            action_with_args(action, vec![format!("--model={requested}")]),
+        );
+        req.identity.params.model = Some(requested.into());
+        let (warnings, movement) = resolve_model(
+            &mut req,
+            &machine,
+            &runtime,
+            &login,
+            recorded,
+            Some(&mut catalog),
+            &ambient,
+        )
+        .unwrap();
+        assert_eq!(req.identity.params.model.as_deref(), Some(expected));
+        if requested == "sol" {
+            assert_eq!(req.action.extra_args(), ["--model", expected]);
+        }
+        if action == "launch" {
+            assert_eq!(movement.unwrap().to, expected);
+        }
+        if action == "resume" && requested == "sol" && recorded.is_none() {
+            assert!(!warnings.is_empty());
+        }
+        let plan = compile(LaunchPlanInputs {
+            request: &req,
+            cwd: root.path(),
+            project_root: root.path(),
+            rimz_bin: Path::new("rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: None,
+            ambient_env: &ambient,
+        })
+        .unwrap();
+        assert_eq!(
+            plan.process()
+                .env
+                .get("RIMZ_AGENT_MODEL")
+                .map(String::as_str),
+            Some(expected)
+        );
+    }
+    assert_eq!(catalog.0, 1);
+    let pinned: crate::config::MachineConfig =
+        toml::from_str("[models.codex]\nsol = 'gpt-6-sol'").unwrap();
+    let mut req = request(
+        "codex",
+        action_with_args("launch", vec!["--model".into(), "sol".into()]),
+    );
+    req.identity.params.model = Some("sol".into());
+    let (warnings, movement) = resolve_model(
+        &mut req,
+        &pinned,
+        &runtime,
+        &login,
+        None,
+        Some(&mut catalog),
+        &ambient,
+    )
+    .unwrap();
+    assert_eq!(req.identity.params.model.as_deref(), Some("gpt-6-sol"));
+    assert!(!warnings.is_empty());
+    assert!(movement.is_none());
+    assert_eq!(catalog.0, 1);
+    let cache_path = runtime.shared_model_catalog_path(&login.key());
+    let mut cache: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+    cache["fetched_at"] = 0.into();
+    std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
+    catalog.1 = true;
+    for (requested, expected, calls, warned) in [
+        ("gpt-6-sol", "gpt-6-sol", 1, false),
+        ("sol", "gpt-6.1-sol", 2, true),
+        ("sol", "gpt-6-sol", 3, true),
+    ] {
+        req.identity.params.model = Some(requested.into());
+        *req.action.extra_args_mut() = vec!["--model".into(), requested.into()];
+        let (warnings, movement) = resolve_model(
+            &mut req,
+            &machine,
+            &runtime,
+            &login,
+            None,
+            Some(&mut catalog),
+            &ambient,
+        )
+        .unwrap();
+        assert_eq!(req.identity.params.model.as_deref(), Some(expected));
+        assert_eq!(req.action.extra_args(), ["--model", expected]);
+        assert_eq!(!warnings.is_empty(), warned);
+        assert!(movement.is_none());
+        assert_eq!(catalog.0, calls);
+        if calls == 2 {
+            std::fs::remove_file(&cache_path).unwrap();
+        }
+    }
+}
+
+#[test]
 fn routine_permissions_cover_actions_children_and_isolations() {
     let project = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();

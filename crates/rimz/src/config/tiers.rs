@@ -223,7 +223,7 @@ impl TierConfig {
                 };
                 return Ok(ResolvedTier {
                     kind: kind.to_owned(),
-                    model: agents::expand_model_alias(kind, &cell.model),
+                    model: cell.model.clone(),
                     effort: effort.to_owned(),
                     provenance: TierProvenance {
                         tier,
@@ -263,17 +263,14 @@ mod tests {
                 .resolve(ModelTier::Junior, "codex", None)
                 .unwrap()
                 .model,
-            "gpt-6-sol"
+            "sol"
         );
         assert!(table.resolve(ModelTier::Principal, "claude", None).is_err());
         let table: TierConfig =
             toml::from_str("[intern]\n[junior]\n[senior]\n[principal]\ncodex = {model = 'astra'}")
                 .unwrap();
         let up = table.resolve(ModelTier::Intern, "claude", None).unwrap();
-        assert_eq!(
-            (up.kind.as_str(), up.model.as_str()),
-            ("codex", "gpt-6-astra")
-        );
+        assert_eq!((up.kind.as_str(), up.model.as_str()), ("codex", "astra"));
         assert!(up.provenance.fell_back);
         let empty: TierConfig =
             toml::from_str("[intern]\n[junior]\n[senior]\n[principal]").unwrap();

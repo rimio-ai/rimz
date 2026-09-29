@@ -59,10 +59,7 @@ fn cli_model_tiers_resolve_each_family_and_refuse_a_runtime_switch() {
         .unwrap();
         let cell = layout.agent_cells().next().unwrap();
         assert_eq!(cell.kind.as_str(), expected_kind);
-        assert_eq!(
-            cell.launch.model,
-            Some(crate::agents::expand_model_alias(expected_kind, model))
-        );
+        assert_eq!(cell.launch.model, Some(model.to_owned()));
         assert_eq!(cell.launch.effort.as_deref(), Some(expected_effort));
         assert!(!cell.args.iter().any(|arg| arg == tier || arg == "old"));
     }
@@ -125,10 +122,7 @@ fn cli_model_tiers_use_chain_preference_unless_agent_overrides_it() {
                 result.unwrap();
                 let cell = layout.agent_cells().next().unwrap();
                 assert_eq!(cell.kind.as_str(), kind);
-                assert_eq!(
-                    cell.launch.model,
-                    Some(crate::agents::expand_model_alias(kind, model))
-                );
+                assert_eq!(cell.launch.model, Some(model.to_owned()));
             }
             Err(fix) => {
                 let error = result.unwrap_err().to_string();

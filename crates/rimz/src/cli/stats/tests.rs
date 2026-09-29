@@ -1625,6 +1625,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert_eq!(
         stats.rollup,
         AssistRollup {
+            model_aliases: 0,
             redeems: 1,
             resets: 1,
             resumes: 1,

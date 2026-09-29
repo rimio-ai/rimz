@@ -247,6 +247,15 @@ pub enum ManualSkill {
 
 #[doc(hidden)]
 pub trait LaunchCapability: CoreCapability {
+    fn is_model_alias(&self, name: &str) -> bool {
+        self.spec()
+            .launch
+            .definitions
+            .models
+            .iter()
+            .any(|entry| entry.name == name && entry.name != entry.id)
+    }
+
     /// Resolve a provider alias under the selected account; pins and unknown names abstain.
     /// With no injected source, use the adapter's native catalog client.
     fn resolve_model_alias(

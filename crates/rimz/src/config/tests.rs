@@ -2190,3 +2190,24 @@ fn model_aliases_reject_empty_ids_and_unknown_kinds() {
         );
     }
 }
+
+#[test]
+fn model_aliases_reject_alias_targets() {
+    for text in [
+        "[models.codex]\nsol = 'luna'",
+        "[models.codex]\ncustom = 'custom'",
+        "[models.codex]\nsol = 'custom'\ncustom = 'gpt-6-sol'",
+        "[models.claude]\ncustom = 'other'\nother = 'opus'",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let error = MachineConfig::parse_text(&dir.path().join("config.toml"), text, dir.path())
+            .expect_err("alias-valued pins must fail");
+        let ConfigErr::Parse { diagnosis, .. } = error else {
+            panic!("expected model pin parse error, got {error:?}");
+        };
+        assert!(
+            diagnosis.to_string().contains("pin a full model id"),
+            "{diagnosis}"
+        );
+    }
+}

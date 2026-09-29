@@ -134,17 +134,11 @@ fn model_tiers_preserve_chain_preference_and_shift_effort() {
     assert!(provenance.fell_back);
     let row = loaded.rows.iter().find(|row| row.name == "parent").unwrap();
     assert_eq!(serde_json::to_value(row).unwrap()["tier"], "principal");
-    assert_eq!(
-        parent.model,
-        Some(crate::agents::expand_model_alias("claude", "fable"))
-    );
+    assert_eq!(parent.model, Some("fable".to_owned()));
     let child = &loaded.agent_profiles.0["child"];
     assert_eq!(child.agent, "codex");
     assert!(!child.model_tier.as_ref().unwrap().fell_back);
-    assert_eq!(
-        child.model,
-        Some(crate::agents::expand_model_alias("codex", "astra"))
-    );
+    assert_eq!(child.model, Some("astra".to_owned()));
     assert_eq!(child.effort.as_deref(), Some("high"));
     assert_eq!(
         loaded.agent_profiles.0["claude-tier"].effort.as_deref(),
@@ -243,10 +237,7 @@ fn model_tiers_seats_resolve_from_root_family() {
         let loaded = clean(root.path());
         let seat = &loaded.agent_profiles.0["probe.judge"];
         assert_eq!(seat.agent, family);
-        assert_eq!(
-            seat.model,
-            Some(crate::agents::expand_model_alias(family, model))
-        );
+        assert_eq!(seat.model, Some(model.to_owned()));
         assert_eq!(seat.effort.as_deref(), Some("high"));
     }
 }
@@ -462,7 +453,7 @@ fn team_overlays_keep_ancestor_crafts_and_move_the_base() {
         ["Parent. parent", "Child. own\n\nrole\n\nteam"]
     );
     assert_eq!(judge.agent, "codex");
-    assert_eq!(judge.model.as_deref(), Some("gpt-6-astra"));
+    assert_eq!(judge.model.as_deref(), Some("astra"));
     assert_eq!(judge.mode, Some(crate::agents::PermissionMode::Yolo));
     assert_eq!(judge.effort.as_deref(), Some("medium"));
     assert_eq!(judge.budget.as_deref(), Some("3/day"));
@@ -1141,7 +1132,7 @@ fn runtime_resolution_aliases_and_defaults() {
             "alias",
             "model: astra\ntools: [Bash]",
             "codex",
-            "gpt-6-astra",
+            "astra",
             "xhigh",
         ),
         (
@@ -1210,7 +1201,7 @@ fn chains_inherit_launch_fields_but_render_each_own_craft() {
     let loaded = clean(root.path());
     let child = &loaded.agent_profiles.0["child"];
     assert_eq!(child.agent, "codex");
-    assert_eq!(child.model.as_deref(), Some("gpt-6-astra"));
+    assert_eq!(child.model.as_deref(), Some("astra"));
     assert_eq!(child.effort.as_deref(), Some("low"));
     assert_eq!(child.budget.as_deref(), Some("2.5"));
     assert_eq!(child.auto_compact.as_deref(), Some("200000"));
