@@ -230,7 +230,7 @@ fn writer_matches(writer: &TopologyWriter, build: &str, config: &str) -> bool {
 impl ZellijBackend {
     pub(super) fn live_presence_plugin_ids(&self, session_name: &str) -> Result<Vec<u32>> {
         let mut ids = self
-            .raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)?
+            .raw_listed_panes(Some(session_name), super::super::COMMAND_TIMEOUT)?
             .into_iter()
             .filter(is_presence_plugin_pane)
             .filter_map(|pane| u32::try_from(pane.id).ok())
@@ -472,7 +472,7 @@ impl ZellijBackend {
         accepted_plugin_id: u32,
         timeout: Duration,
     ) -> Result<()> {
-        let listed = self.raw_listed_panes(session_name, timeout)?;
+        let listed = self.raw_listed_panes(Some(session_name), timeout)?;
         for pane in listed.into_iter().filter(|pane| {
             pane.id != u64::from(accepted_plugin_id) && is_presence_plugin_pane(pane)
         }) {

@@ -462,15 +462,25 @@ impl ZellijBackend {
         focus: bool,
         workspace_id: Option<WorkspaceId>,
         target: &SplitTarget,
+        restore: Option<&PaneId>,
     ) {
+        let session_name = target.session_name();
+        if let Some(restore) = restore {
+            if let (Some(session_name), Some(workspace_id)) = (session_name, workspace_id.as_ref())
+            {
+                let _ = self.restore_attached_client_focus(session_name, workspace_id, restore);
+            } else {
+                let _ = self.focus_pane(restore, session_name);
+            }
+            return;
+        }
         if placement == SplitPlacement::Stacked || focus {
             return;
         }
         let Some(target_pane) = target.pane_id() else {
             return;
         };
-        let session_name = target.session_name().unwrap_or_default();
-        if let Some(workspace_id) = workspace_id
+        if let (Some(session_name), Some(workspace_id)) = (session_name, workspace_id)
             && let Ok(runtime) = self.runtime_paths_for_workspace(workspace_id)
         {
             let _ = execute_focus_restoration(
@@ -482,7 +492,7 @@ impl ZellijBackend {
                 crate::mux::focus_anchor::FocusDispatchRetries::default(),
             );
         } else {
-            let _ = self.focus_pane(target_pane, Some(session_name));
+            let _ = self.focus_pane(target_pane, session_name);
         }
     }
 
@@ -514,7 +524,7 @@ impl ZellijBackend {
             .ok_or_else(|| {
                 output_error(format!("target pane `{pane}` has no numeric Zellij id"))
             })?;
-        let listed = self.raw_listed_panes(session_name, timeout)?;
+        let listed = self.raw_listed_panes(Some(session_name), timeout)?;
         listed
             .into_iter()
             .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
@@ -531,11 +541,14 @@ impl ZellijBackend {
 
     pub(super) fn raw_listed_panes(
         &self,
-        session_name: &str,
+        session_name: Option<&str>,
         timeout: Duration,
     ) -> Result<Vec<RawListedPane>> {
-        let output = self
-            .zellij_action(session_name)
+        let spec = match session_name {
+            Some(session_name) => self.zellij_action(session_name),
+            None => self.cmd().arg("action"),
+        };
+        let output = spec
             .args(["list-panes", "--all", "--json"])
             .run_with_timeout(timeout)?;
         serde_json::from_slice(&output.stdout)
@@ -550,7 +563,7 @@ impl ZellijBackend {
         let deadline = Instant::now() + budget;
         let mut remaining = budget;
         let last_error = loop {
-            match self.raw_listed_panes(name, remaining) {
+            match self.raw_listed_panes(Some(name), remaining) {
                 Ok(_) => return SessionHealth::Healthy,
                 Err(err) => {
                     let Some(wait_budget) = deadline_remaining(deadline) else {
@@ -581,7 +594,7 @@ impl ZellijBackend {
         timeout: Duration,
     ) -> Result<PaneTopologyCache> {
         let observed_at_ms = crate::utils::time::unix_now_ms();
-        let listed = self.raw_listed_panes(session_name, timeout)?;
+        let listed = self.raw_listed_panes(Some(session_name), timeout)?;
         let mut cache = PaneTopologyCache {
             session_name: session_name.to_owned(),
             produced_at_ms: observed_at_ms,
@@ -619,12 +632,12 @@ impl ZellijBackend {
 
     fn focus_restore_target(
         &self,
-        session_name: &str,
-        workspace_id: &WorkspaceId,
+        session_name: Option<&str>,
+        workspace_id: Option<&WorkspaceId>,
     ) -> Option<PaneId> {
         let mut viewed = self
             .client_view(ClientFocusOptions {
-                session_name: Some(session_name.to_owned()),
+                session_name: session_name.map(str::to_owned),
                 command_timeout: None,
             })
             .map(|view| view.viewed_panes)
@@ -634,14 +647,22 @@ impl ZellijBackend {
         let [pane] = viewed.as_slice() else {
             return None;
         };
-        let panes = self
-            .topology_panes_for_workspace(
-                session_name,
-                workspace_id,
-                Some(crate::utils::time::unix_now_ms()),
-                super::super::COMMAND_TIMEOUT,
-            )
-            .ok()?;
+        let panes = match (session_name, workspace_id) {
+            (Some(session_name), Some(workspace_id)) => self
+                .topology_panes_for_workspace(
+                    session_name,
+                    workspace_id,
+                    Some(crate::utils::time::unix_now_ms()),
+                    super::super::COMMAND_TIMEOUT,
+                )
+                .ok()?,
+            _ => self
+                .raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)
+                .ok()?
+                .into_iter()
+                .map(PaneTopologyPane::from)
+                .collect(),
+        };
         panes.iter().find_map(|candidate| {
             (candidate.is_live_terminal() && parse_zellij_raw(pane) == Some(candidate.id))
                 .then_some(pane.clone())
@@ -658,7 +679,7 @@ impl ZellijBackend {
             output_error(format!("focus restore pane `{restore}` has no terminal id"))
         })?;
         let tab_position = self
-            .raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)?
+            .raw_listed_panes(Some(session_name), super::super::COMMAND_TIMEOUT)?
             .into_iter()
             .map(PaneTopologyPane::from)
             .find(|pane| pane.id == pane_id && pane.is_live_terminal())
@@ -684,7 +705,7 @@ impl ZellijBackend {
     fn move_new_tab_after(&self, session: &str, anchor: &PaneId) -> Result<()> {
         ensure_pane_backend(anchor, MuxName::Zellij)?;
         let panes: Vec<PaneTopologyPane> = self
-            .raw_listed_panes(session, RECONCILE_LIST_TIMEOUT)?
+            .raw_listed_panes(Some(session), RECONCILE_LIST_TIMEOUT)?
             .into_iter()
             .map(Into::into)
             .collect();
@@ -711,28 +732,16 @@ impl ZellijBackend {
             .map(|pane| pane.id)
             .ok_or_else(|| output_error("new tab has no live work pane"))?;
         let new_pane = PaneId::from(ZellijPaneId::Terminal(new_pane_id));
-        let focused = confirm_tab_action(|| {
-            self.focus_pane(&new_pane, Some(session))?;
-            Ok(self
-                .client_view(ClientFocusOptions {
-                    session_name: Some(session.to_owned()),
-                    command_timeout: None,
-                })
-                .is_ok_and(|view| view.viewed_panes.contains(&new_pane)))
-        })?;
-        if !focused {
-            return Err(output_error("new tab did not accept focus before its move"));
-        }
+        let new_tab_id = self.tab_id_for_pane(session, &new_pane)?;
         let move_count = moves_to_place_after(anchor_position, tab_count);
         for completed in 0..move_count {
             self.zellij_action(session)
-                .env("ZELLIJ_PANE_ID", new_pane_id.to_string())
-                .args(["move-tab", "left"])
+                .args(["move-tab", "left", "--tab-id", &new_tab_id.to_string()])
                 .run()?;
             let expected_position = last_position - completed - 1;
             let moved = confirm_tab_action(|| {
                 Ok(self
-                    .raw_listed_panes(session, RECONCILE_LIST_TIMEOUT)?
+                    .raw_listed_panes(Some(session), RECONCILE_LIST_TIMEOUT)?
                     .into_iter()
                     .map(PaneTopologyPane::from)
                     .find(|pane| pane.id == new_pane_id && pane.is_live_terminal())
@@ -1008,6 +1017,9 @@ impl MuxBackend for ZellijBackend {
         }
         let anchored_stack = opts.placement == SplitPlacement::Stacked && target_pane.is_some();
         let no_focus = !opts.focus && self.supports_no_focus();
+        let restore = (!opts.focus && !no_focus)
+            .then(|| self.focus_restore_target(session_name, focus_workspace.as_ref()))
+            .flatten();
         match opts.placement {
             SplitPlacement::Stacked => {
                 spec = spec.arg("--stacked");
@@ -1073,6 +1085,7 @@ impl MuxBackend for ZellijBackend {
                 opts.focus,
                 focus_workspace,
                 &target,
+                restore.as_ref(),
             );
         }
         Ok(())
@@ -1595,14 +1608,15 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn open_tab(&self, opts: &TabOptions) -> Result<()> {
-        // Zellij always focuses `new-tab`; tmux gets unfocused opens from
-        // `new-window -d`. Capture the attached client's pane and tab id first
-        // and restore both after the tab exists. A session that offers no single
-        // restore target falls back to the lead tab, which lands whenever a
-        // client is attached to receive it.
-        let restore = (!opts.focus)
+        // Before 0.45, new-tab always takes focus. Restore the single client
+        // view afterward, or fall back to the lead tab when it cannot resolve.
+        let no_focus = !opts.focus && self.supports_no_focus();
+        let restore = (!opts.focus && !no_focus)
             .then(|| {
-                self.focus_restore_target(&opts.sidebar.session_name, &opts.sidebar.workspace_id)
+                self.focus_restore_target(
+                    Some(&opts.sidebar.session_name),
+                    Some(&opts.sidebar.workspace_id),
+                )
             })
             .flatten();
         let view_cols = (|| {
@@ -1624,13 +1638,16 @@ impl MuxBackend for ZellijBackend {
         let sidebar_percent =
             crate::mux::width_target::resolve(&runtime, width, view_cols).percent();
         let layout = TempLayoutFile::new(render_tab_layout(opts, sidebar_percent)?)?;
-        let args = [
+        let mut args = vec![
             "new-tab".to_owned(),
             "--layout".to_owned(),
             layout.path().to_string_lossy().into_owned(),
             "--name".to_owned(),
             opts.title.clone(),
         ];
+        if no_focus {
+            args.push("--no-focus".to_owned());
+        }
         self.run_new_tab_confirmed(&opts.sidebar.session_name, &args, &opts.title)?;
         drop(layout);
         if let Some(anchor) = opts.after.as_ref()
@@ -1644,7 +1661,7 @@ impl MuxBackend for ZellijBackend {
                 "could not place the new tab after its anchor; leaving it appended",
             );
         }
-        if !opts.focus {
+        if !opts.focus && !no_focus {
             let result = match &restore {
                 Some(restore) => self.restore_attached_client_focus(
                     &opts.sidebar.session_name,

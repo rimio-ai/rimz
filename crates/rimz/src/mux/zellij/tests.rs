@@ -886,6 +886,74 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn split_pane_background_restores_client_instead_of_anchor_on_zellij_044() {
+    assert_background_split_restores_client(true);
+}
+
+#[cfg(unix)]
+#[test]
+fn split_pane_background_restores_ambient_client_on_zellij_044() {
+    assert_background_split_restores_client(false);
+}
+
+#[cfg(unix)]
+fn assert_background_split_restores_client(named_session: bool) {
+    let room = TestRoom::new();
+    room.write_cache(
+        9_999_999_999_999,
+        Some(9),
+        None,
+        vec![terminal_pane(9, 1, 120, 0, "zsh")],
+    );
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
+if [ "$1" = "--session" ] && [ -z "$2" ]; then exit 1; fi
+case " $* " in
+  *" action list-clients "*)
+    if [ -f "$dir/spawned" ] && [ ! -f "$dir/restored" ]; then printf '1 terminal_8 work\n'; else printf '1 terminal_9 work\n'; fi ;;
+  *" action list-panes "*) printf '[{"id":7,"tab_id":42,"tab_position":0},{"id":9,"tab_id":43,"tab_position":1}]\n' ;;
+  *" action new-pane "*) touch "$dir/spawned" ;;
+  *" action focus-pane-id terminal_9 "*) touch "$dir/restored" ;;
+esac
+exit 0
+"#,
+    );
+    room.backend(&shim)
+        .split_pane(SplitPaneOptions {
+            target: if named_session {
+                SplitTarget::SessionPane {
+                    session_name: "rimz-test".to_owned(),
+                    pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+                }
+            } else {
+                SplitTarget::Pane(PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"))
+            },
+            env: [(
+                crate::workspace::ENV_WORKSPACE_ID.to_owned(),
+                room.workspace_id.to_string(),
+            )]
+            .into(),
+            focus: false,
+            ..Default::default()
+        })
+        .expect("background split");
+    let log = shim_log(&temp);
+    if !named_session {
+        assert!(!log.contains("--session"), "{log}");
+    }
+    assert!(log.contains("action focus-pane-id terminal_9"), "{log}");
+    assert!(!log.contains("action focus-pane-id terminal_7"), "{log}");
+    assert!(
+        log.find("action list-clients").unwrap() < log.find("action new-pane").unwrap(),
+        "{log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn split_pane_emits_close_on_exit_only_when_requested() {
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
@@ -1912,29 +1980,29 @@ exit 0
 
 #[cfg(unix)]
 #[test]
-fn open_tab_does_not_move_when_focus_never_confirms() {
-    assert_open_tab_move_confirmation(false, false);
+fn open_tab_moves_by_tab_id_on_zellij_044() {
+    assert_open_tab_move_confirmation("0.44.3", true);
 }
 
 #[cfg(unix)]
 #[test]
 fn open_tab_stops_after_first_unconfirmed_move() {
-    assert_open_tab_move_confirmation(true, false);
+    assert_open_tab_move_confirmation("0.45.0", false);
 }
 
 #[cfg(unix)]
 #[test]
-fn open_tab_moves_after_anchor_with_new_pane_context() {
-    assert_open_tab_move_confirmation(true, true);
+fn open_tab_moves_by_tab_id_on_zellij_045() {
+    assert_open_tab_move_confirmation("0.45.0", true);
 }
 
 #[cfg(unix)]
-fn assert_open_tab_move_confirmation(focus_confirms: bool, move_confirms: bool) {
-    // ef12dabd3: placing the new tab requires confirmed focus and each confirmed move.
+fn assert_open_tab_move_confirmation(version: &str, move_confirms: bool) {
     let room = TestRoom::new();
     let (temp, shim) = zellij_shim(&format!(
         r#"#!/bin/sh
 dir=$(dirname "$0")
+if [ "$1" = "--version" ]; then printf 'zellij {version}\n'; exit 0; fi
 case " $* " in
   *" action move-tab "*) printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log" ;;
   *) printf '%s\n' "$*" >> "$dir/zellij.log" ;;
@@ -1944,7 +2012,7 @@ case " $* " in
   *" action move-tab "*)
     position=$(cat "$dir/position" 2>/dev/null || printf 3)
     printf '%s' "$((position - 1))" > "$dir/position" ;;
-  *" action list-clients "*) printf '1 terminal_{focused} work\n' ;;
+  *" action list-clients "*) printf '1 terminal_7 work\n' ;;
   *" action list-tabs "*)
     printf '[{{"name":"main","selectable_tiled_panes_count":1}},{{"name":"two","selectable_tiled_panes_count":1}},{{"name":"three","selectable_tiled_panes_count":1}}'
     if [ -f "$dir/opened" ]; then printf ',{{"name":"new","selectable_tiled_panes_count":1}}'; fi
@@ -1956,7 +2024,6 @@ case " $* " in
 esac
 exit 0
 "#,
-        focused = if focus_confirms { 8 } else { 7 },
     ));
     room.backend(&shim)
         .open_tab(&TabOptions {
@@ -1972,7 +2039,7 @@ exit 0
                 }],
                 focused_pane: 0,
             },
-            focus: true,
+            focus: version == "0.44.3",
             dock_sidebar: false,
             after: Some(PaneId::from_parts(crate::MuxName::Zellij, "terminal_7")),
             sidebar: room.sidebar_options(120),
@@ -1981,30 +2048,39 @@ exit 0
     let log = shim_log(&temp);
     let actions = log
         .lines()
-        .skip_while(|line| !line.contains("action focus-pane-id"))
+        .skip_while(|line| !line.contains("action move-tab"))
         .collect::<Vec<_>>();
     let attempts = usize::try_from(FOCUS_RESTORE_ATTEMPTS).unwrap();
-    let mut expected = [
-        "--session rimz-test action focus-pane-id terminal_8",
-        "--session rimz-test action list-clients",
-    ]
-    .repeat(if focus_confirms { 1 } else { attempts });
-    if focus_confirms {
-        let move_tab = "--session rimz-test action move-tab left | pane=8";
-        let list = "--session rimz-test action list-panes --all --json";
-        if move_confirms {
-            expected.extend([move_tab, list].repeat(2));
-        } else {
-            expected.push(move_tab);
-            expected.extend(std::iter::repeat_n(list, attempts));
-        }
+    let move_tab = "--session rimz-test action move-tab left --tab-id 45 | pane=";
+    let list = "--session rimz-test action list-panes --all --json";
+    let mut expected = vec![];
+    if move_confirms {
+        expected.extend([move_tab, list].repeat(2));
+    } else {
+        expected.push(move_tab);
+        expected.extend(std::iter::repeat_n(list, attempts));
     }
     assert_eq!(actions, expected, "{log}");
+    assert!(
+        !log.contains("focus-pane-id") && !log.contains("list-clients"),
+        "{log}"
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn open_tab_restore_switches_tab_between_request_and_dispatch() {
+    assert_open_tab_background("0.44.3");
+}
+
+#[cfg(unix)]
+#[test]
+fn open_tab_background_never_moves_client_on_zellij_045() {
+    assert_open_tab_background("0.45.0");
+}
+
+#[cfg(unix)]
+fn assert_open_tab_background(version: &str) {
     let room = TestRoom::new();
     let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
     room.write_cache(
@@ -2016,6 +2092,7 @@ fn open_tab_restore_switches_tab_between_request_and_dispatch() {
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
 dir=$(dirname "$0"); log="$dir/zellij.log"; tab="$dir/tab-created"
+if [ "$1" = "--version" ]; then printf 'zellij VERSION\n'; exit 0; fi
 printf '%s\n' "$*" >> "$log"
 case " $* " in
   *" action list-clients "*) printf '1 terminal_7 zsh\n'; exit 0 ;;
@@ -2027,7 +2104,7 @@ case " $* " in
   *" action new-tab "*) : > "$tab"; exit 0 ;;
 esac
 exit 0
-"#,
+"#.replace("VERSION", version).as_str(),
     );
 
     room.backend(&shim)
@@ -2052,6 +2129,17 @@ exit 0
         .expect("open unfocused tab");
 
     let log = shim_log(&temp);
+    if version == "0.45.0" {
+        assert!(
+            log.lines()
+                .any(|line| line.contains("action new-tab") && line.contains("--no-focus")),
+            "{log}"
+        );
+        for forbidden in ["list-clients", "go-to-tab", "focus-pane-id"] {
+            assert!(!log.contains(forbidden), "{log}");
+        }
+        return;
+    }
     let request = log.rfind("action list-clients").expect("request sample");
     let switch = log
         .find("--session rimz-test action go-to-tab 1")

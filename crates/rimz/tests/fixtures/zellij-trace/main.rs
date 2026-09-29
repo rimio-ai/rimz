@@ -2,6 +2,7 @@
 //!
 //! Writes one `argv0\targv1\t...\n` line per invocation to `$RIMZ_TEST_ZELLIJ_LOG`, then returns a small zellij-shaped response or applies stateful filesystem side effects.
 //! Tests set `$RIMZ_TEST_ZELLIJ_MODE` for injected write and session-birth failures.
+//! `$RIMZ_TEST_ZELLIJ_VERSION` overrides the default 0.44.3 version.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -55,7 +56,10 @@ fn main() {
 
     let cli = &args[1..];
     match classify_invocation(cli) {
-        Invocation::Version => write_stdout("zellij 0.44.3"),
+        Invocation::Version => write_stdout(&format!(
+            "zellij {}",
+            env::var("RIMZ_TEST_ZELLIJ_VERSION").unwrap_or_else(|_| "0.44.3".to_owned())
+        )),
         Invocation::ListSessions => handle_list_sessions(&log_path),
         Invocation::ActionQuery(query) => handle_action_query(query),
         Invocation::PresenceBoot {
