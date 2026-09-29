@@ -13,7 +13,7 @@ A new family name, one that is not already an alias, needs an entry in that tabl
 RimZ owns these aliases: `DEFINITIONS.models` in [`adapters/codex/mod.rs`](../../crates/rimz/src/agents/adapters/codex/mod.rs) expands each one to a pinned model id. A release means one commit:
 
 1. Point the alias at the new id in `DEFINITIONS.models`, or add an entry for a new family name. A family without a successor keeps its old id.
-2. Confirm the new model accepts `xhigh`, the Codex kind's default effort (`DEFINITIONS.effort`). If it does not, set `effort` on the entry. A seat whose effort the model rejects fails at every launch, so this is the step that breaks users when missed.
+2. Confirm the new model accepts `xhigh`, the Codex kind's default effort (`DEFINITIONS.effort`). If it does not, set `effort` on the entry. A seat whose effort the model rejects fails at every launch, so this is the step that breaks users when missed. The levels a Codex model accepts are its `supported_reasoning_levels` in `~/.codex/models_cache.json`, or `supportedReasoningEfforts` in the app-server [`model/list`](../externals/agent-adapter/codex-reference.md) response; the upstream `ReasoningEffort` enum is wider than any single model, so it cannot confirm a level.
 3. Update the alias rows in `model_catalog_and_defaults` in [`agents/tools.rs`](../../crates/rimz/src/agents/tools.rs).
 4. Update the alias sentence under [Chains and defaults](../reference/definitions.md#chains-and-defaults), the one home for the alias list.
 

@@ -221,6 +221,17 @@ The loader collects independent errors rather than stopping at the first file, a
 | Team topology | Duplicate/missing/invalid role handles; unknown leader; missing, duplicate, unknown, blank, or reserved stages/owners; same Implement/Review owner; undeclared prompt handle; invalid layout, missing or repeated role placement. |
 | Signals | Empty list, invalid selector or map, blank match value/prompt, unscoped agent selector, or a binding rejected by the shared signal-selector checks. Worktree-dependent scope is checked at launch. |
 
+To check a definition by hand without touching your own home, validate it in a scratch one. Point `RIMZ_HOME` and `RIMZ_AGENTS_HOME` at a temporary directory, write nonempty [kind bases](#kind-bases) `agents/claude.md` and `agents/codex.md`, and give every Claude or Codex definition a `tools:` list such as `tools: [Bash]`:
+
+```sh
+export RIMZ_HOME=$(mktemp -d) RIMZ_AGENTS_HOME=$RIMZ_HOME
+mkdir -p "$RIMZ_HOME/agents"
+printf -- '---\ndescription: Claude base\n---\nBase prompt.\n' > "$RIMZ_HOME/agents/claude.md"
+printf -- '---\ndescription: Codex base\n---\nBase prompt.\n' > "$RIMZ_HOME/agents/codex.md"
+printf -- '---\ndescription: Scratch seat\nagent: claude\nmodel: senior\ntools: [Bash]\n---\n' > "$RIMZ_HOME/agents/scratch.md"
+rimz agents validate
+```
+
 Validation does not prove that provider executables, accounts, sandbox preconditions, or a particular live launch will work. Those remain launch checks.
 
 ## Moving existing machine configuration

@@ -85,6 +85,8 @@ The `Result<T>` alias lives next to the enum it shadows. Predicates like `is_rec
 
 `anyhow` is allowed only at binary boundaries: `crates/rimz/src/main.rs`, the private `cli/` module tree, and `xtask/`. Library modules return their own typed `Result`.
 
+Keep a field required when only tests need to omit it: give the tests a constructor helper instead of adding a production default, which would hide a missing value behind shipped defaults.
+
 ## Identifier newtypes
 
 Every identifier that travels through the schema, the store, or the wakeup socket is a newtype. No bare `String` or `Uuid` flowing through public APIs.
