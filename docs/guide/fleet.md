@@ -319,6 +319,8 @@ The permission mode is the setting you change per task rather than per profile: 
 | `-plan` | start in plan mode | `--permission-mode plan` |
 | `-yolo` | skip the provider's prompts entirely | `--dangerously-skip-permissions` |
 
+For Claude, RimZ also adds launch-only `--settings` so routine coordination need not stop for permission: messages, agent and subagent commands, team inspection and handoffs, asks and answers, timed waits, pane inspection, loop inspection, and read-only LSP queries. The same settings add your agent's scratch/shared directories and describe their use for redirected output to auto mode while retaining its built-in defaults. This is not a blanket permission for `rimz`: commands such as `pane send`, `wait --run`, and `loop add` get no grant from RimZ. Claude's own permission rules still decide. See the [exact command list](../reference/agent-support.md#permission-modes), inspect the flags with `rimz agents explain claude`, or [turn the additions off](./configuration.md#routine-rimz-commands).
+
 ```sh
 rimz agents claude-plan     # start in plan mode
 rimz agents codex-yolo      # codex --dangerously-bypass-approvals-and-sandbox

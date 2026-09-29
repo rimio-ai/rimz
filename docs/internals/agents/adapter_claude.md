@@ -118,7 +118,14 @@ The spec's `LaunchSpec` and `LaunchCapability` render every Claude launch:
 | compaction command | `/compact <brief>` |
 | `rimz subagents` child | `--disallowedTools` gains `Agent`, merged with any tools the profile already denies, so a child cannot spawn Task-tool children |
 | skills home | `<config home>/skills` |
-| host skill list | One merged `--settings` value; `skillOverrides` makes unlisted directory names user-only. See [host mode](../sandbox.md#host-mode). |
+| routine RimZ commands | By default, one merged `--settings` adds curated `permissions.allow` rules, scratch/shared `permissions.additionalDirectories`, and `autoMode.environment` with `$defaults`. Applies to every permission mode, both isolations, and child/resume/fork launches. |
+| host skill list | `skillOverrides` makes unlisted directory names user-only in the same `--settings` that carries the routine RimZ additions unless opted out. See [host mode](../sandbox.md#host-mode). |
+
+The machine-only [`agents.allow-routine-rimz`](../../guide/configuration.md#routine-rimz-commands) switch defaults on. `crates/rimz/src/agents/capabilities.rs::LaunchCapability::allow_routine_rimz_args` is a no-op for other providers. Claude's `crates/rimz/src/agents/adapters/claude/mod.rs::merge_settings` shares JSONC parsing and artifact handling with the host-skills merge, preserving profile keys and unioning the three added arrays without duplicates. Only `autoMode.environment` changes: `$defaults` occurs once, alongside prose naming the curated commands and this launch's scratch/shared paths. Other classifier arrays stay untouched. See the [upstream contract and probes](../../externals/agent-adapter/claude-reference.md#per-launch-permissions-and-auto-mode).
+
+The compiler runs this step after host skills. Preflight compiles without launch directories skip it. Scratch/shared paths are agent-visible: `/tmp/scratchpad` and `/tmp/shared` in the sandbox, the host paths otherwise. A profile settings file remains a private content-addressed `settings.<sha256>.json` artifact under the runtime prompt directory; host skills also keep their existing private-artifact behavior for inline profile settings. A pending skills artifact is merged and re-digested rather than read before it exists. Compilation writes nothing; apply publishes the one artifact in either isolation. With no profile settings, or inline settings without that host-skills case, the result is inline JSON. Reapplying the merge is idempotent.
+
+Invalid JSON, a non-object settings value, or wrongly typed added keys refuse before exec. Routine-merge errors name the source and invalid key and offer correcting it or setting `allow-routine-rimz = false`; earlier host-skills parse errors retain their existing diagnostics. Opting out skips only the routine merge, leaving prior argv behavior intact.
 
 RimZ uses `--append-system-prompt` for its merged launch reminder (team context, model identity, and delegation guidance). The flag is not a typed preset, so a user who wants provider-specific append text puts it in raw profile `args`.
 

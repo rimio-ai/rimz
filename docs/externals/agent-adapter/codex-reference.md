@@ -239,6 +239,21 @@ Each `-c key=value` or `--config key=value` overrides one loaded configuration k
 | `Logged in using workload identity` | workload identity |
 | `Not logged in` | none |
 
+### Execution policy rules
+
+At the pinned `rust-v0.154.0` baseline, [`execpolicy/README.md`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/execpolicy/README.md) defines the Starlark `prefix_rule` syntax. [`core/src/exec_policy.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/exec_policy.rs), `load_exec_policy`, collects `*.rules` from each enabled config layer's `rules/` directory. A user rule file can therefore be `~/.codex/rules/rimz.rules`, or `$CODEX_HOME/rules/rimz.rules` with a custom home. Managed policy can disable user/project rules.
+
+```starlark
+prefix_rule(
+    pattern = ["rimz", "agents"],
+    decision = "allow",
+    match = ["rimz agents", "rimz agents --json"],
+    not_match = ["rimz pane send"],
+)
+```
+
+Patterns match ordered command-token prefixes, not shell globs; an element may be a list of alternative tokens. `decision` is `allow` (the default), `prompt`, or `forbidden`. Optional `match` and `not_match` examples are validated at load time. Across matching rules the strictest decision wins: `forbidden` over `prompt` over `allow`. This is Codex's user-owned execution policy; RimZ does not install this example or any routine-command rules for Codex.
+
 ### Per-launch skill overrides
 
 [`skills.config`](https://developers.openai.com/codex/skills) entries accept `name` or `path` selectors and `enabled=false`; disabled skills are also unavailable to explicit `$skill` invocation. [CLI `-c` overrides](https://developers.openai.com/codex/config-advanced) can supply this array for one run. Local probes on 0.157.0 found that `name` selects the frontmatter name (directory fallback), there is no wildcard, and file `[[skills.config]]` entries remain in effect alongside CLI entries.

@@ -423,6 +423,38 @@ These flags shape a Claude Code launch ([CLI reference](https://code.claude.com/
 
 With snapshot recording on, system-prompt flag text passed on a later `--resume` or `--continue` launch takes effect only after the conversation compacts or in a new conversation ([system prompt flags in resumed conversations](https://code.claude.com/docs/en/cli-usage#system-prompt-flags-in-resumed-conversations)). Before 2.1.265, any system-prompt flag turned recording off.
 
+### Per-launch permissions and auto mode
+
+The [CLI reference](https://code.claude.com/docs/en/cli-reference) accepts a JSON file or inline JSON through `--settings`. These settings support launch-local coordination permissions without permission hooks:
+
+| Key | Upstream contract |
+| --- | --- |
+| `permissions.allow` | Tool-rule array, including `Bash(command *)`; deny and explicit ask rules precede allow rules ([settings reference](https://code.claude.com/docs/en/settings-reference#permissions-allow)). Managed `allowManagedPermissionRulesOnly` can exclude non-managed rules ([managed-only rules](https://code.claude.com/docs/en/settings-reference#allowmanagedpermissionrulesonly)). |
+| `permissions.additionalDirectories` | Extra working directories, alongside those supplied by `--add-dir`; write approval still follows the permission mode ([settings reference](https://code.claude.com/docs/en/settings-reference#permissions-additionaldirectories), [working directories](https://code.claude.com/docs/en/permissions#working-directories)). |
+| `autoMode` | Prose arrays `environment`, `allow`, `soft_deny`, and `hard_deny`; read from user/managed settings and `--settings`, not project/local settings ([configuration scopes](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration)). Each array needs the literal `$defaults` to retain its built-in entries ([settings reference](https://code.claude.com/docs/en/settings-reference#automode)). |
+
+Narrow shell allow rules normally bypass the auto-mode classifier; `autoMode.classifyAllShell = true` suspends all shell allow rules in auto mode ([classifier routing](https://code.claude.com/docs/en/settings-reference#automode-classifyallshell)). Environment entries provide context to the classifier, not unconditional permission.
+
+Recorded local probes on Claude Code **2.1.284** used `claude -p --model haiku` with a clean `CLAUDE_CONFIG_DIR` containing only `.credentials.json`, no pre-existing RimZ rules, and cwd outside the redirect target:
+
+| Probe | Observed result |
+| --- | --- |
+| Default mode, `--settings` containing `permissions.allow: ["Bash(rimz --version)"]`, run `rimz --version` | Ran unprompted. Without settings: “This command requires approval”. Confirms allow rules from `--settings`. |
+| `acceptEdits` mode, the same allow rule plus `permissions.additionalDirectories: ["<P>/out"]`, run `rimz --version > <P>/out/v.txt` | Ran and wrote the file. Without the added directory: “Output redirection to '<P>/out/v.txt' needs approval. The path is outside the working directories”. Confirms the added working-directory effect; default mode still asked for the write. |
+| Only `Bash(rimz --version *)`, run bare `rimz --version` | Ran unprompted. The trailing ` *` also matches the bare prefix; a second bare rule is unnecessary. |
+| `claude auto-mode config --settings …` | Rejected with `error: unknown option '--settings'`. This subcommand cannot inspect a session's launch flag that way. |
+
+A second pass used the `--settings` value `rimz agents explain claude` rendered for a sandboxed launch, on the same clean config and version:
+
+| Probe | Observed result |
+| --- | --- |
+| `--permission-mode auto`, run `rimz agents --json > "$RIMZ_SCRATCH/x.json"` | Ran without a prompt or denial. It also ran without the settings, so the classifier alone allowed it in that case. |
+| `--permission-mode auto`, run `rimz lsp status` | Ran without a prompt or denial. |
+| Default mode, run `rimz pane send @nobody hi` | “This command requires approval”. The launch settings grant no rule for it. |
+| The rendered `autoMode` placed in the config dir's `settings.json`, then `claude auto-mode config` | 22 `environment` entries: the 21 that `claude auto-mode defaults` prints, plus the RimZ entry. `$defaults` expanded in place. |
+
+The interactive `/permissions` display has not been live-verified. RimZ's composition contract is in [the adapter launch section](../../internals/agents/adapter_claude.md#launch).
+
 ### Native LSP denial
 
 The upstream [CLI reference](https://code.claude.com/docs/en/cli-reference) documents `--tools` as tool selection and `--disallowedTools` as denial. A local probe with Claude Code 2.1.282 on 2026-09-25 checked their precedence in a Rust checkout:
