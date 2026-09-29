@@ -29,6 +29,7 @@ fn planner_profiles() -> ProfilesConfig {
     profiles.0.insert(
         "planner".to_owned(),
         Profile {
+            allowed_tools: None,
             preferred_family: None,
             model_tier: None,
             isolation: None,
@@ -241,6 +242,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
         Profile {
+            allowed_tools: None,
             preferred_family: None,
             model_tier: None,
             isolation: None,
@@ -262,6 +264,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.subagents.profiles.0.insert(
         "child-only".to_owned(),
         Profile {
+            allowed_tools: None,
             preferred_family: None,
             model_tier: None,
             isolation: None,
@@ -1535,6 +1538,7 @@ mod launch_options {
         machine.agents.profiles.0.insert(
             "warn".to_owned(),
             rimz::config::Profile {
+                allowed_tools: None,
                 preferred_family: None,
                 model_tier: None,
                 isolation: None,

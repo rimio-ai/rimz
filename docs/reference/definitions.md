@@ -58,6 +58,7 @@ Follow the project's instructions and report what you verified.
 | `tools` | Tool-name list, translated to provider arguments below. |
 | `subagents` | Direct profiles only: allowed RimZ child profiles; `[]` permits none. |
 | `skills` | Bare skill-directory names allowed for model invocation. Claude also adds exact invocation permissions for listed names without `*`, in both isolations and independently of `allow-routine-rimz`. Sandbox views and host Claude keep unlisted skills user-only; host Codex hides them. Other host providers warn and run unrestricted. `[]` lists none. |
+| `allowed-tools` | Permission rules such as `["Bash(git *)", Read]`. Claude pre-approves matching calls in both isolations, independently of `allow-routine-rimz`; other kinds warn and do not apply them. Available only in Markdown definitions, not repository TOML. `[]` or null clears inherited rules. |
 
 Names must match `[A-Za-z0-9_-]+` and be unique across both definition trees. Registered kinds are reserved for kind bases. `general` and model aliases are not reserved by the definition parser. The final namespace checks also reject command-verb and address collisions, such as `all`, kind ordinals, or a profile colliding with a team.
 
@@ -69,7 +70,7 @@ Tier names and effort shifts inherit verbatim. Each definition resolves its inhe
 
 `agent:` follows only definitions in its own namespace: an agent cannot inherit a subagent or vice versa. The chain must end at a registered kind. Without `agent:`, a recognized model alias, model ID, or prefix determines the kind: Claude's roster and `claude-` prefix, and Codex's roster and `gpt-` prefix. Unknown models need an explicit kind. A model implying a different kind from the chain is an error.
 
-Children inherit `model`, `mode`, `isolation`, `effort`, `auto-compact`, `budget`, `tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
+Children inherit `model`, `mode`, `isolation`, `effort`, `auto-compact`, `budget`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
 
 Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases expand as `astra` → `gpt-6-astra`, `sol` → `gpt-6-sol`, `luna` → `gpt-6-luna`, and `terra` → `gpt-5.6-terra`. A kind whose adapter declares native auto-compaction support defaults to `258k`; other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model`, `effort`, or `auto-compact` field. Defaults are filled only when supported.
 
@@ -86,6 +87,8 @@ Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, ex
 Tool entries use Claude-style names. The base before `(` is trimmed and deduplicated in first-seen order; it must begin with an ASCII letter and contain only ASCII letters, digits, or underscores. Parentheses must balance without nesting. Only `Agent(...)` interprets its suffix, as a comma-separated native child-type allowlist. Other suffixes are discarded; this is not a permission-pattern language.
 
 Quote entries containing commas in a YAML flow list: `tools: ["Agent(Explore, Plan)", Bash]`.
+
+`tools` decides which tools exist; `allowed-tools` pre-approves calls to them. Rules are trimmed and deduplicated, keeping the first occurrence. A rule starts with an ASCII letter, followed by ASCII letters, digits, `_`, `*`, or `-`, optionally followed by a nonempty `(specifier)` closing the rule. Control characters are refused. MCP names such as `mcp__my-server__*` are accepted. Claude auto mode drops some broad rules, including `Bash`, `Bash(*)`, wildcarded interpreters, package-manager run commands, `Agent`, and `Monitor`; use narrow rules such as `Bash(git *)`. Claude's drop list is best-effort and may change.
 
 | Kind | Rendering |
 | --- | --- |
@@ -138,7 +141,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `agent` | Required direct definition name. |
 | `role` | Optional handle, defaulting to `agent`; unique within the team. |
 | `owns` | Stages owned by this role; omitted or null means none. |
-| `model`, `mode`, `effort`, `auto-compact`, `budget`, `model-reminder`, `tools`, `subagents`, `skills` | Overrides with the same types as agent fields, including model tiers and relative effort. A tier prefers the selected definition chain's root family. |
+| `model`, `mode`, `effort`, `auto-compact`, `budget`, `model-reminder`, `tools`, `allowed-tools`, `subagents`, `skills` | Overrides with the same types as agent fields, including model tiers and relative effort. A tier prefers the selected definition chain's root family. |
 | `traits` | Additional traits for this seat's leaf craft. |
 | `signals` | Optional nonempty signal-binding list. |
 | `flip-compact` | Stage-handoff compaction threshold or `off`. |

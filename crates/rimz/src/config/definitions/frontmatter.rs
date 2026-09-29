@@ -30,6 +30,8 @@ pub(super) struct AgentFrontmatter {
     #[serde(default, deserialize_with = "list")]
     pub tools: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
+    pub allowed_tools: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
     pub subagents: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
     pub skills: Option<Vec<String>>,
@@ -52,6 +54,7 @@ impl AgentFrontmatter {
             auto_compact,
             budget,
             tools,
+            allowed_tools,
             skills,
             subagents,
             model_reminder
@@ -105,6 +108,8 @@ pub(super) struct RoleFrontmatter {
     #[serde(default, deserialize_with = "list")]
     pub tools: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
+    pub allowed_tools: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
     pub subagents: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
     pub skills: Option<Vec<String>>,
@@ -124,6 +129,7 @@ impl RoleFrontmatter {
             budget: self.budget.clone(),
             model_reminder: self.model_reminder,
             tools: self.tools.clone(),
+            allowed_tools: self.allowed_tools.clone(),
             subagents: self.subagents.clone(),
             skills: self.skills.clone(),
             ..AgentFrontmatter::default()

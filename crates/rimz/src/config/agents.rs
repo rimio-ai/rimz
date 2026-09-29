@@ -224,6 +224,7 @@ impl std::str::FromStr for Isolation {
 
 /// A named agent profile. `agent` is a base reference: either a built-in agent
 /// kind or another profile that resolves to one.
+/// Also deserialized from trusted repository TOML: new deserializable fields must enter `crate::trust::ExecutableProfile` with a hash test, or be `#[serde(skip)]`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
@@ -240,6 +241,8 @@ pub struct Profile {
         deserialize_with = "super::skills::deserialize_optional_skill_list"
     )]
     pub skills: Option<Vec<super::SkillName>>,
+    #[serde(skip)]
+    pub allowed_tools: Option<Vec<super::ToolRule>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Specs this profile's agents may launch through `rimz subagents`.

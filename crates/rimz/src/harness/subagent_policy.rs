@@ -147,6 +147,7 @@ mod tests {
         let profiles = ProfilesConfig(BTreeMap::from([(
             "planner".to_owned(),
             Profile {
+                allowed_tools: None,
                 preferred_family: None,
                 model_tier: None,
                 isolation: None,
@@ -199,6 +200,7 @@ mod tests {
         let subagent_profiles = ProfilesConfig(BTreeMap::from([(
             "explorer".to_owned(),
             Profile {
+                allowed_tools: None,
                 preferred_family: None,
                 model_tier: None,
                 isolation: None,
