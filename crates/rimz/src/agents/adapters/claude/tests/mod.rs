@@ -28,6 +28,180 @@ fn deadline_context_reply_matches_native_post_tool_contract() {
 }
 
 #[test]
+fn routine_rimz_settings_union_and_idempotence() {
+    use crate::agents::capabilities::LaunchCapability;
+    let root = tempfile::tempdir().unwrap();
+    let dirs = [root.path().join("scratch"), root.path().join("shared")];
+    for profile in [
+        None,
+        Some(
+            json!({"permissions":{"allow":["Bash(custom *)"],"additionalDirectories":["/custom"]},"autoMode":{"environment":["custom","custom"],"allow":["unchanged"]}}),
+        ),
+    ] {
+        let mut args = profile
+            .as_ref()
+            .map(|value| vec!["--settings".into(), value.to_string()])
+            .unwrap_or_default();
+        let mut artifact = None;
+        ClaudeAdapter
+            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .unwrap();
+        assert_eq!(args.len(), 2);
+        assert!(artifact.is_none());
+        let value: serde_json::Value = serde_json::from_str(&args[1]).unwrap();
+        let prefixes = [
+            "message",
+            "agents",
+            "subagents",
+            "teams show",
+            "teams wait",
+            "teams flip",
+            "teams record",
+            "asks",
+            "answer",
+            "wait --in",
+            "pane list",
+            "pane capture",
+            "loop show",
+            "loop logs",
+            "lsp def",
+            "lsp refs",
+            "lsp hover",
+            "lsp impl",
+            "lsp callers",
+            "lsp callees",
+            "lsp symbols",
+            "lsp find",
+            "lsp check",
+            "lsp list",
+            "lsp status",
+        ];
+        let mut expected: Vec<_> = prefixes
+            .iter()
+            .map(|prefix| json!(format!("Bash(rimz {prefix} *)")))
+            .collect();
+        if profile.is_some() {
+            expected.insert(0, json!("Bash(custom *)"));
+        }
+        assert_eq!(value["permissions"]["allow"], json!(expected));
+        let env = value["autoMode"]["environment"].as_array().unwrap();
+        assert_eq!(env.iter().filter(|entry| **entry == "$defaults").count(), 1);
+        let text = env.last().unwrap().as_str().unwrap();
+        for name in [
+            "$RIMZ_SCRATCH",
+            "$RIMZ_SHARED",
+            dirs[0].to_str().unwrap(),
+            dirs[1].to_str().unwrap(),
+        ] {
+            assert!(text.contains(name));
+        }
+        let mut expected_dirs = vec![json!(dirs[0]), json!(dirs[1])];
+        if profile.is_some() {
+            expected_dirs.insert(0, json!("/custom"));
+            assert_eq!(value["autoMode"]["allow"], json!(["unchanged"]));
+            assert_eq!(env.iter().filter(|entry| **entry == "custom").count(), 1);
+        } else {
+            assert!(value["autoMode"].get("allow").is_none());
+        }
+        assert_eq!(
+            value["permissions"]["additionalDirectories"],
+            json!(expected_dirs)
+        );
+        let before = args.clone();
+        ClaudeAdapter
+            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .unwrap();
+        assert_eq!(args, before);
+    }
+}
+
+#[test]
+fn routine_rimz_file_and_pending_skills_artifact() {
+    use crate::agents::capabilities::LaunchCapability;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("profile.json"),
+        "{ // jsonc\n\"env\":{\"TOKEN\":\"private-secret\"},}",
+    )
+    .unwrap();
+    let dirs = [root.path().join("scratch"), root.path().join("shared")];
+    for skills in [false, true] {
+        let mut args = vec![
+            "--settings={}".into(),
+            "--settings".into(),
+            "profile.json".into(),
+        ];
+        let mut artifact = if skills {
+            render_host_skills(&[], root.path(), root.path(), &mut args).unwrap()
+        } else {
+            None
+        };
+        ClaudeAdapter
+            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .unwrap();
+        let (path, value) = artifact.as_ref().unwrap();
+        assert_eq!(args, ["--settings", path.to_str().unwrap()]);
+        assert!(!path.exists());
+        assert!(!args.join(" ").contains("private-secret"));
+        assert_eq!(value["env"]["TOKEN"], "private-secret");
+        assert_eq!(value["skillOverrides"].is_object(), skills);
+        assert!(value["permissions"]["allow"].is_array());
+        let before = (args.clone(), artifact.clone());
+        ClaudeAdapter
+            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .unwrap();
+        assert_eq!((&args, &artifact), (&before.0, &before.1));
+        let (path, value) = artifact.as_ref().unwrap();
+        std::fs::write(path, value.to_string()).unwrap();
+        artifact = None;
+        ClaudeAdapter
+            .allow_routine_rimz_args(root.path(), root.path(), &dirs, &mut args, &mut artifact)
+            .unwrap();
+        assert_eq!((args, artifact), before);
+    }
+}
+
+#[test]
+fn routine_rimz_invalid_settings_refuse_with_fix() {
+    use crate::agents::capabilities::LaunchCapability;
+    let root = tempfile::tempdir().unwrap();
+    for (contents, key) in [
+        ("{broken", "JSON"),
+        ("[]", "object"),
+        (r#"{"permissions":{"allow":null}}"#, "permissions.allow"),
+        (
+            r#"{"permissions":{"additionalDirectories":{}}}"#,
+            "permissions.additionalDirectories",
+        ),
+        (
+            r#"{"autoMode":{"environment":false}}"#,
+            "autoMode.environment",
+        ),
+        (r#"{"permissions":false}"#, "permissions"),
+        (r#"{"autoMode":[]}"#, "autoMode"),
+    ] {
+        std::fs::write(root.path().join("profile.json"), contents).unwrap();
+        let mut args = vec!["--settings".into(), "profile.json".into()];
+        let error = ClaudeAdapter
+            .allow_routine_rimz_args(
+                root.path(),
+                root.path(),
+                &[root.path().join("scratch"), root.path().join("shared")],
+                &mut args,
+                &mut None,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("profile.json"), "{error}");
+        assert!(error.contains(key), "{error}");
+        assert!(
+            error.ends_with("correct that key, or set allow-routine-rimz = false"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn host_skills_merge_settings_once_and_use_directory_names() {
     use crate::agents::skills::{HostSkills, SkillDir};
     let root = tempfile::tempdir().unwrap();

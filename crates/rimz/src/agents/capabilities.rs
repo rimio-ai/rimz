@@ -341,6 +341,18 @@ pub trait LaunchCapability: CoreCapability {
     /// native restriction.
     fn lockdown_subagent_args(&self, _extra_args: &mut Vec<String>) {}
 
+    /// Add launch-scoped permissions for routine RimZ coordination, where supported.
+    fn allow_routine_rimz_args(
+        &self,
+        _cwd: &Path,
+        _artifact_dir: &Path,
+        _dirs: &[std::path::PathBuf; 2],
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::HostSkillArtifact>,
+    ) -> std::result::Result<(), super::skills::HostSkillArgErr> {
+        Ok(())
+    }
+
     /// Switch off the provider's native command sandbox for a launch inside
     /// RimZ sandbox isolation, where the RimZ view is the agent's one sandbox;
     /// approval flags stay as the mode set them. The default leaves argv

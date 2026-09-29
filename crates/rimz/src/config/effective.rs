@@ -109,6 +109,7 @@ pub struct ProjectTasks {
 /// executable surface stays closed.
 pub struct LaunchAgents {
     pub env_reminder: bool,
+    pub allow_routine_rimz: bool,
     pub lsp_servers: BTreeMap<String, super::LspServerConfig>,
     pub untrusted_lsp_servers: Vec<String>,
     pub profiles: ProfilesConfig,
@@ -191,6 +192,7 @@ pub fn load_with_roots(
             .unwrap_or_default();
         return Ok(LaunchAgents {
             env_reminder: machine.env_reminder,
+            allow_routine_rimz: machine.allow_routine_rimz,
             lsp_servers,
             untrusted_lsp_servers,
             profiles: machine.profiles.clone(),
@@ -207,6 +209,7 @@ pub fn load_with_roots(
     let Some(repo_value) = repo_value else {
         return Ok(LaunchAgents {
             env_reminder: machine.env_reminder,
+            allow_routine_rimz: machine.allow_routine_rimz,
             lsp_servers,
             untrusted_lsp_servers: Vec::new(),
             profiles: machine.profiles.clone(),
@@ -329,6 +332,7 @@ pub fn load_with_roots(
         })?;
     Ok(LaunchAgents {
         env_reminder: repo.env_reminder.unwrap_or(machine.env_reminder),
+        allow_routine_rimz: machine.allow_routine_rimz,
         lsp_servers,
         untrusted_lsp_servers: Vec::new(),
         profiles,

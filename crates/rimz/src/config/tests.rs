@@ -467,6 +467,41 @@ fn agent_chain_length_defaults_parses_override_and_rejects_retired_key() {
 }
 
 #[test]
+fn allow_routine_rimz_defaults_on_and_parses_override() {
+    let dir = tempdir().unwrap();
+    let defaulted = load_no_fragments(&write_named(&dir, "config.toml", "")).unwrap();
+    assert_eq!(
+        serde_json::to_value(&defaulted.agents).unwrap()["allow-routine-rimz"],
+        true
+    );
+    let tuned = load_no_fragments(&write_named(
+        &dir,
+        "config.toml",
+        "[agents]\nallow-routine-rimz = false\n",
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&tuned.agents).unwrap()["allow-routine-rimz"],
+        false
+    );
+    let project = tempdir().unwrap();
+    std::fs::create_dir(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[agents]\nallow-routine-rimz = true\n",
+    )
+    .unwrap();
+    for trusted in [false, true] {
+        if trusted {
+            crate::trust::grant_with_roots(project.path(), dir.path()).unwrap();
+        }
+        let effective =
+            super::effective::load_with_roots(&tuned, project.path(), dir.path()).unwrap();
+        assert!(!effective.allow_routine_rimz);
+    }
+}
+
+#[test]
 fn env_reminder_defaults_on_and_parses_override() {
     let dir = tempdir().expect("tempdir");
     let defaulted = load_no_fragments(&write_named(&dir, "config.toml", "")).unwrap();

@@ -127,7 +127,8 @@ upward-dependencies = ["address"]
 # Auto-continue shares model-aware reset and capacity queries with agents policy.
 # AgentState::transition and AgentState::turn_ids hand one row's lifecycle inputs to the snapshot fold and the writer.
 # Model tiers use the adapter-owned effort ladders.
-surface-budget = 902
+# LaunchCapability carries provider-owned routine RimZ permission settings.
+surface-budget = 903
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

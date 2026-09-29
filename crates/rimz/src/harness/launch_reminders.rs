@@ -13,6 +13,10 @@ pub use super::launch_context::TeamReminder;
 
 pub(super) struct LaunchReminders {
     pub env: Option<LaunchEnv>,
+    /// Routine RimZ permissions for the launch: the private settings-artifact
+    /// dir, then the scratch and shared dirs as the agent sees them. `None` for
+    /// preflight compiles and when `allow-routine-rimz` is off.
+    pub routine_rimz: Option<(std::path::PathBuf, [std::path::PathBuf; 2])>,
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
     /// The launch runs inside the RimZ sandbox view: adds the sandbox reminder
@@ -28,6 +32,7 @@ impl Default for LaunchReminders {
     fn default() -> Self {
         Self {
             env: None,
+            routine_rimz: None,
             model: true,
             sandbox: false,
             lsp_configured: false,

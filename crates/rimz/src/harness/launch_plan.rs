@@ -127,6 +127,23 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     };
     extra_env.insert(Isolation::ENV.to_owned(), isolation.to_string());
     let scratch_dir = inputs.state.scratch_dir(request.identity.name.as_deref());
+    if inputs
+        .effective
+        .is_none_or(|effective| effective.allow_routine_rimz)
+    {
+        let view = sandbox::TmpView::current(
+            Some(isolation),
+            request.identity.name.as_deref(),
+            inputs.state,
+        );
+        reminders.routine_rimz = Some((
+            inputs.runtime.prompt_dir(),
+            [
+                view.agent_path(&scratch_dir),
+                view.agent_path(&inputs.state.shared_dir),
+            ],
+        ));
+    }
     extra_env.insert(ENV_SCRATCH.to_owned(), scratch_dir.display().to_string());
     extra_env.insert(
         ENV_SHARED.to_owned(),
@@ -216,7 +233,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
 
 pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanErr> {
     plan.runtime.ensure_dirs()?;
-    if let Some((path, settings)) = &plan.process().host_skill_artifact {
+    if let Some((path, settings)) = &plan.process().settings_artifact {
         crate::disk::paths::ensure_private_runtime_dir(&plan.runtime.prompt_dir())?;
         crate::disk::atomic::write_private_temp_then_rename(path, settings)
             .map_err(launch::ExecWireErr::PromptWrite)?;
