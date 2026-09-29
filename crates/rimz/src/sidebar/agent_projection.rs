@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::LocalSessionObservation;
 use crate::disk::parse_cache::ParseCache;
-use crate::disk::paths::RuntimePaths;
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::AgentKind;
 use crate::pane::PaneRef;
 
@@ -70,20 +70,15 @@ impl LocalSessionInputs {
 
     /// Sessions in the room's own account homes; a kind whose account cannot
     /// be resolved discovers nothing rather than another account's sessions.
-    fn discover(&self, runtime: &RuntimePaths) -> Vec<LocalSessionObservation> {
-        let ambient = crate::agents::ambient_env();
+    fn discover(&self, state: &StatePaths) -> Vec<LocalSessionObservation> {
         let accounts = &crate::config::MachineConfig::load_lenient().accounts;
-        let Ok(state) = crate::disk::paths::StatePaths::for_workspace(runtime.workspace_id.clone())
-        else {
-            return Vec::new();
-        };
+        let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, accounts);
         self.discover_with(|kind, workspaces| {
-            let Ok(login) = crate::agents::room_login(&state.workspace_record, accounts, kind)
-            else {
+            let Some(login) = logins.login(kind.as_str()) else {
                 return Vec::new();
             };
             crate::agents::find_definition(kind.as_str())
-                .map(|adapter| adapter.discover_local_sessions(workspaces, &login.env(&ambient)))
+                .map(|adapter| adapter.discover_local_sessions(workspaces, &logins.env(&login)))
                 .unwrap_or_default()
         })
     }
@@ -274,13 +269,14 @@ thread_local! {
 /// Probe wiring and provider sessions once, publish one semantic cache, and
 /// return fresh values even when its disposable write fails.
 pub(super) fn refresh_published(
+    state: &StatePaths,
     runtime: &RuntimePaths,
     session_name: &str,
     panes: &[PaneRef],
 ) -> AgentProjection {
     let wiring = probe_current();
     let inputs = LocalSessionInputs::from_panes(panes);
-    let observations = inputs.discover(runtime);
+    let observations = inputs.discover(state);
     let published = AgentProjectionPublication {
         session_name: session_name.to_owned(),
         wiring: wiring.clone(),

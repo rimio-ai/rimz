@@ -223,6 +223,7 @@ fn consumer_adopt_fixture(warm_parse: bool) -> ConsumerAdoptFixture {
     let projection = rimz::sidebar::enrich::enrich_workspace(
         snapshot,
         Some(&frame),
+        &workspace.paths,
         &workspace.runtime,
         None,
         rimz::sidebar::enrich::FoldOpts {
@@ -650,6 +651,7 @@ fn enrich_cached(bencher: Bencher) {
             divan::black_box(rimz::sidebar::enrich::enrich(
                 fixture.snapshot,
                 Some(&fixture.frame),
+                &fixture._workspace.paths,
                 &fixture.runtime,
                 None,
                 None,

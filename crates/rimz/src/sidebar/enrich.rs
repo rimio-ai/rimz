@@ -9,7 +9,6 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::RuntimePaths;
 use crate::agents::spending::SpendingCaches;
 use crate::forge::pr_state::{PrLink, read_pr_state_cache};
 use crate::harness::auto_continue::{self, ResumeMessage};
@@ -21,6 +20,7 @@ use crate::store::snapshot::{
     SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
     TruthNotice, WorktreeCi, WorktreePrState, WorktreeTrunkSync, compute_lazy_agent_pairings,
 };
+use crate::{RuntimePaths, StatePaths};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -422,9 +422,14 @@ impl WorkspaceSnapshot {
 ///
 /// The fold reads only runtime caches and sidecars unless `opts.lanes` supplies
 /// freshly refreshed account, spending, and PR values for projection.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "room state is explicit alongside runtime paths; local projection also needs the excluded pane"
+)]
 pub fn enrich(
     snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
+    state: &StatePaths,
     runtime: &RuntimePaths,
     store: Option<&Store>,
     exclude: Option<&PaneId>,
@@ -432,7 +437,7 @@ pub fn enrich(
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
     project_local(
-        enrich_workspace(snapshot, frame, runtime, store, opts, diag),
+        enrich_workspace(snapshot, frame, state, runtime, store, opts, diag),
         frame,
         exclude,
     )
@@ -441,12 +446,15 @@ pub fn enrich(
 pub fn enrich_workspace(
     snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
+    state: &StatePaths,
     runtime: &RuntimePaths,
     store: Option<&Store>,
     opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> WorkspaceSnapshot {
-    WorkspaceSnapshot(enrich_core(snapshot, frame, runtime, store, opts, diag))
+    WorkspaceSnapshot(enrich_core(
+        snapshot, frame, state, runtime, store, opts, diag,
+    ))
 }
 
 /// Apply the renderer-owned pane exclusion, own-view, and presence verdict.
@@ -486,6 +494,7 @@ pub(crate) fn project_local(
 fn enrich_core(
     mut snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
+    state: &StatePaths,
     runtime: &RuntimePaths,
     store: Option<&Store>,
     mut opts: FoldOpts<'_>,
@@ -603,12 +612,8 @@ fn enrich_core(
     // pane presence alone cannot see a host whose child stopped serving. The
     // provider's own record of the serving process settles it; a host with no
     // record stays healthy, because absence of evidence is not a failure.
-    let logins = crate::StatePaths::for_workspace(runtime.workspace_id.clone())
-        .ok()
-        .map(|paths| {
-            crate::agents::RoomLoginSet::resolve(&paths.workspace_record, &machine_config.accounts)
-        })
-        .unwrap_or_else(|| crate::agents::RoomLoginSet::new(None, None, Default::default()));
+    let logins =
+        crate::agents::RoomLoginSet::resolve(&state.workspace_record, &machine_config.accounts);
     let claude_rc_enabled = machine_config.remote_control.enabled_for("claude");
     let remote_control_health = RemoteControlServerHealth {
         claude_host_serving: frame.map(|frame| {

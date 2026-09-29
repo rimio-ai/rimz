@@ -253,6 +253,7 @@ mod tests {
         let enriched = enrich(
             build_snapshot(),
             None,
+            &crate::StatePaths::under(workspace.clone(), dir.path()).unwrap(),
             &runtime,
             None,
             None,

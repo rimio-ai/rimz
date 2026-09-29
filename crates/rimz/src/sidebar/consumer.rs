@@ -268,6 +268,7 @@ fn read_published_workspace_snapshot(
     let workspace = enrich_workspace(
         base,
         cache.as_deref(),
+        state,
         runtime,
         store.as_ref(),
         FoldOpts {
