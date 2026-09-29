@@ -479,6 +479,8 @@ pub struct ExecRequest {
         deserialize_with = "crate::config::deserialize_optional_skill_list"
     )]
     pub skills: Option<Vec<crate::config::SkillName>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     #[serde(default)]
     pub provider_account: ProviderAccountState,
     pub run_id: Option<RunId>,
@@ -507,6 +509,7 @@ impl ExecRequest {
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
             team_prompt: cell.team_prompt.clone(),
             skills: cell.skills.clone(),
+            allowed_tools: cell.allowed_tools.clone(),
             isolation_default: cell.isolation_default,
             identity,
             worktree_path,
@@ -526,6 +529,7 @@ impl ExecRequest {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            allowed_tools: None,
             isolation_default: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,

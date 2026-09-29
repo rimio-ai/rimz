@@ -46,6 +46,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
         files: vec!["/prompts/team.md".into()],
     });
     posture.launch.skills = Some(vec!["merge".parse().unwrap()]);
+    posture.launch.allowed_tools = Some(vec!["Bash(git *)".parse().unwrap()]);
     posture.launch.isolation_default = Some(rimz::config::Isolation::Sandbox);
     let mut older = RunRecord::new(
         rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/project")),
@@ -84,6 +85,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
                 team_prompt: posture.launch.team_prompt.clone(),
                 skills: posture.launch.skills.clone(),
+                allowed_tools: posture.launch.allowed_tools.clone(),
                 isolation_default: posture.launch.isolation_default,
                 provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
                 run_id: Some(newer.run_id.clone()),

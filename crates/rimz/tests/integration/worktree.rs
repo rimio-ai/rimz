@@ -41,6 +41,7 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: Some(worktree.to_path_buf()),

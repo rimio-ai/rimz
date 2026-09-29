@@ -104,6 +104,7 @@ pub struct AgentCell {
     /// cell of a staged team whose prompt has a base.
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     /// Canonical shared launch identity selected by profiles, roles, and CLI overlays.
     pub launch: crate::agents::LaunchParams,
 }
@@ -129,6 +130,7 @@ impl Cell {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            allowed_tools: None,
             isolation_default: None,
             launch: crate::agents::LaunchParams::default(),
         })
@@ -169,6 +171,7 @@ pub struct ResolvedProfile {
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub skills: Option<Vec<crate::config::SkillName>>,
+    pub allowed_tools: Option<Vec<crate::config::ToolRule>>,
     pub args: Option<String>,
 }
 
@@ -189,6 +192,7 @@ impl ResolvedProfile {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            allowed_tools: None,
             isolation_default: None,
             args: None,
         }
@@ -198,6 +202,9 @@ impl ResolvedProfile {
         self.isolation_default = self.isolation_default.or(layer.isolation);
         if self.skills.is_none() {
             self.skills.clone_from(&layer.skills);
+        }
+        if self.allowed_tools.is_none() {
+            self.allowed_tools.clone_from(&layer.allowed_tools);
         }
         self.launch.mode = self.launch.mode.or(layer.mode);
         if self.launch.model.is_none() {
@@ -1459,6 +1466,7 @@ fn agent_cell_from(
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
         team_prompt: None,
         skills: resolved.skills.clone(),
+        allowed_tools: resolved.allowed_tools.clone(),
         launch: crate::agents::LaunchParams {
             profile,
             mode,
@@ -1935,6 +1943,9 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
     if original.skills.is_none() {
         original.skills.clone_from(&base.skills);
+    }
+    if original.allowed_tools.is_none() {
+        original.allowed_tools.clone_from(&base.allowed_tools);
     }
     // Keep the role-field merge aligned with ResolvedProfile::fill_missing.
     original.isolation_default = original.isolation_default.or(base.isolation_default);

@@ -187,6 +187,7 @@ pub(super) struct RunPaneCmdArgs<'a> {
     pub(super) append_system_prompt_files: &'a [rimz::config::PromptSource],
     pub(super) team_prompt: Option<&'a rimz::harness::team_prompt::TeamPrompt>,
     pub(super) skills: Option<&'a [rimz::config::SkillName]>,
+    pub(super) allowed_tools: Option<&'a [rimz::config::ToolRule]>,
     pub(super) isolation_default: Option<rimz::config::Isolation>,
     pub(super) self_cleanup_on_completion: bool,
     pub(super) subagent: bool,
@@ -211,6 +212,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
             append_system_prompt_files: args.append_system_prompt_files.to_vec(),
             team_prompt: args.team_prompt.cloned(),
             skills: args.skills.map(<[_]>::to_vec),
+            allowed_tools: args.allowed_tools.map(<[_]>::to_vec),
             isolation_default: args.isolation_default,
             provider_account: args.provider_account_binding.map_or(
                 rimz::harness::launch::ProviderAccountState::Unbound,

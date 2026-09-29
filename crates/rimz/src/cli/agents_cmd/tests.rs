@@ -29,7 +29,6 @@ fn planner_profiles() -> ProfilesConfig {
     profiles.0.insert(
         "planner".to_owned(),
         Profile {
-            allowed_tools: None,
             preferred_family: None,
             model_tier: None,
             isolation: None,
@@ -45,6 +44,7 @@ fn planner_profiles() -> ProfilesConfig {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            allowed_tools: None,
             args: None,
         },
     );
@@ -242,7 +242,6 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
         Profile {
-            allowed_tools: None,
             preferred_family: None,
             model_tier: None,
             isolation: None,
@@ -258,13 +257,13 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            allowed_tools: None,
             args: None,
         },
     );
     machine.subagents.profiles.0.insert(
         "child-only".to_owned(),
         Profile {
-            allowed_tools: None,
             preferred_family: None,
             model_tier: None,
             isolation: None,
@@ -280,6 +279,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            allowed_tools: None,
             args: None,
         },
     );
@@ -506,6 +506,7 @@ fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -989,6 +990,7 @@ mod parse {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            allowed_tools: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: Some(
                 "run_0123456789abcdef0123456789abcdef"
@@ -1538,7 +1540,6 @@ mod launch_options {
         machine.agents.profiles.0.insert(
             "warn".to_owned(),
             rimz::config::Profile {
-                allowed_tools: None,
                 preferred_family: None,
                 model_tier: None,
                 isolation: None,
@@ -1554,6 +1555,7 @@ mod launch_options {
                 system_prompt_file: None,
                 append_system_prompt_files: Vec::new(),
                 skills: None,
+                allowed_tools: None,
                 args: Some("--model raw".to_owned()),
             },
         );
@@ -2570,6 +2572,7 @@ fn bare_exec_args() -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,

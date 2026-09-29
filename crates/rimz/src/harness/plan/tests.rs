@@ -89,7 +89,6 @@ fn cli_model_tiers_use_chain_preference_unless_agent_overrides_it() {
         "claude-coder".into(),
         Profile {
             agent: "claude".into(),
-            allowed_tools: None,
             preferred_family: Some("codex".into()),
             ..toml::from_str("agent = 'claude'").unwrap()
         },
@@ -155,6 +154,7 @@ fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
             files: vec!["/prompts/team.md".into()],
         }),
         skills: Some(vec!["merge".parse().unwrap()]),
+        allowed_tools: Some(vec!["Bash(git *)".parse().unwrap()]),
         isolation_default: Some(crate::config::Isolation::Sandbox),
         mode: Some(PermissionMode::Auto),
         model: Some("opus".to_owned()),
@@ -179,6 +179,7 @@ fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
             append_system_prompt_files: posture.append_system_prompt_files.clone(),
             team_prompt: posture.team_prompt.clone(),
             skills: posture.skills.clone(),
+            allowed_tools: posture.allowed_tools.clone(),
             isolation_default: posture.isolation_default,
             ..ExecRequest::bare_launch(kind, Vec::new())
         }
@@ -240,6 +241,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         append_system_prompt_files: vec![PathBuf::from("append.md").into()],
         team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap()]),
+        allowed_tools: Some(vec!["Read".parse().unwrap()]),
         launch: LaunchParams {
             mode: Some(PermissionMode::Yolo),
             model: Some("o3".to_owned()),
@@ -257,6 +259,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         append_system_prompt_files,
         team_prompt,
         skills,
+        allowed_tools,
         launch,
     } = cell.clone();
 
@@ -270,6 +273,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             append_system_prompt_files,
             team_prompt,
             skills,
+            allowed_tools,
             mode: launch.mode,
             model: launch.model,
             effort: launch.effort,
@@ -316,6 +320,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        allowed_tools: None,
         launch: LaunchParams {
             profile: role.map(|role| format!("{role}-profile")),
             role: role.map(ToOwned::to_owned),
@@ -395,6 +400,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        allowed_tools: None,
         launch: LaunchParams {
             profile: Some(format!("{kind}-coder")),
             model: model.map(str::to_owned),
@@ -432,7 +438,6 @@ fn configured_profile(
     args: Option<&str>,
 ) -> Profile {
     Profile {
-        allowed_tools: None,
         preferred_family: None,
         model_tier: None,
         agent: agent.to_owned(),
@@ -448,6 +453,7 @@ fn configured_profile(
         system_prompt_file: system_prompt_file.map(Into::into),
         append_system_prompt_files: Vec::new(),
         skills: None,
+        allowed_tools: None,
         args: args.map(str::to_owned),
     }
 }
@@ -1464,6 +1470,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            allowed_tools: None,
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
                 mode,
@@ -1558,6 +1565,7 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        allowed_tools: None,
         launch: LaunchParams {
             model: Some("gpt-6-astra".to_owned()),
             ..Default::default()
@@ -1939,6 +1947,7 @@ fn launch_request_names_and_metadata() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        allowed_tools: None,
         launch: LaunchParams {
             profile: Some("codex-coder".to_owned()),
             mode: Some(PermissionMode::Yolo),
@@ -2433,6 +2442,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap()]),
+        allowed_tools: None,
         launch: LaunchParams::default(),
     });
     let launch = AgentLaunchIdentity {
@@ -2537,6 +2547,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: Some(Vec::new()),
+        allowed_tools: None,
         launch: LaunchParams {
             profile: Some("new-profile".to_owned()),
             role: Some("new-role".to_owned()),

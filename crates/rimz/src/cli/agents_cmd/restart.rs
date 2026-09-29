@@ -339,6 +339,7 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: posture.launch.skills.clone(),
+        allowed_tools: posture.launch.allowed_tools.clone(),
         isolation_default: posture.launch.isolation_default,
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
@@ -525,6 +526,7 @@ mod tests {
                     files: vec!["/prompts/team.md".into()],
                 }),
                 skills: Some(vec!["merge".parse().unwrap()]),
+                allowed_tools: Some(vec!["Read".parse().unwrap()]),
                 isolation_default: Some(rimz::config::Isolation::Sandbox),
                 model: Some("opus".to_owned()),
                 ..Default::default()
@@ -537,6 +539,11 @@ mod tests {
         };
 
         let request = relaunch_request(&agent, &posture, action, None);
+
+        let Cell::Agent(cell) = restart_cell(&agent, &posture) else {
+            panic!("agent cell")
+        };
+        assert_eq!(cell.allowed_tools, posture.launch.allowed_tools);
 
         assert_eq!(
             request,
@@ -551,6 +558,7 @@ mod tests {
                 append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
                 team_prompt: posture.launch.team_prompt.clone(),
                 skills: posture.launch.skills.clone(),
+                allowed_tools: posture.launch.allowed_tools.clone(),
                 provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
                 run_id: None,
                 worktree_path: None,
