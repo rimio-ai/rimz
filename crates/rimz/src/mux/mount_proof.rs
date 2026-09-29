@@ -22,13 +22,9 @@ fn wait_for_sidebar_heartbeat(
     {
         return true;
     }
-    let Ok(runtime) = crate::disk::paths::RuntimePaths::for_workspace(opts.workspace_id.clone())
-    else {
-        return false;
-    };
     let deadline = Instant::now() + Duration::from_secs(6);
     loop {
-        if crate::wakeup::heartbeat::fresh_sidebar_heartbeats(&runtime)
+        if crate::wakeup::heartbeat::fresh_sidebar_heartbeats(&opts.runtime)
             .into_iter()
             .any(|heartbeat| {
                 heartbeat.mux == mux

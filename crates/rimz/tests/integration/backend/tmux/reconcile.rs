@@ -15,9 +15,16 @@ sed "s/SIDEBAR_PANE/$TMUX_PANE/" "$0.heartbeat" > "$rimz_test_heartbeat_dir/side
 sleep 600
 "#,
     );
-    let mut opts = sidebar_opts("rimz-replace-width", stub, Some(240));
+    let mut opts = sidebar_opts(
+        server._tempdir.path(),
+        "rimz-replace-width",
+        stub,
+        Some(240),
+    );
     opts.workspace_id = WorkspaceId::from_project_root(room.path());
-    let runtime = RuntimePaths::for_workspace(opts.workspace_id.clone()).unwrap();
+    let state = rimz::StatePaths::for_project_root_under(room.path(), room.path()).unwrap();
+    opts.runtime = RuntimePaths::for_state_under(&state, room.path());
+    let runtime = &opts.runtime;
     std::fs::create_dir_all(&runtime.heartbeat_dir).unwrap();
     let mut heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
         opts.workspace_id.clone(),
@@ -83,7 +90,7 @@ fn sidebar_cwd_fixture() -> (TmuxServer, TempDir, TempDir, TempDir, SidebarPaneO
     let room = TempDir::new().unwrap();
     let tab = TempDir::new().unwrap();
     let (stub_dir, stub) = sidebar_command_stub();
-    let mut opts = sidebar_opts("rimz-sidebar-cwd", stub, Some(200));
+    let mut opts = sidebar_opts(server._tempdir.path(), "rimz-sidebar-cwd", stub, Some(200));
     opts.cwd = tab.path().to_owned();
     server
         .backend
@@ -185,7 +192,7 @@ fn reconcile_without_client_or_probe_leaves_width_seed_alone() {
     server.ensure_with_shell(session);
     assert_eq!(server.display(session, "#{window_width}"), "80");
     let (_stub_dir, stub) = sidebar_command_stub();
-    let opts = sidebar_opts(session, stub, None);
+    let opts = sidebar_opts(server._tempdir.path(), session, stub, None);
     server
         .backend
         .open_sidebar(&opts, None)
@@ -237,7 +244,7 @@ fn reconcile_normalizes_detached_geometry_from_the_attach_probe() {
         "the detached fixture should begin at tmux's fictional default width",
     );
     let (_stub_dir, stub) = sidebar_command_stub();
-    let opts = sidebar_opts(session, stub, Some(212));
+    let opts = sidebar_opts(server._tempdir.path(), session, stub, Some(212));
     server
         .backend
         .open_sidebar(&opts, None)
@@ -287,7 +294,7 @@ fn reconcile_repairs_sidebar_width_outside_the_shared_band() {
     let session = "rimz-width-repair";
     ensure_rimz_session(&server, session, Some((240, 50)));
     let (_stub_dir, stub) = sidebar_command_stub();
-    let opts = sidebar_opts(session, stub, Some(240));
+    let opts = sidebar_opts(server._tempdir.path(), session, stub, Some(240));
     server
         .backend
         .open_sidebar(&opts, None)
@@ -331,8 +338,8 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
     server.ensure_with_shell(session_a);
     server.ensure_with_shell(session_b);
     let (_stub_dir, stub) = sidebar_command_stub();
-    let opts_a = sidebar_opts(session_a, stub.clone(), Some(80));
-    let opts_b = sidebar_opts(session_b, stub, Some(80));
+    let opts_a = sidebar_opts(server._tempdir.path(), session_a, stub.clone(), Some(80));
+    let opts_b = sidebar_opts(server._tempdir.path(), session_b, stub, Some(80));
     server
         .backend
         .open_sidebar(&opts_a, None)
@@ -490,7 +497,7 @@ fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
             pinned: true,
         },
         detected_view_size: Some((80, 24)),
-        ..sidebar_opts(session, stub, Some(80))
+        ..sidebar_opts(server._tempdir.path(), session, stub, Some(80))
     };
     let report = server
         .backend
@@ -588,10 +595,18 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
         .backend
         .reconcile_sidebars(
             &SidebarPaneOptions {
+                runtime: rimz::RuntimePaths::for_state_under(
+                    &rimz::StatePaths::under(
+                        WorkspaceId::from_project_root(Path::new("/tmp/rimz-orphan")),
+                        server._tempdir.path(),
+                    )
+                    .expect("fixture state"),
+                    server._tempdir.path(),
+                ),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-orphan")),
                 project_root: std::env::current_dir().expect("cwd"),
                 cwd: std::env::current_dir().expect("cwd"),
-                ..sidebar_opts("multi", rimz_bin, Some(80))
+                ..sidebar_opts(server._tempdir.path(), "multi", rimz_bin, Some(80))
             },
             // No live sidebars known: the orphan's pane is unclaimed, so it closes.
             &rimz::mux::SidebarLiveness::default(),

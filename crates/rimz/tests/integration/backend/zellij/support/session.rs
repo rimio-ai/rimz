@@ -50,6 +50,11 @@ pub(in crate::backend::zellij) fn sidebar_opts(
         pinned: false,
     };
     SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(WorkspaceId::from_project_root(&workspace_root), cwd)
+                .expect("fixture state"),
+            cwd,
+        ),
         session_name: name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(&workspace_root),
         project_root: cwd.to_path_buf(),

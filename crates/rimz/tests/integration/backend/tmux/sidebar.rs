@@ -36,10 +36,16 @@ fn live_work_boundary_resize_is_audited() {
         ]);
     }
     let opts = SidebarPaneOptions {
+        runtime: env.runtime_paths(),
         workspace_id: env.workspace_id.clone(),
         project_root: env.project_root.clone(),
         cwd: env.project_root.clone(),
-        ..sidebar_opts(session, env.rimz_bin().to_path_buf(), Some(213))
+        ..sidebar_opts(
+            server._tempdir.path(),
+            session,
+            env.rimz_bin().to_path_buf(),
+            Some(213),
+        )
     };
     server
         .backend
@@ -141,10 +147,11 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
         ]);
     }
     let opts = SidebarPaneOptions {
+        runtime: env.runtime_paths(),
         workspace_id: env.workspace_id.clone(),
         project_root: env.project_root.clone(),
         cwd: env.project_root.clone(),
-        ..sidebar_opts(session, binary.clone(), Some(120))
+        ..sidebar_opts(server._tempdir.path(), session, binary.clone(), Some(120))
     };
     server
         .backend
@@ -269,7 +276,10 @@ fn sidebar_width_step_is_exact_two_columns() {
     let (_stub_dir, stub) = sidebar_command_stub();
     server
         .backend
-        .open_sidebar(&sidebar_opts(session, stub, Some(120)), None)
+        .open_sidebar(
+            &sidebar_opts(server._tempdir.path(), session, stub, Some(120)),
+            None,
+        )
         .expect("open sidebar");
     let pane = wait_for_sidebar_pane(&server, session, None);
     let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-width-step"));
@@ -288,7 +298,7 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
     let server = TmuxServer::new();
     ensure_rimz_session(&server, "verdict", Some((120, 50)));
     let (_stub_dir, stub) = sidebar_command_stub();
-    let opts = sidebar_opts("verdict", stub, Some(120));
+    let opts = sidebar_opts(server._tempdir.path(), "verdict", stub, Some(120));
     server
         .backend
         .open_sidebar(&opts, None)
@@ -406,7 +416,7 @@ fn sidebar_birth_and_first_attach_preserve_work_shell_contract() {
     let server = TmuxServer::new();
     ensure_rimz_session(&server, session, Some((100, 30)));
     let (_stub_dir, stub) = sidebar_command_stub();
-    let mut opts = sidebar_opts(session, stub, Some(100));
+    let mut opts = sidebar_opts(server._tempdir.path(), session, stub, Some(100));
     opts.pristine_birth = true;
     let sidebar_cols = u64::from(opts.target.cols(Some(100)).get());
     let birth_shell_cols = 100 - sidebar_cols - 1;
@@ -511,7 +521,7 @@ fn new_window_hook_sidebar_is_chrome_before_title() {
     let server = TmuxServer::new();
     ensure_rimz_session(&server, session, Some((100, 30)));
     let (_stub_dir, stub) = delayed_sidebar_title_command_stub();
-    let opts = sidebar_opts(session, stub, Some(100));
+    let opts = sidebar_opts(server._tempdir.path(), session, stub, Some(100));
     server
         .backend
         .open_sidebar(&opts, None)
@@ -538,7 +548,7 @@ fn new_window_hook_respawns_plain_shell_at_final_width_only() {
     let server = TmuxServer::new();
     ensure_rimz_session(&server, session, Some((100, 30)));
     let (_stub_dir, stub) = sidebar_command_stub();
-    let opts = sidebar_opts(session, stub, Some(100));
+    let opts = sidebar_opts(server._tempdir.path(), session, stub, Some(100));
     let sidebar_cols = u64::from(opts.target.cols(Some(100)).get());
     server
         .backend
@@ -689,10 +699,11 @@ fn fresh_foreign_producer_still_repairs_tmux_session_view() {
     );
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = SidebarPaneOptions {
+        runtime: runtime.clone(),
         workspace_id: workspace_id.clone(),
         project_root: workspace.path().to_path_buf(),
         cwd: workspace.path().to_path_buf(),
-        ..sidebar_opts("rimz-foreign", stub, Some(80))
+        ..sidebar_opts(server._tempdir.path(), "rimz-foreign", stub, Some(80))
     };
     let outcome = launch_sidebar_if_needed(&server.backend, &runtime, &opts, None);
     assert_eq!(outcome, SidebarLaunchOutcome::SkippedFresh);
@@ -794,7 +805,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
             "feature",
             &[2, 1],
         )],
-        ..sidebar_opts("rimz-resume", stub, Some(80))
+        ..sidebar_opts(server._tempdir.path(), "rimz-resume", stub, Some(80))
     };
     server
         .backend

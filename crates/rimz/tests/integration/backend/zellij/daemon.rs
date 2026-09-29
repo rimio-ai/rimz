@@ -31,6 +31,14 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             },
         },
         sidebar: SidebarPaneOptions {
+            runtime: rimz::RuntimePaths::for_state_under(
+                &rimz::StatePaths::under(
+                    WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
+                    stub.parent().expect("stub directory"),
+                )
+                .expect("fixture state"),
+                stub.parent().expect("stub directory"),
+            ),
             session_name: session.to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
             project_root: std::env::temp_dir(),
@@ -113,6 +121,14 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
     };
     let backend = ZellijBackend::with_runtime_dir(xdg);
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(
+                WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
+                cwd.path(),
+            )
+            .expect("fixture state"),
+            cwd.path(),
+        ),
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgfirst")),
         project_root: cwd.path().to_path_buf(),

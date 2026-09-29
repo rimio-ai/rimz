@@ -27,6 +27,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
         let (_stub_dir, stub) = sidebar_stub_alive_for(600);
         let mut sidebar = sidebar_opts(room.name(), &env.project_root, stub, 160);
         sidebar.workspace_id = workspace.workspace_id.clone();
+        sidebar.runtime = env.runtime_paths();
         publish_room_bin(xdg, &sidebar);
         backend.open_sidebar(&sidebar, None).expect("open sidebar");
         wait_for_pane_count(xdg, room.name(), 2);
@@ -174,6 +175,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
     let backend = ZellijBackend::with_runtime_dir(xdg);
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = SidebarPaneOptions {
+        runtime: env.runtime_paths(),
         session_name: workspace.session_name.clone(),
         workspace_id: workspace.workspace_id.clone(),
         project_root: workspace.project_root.clone(),

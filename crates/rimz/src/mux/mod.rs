@@ -413,6 +413,8 @@ pub fn ambient_pane_id() -> Option<PaneId> {
 
 #[derive(Clone, Debug)]
 pub struct SidebarPaneOptions {
+    /// The room's runtime paths, where the mount proof reads heartbeats.
+    pub runtime: crate::disk::paths::RuntimePaths,
     pub session_name: String,
     pub workspace_id: WorkspaceId,
     /// The workspace root behind `workspace_id` — with it, the identity pin a

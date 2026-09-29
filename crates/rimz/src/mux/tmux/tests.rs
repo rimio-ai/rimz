@@ -483,6 +483,11 @@ fn open_tab_rejects_an_empty_layout() {
     // any tmux command runs, so this never forks tmux and needs no live server.
     let backend = TmuxBackend::with_socket("/nonexistent/rimz-open-tab.sock");
     let sidebar = SidebarPaneOptions {
+        runtime: crate::disk::paths::RuntimePaths::under(
+            WorkspaceId::from_project_root(Path::new("/tmp/rimz-empty")),
+            tempfile::tempdir().expect("runtime root").path(),
+        )
+        .expect("runtime paths"),
         session_name: "rimz-empty".to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-empty")),
         project_root: PathBuf::from("/tmp/rimz-empty"),

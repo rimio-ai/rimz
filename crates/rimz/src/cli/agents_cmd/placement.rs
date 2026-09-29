@@ -118,7 +118,7 @@ pub(super) struct PlacementErrors {
 }
 
 enum PreparedPlacement {
-    NewTab(TabOptions),
+    NewTab(Box<TabOptions>),
     NewPane(SplitPaneOptions),
     SamePane {
         argv: Vec<String>,
@@ -195,7 +195,7 @@ fn prepare_resolved(
         ..
     } = request;
     Ok(match placement {
-        Placement::NewTab => PreparedPlacement::NewTab(TabOptions {
+        Placement::NewTab => PreparedPlacement::NewTab(Box::new(TabOptions {
             env: identity_env,
             title,
             panes,
@@ -203,7 +203,7 @@ fn prepare_resolved(
             dock_sidebar: true,
             after: None,
             sidebar,
-        }),
+        })),
         Placement::NewPane => {
             let pane = single_pane(&panes)?;
             PreparedPlacement::NewPane(SplitPaneOptions {
@@ -280,6 +280,11 @@ mod tests {
                 focused_pane: 0,
             },
             sidebar: SidebarPaneOptions {
+                runtime: rimz::RuntimePaths::under(
+                    WorkspaceId::from_project_root(Path::new("/work")),
+                    tempfile::tempdir().expect("runtime root").path(),
+                )
+                .expect("runtime paths"),
                 session_name: "room".to_owned(),
                 workspace_id: WorkspaceId::from_project_root(Path::new("/work")),
                 project_root: PathBuf::from("/work"),

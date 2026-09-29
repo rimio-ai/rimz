@@ -220,6 +220,7 @@ impl TestRoom {
         .expect("nonzero test width");
         let share = crate::mux::WidthPermille::from_cols(requested_cols, view_cols);
         SidebarPaneOptions {
+            runtime: self.runtime.clone(),
             session_name: "rimz-test".to_owned(),
             workspace_id: self.workspace_id.clone(),
             project_root: self.project_root.path().to_path_buf(),

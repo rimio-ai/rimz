@@ -394,6 +394,7 @@ impl RoomContext {
             None => crate::mux::width_target::resolve(&self.runtime, self.width, None),
         };
         SidebarPaneOptions {
+            runtime: self.runtime.clone(),
             session_name: self.workspace.session_name.clone(),
             workspace_id: self.workspace.workspace_id.clone(),
             project_root: self.workspace.project_root.clone(),

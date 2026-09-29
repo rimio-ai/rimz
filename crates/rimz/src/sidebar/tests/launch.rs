@@ -5,6 +5,7 @@ use super::*;
 fn sidebar_opts(harness: &Harness) -> SidebarPaneOptions {
     let cwd = harness.path().to_path_buf();
     SidebarPaneOptions {
+        runtime: harness.runtime.clone(),
         session_name: "session".to_owned(),
         workspace_id: harness.workspace_id.clone(),
         project_root: cwd.clone(),

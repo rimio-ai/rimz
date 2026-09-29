@@ -663,10 +663,16 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
                 dock_sidebar: false,
                 after: None,
                 sidebar: SidebarPaneOptions {
+                    runtime: env.runtime_paths(),
                     workspace_id: workspace.workspace_id.clone(),
                     project_root: workspace.project_root.clone(),
                     cwd: env.project_root.clone(),
-                    ..sidebar_opts(&workspace.session_name, stub, Some(160))
+                    ..sidebar_opts(
+                        server._tempdir.path(),
+                        &workspace.session_name,
+                        stub,
+                        Some(160),
+                    )
                 },
             })
             .expect("open live agent pane");
@@ -862,10 +868,16 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
             dock_sidebar: false,
             after: None,
             sidebar: SidebarPaneOptions {
+                runtime: env.runtime_paths(),
                 workspace_id: workspace.workspace_id.clone(),
                 project_root: workspace.project_root.clone(),
                 cwd: workspace.worktree_root.clone(),
-                ..sidebar_opts(&workspace.session_name, stub, Some(160))
+                ..sidebar_opts(
+                    server._tempdir.path(),
+                    &workspace.session_name,
+                    stub,
+                    Some(160),
+                )
             },
         })
         .expect("open resumed agent tab");
@@ -1985,10 +1997,16 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
             dock_sidebar: true,
             after: None,
             sidebar: SidebarPaneOptions {
+                runtime: env.runtime_paths(),
                 workspace_id: workspace.workspace_id.clone(),
                 project_root: workspace.project_root.clone(),
                 cwd: worktree.clone(),
-                ..sidebar_opts(&workspace.session_name, stub, Some(160))
+                ..sidebar_opts(
+                    server._tempdir.path(),
+                    &workspace.session_name,
+                    stub,
+                    Some(160),
+                )
             },
         })
         .expect("open agent tab");
@@ -2050,10 +2068,16 @@ fn failing_close_pane_agent_drops_to_shell() {
             dock_sidebar: true,
             after: None,
             sidebar: SidebarPaneOptions {
+                runtime: env.runtime_paths(),
                 workspace_id: workspace.workspace_id.clone(),
                 project_root: workspace.project_root.clone(),
                 cwd: workspace.worktree_root.clone(),
-                ..sidebar_opts(&workspace.session_name, stub, Some(160))
+                ..sidebar_opts(
+                    server._tempdir.path(),
+                    &workspace.session_name,
+                    stub,
+                    Some(160),
+                )
             },
         })
         .expect("open agent tab");

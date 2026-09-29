@@ -861,6 +861,14 @@ fn reconcile_opts(
         pinned: false,
     };
     SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(
+                WorkspaceId::from_project_root(Path::new(workspace_root)),
+                stub.parent().expect("stub directory"),
+            )
+            .expect("fixture state"),
+            stub.parent().expect("stub directory"),
+        ),
         session_name: name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new(workspace_root)),
         project_root: project_root.to_path_buf(),

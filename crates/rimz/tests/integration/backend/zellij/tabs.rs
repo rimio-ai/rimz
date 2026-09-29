@@ -19,6 +19,11 @@ fn tab_injects_env_into_every_column_and_row() {
     let _client = AttachedClient::attach(&room, 200, 60);
     let (_stub_dir, stub) = sidebar_stub_alive_for(60);
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(WorkspaceId::from_project_root(cwd.path()), cwd.path())
+                .expect("fixture state"),
+            cwd.path(),
+        ),
         session_name: room.name().to_owned(),
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_owned(),
@@ -109,6 +114,11 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
     let cwd = TempDir::new().expect("cwd");
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(WorkspaceId::from_project_root(cwd.path()), cwd.path())
+                .expect("fixture state"),
+            cwd.path(),
+        ),
         session_name: room.name().to_owned(),
         workspace_id: WorkspaceId::from_project_root(cwd.path()),
         project_root: cwd.path().to_path_buf(),
@@ -585,6 +595,10 @@ fn open_tab_unfocused_routes_input_back_to_source() {
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-tabfocus"));
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(workspace_id.clone(), cwd.path()).expect("fixture state"),
+            cwd.path(),
+        ),
         session_name: name.clone(),
         workspace_id,
         project_root: cwd.path().to_path_buf(),
@@ -717,6 +731,14 @@ fn open_tab_after_anchor_inserts_next_to_it() {
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(
+                WorkspaceId::from_project_root(Path::new("/tmp/rimz-tab-anchor")),
+                cwd.path(),
+            )
+            .expect("fixture state"),
+            cwd.path(),
+        ),
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tab-anchor")),
         project_root: cwd.path().to_path_buf(),
@@ -813,6 +835,14 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
     let cwd = TempDir::new().expect("cwd tempdir");
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(
+                WorkspaceId::from_project_root(Path::new("/tmp/rimz-gallery")),
+                cwd.path(),
+            )
+            .expect("fixture state"),
+            cwd.path(),
+        ),
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-gallery")),
         project_root: cwd.path().to_path_buf(),
@@ -883,6 +913,14 @@ fn native_focused_split_preserves_docked_sidebar() {
 
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
     let sidebar = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(
+                WorkspaceId::from_project_root(Path::new("/tmp/rimz-worksplit")),
+                cwd.path(),
+            )
+            .expect("fixture state"),
+            cwd.path(),
+        ),
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-worksplit")),
         project_root: cwd.path().to_path_buf(),
