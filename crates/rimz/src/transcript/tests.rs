@@ -72,6 +72,53 @@ fn entry(entry: TranscriptKind, text: &str, at: &str) -> TranscriptEntry {
 }
 
 #[test]
+fn section_origin_round_trips_through_its_entry_encoding() {
+    let cases = [
+        (
+            SectionOrigin::Human,
+            TranscriptKind::Prompt,
+            None,
+            EntryOrigin::Human,
+        ),
+        (
+            SectionOrigin::Agent("@coder".to_owned()),
+            TranscriptKind::Message,
+            Some("@coder"),
+            EntryOrigin::Agent,
+        ),
+        (
+            SectionOrigin::Subagent("@child".to_owned()),
+            TranscriptKind::SubagentReport,
+            Some("@child"),
+            EntryOrigin::Harness,
+        ),
+        (
+            SectionOrigin::Notice("@rimz".to_owned()),
+            TranscriptKind::Wait,
+            Some("@rimz"),
+            EntryOrigin::Harness,
+        ),
+        (
+            SectionOrigin::Harness,
+            TranscriptKind::Prompt,
+            Some(HARNESS_FROM),
+            EntryOrigin::Harness,
+        ),
+    ];
+    for (origin, kind, from, read) in cases {
+        let (written_kind, written_from) = origin.entry_kind_and_from();
+        assert_eq!(
+            (written_kind, written_from.as_deref()),
+            (kind, from),
+            "{origin:?}"
+        );
+        let mut written = entry(written_kind, "text", "2026-06-01T00:00:00Z");
+        written.from = written_from;
+        assert_eq!(written.origin(), read, "{origin:?}");
+    }
+}
+
+#[test]
 fn reading_skips_legacy_paste_fragments_without_rewriting_the_log() {
     let (_dir, paths) = paths();
     // A real prompt carrying a paste pair mid-text is the user's, and a
