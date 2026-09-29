@@ -70,15 +70,18 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
     let catalog = rimz::config::MachineConfig::load()
         .map_err(|err| err.to_string())
         .and_then(|config| {
-            rimz::agents::LoginCatalog::from_config(&config.accounts).map_err(|err| err.to_string())
+            rimz::agents::LoginCatalog::from_config(&config.accounts)
+                .map(|catalog| (catalog, config.accounts.use_accounts))
+                .map_err(|err| err.to_string())
         });
     let room = ws.map(room_logins).transpose();
     match (catalog, room) {
-        (Ok(catalog), Ok(room)) => Probe::Ready(Accounts {
+        (Ok((catalog, machine)), Ok(room)) => Probe::Ready(Accounts {
             rows: account_rows(
                 &catalog,
                 room.flatten().as_ref(),
                 &rimz::agents::ambient_env(),
+                &machine,
             ),
         }),
         (Err(error), _) | (_, Err(error)) => Probe::Unavailable { error },
@@ -99,6 +102,7 @@ fn account_rows(
     catalog: &rimz::agents::LoginCatalog,
     room: Option<&rimz::ids::RoomLogins>,
     ambient: &std::collections::BTreeMap<String, String>,
+    machine: &rimz::ids::RoomLogins,
 ) -> Vec<AccountRow> {
     let in_room = |kind: &rimz::ids::AgentKind, name: &rimz::ids::LoginName| {
         room.and_then(|room| room.get(kind)) == Some(name)
@@ -111,6 +115,7 @@ fn account_rows(
             name: login.name().to_string(),
             home: login.home().map(|home| home.display().to_string()),
             room: in_room(login.kind(), login.name()),
+            machine_default: machine.get(login.kind()) == Some(login.name()),
             problem: login.preflight(ambient).err().map(|err| err.to_string()),
         })
         .collect();
@@ -125,8 +130,29 @@ fn account_rows(
             name: name.to_string(),
             home: None,
             room: true,
+            machine_default: !name.is_default() && machine.get(kind) == Some(name),
             problem,
         });
+    }
+    for (kind, name) in machine {
+        if let Err(error) = catalog.select_machine(kind, name) {
+            let problem = Some(error.to_string());
+            if let Some(row) = rows
+                .iter_mut()
+                .find(|row| row.kind == kind.as_str() && row.name == name.as_str())
+            {
+                row.problem = problem;
+                continue;
+            }
+            rows.push(AccountRow {
+                kind: kind.to_string(),
+                name: name.to_string(),
+                home: None,
+                room: false,
+                machine_default: true,
+                problem,
+            });
+        }
     }
     rows.sort_by(|a, b| (&a.kind, &a.name).cmp(&(&b.kind, &b.name)));
     rows
@@ -211,5 +237,39 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
         Err(err) => Probe::Unavailable {
             error: super::config_file_error_detail(&err, err.diagnosis()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_rows_mark_machine_defaults_and_report_dangling_selections() {
+        let config: rimz::config::AccountsConfig =
+            toml::from_str("[codex.work]\n[use]\ncodex = \"work\"\nclaude = \"missing\"\n")
+                .unwrap();
+        let catalog = rimz::agents::LoginCatalog::from_config(&config).unwrap();
+        let rows = account_rows(
+            &catalog,
+            None,
+            &std::collections::BTreeMap::new(),
+            &config.use_accounts,
+        );
+        let rows = serde_json::to_value(rows).unwrap();
+        let rows = rows.as_array().unwrap();
+        let work = rows.iter().find(|row| row["name"] == "work").unwrap();
+        assert_eq!(work["machine_default"], true);
+        let missing = rows
+            .iter()
+            .find(|row| row["name"] == "missing")
+            .expect("dangling machine selection");
+        assert_eq!(missing["machine_default"], true);
+        assert!(
+            missing["problem"]
+                .as_str()
+                .unwrap()
+                .contains("rimz accounts use claude default")
+        );
     }
 }
