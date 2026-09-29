@@ -503,7 +503,8 @@ path = "crates/rimz/src/transcript.rs"
 # The CLI locates a named channel's workspace from transcript evidence.
 # `agents wait` reads an interactive agent's final message from the transcript.
 # Entry origin is projected once here and read by rendering, thread assembly and attribution.
-surface-budget = 22
+# Submitted-prompt author vocabulary and its entry encoding sit beside the read-side origin projection.
+surface-budget = 23
 
 [[module]]
 path = "crates/rimz/src/trust.rs"

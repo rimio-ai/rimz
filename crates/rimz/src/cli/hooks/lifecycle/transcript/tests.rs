@@ -940,7 +940,8 @@ fn agent_message_does_not_answer_open_ask() {
     assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Message);
     assert!(has_open_native_ask(&store, "claude", "sess-1"));
 
-    use rimz::store::message::{PromptSection, SectionOrigin};
+    use rimz::store::message::PromptSection;
+    use rimz::transcript::SectionOrigin;
     let sections = [
         PromptSection {
             text: "attributed".into(),

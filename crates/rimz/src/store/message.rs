@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentCardRef, AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
+use crate::transcript::SectionOrigin;
 
 mod codec;
 
@@ -1061,16 +1062,6 @@ pub(crate) fn prompt_is_harness_delivered(prompt: &str) -> bool {
     classify_submitted_prompt(prompt, &[], &[])
         .into_iter()
         .all(|section| section.origin != SectionOrigin::Human)
-}
-
-/// Who authored one section of a submitted prompt.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SectionOrigin {
-    Human,
-    Agent(String),
-    Subagent(String),
-    Notice(String),
-    Harness,
 }
 
 /// A classified section and the queue record that supplied it, when known.
