@@ -471,6 +471,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
     crate::agents::definition::DefinitionSpec {
         mode: None,
         effort: Some("xhigh"),
+        effort_ladder: &["low", "medium", "high", "xhigh", "max"],
         models: &[
             crate::agents::definition::DefinitionModel {
                 name: "astra",

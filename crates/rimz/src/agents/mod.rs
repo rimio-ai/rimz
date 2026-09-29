@@ -133,7 +133,8 @@ pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_de
 use tools::ToolErr;
 pub use tools::definition_model_kind;
 pub(crate) use tools::{
-    ToolSet, definition_defaults, expand_model_alias, render_tool_args, tools_required,
+    ToolSet, definition_defaults, effort_ladder, expand_model_alias, render_tool_args,
+    tools_required,
 };
 use transcript::TranscriptRole;
 pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition};

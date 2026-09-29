@@ -23,15 +23,16 @@ struct SeatLoader<'a> {
     bases: &'a BTreeSet<String>,
     skills: SkillCheck<'a>,
     children: &'a BTreeSet<String>,
+    tiers: &'a crate::config::tiers::TierConfig,
 }
 
 pub(super) fn load(
     home: &Path,
-    agents: &Namespace,
-    subagents: &Namespace,
+    [agents, subagents]: [&Namespace; 2],
     bases: &BTreeSet<String>,
     skills: SkillCheck<'_>,
     children: &BTreeSet<String>,
+    tiers: &crate::config::tiers::TierConfig,
     loaded: &mut LoadedDefinitions,
 ) {
     let seats = SeatLoader {
@@ -41,6 +42,7 @@ pub(super) fn load(
         bases,
         skills,
         children,
+        tiers,
     };
     let paths = match files(home, "teams") {
         Ok(paths) => paths,
@@ -291,12 +293,22 @@ impl SeatLoader<'_> {
                 .as_ref()
                 .and_then(|name| self.agents.definitions.get(name));
         }
-        let kind = fm
+        let tier = fm
             .model
             .as_deref()
-            .and_then(agents::definition_model_kind)
-            .unwrap_or(&original.agent);
-        if !self.bases.contains(kind) {
+            .and_then(crate::config::tiers::ModelTier::from_model);
+        let kind = if tier.is_some() {
+            original
+                .preferred_family
+                .as_deref()
+                .unwrap_or(&original.agent)
+        } else {
+            fm.model
+                .as_deref()
+                .and_then(agents::definition_model_kind)
+                .unwrap_or(&original.agent)
+        };
+        if tier.is_none() && !self.bases.contains(kind) {
             return Err(DefinitionErr::new(
                 path,
                 format!(
@@ -349,11 +361,11 @@ impl SeatLoader<'_> {
             agent::Resolver::new(
                 self.home,
                 "agents",
-                &tree,
-                self.subagents,
+                [&tree, self.subagents],
                 self.bases,
                 self.skills,
                 self.children,
+                self.tiers,
             ),
             &mut seat,
         );
@@ -363,6 +375,9 @@ impl SeatLoader<'_> {
         let mut profile = seat.agent_profiles.0.remove(&role.agent).ok_or_else(|| {
             DefinitionErr::new(path, format!("seat '{}' failed to resolve", role.agent))
         })?;
+        profile
+            .preferred_family
+            .clone_from(&original.preferred_family);
         let mut crafts: Vec<_> = original
             .append_system_prompt_files
             .iter()

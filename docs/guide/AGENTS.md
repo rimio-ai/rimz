@@ -39,7 +39,7 @@ Each page owns the topics in its row. A fact from another row gets a link, never
 | `sidebar.md` | The attention model: the trust story, the zone map, the agent lifecycle, the jump loop, and the ranking. |
 | `docs/interface/sidebar.md` | Every exact drawing: glyph meanings, worktree markers, receipts, budget bars, narrow-pane fallbacks, and the key and mouse tables. |
 | `insight.md` | What every token and dollar figure means, how each is calculated, and the scopes and windows. |
-| `configuration.md` | Every config key and its default, the `~/.rimz` layout, and rebirth resume. |
+| `configuration.md` | Every config key and its default, choosing and binding model tiers, the `~/.rimz` layout, and rebirth resume. |
 | `theme.md` | Every `[theme]` key table. |
 | `subagents.md` | Delegation through `rimz subagents` from the user's side: child profiles, the `subagents:` allowlist, watching and stopping children, and choosing between a child, a peer run, and a team. |
 | `loops.md` | `loop.toml` and the four hands-off reflexes: auto-continue, auto-redeem, idle compaction, smart compaction. |
@@ -58,6 +58,7 @@ The left column is the word to use. A synonym for one of these is a bug, and a t
 | Term | Means |
 | --- | --- |
 | account | A provider login. |
+| model tier | A capability level bound to a model and default effort per family in machine config. |
 | park | An agent or run held rather than progressing: a crossed cap, a provider rate limit, spend limit, or overload, or a wake that never arrived. The sidebar's `⏸` covers the limit cases only. A message parks when it is held for the recipient's next turn boundary, the opposite of `--steer`. Sleeping is a separate state: an agent resting with a wait armed. |
 | reporting hooks | What `rimz hooks install` writes into an agent's own config. |
 | the run | What `rimz agents -p` or a scheduled task starts. |

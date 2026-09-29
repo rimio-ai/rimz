@@ -48,6 +48,8 @@ fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
 
 fn profile(agent: &str) -> Profile {
     Profile {
+        preferred_family: None,
+        model_tier: None,
         agent: agent.to_owned(),
         isolation: None,
         description: None,
@@ -750,6 +752,8 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
     let profiles = profiles([(
         "planner",
         Profile {
+            preferred_family: None,
+            model_tier: None,
             agent: "claude".to_owned(),
             isolation: None,
             description: None,

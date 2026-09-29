@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::{self, ManualSkill, PresetField, ToolSet};
+use crate::config::tiers::{ModelTier, TierConfig};
 use crate::config::{Isolation, Profile, PromptSource, SkillName};
 
 use super::frontmatter::AgentFrontmatter;
@@ -20,6 +21,8 @@ struct Resolved {
 pub(super) fn empty_profile(kind: &str) -> Profile {
     Profile {
         agent: kind.to_owned(),
+        preferred_family: Some(kind.to_owned()),
+        model_tier: None,
         isolation: None,
         skills: None,
         description: None,
@@ -64,11 +67,11 @@ impl<'a> Resolver<'a> {
     pub(super) fn new(
         home: &'a Path,
         namespace: &'a str,
-        tree: &'a Namespace,
-        foreign: &'a Namespace,
+        [tree, foreign]: [&'a Namespace; 2],
         bases: &'a BTreeSet<String>,
         skills: SkillCheck<'a>,
         allowed_children: &'a BTreeSet<String>,
+        tiers: &'a TierConfig,
     ) -> Self {
         Self {
             home,
@@ -78,6 +81,7 @@ impl<'a> Resolver<'a> {
             bases,
             skills,
             allowed_children,
+            tiers,
             resolved: BTreeMap::new(),
             trail: Vec::new(),
             errors: Vec::new(),
@@ -93,6 +97,7 @@ pub(super) struct Resolver<'a> {
     bases: &'a BTreeSet<String>,
     skills: SkillCheck<'a>,
     allowed_children: &'a BTreeSet<String>,
+    tiers: &'a TierConfig,
     resolved: BTreeMap<String, Option<Resolved>>,
     trail: Vec<String>,
     errors: Vec<DefinitionErr>,
@@ -149,6 +154,17 @@ impl Resolver<'_> {
                     .map(str::to_owned)
             })
             .ok_or_else(|| {
+                if fm
+                    .model
+                    .as_deref()
+                    .and_then(ModelTier::from_model)
+                    .is_some()
+                {
+                    return DefinitionErr::new(
+                        path,
+                        "model is a tier; name the preferred family in `agent:` (claude or codex)",
+                    );
+                }
                 DefinitionErr::new(
                     path,
                     format!(
@@ -176,6 +192,7 @@ impl Resolver<'_> {
             })?;
             fm.inherit(&parent.frontmatter);
             let mut profile = empty_profile(&parent.profile.agent);
+            profile.preferred_family = parent.profile.preferred_family;
             profile.append_system_prompt_files = parent.profile.append_system_prompt_files;
             profile
         } else {
@@ -191,6 +208,73 @@ impl Resolver<'_> {
                 format!("follows unknown profile '{parent_name}'{hint}"),
             ));
         };
+        let unresolved = fm.clone();
+        if let Some(tier) = fm.model.as_deref().and_then(ModelTier::from_model) {
+            let resolved = self
+                .tiers
+                .resolve(
+                    tier,
+                    profile
+                        .preferred_family
+                        .as_deref()
+                        .unwrap_or(&profile.agent),
+                    fm.effort.as_deref(),
+                )
+                .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
+            profile.agent = resolved.kind;
+            fm.model = Some(resolved.model);
+            fm.effort = Some(resolved.effort);
+            profile.model_tier = Some(resolved.provenance);
+        } else if let Some(shift) = fm
+            .effort
+            .as_deref()
+            .filter(|effort| super::super::tiers::is_relative_effort(effort))
+        {
+            let source = if definition.frontmatter.effort.is_some() {
+                String::new()
+            } else {
+                format!(" (inherited from '{parent_name}')")
+            };
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "effort {shift}{source} shifts a tier's default; name a tier in `model:` or use an absolute effort"
+                ),
+            ));
+        }
+        let fallback = profile
+            .model_tier
+            .as_ref()
+            .filter(|tier| tier.fell_back)
+            .map(|tier| {
+                format!(
+                    "tier {} resolved to {} {} because {} has no model at that tier",
+                    tier.tier,
+                    profile.agent,
+                    fm.model.as_deref().unwrap_or_default(),
+                    tier.preferred_family
+                )
+            });
+        let profile = self.finish(name, fm, profile).map_err(|mut error| {
+            if let Some(fallback) = fallback {
+                error.message = format!("{fallback}; {}", error.message);
+            }
+            error
+        })?;
+        Ok(Resolved {
+            frontmatter: unresolved,
+            profile,
+        })
+    }
+
+    fn finish(
+        &self,
+        name: &str,
+        fm: AgentFrontmatter,
+        mut profile: Profile,
+    ) -> Result<Profile, DefinitionErr> {
+        let definition = &self.tree.definitions[name];
+        let path = &definition.path;
         let kind = profile.agent.as_str();
         if let Some(definition) = agents::find_definition(kind) {
             for (field, name, value) in [
@@ -376,10 +460,7 @@ impl Resolver<'_> {
                 ),
             ));
         }
-        Ok(Resolved {
-            frontmatter: fm,
-            profile,
-        })
+        Ok(profile)
     }
 }
 

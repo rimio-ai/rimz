@@ -155,6 +155,10 @@ pub(crate) fn tools_required(kind: &str) -> bool {
     matches!(definitions(kind).tools, DefinitionTools::Required(_))
 }
 
+pub(crate) fn effort_ladder(kind: &str) -> &'static [&'static str] {
+    definitions(kind).effort_ladder
+}
+
 pub(crate) fn render_tool_args(
     kind: &str,
     tools: Option<&ToolSet>,

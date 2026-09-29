@@ -2079,3 +2079,29 @@ fn lsp_configuration_has_documented_defaults() {
     assert_eq!(value["lsp"]["servers"]["rust"]["wait-timeout"], "10m");
     assert_eq!(value["lsp"]["servers"]["rust"]["memory-estimate"], "8G");
 }
+
+#[test]
+fn model_tier_cells_validate_at_machine_load() {
+    for text in [
+        "[tiers.typo]",
+        "[tiers.senior]\ngrok = {model = 'opus'}",
+        "[tiers.senior]\nclaude = {model = 'astra'}",
+        "[tiers.senior]\ncodex = {model = 'astra', effort = 'minimal'}",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        assert!(load_no_fragments(&path).is_err(), "{text}");
+        assert!(
+            !load_lenient_no_fragments(&path)
+                .notices
+                .unreadable_files
+                .is_empty(),
+            "{text}"
+        );
+        assert!(
+            MachineConfig::parse_text(&path, text, dir.path()).is_err(),
+            "{text}"
+        );
+    }
+}

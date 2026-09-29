@@ -52,6 +52,7 @@ mod sentry;
 mod sidebar;
 mod skills;
 mod theme;
+pub mod tiers;
 mod web;
 mod worktree;
 
@@ -435,6 +436,7 @@ impl ConfigNotices {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MachineConfig {
+    pub tiers: tiers::TierConfig,
     pub lsp: LspConfig,
     /// IANA time zone for displayed times and scheduling. Unset or unknown
     /// falls back to the system zone.
@@ -656,6 +658,7 @@ impl MachineConfig {
 
     fn assemble(core: CoreConfig, theme: ThemeConfig, loop_: LoopConfig) -> Self {
         Self {
+            tiers: core.tiers,
             lsp: core.lsp,
             timezone: core.timezone,
             mux: core.mux,
@@ -700,7 +703,7 @@ impl MachineConfig {
         } else {
             definitions::SkillCheck::Skip
         };
-        let loaded = definitions::load(agents_home, check, &self.agents.commands);
+        let loaded = definitions::load(agents_home, check, &self.agents.commands, &self.tiers);
         self.agents.profiles = loaded.agent_profiles;
         self.subagents.profiles = loaded.subagent_profiles;
         self.agents.teams.0.extend(loaded.teams.0);
@@ -990,6 +993,7 @@ pub(crate) fn resolve_time_zone(name: Option<&str>) -> jiff::tz::TimeZone {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct CoreConfig {
+    tiers: tiers::TierConfig,
     lsp: LspConfig,
     agents: AgentsConfig,
     subagents: SubagentProfilesConfig,

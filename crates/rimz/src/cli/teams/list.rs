@@ -205,6 +205,7 @@ pub(super) fn load_catalog(
         &rimz::disk::paths::agents_home(),
         rimz::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
+        &machine.tiers,
     )
     .sources;
     Ok(build_catalog(

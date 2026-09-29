@@ -47,10 +47,10 @@ Follow the project's instructions and report what you verified.
 | `name` | Optional public name; defaults to the filename stem. |
 | `description` | Required nonempty, single-line listing description; not inherited. |
 | `agent` | Registered kind or another definition in the same tree. May be omitted when `model` identifies a kind. |
-| `model` | Model alias or provider model ID. |
+| `model` | Model alias, provider model ID, or [model tier](../guide/configuration.md#model-tiers). |
 | `mode` | `ask`, `auto`, `plan`, or `yolo`. |
 | `isolation` | `host` or `sandbox`; overrides machine policy unless `--isolation` is recorded. Inherited through definitions, unavailable on team roles or repository profiles. |
-| `effort` | Provider-specific effort string. |
+| `effort` | Provider-specific absolute effort, or `+N` / `-N` steps from a tier cell's default (YAML integer or string). |
 | `auto-compact` | Native compaction window: integer or string token count from `100k` through `1M`, inclusive; no percentages or decimals. |
 | `budget` | Dollar cap as string or number; a string such as `20/day` selects a daily cap. |
 | `model-reminder` | Boolean controlling the model identity in the launch reminder. Defaults on. |
@@ -62,6 +62,10 @@ Follow the project's instructions and report what you verified.
 Names must match `[A-Za-z0-9_-]+` and be unique across both definition trees. Registered kinds are reserved for kind bases. `general` and model aliases are not reserved by the definition parser. The final namespace checks also reject command-verb and address collisions, such as `all`, kind ordinals, or a profile colliding with a team.
 
 ### Chains and defaults
+
+The tier names `intern`, `junior`, `senior`, and `principal` resolve through the machine [tier table](../guide/configuration.md#model-tiers). They require a chain rooted in `agent: claude` or `agent: codex`, or a concrete ancestor model implying that kind. This root is the preferred family even when an ancestor falls back to another runtime. Resolution tries that family's cell, then the other family's cell, then moves upward through the tiers, never downward. No cell at or above the requested tier is an error. The selected runtime's tools, skills, supported fields, and kind base are checked after resolution.
+
+Tier names and effort shifts inherit verbatim. Each definition resolves its inherited values afresh; a child setting a tier still inherits its parent's absolute effort if present. A relative effort clamps to the selected family's [effort ladder](../guide/configuration.md#model-tiers); without a tier it is an error. An absolute effort overrides the cell default without validation. Project TOML profiles and roles cannot use tier names: define the tiered profile in Markdown or name a concrete model in TOML. For tier selection guidance, see [choosing a model tier](../guide/configuration.md#choosing-a-model-tier).
 
 `agent:` follows only definitions in its own namespace: an agent cannot inherit a subagent or vice versa. The chain must end at a registered kind. Without `agent:`, a recognized model alias, model ID, or prefix determines the kind: Claude's roster and `claude-` prefix, and Codex's roster and `gpt-` prefix. Unknown models need an explicit kind. A model implying a different kind from the chain is an error.
 
@@ -134,7 +138,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `agent` | Required direct definition name. |
 | `role` | Optional handle, defaulting to `agent`; unique within the team. |
 | `owns` | Stages owned by this role; omitted or null means none. |
-| `model`, `mode`, `effort`, `auto-compact`, `budget`, `model-reminder`, `tools`, `subagents`, `skills` | Overrides with the same types as agent fields. |
+| `model`, `mode`, `effort`, `auto-compact`, `budget`, `model-reminder`, `tools`, `subagents`, `skills` | Overrides with the same types as agent fields, including model tiers and relative effort. A tier prefers the selected definition chain's root family. |
 | `traits` | Additional traits for this seat's leaf craft. |
 | `signals` | Optional nonempty signal-binding list. |
 | `flip-compact` | Stage-handoff compaction threshold or `off`. |
@@ -208,6 +212,7 @@ The loader collects independent errors rather than stopping at the first file, a
 | Identity | Unsafe, duplicate, reserved, or address-shadowing names; cross-namespace duplicates; team/profile/command collisions. |
 | Required content | Missing or multiline definition/base description, empty kind base, missing team pipeline, roster, stages, or leader. Ordinary definition bodies may be empty. |
 | Resolution | Missing kind inference, unknown or failed parent, cross-namespace inheritance, cycles, excessive shared chain depth, model/kind mismatch, missing kind base, or an unknown/failed seat definition. |
+| Model tiers | Missing or unsupported preferred family, a relative effort without a tier, or no configured cell at or above the requested tier. Fallback-related definition errors identify the selected runtime and model. Configure cells in machine `config.toml`; project TOML cannot set `[tiers]` or tier-valued models. |
 | Traits | Invalid names, unreadable fragments, or named traits without a substitution token. |
 | Tools | Required list missing, malformed entry, unsupported kind, unknown Claude native child type, or an argument that cannot be rendered. |
 | Delegation | Empty/unknown child names, delegation on a child, native `Agent` combined with a RimZ child list, or a child reference rejected by final namespace validation. |

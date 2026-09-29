@@ -223,6 +223,11 @@ impl std::str::FromStr for Isolation {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
+    /// Definition-chain root, retained even when a tier selects another runtime.
+    #[serde(skip)]
+    pub preferred_family: Option<String>,
+    #[serde(skip)]
+    pub model_tier: Option<super::tiers::TierProvenance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<Isolation>,
     #[serde(

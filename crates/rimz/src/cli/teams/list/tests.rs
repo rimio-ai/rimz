@@ -32,6 +32,7 @@ fn team_source_survives_an_unrelated_broken_definition() {
         root.path(),
         rimz::config::definitions::SkillCheck::Skip,
         &rimz::config::CommandsConfig::default(),
+        &rimz::config::tiers::TierConfig::default(),
     );
     assert!(
         loaded

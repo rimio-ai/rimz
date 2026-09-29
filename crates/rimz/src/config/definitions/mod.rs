@@ -166,6 +166,7 @@ pub fn load(
     agents_home: &Path,
     skills: SkillCheck<'_>,
     commands: &CommandsConfig,
+    tiers: &super::tiers::TierConfig,
 ) -> LoadedDefinitions {
     let mut loaded = LoadedDefinitions::default();
     let mut agents = Namespace::default();
@@ -288,11 +289,11 @@ pub fn load(
         agent::Resolver::new(
             agents_home,
             "subagents",
-            &subagents,
-            &agents,
+            [&subagents, &agents],
             &bases,
             skills,
             &BTreeSet::new(),
+            tiers,
         ),
         &mut loaded,
     );
@@ -307,21 +308,21 @@ pub fn load(
         agent::Resolver::new(
             agents_home,
             "agents",
-            &agents,
-            &subagents,
+            [&agents, &subagents],
             &bases,
             skills,
             &children,
+            tiers,
         ),
         &mut loaded,
     );
     team::load(
         agents_home,
-        &agents,
-        &subagents,
+        [&agents, &subagents],
         &bases,
         skills,
         &children,
+        tiers,
         &mut loaded,
     );
     loaded.failed.retain(|name, _| {

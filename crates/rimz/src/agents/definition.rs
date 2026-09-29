@@ -268,6 +268,7 @@ pub(super) enum DefinitionTools {
 pub(super) struct DefinitionSpec {
     pub mode: Option<PermissionMode>,
     pub effort: Option<&'static str>,
+    pub effort_ladder: &'static [&'static str],
     pub models: &'static [DefinitionModel],
     pub prefixes: &'static [&'static str],
     pub tools: DefinitionTools,
@@ -277,6 +278,7 @@ impl DefinitionSpec {
     pub const EMPTY: Self = Self {
         mode: None,
         effort: None,
+        effort_ladder: &[],
         models: &[],
         prefixes: &[],
         tools: DefinitionTools::Unsupported,
