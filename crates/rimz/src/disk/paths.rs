@@ -228,7 +228,7 @@ impl StatePaths {
         Ok(Self::under_named(workspace_id, dir_name, home))
     }
 
-    /// Paths for a workspace known only by id: its existing dir, else the
+    /// Paths for a workspace known only by id: the dir its record names, else the
     /// `ws-<24hex>` fallback name. Creates nothing.
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
         Self::under(workspace_id, &rimz_home())
@@ -370,7 +370,7 @@ impl StatePaths {
 /// `ws-<24hex>` fallback when it has none.
 fn workspace_dir_name(ws_dir: &Path, workspace_id: &WorkspaceId) -> Result<WorkspaceDirName> {
     let names: Vec<WorkspaceDirName> = workspace_dir_names(ws_dir)?.collect();
-    Ok(find_workspace_dir(ws_dir, &names, workspace_id, |_| true)?
+    Ok(find_workspace_dir(ws_dir, &names, workspace_id, |_| false)?
         .unwrap_or_else(|| WorkspaceDirName::fallback(workspace_id)))
 }
 
@@ -423,7 +423,7 @@ fn workspace_dir_names(ws_dir: &Path) -> Result<impl Iterator<Item = WorkspaceDi
 
 /// Locate `workspace_id`'s dir among `names` listed from `ws_dir` by hex prefix. A candidate whose
 /// `workspace.json` names the id wins; one naming another id is skipped; a
-/// candidate without a readable record (half-born, or a runtime tree) is
+/// candidate without a readable record (half-born or unroomed) is
 /// accepted only when `may_own_unrecorded` admits it and it is the sole such
 /// candidate.
 fn find_workspace_dir(
@@ -595,8 +595,8 @@ impl RuntimePaths {
         paths
     }
 
-    /// Build runtime paths rooted at `runtime_root`, naming the dir after a
-    /// matching one already in that runtime tree (else `ws-<24hex>`). Tests
+    /// Build runtime paths rooted at `runtime_root`, naming the dir through
+    /// the state lookup under that same root (else `ws-<24hex>`). Tests
     /// prefer this so they don't need to set `XDG_RUNTIME_DIR`. This raw
     /// constructor deliberately skips the socket budget; ambient production
     /// callers use [`Self::for_workspace`] so a long runtime root fails before
@@ -605,9 +605,8 @@ impl RuntimePaths {
     /// [`Self::for_workspace`] and
     /// [`Self::shared`] move shared data to its persistent home.
     pub fn under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
-        let ws_dir = runtime_root.join("rimz").join("ws");
-        let dir_name = workspace_dir_name(&ws_dir, &workspace_id)?;
-        Ok(Self::under_named(workspace_id, dir_name, runtime_root))
+        let state = StatePaths::under(workspace_id, runtime_root)?;
+        Ok(Self::for_state_under(&state, runtime_root))
     }
 
     /// Runtime paths for `workspace_id` in the dir `dir_name` under
@@ -672,9 +671,9 @@ impl RuntimePaths {
     /// persistent shared roots. The spending service uses this after validating
     /// a typed workspace id instead of accepting caller-supplied output paths.
     pub(crate) fn for_sibling_workspace(&self, workspace_id: WorkspaceId) -> Result<Self> {
-        let dir_name = workspace_dir_name(&workspaces_dir(), &workspace_id)?;
-        let mut paths = Self::validated(workspace_id, dir_name, &self.runtime_root)?;
-        paths.bind_state_locks(&StatePaths::for_workspace(paths.workspace_id.clone())?);
+        let state = StatePaths::for_workspace(workspace_id.clone())?;
+        let mut paths = Self::validated(workspace_id, state.dir_name.clone(), &self.runtime_root)?;
+        paths.bind_state_locks(&state);
         paths.shared_root = self.shared_root.clone();
         paths.persistent_shared_root = self.persistent_shared_root.clone();
         Ok(paths)

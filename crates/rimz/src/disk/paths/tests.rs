@@ -400,6 +400,17 @@ fn project_root_mints_a_basename_name_and_finds_it_again() {
     assert!(!minted.root.exists(), "constructors create nothing");
 
     minted.ensure_dirs().unwrap();
+    assert_eq!(
+        StatePaths::for_project_root_under(root, home.path())
+            .unwrap()
+            .root,
+        minted.root
+    );
+    assert_eq!(
+        StatePaths::under(id.clone(), home.path()).unwrap().dir_name,
+        WorkspaceDirName::fallback(&id)
+    );
+    write_record(home.path(), minted.dir_name.as_str(), &id);
     let by_id = StatePaths::under(id, home.path()).unwrap();
     assert_eq!(by_id.root, minted.root);
 }
@@ -453,33 +464,71 @@ fn mint_lengthens_past_a_taken_prefix_and_records_decide_lookup() {
 #[test]
 fn unrecorded_candidates_resolve_alone_and_refuse_together() {
     let home = tempfile::tempdir().unwrap();
-    let id = WorkspaceId::parse("ws_abcdef0123456789abcdef01").unwrap();
+    let root = Path::new("/src/repo");
+    let id = WorkspaceId::from_project_root(root);
+    let one = WorkspaceDirName::mint("repo", &id, 4);
+    let two = WorkspaceDirName::mint("repo", &id, 6);
     let ws = workspaces_dir_under(home.path());
-    fs::create_dir_all(ws.join("one-abcd")).unwrap();
+    fs::create_dir_all(ws.join(one.as_str())).unwrap();
     assert_eq!(
-        StatePaths::under(id.clone(), home.path())
+        StatePaths::for_project_root_under(root, home.path())
             .unwrap()
-            .dir_name
-            .as_str(),
-        "one-abcd"
+            .dir_name,
+        one
     );
 
-    fs::create_dir_all(ws.join("two-abcdef")).unwrap();
-    match StatePaths::under(id.clone(), home.path()) {
+    fs::create_dir_all(ws.join(two.as_str())).unwrap();
+    match StatePaths::for_project_root_under(root, home.path()) {
         Err(PathErr::AmbiguousWorkspaceDir { candidates, .. }) => {
             assert_eq!(candidates.len(), 2)
         }
         other => panic!("expected AmbiguousWorkspaceDir, got {other:?}"),
     }
 
-    write_record(home.path(), "two-abcdef", &id);
+    write_record(home.path(), two.as_str(), &id);
     assert_eq!(
-        StatePaths::under(id, home.path())
+        StatePaths::for_project_root_under(root, home.path())
             .unwrap()
-            .dir_name
-            .as_str(),
-        "two-abcdef"
+            .dir_name,
+        two
     );
+    let foreign = WorkspaceDirName::mint("elsewhere", &id, 6);
+    fs::rename(ws.join(two.as_str()), ws.join(foreign.as_str())).unwrap();
+    assert_eq!(
+        StatePaths::under(id, home.path()).unwrap().dir_name,
+        foreign
+    );
+}
+
+#[test]
+fn id_only_lookup_ignores_foreign_unrecorded_directories() {
+    let home = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::parse("ws_abcdef0123456789abcdef01").unwrap();
+    let ws = workspaces_dir_under(home.path());
+    for name in ["other-abcd", "another-abcdef"] {
+        fs::create_dir_all(ws.join(name)).unwrap();
+        let state = StatePaths::under(id.clone(), home.path()).unwrap();
+        assert_eq!(state.dir_name, WorkspaceDirName::fallback(&id));
+        let runtime = RuntimePaths::under(id.clone(), home.path()).unwrap();
+        assert_eq!(runtime.dir_name, state.dir_name);
+        assert!(!state.root.exists());
+        assert!(!runtime.root.exists());
+    }
+    for name in ["other-abcd", "another-abcdef"] {
+        assert_eq!(fs::read_dir(ws.join(name)).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn runtime_under_follows_recorded_state_without_a_runtime_tree() {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(Path::new("/src/repo"), home.path()).unwrap();
+    write_record(home.path(), state.dir_name.as_str(), &state.workspace_id);
+    assert!(!home.path().join("rimz").exists());
+    let runtime = RuntimePaths::under(state.workspace_id.clone(), home.path()).unwrap();
+    assert_eq!(runtime.dir_name, state.dir_name);
+    assert_eq!(runtime.lock_path("workspace.lock"), state.workspace_lock);
+    assert!(!runtime.root.exists());
 }
 
 #[test]

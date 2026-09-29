@@ -1139,7 +1139,7 @@ pub enum StopOutcome {
 pub fn stop_task(
     name: &str,
     task: &LoadedTask,
-    cancel: impl FnOnce(Option<&ResolvedWorkspace>, WorkspaceId, Option<&RunRecord>) -> Result<()>,
+    cancel: impl FnOnce(Option<&ResolvedWorkspace>, StatePaths, Option<&RunRecord>) -> Result<()>,
 ) -> Result<StopOutcome> {
     let entry = task.entry();
     let RunLockState::Held(holder) = probe_run_lock(name, entry)? else {
@@ -1149,11 +1149,10 @@ pub fn stop_task(
     let root = entry.resolved_root();
     let (workspace, project_root) = stop_workspace(&root)?;
     let paths = StatePaths::for_project_root(&project_root)?;
-    let workspace_id = paths.workspace_id.clone();
     let run = newest_active_run(&paths, name);
     cancel(
         workspace.as_ref(),
-        workspace_id,
+        paths,
         run.as_ref().ok().and_then(Option::as_ref),
     )?;
     let run = run?;

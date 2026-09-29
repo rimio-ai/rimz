@@ -1018,6 +1018,7 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
 #[test]
 fn doctor_clear_dismisses_recorded_history() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_diag_record(&env, 0, None);
     let _ = write_last_death_marker(&env, SessionDeathCause::Crash, Some(2));
     let mut failed = EventEnvelope::unresolved_message_event(
@@ -1187,6 +1188,7 @@ fn doctor_clear_cuts_the_multiplexer_log_at_the_watermark() {
 #[test]
 fn doctor_labels_stale_build_diagnostics() {
     let env = Env::new();
+    env.record(&env.project_root);
     write_diag_record(&env, rimz::utils::time::unix_now_ms(), Some("stale-build"));
 
     let report = doctor_json(

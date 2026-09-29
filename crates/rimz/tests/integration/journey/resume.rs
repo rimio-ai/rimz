@@ -12,6 +12,14 @@ fn rendered_room_recovers_post_rebirth_agents_from_the_store() {
     if env.skip_if_sandboxed() {
         return;
     }
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .arg(&env.project_root)
+            .status()
+            .expect("init repo room")
+            .success()
+    );
     append_rebirth(&env);
     append_registered_agent(&env, "sess-resume", "coder", "%0", "main");
 

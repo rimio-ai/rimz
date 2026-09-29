@@ -8,11 +8,9 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
         .for_run(name)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
-    match stop_task(name, &task, |workspace, id, record| {
-        let store = rimz::Store::open(
-            StatePaths::for_workspace(id.clone())?,
-            RuntimePaths::for_workspace(id)?,
-        )?;
+    match stop_task(name, &task, |workspace, paths, record| {
+        let runtime = RuntimePaths::for_state(&paths)?;
+        let store = rimz::Store::open(paths, runtime)?;
         match (workspace, record) {
             (_, None) => Ok(()),
             (Some(workspace), Some(record)) => {
