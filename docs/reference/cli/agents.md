@@ -338,7 +338,7 @@ Reads the machine Markdown definition trees without launching agents or generati
 
 ### Discover agent profiles
 
-`rimz agents profiles` lists the configured direct definitions and launch commands as compact cards, with each profile's description. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams`](./teams.md#list-teams). Team role profiles, named `<team>.<role>` for a configured team, appear only with `--teams`; [`rimz teams profiles`](./teams.md#list-team-role-profiles) lists them alone.
+`rimz agents profiles` lists the configured direct definitions and launch commands as compact cards, with each profile's description. A nonempty permission-rule list adds `  allowed-tools: Bash(git *), Read` after the description; JSON includes `"allowed_tools": ["Bash(git *)", "Read"]`, omitted when unset or empty. Subagent and team profile listings show the same detail. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams`](./teams.md#list-teams). Team role profiles, named `<team>.<role>` for a configured team, appear only with `--teams`; [`rimz teams profiles`](./teams.md#list-team-role-profiles) lists them alone.
 
 ```sh
 rimz agents profiles
