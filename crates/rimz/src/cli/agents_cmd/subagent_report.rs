@@ -17,7 +17,7 @@ use rimz::ids::{AgentKind, AgentSessionId, MessageId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
 use rimz::sandbox::TmpView;
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
-use rimz::store::run::{RunRecord, RunStatus, RunStoreErr};
+use rimz::store::run::{EarlierAnswer, RunRecord, RunStatus, RunStoreErr};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{RuntimeScope, Store};
 
@@ -117,7 +117,16 @@ fn report_fleet_with_kind(
     if fleet.any_running() {
         return Ok(ReportOutcome::SiblingsRunning);
     }
-    let rows = fleet.unreported();
+    let rows = fleet
+        .unreported()
+        .into_iter()
+        .flat_map(|(child, record)| {
+            record
+                .answer_claims()
+                .filter(|claim| claim.owed)
+                .map(move |claim| (child, record, claim.earlier))
+        })
+        .collect::<Vec<_>>();
     if rows.is_empty() {
         return Ok(ReportOutcome::NothingToReport);
     }
@@ -129,16 +138,29 @@ fn report_fleet_with_kind(
     );
     let responses = rows
         .iter()
-        .map(|(_, record)| {
-            let Some(path) = published.get(&record.run_id).and_then(Option::as_ref) else {
+        .map(|(_, record, answer)| {
+            let path = match answer {
+                Some(answer) => record
+                    .agent_name
+                    .as_deref()
+                    .map(|name| run::response_path(store.paths(), name, answer.ordinal)),
+                None => published
+                    .get(&record.run_id)
+                    .and_then(Option::as_ref)
+                    .cloned(),
+            };
+            let Some(path) = path else {
                 return Ok(None);
             };
-            let summary = FileSummary::measure(path).map_err(|source| ReportErr::Response {
-                path: path.clone(),
-                source,
-            })?;
+            let summary = match FileSummary::measure(&path) {
+                Ok(summary) => summary,
+                Err(error) if answer.is_some() && error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(None);
+                }
+                Err(source) => return Err(ReportErr::Response { path, source }),
+            };
             Ok(Some(ResponseFile {
-                path: view.agent_path(path),
+                path: view.agent_path(&path),
                 summary,
             }))
         })
@@ -146,10 +168,10 @@ fn report_fleet_with_kind(
     let digest_rows = rows
         .iter()
         .zip(&responses)
-        .map(|((child, run), response)| (*child, *run, response.as_ref()))
+        .map(|((child, run, answer), response)| (*child, *run, *answer, response.as_ref()))
         .collect::<Vec<_>>();
 
-    let subagents = rows.iter().all(|(_, run)| run.subagent);
+    let subagents = rows.iter().all(|(_, run, _)| run.subagent);
     let sender = MessageSender::Harness {
         notice: if subagents {
             HarnessNotice::SubagentReport
@@ -170,19 +192,20 @@ fn report_fleet_with_kind(
         message = message.with_pane_id(pane_id.clone());
     }
     let message_id = message.message_id.clone();
-    let run_ids = rows
+    let answers = rows
         .iter()
-        .map(|(_, run)| run.run_id.clone())
+        .map(|(_, run, answer)| {
+            (
+                run.run_id.clone(),
+                answer.map_or(run.follow_ups + 1, |answer| answer.ordinal),
+            )
+        })
         .collect::<Vec<_>>();
-    let stamped = run::report::record_report_messages(store.paths(), &run_ids, Some(&message_id))?;
-    if stamped
-        .iter()
-        .any(|run| run.report_message_id.as_ref() != Some(&message_id))
-    {
+    if !run::report::record_report_messages(store.paths(), &answers, Some(&message_id))? {
         return Ok(ReportOutcome::NothingToReport);
     }
     if let Err(err) = store.queue_message(&message, &workspace.session_name) {
-        let _ = run::report::record_report_messages(store.paths(), &run_ids, None);
+        let _ = run::report::record_report_messages(store.paths(), &answers, None);
         return Err(err.into());
     }
     if run::report::digest_fully_joined(store.paths(), &message_id)? {
@@ -299,10 +322,14 @@ fn settle_peer_turns(store: &Store, parent_id: &AgentSessionId) -> Result<(), Re
     Ok(())
 }
 
-fn compose_digest(
-    rows: &[(&AgentState, &RunRecord, Option<&ResponseFile>)],
-    subagents: bool,
-) -> String {
+type DigestRow<'a> = (
+    &'a AgentState,
+    &'a RunRecord,
+    Option<&'a EarlierAnswer>,
+    Option<&'a ResponseFile>,
+);
+
+fn compose_digest(rows: &[DigestRow<'_>], subagents: bool) -> String {
     let noun = if subagents {
         "subagent"
     } else {
@@ -310,7 +337,7 @@ fn compose_digest(
     };
     let responses = rows
         .iter()
-        .filter_map(|(_, _, response)| response.map(|response| response.summary))
+        .filter_map(|(_, _, _, response)| response.map(|response| response.summary))
         .collect::<Vec<_>>();
     let heading = if rows.len() == 1 {
         format!("Your {noun} settled:")
@@ -326,7 +353,7 @@ fn compose_digest(
     };
     let rows = rows
         .iter()
-        .map(|(child, run, response)| compose_digest_row(child, run, *response))
+        .map(|(child, run, answer, response)| compose_answer_row(child, run, *answer, *response))
         .collect::<Vec<_>>()
         .join("\n");
     format!("{heading}\n{rows}")
@@ -337,10 +364,42 @@ pub(super) fn compose_digest_row(
     run: &RunRecord,
     response: Option<&ResponseFile>,
 ) -> String {
-    let finished_at = run.completed_at.unwrap_or(run.updated_at);
+    compose_answer_row(child, run, None, response)
+}
+
+fn compose_answer_row(
+    child: &AgentState,
+    run: &RunRecord,
+    answer: Option<&EarlierAnswer>,
+    response: Option<&ResponseFile>,
+) -> String {
+    let status = answer.map_or(run.status, |answer| answer.status);
+    let started_at = answer.map_or_else(
+        || {
+            run.follow_up
+                .as_ref()
+                .map_or(run.started_at, |turn| turn.started_at)
+        },
+        |answer| answer.started_at,
+    );
+    let finished_at = answer
+        .map_or(run.completed_at, |answer| answer.completed_at)
+        .unwrap_or(run.updated_at);
+    let follow_up = answer.map_or(run.follow_ups > 0, |answer| answer.ordinal > 1);
+    let prompt = if follow_up {
+        match answer {
+            Some(answer) => answer.prompt.as_deref(),
+            None => run
+                .follow_up
+                .as_ref()
+                .and_then(|turn| turn.prompt.as_deref()),
+        }
+    } else {
+        Some(run.prompt.as_str())
+    };
     let elapsed =
-        format_compact_duration(finished_at.duration_since(run.started_at).as_secs().max(0) as u64);
-    let preposition = if run.status == RunStatus::TimedOut {
+        format_compact_duration(finished_at.duration_since(started_at).as_secs().max(0) as u64);
+    let preposition = if status == RunStatus::TimedOut {
         "after"
     } else {
         "in"
@@ -348,10 +407,12 @@ pub(super) fn compose_digest_row(
     let mut row = format!(
         "- @{}: {} {preposition} {elapsed}",
         child_name(child, run),
-        status_label(run.status),
+        status_label(status),
     );
-    if run.status != RunStatus::Completed
-        && let Some(reason) = failure_reason(run)
+    if status != RunStatus::Completed
+        && let Some(reason) = failure_reason(answer.map_or(run.failure_tail.as_deref(), |answer| {
+            answer.failure_tail.as_deref()
+        }))
     {
         row.push_str("; ");
         row.push_str(reason);
@@ -359,10 +420,10 @@ pub(super) fn compose_digest_row(
     if let Some(task) = child
         .description
         .as_deref()
-        .filter(|value| run.peer.is_none() && !value.is_empty())
+        .filter(|value| !follow_up && run.peer.is_none() && !value.is_empty())
         .map(std::borrow::Cow::Borrowed)
         .or_else(|| {
-            run.prompt
+            prompt?
                 .lines()
                 .next()
                 .filter(|line| !line.is_empty())
@@ -374,7 +435,7 @@ pub(super) fn compose_digest_row(
     match response {
         Some(response) => row.push_str(&format!(
             ", {}response: {} ({})",
-            if run.status == RunStatus::TimedOut {
+            if status == RunStatus::TimedOut {
                 "partial "
             } else {
                 ""
@@ -410,9 +471,8 @@ fn child_name<'a>(child: &'a AgentState, run: &'a RunRecord) -> &'a str {
         .unwrap_or_else(|| child.agent_id.as_str())
 }
 
-fn failure_reason(run: &RunRecord) -> Option<&str> {
-    run.failure_tail
-        .as_deref()?
+fn failure_reason(tail: Option<&str>) -> Option<&str> {
+    tail?
         .lines()
         .rev()
         .find(|line| !line.trim().is_empty())

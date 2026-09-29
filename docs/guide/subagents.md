@@ -105,7 +105,7 @@ All 3 subagents settled, responses total ~5.1k tokens, 96 lines:
 - @slow-reviewer: timed out after 33m; provider did not stop, task: "review correctness", partial response: /tmp/rimz-subagents/slow-reviewer.output (<1k tokens, 12 lines)
 ```
 
-The report carries status and a file path per child, never the answers themselves, so the parent decides how much of each to read into its window. A parent that needs an answer sooner joins with `rimz subagents wait <petname>`, and a child it has joined or stopped drops out of the report. The path above is the sandbox view; under host isolation the report names the host path of the room's tmp directory. Every field of the report is in the [reference](../reference/cli/subagents.md#the-fleet-report).
+The report carries status and a file path per answer, never the answers themselves, so the parent decides how much of each to read into its window. Follow-up answers get their own rows and elapsed times; an earlier answer is not lost when a child answers again before its siblings finish. A parent that needs an answer sooner joins with `rimz subagents wait <petname>`: only the answer it prints drops out of the report, while stopping a child dismisses all its answers. The path above is the sandbox view; under host isolation the report names the host path of the room's tmp directory. Every field of the report is in the [reference](../reference/cli/subagents.md#the-fleet-report).
 
 A parent that is itself a supervised run (`rimz agents -p`, or a scheduled task) can end its turn while its children work. Its run stays open and your script keeps blocking until the report arrives and the parent finishes.
 

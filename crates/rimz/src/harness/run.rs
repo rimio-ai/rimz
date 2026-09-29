@@ -24,7 +24,9 @@ use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::StatePaths;
 use crate::harness::owed::OwedWake;
 use crate::ids::{AgentSessionId, PaneId, RunId};
-use crate::store::run::{RunRecord, RunStatus, RunStoreErr, RunVerify};
+use crate::store::run::{
+    EarlierAnswer, FollowUpTurn, RunRecord, RunStatus, RunStoreErr, RunVerify,
+};
 use crate::store::{
     Store,
     snapshot::{SidebarSnapshot, find_agent},
@@ -51,8 +53,13 @@ pub enum ResponsePublishErr {
 }
 
 /// Host path promised by the launch receipt for this run's response.
-pub fn response_path(paths: &StatePaths, agent_name: &str) -> PathBuf {
-    paths.subagents_dir.join(format!("{agent_name}.output"))
+pub fn response_path(paths: &StatePaths, agent_name: &str, ordinal: u32) -> PathBuf {
+    let name = if ordinal == 1 {
+        format!("{agent_name}.output")
+    } else {
+        format!("{agent_name}.{ordinal}.output")
+    };
+    paths.subagents_dir.join(name)
 }
 
 pub fn peer_response_path(paths: &StatePaths, agent_name: &str, run_id: &RunId) -> PathBuf {
@@ -72,13 +79,8 @@ pub fn publish_response(
     };
     let path = if record.peer.is_some() || record.team.is_some() {
         peer_response_path(paths, name, &record.run_id)
-    } else if record.follow_ups > 0 {
-        response_path(
-            paths,
-            &format!("{name}.{}", u64::from(record.follow_ups) + 1),
-        )
     } else {
-        response_path(paths, name)
+        response_path(paths, name, record.follow_ups + 1)
     };
     let io_error = |source| ResponsePublishErr::Io {
         path: path.clone(),
@@ -731,12 +733,40 @@ fn fold_lifecycle(
         (None, None) | (Some(_), Some(_)) => {}
     }
     if reopen {
-        record.follow_ups += 1;
+        let started_at = record
+            .follow_up
+            .as_ref()
+            .map_or(record.started_at, |turn| turn.started_at);
+        record
+            .earlier_answers
+            .retain(|answer| answer.joined_at.is_none());
+        if record.joined_at.is_none() {
+            record.earlier_answers.push(EarlierAnswer {
+                ordinal: record.follow_ups + 1,
+                status: record.status,
+                started_at,
+                completed_at: record.completed_at,
+                prompt: record
+                    .follow_up
+                    .as_ref()
+                    .and_then(|turn| turn.prompt.clone()),
+                failure_tail: record.failure_tail.take(),
+                opened_by: std::mem::take(&mut record.opened_by),
+                report_message_id: record.report_message_id.take(),
+                joined_at: None,
+            });
+        }
         record.deadline_at = record.timeout.map(|timeout| now + timeout).or_else(|| {
             record
                 .deadline_at
-                .map(|deadline| now + (deadline - record.started_at))
+                .map(|deadline| now + (deadline - started_at))
         });
+        record.follow_ups += 1;
+        record.follow_up = Some(FollowUpTurn {
+            started_at: now,
+            prompt: None,
+        });
+        record.opened_by.clear();
         record.deadline_notice_at = None;
         record.status = RunStatus::Running;
         record.completed_at = None;

@@ -132,6 +132,32 @@ pub struct TeamRun {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FollowUpTurn {
+    pub started_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EarlierAnswer {
+    pub ordinal: u32,
+    pub status: RunStatus,
+    pub started_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_tail: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opened_by: Vec<crate::ids::MessageId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_message_id: Option<crate::ids::MessageId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joined_at: Option<Timestamp>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: RunId,
     pub workspace_id: WorkspaceId,
@@ -171,17 +197,23 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub follow_ups: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up: Option<FollowUpTurn>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opened_by: Vec<crate::ids::MessageId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier_answers: Vec<EarlierAnswer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer: Option<PeerRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<TeamRun>,
-    /// Time at which the caller claimed the settled result, either by printing
+    /// Time at which the caller claimed the current answer, either by printing
     /// it during an open agent turn (or to a human shell) or discarding it
-    /// through `rimz subagents stop`; joined runs are
+    /// through `rimz subagents stop`; joined answers are
     /// excluded from the next completion digest and let the joiner cancel a
     /// digest once every row it lists has been joined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub joined_at: Option<Timestamp>,
-    /// Completion digest that listed this run.
+    /// Completion digest that listed the current answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_message_id: Option<crate::ids::MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -238,7 +270,46 @@ pub enum RunPromptOrigin {
     Human,
 }
 
+pub struct AnswerClaim<'a> {
+    pub ordinal: u32,
+    pub report: Option<&'a crate::ids::MessageId>,
+    pub joined: Option<Timestamp>,
+    pub owed: bool,
+    pub earlier: Option<&'a EarlierAnswer>,
+}
+
 impl RunRecord {
+    /// Earlier answers first, then the settled current answer.
+    pub fn answer_claims(&self) -> impl Iterator<Item = AnswerClaim<'_>> {
+        self.earlier_answers
+            .iter()
+            .map(|answer| {
+                (
+                    answer.ordinal,
+                    answer.report_message_id.as_ref(),
+                    answer.joined_at,
+                    Some(answer),
+                )
+            })
+            .chain(self.status.is_terminal().then_some((
+                self.follow_ups + 1,
+                self.report_message_id.as_ref(),
+                self.joined_at,
+                None,
+            )))
+            .map(|(ordinal, report, joined, earlier)| AnswerClaim {
+                ordinal,
+                report,
+                joined,
+                owed: report.is_none() && joined.is_none(),
+                earlier,
+            })
+    }
+
+    pub fn owes_report(&self) -> bool {
+        self.status.is_terminal() && self.answer_claims().any(|claim| claim.owed)
+    }
+
     pub fn prompt_origin(&self) -> RunPromptOrigin {
         match (
             self.subagent || self.peer.is_some() || self.team.is_some(),
@@ -297,6 +368,9 @@ impl RunRecord {
             keep: false,
             subagent: false,
             follow_ups: 0,
+            follow_up: None,
+            opened_by: Vec::new(),
+            earlier_answers: Vec::new(),
             peer: None,
             team: None,
             joined_at: None,
@@ -484,6 +558,19 @@ mod tests {
         let old: RunRecord = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(old.follow_ups, 0);
         assert_eq!(old.prompt_origin(), RunPromptOrigin::Human);
+        for field in ["follow_up", "opened_by", "earlier_answers"] {
+            assert!(value.get(field).is_none());
+        }
+        let mut answers = value.clone();
+        answers["follow_up"] =
+            serde_json::json!({"started_at": record.started_at, "prompt": "follow up"});
+        answers["opened_by"] = serde_json::json!([crate::ids::MessageId::new()]);
+        answers["earlier_answers"] = serde_json::json!([{
+            "ordinal": 1, "status": "completed", "started_at": record.started_at,
+            "completed_at": record.started_at, "report_message_id": crate::ids::MessageId::new()
+        }]);
+        let decoded: RunRecord = serde_json::from_value(answers.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), answers);
         value["peer"] = serde_json::json!({"launch_id": "peer-launch"});
         let peer: RunRecord = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(peer.prompt_origin(), RunPromptOrigin::Parent);

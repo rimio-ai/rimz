@@ -264,11 +264,11 @@ A failure before any byte is written keeps or returns the record to `Queued` wit
 
 A fleet digest (`SUBAGENT_REPORT` or `AGENT_REPORT`) points a launcher at the response files of runs that have settled. A launcher that already joined those runs inline has read the results, so the digest would cost it a turn and show it nothing. Two layers cancel it.
 
-The producer cancels first, as eager cleanup. An attended inline `rimz subagents wait` and a `rimz subagents stop` stamp `joined_at` on the run rows and cancel a digest whose every listed row is joined, and the composer rechecks after queueing ([subagents.md § The lifecycle, end to end](./subagents.md#the-lifecycle-end-to-end)). Any of these cancels can fail after the stamp and before the queue changes, so delivery cannot rely on them.
+The producer cancels first, as eager cleanup. An attended inline `rimz subagents wait` stamps `joined_at` on the answer it prints; `rimz subagents stop` stamps every answer of the selected run. They cancel each digest whose every listed answer is joined, and the composer rechecks after queueing ([subagents.md § The lifecycle, end to end](./subagents.md#the-lifecycle-end-to-end)). Any of these cancels can fail after the stamp and before the queue changes, so delivery cannot rely on them.
 
-Delivery is the guarantee. [`attempt_delivery`](../../../crates/rimz/src/message/deliver.rs) calls `cancel_joined_subagent_report` before it claims and again after a successful claim, before sending. For a record whose sender is `Harness { notice: SubagentReport }`, each call runs `harness::run::report::digest_fully_joined` over the run records whose `report_message_id` is this digest:
+Delivery is the guarantee. [`attempt_delivery`](../../../crates/rimz/src/message/deliver.rs) calls `cancel_joined_subagent_report` before it claims and again after a successful claim, before sending. For a record whose sender is `Harness { notice: SubagentReport }`, each call runs `harness::run::report::digest_fully_joined` over current and earlier answers whose `report_message_id` is this digest. Reopening a child preserves that link on its unjoined earlier answer:
 
-> **A digest with at least one linked run row, every one of them joined, never reaches the pane.**
+> **A digest with at least one linked answer, every listed answer joined, never reaches the pane.**
 
 When either scan finds that, the guard cancels the digest with reason `joined before delivery` and skips the write. It skips the write even when producer cleanup already removed the record and the cancel finds nothing to cancel. A digest with some rows unjoined, or with no linked rows, delivers its full text, so a genuinely unread result still reaches the parent. Other harness notices take ordinary delivery.
 

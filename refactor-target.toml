@@ -501,7 +501,10 @@ path = "crates/rimz/src/store"
 # `TeamRun` marks the leader's team-long run record.
 # Subagent context percent shares the parent gauge's arithmetic with the renderer.
 # Fleet digest matching is shared by batching, delivery cancellation, and reply waits.
-surface-budget = 334
+# Durable FollowUpTurn/EarlierAnswer metadata and RunRecord::owes_report share per-answer claims with CLI consumers.
+# RunRecord::answer_claims is the shared ordered claim view for report selection and settlement.
+# AnswerClaim names that borrowed view and carries the earlier answer without another lookup.
+surface-budget = 339
 
 [[module]]
 path = "crates/rimz/src/theme"

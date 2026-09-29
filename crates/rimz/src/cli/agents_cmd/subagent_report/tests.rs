@@ -47,7 +47,10 @@ fn peer_digest_uses_each_turn_task() {
     let mut second = first.clone();
     second.run_id = rimz::ids::RunId::new();
     second.prompt = "second task".into();
-    let digest = compose_digest(&[(&child, &first, None), (&child, &second, None)], false);
+    let digest = compose_digest(
+        &[(&child, &first, None, None), (&child, &second, None, None)],
+        false,
+    );
     assert!(digest.contains("task: \"first task\""), "{digest}");
     assert!(digest.contains("task: \"second task\""), "{digest}");
     assert!(!digest.contains("stale launch description"));
@@ -93,7 +96,7 @@ fn digest_lists_a_single_result_without_a_trailing_command() {
     };
 
     assert_eq!(
-        compose_digest(&[(&child, &result, Some(&response))], true),
+        compose_digest(&[(&child, &result, None, Some(&response))], true),
         "Your subagent settled:\n\
          - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (<1k tokens, 3 lines)"
     );
@@ -130,9 +133,9 @@ fn digest_sizes_non_completed_results_and_appends_reason() {
     assert_eq!(
         compose_digest(
             &[
-                (&naming, &completed, Some(&response)),
-                (&runtime, &blank, None),
-                (&reviewer, &timed_out, Some(&partial)),
+                (&naming, &completed, None, Some(&response)),
+                (&runtime, &blank, None, None),
+                (&reviewer, &timed_out, None, Some(&partial)),
             ],
             true
         ),
@@ -159,6 +162,27 @@ fn digest_task_falls_back_to_prompt_preview_or_is_omitted() {
         compose_digest_row(&child, &result, None),
         "- @naming: completed in 4m12s, no response"
     );
+}
+
+#[test]
+fn follow_up_row_uses_its_own_clock_and_never_the_launch_task() {
+    let child = child("naming", Some("launch description"));
+    for prompt in [None, Some("follow-up task\nnot the preview")] {
+        let mut value = serde_json::to_value(run(RunStatus::Completed)).unwrap();
+        value["follow_ups"] = serde_json::json!(1);
+        value["follow_up"] = serde_json::json!({
+            "started_at": Timestamp::from_second(1_250).unwrap(),
+            "prompt": prompt,
+        });
+        let result: RunRecord = serde_json::from_value(value).unwrap();
+        let row = compose_digest_row(&child, &result, None);
+        assert!(row.contains("completed in 2s"), "{row}");
+        assert!(!row.contains("launch description"), "{row}");
+        match prompt {
+            Some(_) => assert!(row.contains("task: \"follow-up task\""), "{row}"),
+            None => assert!(!row.contains("task:"), "{row}"),
+        }
+    }
 }
 
 fn fixture() -> (tempfile::TempDir, ResolvedWorkspace, Store) {
@@ -209,6 +233,87 @@ fn child_run(workspace_id: &WorkspaceId, name: &str, status: RunStatus) -> RunRe
     record.agent_name = Some(name.to_owned());
     record.subagent = true;
     record
+}
+
+#[test]
+fn fleet_reports_each_answer_after_a_sibling_settles() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    for name in ["a", "b"] {
+        append_agent(&store, name, Some("parent"));
+    }
+    let mut a = child_run(&workspace.workspace_id, "a", RunStatus::Completed);
+    a.last_message = Some("first answer".into());
+    let b = child_run(&workspace.workspace_id, "b", RunStatus::Running);
+    for record in [&a, &b] {
+        run::create(store.paths(), record).unwrap();
+    }
+    assert_eq!(
+        report_settled_child(&workspace, &store, &a).unwrap(),
+        ReportOutcome::SiblingsRunning
+    );
+    let mut observation = AgentLifecycleObservation::new(
+        Some("a".into()),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    run::record_lifecycle(
+        store.paths(),
+        &a.run_id,
+        "codex",
+        &observation,
+        None,
+        || None,
+    )
+    .unwrap();
+    observation.signal = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    run::record_lifecycle(
+        store.paths(),
+        &a.run_id,
+        "codex",
+        &observation,
+        Some("second answer".into()),
+        || None,
+    )
+    .unwrap();
+    observation.agent_id = Some("b".into());
+    let b = run::record_lifecycle(
+        store.paths(),
+        &b.run_id,
+        "codex",
+        &observation,
+        Some("b answer".into()),
+        || None,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        report_settled_child(&workspace, &store, &b).unwrap(),
+        ReportOutcome::Queued { .. }
+    ));
+    let messages = store.list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    let digest = &messages[0].text;
+    assert_eq!(
+        digest
+            .lines()
+            .filter(|line| line.starts_with("- @"))
+            .count(),
+        3,
+        "{digest}"
+    );
+    for (name, answer) in [
+        ("a.output", "first answer\n"),
+        ("a.2.output", "second answer\n"),
+        ("b.output", "b answer\n"),
+    ] {
+        let path = store.paths().subagents_dir.join(name);
+        assert!(digest.contains(path.to_str().unwrap()), "{digest}");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), answer);
+    }
 }
 
 #[test]
@@ -279,6 +384,179 @@ fn follow_up_digest_preserves_both_response_paths() {
     for (path, answer) in replies {
         assert_eq!(std::fs::read_to_string(path).unwrap(), answer);
     }
+    run::report::join_and_settle_digest(
+        &store,
+        &workspace.session_name,
+        &record.run_id,
+        None,
+        "stopped by parent",
+    )
+    .unwrap();
+    assert!(
+        store.list_messages().unwrap().is_empty(),
+        "dismissal must cancel both answers' digests"
+    );
+    assert_eq!(
+        report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap(),
+        ReportOutcome::NothingToReport
+    );
+}
+
+#[test]
+fn reopening_keeps_a_queued_digest_until_its_answer_is_joined() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    for name in ["a", "b"] {
+        append_agent(&store, name, Some("parent"));
+    }
+    let a = child_run(&workspace.workspace_id, "a", RunStatus::Completed);
+    let b = child_run(&workspace.workspace_id, "b", RunStatus::Completed);
+    for record in [&a, &b] {
+        run::create(store.paths(), record).unwrap();
+    }
+    let ReportOutcome::Queued { message_id, .. } =
+        report_settled_child(&workspace, &store, &a).unwrap()
+    else {
+        panic!("digest should queue");
+    };
+    let mut observation = AgentLifecycleObservation::new(
+        Some("a".into()),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    run::record_lifecycle(
+        store.paths(),
+        &a.run_id,
+        "codex",
+        &observation,
+        None,
+        || None,
+    )
+    .unwrap();
+    run::report::join_and_settle_digest(
+        &store,
+        &workspace.session_name,
+        &b.run_id,
+        Some(1),
+        "joined inline",
+    )
+    .unwrap();
+    assert!(!run::report::digest_fully_joined(store.paths(), &message_id).unwrap());
+    assert!(
+        store
+            .list_messages()
+            .unwrap()
+            .iter()
+            .any(|message| message.message_id == message_id)
+    );
+    observation.signal = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    let settled = run::record_lifecycle(
+        store.paths(),
+        &a.run_id,
+        "codex",
+        &observation,
+        Some("second answer".into()),
+        || None,
+    )
+    .unwrap()
+    .unwrap();
+    let ReportOutcome::Queued {
+        message_id: next_message_id,
+        ..
+    } = report_settled_child(&workspace, &store, &settled).unwrap()
+    else {
+        panic!("follow-up digest should queue");
+    };
+    assert_ne!(next_message_id, message_id);
+    let messages = store.list_messages().unwrap();
+    let first = messages
+        .iter()
+        .find(|message| message.message_id == message_id)
+        .unwrap();
+    assert_eq!(first.status, MessageStatus::Queued);
+    assert!(!run::report::digest_fully_joined(store.paths(), &message_id).unwrap());
+    let digest = &messages
+        .iter()
+        .find(|message| message.message_id == next_message_id)
+        .unwrap()
+        .text;
+    let rows = digest
+        .lines()
+        .filter(|line| line.starts_with("- @"))
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1, "{digest}");
+    assert!(rows[0].starts_with("- @a:"), "{digest}");
+    let path = store.paths().subagents_dir.join("a.2.output");
+    assert!(rows[0].contains(path.to_str().unwrap()), "{digest}");
+    assert!(!digest.contains("/a.output"), "{digest}");
+    assert!(!digest.contains("/b.output"), "{digest}");
+}
+
+#[test]
+fn joining_current_answer_leaves_the_first_answer_owed() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    append_agent(&store, "a", Some("parent"));
+    let mut a = child_run(&workspace.workspace_id, "a", RunStatus::Completed);
+    a.last_message = Some("first answer".into());
+    run::create(store.paths(), &a).unwrap();
+    run::publish_response(store.paths(), &a).unwrap();
+    let mut observation = AgentLifecycleObservation::new(
+        Some("a".into()),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    run::record_lifecycle(
+        store.paths(),
+        &a.run_id,
+        "codex",
+        &observation,
+        None,
+        || None,
+    )
+    .unwrap();
+    observation.signal = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    let settled = run::record_lifecycle(
+        store.paths(),
+        &a.run_id,
+        "codex",
+        &observation,
+        Some("second answer".into()),
+        || None,
+    )
+    .unwrap()
+    .unwrap();
+    run::report::join_and_settle_digest(
+        &store,
+        &workspace.session_name,
+        &a.run_id,
+        Some(2),
+        "joined inline",
+    )
+    .unwrap();
+    assert_eq!(
+        rimz::harness::owed::owed_wake(
+            &store,
+            &AgentKind::new_unchecked("codex"),
+            &AgentSessionId::from("parent")
+        )
+        .unwrap(),
+        Some(rimz::harness::owed::OwedWake::Subagents)
+    );
+    let ReportOutcome::Queued { .. } = report_settled_child(&workspace, &store, &settled).unwrap()
+    else {
+        panic!("first answer is still owed");
+    };
+    let messages = store.list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].text.contains("/a.output"));
+    assert!(!messages[0].text.contains("/a.2.output"));
 }
 
 #[test]
@@ -548,7 +826,7 @@ fn settled_background_peer_reports_to_its_launcher_only() {
         report_settled_child(&workspace, &store, &peer).unwrap(),
         ReportOutcome::SiblingsRunning
     );
-    let path = response_path(store.paths(), "peer");
+    let path = response_path(store.paths(), "peer", 1);
     assert!(path.exists(), "running siblings must not delay publication");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "peer answer\n");
     std::fs::File::open(&path)
@@ -572,7 +850,7 @@ fn settled_background_peer_reports_to_its_launcher_only() {
     assert!(messages[0].text.contains("@child"));
     assert!(!messages[0].text.contains("@shell-peer"));
     assert_eq!(
-        std::fs::read_to_string(response_path(store.paths(), "peer")).unwrap(),
+        std::fs::read_to_string(response_path(store.paths(), "peer", 1)).unwrap(),
         "peer answer\n"
     );
     assert_eq!(
@@ -599,6 +877,7 @@ fn dismissed_child_is_not_reported() {
         &store,
         &workspace.session_name,
         &second.run_id,
+        None,
         "stopped by parent",
     )
     .unwrap();
@@ -614,11 +893,11 @@ fn dismissed_child_is_not_reported() {
     assert!(messages[0].text.contains("@first"));
     assert!(!messages[0].text.contains("@second"));
     assert!(
-        response_path(store.paths(), "receipt-name").exists(),
+        response_path(store.paths(), "receipt-name", 1).exists(),
         "joined rows still publish at the run's name"
     );
     assert_eq!(
-        std::fs::read_to_string(response_path(store.paths(), "receipt-name")).unwrap(),
+        std::fs::read_to_string(response_path(store.paths(), "receipt-name", 1)).unwrap(),
         "joined answer\n"
     );
 }
@@ -635,6 +914,7 @@ fn dismissing_every_child_reports_nothing() {
             &store,
             &workspace.session_name,
             &record.run_id,
+            None,
             "stopped by parent",
         )
         .unwrap();
@@ -669,6 +949,7 @@ fn dismissing_every_row_of_a_queued_digest_cancels_it() {
             &store,
             &workspace.session_name,
             &record.run_id,
+            None,
             "stopped by parent",
         )
         .unwrap();

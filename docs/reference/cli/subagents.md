@@ -140,26 +140,26 @@ The report lists status and where each answer is, and asks for nothing: reading 
 | Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; `background agent` replaces `subagent` when any row is a `-p --bg` run or a peer turn |
 | Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({size})`; `partial response:` for a timed-out child with text, or ending `, no response` |
 | Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled` |
-| `in` / `after` | `after` for a timed-out child, `in` for every other status; elapsed time is compact (`4m12s`) |
-| Reason | The last non-empty line of the run's failure tail, for a status other than completed |
-| Task | For peer turns, the shortened first line of that turn's prompt; otherwise the launch `--description`, falling back to the prompt, omitted when empty |
+| `in` / `after` | `after` for a timed-out answer, `in` for every other status; elapsed time is compact (`4m12s`) and starts at that answer's turn, not the child's launch |
+| Reason | The last non-empty line of the answer's failure tail, for a status other than completed |
+| Task | The launch answer uses `--description`, falling back to the prompt. Follow-ups use the shortened first line of their own stored prompt, omitted when unknown. Peer turns use their own prompt preview |
 | Response | The child's first answer in `rimz-subagents/<name>.output` under room tmp, then `<name>.2.output`, `<name>.3.output`, and so on for follow-ups; available when that turn settles. `no response` when the message is empty or absent, with no file for that turn; earlier files remain |
 | Size | `{tokens} tokens, {lines}`: an estimated token count (`<1k`, `~1.2k`, `~22k`, `~1.2M`) from OpenAI's public `o200k_base` tokenizer, which only approximates Claude's, then the line count (`1 line`, `{N} lines`, blank lines included) |
 
-Rows follow launch order. Under sandbox isolation the first response path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. The files are removed when the room closes, and opening one does not count as reading the result.
+Rows follow launch order, with a child's earlier answers before its current answer. Each unreported, unjoined answer gets a row; the heading counts rows, so one child can contribute several. Under sandbox isolation the first response path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. The files are removed when the room closes, and opening one does not count as reading the result.
 
 A fleet is every child launched before the report is composed. A child launched while its siblings still run joins that fleet; one launched after composition starts belongs to the next. No report is sent when the parent has ended.
 
 A supervised parent can end its turn while children run without ending its own run. It stays parked while children are live or their results remain unjoined and unreported, and while the report is on its way; the report opens its next turn.
 
-A child drops out of a report that has not been composed yet when:
+An answer drops out of a report that has not been composed yet when:
 
 - a join (`subagents wait`, `fanout --wait`, or `--wait` on a launch) printed its result while the parent's turn was open;
 - a [`rimz agents wait`](./agents.md#wait) printed its result from a user shell or while the caller's turn was open, which is how a `-p --bg` run is joined;
 - it is a `-p` run the parent launched without `--bg`, which prints its own result;
 - the parent stopped it with `rimz subagents stop`.
 
-A join that finishes after the parent's turn has ended still prints, but its rows stay in the report, so the parent is woken with them at its next boundary. A report already queued is canceled only when every row it lists has been read or stopped, and a delivered report cannot be recalled. A child stopped by someone else with `rimz agents stop @child` still appears as `canceled`. If the normal report is missed, the room's sidebar producer rebuilds it from the run records within about a minute ([backstops](../../internals/harness/subagents.md#backstops)).
+A join claims only the answer it prints, leaving earlier unread answers for the report. Stopping a child dismisses all its answers. A join that finishes after the parent's turn has ended still prints, but its rows stay in the report, so the parent is woken with them at its next boundary. A report already queued is canceled only when every answer it lists has been read or stopped, even if a listed child has since answered again; a delivered report cannot be recalled. A child stopped by someone else with `rimz agents stop @child` still appears as `canceled`. If the normal report is missed, the room's sidebar producer rebuilds it from the run records within about a minute ([backstops](../../internals/harness/subagents.md#backstops)).
 
 ## Join results with wait
 

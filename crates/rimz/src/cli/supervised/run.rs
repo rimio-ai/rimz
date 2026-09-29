@@ -780,6 +780,7 @@ fn execute_attempt(
                 view.agent_path(&rimz::harness::run::response_path(
                     prepared.store.paths(),
                     &launch_identity.name,
+                    1,
                 ))
             }),
             agent_name: launch_identity.name.clone(),
@@ -1072,6 +1073,7 @@ pub(super) fn join_presented_attempt(store: &rimz::Store, session_name: &str, re
         store,
         session_name,
         &record.run_id,
+        Some(record.follow_ups + 1),
         "joined inline",
     ) {
         tracing::warn!(

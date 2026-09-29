@@ -300,6 +300,7 @@ fn mark_joined<'a>(
             store,
             session_name,
             &record.run_id,
+            Some(record.follow_ups + 1),
             "joined inline",
         );
         if let Err(err) = result {
