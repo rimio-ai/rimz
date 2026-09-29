@@ -713,6 +713,7 @@ fn birth_managed_room(
 fn blocks_room_start(err: &ConfigErr) -> bool {
     match err {
         ConfigErr::AccountBudget { .. }
+        | ConfigErr::UnreadableCore { .. }
         | ConfigErr::Account { .. }
         | ConfigErr::Notifications { .. } => true,
         ConfigErr::Definition { .. }

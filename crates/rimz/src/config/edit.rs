@@ -190,6 +190,26 @@ impl ConfigEditor {
         write(file.path(), doc.to_string().as_bytes())
     }
 
+    /// Select an account for new rooms; `default` clears the machine override.
+    pub fn use_account(
+        &self,
+        kind: &crate::ids::AgentKind,
+        name: &crate::ids::LoginName,
+    ) -> Result<()> {
+        if !name.is_default() {
+            return self.set(&format!("accounts.use.{kind}"), name.as_str());
+        }
+        let file = self.files.file(MachineConfigFileKind::Core);
+        let Some(text) = read_existing(file.path())? else {
+            return Ok(());
+        };
+        let mut doc = parse_document(file.path(), &text)?;
+        if clear_account_use(&mut doc, kind, None) {
+            write(file.path(), doc.to_string().as_bytes())?;
+        }
+        Ok(())
+    }
+
     /// Drop `[accounts.<kind>.<name>]`, and the kind table with it once it
     /// holds no accounts. Reports whether the entry was there.
     pub fn remove_named_account(
@@ -210,6 +230,7 @@ impl ConfigEditor {
         if table.is_empty() {
             table_at_mut(&mut doc, &kinds[..1])?.remove(kind.as_str());
         }
+        clear_account_use(&mut doc, kind, Some(name));
         write(file.path(), doc.to_string().as_bytes())?;
         Ok(true)
     }
@@ -833,10 +854,34 @@ fn is_known_get_key(files: &MachineConfigFiles, path: &[String]) -> Result<bool>
     Ok(!ignored_path_matches(&ignored, &document_key))
 }
 
+fn clear_account_use(
+    doc: &mut DocumentMut,
+    kind: &crate::ids::AgentKind,
+    matching: Option<&crate::ids::LoginName>,
+) -> bool {
+    let Some(accounts) = doc.get_mut("accounts").and_then(Item::as_table_like_mut) else {
+        return false;
+    };
+    let Some(selection) = accounts.get_mut("use").and_then(Item::as_table_like_mut) else {
+        return false;
+    };
+    if matching.is_some_and(|name| {
+        selection.get(kind.as_str()).and_then(Item::as_str) != Some(name.as_str())
+    }) {
+        return false;
+    }
+    let removed = selection.remove(kind.as_str()).is_some();
+    if selection.is_empty() {
+        accounts.remove("use");
+    }
+    removed
+}
+
 fn is_unknown_get_shape(path: &[String]) -> bool {
     matches!(path, [root, child, ..] if (root == "agents" && matches!(child.as_str(), "profiles" | "teams")) || (root == "subagents" && child == "profiles"))
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
+        || matches!(path, [root, child, _, ..] if root == "accounts" && child == "use" && path.len() > 3)
         || matches!(path, [root, child, _, field] if root == "accounts" && is_named_account_kind(child) && field != "home")
         || matches!(path, [root, child, _, _, _, ..] if root == "accounts" && is_named_account_kind(child))
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
@@ -899,6 +944,8 @@ fn is_disallowed_set_container(path: &[String]) -> bool {
         || matches!(path, [root, child] if root == "accounts" && child == "usage_limit_usd")
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child] if root == "accounts" && child == "budget")
+        || matches!(path, [root, child] if root == "accounts" && child == "use")
+        || matches!(path, [root, child, _, ..] if root == "accounts" && child == "use" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
         || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "teams" | "commands"))
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
@@ -947,6 +994,7 @@ fn parse_edit_value(raw: &str) -> Value {
 
 fn parse_set_value(path: &[String], raw: &str) -> Value {
     if matches!(path, [root, profiles, _, field] if matches!(root.as_str(), "agents" | "subagents") && profiles == "profiles" && field == "auto-compact")
+        || matches!(path, [root, child, _] if root == "accounts" && child == "use")
         || is_harness_smart_compact_edit(path)
         || is_harness_flip_compact_edit(path)
         || is_harness_compact_instruction_edit(path)

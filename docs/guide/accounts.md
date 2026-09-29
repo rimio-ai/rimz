@@ -20,6 +20,7 @@ $ rimz accounts add claude work
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
   use it        rimz start --account claude=work
+  new rooms     rimz accounts use claude work
 ```
 
 What it does on your machine:
@@ -40,12 +41,12 @@ The account named `default` is the provider's own home and is never declared. It
 
 ```console
 $ rimz accounts list
-KIND    NAME      HOME                          STATUS
-claude  default   ~/.claude                     native
-claude  work      ~/.rimz/accounts/claude/work  ready
-codex   default   ~/.codex                      native
-codex   personal  ~/codex-personal              hooks untrusted
-RimZ hooks for codex account `personal` at `/home/me/codex-personal` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks, started as `CODEX_HOME=/home/me/codex-personal codex`
+KIND    NAME      HOME                          STATUS           NEW ROOMS
+claude  default   ~/.claude                     native           yes
+claude  work      ~/.rimz/accounts/claude/work  ready            -
+codex   default   ~/.codex                      native           yes
+codex   personal  ~/codex-me                    hooks untrusted  -
+RimZ hooks for codex account `personal` at `/home/me/codex-me` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks, started as `CODEX_HOME=/home/me/codex-me codex`
 ```
 
 A named account reads `ready` once its home exists and holds trusted RimZ hooks. Anything else prints its own line under the table with the fix: `home missing` and `hooks missing` both mean `rimz accounts add` never finished, so rerun it. `hooks untrusted` is Codex asking you to approve new hooks inside Codex itself, so an account you just declared stays there until you start Codex once under its home and trust them with `/hooks`. A `default` row reads `native` and is checked nowhere, because `rimz start` offers to install and refresh the hooks in the provider's own home ([install agent hooks](./setup.md#install-agent-hooks)).
@@ -58,7 +59,9 @@ A room picks one account per provider when it is born:
 rimz start --account claude=work --account codex=personal
 ```
 
-Without `--account`, a new room uses the selection in the project config, `<repo>/.rimz/config.toml`, and otherwise `default`:
+To use the same account in every new room without repeating the flag, run `rimz accounts use codex personal` once. It writes the machine's `[accounts.use]` selection while keeping the account declarations and comments. Reverse it with `rimz accounts use codex default`. Running rooms keep their accounts until `rimz reset`.
+
+A frozen room keeps its recorded accounts. For each provider in a new room, `--account` wins over the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`. The project selection lives in `<repo>/.rimz/config.toml`:
 
 ```toml
 [accounts]

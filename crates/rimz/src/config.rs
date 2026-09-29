@@ -264,6 +264,14 @@ struct LoadMemo {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigErr {
+    #[error(
+        "cannot {action}: {message}; correct {path}, then retry; `rimz config get` shows the strict error"
+    )]
+    UnreadableCore {
+        path: PathBuf,
+        action: &'static str,
+        message: String,
+    },
     #[error("invalid per-machine worktree config at {path}: {source}")]
     Worktree {
         path: PathBuf,
@@ -333,6 +341,7 @@ impl ConfigErr {
         match self {
             Self::Definition(error) => &error.path,
             Self::Io { path, .. }
+            | Self::UnreadableCore { path, .. }
             | Self::Parse { path, .. }
             | Self::Theme { path, .. }
             | Self::Agents { path, .. }
@@ -359,9 +368,10 @@ impl ConfigErr {
             Self::Loop { source, .. } => source.to_string(),
             Self::AccountBudget { source, .. } => source.to_string(),
             Self::Account { source, .. } => source.to_string(),
-            Self::Io { .. } | Self::RemovedTable { .. } | Self::RemovedKey { .. } => {
-                self.to_string()
-            }
+            Self::Io { .. }
+            | Self::UnreadableCore { .. }
+            | Self::RemovedTable { .. }
+            | Self::RemovedKey { .. } => self.to_string(),
         }
     }
 
@@ -468,6 +478,19 @@ pub struct MachineConfig {
 }
 
 impl MachineConfig {
+    /// Refuse a config-dependent action when lenient loading lost the core file.
+    pub fn require_readable_core(&self, action: &'static str) -> Result<()> {
+        let path = Self::config_path();
+        if let Some(message) = self.notices.unreadable_files.get(&path) {
+            return Err(ConfigErr::UnreadableCore {
+                path,
+                action,
+                message: message.clone(),
+            });
+        }
+        Ok(())
+    }
+
     /// The generated loop per-machine config reference.
     pub fn template_loop() -> &'static str {
         MachineConfigFileKind::Loop.template()

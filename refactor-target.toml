@@ -132,7 +132,8 @@ upward-dependencies = ["address"]
 # LaunchCapability carries provider-owned routine RimZ and listed-skill permission settings.
 # Async-ask observation edits, queue projections and actionable access cross the adapter/store/CLI seams.
 # ToolRules declares per-launch permission-rule support for launch and validation (+1).
-surface-budget = 914
+# LoginCatalog::select_machine names the [accounts.use] source for birth, accounts list, and doctor (+1).
+surface-budget = 915
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -244,7 +245,8 @@ upward-dependencies = [
 # Machine tiers expose the shared resolver and definition provenance to launch consumers.
 # TierConfig::family_tiers lists a family's tiers for the CLI cross-family refusal (+1).
 # ToolRule carries validated definition permission rules across launch boundaries (+1).
-surface-budget = 179
+# MachineConfig::require_readable_core shares birth/worktree refusal; ConfigEditor::use_account preserves machine selection edits (+2).
+surface-budget = 181
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

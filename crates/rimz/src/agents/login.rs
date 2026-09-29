@@ -266,13 +266,39 @@ impl LoginCatalog {
         })
     }
 
+    /// Resolve a machine `[accounts.use]` entry; the error names that source and both fixes.
+    pub fn select_machine(
+        &self,
+        kind: &AgentKind,
+        name: &LoginName,
+    ) -> Result<ProviderLogin, BirthLoginErr> {
+        let path = crate::config::MachineConfig::config_path();
+        self.select(kind, name).map_err(|source| match source {
+            LoginErr::Unknown {
+                kind,
+                name,
+                configured,
+            } => BirthLoginErr::MachineUnknown {
+                kind,
+                name,
+                configured,
+                path,
+            },
+            LoginErr::Unsupported { kind } => BirthLoginErr::MachineUnsupported {
+                kind,
+                name: name.clone(),
+                path,
+            },
+        })
+    }
+
     /// The login a kind launches under when the room names `name`.
     pub fn select(&self, kind: &AgentKind, name: &LoginName) -> Result<ProviderLogin, LoginErr> {
         self.logins
             .get(&LoginKey::new(kind.clone(), name.clone()))
             .cloned()
             .ok_or_else(|| {
-                if name.is_default() || config_home_env_key(kind).is_none() {
+                if name.is_default() || !self.account_kinds.contains(kind) {
                     LoginErr::Unsupported { kind: kind.clone() }
                 } else {
                     LoginErr::Unknown {
@@ -311,7 +337,7 @@ impl LoginCatalog {
 
     /// The selection a room is born with. A frozen selection stands, and a
     /// requested account that disagrees with it is refused; otherwise the
-    /// requested accounts win over the project's, which win over `default`.
+    /// requested accounts win over the project's, then the machine's, then `default`.
     /// Every kind that can carry an account gets an explicit entry, so the
     /// frozen record reads the same whichever layer chose it.
     pub fn birth_selection(
@@ -319,6 +345,7 @@ impl LoginCatalog {
         frozen: Option<&RoomLogins>,
         requested: &RoomLogins,
         project: &RoomLogins,
+        machine: &RoomLogins,
     ) -> Result<RoomLogins, BirthLoginErr> {
         let chosen_project = project
             .iter()
@@ -339,6 +366,12 @@ impl LoginCatalog {
             }
             return Ok(frozen.clone());
         }
+        for (kind, name) in machine
+            .iter()
+            .filter(|(kind, _)| !requested.contains_key(*kind) && !project.contains_key(*kind))
+        {
+            self.select_machine(kind, name)?;
+        }
         Ok(self
             .account_kinds
             .iter()
@@ -346,6 +379,7 @@ impl LoginCatalog {
                 let name = requested
                     .get(kind)
                     .or_else(|| project.get(kind))
+                    .or_else(|| machine.get(kind))
                     .cloned()
                     .unwrap_or_default();
                 (kind.clone(), name)
@@ -371,6 +405,24 @@ impl LoginCatalog {
 /// A room's account selection that cannot be born.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BirthLoginErr {
+    #[error(
+        "unknown {kind} account `{name}` selected by [accounts.use] in {path}; configured: {}; run `rimz accounts add {kind} {name}` or `rimz accounts use {kind} default`",
+        render_names(configured)
+    )]
+    MachineUnknown {
+        kind: AgentKind,
+        name: LoginName,
+        configured: Vec<LoginName>,
+        path: PathBuf,
+    },
+    #[error(
+        "[accounts.use] in {path} selects {kind} account `{name}`, but {kind} has no named accounts; run `rimz accounts use {kind} default`"
+    )]
+    MachineUnsupported {
+        kind: AgentKind,
+        name: LoginName,
+        path: PathBuf,
+    },
     #[error(
         "this room uses {kind} account `{current}`, not `{requested}`; accounts are fixed until reset, so run `rimz reset --account {kind}={requested}`"
     )]

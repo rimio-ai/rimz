@@ -188,7 +188,7 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
     ]);
 
     let born = catalog
-        .birth_selection(None, &requested, &project)
+        .birth_selection(None, &requested, &project, &RoomLogins::new())
         .expect("fresh birth");
     assert_eq!(
         born,
@@ -199,7 +199,12 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
     );
     assert_eq!(
         catalog
-            .birth_selection(None, &RoomLogins::new(), &RoomLogins::new())
+            .birth_selection(
+                None,
+                &RoomLogins::new(),
+                &RoomLogins::new(),
+                &RoomLogins::new()
+            )
             .expect("default birth"),
         RoomLogins::from([
             (kind("claude"), LoginName::default_login()),
@@ -208,16 +213,21 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
     );
 
     assert_eq!(
-        catalog.birth_selection(Some(&born), &RoomLogins::new(), &RoomLogins::new()),
+        catalog.birth_selection(
+            Some(&born),
+            &RoomLogins::new(),
+            &RoomLogins::new(),
+            &RoomLogins::new()
+        ),
         Ok(born.clone())
     );
     assert_eq!(
-        catalog.birth_selection(Some(&born), &requested, &project),
+        catalog.birth_selection(Some(&born), &requested, &project, &RoomLogins::new()),
         Ok(born.clone())
     );
     let other = RoomLogins::from([(kind("claude"), name("personal"))]);
     let refused = catalog
-        .birth_selection(Some(&born), &other, &RoomLogins::new())
+        .birth_selection(Some(&born), &other, &RoomLogins::new(), &RoomLogins::new())
         .unwrap_err();
     assert_eq!(
         refused.to_string(),
@@ -226,13 +236,13 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
 
     let unknown = RoomLogins::from([(kind("claude"), name("travel"))]);
     assert!(matches!(
-        catalog.birth_selection(None, &RoomLogins::new(), &unknown),
+        catalog.birth_selection(None, &RoomLogins::new(), &unknown, &RoomLogins::new()),
         Err(BirthLoginErr::Login(LoginErr::Unknown { .. }))
     ));
     let escape = RoomLogins::from([(kind("claude"), LoginName::default_login())]);
     assert_eq!(
         catalog
-            .birth_selection(None, &escape, &unknown)
+            .birth_selection(None, &escape, &unknown, &RoomLogins::new())
             .expect("a flag overrides an undeclared project account")
             .get(&kind("claude")),
         Some(&LoginName::default_login())
@@ -271,6 +281,85 @@ fn a_named_account_preflights_its_home_and_hooks() {
         ProviderLogin::default_for(kind("claude")).preflight(&ambient),
         Ok(())
     );
+}
+
+#[test]
+fn machine_selection_fills_only_unset_kinds_and_never_changes_frozen_accounts() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[claude.work]\n[codex.work]\n"),
+        Some(Path::new("/home/u")),
+    )
+    .unwrap();
+    let empty = RoomLogins::new();
+    let machine = RoomLogins::from([
+        (kind("claude"), name("work")),
+        (kind("codex"), name("work")),
+    ]);
+    let born = catalog
+        .birth_selection(None, &empty, &empty, &machine)
+        .unwrap();
+    assert_eq!(born, machine);
+    let requested = RoomLogins::from([(kind("claude"), LoginName::default_login())]);
+    let project = RoomLogins::from([(kind("codex"), LoginName::default_login())]);
+    let overridden = catalog
+        .birth_selection(None, &requested, &project, &machine)
+        .unwrap();
+    assert!(overridden.values().all(LoginName::is_default));
+    let dangling = RoomLogins::from([(kind("codex"), name("missing"))]);
+    assert_eq!(
+        catalog
+            .birth_selection(Some(&born), &empty, &empty, &dangling)
+            .unwrap(),
+        born
+    );
+    assert_eq!(
+        catalog
+            .birth_selection(None, &project, &empty, &dangling)
+            .unwrap()[&kind("codex")],
+        LoginName::default_login()
+    );
+    assert_eq!(
+        catalog
+            .birth_selection(None, &empty, &project, &dangling)
+            .unwrap()[&kind("codex")],
+        LoginName::default_login()
+    );
+}
+
+#[test]
+fn deciding_machine_selection_refuses_unknown_names_and_unsupported_kinds() {
+    let catalog =
+        LoginCatalog::from_config_under(&AccountsConfig::default(), Some(Path::new("/home/u")))
+            .unwrap();
+    for provider in ["codex", "grok"] {
+        let machine = RoomLogins::from([(kind(provider), name("missing"))]);
+        let error = catalog
+            .birth_selection(None, &RoomLogins::new(), &RoomLogins::new(), &machine)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("[accounts.use]"), "{error}");
+        // `accounts add` refuses a kind without named accounts, so only a
+        // declarable kind names it, and names it once.
+        assert_eq!(
+            error
+                .matches(&format!("rimz accounts add {provider} missing"))
+                .count(),
+            usize::from(provider == "codex"),
+            "{error}"
+        );
+        assert!(
+            error.contains(&format!("rimz accounts use {provider} default")),
+            "{error}"
+        );
+        assert!(
+            error.contains(
+                &crate::config::MachineConfig::config_path()
+                    .display()
+                    .to_string()
+            ),
+            "{error}"
+        );
+    }
 }
 
 #[test]

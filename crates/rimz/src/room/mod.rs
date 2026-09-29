@@ -69,29 +69,54 @@ fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> LiveRoo
 }
 
 /// Decide the provider accounts a room is born under: its frozen record wins,
-/// then the explicit request, then the trusted project's `[accounts]`, and
-/// every selected account must be usable before anything launches.
+/// then the explicit request, then the trusted project's `[accounts]`, then
+/// the machine's `[accounts.use]`, and every selected account must be usable
+/// before anything launches.
 pub fn resolve_birth_logins(
     project_root: &Path,
     machine_config: &MachineConfig,
     requested: &crate::ids::RoomLogins,
     was_live: bool,
 ) -> Result<crate::ids::RoomLogins> {
-    let empty = crate::ids::RoomLogins::new();
-    let catalog = crate::agents::LoginCatalog::from_config(&machine_config.accounts)?;
     let state = StatePaths::for_project_root(project_root).context("preparing store paths")?;
-    let mut frozen = record::read_optional(&state.workspace_record)
+    let frozen = record::read_optional(&state.workspace_record)
         .context("reading the room's accounts")?
         .and_then(|record| record.logins);
+    resolve_birth_logins_with_frozen(project_root, machine_config, requested, was_live, frozen)
+}
+
+fn resolve_birth_logins_with_frozen(
+    project_root: &Path,
+    machine_config: &MachineConfig,
+    requested: &crate::ids::RoomLogins,
+    was_live: bool,
+    mut frozen: Option<crate::ids::RoomLogins>,
+) -> Result<crate::ids::RoomLogins> {
+    let empty = crate::ids::RoomLogins::new();
+    match &frozen {
+        None if !was_live => machine_config.require_readable_core("start a new room")?,
+        // Named accounts resolve to their homes through the machine config's
+        // declarations, which an unreadable file has lost.
+        Some(logins) if logins.values().any(|name| !name.is_default()) => {
+            machine_config.require_readable_core("start a room on its named accounts")?
+        }
+        _ => {}
+    }
+    let catalog = crate::agents::LoginCatalog::from_config(&machine_config.accounts)?;
     if frozen.is_none() && was_live {
         // A room already running before accounts were recorded runs under the
         // provider's own homes; the project cannot re-point it mid-life.
-        frozen = Some(catalog.birth_selection(None, &empty, &empty)?);
+        frozen = Some(catalog.birth_selection(None, &empty, &empty, &empty)?);
     }
+    let machine = if frozen.is_some() {
+        &empty
+    } else {
+        &machine_config.accounts.use_accounts
+    };
     let project = match frozen {
-        Some(_) => empty,
+        Some(_) => empty.clone(),
         None => match crate::trust::project_logins(project_root)? {
-            crate::trust::ProjectLogins::Unconfigured => empty,
+            crate::trust::ProjectLogins::Unconfigured => empty.clone(),
             crate::trust::ProjectLogins::Apply(logins) => logins,
             crate::trust::ProjectLogins::Blocked(state) => anyhow::bail!(
                 "project account selections in .rimz/config.toml are {}; {}",
@@ -100,7 +125,7 @@ pub fn resolve_birth_logins(
             ),
         },
     };
-    let logins = catalog.birth_selection(frozen.as_ref(), requested, &project)?;
+    let logins = catalog.birth_selection(frozen.as_ref(), requested, &project, machine)?;
     let ambient = crate::agents::ambient_env();
     for login in catalog.room(&logins)? {
         login.preflight(&ambient)?;
@@ -584,6 +609,74 @@ fn recorded_room_bin(workspace_id: &WorkspaceId) -> PathBuf {
 mod tests {
     use super::*;
     use crate::workspace::RootClass;
+
+    #[test]
+    fn fresh_birth_refuses_unreadable_core_but_existing_rooms_and_other_files_do_not() {
+        let root = tempfile::tempdir().unwrap();
+        let empty = crate::ids::RoomLogins::new();
+        let mut config = MachineConfig::default();
+        let path = MachineConfig::config_path();
+        config
+            .notices
+            .unreadable_files
+            .insert(path.clone(), "broken TOML".to_owned());
+        let error = resolve_birth_logins_with_frozen(root.path(), &config, &empty, false, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("broken TOML")
+                && error.contains("rimz config get")
+                && error.contains(&path.display().to_string()),
+            "{error}"
+        );
+        config.accounts.use_accounts.insert(
+            crate::ids::AgentKind::new_unchecked("codex"),
+            "missing".parse().unwrap(),
+        );
+        assert!(
+            resolve_birth_logins_with_frozen(
+                root.path(),
+                &config,
+                &empty,
+                false,
+                Some(empty.clone())
+            )
+            .is_ok()
+        );
+        assert!(resolve_birth_logins_with_frozen(root.path(), &config, &empty, true, None).is_ok());
+        let frozen_named = crate::ids::RoomLogins::from([(
+            crate::ids::AgentKind::new_unchecked("codex"),
+            "rimio".parse().unwrap(),
+        )]);
+        let error = resolve_birth_logins_with_frozen(
+            root.path(),
+            &config,
+            &empty,
+            false,
+            Some(frozen_named),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("broken TOML") && error.contains("named accounts"),
+            "{error}"
+        );
+        config.notices.unreadable_files.clear();
+        let error = resolve_birth_logins_with_frozen(root.path(), &config, &empty, false, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("[accounts.use]"), "{error}");
+        config.accounts.use_accounts.clear();
+        for file in ["theme.toml", "loop.toml"] {
+            config
+                .notices
+                .unreadable_files
+                .insert(path.with_file_name(file), "broken TOML".to_owned());
+        }
+        assert!(
+            resolve_birth_logins_with_frozen(root.path(), &config, &empty, false, None).is_ok()
+        );
+    }
 
     fn workspace() -> ResolvedWorkspace {
         let project_root = PathBuf::from("/code/rimz");
