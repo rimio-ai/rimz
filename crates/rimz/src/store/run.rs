@@ -167,6 +167,9 @@ pub struct RunRecord {
     /// Pane-backed child launched through `rimz subagents`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub subagent: bool,
+    /// Number of times this run reopened for a follow-up prompt.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub follow_ups: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer: Option<PeerRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -293,6 +296,7 @@ impl RunRecord {
             permission_mode,
             keep: false,
             subagent: false,
+            follow_ups: 0,
             peer: None,
             team: None,
             joined_at: None,
@@ -332,6 +336,10 @@ impl RunRecord {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Wakeup frame the store writer sends to a per-run socket when a supervised
@@ -472,7 +480,9 @@ mod tests {
         );
         let mut value = serde_json::to_value(&record).unwrap();
         assert!(value.get("peer").is_none());
+        assert!(value.get("follow_ups").is_none());
         let old: RunRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(old.follow_ups, 0);
         assert_eq!(old.prompt_origin(), RunPromptOrigin::Human);
         value["peer"] = serde_json::json!({"launch_id": "peer-launch"});
         let peer: RunRecord = serde_json::from_value(value.clone()).unwrap();

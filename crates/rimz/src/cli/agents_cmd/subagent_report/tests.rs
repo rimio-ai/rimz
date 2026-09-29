@@ -212,6 +212,76 @@ fn child_run(workspace_id: &WorkspaceId, name: &str, status: RunStatus) -> RunRe
 }
 
 #[test]
+fn follow_up_digest_preserves_both_response_paths() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    append_agent(&store, "child", Some("parent"));
+    let record = child_run(&workspace.workspace_id, "child", RunStatus::Running);
+    run::create(store.paths(), &record).unwrap();
+    let mut replies = Vec::new();
+    for (index, answer) in ["first answer", "second answer"].into_iter().enumerate() {
+        let mut observation = AgentLifecycleObservation::new(
+            Some("child".into()),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        run::record_lifecycle(
+            store.paths(),
+            &record.run_id,
+            "codex",
+            &observation,
+            None,
+            || None,
+        )
+        .unwrap();
+        observation.signal = LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        };
+        let settled = run::record_lifecycle(
+            store.paths(),
+            &record.run_id,
+            "codex",
+            &observation,
+            Some(answer.into()),
+            || None,
+        )
+        .unwrap()
+        .unwrap();
+        let ReportOutcome::Queued { message_id, .. } =
+            report_settled_child(&workspace, &store, &settled).unwrap()
+        else {
+            panic!("each settled turn must queue a report");
+        };
+        let messages = store.list_messages().unwrap();
+        let digest = &messages
+            .iter()
+            .find(|message| message.message_id == message_id)
+            .unwrap()
+            .text;
+        let path = digest
+            .split("response: ")
+            .nth(1)
+            .unwrap()
+            .split(" (")
+            .next()
+            .unwrap();
+        assert!(
+            path.ends_with(if index == 0 {
+                "/child.output"
+            } else {
+                "/child.2.output"
+            }),
+            "{digest}"
+        );
+        replies.push((PathBuf::from(path), format!("{answer}\n")));
+    }
+    for (path, answer) in replies {
+        assert_eq!(std::fs::read_to_string(path).unwrap(), answer);
+    }
+}
+
+#[test]
 fn fleet_header_and_heading_follow_launch_kind() {
     for flags in [[true, true], [false, false], [true, false]] {
         let (_dir, workspace, store) = fixture();

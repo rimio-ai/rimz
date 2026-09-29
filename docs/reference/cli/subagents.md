@@ -143,10 +143,10 @@ The report lists status and where each answer is, and asks for nothing: reading 
 | `in` / `after` | `after` for a timed-out child, `in` for every other status; elapsed time is compact (`4m12s`) |
 | Reason | The last non-empty line of the run's failure tail, for a status other than completed |
 | Task | For peer turns, the shortened first line of that turn's prompt; otherwise the launch `--description`, falling back to the prompt, omitted when empty |
-| Response | The child's final message in `rimz-subagents/<name>.output` under room tmp, available when that child settles; `no response` when the message is empty or absent, and no file remains |
+| Response | The child's first answer in `rimz-subagents/<name>.output` under room tmp, then `<name>.2.output`, `<name>.3.output`, and so on for follow-ups; available when that turn settles. `no response` when the message is empty or absent, with no file for that turn; earlier files remain |
 | Size | `{tokens} tokens, {lines}`: an estimated token count (`<1k`, `~1.2k`, `~22k`, `~1.2M`) from OpenAI's public `o200k_base` tokenizer, which only approximates Claude's, then the line count (`1 line`, `{N} lines`, blank lines included) |
 
-Rows follow launch order. Under sandbox isolation the path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. The files are removed when the room closes, and opening one does not count as reading the result.
+Rows follow launch order. Under sandbox isolation the first response path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. The files are removed when the room closes, and opening one does not count as reading the result.
 
 A fleet is every child launched before the report is composed. A child launched while its siblings still run joins that fleet; one launched after composition starts belongs to the next. No report is sent when the parent has ended.
 
@@ -221,7 +221,7 @@ Stopping a parent with `rimz agents stop`, or through `rimz teams stop`, stops i
 
 ## Follow-up messages
 
-A child is addressable as `@<petname>` for `rimz message` and `rimz pane`. The parent can message a live interactive child for another turn in the same session. If the child has ended, a message from its parent resumes the same session in the subagent zone and delivers the message as its next prompt. The next result can produce another fleet report; `rimz message --wait` also supports the exchange.
+A child is addressable as `@<petname>` for `rimz message` and `rimz pane`. The parent can message a live interactive child for another turn in the same session. If the child has ended, a message from its parent resumes the same session in the subagent zone and delivers the message as its next prompt. Each follow-up keeps its own response file, leaving earlier answers readable at the paths already reported. The next result can produce another fleet report; `rimz message --wait` also supports the exchange.
 
 Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory, conversation, login, profile and provider resume support to remain usable; otherwise the miss names the reason. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
 

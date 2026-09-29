@@ -47,7 +47,7 @@ The record schema also supports launcher-opened persistent peer turns through op
 | Retention | `keep`, `subagent` |
 | Outcome | `status`, `last_message`, `verify`, `failure_tail`, `transcript_path` |
 | Accounting | `cost_usd`, `input_tokens`, `output_tokens` |
-| Reporting | `joined_at`, `report_message_id` ([subagents.md](./subagents.md#the-lifecycle-end-to-end)) |
+| Reporting | `follow_ups`, `joined_at`, `report_message_id` ([subagents.md](./subagents.md#the-lifecycle-end-to-end)) |
 | Timing | `started_at`, `deadline_at`, `updated_at`, `completed_at`, `parked_at`; subagent ladder: `timeout`, `warn`, `grace`, `deadline_notice_at` ([subagents.md](./subagents.md#the-lifecycle-end-to-end)) |
 
 `agent_id` starts empty. The first lifecycle observation that matches the run fills it, which is how the record binds to a session whose id did not exist when the record was written. `transcript_path` points at the provider's own session file, which streaming reads directly; the RimZ transcript log that `rimz transcript` renders is a different file. The wrapper stamps `provider_pid` and its process-start token when it spawns the provider, so a later signal cannot reach a reused PID.
