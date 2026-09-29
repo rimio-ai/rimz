@@ -24,7 +24,12 @@ A room running Copilot gets one more file. RimZ points Copilot's own telemetry e
 
 Inside a workspace, plenty already runs as you: hooks, postinstall scripts, generated binaries, test runners, and the agents themselves. Same-user isolation is no real boundary there, so RimZ does not lean on it. Instead it makes command execution an explicit choice, and three things in your configuration can make that choice for you: a repository's config, which stays inert until you trust it, and your own notification handlers and worktree hooks, which a repository cannot supply.
 
-RimZ gives Claude a curated launch-only permission list for [routine coordination](./configuration.md#routine-rimz-commands), on by default with a machine-only opt-out; Claude still makes permission decisions.
+RimZ also gives every Claude agent it launches a curated permission list for [routine coordination](./fleet.md#set-a-permission-mode), on by default. That list lets an agent widen what other agents may do, with no prompt:
+
+- The `rimz agents` and `rimz subagents` rules cover launches as well as inspection. An agent can run `rimz agents claude --yolo …`, or `rimz subagents claude "…" -- --dangerously-skip-permissions`, since arguments after `--` pass through unfiltered. The launched agent then runs with no permission checks at all.
+- The `rimz answer` rule lets an agent answer another agent's permission prompt, approving it on your behalf.
+
+To remove all of these rules, set `allow-routine-rimz = false` under `[agents]` in `~/.rimz/config.toml` ([routine RimZ commands](./configuration.md#routine-rimz-commands)). This is a machine setting, so a repository cannot turn it back on.
 
 ### Project trust
 
