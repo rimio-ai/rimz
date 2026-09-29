@@ -117,10 +117,11 @@ fn model_tiers_refuse_missing_or_unsupported_family_and_unbased_shift() {
         "agent: codex\nmodel: senior\neffort: -1\ntools: [Bash]",
         "Craft.",
     );
+    definition(root.path(), "agents/middle.md", "agent: tiered", "Craft.");
     definition(
         root.path(),
         "agents/probe.md",
-        "agent: tiered\nmodel: gpt-6-sol",
+        "agent: middle\nmodel: gpt-6-sol",
         "Craft.",
     );
     error(root.path(), "effort -1 (inherited from 'tiered') shifts");

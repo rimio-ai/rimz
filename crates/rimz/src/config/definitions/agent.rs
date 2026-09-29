@@ -233,7 +233,7 @@ impl Resolver<'_> {
             let source = if definition.frontmatter.effort.is_some() {
                 String::new()
             } else {
-                format!(" (inherited from '{parent_name}')")
+                format!(" (inherited from '{}')", self.effort_source(&parent_name))
             };
             return Err(DefinitionErr::new(
                 path,
@@ -265,6 +265,21 @@ impl Resolver<'_> {
             frontmatter: unresolved,
             profile,
         })
+    }
+
+    /// The definition along `name`'s `agent:` chain whose own frontmatter sets `effort:`.
+    fn effort_source<'n>(&'n self, mut name: &'n str) -> &'n str {
+        loop {
+            let own = &self.tree.definitions[name].frontmatter;
+            match own.agent.as_deref() {
+                Some(parent)
+                    if own.effort.is_none() && self.tree.definitions.contains_key(parent) =>
+                {
+                    name = parent;
+                }
+                _ => return name,
+            }
+        }
     }
 
     fn finish(
