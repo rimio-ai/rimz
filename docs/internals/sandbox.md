@@ -59,6 +59,8 @@ Codex replaces every `--sandbox`/`-s` flag and `sandbox_mode` override with `--s
 
 The view neither pins nor binds `CARGO_HOME` or `RUSTUP_HOME`. The agent keeps the host `HOME`, so the root bind shows the host toolchain at its host paths: an exported `CARGO_HOME` and `RUSTUP_HOME`, or `~/.cargo` and `~/.rustup` when they are unset. Both stay read-write on purpose, because cargo writes its registry, git checkouts, and installed binaries under `CARGO_HOME` during a build, and rustup writes toolchains and components under `RUSTUP_HOME` when it installs them. The view is not containment here: a sandboxed agent can modify the host toolchain as it can any other host file it can write. An exported `CARGO_HOME` or `RUSTUP_HOME` below host `/tmp` is not itself a [reachable host path](#reachable-host-paths) candidate, so room tmp hides it unless a rebound candidate such as HOME or the worktree contains it; a default `~/.cargo` under a rebound HOME stays visible.
 
+A compiler cache wrapper crosses views. Every sccache client forwards compiles to one server over its socket (`SCCACHE_SERVER_UDS`, or TCP port 4226), which the view shares with the host because `/run/user` is not rebound and the network is not unshared. A server-side compile runs rustc in the mount namespace of whichever process spawned the server, so a sandboxed pane's `/tmp` paths resolve against another view, or against room tmp that is already gone, and the build fails with `error writing dependencies ... No such file or directory` or exit status 254. The view therefore pins `SCCACHE_CLIENT_SIDE=1` ([environment pins](#environment-pins)): sccache 0.17 or later then runs rustc inside the client, in the pane's own view, and uses the shared server only for cache storage, so every view still shares one cache. Older sccache ignores the key and stays broken. After upgrading, run `sccache --stop-server` once, because a client in client-side mode cannot talk to a pre-0.17 server still running. Host launches are not pinned, so a host shell's server-side compile can still land on a server a sandboxed pane spawned; set `client_side_mode = true` in the sccache config, or export `SCCACHE_CLIENT_SIDE=1` machine-wide, to close that too. Reproduce with `CARGO_INCREMENTAL=0` on a fresh crate under `/tmp/scratchpad`, since incremental compiles bypass the cache.
+
 ## Mount order
 
 `sandbox::bwrap_argv` emits `bwrap --bind / / --dev-bind /dev /dev --die-with-parent`, then the plan's mounts in this order, then `--chdir <cwd> -- <provider argv>`:
@@ -100,6 +102,7 @@ The plan pins every environment variable it consulted, so shell startup files ca
 | `TMPDIR` | Always `/tmp`. |
 | `RIMZ_SCRATCH` | Always `/tmp/scratchpad`. |
 | `RIMZ_SHARED` | Always `/tmp/shared`. |
+| `SCCACHE_CLIENT_SIDE` | Always `1`, so a shared sccache server never compiles in another view ([toolchain homes](#toolchain-homes)). |
 
 Separately, every launch sets `RIMZ_ISOLATION` to `sandbox` or `host`, `RIMZ_SCRATCH` to the host path of its scratch dir, and `RIMZ_SHARED` to the host path of the room's shared dir ([env application](./harness/trust.md#env-application), layer 5), so a process can tell which view it runs in without probing namespaces and find both directories in either mode (`Isolation::ambient` is the one reader); the pins above replace the host paths under the sandbox.
 

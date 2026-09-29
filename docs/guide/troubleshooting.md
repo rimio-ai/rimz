@@ -148,6 +148,19 @@ rimz config set agents.isolation host
 
 The switch affects new launches, not existing panes. Profile `skills` lists can stay: host mode ignores them. [Sandbox isolation](./security.md#sandbox-isolation) covers the limits of each mode.
 
+### A Rust build in a sandboxed pane fails through sccache
+
+A Cargo build that uses sccache as its `rustc-wrapper` fails in a sandboxed pane with `error writing dependencies ... No such file or directory` or `exit status: 254`. The sccache server is shared by every pane and normally compiles in the view of whichever process started it, where the sandboxed pane's `/tmp` paths do not exist. RimZ sets `SCCACHE_CLIENT_SIDE=1` in sandboxed panes so each build compiles in its own pane and still shares one cache, but sccache only honors it from version 0.17.
+
+Upgrade sccache, then stop the old server so the next build starts a new one:
+
+```sh
+cargo install sccache --locked
+sccache --stop-server
+```
+
+To keep host shells from compiling inside a server that a sandboxed pane started, also set `client_side_mode = true` in your sccache config file. [Sandbox isolation](./security.md#sandbox-isolation) covers what a sandboxed pane sees.
+
 ### Zellij is live but not responding
 
 Zellij can still list a room after that room has stopped answering pane queries. Attaching then opens an alternate screen that cannot draw, so RimZ refuses before attach and leaves every pane untouched. `rimz doctor` confirms it with a `live but not responding` session-health verdict. If it does not recover, rebuild the room:
