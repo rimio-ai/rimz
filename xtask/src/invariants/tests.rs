@@ -26,7 +26,7 @@ fn integration_identity_requires_fixture_home() {
         }
         std::fs::write(
             &path,
-            "WorkspaceResolver::resolve_under(root, None, home);\nStatePaths::for_project_root_under(root, home);\nRuntimePaths::for_project_root_under(root, home);\n",
+            "WorkspaceResolver::resolve_under(root, None, home);\nStatePaths::for_project_root_under(root, home);\nRuntimePaths::for_state_under(&state, runtime_root);\n",
         )
         .unwrap();
         ensure_integration_fixture_home(&root, &[path]).unwrap();
