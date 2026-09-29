@@ -1350,6 +1350,17 @@ fn sandbox_skills_under_host_use_provider_switches() {
     )
     .unwrap();
     for kind in ["codex", "amp", "claude"] {
+        if kind == "claude" {
+            for name in ["rimz-probe", "commit"] {
+                let dir = env.agents_home().join("skills").join(name);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    dir.join("SKILL.md"),
+                    format!("---\nname: {name}\ndescription: test\n---\nSkill."),
+                )
+                .unwrap();
+            }
+        }
         let shim_dir = write_env_dump_shim(&env, kind);
         let args = if kind == "claude" {
             vec!["--settings".into(), settings.display().to_string()]
@@ -1364,6 +1375,10 @@ fn sandbox_skills_under_host_use_provider_switches() {
             .scratch_dir(request.identity.name.as_deref());
         for skills in [vec!["missing-skill".parse().unwrap()], vec![]] {
             request.skills = Some(skills);
+            let missing = !request.skills.as_ref().unwrap().is_empty();
+            if kind == "claude" && !missing {
+                request.skills = Some(vec!["commit".parse().unwrap()]);
+            }
             let output = env
                 .rimz()
                 .args(exec_args(&env, &request))
@@ -1373,7 +1388,7 @@ fn sandbox_skills_under_host_use_provider_switches() {
                 .bounded_output()
                 .unwrap();
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if kind != "amp" && !request.skills.as_ref().unwrap().is_empty() {
+            if kind != "amp" && missing {
                 assert!(!output.status.success(), "missing host skill must refuse");
                 assert!(stderr.contains("missing-skill"), "{stderr}");
                 assert!(
@@ -1422,11 +1437,15 @@ fn sandbox_skills_under_host_use_provider_switches() {
                 let mut settings: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
                 let routine = settings.as_object_mut().unwrap();
-                assert!(routine.remove("permissions").is_some(), "{routine:?}");
+                let permissions = routine.remove("permissions").unwrap();
+                let allow = permissions["allow"].as_array().unwrap();
+                assert!(allow.contains(&serde_json::json!("Skill(rimz-probe)")));
+                assert!(allow.contains(&serde_json::json!("Skill(commit)")));
+                assert!(!allow.contains(&serde_json::json!("Skill(unlisted-dir)")));
                 assert!(routine.remove("autoMode").is_some(), "{routine:?}");
                 assert_eq!(
                     settings,
-                    serde_json::json!({"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":{"kept":"enabled", "unlisted-dir":"user-invocable-only"}})
+                    serde_json::json!({"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":{"kept":"enabled", "unlisted-dir":"user-invocable-only", "rimz-probe":"user-invocable-only"}})
                 );
             }
             assert!(

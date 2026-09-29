@@ -107,6 +107,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         Err(error) => tracing::debug!(%error, "language-server launch reminder unavailable"),
     }
     reminders.sandbox = inputs.bwrap.is_some();
+    reminders.settings = Some((inputs.runtime.prompt_dir(), inputs.ambient_env.clone()));
     if inputs
         .effective
         .is_none_or(|effective| effective.env_reminder)
@@ -233,7 +234,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
 
 pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanErr> {
     plan.runtime.ensure_dirs()?;
-    if let Some((path, settings)) = &plan.process().settings_artifact {
+    if let Some((path, settings, _)) = &plan.process().settings_artifact {
         crate::disk::paths::ensure_private_runtime_dir(&plan.runtime.prompt_dir())?;
         crate::disk::atomic::write_private_temp_then_rename(path, settings)
             .map_err(launch::ExecWireErr::PromptWrite)?;

@@ -496,15 +496,20 @@ fn merge_settings(
         .filter(|value| !value.trim_start().starts_with('{'))
         .map(|value| cwd.join(value))
         .unwrap_or_else(|| PathBuf::from("--settings"));
+    let source_path = pending
+        .filter(|(pending_path, _, _)| *pending_path == path)
+        .map(|(_, _, source)| source)
+        .unwrap_or(&path)
+        .clone();
     let invalid = |reason: String| LaunchSettingsErr::Settings {
-        path: path.clone(),
+        path: source_path.clone(),
         reason,
     };
     let private = value
         .as_ref()
         .is_some_and(|value| private_inline || !value.trim_start().starts_with('{'));
     let mut settings: serde_json::Value = match (value, pending) {
-        (Some(value), Some((path, settings))) if path == Path::new(&value) => settings.clone(),
+        (Some(value), Some((path, settings, _))) if path == Path::new(&value) => settings.clone(),
         (Some(value), _) => {
             let bytes = if value.trim_start().starts_with('{') {
                 value.into_bytes()
@@ -526,7 +531,7 @@ fn merge_settings(
         let digest = hex::encode(Sha256::digest(settings.to_string().as_bytes()));
         let path = artifact_dir.join(format!("settings.{digest}.json"));
         args.extend(["--settings".into(), path.display().to_string()]);
-        return Ok(Some((path, settings)));
+        return Ok(Some((path, settings, source_path)));
     }
     args.extend(["--settings".into(), settings.to_string()]);
     Ok(None)
@@ -729,17 +734,25 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
 
     fn allow_routine_rimz_args(
         &self,
-        cwd: &Path,
-        artifact_dir: &Path,
+        (cwd, artifact_dir): (&Path, &Path),
+        skill_roots: (Option<&Path>, Option<&Path>),
         dirs: &[PathBuf; 2],
         extra_args: &mut Vec<String>,
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
         use crate::agents::skills::LaunchSettingsErr;
+        let skills = crate::agents::skills::enumerate(skill_roots.0, skill_roots.1)
+            .map_err(LaunchSettingsErr::RoutineSkills)?;
         let [scratch, shared] = dirs.each_ref().map(|path| path.display().to_string());
         let allow = ROUTINE_RIMZ_PREFIXES
             .iter()
-            .map(|prefix| format!("Bash({prefix} *)"));
+            .map(|prefix| format!("Bash({prefix} *)"))
+            .chain(
+                skills
+                    .keys()
+                    .filter(|name| name.starts_with("rimz-") && !name.contains('*'))
+                    .map(|name| format!("Skill({name})")),
+            );
         let environment = format!(
             "rimz is this machine's agent-coordination CLI. These subcommands are routine \
              coordination: {}. $RIMZ_SCRATCH ({scratch}) and $RIMZ_SHARED ({shared}) are this \
@@ -772,6 +785,40 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             LaunchSettingsErr::Settings { path, reason } => LaunchSettingsErr::Settings {
                 path,
                 reason: format!("{reason}; correct that key, or set allow-routine-rimz = false"),
+            },
+            error => error,
+        })?;
+        Ok(())
+    }
+
+    fn allow_listed_skill_args(
+        &self,
+        listed: &[crate::config::SkillName],
+        (cwd, artifact_dir): (&Path, &Path),
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        use crate::agents::skills::LaunchSettingsErr;
+        let allow: Vec<_> = listed
+            .iter()
+            .filter(|name| !name.as_str().contains('*'))
+            .map(|name| format!("Skill({name})"))
+            .collect();
+        if allow.is_empty() {
+            return Ok(());
+        }
+        *artifact = merge_settings(
+            cwd,
+            artifact_dir,
+            extra_args,
+            artifact.as_ref(),
+            false,
+            |object| union_settings_array(object, "permissions", "allow", allow),
+        )
+        .map_err(|error| match error {
+            LaunchSettingsErr::Settings { path, reason } => LaunchSettingsErr::Settings {
+                path,
+                reason: format!("{reason}; correct that key, or remove the profile's skills list"),
             },
             error => error,
         })?;

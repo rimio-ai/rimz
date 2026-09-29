@@ -35,7 +35,8 @@ pub enum HostSkills {
     },
 }
 
-pub(crate) type LaunchSettingsArtifact = (PathBuf, serde_json::Value);
+/// Publication path, settings, and original source path for chained-merge diagnostics.
+pub(crate) type LaunchSettingsArtifact = (PathBuf, serde_json::Value, PathBuf);
 
 type RenderHostSkills = fn(
     &[ProviderSkillKey],
@@ -75,6 +76,8 @@ pub enum SkillErr {
 pub enum LaunchSettingsErr {
     #[error(transparent)]
     Skills(#[from] SkillErr),
+    #[error("{0}; correct skill root access, or set allow-routine-rimz = false")]
+    RoutineSkills(#[source] SkillErr),
     #[error("invalid launch settings at {path}: {reason}")]
     Settings { path: PathBuf, reason: String },
     #[error("skills sharing provider name {name:?} have conflicting invocation policies; list all of their directories or none", name = .key.as_str())]

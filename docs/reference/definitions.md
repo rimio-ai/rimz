@@ -57,7 +57,7 @@ Follow the project's instructions and report what you verified.
 | `traits` | Trait names substituted into this definition's body. |
 | `tools` | Tool-name list, translated to provider arguments below. |
 | `subagents` | Direct profiles only: allowed RimZ child profiles; `[]` permits none. |
-| `skills` | Bare skill-directory names allowed for model invocation. Sandbox views and host Claude keep unlisted skills user-only; host Codex hides them. Other host providers warn and run unrestricted. `[]` lists none. |
+| `skills` | Bare skill-directory names allowed for model invocation. Claude also adds exact invocation permissions for listed names without `*`, in both isolations and independently of `allow-routine-rimz`. Sandbox views and host Claude keep unlisted skills user-only; host Codex hides them. Other host providers warn and run unrestricted. `[]` lists none. |
 
 Names must match `[A-Za-z0-9_-]+` and be unique across both definition trees. Registered kinds are reserved for kind bases. `general` and model aliases are not reserved by the definition parser. The final namespace checks also reject command-verb and address collisions, such as `all`, kind ordinals, or a profile colliding with a team.
 

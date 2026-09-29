@@ -430,6 +430,7 @@ The [CLI reference](https://code.claude.com/docs/en/cli-reference) accepts a JSO
 | Key | Upstream contract |
 | --- | --- |
 | `permissions.allow` | Tool-rule array, including `Bash(command *)`; deny and explicit ask rules precede allow rules ([settings reference](https://code.claude.com/docs/en/settings-reference#permissions-allow)). Managed `allowManagedPermissionRulesOnly` can exclude non-managed rules ([managed-only rules](https://code.claude.com/docs/en/settings-reference#allowmanagedpermissionrulesonly)). |
+| `Skill(<name>)` in `permissions.allow` | Allows skill invocation; that skill's `allowed-tools` then apply for the invoking turn ([skills permissions](https://code.claude.com/docs/en/skills)). Rules name the skill directory, as checked by the local probe below. |
 | `permissions.additionalDirectories` | Extra working directories, alongside those supplied by `--add-dir`; write approval still follows the permission mode ([settings reference](https://code.claude.com/docs/en/settings-reference#permissions-additionaldirectories), [working directories](https://code.claude.com/docs/en/permissions#working-directories)). |
 | `autoMode` | Prose arrays `environment`, `allow`, `soft_deny`, and `hard_deny`; read from user/managed settings and `--settings`, not project/local settings ([configuration scopes](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration)). Each array needs the literal `$defaults` to retain its built-in entries ([settings reference](https://code.claude.com/docs/en/settings-reference#automode)). |
 
@@ -452,6 +453,8 @@ A second pass used the `--settings` value `rimz agents explain claude` rendered 
 | `--permission-mode auto`, run `rimz lsp status` | Ran without a prompt or denial. |
 | Default mode, run `rimz pane send @nobody hi` | “This command requires approval”. The launch settings grant no rule for it. |
 | The rendered `autoMode` placed in the config dir's `settings.json`, then `claude auto-mode config` | 22 `environment` entries: the 21 that `claude auto-mode defaults` prints, plus the RimZ entry. `$defaults` expanded in place. |
+
+A separate planning probe on 2.1.284 found that `Skill(<name>)` matches invocation with or without arguments. `Skill(<name> *)` strips the suffix and performs a prefix match, also admitting `<name>x`; exact rules avoid that leak. Rules matched directory names, not differing frontmatter names. A skill with only safe frontmatter keys was auto-allowed; adding `allowed-tools` made invocation permission-checked, and `allow: []` yielded a Skill denial. This did not reproduce the reported refusal in auto mode itself. Personal-versus-project precedence for the Skill tool was not probed.
 
 The interactive `/permissions` display has not been live-verified. RimZ's composition contract is in [the adapter launch section](../../internals/agents/adapter_claude.md#launch).
 
