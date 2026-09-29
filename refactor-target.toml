@@ -297,7 +297,8 @@ surface-budget = 202
 [[module]]
 path = "crates/rimz/src/forge"
 # Shared same-repository PR graph and stack walk feed sidebar enrichment.
-surface-budget = 42
+# Forge signal vocabulary is shared with CLI admission.
+surface-budget = 45
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -4184,6 +4185,11 @@ reason = "Named in main.rs and carried by the pub init result, both outside the 
 kind = "item"
 key = "forge::Forge"
 reason = "Field type of PrTarget::forge (forge.rs:46), which the pub PR target exposes (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "forge::ForgeSignal"
+reason = "The CLI binary and sidebar producer share forge signal admission and spelling."
 
 [[verdict]]
 kind = "item"

@@ -9,6 +9,33 @@ use crate::store::snapshot::{PrStack, StackPr, WorktreeCi, WorktreePrState};
 
 pub mod pr_state;
 
+/// Signals derived from successful forge probes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForgeSignal {
+    CiPassed,
+    CiFailed,
+    PrMerged,
+    PrClosed,
+}
+
+impl ForgeSignal {
+    pub const ALL: &[Self] = &[
+        Self::CiPassed,
+        Self::CiFailed,
+        Self::PrMerged,
+        Self::PrClosed,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CiPassed => "ci.passed",
+            Self::CiFailed => "ci.failed",
+            Self::PrMerged => "pr.merged",
+            Self::PrClosed => "pr.closed",
+        }
+    }
+}
+
 const GH_HEAD_FIELDS: &str = "headRefName,headRepository,headRepositoryOwner,isCrossRepository";
 const TEA_LIST_FIELDS: &str = "index,state,head,base,created";
 const LIST_LIMIT: &str = "500";

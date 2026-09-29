@@ -143,13 +143,12 @@ fn validate_emit_source(
 
     match source {
         "forge" => {
-            if !matches!(
-                name.as_str(),
-                "ci.passed" | "ci.failed" | "pr.merged" | "pr.closed"
-            ) {
-                anyhow::bail!(
-                    "--source forge accepts only ci.passed, ci.failed, pr.merged, or pr.closed"
-                );
+            let names = rimz::forge::ForgeSignal::ALL
+                .iter()
+                .map(|signal| signal.as_str())
+                .collect::<Vec<_>>();
+            if !names.contains(&name.as_str()) {
+                anyhow::bail!("--source forge accepts only {}", names.join(", "));
             }
             Ok(SignalSource::Forge)
         }
