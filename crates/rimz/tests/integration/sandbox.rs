@@ -51,7 +51,7 @@ fn child_cap_launch(explicit_host: bool) {
     let store = env.store();
     let cwd = store.paths().tmp_dir.join("clean");
     std::fs::create_dir_all(&cwd).unwrap();
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
     store
         .append_event(&EventEnvelope::agent_launched(
             env.workspace_id.clone(),

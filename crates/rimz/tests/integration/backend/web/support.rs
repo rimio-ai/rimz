@@ -290,8 +290,7 @@ impl LiveWebFixture {
         let env = Env::new();
         env.write_config(&env.project_root, "");
         env.record(&env.project_root);
-        let workspace =
-            rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+        let workspace = env.resolve_workspace(&env.project_root);
         let server = TmuxServer::in_runtime_root(&env.runtime_root);
         let root = env.project_root.to_string_lossy();
         server.output(&[
@@ -621,8 +620,7 @@ impl LiveZellijWebFixture {
         let env = Env::new();
         env.write_config(&env.project_root, "");
         env.record(&env.project_root);
-        let workspace =
-            rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+        let workspace = env.resolve_workspace(&env.project_root);
         let namespace = ZellijNamespace::new();
         std::fs::write(namespace.path().join(".zshrc"), "").expect("disable zsh first-run menu");
         let output = namespace

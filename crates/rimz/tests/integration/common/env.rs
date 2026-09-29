@@ -173,11 +173,15 @@ impl Env {
 
     // --- paths ---
 
-    /// `RIMZ_HOME` for every command this env builds. Not `~/.rimz`: the
-    /// binary knows its home is no project marker, but this process resolves
-    /// workspaces without the pin and would root the project at the fixture HOME.
+    /// `RIMZ_HOME` for every command this env builds.
     pub fn rimz_home(&self) -> PathBuf {
         self.home_root.join(RIMZ_HOME_DIR)
+    }
+
+    /// Resolve `start` under this env's RimZ home, as its `rimz` children do.
+    pub fn resolve_workspace(&self, start: &Path) -> rimz::ResolvedWorkspace {
+        WorkspaceResolver::resolve_under(start, None, &self.rimz_home())
+            .unwrap_or_else(|err| panic!("resolve fixture workspace {}: {err}", start.display()))
     }
 
     /// `XDG_STATE_HOME`; RimZ no longer writes here, so a `rimz/` child is a
@@ -636,7 +640,7 @@ impl Env {
     /// Resolve and record a workspace so `rimz list`/`workspace` see it.
     pub fn record(&self, project_root: &Path) {
         std::fs::create_dir_all(project_root).expect("mkdir project");
-        let workspace = WorkspaceResolver::resolve(project_root, None).expect("resolve");
+        let workspace = self.resolve_workspace(project_root);
         self.store_for(project_root)
             .record_workspace(&workspace)
             .expect("record workspace");

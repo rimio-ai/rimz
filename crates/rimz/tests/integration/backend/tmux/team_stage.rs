@@ -53,7 +53,7 @@ done
     )
     .unwrap();
     chmod_executable(&shim);
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     let mut options = session_opts(
         &workspace.session_name,

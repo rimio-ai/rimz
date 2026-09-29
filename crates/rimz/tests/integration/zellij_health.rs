@@ -5,7 +5,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, Env};
@@ -22,7 +21,7 @@ fn timed_out_live_zellij_room_fails_fast_and_is_preserved() {
 
 fn assert_unresponsive_live_room_is_preserved(list_panes_sleep: Option<&str>) {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     let shim = FakeZellij::new();
 
     let mut command = env.rimz();
@@ -116,7 +115,7 @@ fn unresponsive_foreign_zellij_session_names_native_recovery_and_bypass() {
 #[test]
 fn unresponsive_zellij_session_with_unknown_ownership_avoids_destroy_guidance() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .record_room_bin(
             &workspace,
@@ -169,7 +168,7 @@ fn unresponsive_zellij_session_with_unknown_ownership_avoids_destroy_guidance() 
 #[test]
 fn attach_retries_transient_zellij_session_listing_before_default_mux_fallback() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     let shim = FakeZellij::new().with_tmux();
     let fail_once = shim.log.with_extension("list-sessions-fail-once");
 
@@ -214,7 +213,7 @@ fn attach_retries_transient_zellij_session_listing_before_default_mux_fallback()
 #[test]
 fn named_attach_preserves_recorded_room_owner() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     let recorded_owner = env.project_root.join("previous-rimz");
     rimz::disk::atomic::write_executable_bytes_atomically(&recorded_owner, b"recorded build")
         .expect("write recorded room owner");
@@ -249,7 +248,7 @@ fn named_attach_preserves_recorded_room_owner() {
 #[test]
 fn cold_cwd_attach_claims_recorded_room_owner() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     let recorded_owner = env.project_root.join("previous-rimz");
     rimz::disk::atomic::write_executable_bytes_atomically(&recorded_owner, b"recorded build")
         .expect("write recorded room owner");
@@ -292,7 +291,7 @@ fn cold_cwd_attach_claims_recorded_room_owner() {
 #[test]
 fn tmux_start_skips_wedged_rival_zellij_session_probe() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     let shim = FakeZellij::new().with_tmux();
     let tmux_log = env.project_root.join("tmux.log");
     let _room = crate::common::room::ShimRoom::watch_tmux(
@@ -341,7 +340,7 @@ fn tmux_start_skips_wedged_rival_zellij_session_probe() {
 #[test]
 fn zellij_start_fails_fast_when_selected_session_probe_wedges() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     let shim = FakeZellij::new().with_tmux();
 
     let output = env

@@ -265,7 +265,7 @@ fn unmanaged_launch_checkout_preserves_ownership_and_local_work() {
         ],
     );
     std::fs::write(path.join("local.txt"), "keep me\n").expect("local work");
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let config = rimz::config::WorktreeConfig::default();
     assert!(matches!(
         rimz::worktree::resolve_launch_checkout(
@@ -330,7 +330,7 @@ fn unmanaged_launch_checkout_rejects_non_worktrees_and_other_repositories() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let outside = env.home_root.join("project-worktrees/plain");
     std::fs::create_dir_all(&outside).expect("plain sibling directory");
     assert!(matches!(
@@ -2912,7 +2912,7 @@ fn seed_agent_launch(
     agent_name: &str,
     state: AgentLaunchState,
 ) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
     let event = EventEnvelope::agent_launched(
         workspace.workspace_id,

@@ -302,8 +302,7 @@ fn hidden_timeout_helper_signals_pre_hook_provider_without_killing_wrapper() {
     .expect("persist provider process");
 
     let launch_id = AgentSessionId::from("launch-pre-hook-timeout");
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace context");
+    let workspace = env.resolve_workspace(&env.project_root);
     store
         .append_event(&EventEnvelope::agent_launched(
             workspace.workspace_id,
@@ -534,7 +533,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     trust_codex_project(&env, &env.project_root);
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
     let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
@@ -766,9 +765,10 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let workspace = rimz::WorkspaceResolver::resolve(
+    let workspace = rimz::WorkspaceResolver::resolve_under(
         &env.project_root,
         repo_subdir.then(|| env.project_root.clone()),
+        &env.rimz_home(),
     )
     .expect("workspace");
     let store = env.store();
@@ -2182,7 +2182,7 @@ fn spawn_retrying_print(
     let agent_bin = write_failing_agent_shim(env, "codex", 1);
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     seed_live_zellij_room(&env.runtime_paths(), &workspace.session_name, Vec::new());
     let mut command = env.rimz();
     command
@@ -2231,7 +2231,7 @@ fn spawn_verifying_print(
     let agent_bin = write_failing_agent_shim(env, "codex", 1);
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     seed_live_zellij_room(&env.runtime_paths(), &workspace.session_name, Vec::new());
     let mut command = env.rimz();
     command
@@ -2268,7 +2268,7 @@ fn spawn_verifying_print(
 
 #[cfg(unix)]
 fn register_verify_agent(env: &Env, store: &rimz::Store, record: &mut RunRecord) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let agent_id = AgentSessionId::from("sess-verify");
     let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     let mut observation =
@@ -2291,7 +2291,7 @@ fn register_verify_agent(env: &Env, store: &rimz::Store, record: &mut RunRecord)
 
 #[cfg(unix)]
 fn verify_agent_pane(env: &Env) -> rimz::pane::PaneRef {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     rimz::pane::PaneRef {
         pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_9"),
         session_name: workspace.session_name,
@@ -2337,7 +2337,7 @@ fn git_ok(cwd: &std::path::Path, args: &[&str]) -> bool {
 
 #[cfg(unix)]
 fn end_retry_agents(env: &Env, store: &rimz::Store) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     // The trace backend opens no real wrapper process, so drain the provisional
     // launch cards an exiting wrapper would stamp ended before cleanup.
     for _ in 0..3 {
@@ -2980,7 +2980,7 @@ fn assert_agents_list_requires_live_room(env: &Env, args: &[&str]) {
 #[test]
 fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
     let env = Env::new();
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
     let owner_pid = std::process::id();
@@ -3102,7 +3102,7 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
 #[test]
 fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
     let env = Env::new();
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     register_list_agent(&env, &workspace, "sess-auth", "claude", "auth", "%1");
     register_list_agent(&env, &workspace, "sess-ops", "codex", "ops", "%2");
     publish_pane_frame(
@@ -3173,7 +3173,7 @@ fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
 #[test]
 fn agents_list_and_show_share_seat_active_time() {
     let env = Env::new();
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     for (id, name, pane, parent) in [
         ("parent", "seat-parent", "%1", None),
         ("child", "seat-child", "%2", Some("parent")),
@@ -3578,7 +3578,7 @@ fn create_finished_subagent(
     env: &Env,
     store: &rimz::Store,
 ) -> (RunRecord, AgentKind, AgentSessionId) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let parent_kind = AgentKind::new_unchecked("claude");
     let parent_id = AgentSessionId::from("parent-session");
     let parent_launch_id = AgentSessionId::from("parent-launch");
@@ -3688,7 +3688,7 @@ fn create_finished_subagent(
 }
 
 fn register_running_wait_agent(env: &Env, store: &rimz::Store, name: &str, session_id: &str) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let agent_id = AgentSessionId::from(session_id);
     let mut registered =
         AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Registered);
@@ -3719,7 +3719,7 @@ fn register_running_wait_agent(env: &Env, store: &rimz::Store, name: &str, sessi
 }
 
 fn end_wait_agent(env: &Env, store: &rimz::Store, session_id: &str) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     store
         .append_event(&EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),
@@ -3966,7 +3966,7 @@ fn assert_wait_rechecks_parent_turn(settle_without_hook: bool) {
     let env = Env::new();
     let store = env.store();
     let (attended, parent_kind, parent_launch_id) = create_finished_subagent(&env, &store);
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     store
         .append_event(&EventEnvelope::agent_lifecycle(
             env.workspace_id.clone(),

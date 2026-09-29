@@ -5,8 +5,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use rimz::workspace::WorkspaceResolver;
-
 use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
 #[test]
@@ -390,8 +388,7 @@ impl TmuxRoom {
         let env = Env::new();
         let tmux_tmpdir = env.project_root.join("tmux");
         std::fs::create_dir_all(&tmux_tmpdir).expect("mkdir tmux tmpdir");
-        let workspace =
-            WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+        let workspace = env.resolve_workspace(&env.project_root);
         let session_name = workspace.session_name;
 
         let output = {
@@ -464,8 +461,7 @@ impl ZellijRoom {
         let env = Env::new();
         let tmux_tmpdir = env.project_root.join("tmux");
         std::fs::create_dir_all(&tmux_tmpdir).expect("mkdir tmux tmpdir");
-        let workspace =
-            WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+        let workspace = env.resolve_workspace(&env.project_root);
         let session_name = workspace.session_name;
 
         let output = {

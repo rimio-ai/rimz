@@ -19,7 +19,6 @@ pub(super) use rimz::pane::PaneRef;
 pub(super) use rimz::pane::keys::NamedKey;
 pub(super) use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed};
 pub(super) use rimz::wakeup::heartbeat::write_heartbeat;
-pub(super) use rimz::workspace::WorkspaceResolver;
 pub(super) use tempfile::TempDir;
 
 pub(super) use crate::common::{

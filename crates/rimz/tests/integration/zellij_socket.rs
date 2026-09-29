@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, Env};
@@ -96,7 +95,7 @@ fn terminal_stuck_room_resets_without_second_prompt() {
         "setup should seed config: {}",
         String::from_utf8_lossy(&setup.stderr)
     );
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     let shim = FakeZellij::new(FakeZellijMode::BirthFails);
 
     let output = rimz_start_pty_output(&env, &shim, &workspace.session_name);

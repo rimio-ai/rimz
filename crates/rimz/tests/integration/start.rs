@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use rimz::workspace::WorkspaceResolver;
 
 use crate::common::room::ShimRoom;
 use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
@@ -253,7 +252,7 @@ fn singular_agent_is_unknown_subcommand_with_agents_suggestion() {
 #[test]
 fn start_inside_selected_mux_reports_and_skips_launch() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     let bin = env.home_root.join("sandbox-bin");
     std::fs::create_dir(&bin).expect("mkdir bwrap PATH");
     let bwrap = bin.join("bwrap");
@@ -447,7 +446,7 @@ fn start_opens_the_room_when_the_invalid_notifications_table_is_switched_off() {
 fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let birth = Env::new();
     let birth_bin = seed_actionable_agent(&birth);
-    let birth_workspace = WorkspaceResolver::resolve(&birth.project_root, None).expect("resolve");
+    let birth_workspace = birth.resolve_workspace(&birth.project_root);
     let birth_heartbeat = seed_sidebar_heartbeat(&birth, &birth_workspace.session_name, "birth");
     let birth_trace = birth.project_root.join("zellij-birth.log");
     let _birth_room = ShimRoom::watch(&birth, &birth_trace, MATERIALIZED_ROOM_PANES);
@@ -494,7 +493,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
 
     let live = Env::new();
     let live_bin = seed_actionable_agent(&live);
-    let workspace = WorkspaceResolver::resolve(&live.project_root, None).expect("resolve live");
+    let workspace = live.resolve_workspace(&live.project_root);
     let live_heartbeat = seed_sidebar_heartbeat(&live, &workspace.session_name, "live");
     let sessions = format!("{} [Created 1m ago]\n", workspace.session_name);
     let live_trace = live.project_root.join("zellij-live.log");
@@ -628,7 +627,7 @@ fn room_logins(env: &Env) -> Option<serde_json::Value> {
 #[test]
 fn start_replaces_an_old_layout_room_before_birth() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
     let paths = env.state_path_for(&env.project_root);
     let runtime = env.runtime_paths();
     std::fs::create_dir_all(&runtime.root).unwrap();
@@ -771,7 +770,7 @@ fn start_freezes_room_accounts_until_reset() {
     let frozen = serde_json::json!({"claude": "default", "codex": "default"});
     assert_eq!(room_logins(&env), Some(frozen.clone()));
 
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
     let live = format!("{} [Created 1m ago]\n", workspace.session_name);
     for sessions in ["", live.as_str()] {
         let refused = start_with_accounts(

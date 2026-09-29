@@ -381,7 +381,7 @@ fn team_signal_fixture(env: &Env) -> Option<std::path::PathBuf> {
 }
 
 fn seed_team_signal_member(env: &Env, cwd: &Path, session: &str, parent: Option<&str>) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .append_event(&rimz::store::event::EventEnvelope::agent_launched(
             workspace.workspace_id,
@@ -1867,7 +1867,7 @@ fn loop_wait_workflow_pins_and_delivers_to_live_session() {
 fn emitted_signal_reaches_the_matching_wait_consumer() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .append_event(&rimz::store::event::EventEnvelope::agent_launched(
             workspace.workspace_id,
@@ -4492,7 +4492,7 @@ fn assert_pending_message(env: &Env, session: &str, text_fragment: &str) {
 }
 
 fn stamp_session_ended(env: &Env, session_id: &str) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let observation = rimz::agents::AgentLifecycleObservation::new(
         Some(AgentSessionId::from(session_id)),
         rimz::agents::LifecycleSignal::Ended,

@@ -1511,8 +1511,7 @@ fn watcher_survives_retiring_its_own_row_mid_fire() {
 }
 
 fn stamp_session_ended(env: &Env, session_id: &str) {
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let workspace = env.resolve_workspace(&env.project_root);
     let observation = AgentLifecycleObservation::new(
         Some(AgentSessionId::from(session_id)),
         LifecycleSignal::Ended,

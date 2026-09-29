@@ -309,7 +309,7 @@ impl Fixture {
         channel: &str,
         worktree: &Path,
     ) {
-        let workspace = rimz::WorkspaceResolver::resolve(&self.env.project_root, None).unwrap();
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
         self.env
             .store()
             .append_event(&EventEnvelope::agent_launched(
@@ -346,7 +346,7 @@ impl Fixture {
     /// Seed a live row launched by the agent `launched_by`: a team seat when
     /// `role` is set, a plain agent otherwise.
     fn seed_launched(&self, name: &str, role: Option<&str>, launched_by: Option<&str>) {
-        let workspace = rimz::WorkspaceResolver::resolve(&self.env.project_root, None).unwrap();
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
         self.env
             .store()
             .append_event(&EventEnvelope::agent_launched(
