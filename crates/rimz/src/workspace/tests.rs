@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn resolve_under_reads_only_the_selected_home_record() {
+    let project = tempfile::tempdir().unwrap();
+    let home_a = tempfile::tempdir().unwrap();
+    let home_b = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceResolver::resolve(project.path(), None).unwrap();
+    let paths = crate::StatePaths::for_project_root_under(project.path(), home_a.path()).unwrap();
+    let mut record = WorkspaceRecord::from_resolved(&workspace);
+    record.session_name = "custom-session".to_owned();
+    record::write(&paths, &record).unwrap();
+
+    assert_eq!(
+        WorkspaceResolver::resolve_under(project.path(), None, home_a.path())
+            .unwrap()
+            .session_name,
+        "custom-session"
+    );
+    let empty = WorkspaceResolver::resolve_under(project.path(), None, home_b.path()).unwrap();
+    assert_eq!(empty.session_name, paths.dir_name.as_str());
+    assert_eq!(empty.session_name.rsplit('-').next().unwrap().len(), 4);
+}
+
+#[test]
+fn resolve_under_extends_a_non_owned_collision_prefix() {
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::for_project_root_under(project.path(), home.path()).unwrap();
+    let prefix = paths.dir_name.as_str().rsplit('-').next().unwrap();
+    std::fs::create_dir_all(home.path().join("ws").join(format!("collide-{prefix}"))).unwrap();
+
+    let workspace = WorkspaceResolver::resolve_under(project.path(), None, home.path()).unwrap();
+    let suffix = workspace.session_name.rsplit('-').next().unwrap();
+    assert_eq!(suffix.len(), 6);
+    assert!(suffix.starts_with(prefix));
+}
+
+#[test]
 fn known_workspaces_skips_legacy_rooms() {
     let home = tempfile::tempdir().unwrap();
     let project = home.path().join("project");
@@ -262,7 +298,8 @@ fn recorded_room_bin_prefers_stable_then_recorded_then_current() {
 #[test]
 fn resolve_marker_finds_cargo_toml_ancestor() {
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let resolved = resolve_marker(here).expect("Cargo.toml above us");
+    let resolved =
+        resolve_marker(here, &crate::disk::paths::rimz_home()).expect("Cargo.toml above us");
     assert!(resolved.join("Cargo.toml").exists());
 }
 
