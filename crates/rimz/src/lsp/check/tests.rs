@@ -63,12 +63,24 @@ fn fix_preserves_hint_forms_and_every_other_byte() {
 fn fix_skips_dirty_ambiguous_and_unmappable_anchors() {
     let source = "`a.rs::Type::method ~90`";
     assert_eq!(rewrite_hints(source, true), source);
-    let source = "`a.rs::load ~93` `a.rs::absent ~99` `a.rs::Type::method` `a.rs:99` `o/r@v1:a.rs::Type::method ~99` `a.rs::Type::method\n~99`";
+    let source = "`a.rs::load ~98` `a.rs::load ~200` `a.rs::absent ~99` `a.rs::Type::method` `a.rs:99` `o/r@v1:a.rs::Type::method ~99` `a.rs::Type::method\n~99`";
     assert_eq!(rewrite_hints(source, false), source);
     assert_eq!(
         rewrite_hints("``a.rs::Type::method()`` (~99-100)", false),
         "``a.rs::Type::method()`` (~11-16)"
     );
+}
+
+#[test]
+fn fix_uses_the_single_hit_selected_by_a_hint() {
+    for (source, expected) in [
+        ("`a.rs::Type ~4-5`", "`a.rs::Type ~1-3`"),
+        ("`a.rs::load ~93`", "`a.rs::load ~91`"),
+    ] {
+        assert_eq!(rewrite_hints(source, false), expected);
+        assert_eq!(rewrite_hints(expected, false), expected);
+        assert_eq!(rewrite_hints(source, true), source);
+    }
 }
 
 fn node(

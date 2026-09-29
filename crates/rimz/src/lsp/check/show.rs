@@ -142,26 +142,47 @@ fn render_item(
             })
     } else if let Some(chain) = &anchor.symbol {
         let hits = symbol_hits(nodes, chain);
-        let selected = anchor
-            .hint
-            .and_then(|hint| hits.iter().copied().find(|node| overlaps(node, hint)))
-            .or_else(|| if hits.len() == 1 { Some(hits[0]) } else { None });
-        if selected.is_none() {
-            let (status, code) = if hits.is_empty() {
-                ("missing-symbol", 5)
-            } else {
-                ("ambiguous-symbol", 6)
-            };
-            let (_, detail) = candidate_details(nodes, chain, hits.into_iter().cloned().collect());
-            return failure(argument, status, &detail, code);
+        if hits.is_empty() {
+            let (_, detail) = candidate_details(nodes, chain, Vec::new());
+            return failure(argument, "missing-symbol", &detail, 5);
         }
-        selected
+        let overlapping = hinted(&hits, anchor.hint);
+        let selected = if overlapping.is_empty() {
+            hits
+        } else {
+            overlapping
+        };
+        let mut text = String::new();
+        let mut exit = 0;
+        for node in selected {
+            let (block, code) =
+                render_selected(anchor, Some(node), path, nodes, source, dirty, full);
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&block);
+            exit = exit.max(code);
+        }
+        return (text, exit);
     } else {
         None
     };
     if (position.is_some() || anchor.symbol.is_some()) && selected.is_none() {
         return failure(argument, "missing-symbol", "no matching outline symbol", 5);
     }
+    render_selected(anchor, selected, path, nodes, source, dirty, full)
+}
+
+fn render_selected(
+    anchor: &Anchor,
+    selected: Option<&Candidate>,
+    path: &Path,
+    nodes: &[Candidate],
+    source: &str,
+    dirty: bool,
+    full: bool,
+) -> (String, i32) {
+    let argument = &anchor.text;
     let [start, end] = selected
         .map(|node| node.range)
         .or(anchor.hint)
@@ -304,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn show_reports_ambiguous_missing_and_outside() {
+    fn show_reports_missing_and_outside() {
         let argument = "src/lib.rs::Parent::chld";
         let (anchor, _) = parse_argument(argument).unwrap();
         let checked = check_symbol(anchor, PathBuf::from("src/lib.rs"), &nodes());
@@ -315,12 +336,6 @@ mod tests {
                 format!("{argument}  missing-symbol  {}\n", checked.detail),
                 5
             )
-        );
-        let (text, exit) = read("src/lib.rs::child", false, false);
-        assert_eq!(exit, 6);
-        assert_eq!(
-            text,
-            "src/lib.rs::child  ambiguous-symbol  method Parent::child is at 3-5; function child is at 208-209\n"
         );
         assert_eq!(
             read("src/lib.rs::child ~4", false, false).0,
@@ -333,6 +348,55 @@ mod tests {
             "src/lib.rs:0-2",
         ] {
             assert_eq!(read(argument, false, false).1, 5, "{argument}");
+        }
+    }
+
+    #[test]
+    fn show_prints_all_hits_unless_a_hint_selects_a_subset() {
+        let first = read("src/lib.rs::Parent::child", false, false).0;
+        let second = read("src/lib.rs:208-209", false, false).0;
+        for argument in [
+            "src/lib.rs::child",
+            "src/lib.rs::child ~100",
+            "src/lib.rs::child ~4-208",
+        ] {
+            assert_eq!(
+                read(argument, false, false),
+                (format!("{first}\n{second}"), 0)
+            );
+        }
+        assert_eq!(read("src/lib.rs::child ~4", false, false), (first, 0));
+    }
+
+    #[test]
+    fn show_type_prints_struct_and_impl_in_outline_order() {
+        let mut nodes = nodes();
+        nodes.remove(0);
+        nodes[0].name = "Type".into();
+        nodes[0].path = vec!["Type".into()];
+        nodes[0].kind = "struct";
+        nodes[0].parent = None;
+        nodes[1].name = "impl Type".into();
+        nodes[1].path = vec!["impl Type".into()];
+        for (argument, spans) in [
+            ("src/lib.rs::Type", vec!["3-5", "208-209"]),
+            ("src/lib.rs::Type ~4", vec!["3-5"]),
+        ] {
+            let (text, exit) = render_item(
+                &parse_argument(argument).unwrap().0,
+                None,
+                Path::new("src/lib.rs"),
+                &nodes,
+                &source(),
+                false,
+                false,
+            );
+            assert_eq!(exit, 0);
+            let headers: Vec<_> = text
+                .lines()
+                .filter_map(|line| line.strip_prefix("src/lib.rs:"))
+                .collect();
+            assert_eq!(headers, spans);
         }
     }
 
