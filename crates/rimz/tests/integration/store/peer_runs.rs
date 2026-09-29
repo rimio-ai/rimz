@@ -131,6 +131,12 @@ fn ack_in_run(
 
 #[test]
 fn foreground_peer_with_its_own_run_id_still_enrolls_launcher_turns() {
+    for collected in [false, true] {
+        foreground_peer_enrolls(collected);
+    }
+}
+
+fn foreground_peer_enrolls(collected: bool) {
     let h = Harness::new();
     let peer = peer();
     let foreground = rimz::store::run::RunRecord::new(
@@ -140,7 +146,9 @@ fn foreground_peer_with_its_own_run_id_still_enrolls_launcher_turns() {
         "foreground".into(),
         Path::new("/repo").into(),
     );
-    run::create(h.store.paths(), &foreground).unwrap();
+    if !collected {
+        run::create(h.store.paths(), &foreground).unwrap();
+    }
     sent(&h, &peer, &["first"], launcher(), MessageBody::Prompt);
     ack_in_run(
         &h,
@@ -152,7 +160,7 @@ fn foreground_peer_with_its_own_run_id_still_enrolls_launcher_turns() {
     );
     let enrolled = run::open_peer_run(h.store.paths(), &peer).unwrap().unwrap();
     assert_ne!(enrolled.run_id, foreground.run_id);
-    assert_eq!(enrolled.prompt, "first");
+    assert_eq!(enrolled.prompt, "first", "collected={collected}");
 }
 
 #[test]
