@@ -66,6 +66,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_presence_plugin_vendored(root)?;
     ensure_store_durability(root, &files)?;
     ensure_participant_identity(root, &files)?;
+    ensure_integration_fixture_home(root, &files)?;
     ensure_rimz_block_registry(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_managed_tmux_endpoint(root, &files)?;
@@ -661,6 +662,22 @@ fn ensure_participant_identity(root: &Path, files: &[PathBuf]) -> Result<()> {
         },
         "participant surfaces resolve identity through the session pin — use resolve_participant",
     )
+}
+
+fn ensure_integration_fixture_home(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let tests_root = root.join("crates/rimz/tests");
+    for needle in [
+        concat!("WorkspaceResolver::", "resolve("),
+        concat!("StatePaths::", "for_project_root("),
+    ] {
+        ensure_no_match(
+            files,
+            needle,
+            |path| !path.starts_with(&tests_root),
+            "integration identity must use the fixture home because the child runs under the fixture's RIMZ_HOME — use common::Env::resolve_workspace, or pass the fixture home to resolve_under / StatePaths::for_project_root_under",
+        )?;
+    }
+    Ok(())
 }
 
 fn ensure_rimz_block_registry(root: &Path, files: &[PathBuf]) -> Result<()> {
