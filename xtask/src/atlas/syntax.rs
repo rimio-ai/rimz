@@ -71,6 +71,7 @@ pub(super) enum Spelling {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct FnBody {
+    pub(super) module: String,
     pub(super) name: String,
     pub(super) owner: Option<String>,
     pub(super) path: PathBuf,
@@ -284,6 +285,7 @@ fn analyze_file(
     let mut fn_collector = FnCollector {
         path,
         source,
+        module: module_path.clone(),
         functions: Vec::new(),
         test_functions: Vec::new(),
         owner: None,
@@ -674,7 +676,7 @@ fn item_attributes(item: &Item) -> &[syn::Attribute] {
     }
 }
 
-fn join_module(module: &str, name: &str) -> String {
+pub(super) fn join_module(module: &str, name: &str) -> String {
     if module.is_empty() {
         name.to_owned()
     } else {
@@ -1010,6 +1012,7 @@ pub(super) fn resolve_import_path(file_module: &str, path: &[String]) -> String 
 struct FnCollector<'a> {
     path: &'a Path,
     source: &'a str,
+    module: String,
     functions: Vec<FnBody>,
     test_functions: Vec<FnBody>,
     owner: Option<String>,
@@ -1023,6 +1026,7 @@ impl FnCollector<'_> {
         let mut calls = CallCollector::new(self.source, false);
         calls.visit_block(block);
         let function = FnBody {
+            module: self.module.clone(),
             name: signature.ident.to_string(),
             owner: self.owner.clone(),
             path: self.path.to_path_buf(),
@@ -1201,9 +1205,16 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
         let previous = self.in_test_region;
+        let module = if item.content.is_some() {
+            join_module(&self.module, &item.ident.to_string())
+        } else {
+            self.module.clone()
+        };
+        let previous_module = std::mem::replace(&mut self.module, module);
         self.in_test_region |= is_cfg_excluded(&item.attrs);
         visit::visit_item_mod(self, item);
         self.in_test_region = previous;
+        self.module = previous_module;
     }
 
     fn visit_item_trait(&mut self, item: &'ast ItemTrait) {

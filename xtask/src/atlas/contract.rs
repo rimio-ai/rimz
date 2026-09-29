@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use super::inspect;
 use super::modules::module_is_within;
-use super::syntax::{FileSyntax, FnBody};
+use super::syntax::{FileSyntax, FnBody, join_module};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -191,11 +191,8 @@ fn validate(
 pub(super) fn cx_functions<'a>(files: &'a [FileSyntax], item: &str) -> Vec<&'a FnBody> {
     files
         .iter()
-        .flat_map(|file| {
-            file.fns.iter().filter(move |function| {
-                format!("{}::{}", file.module_path, function.label()) == item
-            })
-        })
+        .flat_map(|file| &file.fns)
+        .filter(|function| join_module(&function.module, &function.label()) == item)
         .collect()
 }
 
@@ -389,6 +386,57 @@ mod tests {
             ] {
                 let parsed: PassContract = toml::from_str(&format!("version = 2\nbase = 'main'\nkind = 'thin-cli'\npaths = ['src']\nmax-production-sloc-delta = 0\n[[cx]]\nitem = '{item}'\nmax = 5")).expect("cx schema accepts integer maxima and thin-cli");
                 assert!(validate(root.path(), current, base, parsed).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn cx_contract_resolves_inline_modules_on_either_side() {
+        let root = tempfile::tempdir().unwrap();
+        let syntax = super::super::syntax::analyze_sources(
+            &[Source::new(
+                "src/cli.rs",
+                "mod a { fn deserialize() {} struct Owner; impl Owner { fn new() {} } }
+                 mod b { fn deserialize() {} }",
+            )],
+            &BTreeSet::new(),
+        );
+        for item in [
+            "cli::a::deserialize",
+            "cli::b::deserialize",
+            "cli::a::Owner::new",
+            "cli::deserialize",
+        ] {
+            for (base, current) in [
+                (&syntax.files[..], &[][..]),
+                (&[][..], &syntax.files[..]),
+                (&syntax.files[..], &syntax.files[..]),
+            ] {
+                let mut contract = contract();
+                contract.version = 2;
+                contract.assembly.clear();
+                contract.cx = vec![CxExpectation {
+                    item: Some(item.into()),
+                    path: None,
+                    max: 5.0,
+                }];
+                let result = validate(root.path(), current, base, contract);
+                if item == "cli::deserialize" {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("defined at neither base nor current")
+                    );
+                } else {
+                    assert!(result.is_ok(), "{item}: {result:?}");
+                    for files in [base, current]
+                        .into_iter()
+                        .filter(|files| !files.is_empty())
+                    {
+                        assert_eq!(cx_functions(files, item).len(), 1);
+                    }
+                }
             }
         }
     }
