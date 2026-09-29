@@ -72,12 +72,8 @@ impl ZellijNamespace {
         command
     }
 
-    /// Scope a long-lived PTY child to the same namespace as control calls.
-    pub fn pin_pty(&self, command: &mut CommandBuilder) {
-        Self::pin_pty_at(self.path(), command);
-    }
-
-    /// Reapply an owned namespace path when a self-healing client respawns.
+    /// Scope a long-lived PTY child to the same namespace as control calls,
+    /// reapplied each time a self-healing client respawns.
     pub(crate) fn pin_pty_at(path: &Path, command: &mut CommandBuilder) {
         command.scrub_session_env();
         command.env("XDG_RUNTIME_DIR", path);
