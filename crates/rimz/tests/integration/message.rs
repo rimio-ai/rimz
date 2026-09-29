@@ -1944,6 +1944,25 @@ fn message_wait_prints_the_reply_after_the_turn_ends() {
 
     wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
     agent.start(&env, "did it land?");
+    let store = env.store();
+    let message = store
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.text == "did it land?")
+        .unwrap();
+    let mut run = rimz::store::run::RunRecord::new(
+        message.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "did it land?".into(),
+        env.project_root.clone(),
+    );
+    run.subagent = true;
+    run.agent_id = Some(agent.session_id.as_str().into());
+    run.opened_by.push(message.message_id);
+    run.status = rimz::store::run::RunStatus::Completed;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
     agent.finish(&env, "migration landed", false);
 
     let out = child.wait_with_output().expect("wait message --wait");
@@ -1951,6 +1970,9 @@ fn message_wait_prints_the_reply_after_the_turn_ends() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "migration landed\n");
     assert!(out.stderr.is_empty());
     assert!(env.store().list_messages().unwrap().is_empty());
+    let joined = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert!(joined.joined_at.is_some());
+    assert!(!joined.owes_report());
 }
 
 #[test]

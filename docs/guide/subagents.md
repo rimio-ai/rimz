@@ -107,6 +107,8 @@ All 3 subagents settled, responses total ~5.1k tokens, 96 lines:
 
 The report carries status and a file path per answer, never the answers themselves, so the parent decides how much of each to read into its window. Follow-up answers get their own rows and elapsed times; an earlier answer is not lost when a child answers again before its siblings finish. A parent that needs an answer sooner joins with `rimz subagents wait <petname>`: only the answer it prints drops out of the report, while stopping a child dismisses all its answers. The path above is the sandbox view; under host isolation the report names the host path of the room's tmp directory. Every field of the report is in the [reference](../reference/cli/subagents.md#the-fleet-report).
 
+For a follow-up, the parent can use [`rimz message @child --wait "next question"`](../reference/cli/message.md#wait-for-replies) to read the reply directly. That reply drops out of the next report; any earlier unread answer still comes back there.
+
 A parent that is itself a supervised run (`rimz agents -p`, or a scheduled task) can end its turn while its children work. Its run stays open and your script keeps blocking until the report arrives and the parent finishes.
 
 ## Deadlines, stopping, and cleanup

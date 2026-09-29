@@ -131,6 +131,7 @@ pub(super) fn send_message(
             reply_wait,
             wait,
             wait.deadline_from(wait_started),
+            caller.as_ref(),
         );
     }
     send::report_dispatch(kind, &target, &result.outcomes, &result.compacted)

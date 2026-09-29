@@ -11,6 +11,7 @@ use crate::cli::render;
 use crate::cli::render::prose::{Prose, prose_width};
 use crate::cli::send::WaitSpec;
 use crate::cli::spinner::Spinner;
+use rimz::harness::run::report;
 use rimz::message::reply::{ReplyFailure, ReplyProgress, ReplyResult, ReplyUpdate, ReplyWait};
 use rimz::store::run::RunStatus;
 
@@ -22,10 +23,25 @@ pub(super) fn wait_for_replies(
     mut wait_state: ReplyWait,
     wait: WaitSpec,
     deadline: Option<Instant>,
+    caller: Option<&rimz::harness::ancestry::CallerIdentity>,
 ) -> Result<()> {
     let initial_progress = wait_state.progress();
     let total = progress_total(&initial_progress);
-    let prose = Prose::for_stdout();
+    let claim = |result: &ReplyResult| {
+        let answered = result.failure.is_none()
+            && result
+                .final_message
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty());
+        if !answered {
+            return;
+        }
+        if let Err(err) =
+            report::claim_reply(store, session_name, &result.message_id, caller, deadline)
+        {
+            tracing::warn!(error = %err, message_id = %result.message_id, "could not claim printed reply");
+        }
+    };
     let spinner = Spinner::delayed(
         progress_label(&initial_progress),
         Duration::from_millis(500),
@@ -43,7 +59,7 @@ pub(super) fn wait_for_replies(
             &spinner,
             &mut printed_block,
             &mut gathered,
-            prose,
+            &claim,
         )? {
             return return_or_exit(status);
         }
@@ -62,6 +78,9 @@ pub(super) fn wait_for_replies(
                 }
                 if wait.json {
                     print_json_replies(&gathered, None)?;
+                    for result in gathered.values() {
+                        claim(result);
+                    }
                 } else {
                     print_timeout(total, &timed_out, wait)?;
                 }
@@ -80,7 +99,7 @@ fn present_update(
     spinner: &Spinner,
     printed_block: &mut bool,
     gathered: &mut BTreeMap<String, ReplyResult>,
-    prose: Prose,
+    claim: &impl Fn(&ReplyResult),
 ) -> Result<Option<RunStatus>> {
     let winner = update.join.as_ref().and_then(|join| join.winner.as_ref());
     for result in update.settled {
@@ -95,7 +114,9 @@ fn present_update(
         }
         if !wait.json {
             spinner.pause();
-            print_reply_result(&result, total, printed_block, prose)?;
+            if print_reply_result(&result, total, printed_block, Prose::for_stdout())? {
+                claim(&result);
+            }
             spinner.resume();
         }
         gathered.insert(result.label.clone(), result);
@@ -106,6 +127,15 @@ fn present_update(
     spinner.pause();
     if wait.json {
         print_json_replies(gathered, join.winner.as_ref())?;
+        for result in gathered.values() {
+            if join
+                .winner
+                .as_ref()
+                .is_none_or(|winner| *winner == result.message_id)
+            {
+                claim(result);
+            }
+        }
     }
     Ok(Some(join.status))
 }
@@ -138,12 +168,12 @@ fn print_reply_result(
     total: usize,
     printed_block: &mut bool,
     prose: Prose,
-) -> Result<()> {
+) -> Result<bool> {
     if let Some(failure) = &result.failure {
         let mut err = render::err();
         writeln!(err, "rimz: {}", failure_message(result, failure))?;
         err.flush()?;
-        return Ok(());
+        return Ok(false);
     }
     let message = result
         .final_message
@@ -151,11 +181,12 @@ fn print_reply_result(
         .map(str::trim)
         .filter(|message| !message.is_empty());
     let label = (total > 1).then_some(result.label.as_str());
-    match (label, message, result.status) {
+    let printed = match (label, message, result.status) {
         (None, Some(message), _) => {
             let mut out = render::out();
             write_prose(&mut out, message, prose)?;
             out.flush()?;
+            true
         }
         (Some(label), Some(message), RunStatus::Completed) => {
             let mut out = render::out();
@@ -166,6 +197,7 @@ fn print_reply_result(
             write_prose(&mut out, message, prose)?;
             out.flush()?;
             *printed_block = true;
+            true
         }
         (None, None, RunStatus::Completed) => {
             let mut err = render::err();
@@ -174,6 +206,7 @@ fn print_reply_result(
                 "rimz: turn completed but no final assistant message was extracted"
             )?;
             err.flush()?;
+            false
         }
         (Some(label), None, RunStatus::Completed) => {
             let mut err = render::err();
@@ -182,13 +215,14 @@ fn print_reply_result(
                 "rimz: {label} turn completed but no final assistant message was extracted"
             )?;
             err.flush()?;
+            false
         }
-        (Some(_), Some(_), _) | (_, None, _) => {}
-    }
+        (Some(_), Some(_), _) | (_, None, _) => false,
+    };
     if result.status != RunStatus::Completed {
         print_turn_failure(label, result.status, result.transcript_path.as_deref())?;
     }
-    Ok(())
+    Ok(printed)
 }
 
 fn write_prose(out: &mut impl Write, message: &str, prose: Prose) -> Result<()> {
@@ -295,7 +329,11 @@ fn print_json_replies(
             },
         );
     }
-    render::json(&replies)
+    let mut out = render::out();
+    serde_json::to_writer(&mut out, &replies)?;
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
 }
 
 fn print_timeout(total: usize, timed_out: &[String], wait: WaitSpec) -> Result<()> {
