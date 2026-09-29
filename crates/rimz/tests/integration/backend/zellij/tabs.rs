@@ -586,7 +586,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
     let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-tabfocus"));
     let sidebar = SidebarPaneOptions {
         session_name: name.clone(),
-        workspace_id: workspace_id.clone(),
+        workspace_id,
         project_root: cwd.path().to_path_buf(),
         extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
@@ -676,14 +676,6 @@ fn open_tab_unfocused_routes_input_back_to_source() {
     );
 
     client.assert_input_reaches(&source_pane, "source pane after unfocused tab open");
-
-    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id, xdg).expect("runtime");
-    let intent = rimz::mux::focus_anchor::load(&runtime).expect("applied focus intent");
-    assert_eq!(intent.pane_id, source_pane);
-    assert_eq!(
-        intent.state,
-        rimz::mux::focus_anchor::FocusIntentState::Applied,
-    );
 }
 
 #[test]

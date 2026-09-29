@@ -29,6 +29,7 @@ fn split_pane_injects_env_vars() {
     require_tmux!();
     let server = TmuxServer::new();
     server.ensure_with_shell("split");
+    let focused = server.display("split", "#{pane_id}");
     let mut env = BTreeMap::new();
     env.insert("RIMZ_TEST_VAR".to_owned(), "marker-rimz-env".to_owned());
     server
@@ -48,6 +49,11 @@ fn split_pane_injects_env_vars() {
             focus: false,
         })
         .expect("split_pane");
+    assert_eq!(
+        server.display("split", "#{pane_id}"),
+        focused,
+        "an unfocused split must leave the active pane unchanged",
+    );
     let panes = server
         .backend
         .list_panes(PaneListOptions {
