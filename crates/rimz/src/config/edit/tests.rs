@@ -1732,3 +1732,76 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
     assert!(!text.contains("[accounts.claude"), "{text}");
     assert!(text.contains("[accounts.budget]"), "{text}");
 }
+
+#[test]
+fn machine_selection_edits_preserve_comments_and_clear_on_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "# machine\n[accounts.budget]\ncodex = \"25/day\" # cap\n[accounts.codex.work]\n[accounts.codex.personal]\n").unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents"),
+    ));
+    let kind = crate::ids::AgentKind::new_unchecked("codex");
+    let work = "work".parse().unwrap();
+    editor.set("accounts.use.codex", "work").unwrap();
+    assert_eq!(
+        editor.get(Some("accounts.use.codex")).unwrap().as_str(),
+        Some("work")
+    );
+    assert!(editor.set("accounts.use", "{}").is_err());
+    assert!(editor.set("accounts.use.codex.extra", "work").is_err());
+    assert!(editor.get(Some("accounts.use.codex.extra")).is_err());
+    editor
+        .use_account(&kind, &crate::ids::LoginName::default_login())
+        .unwrap();
+    let cleared = std::fs::read_to_string(&path).unwrap();
+    assert!(!cleared.contains("[accounts.use]"), "{cleared}");
+    assert!(
+        cleared.contains("# machine")
+            && cleared.contains("# cap")
+            && cleared.contains("[accounts.codex.work]"),
+        "{cleared}"
+    );
+    editor
+        .use_account(&kind, &crate::ids::LoginName::default_login())
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), cleared);
+    editor.use_account(&kind, &work).unwrap();
+    editor
+        .remove_named_account(&kind, &"personal".parse().unwrap())
+        .unwrap();
+    assert_eq!(
+        editor.get(Some("accounts.use.codex")).unwrap().as_str(),
+        Some("work")
+    );
+    editor
+        .upsert_named_account(&kind, &"personal".parse().unwrap(), None)
+        .unwrap();
+    editor.remove_named_account(&kind, &work).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("[accounts.use]"), "{text}");
+    assert!(
+        text.contains("# machine")
+            && text.contains("# cap")
+            && text.contains("[accounts.codex.personal]"),
+        "{text}"
+    );
+}
+
+#[test]
+fn machine_selection_numeric_and_boolean_names_stay_strings() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("agents"),
+    ));
+    let kind = crate::ids::AgentKind::new_unchecked("codex");
+    for name in ["123", "true"] {
+        editor.use_account(&kind, &name.parse().unwrap()).unwrap();
+        assert_eq!(
+            editor.get(Some("accounts.use.codex")).unwrap().as_str(),
+            Some(name)
+        );
+    }
+}

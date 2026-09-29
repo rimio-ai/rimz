@@ -909,13 +909,7 @@ pub(crate) fn machine_config() -> std::sync::Arc<rimz::config::MachineConfig> {
 }
 
 fn require_worktree_config(config: &rimz::config::MachineConfig) -> Result<()> {
-    let path = rimz::config::MachineConfig::config_path();
-    if let Some(error) = config.notices.unreadable_files.get(&path) {
-        anyhow::bail!(
-            "cannot create a worktree: {error}; correct {}, then retry; `rimz config get` shows the strict error",
-            path.display(),
-        );
-    }
+    config.require_readable_core("create a worktree")?;
     Ok(())
 }
 

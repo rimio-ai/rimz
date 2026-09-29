@@ -136,6 +136,8 @@ tmux -S "${XDG_RUNTIME_DIR:-/tmp/rimz-$(id -u)}/rimz/tmux/server" ls
 
 One more refusal comes from project config rather than from the account itself. `project account selections in .rimz/config.toml are untrusted` means the repository's `[accounts]` table sits behind the trust gate, because choosing which provider account your agents run under is part of the surface you grant. Run `rimz trust status`, read the diff, then `rimz trust grant`.
 
+A new room also refuses when the machine `config.toml` is unreadable, rather than freezing the wrong account. Correct the file; `rimz config get` shows the strict error. An invalid deciding `[accounts.use]` selection names its source and the commands to declare or clear it. See [account selection](./accounts.md#start-a-room-on-an-account).
+
 ### Sandbox isolation is unavailable
 
 The `SANDBOX` section reports the configured mode, the bubblewrap path and version, the probe result, and the fix. Sandbox mode needs Linux and the `bubblewrap` package (`bwrap` on `PATH`). A failed probe usually means unprivileged user namespaces are disabled (`kernel.unprivileged_userns_clone` or `user.max_user_namespaces`) or an AppArmor or LSM policy blocks them.
@@ -364,7 +366,7 @@ Two fields load, enter the trust hash so a grant covers them, and are then read 
 
 ### RimZ cannot parse a config file
 
-The `MACHINE CONFIG` section names parse and validation errors in `config.toml`, `theme.toml`, and `loop.toml`. A file that cannot parse does not stop the room: `rimz start` warns on stderr and opens with built-in defaults for every setting in that file. Invalid accounts, account budgets, or notification settings do stop start. Invalid palette sources only produce notices; other theme settings still apply. Fix the reported error, then restart so RimZ loads the values you meant.
+The `MACHINE CONFIG` section names parse and validation errors in `config.toml`, `theme.toml`, and `loop.toml`. An unreadable `config.toml` refuses a new room so its account selection cannot silently fall back; a room frozen on a named account refuses too, since its declaration is lost, while a room frozen on `default` accounts still starts. Unreadable `theme.toml` and `loop.toml` produce warnings and built-in defaults for that file. Invalid accounts, account budgets, or notification settings do stop start. Invalid palette sources only produce notices; other theme settings still apply. Fix the reported error, then restart so RimZ loads the values you meant.
 
 Markdown definitions fail differently. A broken profile, team, or subagent definition refuses only the launches that select it, while read-only views keep showing the definitions that loaded. `rimz start` summarizes broken definitions in a few lines grouped by cause; `rimz agents validate` lists each file and error. Nothing rewrites a definition for you.
 

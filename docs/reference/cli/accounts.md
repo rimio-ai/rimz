@@ -1,12 +1,13 @@
 # Accounts CLI
 
-`rimz accounts` declares, lists, and removes the named provider accounts a room can launch into. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home, so credentials, settings, and transcripts stay apart. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
+`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home, so credentials, settings, and transcripts stay apart. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
-The commands work inside or outside a room. `add` and `remove` write the machine `config.toml`, and `add` also writes into the account home; no command touches a running room. A room picks its accounts when it is born, with `rimz start --account` ([Accounts at start](./getting-started.md#accounts)), and changes them only through `rimz reset --account` ([Reset a wedged room](./maintenance.md#reset-a-wedged-room)). Run `start --account` from inside the room's own multiplexer session and it refuses without reading the value, naming `rimz reset --account` as the way to change them. From outside, a room that already recorded a selection accepts a request matching it and refuses any other. The reset that moves a room rebuilds it with no agents in it. The workflow is in the [accounts guide](../../guide/accounts.md).
+The commands work inside or outside a room. `add`, `use`, and `remove` write the machine `config.toml`, and `add` also writes into the account home; no command touches a running room. A room picks its accounts when it is born ([Accounts at start](./getting-started.md#accounts)), and changes them only through `rimz reset` ([Reset a wedged room](./maintenance.md#reset-a-wedged-room)). Run `start --account` from inside the room's own multiplexer session and it refuses without reading the value, naming `rimz reset --account` as the way to change them. From outside, a room that already recorded a selection accepts a request matching it and refuses any other. The reset that moves a room rebuilds it with no agents in it. The workflow is in the [accounts guide](../../guide/accounts.md).
 
 ```sh
 rimz accounts add claude work                        # declare, create the home, install hooks
 rimz accounts add codex personal --home ~/codex-me   # place the home yourself
+rimz accounts use codex personal                     # machine selection for new rooms
 rimz accounts list                                   # every account and whether a room can use it
 rimz accounts list --json
 rimz accounts remove claude work                     # forget the entry; the home stays on disk
@@ -47,7 +48,7 @@ rimz accounts add <KIND> <NAME> [--home <PATH>]
 1. Writes `[accounts.<KIND>.<NAME>]` to the machine `config.toml`, with `home` only when `--home` is given.
 2. Creates the home directory.
 3. Installs RimZ hooks into that home's provider config (`settings.json` for Claude, `config.toml` for Codex), the same install `rimz hooks install` runs against the provider's own home.
-4. Prints where the account lives, the command that logs the provider in once under that home, and the `rimz start` flag that uses it.
+4. Prints where the account lives, the command that logs the provider in once under that home, the `rimz start` flag that uses it, and the `rimz accounts use` command that selects it for new rooms.
 
 ```console
 $ rimz accounts add claude work
@@ -55,6 +56,7 @@ $ rimz accounts add claude work
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
   use it        rimz start --account claude=work
+  new rooms     rimz accounts use claude work
 ```
 
 RimZ writes no credentials and copies no settings or skills into the home. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`, and a new Codex account also needs its hooks trusted inside Codex (see `hooks untrusted` under [`list`](#list)).
@@ -70,6 +72,23 @@ Rerunning `add` for an account that already exists leaves the config entry alone
 | `--home` differs from the existing account's home | `` <kind> account `<name>` already lives at `<home>`; rerun without --home, or remove the account first `` |
 | The home breaks a [home rule](#kinds-names-and-homes) | `` `accounts.<kind>.<name>.home` is `<home>`, ... `` with the rule it breaks |
 
+## `use`
+
+```sh
+rimz accounts use <KIND> <NAME>
+rimz accounts use codex personal
+rimz accounts use codex default
+```
+
+`use` writes `[accounts.use] <KIND> = "<NAME>"` in the machine `config.toml`, preserving comments and sibling tables. The name must be declared for that kind; an unknown name refuses with the configured names and `rimz accounts add <kind> <name>`. A missing home or missing or untrusted hooks produces a warning but does not prevent selection: birth checks those preconditions again.
+
+The output says that new rooms now use the selected account and running rooms keep their account until `rimz reset`. Explicit flags and trusted project selections still take precedence ([Accounts at start](./getting-started.md#accounts)). `use <kind> default` removes that provider's entry and says new rooms use the provider's own home. It accepts any provider, so it also clears a hand-set entry for one without named accounts; an empty `[accounts.use]` table is removed, and clearing an absent entry succeeds without a write.
+
+```console
+$ rimz accounts use claude work
+new rooms now use claude account `work`; running rooms keep their account until `rimz reset`
+```
+
 ## `list`
 
 ```sh
@@ -80,11 +99,11 @@ rimz accounts list [--json]
 
 ```console
 $ rimz accounts list
-KIND    NAME      HOME                          STATUS
-claude  default   ~/.claude                     native
-claude  work      ~/.rimz/accounts/claude/work  ready
-codex   default   ~/.codex                      native
-codex   personal  ~/codex-me                    hooks missing
+KIND    NAME      HOME                          STATUS         NEW ROOMS
+claude  default   ~/.claude                     native         yes
+claude  work      ~/.rimz/accounts/claude/work  ready          -
+codex   default   ~/.codex                      native         yes
+codex   personal  ~/codex-me                    hooks missing  -
 RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run `rimz accounts add codex personal`
 ```
 
@@ -107,9 +126,10 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `kind` | `claude` or `codex`. |
 | `name` | The account name, `default` included. |
 | `home` | Absolute path of the home, or `null` when the provider's home cannot be resolved. |
+| `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
 | `problem` | The problem line with its fix. Present only when the account has a problem. |
 
-`rimz doctor` checks the same accounts in its ACCOUNTS section and marks the ones the current room uses ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
+`NEW ROOMS` marks the machine selection. A dangling machine selection adds a problem row with the commands to declare or clear it. `rimz doctor` checks named accounts in its ACCOUNTS section and marks the ones the current room uses ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
 
 ## `remove`
 
@@ -117,10 +137,11 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 rimz accounts remove <KIND> <NAME>
 ```
 
-`remove` deletes the `[accounts.<KIND>.<NAME>]` entry from the machine `config.toml` (and the `[accounts.<KIND>]` table when it becomes empty) and nothing else. The home directory, its credentials, and its transcripts stay on disk, and `rimz accounts add <KIND> <NAME> --home <that home>` brings the account back with them.
+`remove` deletes the `[accounts.<KIND>.<NAME>]` entry from the machine `config.toml` (and the `[accounts.<KIND>]` table when it becomes empty). If that account is the machine selection, the same write clears its `[accounts.use]` entry and the output says new rooms now use `default` for that provider. A selection naming another account stays untouched. The home directory, its credentials, and its transcripts stay on disk, and `rimz accounts add <KIND> <NAME> --home <that home>` brings the account back with them.
 
 ```console
 $ rimz accounts remove claude work
+cleared the machine selection; new rooms now use claude account `default`
 removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk, and a room still using it refuses to start until `rimz reset`
 ```
 

@@ -1,4 +1,4 @@
-//! Provider accounts at the command line: `rimz accounts add|list|remove`,
+//! Provider accounts at the command line: `rimz accounts add|use|list|remove`,
 //! and the `--account <kind>=<name>` selection `rimz start` and `rimz reset`
 //! pass to a room's birth.
 
@@ -24,6 +24,13 @@ pub struct AccountsArgs {
 
 #[derive(Debug, Subcommand)]
 enum AccountsSubcmd {
+    /// Select the account new rooms use; `default` clears the machine selection.
+    Use {
+        /// Provider kind: claude or codex.
+        kind: String,
+        /// Declared account name, or `default` for the provider's own home.
+        name: LoginName,
+    },
     /// Declare a named account, create its home, and install RimZ hooks there.
     ///
     /// Rerun to finish an account whose setup stopped part way.
@@ -57,6 +64,7 @@ pub fn run(args: AccountsArgs, _globals: &GlobalFlags) -> Result<()> {
         AccountsSubcmd::Add { kind, name, home } => add(&account_kind(&kind)?, name, home),
         AccountsSubcmd::List { json } => list(json),
         AccountsSubcmd::Remove { kind, name } => remove(&account_kind(&kind)?, &name),
+        AccountsSubcmd::Use { kind, name } => use_account(&kind, &name),
     }
 }
 
@@ -141,7 +149,7 @@ fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
         .join(" ");
     render::finish(writeln!(
         out,
-        "{kind} account `{name}` lives at {}\n  log in once   {home_override} {kind}\n  use it        rimz start --account {kind}={name}",
+        "{kind} account `{name}` lives at {}\n  log in once   {home_override} {kind}\n  use it        rimz start --account {kind}={name}\n  new rooms     rimz accounts use {kind} {name}",
         render::home_relative(&home.display().to_string())
     ))
 }
@@ -150,11 +158,44 @@ fn lexical_home(login: &ProviderLogin) -> Option<PathBuf> {
     login.home().map(normalize_path_lexical)
 }
 
+fn use_account(raw_kind: &str, name: &LoginName) -> Result<()> {
+    // Clearing takes any kind, so it removes a hand-set entry for a kind
+    // without named accounts, the fix its birth refusal names.
+    let kind = &match account_kind(raw_kind) {
+        Err(_) if name.is_default() => AgentKind::new_unchecked(raw_kind),
+        kind => kind?,
+    };
+    let machine = MachineConfig::load()?;
+    let login = match LoginCatalog::from_config(&machine.accounts)?.select(kind, name) {
+        Ok(login) => Some(login),
+        Err(_) if name.is_default() => None,
+        Err(error) => return Err(error.into()),
+    };
+    ConfigEditor::machine().use_account(kind, name)?;
+    let mut out = render::out();
+    if name.is_default() {
+        render::finish(writeln!(
+            out,
+            "new rooms now use {kind}'s own home (`default`); running rooms keep their account until `rimz reset`"
+        ))?;
+    } else {
+        render::finish(writeln!(
+            out,
+            "new rooms now use {kind} account `{name}`; running rooms keep their account until `rimz reset`"
+        ))?;
+    }
+    if let Some(Err(error)) = login.map(|login| login.preflight(&rimz::agents::ambient_env())) {
+        writeln!(std::io::stderr().lock(), "rimz: warning: {error}")?;
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct AccountRow {
     kind: AgentKind,
     name: LoginName,
     home: Option<PathBuf>,
+    machine_default: bool,
     /// Why a room cannot launch into this account, with the fix.
     #[serde(skip_serializing_if = "Option::is_none")]
     problem: Option<String>,
@@ -166,7 +207,7 @@ fn list(json: bool) -> Result<()> {
     let machine = MachineConfig::load()?;
     let catalog = LoginCatalog::from_config(&machine.accounts)?;
     let ambient = rimz::agents::ambient_env();
-    let rows: Vec<AccountRow> = catalog
+    let mut rows: Vec<AccountRow> = catalog
         .all()
         .filter(|login| machine.accounts.named(login.kind()).is_some())
         .map(|login| {
@@ -175,22 +216,46 @@ fn list(json: bool) -> Result<()> {
                 kind: login.kind().clone(),
                 name: login.name().clone(),
                 home: login.home_dir(&ambient),
+                machine_default: machine
+                    .accounts
+                    .use_accounts
+                    .get(login.kind())
+                    .cloned()
+                    .unwrap_or_default()
+                    == *login.name(),
                 status: match &problem {
                     None if login.is_default() => "native",
                     None => "ready",
                     Some(BirthLoginErr::MissingHome { .. }) => "home missing",
                     Some(BirthLoginErr::HooksMissing { .. }) => "hooks missing",
                     Some(BirthLoginErr::HooksUntrusted { .. }) => "hooks untrusted",
-                    Some(BirthLoginErr::Frozen { .. } | BirthLoginErr::Login(_)) => "unavailable",
+                    Some(
+                        BirthLoginErr::Frozen { .. }
+                        | BirthLoginErr::Login(_)
+                        | BirthLoginErr::MachineUnknown { .. }
+                        | BirthLoginErr::MachineUnsupported { .. },
+                    ) => "unavailable",
                 },
                 problem: problem.map(|err| err.to_string()),
             }
         })
         .collect();
+    for (kind, name) in &machine.accounts.use_accounts {
+        if let Err(problem) = catalog.select_machine(kind, name) {
+            rows.push(AccountRow {
+                kind: kind.clone(),
+                name: name.clone(),
+                home: None,
+                machine_default: true,
+                status: "unavailable",
+                problem: Some(problem.to_string()),
+            });
+        }
+    }
     if json {
         return render::json_pretty(&rows);
     }
-    let mut table = render::Table::new(["KIND", "NAME", "HOME", "STATUS"]);
+    let mut table = render::Table::new(["KIND", "NAME", "HOME", "STATUS", "NEW ROOMS"]);
     for row in &rows {
         let status = render::cell(row.status);
         table.row([
@@ -205,6 +270,7 @@ fn list(json: bool) -> Result<()> {
             } else {
                 status
             },
+            render::cell(if row.machine_default { "yes" } else { "-" }),
         ]);
     }
     let mut out = render::out();
@@ -223,7 +289,9 @@ fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
     if name.is_default() {
         bail!("`default` is {kind}'s own home and cannot be removed");
     }
-    let home = LoginCatalog::from_config(&MachineConfig::load()?.accounts)?
+    let machine = MachineConfig::load()?;
+    let clears_selection = machine.accounts.use_accounts.get(kind) == Some(name);
+    let home = LoginCatalog::from_config(&machine.accounts)?
         .select(kind, name)
         .ok()
         .and_then(|login| login.home().map(|home| home.display().to_string()));
@@ -238,6 +306,12 @@ fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
     // After the removal: the probe costs a session listing on both backends,
     // and a room's selection lives in its own record rather than this config.
     let live = live_rooms_selecting(kind, name);
+    if clears_selection {
+        render::finish(writeln!(
+            out,
+            "cleared the machine selection; new rooms now use {kind} account `default`"
+        ))?;
+    }
     render::finish(writeln!(
         out,
         "{}",
