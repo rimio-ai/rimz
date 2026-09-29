@@ -1051,6 +1051,7 @@ fn no_frame_enrich_preserves_rollup_metadata_but_emits_no_groups() {
     let snapshot = enrich(
         SidebarSnapshot::build_with_agents(workspace, vec![agent], Timestamp::now()),
         None,
+        &StatePaths::under(runtime.workspace_id.clone(), dir.path()).unwrap(),
         &runtime,
         None,
         None,
@@ -1085,6 +1086,7 @@ fn enrich_maps_carried_frame_to_truth_notice() {
     let snapshot = enrich(
         SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now()),
         Some(&frame),
+        &StatePaths::under(runtime.workspace_id.clone(), dir.path()).unwrap(),
         &runtime,
         None,
         None,

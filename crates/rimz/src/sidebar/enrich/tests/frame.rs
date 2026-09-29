@@ -104,7 +104,7 @@ fn frame_fold_carries_presence_onto_snapshot() {
 
 #[test]
 fn enrich_workspace_rejects_sidebar_chrome_and_defers_presence() {
-    let (_dir, runtime, mut snapshot) = runtime();
+    let (dir, runtime, mut snapshot) = runtime();
     snapshot.now = Timestamp::from_millisecond(1_700_000_000_000).unwrap();
     let own = pane(
         "terminal_sidebar",
@@ -124,6 +124,7 @@ fn enrich_workspace_rejects_sidebar_chrome_and_defers_presence() {
     let workspace = enrich_workspace(
         snapshot,
         Some(&frame),
+        &StatePaths::under(runtime.workspace_id.clone(), dir.path()).unwrap(),
         &runtime,
         None,
         cached_opts(),

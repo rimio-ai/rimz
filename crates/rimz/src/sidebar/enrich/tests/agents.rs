@@ -150,6 +150,7 @@ fn producer_binding_log_dedups_unchanged_lazy_pairing_ambiguity() {
         enrich(
             snapshot,
             Some(frame),
+            &state,
             &runtime,
             Some(&store),
             None,

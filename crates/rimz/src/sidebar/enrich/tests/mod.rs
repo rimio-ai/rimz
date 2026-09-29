@@ -83,6 +83,7 @@ fn fold(
     enrich(
         snapshot,
         frame,
+        &StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap(),
         runtime,
         None,
         None,

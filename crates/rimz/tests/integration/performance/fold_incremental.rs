@@ -238,6 +238,7 @@ fn auto_continue_tick(
     rimz::sidebar::enrich::enrich(
         base,
         None,
+        state,
         runtime,
         store.as_ref(),
         None,

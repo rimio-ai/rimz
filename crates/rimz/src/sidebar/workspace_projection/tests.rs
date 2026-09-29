@@ -168,6 +168,7 @@ fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
         enrich_workspace(
             snapshot,
             Some(&frame),
+            &state,
             &runtime,
             None,
             FoldOpts {
