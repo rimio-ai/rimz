@@ -126,7 +126,7 @@ pub(super) fn record_user_input_for_lifecycle(
                 .any(rimz::store::message::MessageRecord::is_user_input)
     } else {
         sections.iter().any(|section| {
-            section.origin == rimz::store::message::SectionOrigin::Human
+            section.origin == rimz::transcript::SectionOrigin::Human
                 && section.record.is_none_or(|record| record.is_user_input())
         })
     };

@@ -36,6 +36,16 @@ pub enum EntryOrigin {
     Harness,
 }
 
+/// Who authored one section of a submitted prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SectionOrigin {
+    Human,
+    Agent(String),
+    Subagent(String),
+    Notice(String),
+    Harness,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TranscriptLogErr {
     #[error(transparent)]

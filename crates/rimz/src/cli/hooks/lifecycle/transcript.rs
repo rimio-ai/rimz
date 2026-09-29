@@ -243,7 +243,7 @@ pub(super) fn record_conversation(
             // One read per turn, and none when no section needs it.
             let mut run = None;
             for section in sections {
-                use rimz::store::message::SectionOrigin;
+                use rimz::transcript::SectionOrigin;
                 use rimz::transcript::TranscriptKind;
                 let mut origin = Cow::Borrowed(&section.origin);
                 if section.origin == SectionOrigin::Human
