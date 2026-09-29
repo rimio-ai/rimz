@@ -501,7 +501,12 @@ fn builds_github_bulk_query_with_ordered_escaped_aliases() {
         query.contains(r#"facts0: pullRequests(first: 1, headRefName: "feature", states: [OPEN]"#)
     );
     assert!(query.contains(r#"baseRef { name compare(headRef: "quote\"branch") { behindBy } }"#));
-    assert_eq!(query.matches("headRefOid mergeable").count(), 2);
+    assert_eq!(
+        query
+            .matches("headRefOid mergeable isCrossRepository")
+            .count(),
+        2
+    );
     assert_eq!(query.matches("pullRequests(").count(), 4);
     assert_eq!(query.matches(": object(").count(), 2);
 }
@@ -537,7 +542,7 @@ fn parses_github_open_pr_facts_and_unknown_bases() {
         ] {
             let raw = json!({"data": {"repository": {
                 "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
-                "facts0": {"nodes": [{"number": 42, "headRefOid": "head-a", "mergeable": mergeable, "baseRef": base_ref}]}
+                "facts0": {"nodes": [{"number": 42, "headRefOid": "head-a", "mergeable": mergeable, "isCrossRepository": false, "baseRef": base_ref}]}
             }}});
             let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
             assert_eq!(
@@ -551,6 +556,65 @@ fn parses_github_open_pr_facts_and_unknown_bases() {
             );
         }
     }
+}
+
+#[test]
+fn github_facts_errors_are_scoped() {
+    use serde_json::json;
+
+    let mut raw = json!({"data": {"repository": {
+        "pr0": {"nodes": [{"number": 14519, "state": "OPEN"}]},
+        "facts0": {"nodes": [{"number": 14519, "headRefOid": "head-a",
+            "mergeable": "CONFLICTING", "isCrossRepository": false,
+            "baseRef": {"name": "trunk", "compare": null}}]}
+    }}, "errors": [{"type": "NOT_FOUND",
+        "path": ["repository", "facts0", "nodes", 0, "baseRef", "compare"],
+        "message": "Could not resolve head ref 'document-search-operator-support'."}]});
+    let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+    let pr = response.prs[0].as_ref().unwrap();
+    assert_eq!(pr.number, 14519);
+    let facts = pr.open.as_ref().unwrap();
+    assert_eq!(facts.behind_by, None);
+    assert_eq!(
+        facts.mergeability,
+        Some(pr_state::SettledMergeability::Conflicting("head-a".into()))
+    );
+    raw["data"]["repository"]["facts0"]["nodes"][0]["baseRef"]["compare"] = json!({"behindBy": 7});
+    assert_eq!(
+        parse_github_bulk_response(false, &raw.to_string(), 1, 0)
+            .unwrap()
+            .prs[0]
+            .as_ref()
+            .unwrap()
+            .open
+            .as_ref()
+            .unwrap()
+            .behind_by,
+        None
+    );
+    for path in [
+        json!(["repository", "pr0"]),
+        json!(["repository", "sha0"]),
+        json!(["repository", "facts9"]),
+        json!(null),
+    ] {
+        raw["errors"][0]["path"] = path;
+        assert!(parse_github_bulk_response(false, &raw.to_string(), 1, 0).is_err());
+    }
+}
+
+#[test]
+fn github_fork_facts_have_unknown_distance() {
+    let raw = serde_json::json!({"data": {"repository": {
+        "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
+        "facts0": {"nodes": [{"number": 42, "headRefOid": "head-a",
+            "mergeable": "CONFLICTING", "isCrossRepository": true,
+            "baseRef": {"name": "main", "compare": {"behindBy": 7}}}]}
+    }}});
+    let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+    let facts = response.prs[0].as_ref().unwrap().open.as_ref().unwrap();
+    assert_eq!(facts.behind_by, None);
+    assert!(facts.mergeability.is_some());
 }
 
 #[test]

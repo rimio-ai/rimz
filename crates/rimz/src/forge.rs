@@ -584,7 +584,7 @@ pub(crate) fn github_bulk_query(
             graphql_string(branch)
         ));
         fields.push(format!(
-            "facts{index}: pullRequests(first: 1, headRefName: {}, states: [OPEN], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number headRefOid mergeable baseRef {{ name compare(headRef: {}) {{ behindBy }} }} }} }}",
+            "facts{index}: pullRequests(first: 1, headRefName: {}, states: [OPEN], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number headRefOid mergeable isCrossRepository baseRef {{ name compare(headRef: {}) {{ behindBy }} }} }} }}",
             graphql_string(branch),
             graphql_string(branch)
         ));
@@ -633,7 +633,7 @@ pub(crate) fn parse_github_bulk_response(
 
     #[derive(Deserialize)]
     struct FactsConnection {
-        nodes: Vec<FactsPull>,
+        nodes: Vec<Option<FactsPull>>,
     }
 
     #[derive(Deserialize)]
@@ -642,6 +642,7 @@ pub(crate) fn parse_github_bulk_response(
         number: u64,
         head_ref_oid: String,
         mergeable: String,
+        is_cross_repository: bool,
         base_ref: Option<BaseRef>,
     }
 
@@ -696,12 +697,17 @@ pub(crate) fn parse_github_bulk_response(
     }
 
     let response: Response = serde_json::from_str(raw).map_err(|err| err.to_string())?;
-    if response
-        .errors
-        .as_ref()
-        .is_some_and(|errors| !errors.is_empty())
-    {
-        return Err("github GraphQL response contains errors".to_owned());
+    let mut failed_facts = BTreeSet::new();
+    for error in response.errors.iter().flatten() {
+        let path = error.get("path").and_then(Value::as_array);
+        let alias = path.and_then(|path| path.get(1)).and_then(Value::as_str);
+        let Some(alias) = alias.filter(|alias| {
+            path.and_then(|path| path.first()).and_then(Value::as_str) == Some("repository")
+                && (0..branch_count).any(|index| *alias == format!("facts{index}"))
+        }) else {
+            return Err("github GraphQL response contains errors".to_owned());
+        };
+        failed_facts.insert(alias);
     }
     let repository = response
         .data
@@ -754,13 +760,14 @@ pub(crate) fn parse_github_bulk_response(
         let value = repository
             .get(&alias)
             .ok_or_else(|| format!("github GraphQL response is missing alias `{alias}`"))?;
-        let facts: FactsConnection =
+        let facts: Option<FactsConnection> =
             serde_json::from_value(value.clone()).map_err(|err| err.to_string())?;
         if let Some(pr) = &mut best
             && pr.state == WorktreePrState::Open
             && let Some(facts) = facts
-                .nodes
                 .into_iter()
+                .flat_map(|facts| facts.nodes)
+                .flatten()
                 .find(|facts| facts.number == pr.number)
             && let Some(head) = nonempty(&facts.head_ref_oid)
         {
@@ -774,6 +781,9 @@ pub(crate) fn parse_github_bulk_response(
                 base: facts.base_ref.as_ref().map(|base| base.name.clone()),
                 behind_by: facts
                     .base_ref
+                    .filter(|_| {
+                        !facts.is_cross_repository && !failed_facts.contains(alias.as_str())
+                    })
                     .and_then(|base| base.compare)
                     .map(|compare| compare.behind_by),
                 mergeability,

@@ -681,9 +681,9 @@ fn plan_github_queries(group: &RepoGroup) -> Vec<GhQueryPlan> {
     while pr_offset < pr_targets.len() || oid_offset < oids.len() {
         let include_open = plans.is_empty() && !pr_targets.is_empty();
         let alias_capacity = GH_BULK_MAX_ALIASES - usize::from(include_open);
-        let pr_end = (pr_offset + alias_capacity).min(pr_targets.len());
+        let pr_end = (pr_offset + alias_capacity / 2).min(pr_targets.len());
         let plan_pr_targets = pr_targets[pr_offset..pr_end].to_vec();
-        let oid_capacity = alias_capacity - plan_pr_targets.len();
+        let oid_capacity = alias_capacity - plan_pr_targets.len() * 2;
         let oid_end = (oid_offset + oid_capacity).min(oids.len());
         let plan_oids = oids[oid_offset..oid_end].to_vec();
         let branches = plan_pr_targets
@@ -724,14 +724,20 @@ fn probe_github_repo_group(
     let mut batches = Vec::with_capacity(plans.len());
     for plan in plans {
         let query_arg = format!("query={}", plan.query);
-        let Some(output) =
-            command_stdout(&group.worktree, "gh", &["api", "graphql", "-f", &query_arg])
+        let mut command = Command::new("gh");
+        command
+            .current_dir(&group.worktree)
+            .args(["api", "graphql", "-f", &query_arg]);
+        // gh exits nonzero for partial GraphQL errors; the parser decides their scope.
+        let Some(output) = crate::proc::run_bounded_output(&mut command, PR_STATE_COMMAND_TIMEOUT)
+            .ok()
+            .filter(|output| !output.timed_out)
         else {
             return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
         };
         let response = match forge::parse_github_bulk_response(
             plan.include_open,
-            &output,
+            &String::from_utf8_lossy(&output.stdout),
             plan.pr_targets.len(),
             plan.oids.len(),
         ) {
