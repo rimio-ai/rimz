@@ -6,7 +6,7 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::harness::DayCap;
-use crate::ids::{AgentKind, LoginName};
+use crate::ids::{AgentKind, LoginName, RoomLogins};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AccountBudgetConfigError {
@@ -24,6 +24,9 @@ pub enum AccountBudgetConfigError {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AccountsConfig {
+    /// Machine account selections for new rooms, below explicit and project selections.
+    #[serde(rename = "use", skip_serializing_if = "BTreeMap::is_empty")]
+    pub use_accounts: RoomLogins,
     /// Local-calendar-day dollar caps by provider login, shared across rooms.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub budget: BTreeMap<String, DayCap>,
@@ -258,6 +261,12 @@ mod tests {
             [budget]
             claude = "100/day"
 
+            [use]
+            codex = "personal"
+
+            [usage_limit_usd]
+            codex = 25
+
             [claude.work]
             home = "/srv/homes/work"
 
@@ -271,6 +280,30 @@ mod tests {
         assert_eq!(codex["personal"].home, None);
         assert!(config.named(&AgentKind::new_unchecked("grok")).is_none());
         assert_eq!(config.budget("claude").map(DayCap::as_usd), Some(100.0));
+        let serialized = toml::Value::try_from(&config).unwrap();
+        assert_eq!(
+            serialized
+                .get("use")
+                .and_then(|v| v.get("codex"))
+                .and_then(toml::Value::as_str),
+            Some("personal")
+        );
+    }
+
+    #[test]
+    fn machine_selection_allows_undeclared_names_at_strict_load() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.toml");
+        std::fs::write(&path, "[accounts.use]\ncodex = \"missing\"\n").unwrap();
+        let config = crate::config::MachineConfig::load_from(&path, root.path()).unwrap();
+        let serialized = toml::Value::try_from(&config.accounts).unwrap();
+        assert_eq!(
+            serialized
+                .get("use")
+                .and_then(|v| v.get("codex"))
+                .and_then(toml::Value::as_str),
+            Some("missing")
+        );
     }
 
     #[test]

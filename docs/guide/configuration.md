@@ -391,6 +391,9 @@ home = "/home/you/.claude-work"
 
 [accounts.codex.personal]
 
+[accounts.use]
+codex = "personal"
+
 [accounts.budget]
 claude = "100/day"
 
@@ -402,6 +405,8 @@ codex = 25.0
 `[accounts.<kind>.<name>]` declares a named Claude or Codex account: a separate provider home that a room launches that provider's agents into. `home` is optional, and an empty table places the home under `~/.rimz/accounts/<kind>/<name>`. `default` is reserved for the provider's own home and is never declared. `rimz accounts add` writes these entries for you, and [provider accounts](./accounts.md) walks the whole flow.
 
 Two limits apply to the path. Two accounts of the same provider cannot share a home, and a `home` cannot contain `,` or end in a directory named `projects`, because provider home lists split on commas and Claude reads `projects` as its transcript folder.
+
+`[accounts.use]` selects the machine's accounts for new rooms. Each key names a provider and each value names a declared account or `default`, the provider's own home. It coexists with the account declarations; a provider name directly under `[accounts]` is not a selection in the machine file. Names are checked when a new room selects them, not when the file loads, so you can still repair a missing declaration.
 
 A project picks its room's accounts in `.rimz/config.toml` with `[accounts]` entries such as `claude = "work"`. That selection joins the project trust hash, so an untrusted one refuses `rimz start` until you grant it, and `rimz start --account` overrides it for one room.
 
