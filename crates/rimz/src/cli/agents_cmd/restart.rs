@@ -1,4 +1,5 @@
 use super::*;
+use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::launch::{ExecAction, ExecRequest};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,7 +24,8 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         crate::cli::resolve_agent_one(&ctx.store, &snapshot, &reference, None, ctx.channel())?
             .clone();
     let peers = rimz::address::addressable_agents(&snapshot);
-    let message = restart_resolved(&ctx, &agent, &peers)?;
+    let focus = LaunchFocus::resolve(false, resolve_caller(&snapshot.agents).as_ref());
+    let message = restart_resolved(&ctx, &agent, &peers, focus)?;
     writeln!(crate::cli::render::out(), "{message}")?;
     Ok(())
 }
@@ -32,6 +34,7 @@ pub(in crate::cli) fn restart_resolved(
     ctx: &Ctx,
     agent: &AgentState,
     peers: &[&AgentState],
+    focus: LaunchFocus,
 ) -> Result<String> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -114,13 +117,14 @@ pub(in crate::cli) fn restart_resolved(
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();
 
-    if let Err(err) = rimz::mux::focus_anchor::execute_action(
-        backend.as_ref(),
-        ctx.runtime(),
-        &workspace.session_name,
-        old_pane.clone(),
-    )
-    .context("focusing the agent pane for restart")
+    if focus.takes_focus()
+        && let Err(err) = rimz::mux::focus_anchor::execute_action(
+            backend.as_ref(),
+            ctx.runtime(),
+            &workspace.session_name,
+            old_pane.clone(),
+        )
+        .context("focusing the agent pane for restart")
     {
         if let Some(batch) = &fresh_batch {
             let _ = store.fail_agent_launch_batch(batch);
@@ -129,14 +133,21 @@ pub(in crate::cli) fn restart_resolved(
     }
     if let Err(err) = backend
         .split_pane(SplitPaneOptions {
-            target: rimz::mux::SplitTarget::Pane(old_pane.clone()),
+            target: if focus.takes_focus() {
+                rimz::mux::SplitTarget::Pane(old_pane.clone())
+            } else {
+                rimz::mux::SplitTarget::SessionPane {
+                    session_name: workspace.session_name.clone(),
+                    pane_id: old_pane.clone(),
+                }
+            },
             cwd: Some(cwd.display().to_string()),
             command: Some(argv),
             title: Some(pane_name),
             close_on_exit: false,
             env,
             placement: rimz::mux::SplitPlacement::Directional(direction),
-            focus: true,
+            focus: focus.takes_focus(),
         })
         .context("opening the replacement agent pane")
     {

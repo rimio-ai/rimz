@@ -657,11 +657,16 @@ fn open_tab_unfocused_routes_input_back_to_source() {
             env: Default::default(),
             title: background_tab.to_owned(),
             panes: LayoutPanes {
-                columns: vec![tiled_column(vec![PaneCmd {
-                    argv: vec!["sleep".to_owned(), "600".to_owned()],
-                    name: None,
-                }])],
-                focused_pane: 0,
+                columns: vec![tiled_column(
+                    ["worker", "leader"]
+                        .into_iter()
+                        .map(|name| PaneCmd {
+                            argv: vec!["sleep".to_owned(), "600".to_owned()],
+                            name: Some(name.to_owned()),
+                        })
+                        .collect(),
+                )],
+                focused_pane: 1,
             },
             focus: false,
             dock_sidebar: true,
@@ -670,12 +675,36 @@ fn open_tab_unfocused_routes_input_back_to_source() {
         })
         .expect("open unfocused background tab");
     assert_eq!(
-        wait_for_named_work_pane_count(xdg, &name, background_tab, 1).len(),
-        1,
-        "background tab should open one work pane",
+        wait_for_named_work_pane_count(xdg, &name, background_tab, 2).len(),
+        2,
+        "background tab should open two work panes",
     );
 
     client.assert_input_reaches(&source_pane, "source pane after unfocused tab open");
+    let leader = expect_list_panes(xdg, &name)
+        .panes
+        .into_iter()
+        .find(|pane| pane.title.as_deref() == Some("leader"))
+        .expect("background leader");
+    let output = crate::common::ZellijNamespace::command_at(xdg)
+        .args([
+            "--session",
+            &name,
+            "action",
+            "go-to-tab-name",
+            background_tab,
+        ])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    client.wait_until_focused(
+        &PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", leader.id)),
+        "leader on first entry to background tab",
+    );
 }
 
 #[test]

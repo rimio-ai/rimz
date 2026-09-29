@@ -10,6 +10,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 use rimz::agents::LocalSessionObservation;
+use rimz::harness::ancestry::{LaunchFocus, resolve_caller};
 use rimz::harness::resume::{
     LaneRestoreConfig, LaneResumeAction, LaneResumeError, LaneResumeRequest, LaneResumeSelector,
     LaneSummary, LaneWorktree, ResumeSkip, plan_lane_resume, resume_session_present,
@@ -41,6 +42,7 @@ pub(super) fn resume_lane(
     let projection = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
+    let focus = LaunchFocus::resolve(bg, resolve_caller(&projection.agents).as_ref());
     let worktrees = local_worktrees(&workspace)?;
     let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
     let catalog = rimz::agents::LoginCatalog::from_config(&machine_config.accounts)?;
@@ -95,6 +97,13 @@ pub(super) fn resume_lane(
             lane_label,
             pane_id,
         } => {
+            if !focus.takes_focus() {
+                writeln!(
+                    std::io::stdout().lock(),
+                    "lane '{lane_label}' is already live"
+                )?;
+                return Ok(());
+            }
             let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
             rimz::mux::focus_anchor::execute_action(
                 backend,
@@ -134,7 +143,7 @@ pub(super) fn resume_lane(
                     title: pane.name,
                     close_on_exit: false,
                     placement: SplitPlacement::Directional(direction),
-                    focus: !bg,
+                    focus: focus.takes_focus(),
                 })?;
             }
             for label in live_labels {
@@ -156,7 +165,7 @@ pub(super) fn resume_lane(
             let tabs = plan.materialize(&store, &workspace.session_name)?;
             let count = tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
             for tab in tabs {
-                open_resume_tab(&room, tab, bg)?;
+                open_resume_tab(&room, tab, focus)?;
             }
             writeln!(
                 std::io::stdout().lock(),
@@ -223,14 +232,14 @@ fn discover_lane_sessions(
         .collect()
 }
 
-fn open_resume_tab(room: &RoomContext, tab: ResumeTab, bg: bool) -> Result<()> {
+fn open_resume_tab(room: &RoomContext, tab: ResumeTab, focus: LaunchFocus) -> Result<()> {
     let sidebar = room.sidebar_options(&tab.cwd);
     room.backend()
         .open_tab(&TabOptions {
             env: tab.env,
             title: tab.label,
             panes: tab.layout,
-            focus: !bg,
+            focus: focus.takes_focus(),
             dock_sidebar: true,
             after: None,
             sidebar,

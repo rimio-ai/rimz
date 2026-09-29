@@ -6,6 +6,27 @@
 
 use crate::ids::{AgentKind, AgentSessionId};
 
+/// Whether a launch may move the user's focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchFocus {
+    Take,
+    Keep,
+}
+
+impl LaunchFocus {
+    pub fn resolve(background: bool, caller: Option<&CallerIdentity>) -> Self {
+        if background || caller.is_some() {
+            Self::Keep
+        } else {
+            Self::Take
+        }
+    }
+
+    pub fn takes_focus(self) -> bool {
+        self == Self::Take
+    }
+}
+
 /// Durable launch stamp for an agent started by another agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaunchAncestry {
@@ -290,6 +311,26 @@ pub fn resolve_launch_caller<'a>(
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
+
+    #[test]
+    fn launch_focus_preserves_agent_and_background_callers() {
+        let caller = CallerIdentity {
+            kind: AgentKind::new_unchecked("claude"),
+            launch_id: None,
+            pane_id: None,
+            name: None,
+            profile: None,
+            role: None,
+        };
+        for (background, caller, expected) in [
+            (false, None, LaunchFocus::Take),
+            (true, None, LaunchFocus::Keep),
+            (false, Some(&caller), LaunchFocus::Keep),
+            (true, Some(&caller), LaunchFocus::Keep),
+        ] {
+            assert_eq!(LaunchFocus::resolve(background, caller), expected);
+        }
+    }
 
     #[test]
     fn launch_room_requires_matching_verified_pin_only_for_agents() {

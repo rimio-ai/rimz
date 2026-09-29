@@ -204,7 +204,7 @@ rimz teams peer --channel triage
 rimz teams launch forge -w feat-rate-limits
 ```
 
-`rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. The team's tab opens with the leader's pane focused. Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree) (a live cohort is focused; a closed one prompts to resume, start fresh, or remove). A name that is not a defined team is refused with the list of configured teams, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
+`rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. The team's tab selects the leader's pane internally; whether the client enters it follows the [agent launch focus rule](./agents.md#channel-worktree-and-placement). Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree) (a live cohort is focused unless an agent caller or `--bg` preserves focus; a closed one prompts to resume, start fresh, or remove). A name that is not a defined team is refused with the list of configured teams, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
 
 | Flag | Effect |
 | --- | --- |
@@ -216,7 +216,7 @@ rimz teams launch forge -w feat-rate-limits
 | `--fresh` | Start new sessions in an existing named worktree instead of resuming its closed cohort, keeping the checkout and its files. Needs `-w NAME` or `team#NAME`. |
 | `--budget AMOUNT[/day]` | Cap each member's spend for the session (`5`) or the local day (`20/day`). Each member is capped separately; there is no pooled team cap. See [`rimz budget`](./budget.md). |
 | `--isolation host\|sandbox` | Run every member under this isolation instead of the machine's `agents.isolation`, recorded per member. |
-| `--bg` | Keep focus where it is. |
+| `--bg` | Keep focus where it is, as agent callers always do. See the [focus rule](./agents.md#channel-worktree-and-placement). |
 | `--new-tab` | Open the launch in a new tab or tmux window. |
 
 `--resume` accepts `--isolation host|sandbox`, replacing each member's recorded isolation while keeping its conversation. It refuses `PROMPT`: send it with `rimz message` after the session opens, or choose fresh at the named-worktree prompt. `--from-pr`, `--channel`, `--description`, and `--budget` still conflict with resume. `--fresh` conflicts with `--resume` and `--from-pr`. Launch flags without a team name are refused with `team launch options require a team name`.
@@ -263,7 +263,7 @@ rimz teams resume forge -w --bg
 
 `--isolation host|sandbox` replaces each resumed member's recorded isolation; for example, `rimz teams resume forge --isolation host`. Omitting it preserves each member's recorded override; a member with none recorded takes its profile's `isolation` default, then machine policy. The replacement survives restart, rebirth, and child launches. For one-shot permission, model, or effort changes, use [`rimz agents forge --resume`](./agents.md#resume-a-cohort).
 
-`--bg` keeps focus where it is. `resume` prints one line per member, `resumed <kind>:<name> (<session id>)` or `started fresh <member>` for a member with nothing to resume, followed by `Check:`, `Reach:`, and `Wait:` command hints for the cohort.
+`--bg` and agent callers keep focus where it is under the [focus rule](./agents.md#channel-worktree-and-placement). `resume` prints one line per member, `resumed <kind>:<name> (<session id>)` or `started fresh <member>` for a member with nothing to resume, followed by `Check:`, `Reach:`, and `Wait:` command hints for the cohort.
 
 ## Drive a live team
 
