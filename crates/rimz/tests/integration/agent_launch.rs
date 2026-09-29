@@ -89,7 +89,8 @@ fn unsupported_plugin_peer_launch_explains_that_no_report_will_come() {
         .assert()
         .success();
     let shim = write_env_dump_shim(&env, "testbot");
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    // The runner's home can mint a different name when a short workspace ID collides.
+    let session_name = env.state_path_for(&env.project_root).dir_name;
     let out = env
         .rimz()
         .args([
@@ -112,7 +113,7 @@ fn unsupported_plugin_peer_launch_explains_that_no_report_will_come() {
         .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 1s ago]\n", workspace.session_name),
+            format!("{session_name} [Created 1s ago]\n"),
         )
         .bounded_output()
         .unwrap();
@@ -146,7 +147,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
     )
     .unwrap();
     let shim = write_env_dump_shim(&env, "claude");
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let session_name = store.paths().dir_name.as_str();
     let out = env
         .rimz()
         .args([
@@ -171,7 +172,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
         .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 1s ago]\n", workspace.session_name),
+            format!("{session_name} [Created 1s ago]\n"),
         )
         .bounded_output()
         .unwrap();
@@ -224,7 +225,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
                 run_id: None,
                 prompt: Some("first task".into()),
             },
-            &workspace.session_name,
+            session_name,
             &env.project_root,
             &rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_2"),
         )
