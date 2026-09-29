@@ -562,7 +562,7 @@ path = "crates/rimz/src/worktree"
 # Attribution probes the selected checkout's branch through the shared resolver.
 surface-budget = 57
 
-# Ratchet CLI-to-CLI surfaces for future thin-cli workflow moves.
+# Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
 path = "crates/rimz/src/cli/supervised"
 surface-budget = 48
@@ -1051,7 +1051,7 @@ reason = "Reached by inference from the binary; narrowing is a private-interface
 
 [[verdict]]
 kind = "item"
-key = "harness::schedule::runner::new"
+key = "harness::schedule::runner::TaskFire::new"
 reason = "TaskFire keeps ten explicit inputs; CLI owns the spawn."
 
 [[verdict]]
@@ -1061,7 +1061,7 @@ reason = "Classifier and thresholds are remote policy over a store-owned tier; s
 
 [[verdict]]
 kind = "pass-through"
-key = "cli::remote::supervisor::drop"
+key = "cli::remote::supervisor::LinkSupervisor::drop"
 reason = "Pass 29d: LinkSupervisor releases the held screen before fields drop the SSH master; explicit teardown order belongs here, not in field ordering."
 
 [[verdict]]
@@ -1216,11 +1216,6 @@ reason = "Pass 10: the concrete backend is driven by the separate integration cr
 
 [[verdict]]
 kind = "item"
-key = "mux::zellij::with_runtime_dir"
-reason = "Pass 10: per-backend XDG pinning is compiled only under test/testkit; the integration crate needs independent roots (900c5ced2)."
-
-[[verdict]]
-kind = "item"
 key = "mux::zellij::pane_topology::PaneTopologyPane"
 reason = "Pass 10: public topology wire schema nested in PaneTopologyCache, constructed by integration fixtures and sidebar renderer tests."
 
@@ -1258,11 +1253,6 @@ reason = "Pass 10: MuxBackend member forwards to the Zellij implementation; the 
 kind = "shape"
 key = "SplitPlacement::Directional+companion_geometry+plan_append+split_pane"
 reason = "Pass 10: companion_layout already shares the policy; backend-native remainders differ in gap width, the 0.45 no-focus gate, target kind and native convergence (one origin bce9d5d75)."
-
-[[verdict]]
-kind = "pass-through"
-key = "config::parse_core_text_collecting"
-reason = "Pass 12: lifetime adapter making parse_toml_collecting late-bound for the fn(&Path, &str) loader callbacks; inlining needs a closure at each site and saves no surface."
 
 [[verdict]]
 kind = "item"
@@ -1366,11 +1356,6 @@ reason = "Pass 12: public notice field type; narrowing beneath its owner violate
 
 [[verdict]]
 kind = "item"
-key = "config::AgentsFragmentError"
-reason = "Pass 12: public notice field type; narrowing beneath its owner violates private_interfaces under -D warnings."
-
-[[verdict]]
-kind = "item"
 key = "config::edit::FileMergeOutcome"
 reason = "Pass 12: public merge report field type; narrowing beneath its owner violates private_interfaces under -D warnings."
 
@@ -1378,11 +1363,6 @@ reason = "Pass 12: public merge report field type; narrowing beneath its owner v
 kind = "item"
 key = "config::edit::SkippedKey"
 reason = "Pass 12: public merge outcome field type; narrowing beneath its owner violates private_interfaces under -D warnings."
-
-[[verdict]]
-kind = "item"
-key = "config::edit::FragmentRepairOutcome"
-reason = "Pass 12: public fragment repair report field type; narrowing beneath its owner violates private_interfaces under -D warnings."
 
 [[verdict]]
 kind = "item"
@@ -2566,7 +2546,12 @@ reason = "Accessors name distinct socket, lock, cache and durable protocols, not
 
 [[verdict]]
 kind = "item"
-key = "disk::paths::ensure_dirs"
+key = "disk::paths::StatePaths::ensure_dirs"
+reason = "Both path owners are constructed and ensured by the separate binary, integration fixtures and benches/fleet.rs and hotpath.rs. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::ensure_dirs"
 reason = "Both path owners are constructed and ensured by the separate binary, integration fixtures and benches/fleet.rs and hotpath.rs. (pass 19b)."
 
 [[verdict]]
@@ -3611,11 +3596,6 @@ reason = "Called by the separate integration crate at six sites (tests/integrati
 
 [[verdict]]
 kind = "pass-through"
-key = "sandbox::prepare"
-reason = "plan-then-apply for callers that need both; no production caller remains, but the separate integration crate drives it at six sites, so the seam stays until a pass may edit that crate (pass 23b)."
-
-[[verdict]]
-kind = "pass-through"
 key = "sandbox::rewrite::from"
 reason = "MaterializeErr::from is the `?` conversion from SandboxErr; inlining it rewrites every call site to map_err and is net-additive (pass 23b)."
 
@@ -3676,7 +3656,7 @@ reason = "The bundle every adapter implements and AgentDefinition holds as a tra
 
 [[verdict]]
 kind = "item"
-key = "agents::hook_types::context_agent_id"
+key = "agents::hook_types::HookOutput::context_agent_id"
 reason = "The binary crate calls it on the publicly re-exported HookOutput (cli/hooks/lifecycle/mod.rs:148,537,542, context.rs:59,441), so pub is its floor; worktree_path has the same floor (cli/hooks/lifecycle/transcript.rs:25,109). The adapter tests under agents/adapters are descendants and floor nothing (pass 24b, corrected in review)."
 
 [[verdict]]
@@ -3701,8 +3681,8 @@ reason = "ProviderCapacity::from_windows is built by harness/auto_continue/tests
 
 [[verdict]]
 kind = "item"
-key = "agents::account::binding"
-reason = "Two methods share this key. ManagedLaunchState::binding (account.rs:114) is read by the binary (cli/supervised/run.rs:703,909) and the integration crate, so E0624 refuted pub(crate) and it stays pub; AccountUsageIdentity::binding (account.rs:147) narrowed to pub(super) and needs no verdict (pass 24b)."
+key = "agents::account::ManagedLaunchState::binding"
+reason = "ManagedLaunchState::binding is read by the binary (cli/supervised/run.rs) and the integration crate, so E0624 refuted pub(crate) and it stays pub; AccountUsageIdentity::binding narrowed to pub(super) and needs no verdict (pass 24b)."
 
 [[verdict]]
 kind = "item"
@@ -3736,7 +3716,7 @@ reason = "ExtraCredits::known is called by the binary's sidebar fixture (cli/sid
 
 [[verdict]]
 kind = "item"
-key = "agents::managed_source::managed_artifacts_present"
+key = "agents::managed_source::ManagedSource::managed_artifacts_present"
 reason = "The ManagedSource inherent methods (install, preview, uninstall, resolved_path, upgrade_available_at, wrapped_status_line_command, wrapped_subagent_status_line_command) are the seam held adapters call; their pass-through shape is the ManagedIntegration impl, pinned by 417721973 and e566d6b44 (pass 24b)."
 
 [[verdict]]
@@ -3816,8 +3796,13 @@ reason = "Pass 24a: the `file` accessor cannot narrow — cli/agents_cmd/fork.rs
 
 [[verdict]]
 kind = "item"
-key = "config::glyphs::GlyphRole"
-reason = "Pass 24a: `name` and `namespace` cannot narrow — theme/glyphs.rs:357 reads them across the module boundary (E0624); `namespaced_name` has the same floor."
+key = "config::glyphs::name"
+reason = "Pass 24a: `name` and `namespace` are read by the theme::glyphs tests across the module boundary (E0624 when private); their floor is pub(crate), which does not lower esc."
+
+[[verdict]]
+kind = "item"
+key = "config::glyphs::namespace"
+reason = "Pass 24a: `name` and `namespace` are read by the theme::glyphs tests across the module boundary (E0624 when private); their floor is pub(crate), which does not lower esc."
 
 [[verdict]]
 kind = "item"
@@ -4051,7 +4036,17 @@ reason = "PaneId::creation_ordinal is read by the separate integration crate (te
 
 [[verdict]]
 kind = "item"
-key = "ids::parse"
+key = "ids::WorkspaceId::parse"
+reason = "WorkspaceId::parse, MessageId::parse and WorkspaceDirName::parse are all called from the binary crate (cli/sidebar/tests.rs:232, cli/message/list.rs:816, cli/message/show.rs:704, cli/sessions/picker/tests.rs:386) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::MessageId::parse"
+reason = "WorkspaceId::parse, MessageId::parse and WorkspaceDirName::parse are all called from the binary crate (cli/sidebar/tests.rs:232, cli/message/list.rs:816, cli/message/show.rs:704, cli/sessions/picker/tests.rs:386) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::WorkspaceDirName::parse"
 reason = "WorkspaceId::parse, MessageId::parse and WorkspaceDirName::parse are all called from the binary crate (cli/sidebar/tests.rs:232, cli/message/list.rs:816, cli/message/show.rs:704, cli/sessions/picker/tests.rs:386) (pass 24c)."
 
 [[verdict]]
@@ -4061,7 +4056,7 @@ reason = "Named by the binary crate (cli/doctor/runtime/tests.rs:651) and a fiel
 
 [[verdict]]
 kind = "item"
-key = "ids::new_unchecked"
+key = "ids::ViewId::new_unchecked"
 reason = "ViewId::new_unchecked is called from the binary crate (cli/budget.rs, cli/doctor/runtime/tests.rs:651) (pass 24c)."
 
 [[verdict]]

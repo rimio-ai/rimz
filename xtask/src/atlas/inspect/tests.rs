@@ -186,7 +186,7 @@ fn inspect_item_and_verdicts_report_name_collisions() {
     )
     .unwrap_err()
     .to_string();
-    assert!(error.contains("ambiguous: 2 public items named open"));
+    assert!(error.contains("ambiguous: 2 visible items named open"));
     assert!(error.contains("owner Left"));
     assert!(error.contains("owner Right"));
 
@@ -354,4 +354,313 @@ fn inspect_brief_presets_sections_and_top_unless_given() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("mutually exclusive"), "{error}");
+}
+
+fn verdicts(verdicts: &[(VerdictKind, &str)]) -> Target {
+    Target {
+        version: 5,
+        layers: Vec::new(),
+        modules: Vec::new(),
+        strangler: Vec::new(),
+        verdicts: verdicts
+            .iter()
+            .map(|(kind, key)| Verdict {
+                kind: *kind,
+                key: (*key).to_owned(),
+                reason: "probe".to_owned(),
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn item_verdicts_resolve_private_functions_after_public_items() {
+    let root = crate_fixture(
+        "pub struct Left;\nimpl Left { fn open(&self) {} }\npub fn open() {}\nfn helper() {}\nfn run() { helper() }\n",
+    );
+    let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let target = verdicts(&[
+        (VerdictKind::Item, "store::helper"),
+        (VerdictKind::Item, "store::gone"),
+        (VerdictKind::Item, "store::open"),
+    ]);
+
+    let diagnostics = stale_module_verdicts(&target, "store", &facts);
+
+    assert_eq!(diagnostics.stale, ["Item:store::gone"]);
+    assert!(
+        diagnostics.ambiguous.is_empty(),
+        "the public `open` wins over the private method: {:?}",
+        diagnostics.ambiguous
+    );
+    let check = check_item_verdicts(&target, "", &facts);
+    assert_eq!(
+        check
+            .stale
+            .iter()
+            .map(|verdict| verdict.key.as_str())
+            .collect::<Vec<_>>(),
+        ["store::gone"]
+    );
+}
+
+#[test]
+fn inspect_item_resolves_private_functions_with_their_referrers() {
+    let root = crate_fixture(
+        "pub struct Left;\npub struct Right;\nimpl Left { fn shut(&self) {} }\nimpl Right { fn shut(&self) {} }\npub fn open() {}\nimpl Left { fn open(&self) {} }\n\nfn helper() -> usize {\n    1\n}\n\npub fn run() -> usize {\n    helper()\n}\n",
+    );
+    run(root.path(), &["init", "--quiet"]);
+    run(root.path(), &["add", "."]);
+    run(
+        root.path(),
+        &[
+            "-c",
+            "user.name=Atlas Test",
+            "-c",
+            "user.email=atlas@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "introduce helper",
+        ],
+    );
+    let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let file = facts
+        .syntax
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("src/store.rs"))
+        .unwrap();
+    let line = |name: &str| {
+        file.fns
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap()
+            .line
+    };
+    let (helper, caller) = (line("helper"), line("run"));
+    let mut reference = super::testkit::edge(
+        "helper",
+        "store",
+        Some(("run", caller)),
+        SourceKind::Production,
+    );
+    reference.from_path = PathBuf::from("src/store.rs");
+    reference.to_path = PathBuf::from("src/store.rs");
+    reference.to_line = helper;
+    facts.references = Some(super::super::references::References {
+        fn_edges: vec![reference],
+        ..Default::default()
+    });
+    let target = verdicts(&[(VerdictKind::Item, "store::helper")]);
+
+    let evidence = item_evidence(
+        root.path(),
+        &facts,
+        &selector("store"),
+        Some(&target),
+        "store::helper",
+    )
+    .unwrap();
+
+    assert_eq!(evidence.key, "store::helper");
+    assert_eq!(
+        (evidence.path.as_path(), evidence.line),
+        (Path::new("src/store.rs"), helper)
+    );
+    assert_eq!(evidence.sloc, 3);
+    assert_eq!(evidence.declared, "private");
+    assert_eq!(evidence.effective_reach, "store");
+    assert_eq!(evidence.production_referrers, ["store::run"]);
+    assert!(evidence.test_referrers.is_empty());
+    assert_eq!(evidence.commits.len(), 1);
+    assert_eq!(evidence.verdict.unwrap().reason, "probe");
+
+    let error = item_evidence(root.path(), &facts, &selector("store"), None, "shut")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("ambiguous: 2 production functions named shut"),
+        "{error}"
+    );
+    assert!(
+        error.contains("owner Left") && error.contains("owner Right"),
+        "{error}"
+    );
+    let owned = item_evidence(
+        root.path(),
+        &facts,
+        &selector("store"),
+        None,
+        "store::Right::shut",
+    )
+    .unwrap();
+    assert_eq!(owned.key, "store::Right::shut");
+    assert_eq!(owned.line, line("shut") + 1);
+    let public =
+        item_evidence(root.path(), &facts, &selector("store"), None, "store::open").unwrap();
+    assert_eq!(
+        public.declared, "pub",
+        "a public item wins over a private method of the same name"
+    );
+    let error = item_evidence(root.path(), &facts, &selector("store"), None, "store::gone")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("names no item or production function"),
+        "{error}"
+    );
+}
+
+/// A crate mirroring the verdict keys the resolver once missed: private
+/// items in a private child (`disk::usage::FileIdentity`), a private trait at
+/// a module root (`sidebar::SidebarMux`), a method keyed by its owner
+/// (`lsp::check::Report::render`), and a method in a private child module
+/// keyed from its parent (`mux::zellij::converge_presence_plugin_for`).
+fn resolver_fixture() -> tempfile::TempDir {
+    crate_with_files(&[
+        ("src/lib.rs", "mod store;\n"),
+        (
+            "src/store.rs",
+            "mod usage;\nmod presence;\ntrait SidebarMux {}\nstruct Shared {}\npub struct Report;\nimpl Report {\n    pub fn render(&self) {}\n}\n",
+        ),
+        (
+            "src/store/usage.rs",
+            "struct FileIdentity {\n    dev: u64,\n}\n\nenum RequiredDecision {\n    Run,\n}\n\npub fn walk() -> usize {\n    let identity = FileIdentity { dev: 0 };\n    identity.dev as usize\n}\n",
+        ),
+        (
+            "src/store/presence.rs",
+            "pub struct Shared;\npub struct Zellij;\nimpl Zellij {\n    pub fn converge_presence_plugin_for(&self) {}\n}\n",
+        ),
+    ])
+}
+
+#[test]
+fn item_verdicts_resolve_private_items_owner_keys_and_child_modules() {
+    let root = resolver_fixture();
+    let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let target = verdicts(&[
+        (VerdictKind::Item, "store::usage::FileIdentity"),
+        (VerdictKind::Item, "store::usage::RequiredDecision"),
+        (VerdictKind::Item, "store::SidebarMux"),
+        (VerdictKind::Item, "store::FileIdentity"),
+        (VerdictKind::Item, "store::Report::render"),
+        (VerdictKind::Item, "store::render"),
+        (VerdictKind::Item, "store::Wrong::render"),
+        (VerdictKind::Item, "store::converge_presence_plugin_for"),
+        (VerdictKind::Item, "store::Shared"),
+        (VerdictKind::Item, "store::Gone"),
+    ]);
+
+    let diagnostics = stale_module_verdicts(&target, "store", &facts);
+
+    assert_eq!(
+        diagnostics.stale,
+        ["Item:store::Gone", "Item:store::Wrong::render"]
+    );
+    assert!(
+        diagnostics.ambiguous.is_empty(),
+        "a visible `Shared` beneath the module wins over the private one in it: {:?}",
+        diagnostics.ambiguous
+    );
+}
+
+#[test]
+fn inspect_item_resolves_private_items_with_their_referrers() {
+    let root = resolver_fixture();
+    run(root.path(), &["init", "--quiet"]);
+    run(root.path(), &["add", "."]);
+    run(
+        root.path(),
+        &[
+            "-c",
+            "user.name=Atlas Test",
+            "-c",
+            "user.email=atlas@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "introduce FileIdentity",
+        ],
+    );
+    let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let usage = facts
+        .syntax
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("src/store/usage.rs"))
+        .unwrap();
+    let walk = usage
+        .fns
+        .iter()
+        .find(|function| function.name == "walk")
+        .unwrap()
+        .line;
+    let mut reference = super::testkit::edge(
+        "FileIdentity",
+        "store::usage",
+        Some(("walk", walk)),
+        SourceKind::Production,
+    );
+    reference.from_path = PathBuf::from("src/store/usage.rs");
+    reference.to_path = PathBuf::from("src/store/usage.rs");
+    reference.to = "store::usage".to_owned();
+    reference.to_line = 1;
+    facts.references = Some(super::super::references::References {
+        fn_edges: vec![reference],
+        ..Default::default()
+    });
+    let target = verdicts(&[(VerdictKind::Item, "store::FileIdentity")]);
+
+    let evidence = item_evidence(
+        root.path(),
+        &facts,
+        &selector("store"),
+        Some(&target),
+        "store::FileIdentity",
+    )
+    .unwrap();
+
+    assert_eq!(evidence.key, "store::usage::FileIdentity");
+    assert_eq!(
+        (evidence.path.as_path(), evidence.line, evidence.sloc),
+        (Path::new("src/store/usage.rs"), 1, 3)
+    );
+    assert_eq!(evidence.declared, "private");
+    assert_eq!(evidence.effective_reach, "store::usage");
+    assert_eq!(evidence.production_referrers, ["store::usage::walk"]);
+    assert_eq!(evidence.commits.len(), 1);
+    assert_eq!(
+        evidence.verdict.unwrap().key,
+        "store::FileIdentity",
+        "a verdict keyed from the parent module reaches the definition"
+    );
+
+    let owned = item_evidence(
+        root.path(),
+        &facts,
+        &selector("store"),
+        None,
+        "store::Report::render",
+    )
+    .unwrap();
+    assert_eq!(owned.key, "store::Report::render");
+    let child = item_evidence(
+        root.path(),
+        &facts,
+        &selector("store"),
+        None,
+        "store::converge_presence_plugin_for",
+    )
+    .unwrap();
+    assert_eq!(child.key, "store::presence::converge_presence_plugin_for");
+    let shared = item_evidence(root.path(), &facts, &selector("store"), None, "Shared").unwrap();
+    assert_eq!(shared.declared, "pub", "the visible item wins");
+    let error = item_evidence(root.path(), &facts, &selector("store"), None, "store::Gone")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("names no item or production function"),
+        "{error}"
+    );
 }

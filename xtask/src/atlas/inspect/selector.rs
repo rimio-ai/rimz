@@ -29,6 +29,12 @@ impl ModuleSelector {
             None => true,
         }
     }
+
+    /// Whether `other` names a module strictly beneath this one, so this
+    /// selector's matches include every one of `other`'s.
+    pub(in crate::atlas) fn contains(&self, other: &Self) -> bool {
+        other.module != self.module && module_is_within(&other.module, &self.module)
+    }
 }
 
 pub(in crate::atlas) fn resolve_module(

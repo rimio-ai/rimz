@@ -152,6 +152,7 @@ fn survey_output_is_bounded_by_top() {
         stale: (0..30)
             .map(|index| format!("shape:stale-{index}"))
             .collect(),
+        ambiguous: Vec::new(),
         ledger: LedgerNote {
             present: true,
             intents: 54,
@@ -666,4 +667,646 @@ fn survey_rejects_unknown_sections() {
     let error = parse_args(&args).unwrap_err().to_string();
 
     assert!(error.contains("unknown section(s) unknown"));
+}
+
+fn git(root: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
+fn ledger_rows_are_spelled_crate_relative_whatever_the_scope() {
+    for (scope, row, key) in [
+        ("crates/rimz/src", "cli/remote", "cli/remote"),
+        ("crates/rimz/src", "(root)", "(root)"),
+        ("crates/rimz/src/cli", "remote", "cli/remote"),
+        ("crates/rimz/src/cli", "(root)", "cli/(root)"),
+        (
+            "crates/rimz/src/cli",
+            "agents_cmd/(root)",
+            "cli/agents_cmd/(root)",
+        ),
+        ("crates/rimz/src/lsp", "(root)", "lsp/(root)"),
+        ("crates/rimz/src/cli/remote.rs", "remote", "cli/remote"),
+        ("crates/rimz/src/lib.rs", "(root)", "(root)"),
+        ("src", "store/snapshot", "store/snapshot"),
+    ] {
+        assert_eq!(ledger_row(Path::new(scope), row), key, "{scope} {row}");
+    }
+}
+
+#[test]
+fn scoped_rows_read_the_ledger_row_of_their_crate_relative_spelling() {
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "-q"]);
+    std::fs::create_dir_all(root.path().join("crates/demo/src/cli")).unwrap();
+    std::fs::write(root.path().join("crates/demo/src/cli/remote.rs"), "\n").unwrap();
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "-qm", "base"]);
+    let base = git(root.path(), &["rev-parse", "HEAD"]);
+    let ledger_path = root.path().join(LEDGER_FILE);
+    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+    let flags = |ledger_row: &str| {
+        std::fs::write(
+            &ledger_path,
+            format!(
+                "## Module verdicts\n\n| module | status | sha | reopen at | note |\n| --- | --- | --- | --- | --- |\n| `{ledger_row}` | holds | {base} | 5 | reviewed |\n"
+            ),
+        )
+        .unwrap();
+        let ledger = ledger::load(root.path()).unwrap().unwrap();
+        let mut rows = vec![Row {
+            module: "remote".to_owned(),
+            ..Row::default()
+        }];
+        let mut problems = Vec::new();
+        flag_held_rows(
+            root.path(),
+            Path::new("crates/demo/src/cli"),
+            &ledger,
+            &mut rows,
+            &mut problems,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        rows.remove(0).flags
+    };
+
+    assert!(
+        flags("remote").is_empty(),
+        "the library `remote` row does not hold `cli/remote`"
+    );
+    assert_eq!(flags("cli/remote"), [HELD_FLAG]);
+}
+
+#[test]
+fn stale_verdict_keys_are_judged_crate_wide_whatever_the_scope() {
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "-q"]);
+    let caller = |name: &str| {
+        format!(
+            "fn {name}(s: &crate::store::S) {{\n    if s.phase == crate::store::Phase::Ready {{}}\n}}\n"
+        )
+    };
+    let files = [
+        (
+            "Cargo.toml",
+            "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n".to_owned(),
+        ),
+        (
+            "src/lib.rs",
+            "mod store;\nmod outside;\nmod inside;\n".to_owned(),
+        ),
+        (
+            "src/store.rs",
+            "#[derive(PartialEq)]\npub enum Phase { Ready }\npub struct S { pub phase: Phase }\n"
+                .to_owned(),
+        ),
+        ("src/outside/a.rs", caller("a")),
+        ("src/outside/b.rs", caller("b")),
+        ("src/outside/c.rs", caller("c")),
+        (
+            "src/outside/cmd.rs",
+            "fn run_private() -> usize { 1 }\nfn forward(value: usize) -> usize { target(value) }\nfn target(value: usize) -> usize { value }\n"
+                .to_owned(),
+        ),
+        ("src/inside/mod.rs", "pub fn quiet() {}\n".to_owned()),
+    ];
+    for (path, text) in &files {
+        let path = root.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "-qm", "fixture"]);
+    let scope = Path::new("src/inside");
+    let mut facts = Facts::load(
+        root.path(),
+        scope,
+        Facets {
+            history: true,
+            ..Facets::default()
+        },
+    )
+    .unwrap();
+    facts.metrics = Some(super::super::metrics::MetricsReport {
+        module_scores: BTreeMap::new(),
+        functions: Vec::new(),
+    });
+    let outside = detect::guard_families(&facts, Path::new("."));
+    assert_eq!(outside.len(), 1, "{outside:?}");
+    assert!(
+        detect::guard_families(&facts, scope).is_empty(),
+        "the family lives only outside the scope"
+    );
+    let verdict = |kind: &str, key: &str| {
+        format!("[[verdict]]\nkind = \"{kind}\"\nkey = '{key}'\nreason = \"probe\"\n\n")
+    };
+    std::fs::write(
+        root.path().join(TARGET_FILE),
+        format!(
+            "version = 5\nlayers = []\n\n{}{}{}{}{}{}",
+            verdict("guard", &outside[0].key),
+            verdict("guard", "gone.phase==Phase::Ready"),
+            verdict("item", "outside::cmd::run_private"),
+            verdict("item", "outside::cmd::gone"),
+            verdict("pass-through", "outside::cmd::forward"),
+            verdict("pass-through", "outside::cmd::run_private"),
+        ),
+    )
+    .unwrap();
+
+    let report = build_report(root.path(), &facts, scope, RankBy::default(), false).unwrap();
+
+    assert_eq!(
+        report.stale,
+        [
+            "guard:gone.phase==Phase::Ready",
+            "item:outside::cmd::gone",
+            "pass-through:outside::cmd::run_private",
+        ]
+    );
+    let output = render_markdown(&report, 20, &OutputArgs::default());
+    assert!(output.contains(
+        "stale verdict keys: guard:gone.phase==Phase::Ready, item:outside::cmd::gone, pass-through:outside::cmd::run_private"
+    ));
+    let json: serde_json::Value =
+        serde_json::from_str(&render_json(&report, &OutputArgs::default()).unwrap()).unwrap();
+    assert_eq!(
+        json["footer"]["stale_verdict_keys"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn scoped_assemblers_count_modules_outside_the_scope_by_top_module() {
+    let report = super::super::syntax::analyze_sources(
+        &[Source::new(
+            "crates/demo/src/cli/exec.rs",
+            "use crate::harness::launch;\nuse crate::store::open;\nuse crate::agents::catalog;\nfn run_exec() {\n    launch::start();\n    open();\n    catalog::load();\n    super::render::table();\n    self::helper();\n}\nfn inside_only() { super::render::table(); super::room::open(); self::helper(); }\nfn helper() {}\n",
+        )],
+        &BTreeSet::new(),
+    );
+    let known = [
+        "cli",
+        "cli::exec",
+        "cli::render",
+        "cli::room",
+        "harness",
+        "harness::launch",
+        "store",
+        "agents",
+        "agents::catalog",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+
+    let rows = assemblers(
+        &report.files,
+        &known,
+        &BTreeSet::new(),
+        Path::new("crates/demo/src/cli"),
+    );
+
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].function, "run_exec");
+    assert_eq!(
+        rows[0]
+            .providers
+            .iter()
+            .map(|provider| (provider.provider.as_str(), provider.sites))
+            .collect::<Vec<_>>(),
+        [
+            ("agents", 1),
+            ("cli/render", 1),
+            ("harness", 1),
+            ("store", 1)
+        ]
+    );
+    let mut output = String::new();
+    let report = Report {
+        path: PathBuf::from("crates/demo/src/cli"),
+        probes: Vec::new(),
+        rows: Vec::new(),
+        totals: Totals::default(),
+        hot: Vec::new(),
+        assemblers: rows,
+        debt: Debt::default(),
+        cycles: Vec::new(),
+        shapes: Vec::new(),
+        guards: Vec::new(),
+        history_commits: 0,
+        pace_window: 0,
+        parse_failures: 0,
+        shape_families_dropped: shapes::FamilyDrops::default(),
+        guard_families_dropped: detect::GuardDrops::default(),
+        suppressed: 0,
+        stale: Vec::new(),
+        ambiguous: Vec::new(),
+        ledger: LedgerNote::default(),
+    };
+    output.push_str(&render_markdown(
+        &report,
+        20,
+        &parse_args(&["--section".to_owned(), "assemblers".to_owned()])
+            .unwrap()
+            .unwrap()
+            .output,
+    ));
+    assert!(output.contains("1 functions call into 3+ modules (syntax-resolved"));
+}
+
+#[test]
+fn scoped_assemblers_keep_a_scope_row_apart_from_the_library_module_of_its_name() {
+    let report = super::super::syntax::analyze_sources(
+        &[Source::new(
+            "crates/demo/src/cli/reset.rs",
+            "use crate::room::Room;\nfn run() {\n    Room::open();\n    super::room::prompt();\n    crate::store::open();\n}\n",
+        )],
+        &BTreeSet::new(),
+    );
+    let known = ["cli", "cli::reset", "cli::room", "room", "store"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+
+    let rows = assemblers(
+        &report.files,
+        &known,
+        &BTreeSet::new(),
+        Path::new("crates/demo/src/cli"),
+    );
+
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        rows[0]
+            .providers
+            .iter()
+            .map(|provider| (provider.provider.as_str(), provider.sites))
+            .collect::<Vec<_>>(),
+        [("cli/room", 1), ("room", 1), ("store", 1)]
+    );
+}
+
+#[test]
+fn assemblers_resolve_callees_qualified_by_a_workspace_crate_name() {
+    let report = super::super::syntax::analyze_sources(
+        &[Source::new(
+            "crates/demo/src/cli/exec.rs",
+            "fn run_exec() {\n    demo::harness::launch::compile();\n    demo::store::run::RunRecord::load();\n    demo::agents::list();\n    demo::Store::open();\n    other::harness::start();\n}\n",
+        )],
+        &BTreeSet::from(["demo".to_owned()]),
+    );
+    let known = [
+        "cli",
+        "cli::exec",
+        "harness",
+        "harness::launch",
+        "store",
+        "store::run",
+        "agents",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+    let wiring = |crate_names: &BTreeSet<String>, scope: &str| {
+        assemblers(&report.files, &known, crate_names, Path::new(scope))
+            .into_iter()
+            .map(|row| {
+                row.providers
+                    .into_iter()
+                    .map(|provider| (provider.provider, provider.sites))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    // The library root reads `(root)` whatever the scope: a scoped run
+    // spells its own root `cli/(root)`, so the two never merge.
+    let expected = [
+        ("(root)".to_owned(), 1),
+        ("agents".to_owned(), 1),
+        ("harness".to_owned(), 1),
+        ("store".to_owned(), 1),
+    ];
+
+    let crate_names = BTreeSet::from(["demo".to_owned()]);
+    assert_eq!(
+        wiring(&crate_names, "crates/demo/src/cli"),
+        [expected.to_vec()]
+    );
+    assert_eq!(wiring(&crate_names, "crates/demo/src"), [expected.to_vec()]);
+    assert!(wiring(&BTreeSet::new(), "crates/demo/src/cli").is_empty());
+}
+
+#[test]
+fn stale_item_keys_resolve_private_items_owner_keys_and_child_module_methods() {
+    let root = tempfile::tempdir().unwrap();
+    for (path, text) in [
+        (
+            "Cargo.toml",
+            "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        ),
+        (
+            "src/lib.rs",
+            "mod disk;\nmod lsp;\nmod mux;\nmod sidebar;\n",
+        ),
+        ("src/disk.rs", "mod usage;\n"),
+        (
+            "src/disk/usage.rs",
+            "struct FileIdentity {\n    dev: u64,\n}\nenum RequiredDecision {\n    Run,\n}\n",
+        ),
+        (
+            "src/sidebar/mod.rs",
+            "trait SidebarMux {}\nstruct Shared {}\n",
+        ),
+        ("src/sidebar/view.rs", "pub struct Shared;\n"),
+        ("src/lsp.rs", "mod check;\n"),
+        (
+            "src/lsp/check.rs",
+            "pub struct Report;\nimpl Report {\n    pub fn render(&self) {}\n}\n",
+        ),
+        ("src/mux.rs", "mod zellij;\n"),
+        ("src/mux/zellij.rs", "mod presence;\n"),
+        (
+            "src/mux/zellij/presence.rs",
+            "pub struct Zellij;\nimpl Zellij {\n    pub fn converge_presence_plugin_for(&self) {}\n}\n",
+        ),
+    ] {
+        let path = root.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let facts = Facts::load(root.path(), Path::new("src"), Facets::default()).unwrap();
+    let verdict = |key: &str| super::super::target::Verdict {
+        kind: VerdictKind::Item,
+        key: key.to_owned(),
+        reason: "probe".to_owned(),
+    };
+    let target = Target {
+        version: 5,
+        layers: Vec::new(),
+        modules: Vec::new(),
+        strangler: Vec::new(),
+        verdicts: [
+            "disk::usage::FileIdentity",
+            "disk::usage::RequiredDecision",
+            "sidebar::SidebarMux",
+            "sidebar::Shared",
+            "lsp::check::Report::render",
+            "lsp::check::render",
+            "lsp::check::Other::render",
+            "mux::zellij::converge_presence_plugin_for",
+            "mux::zellij::converge_gone",
+            "disk::usage::Gone",
+        ]
+        .map(verdict)
+        .to_vec(),
+    };
+
+    let check = verdict_key_check(&target, &facts, false);
+    assert_eq!(
+        check.stale,
+        [
+            "item:disk::usage::Gone",
+            "item:lsp::check::Other::render",
+            "item:mux::zellij::converge_gone",
+        ]
+    );
+    assert!(check.ambiguous.is_empty(), "{:?}", check.ambiguous);
+}
+
+#[test]
+fn root_rows_count_the_commits_of_the_root_file_they_head() {
+    let root = tempfile::tempdir().unwrap();
+    for path in [
+        "crates/demo/src/lib.rs",
+        "crates/demo/src/main.rs",
+        "crates/demo/src/cli/mod.rs",
+        "crates/demo/src/mux.rs",
+        "crates/demo/src/mux/zellij.rs",
+    ] {
+        let path = root.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "\n").unwrap();
+    }
+    let paths = |scope: &str, row: &str| {
+        row_history_paths(root.path(), Path::new(scope), row)
+            .into_iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        paths("crates/demo/src/cli", "(root)"),
+        ["crates/demo/src/cli/mod.rs"]
+    );
+    assert_eq!(
+        paths("crates/demo/src/mux", "(root)"),
+        ["crates/demo/src/mux.rs"]
+    );
+    assert_eq!(
+        paths("crates/demo/src", "(root)"),
+        ["crates/demo/src/lib.rs", "crates/demo/src/main.rs"]
+    );
+    assert_eq!(
+        paths("crates/demo/src", "cli/(root)"),
+        ["crates/demo/src/cli/mod.rs"]
+    );
+    assert_eq!(
+        paths("crates/demo/src", "cli/remote"),
+        [
+            "crates/demo/src/cli/remote",
+            "crates/demo/src/cli/remote.rs"
+        ]
+    );
+
+    // The decision the path feeds: a scoped `(root)` hold reopens once its
+    // root file's commits reach the count.
+    git(root.path(), &["init", "-q"]);
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "-qm", "base"]);
+    let base = git(root.path(), &["rev-parse", "HEAD"]);
+    for step in 0..2 {
+        std::fs::write(
+            root.path().join("crates/demo/src/cli/mod.rs"),
+            format!("// {step}\n"),
+        )
+        .unwrap();
+        git(root.path(), &["commit", "-qam", "touch cli root"]);
+    }
+    let ledger_path = root.path().join(LEDGER_FILE);
+    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &ledger_path,
+        format!(
+            "## Module verdicts\n\n| module | status | sha | reopen at | note |\n| --- | --- | --- | --- | --- |\n| `cli/(root)` | holds | {base} | 2 | reviewed |\n"
+        ),
+    )
+    .unwrap();
+    let ledger = ledger::load(root.path()).unwrap().unwrap();
+    let mut rows = vec![Row {
+        module: "(root)".to_owned(),
+        ..Row::default()
+    }];
+    let mut problems = Vec::new();
+
+    flag_held_rows(
+        root.path(),
+        Path::new("crates/demo/src/cli"),
+        &ledger,
+        &mut rows,
+        &mut problems,
+    );
+
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(rows[0].flags, [REOPEN_FLAG]);
+}
+
+#[test]
+fn ambiguous_verdict_keys_are_reported_beside_stale_ones() {
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "-q"]);
+    for (path, text) in [
+        (
+            "Cargo.toml",
+            "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        ),
+        ("src/lib.rs", "mod store;\n"),
+        (
+            "src/store.rs",
+            "pub struct Left;\npub struct Right;\nimpl Left {\n    /// Opens.\n    pub fn open() {}\n    /// Forwards.\n    fn forward(value: usize) -> usize {\n        target(value)\n    }\n}\nimpl Right {\n    pub fn open() {}\n    fn forward(value: usize) -> usize {\n        target(value)\n    }\n}\nfn relay(value: usize) -> usize {\n    target(value)\n}\nfn target(value: usize) -> usize {\n    value\n}\n",
+        ),
+    ] {
+        let path = root.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "-qm", "fixture"]);
+    let verdict = |kind: &str, key: &str| {
+        format!("[[verdict]]\nkind = \"{kind}\"\nkey = '{key}'\nreason = \"probe\"\n\n")
+    };
+    std::fs::write(
+        root.path().join(TARGET_FILE),
+        format!(
+            "version = 5\nlayers = []\n\n{}{}{}{}{}",
+            verdict("item", "store::open"),
+            verdict("item", "store::Left::open"),
+            verdict("pass-through", "store::forward"),
+            verdict("pass-through", "store::Left::forward"),
+            verdict("pass-through", "store::relay"),
+        ),
+    )
+    .unwrap();
+    let mut facts = Facts::load(
+        root.path(),
+        Path::new("src"),
+        Facets {
+            history: true,
+            ..Facets::default()
+        },
+    )
+    .unwrap();
+    facts.metrics = Some(super::super::metrics::MetricsReport {
+        module_scores: BTreeMap::new(),
+        functions: Vec::new(),
+    });
+
+    let report = build_report(
+        root.path(),
+        &facts,
+        Path::new("src"),
+        RankBy::default(),
+        false,
+    )
+    .unwrap();
+
+    assert!(report.stale.is_empty(), "{:?}", report.stale);
+    assert_eq!(report.ambiguous.len(), 2, "{:?}", report.ambiguous);
+    assert!(
+        report.ambiguous[0].starts_with(
+            "item:store::open — ambiguous: 2 visible items named open: src/store.rs:5 (owner Left), src/store.rs:12 (owner Right)"
+        ),
+        "{:?}",
+        report.ambiguous
+    );
+    assert!(
+        report.ambiguous[1].starts_with(
+            "pass-through:store::forward — ambiguous: 2 production functions named forward"
+        ),
+        "{:?}",
+        report.ambiguous
+    );
+    let output = render_markdown(&report, 20, &OutputArgs::default());
+    assert!(output.contains("stale verdict keys: none\nambiguous verdict keys: item:store::open"));
+    let json: serde_json::Value =
+        serde_json::from_str(&render_json(&report, &OutputArgs::default()).unwrap()).unwrap();
+    assert_eq!(
+        json["footer"]["ambiguous_verdict_keys"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let mut clean = report;
+    clean.ambiguous.clear();
+    let output = render_markdown(&clean, 20, &OutputArgs::default());
+    assert!(output.contains("stale verdict keys: none\nambiguous verdict keys: none"));
+    clean.stale.push("item:store::gone".to_owned());
+    let output = render_markdown(&clean, 20, &OutputArgs::default());
+    assert!(
+        !output.contains("ambiguous verdict keys"),
+        "a clean ambiguous line prints only beside a `none` stale line"
+    );
+}
+
+#[test]
+fn shape_keys_one_view_forms_several_families_under_are_collisions() {
+    let family = |name: &str, path: &str| ShapeFamily {
+        name: name.to_owned(),
+        members: vec![Member {
+            path: PathBuf::from(path),
+            line: 3,
+            name: "load".to_owned(),
+            sloc: 20,
+        }],
+        files: 1,
+        mean_sloc: 20.0,
+        sloc_in_play: 20.0,
+        score: 1.0,
+        siblings: 0,
+        role: None,
+        provider: None,
+    };
+
+    let collisions = shape_collisions_in(&[
+        family("load+parse", "src/a.rs"),
+        family("load+parse", "src/b.rs"),
+        family("walk", "src/c.rs"),
+    ]);
+
+    assert_eq!(
+        collisions.into_iter().collect::<Vec<_>>(),
+        [(
+            "load+parse".to_owned(),
+            vec![
+                "src/a.rs:3 (load)".to_owned(),
+                "src/b.rs:3 (load)".to_owned()
+            ]
+        )]
+    );
 }

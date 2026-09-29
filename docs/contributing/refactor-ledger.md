@@ -1,37 +1,16 @@
 # Refactor ledger
 
-The memory between passes of the [refactor program](./refactor-program.md): where the program stands, what has been reviewed, and which upward edges are intended. A pass reads it first and edits it last. `cargo xtask atlas survey` parses the tables under `## Module verdicts` and `## Admission intents` (`xtask/src/atlas/ledger.rs`), so their column shapes are a contract; the other sections are prose. Keep every note to one clause: the code is the result, and commits and PRs are the history.
+The memory between passes of the [refactor program](./refactor-program.md): where the program stands, what has been reviewed, and which upward edges are intended. A pass reads it first and edits it last. `cargo xtask atlas survey` parses the tables under `## Module verdicts` and `## Admission intents` (`xtask/src/atlas/ledger.rs`), so their column shapes are a contract; the other sections are prose. The ledger holds state, not history: each pass rewrites Status whole, and its figures go in its PR and record commit. Keep every note to one clause.
 
 ## Status
 
-Pass 30b records source tip `a0351234c` (base `c475fff2e`), a tooling pass for thin-cli moves. The pass contract gains a `[[cx]]` row (a function key `module::name` or `module::Owner::name`, or a path sum, capped by `max` and measured on both sides from source snapshots) and `kind = "thin-cli"`, whose `cli thinning` row requires a cx item row under `cli` capped below its base. Production SLOC is +216 against a +220 tooling ceiling; `xtask/src/atlas/diff.rs` cx rises from 15.5 to 23.4 at its cap. A throwaway trial moved `cli::loop_cmd::run_one` into `harness::schedule`, and the bin-to-lib `[[rehome]]` row landed with no atlas fix; a fixture test now pins that. New CLI submodule surface budgets are set at their measured values: `cli/supervised` 48, `cli/agents_cmd/mod.rs` 24, `cli/agents_cmd/exec.rs` 13, `cli/transcript` 18, `cli/room` 12. `cli/render` takes no rule: it is the shared presentation hub, and view-model splits widen it by design. Binary modules receive no ledger row.
-
-Pass 29f records source tip `4e6f8e56b` (base `1b77ddd4f`, rebased onto trunk `952deece7`): exact agent identity lookups resolve through `find_agent`, `live_agent_pane` and `TeamCohort::contains`; extra-condition predicates keep their own spelling. Production SLOC falls from 38709 to 38644 (−65 against the contract's −50 ceiling). This call-site collapse re-reviews no module interior, so module verdict rows stay unchanged. Scoped tightening leaves the address and store budgets unchanged.
-
-Pass 29g records source tip `59a304ec1` (base `1b77ddd4f`): `SectionOrigin` and its `(TranscriptKind, from)` entry encoding move from `store/message` and the turn-start hook into `transcript`, beside the `TranscriptEntry::origin` read side, with the first round-trip test of the origin invariant. Production SLOC +0 against a +5 seam ceiling (the method's signature and doc and store's new import, paid for by the hook's inline table); test SLOC +47. Escaping surface: `store` budget 335 → 334 (`store/message.rs` 86 → 85), `transcript.rs` 22 → 24. The `store → transcript` edge is downward, 0 → 1 site, with no admission.
-
-Pass 29d records source tip `bf47c4ab8` (base `221c53578`, rebased onto trunk `eb03b2204`): both supervisors share master ownership, each web round settles once, and recovery frames own the panel rows. `cli/remote` cx falls from 34.0 to 1.4; `remote` remains 0.0. The four hotspots' base/final cx are `run_supervised_web` 12.0/0.0, `supervise_remote` 9.8/0.8, `display_rows` 6.7/0.0 and `wait_for_master` 5.5/0.6. The two residuals are SLOC-only, held by item verdicts; ordered screen teardown and shared tty restoration retain pass-through verdicts. Production SLOC falls by 154 against the contract's ceiling of −80. Binary modules receive no ledger row.
-
-Pass 29e records source tip `2251c6f2e` (base `c42d760e8`): shared rate-limit fusion and producer bookkeeping reduce `sidebar/refresh` cx from 27.1 to 16.7; collapsed worktree header, pipeline and tail representations reduce `sidebar_pane/render/sections` cx from 42.1 to 30.5. Both modules were deliberately reopened for this complexity review, not churned past their rows' count. Production SLOC falls by 47 against the contract's 30-line reduction floor, with no stored/wire or snapshot changes. The four target functions retain item verdicts for their distinct pinned policies; the untouched finished roster retains cx 1.2. The two reviewed modules have no individual surface-budget rules to tighten; their parent budgets stay unchanged.
-
-Pass 29c records `cli/doctor` on `66bc4cffe` (rebased base `c42d760e8`): cx 33.0 → 15.4, with `scan_tail` 13.1 → 0.4 and `collect_remote_control` 4.9 → 0; unchanged residuals are `render_lsp` 9.7, `render_mux` 1.8, `collect_mux` 1.1, `diagnose_zellij_log_record` 1.6, `presence_plugins_view` 0.4 and `classify_diagnostic` 0.4. Production SLOC falls by 85 against the contract's −50 ceiling. Seven item verdicts hold the residuals; binary modules receive no ledger row. Providers were judged and left untouched because they already own their probes and doctor owns grouping and presentation. `collect_loop` was deferred as fresh (`f13109387`).
-
-Pass 29b records source tip `eba365a6b` (base `221c53578`, rebased onto trunk `b426db4f4`): newly terminal non-peer spend settlement belongs to `harness/run`, and hooks share the exact rollup agent lookup in `store/snapshot`. Base to gated tree cx: `handle_lifecycle_hook` 13.6 to 12.7, `record_conversation` 13.7 to 10.6, and `cli/hooks` 32.2 to 28.2. Production SLOC falls by 44 against the 40-line minimum. The two item verdicts retain ordered phases and origin policy, refining pass 28g: repeated projections, root-tool eligibility, origin back-projection and response finalization were not inherent. The hook's cognitive complexity rises from 28 to 29 despite the local deletions. Binary modules receive no ledger row; the `harness/run` row names this branch's parent and needs re-stamping at merge.
-
-Round 28 (passes 28a to 28g) landed. Against the round base `27c50ce2d`, current module cx is `mux/zellij` 53.5 to 30.3, `store/snapshot` 34.2 to 24.3, `harness/schedule` 35.5 to 29.1, `cli/hooks` 58.0 to 32.2, and `cli/room` 22.3 to 16.3. Pass 28b shares the pixel wire; passes 28c to 28f deepen Zellij balancing, snapshot folding, schedule gates, and launch preflight. Pass 28g moves lifecycle reaction into `harness/team_stage`, whose cx is 12.5 against the planned ceiling of 5; its per-event order remains held by an item verdict. Binary modules receive no ledger row.
-
-Round 29 is in flight: 29a resolves rewritten ledger SHAs and repairs the round-28 records; 29b reviews `cli/hooks` deferrals and lifecycle cx; 29c reviews `cli/doctor`; 29d reviews `cli/remote`; 29e reviews sidebar.
-
-Survey on the pass 29a tree (merge base `b426db4f4` plus pass 29a, 2026-09-28): 4548 scoped commits (pace window 1137), 24 admission intents and 234 holds; no parse failures, ledger problems, pending restamps, stale verdict keys or open families. It suppresses 14 families; shape filters drop 9 standard-vocabulary families, 32 below the finding gate and 7 single-module APIs; guard filters drop 149 standard idioms and 19 predicate uses. Rewrite the Status paragraphs whenever a pass ends. The Reopened and Row SHAs bullets keep their meaning: a pass adds its own entries and removes only entries it resolved.
-
-- **Seam queue: empty.** Twelve seams landed in passes 1 to 28b. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
-- **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
-- **Reopened** (churn past the row's count): none; all 11 repaired modules are held.
-- **Never reviewed:** no production library module is unheld; binary modules and test-only rows carry no hold.
+- **Survey:** base `0d803fd02`, after pass 30b: 4605 scoped commits (pace window 1152), 24 admission intents, 234 holds; no parse failures, ledger problems, pending restamps, stale or ambiguous verdict keys, or open families (14 suppressed by verdict).
+- **Seam queue:** empty. A seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
+- **Reopened:** `agents/state` and `agents/(root)` (scoped churn past its row's count; `(root)` rows count their root file's commits since the history-path fix).
+- **Never reviewed:** `config/tiers`. Binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
-- **Row SHAs:** the survey resolves an unreachable SHA to the oldest trunk commit that changed its occurrence count in this ledger; `survey --restamp` writes the resolved cells. An unresolved SHA remains a ledger problem and leaves its module unheld. Pass 29a repairs 11 rows from passes 28b to 28f to their landed record commits. Pass 29e's `sidebar/refresh` and `sidebar_pane/render/sections` rows carry branch parent `2251c6f2e`; the merge must re-stamp both. Pass 29d's `remote` row carries branch parent `bf47c4ab8`; the merge must re-stamp it.
-- **Pass 29d verdict diagnostics:** `inspect` reports the private `wait_for_master` item verdict as stale because its validator searches only visibility-qualified items. Drop verdict keys omit the owner to match the validator, unlike the owner-qualified names printed by `inspect`.
-- **Unjudged families:** none; no stale verdict keys.
+- **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
+- **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 48, `cli/agents_cmd/mod.rs` 24, `cli/transcript` 18, `cli/agents_cmd/exec.rs` 13, `cli/room` 12); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
 
 ## Module verdicts
 
@@ -143,7 +122,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/launch` | holds | `f4084e548` | 30 | fresh requests and the private pane-identity key table keep the exec wire unchanged. |
 | `harness/spec` | holds; landed pass-20a | `4d7889261` | 30 | layout parse family stays `pub`. |
 | `harness/budget` | holds; landed pass-20a | `4d7889261` | 30 | evaluation private; ledger types are signature types. |
-| `harness/run` | holds; landed pass-29b | `eba365a6b` | 30 | newly terminal non-peer spend and owed-wake assembly stay behind lifecycle settlement; spend recording is private. |
+| `harness/run` | holds; landed pass-29b | `74fd1e168` | 30 | newly terminal non-peer spend and owed-wake assembly stay behind lifecycle settlement; spend recording is private. |
 | `harness/rebirth` | holds; landed pass-23b | `25faa1bf6` | 30 | `materialize` returns the plan; types floored by `room::RoomContext::inspect_rebirth`. |
 | `harness/auto_continue` | holds; landed pass-25 | `4a82d6b28` | 30 | `message` admission on `ResumeUnrecovered` held by intent. |
 | `harness/auto_redeem` | holds; landed pass-25 | `4a82d6b28` | 30 | `AutoRedeemErr`/`Redeemed` are the CLI entry's error and return. |
@@ -195,13 +174,13 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `pane` | holds; landed pass-24a | `2a9ec66e5` | 30 | owns `ClientPaneView`; `proc` cycle by intent. |
 | `proc` | holds; landed pass-25 | `4a82d6b28` | 30 | platform seams, bounded execution and pane-probe abstention hold. |
 | `reload` | holds; landed pass-23c | `1830bd0c6` | 30 | one durable staged-build path. |
-| `remote` | holds; landed pass-21a; pass-29d | `bf47c4ab8` | 30 | pure transitions here, drivers in `cli/remote`; recovery frame owns the panel's row model. |
+| `remote` | holds; landed pass-21a; pass-29d | `85448a2f5` | 30 | pure transitions here, drivers in `cli/remote`; recovery frame owns the panel's row model. |
 | `remote_control` | holds; landed pass-15c | `944c8120e` | 30 | one enable preflight; typed snapshot and batch toggle. |
 | `room` | holds; landed pass-28f | `f4084e548` | 30 | owns live-tab admission and managed birth with source-specific ownership. |
 | `sandbox` | holds; landed pass-28f | `f4084e548` | 30 | launch preflight admits skills before probing isolation. |
 | `sidebar` | landed pass-4 | — | — | election, fusion, refresh lanes, own cadences; interiors have rows. |
 | `sidebar/(root)` | holds; landed pass-23c | `1830bd0c6` | 30 | one data plane; `pub` items are binary, bench or integration reached, or signature floors. |
-| `sidebar/refresh` | holds; landed pass-29e | `2251c6f2e` | 30 | one rate-limit transaction and one `pub` account-cache publish entry, sharing keyed fusion behind one producer/login boundary. |
+| `sidebar/refresh` | holds; landed pass-29e | `eb03b2204` | 30 | one rate-limit transaction and one `pub` account-cache publish entry, sharing keyed fusion behind one producer/login boundary. |
 | `sidebar/consumer` | holds; landed pass-23c | `1830bd0c6` | 30 | two readers `pub` for the hotpath bench. |
 | `sidebar/frame` | holds; landed pass-23c | `1830bd0c6` | 30 | `PaneFrame` wire public field by field. |
 | `sidebar/produce` | holds; landed pass-17a | `78fa580ea` | 30 | named entries, no fold-mode core. |
@@ -229,7 +208,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar_pane/render/animation` | holds; landed pass-26b | `be91f3434` | 30 | cadence decision is now render's, contradicting pass 23c. |
 | `sidebar_pane/render/(root)` | holds; landed pass-26b | `be91f3434` | 30 | one live draw entry and pane-reach selectors. |
 | `sidebar_pane/render/compose` | holds; landed pass-18b | `045f8bfe6` | 30 | render bundle; frame types at pane reach. |
-| `sidebar_pane/render/sections` | holds; landed pass-29e | `2251c6f2e` | 30 | collapsed header and pipeline representations with pinned width and hit regions. |
+| `sidebar_pane/render/sections` | holds; landed pass-29e | `eb03b2204` | 30 | collapsed header and pipeline representations with pinned width and hit regions. |
 | `sidebar_pane/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `sidebar_pane/view` | holds; landed pass-24c | `e083557ba` | 30 | the pane's body projection; row cap read by the CLI fixture. |
 | `sidebar_pane/render/ui_state` | holds; landed pass-26b | `be91f3434` | 30 | pane-reach state owns the active roster projection. |
@@ -244,7 +223,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `store/snapshot` | holds; landed pass-28d | `b93ab174a` | 30 | view model crate-wide because the renderer decodes it; local-bind cascade and lifecycle fold inherent. |
 | `store/writer` | holds; landed pass-27b | `52b2358b0` | 30 | one log boundary; one queue terminal step; one lifecycle staging path. |
 | `store/event` | holds; landed pass-21b | `5e6580fb0` | 30 | legacy `message.removed` parse holds. |
-| `store/message` | holds; landed pass-21b; pass-29g | `59a304ec1` | 30 | submitted-prompt classifier, header grammar and codec hold; author vocabulary lives in `transcript`. |
+| `store/message` | holds; landed pass-21b; pass-29g | `0df251b8a` | 30 | submitted-prompt classifier, header grammar and codec hold; author vocabulary lives in `transcript`. |
 | `store/gc` | holds; landed pass-21b | `5e6580fb0` | 30 | exporter check pinned by `b58b6594c`. |
 | `store/event_log` | holds; landed pass-25 | `4a82d6b28` | 30 | the store's own write path; incremental read `pub(crate)` for the reply poll. |
 | `store/sidecar` | holds; landed pass-23a | `250f10820` | 30 | store-internal; digest `pub(crate)` for the harness. |
@@ -257,7 +236,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `store/run` | holds | `250f10820` | 30 | `WakeupFrame` is the pinned run-wake wire. |
 | `store/active_time` | holds | `250f10820` | 30 | floored by `read_for_keys`. |
 | `theme` | holds; landed pass-22b | `339310452` | 30 | every re-export has an outside reader; OKLab blends private. |
-| `transcript` | holds; landed pass-24a; pass-29g | `59a304ec1` | 30 | `SectionOrigin` and its entry encoding sit beside `origin()`. |
+| `transcript` | holds; landed pass-24a; pass-29g | `0df251b8a` | 30 | `SectionOrigin` and its entry encoding sit beside `origin()`. |
 | `trust` | holds; landed pass-22b | `339310452` | 30 | `_with_roots` seams private except `grant_with_roots`. |
 | `wakeup` | holds; landed pass-24a | `2a9ec66e5` | 30 | the sidebar wire at L2 below `store`. |
 | `web` | holds; landed pass-28b | `83b184ffb` | 30 | `pixel_ttyd_pids` is the renderer's one read of current-page ttyd daemons. |
@@ -311,20 +290,21 @@ One row per intended upward edge, `` `from` → `to` `` with an optional `to::{a
 
 ## Open deferrals
 
-Candidates a pass judged real but could not land, each with what unblocks it.
+Refactor candidates a pass judged real but could not land, each with its concrete blocker. Pace is not a blocker: a candidate in a module under feature work is picked, and its conflicts are resolved at merge. Compiler-refused narrowings (atlas caveat 13) are never deferrals; do not re-plan them from `inspect`'s `narrow to` column.
 
 - `harness/team_stage` ↔ `cli/teams`: trusted team loading remains duplicated; sharing it needs a typed harness error and a pass owning the CLI flip caller.
 - `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
 - `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
 - `agents/adapters/codex`: `cap_turn_error_label` and `TURN_ERROR_LABEL_MAX` copy Claude's `statusline` pair word for word; a shared helper beside `TurnErrorClass::classify_label` in `agents/context` lands with a pass owning codex or `agents/context`.
-- `config/definitions`: one load context for the seven-argument `Resolver::new` and the `SeatLoader` repack, plus one safe-name predicate (about −20 SLOC). Waits for the module's pace to drop below hot.
+- `config/definitions`: one load context for the seven-argument `Resolver::new` and the `SeatLoader` repack, plus one safe-name predicate (about −20 SLOC). Ready for a pass owning `config/definitions`.
 - `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
-- `agents/attribution`: a `testkit` fixture builder would let five report types narrow. Waits for its `fix(attribution)` churn to settle.
-- `disk`: the `StatePaths`/`RuntimePaths` constructor family (5 + 8, ~460 test sites on `under`/`under_named`) → `for_project_root(root, home)`, `for_workspace(id, home)`, `RuntimePaths::for_state(state, runtime_root)`. Waits for a round with no concurrent passes.
+- `agents/attribution`: a `testkit` fixture builder would let five report types narrow. Ready for a pass owning `agents/attribution`.
+- `disk`: the `StatePaths`/`RuntimePaths` constructor family (5 + 8, ~460 test sites on `under`/`under_named`) → `for_project_root(root, home)`, `for_workspace(id, home)`, `RuntimePaths::for_state(state, runtime_root)`. Ready; it touches about 460 test sites across the crate, so it runs as its own pass and merges last in its round.
 - `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Waits for a `store/snapshot` or `disk` pass that takes cache identity in scope.
 - `ids::ViewId::as_str`: no production reader, `dead_code` blocks narrowing, tests hold it. Wait for a pass on `sidebar/produce`.
+- `sandbox::prepare`: no production caller; only the integration tests call it (six sites in `tests/integration/sandbox.rs`), for `plan` then `apply`. Deleting it and having those tests call the pair drops one escaping item. Ready for a pass owning `sandbox`.
+- `config::glyphs::GlyphRole::namespaced_name`: no production caller; only the `theme::glyphs` tests read it (five sites), and they can format `namespace` and `name` themselves. Ready for a pass owning `config/glyphs`.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
 - Reported, not fixed: Codex transcript lookup ignores `CODEX_HOME`, substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.
-- Compiler-refused narrowings (atlas caveat 13) are never deferrals; do not re-plan them from `inspect`'s `narrow to` column.

@@ -16,7 +16,7 @@ use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind};
 use super::shapes::{self, ShapeFamily};
 use super::sources::SourceKind;
-use super::syntax::{FileSyntax, resolved_internal_import};
+use super::syntax::{FileSyntax, FnBody, PrivateItem, resolved_internal_import};
 use super::target::{self, ModuleRule, TARGET_FILE, Target, Verdict, VerdictKind};
 use super::{positive_usize, set_once, value};
 
@@ -139,7 +139,9 @@ struct ItemCandidate {
 
 #[derive(Clone, Debug, Default, Serialize)]
 struct VerdictDiagnostics {
+    #[serde(rename = "stale_verdict_keys")]
     stale: Vec<String>,
+    #[serde(rename = "ambiguous_verdict_keys")]
     ambiguous: Vec<String>,
 }
 
@@ -196,6 +198,7 @@ struct Footer {
     parse_failures: usize,
     unresolved_definitions: usize,
     declaration_only: usize,
+    #[serde(flatten)]
     verdicts: VerdictDiagnostics,
 }
 
@@ -236,13 +239,31 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
             ..Facets::default()
         },
     )?;
-    let module = resolve_module(
+    let module = match resolve_module(
         root,
         &facts.syntax.files,
         &args.module,
         "inspect",
         "--module",
-    )?;
+    ) {
+        Ok(module) => module,
+        Err(error) => {
+            // `--item module::Owner::name` implies `module::Owner`, a type:
+            // its module is one segment up.
+            let implied = args
+                .item
+                .as_deref()
+                .and_then(|key| key.rsplit_once("::"))
+                .is_some_and(|(module, _)| module == args.module);
+            match args.module.rsplit_once("::") {
+                Some((parent, _)) if implied => {
+                    resolve_module(root, &facts.syntax.files, parent, "inspect", "--module")
+                        .map_err(|_| error)?
+                }
+                _ => return Err(error),
+            }
+        }
+    };
     let references = facts
         .references
         .as_ref()
@@ -699,77 +720,95 @@ fn rule_row(rule: &ModuleRule, ranks: &super::target::LayerRanks, from: &str, to
 }
 
 fn stale_module_verdicts(target: &Target, module: &str, facts: &Facts) -> VerdictDiagnostics {
-    let pass_throughs = detect::passthroughs(facts, Path::new("."))
-        .into_iter()
-        .fold(
-            BTreeMap::<String, Vec<ItemCandidate>>::new(),
-            |mut rows, row| {
-                let owner = facts
-                    .syntax
-                    .files
-                    .iter()
-                    .find(|file| file.path == row.path)
-                    .and_then(|file| function_owner(file, &row.name, row.line));
-                rows.entry(format!("{}::{}", row.module, row.name))
-                    .or_default()
-                    .push(ItemCandidate {
-                        path: row.path,
-                        line: row.line,
-                        owner,
-                    });
-                rows
-            },
-        );
-    let items = public_item_candidates(facts);
-    let mut diagnostics = VerdictDiagnostics::default();
-    for verdict in target.verdicts.iter().filter(|verdict| {
-        matches!(verdict.kind, VerdictKind::Item | VerdictKind::PassThrough)
-            && (verdict.key == module || verdict.key.starts_with(&format!("{module}::")))
-    }) {
-        let candidates = match verdict.kind {
-            VerdictKind::Item => items.get(&verdict.key),
-            VerdictKind::PassThrough => pass_throughs.get(&verdict.key),
-            _ => None,
-        };
-        let label = format!("{:?}:{}", verdict.kind, verdict.key);
-        match candidates.map(Vec::as_slice).unwrap_or_default() {
-            [] => diagnostics.stale.push(label),
-            candidates if candidates.len() > 1 => diagnostics
-                .ambiguous
-                .push(format!("{label} — {}", ambiguity(&verdict.key, candidates))),
-            _ => {}
-        }
-    }
+    let check = check_item_verdicts(target, module, facts);
+    let label = |verdict: &Verdict| format!("{:?}:{}", verdict.kind, verdict.key);
+    let mut diagnostics = VerdictDiagnostics {
+        stale: check.stale.into_iter().map(label).collect(),
+        ambiguous: check
+            .ambiguous
+            .into_iter()
+            .map(|(verdict, ambiguity)| format!("{} — {ambiguity}", label(verdict)))
+            .collect(),
+    };
     diagnostics.stale.sort();
     diagnostics.ambiguous.sort();
     diagnostics
 }
 
-fn public_item_candidates(facts: &Facts) -> BTreeMap<String, Vec<ItemCandidate>> {
-    let mut candidates = BTreeMap::<String, Vec<ItemCandidate>>::new();
-    for file in &facts.syntax.files {
-        for item in &file.pub_items {
-            candidates
-                .entry(format!("{}::{}", item.module, item.name))
-                .or_default()
-                .push(ItemCandidate {
-                    path: file.path.clone(),
-                    line: item.line,
-                    owner: function_owner(file, &item.name, item.line),
-                });
+/// How the item and pass-through verdicts under one module resolve: the
+/// ones whose key names nothing, and the ones whose key names several
+/// definitions, with the candidates spelled out.
+pub(super) struct ItemVerdictCheck<'a> {
+    pub(super) stale: Vec<&'a Verdict>,
+    pub(super) ambiguous: Vec<(&'a Verdict, String)>,
+}
+
+/// Resolves every item and pass-through verdict keyed at or under `module`
+/// (every one when `module` is the crate root, `""`) against the whole
+/// source set, through `modules::definitions_for_key`, the one resolver
+/// item keys share: a visible item, else a production function (a binary
+/// module records its decisions on private functions), else a private
+/// non-function item, in any key spelling. A key naming several definitions
+/// is ambiguous. A pass-through key resolves the same way and must name one
+/// definition that `detect::passthroughs` finds forwarding. Syntax-only, so
+/// `survey` shares it without an index.
+pub(super) fn check_item_verdicts<'a>(
+    target: &'a Target,
+    module: &str,
+    facts: &Facts,
+) -> ItemVerdictCheck<'a> {
+    let forwarding = detect::passthroughs(facts, Path::new("."))
+        .into_iter()
+        .map(|row| (row.path, row.line))
+        .collect::<BTreeSet<_>>();
+    let mut check = ItemVerdictCheck {
+        stale: Vec::new(),
+        ambiguous: Vec::new(),
+    };
+    for verdict in target.verdicts.iter().filter(|verdict| {
+        matches!(verdict.kind, VerdictKind::Item | VerdictKind::PassThrough)
+            && (module.is_empty()
+                || verdict.key == module
+                || verdict.key.starts_with(&format!("{module}::")))
+    }) {
+        let definitions = modules::definitions_for_key(&facts.syntax.files, &verdict.key);
+        match definitions.as_slice() {
+            [] => check.stale.push(verdict),
+            [definition] => {
+                let forwards = || {
+                    definition.function().is_some_and(|function| {
+                        forwarding.contains(&(definition.file.path.clone(), function.line))
+                    })
+                };
+                if verdict.kind == VerdictKind::PassThrough && !forwards() {
+                    check.stale.push(verdict);
+                }
+            }
+            definitions => check.ambiguous.push((
+                verdict,
+                ambiguity(
+                    &verdict.key,
+                    &candidates_of(definitions),
+                    definitions[0].resolved.noun(),
+                ),
+            )),
         }
     }
-    candidates
+    check
 }
 
-fn function_owner(file: &FileSyntax, name: &str, line: usize) -> Option<String> {
-    file.fns
+fn candidates_of(definitions: &[modules::KeyDefinition<'_>]) -> Vec<ItemCandidate> {
+    definitions
         .iter()
-        .find(|function| function.name == name && function.line == line)
-        .and_then(|function| function.owner.clone())
+        .map(|definition| ItemCandidate {
+            path: definition.file.path.clone(),
+            line: definition.line,
+            owner: definition.owner.map(str::to_owned),
+        })
+        .collect()
 }
 
-fn ambiguity(key: &str, candidates: &[ItemCandidate]) -> String {
+fn ambiguity(key: &str, candidates: &[ItemCandidate], noun: &str) -> String {
     let name = key.rsplit_once("::").map_or(key, |(_, name)| name);
     let locations = candidates
         .iter()
@@ -788,7 +827,7 @@ fn ambiguity(key: &str, candidates: &[ItemCandidate]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "ambiguous: {} public items named {name}: {locations}",
+        "ambiguous: {} {noun} named {name}: {locations}",
         candidates.len()
     )
 }
@@ -817,28 +856,31 @@ fn item_evidence(
             target.module
         );
     }
-    let matches = modules::items_for_key(&facts.syntax.files, &key)
-        .into_iter()
-        .filter(|(file, _)| target.matches(&file.module_path, &file.path))
-        .collect::<Vec<_>>();
-    if matches.len() > 1 {
-        let candidates = matches
-            .iter()
-            .map(|(file, item)| ItemCandidate {
-                path: file.path.clone(),
-                line: item.line,
-                owner: function_owner(file, &item.name, item.line),
-            })
-            .collect::<Vec<_>>();
-        bail!(
+    let matches = modules::definitions_for_key_where(&facts.syntax.files, &key, |file| {
+        target.matches(&file.module_path, &file.path)
+    });
+    let definition = match matches.as_slice() {
+        [] => bail!("atlas inspect --item `{key}` names no item or production function"),
+        [definition] => *definition,
+        definitions => bail!(
             "atlas inspect --item `{key}` is {}",
-            ambiguity(&key, &candidates)
-        );
-    }
-    let (file, item) = matches
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("atlas inspect --item `{key}` is not a public item"))?;
+            ambiguity(
+                &key,
+                &candidates_of(definitions),
+                definitions[0].resolved.noun()
+            )
+        ),
+    };
+    let file = definition.file;
+    let item = match definition.resolved {
+        modules::Resolved::Visible(item) => item,
+        modules::Resolved::Function(function) => {
+            return function_evidence(root, facts, target, configured, file, function);
+        }
+        modules::Resolved::Private(item) => {
+            return private_item_evidence(root, facts, target, configured, file, item);
+        }
+    };
     let (declared_file, declared) = (file, item);
     // A `pub use` has no references of its own: the evidence is the
     // definition it re-exports.
@@ -858,40 +900,16 @@ fn item_evidence(
         .references
         .as_ref()
         .expect("inspect loads exact references");
-    let referrer = |edge: &Edge| {
-        let module = reference_module_label(&edge.from, &target.module);
-        edge.from_fn.as_ref().map_or_else(
-            || format!("{module}::(outside any function)"),
-            |function| format!("{module}::{}", function.label),
-        )
-    };
-    let matching = references.edges.iter().filter(|edge| {
-        edge.kind == EdgeKind::Reference
-            && edge.item == name
-            && edge.to == item.module
-            && edge.to_line == item.line
-            && edge.to_path == file.path
-    });
-    let production_referrers = matching
-        .clone()
-        .filter(|edge| edge.site_kind == SourceKind::Production)
-        .map(referrer)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let testkit_referrers = matching
-        .clone()
-        .filter(|edge| edge.site_kind == SourceKind::TestSupport)
-        .map(referrer)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let test_referrers = matching
-        .filter(|edge| edge.site_kind == SourceKind::Test)
-        .map(referrer)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    let referrers = Referrers::collect(
+        &references.edges,
+        &target.module,
+        Definition {
+            name,
+            module: &item.module,
+            line: item.line,
+            path: &file.path,
+        },
+    );
     let commits = history::introducing_commits(root, &file.path, name)?;
     let markers = commit_markers(&commits);
     Ok(ItemEvidence {
@@ -904,12 +922,155 @@ fn item_evidence(
             declared.declared.clone()
         },
         effective_reach: facts.mod_index.effective_reach(declared_file, declared),
-        production_referrers,
-        testkit_referrers,
-        test_referrers,
+        production_referrers: referrers.production,
+        testkit_referrers: referrers.testkit,
+        test_referrers: referrers.test,
         commits,
         markers,
-        verdict: configured.and_then(|target| item_verdict(target, &key)),
+        verdict: configured.and_then(|target| {
+            definition_verdict(target, facts, &key, &declared_file.path, declared.line)
+        }),
+        key,
+    })
+}
+
+/// The definition an `--item` resolved to, as reference edges name it.
+#[derive(Clone, Copy)]
+struct Definition<'a> {
+    name: &'a str,
+    module: &'a str,
+    line: usize,
+    path: &'a Path,
+}
+
+/// The distinct functions referring to one definition, split by where the
+/// reference sits.
+struct Referrers {
+    production: Vec<String>,
+    testkit: Vec<String>,
+    test: Vec<String>,
+}
+
+impl Referrers {
+    fn collect(edges: &[Edge], target_module: &str, definition: Definition<'_>) -> Self {
+        let referrer = |edge: &Edge| {
+            let module = reference_module_label(&edge.from, target_module);
+            edge.from_fn.as_ref().map_or_else(
+                || format!("{module}::(outside any function)"),
+                |function| format!("{module}::{}", function.label),
+            )
+        };
+        let matching = edges.iter().filter(|edge| {
+            edge.kind == EdgeKind::Reference
+                && edge.item == definition.name
+                && edge.to == definition.module
+                && edge.to_line == definition.line
+                && edge.to_path == definition.path
+        });
+        let of_kind = |kind: SourceKind| {
+            matching
+                .clone()
+                .filter(|edge| edge.site_kind == kind)
+                .map(referrer)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        };
+        Self {
+            production: of_kind(SourceKind::Production),
+            testkit: of_kind(SourceKind::TestSupport),
+            test: of_kind(SourceKind::Test),
+        }
+    }
+}
+
+/// `--item` evidence for a production function no visibility-qualified item
+/// covers: the private functions a rehome or delete moves.
+fn function_evidence(
+    root: &Path,
+    facts: &Facts,
+    target: &ModuleSelector,
+    configured: Option<&Target>,
+    file: &FileSyntax,
+    function: &FnBody,
+) -> Result<ItemEvidence> {
+    let references = facts
+        .references
+        .as_ref()
+        .expect("inspect loads exact references");
+    let referrers = Referrers::collect(
+        &references.fn_edges,
+        &target.module,
+        Definition {
+            name: &function.name,
+            module: &file.module_path,
+            line: function.line,
+            path: &file.path,
+        },
+    );
+    let commits = history::introducing_commits(root, &file.path, &function.name)?;
+    let markers = commit_markers(&commits);
+    let verdict_key = format!("{}::{}", function.module, function.name);
+    Ok(ItemEvidence {
+        key: format!("{}::{}", function.module, function.label()),
+        path: file.path.clone(),
+        line: function.line,
+        sloc: function.sloc,
+        declared: "private".to_owned(),
+        effective_reach: function.module.clone(),
+        production_referrers: referrers.production,
+        testkit_referrers: referrers.testkit,
+        test_referrers: referrers.test,
+        commits,
+        markers,
+        verdict: configured.and_then(|target| {
+            definition_verdict(target, facts, &verdict_key, &file.path, function.line)
+        }),
+    })
+}
+
+/// `--item` evidence for a private non-function item: a private type,
+/// trait, const, static, or type alias. It reaches its own module, and its
+/// referrers come from the same private-definition edges a private function
+/// reads.
+fn private_item_evidence(
+    root: &Path,
+    facts: &Facts,
+    target: &ModuleSelector,
+    configured: Option<&Target>,
+    file: &FileSyntax,
+    item: &PrivateItem,
+) -> Result<ItemEvidence> {
+    let references = facts
+        .references
+        .as_ref()
+        .expect("inspect loads exact references");
+    let referrers = Referrers::collect(
+        &references.fn_edges,
+        &target.module,
+        Definition {
+            name: &item.name,
+            module: &item.module,
+            line: item.line,
+            path: &file.path,
+        },
+    );
+    let commits = history::introducing_commits(root, &file.path, &item.name)?;
+    let markers = commit_markers(&commits);
+    let key = format!("{}::{}", item.module, item.name);
+    Ok(ItemEvidence {
+        path: file.path.clone(),
+        line: item.line,
+        sloc: item.end_line.max(item.line) - item.line + 1,
+        declared: "private".to_owned(),
+        effective_reach: item.module.clone(),
+        production_referrers: referrers.production,
+        testkit_referrers: referrers.testkit,
+        test_referrers: referrers.test,
+        commits,
+        markers,
+        verdict: configured
+            .and_then(|target| definition_verdict(target, facts, &key, &file.path, item.line)),
         key,
     })
 }
@@ -932,6 +1093,31 @@ fn item_verdict(target: &Target, key: &str) -> Option<Verdict> {
         .iter()
         .find(|verdict| verdict.kind == VerdictKind::Item && verdict.key == key)
         .cloned()
+}
+
+/// The item verdict recorded on one definition: the verdict keyed by its
+/// canonical `key`, else any item verdict whose key, in whatever spelling,
+/// resolves to exactly that definition.
+fn definition_verdict(
+    target: &Target,
+    facts: &Facts,
+    key: &str,
+    path: &Path,
+    line: usize,
+) -> Option<Verdict> {
+    item_verdict(target, key).or_else(|| {
+        target
+            .verdicts
+            .iter()
+            .filter(|verdict| verdict.kind == VerdictKind::Item)
+            .find(|verdict| {
+                matches!(
+                    modules::definitions_for_key(&facts.syntax.files, &verdict.key).as_slice(),
+                    [definition] if definition.file.path == path && definition.line == line
+                )
+            })
+            .cloned()
+    })
 }
 
 fn render_json(report: &Report, output: &OutputArgs) -> Result<String> {
@@ -1167,18 +1353,14 @@ fn render_footer(out: &mut String, footer: &Footer, top: usize) {
         footer.declaration_only
     )
     .expect("writing to a String cannot fail");
-    writeln!(
-        out,
-        "stale item/pass-through verdicts: {}",
-        footer.verdicts.stale.len()
-    )
-    .expect("writing to a String cannot fail");
+    writeln!(out, "stale verdict keys: {}", footer.verdicts.stale.len())
+        .expect("writing to a String cannot fail");
     for key in &footer.verdicts.stale {
         writeln!(out, "- `{key}`").expect("writing to a String cannot fail");
     }
     writeln!(
         out,
-        "ambiguous item/pass-through verdicts: {}",
+        "ambiguous verdict keys: {}",
         footer.verdicts.ambiguous.len()
     )
     .expect("writing to a String cannot fail");

@@ -32,6 +32,28 @@ pub(super) struct PubItem {
     /// and the source name there (`*` for a glob).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) target: Option<UseTarget>,
+    /// The non-test `#[cfg(...)]` predicate gating the item, with its
+    /// enclosing `impl`, trait, or inline module; `None` when ungated.
+    #[serde(skip)]
+    pub(super) cfg: Option<String>,
+    /// Declared inside an `impl` or trait: a method rather than a free item.
+    #[serde(skip)]
+    pub(super) member: bool,
+}
+
+/// A production item no boundary visibility qualifies: a private type,
+/// trait, const, static, or type alias. Functions live in `FileSyntax::fns`,
+/// and private `mod` and `use` items are not recorded. An item key resolves
+/// here last, after visible items and production functions.
+#[derive(Clone, Debug)]
+pub(super) struct PrivateItem {
+    pub(super) module: String,
+    pub(super) name: String,
+    pub(super) line: usize,
+    pub(super) end_line: usize,
+    /// The non-test `#[cfg(...)]` predicate gating the item; `None` when
+    /// ungated.
+    pub(super) cfg: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -81,6 +103,18 @@ pub(super) struct FnBody {
     pub(super) params: Vec<FnParam>,
     pub(super) callees: Vec<String>,
     pub(super) forwards: Option<String>,
+    /// The non-test `#[cfg(...)]` predicate gating the function, with its
+    /// enclosing `impl`, trait, or inline module; `None` when ungated.
+    #[serde(skip)]
+    pub(super) cfg: Option<String>,
+    /// Declared inside an `impl` or trait: a method rather than a free
+    /// function.
+    #[serde(skip)]
+    pub(super) member: bool,
+    /// A method of a trait `impl` (`impl Trait for Owner`) rather than an
+    /// inherent one.
+    #[serde(skip)]
+    pub(super) trait_impl: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -161,6 +195,8 @@ pub(super) struct FileSyntax {
     /// statement of what it is for.
     pub(super) doc_head: Option<String>,
     pub(super) pub_items: Vec<PubItem>,
+    #[serde(skip)]
+    pub(super) private_items: Vec<PrivateItem>,
     pub(super) mod_decls: Vec<(String, String)>,
     /// Named fields of every struct, one entry per declaring struct.
     pub(super) struct_fields: Vec<String>,
@@ -256,18 +292,21 @@ fn analyze_file(
 ) -> FileSyntax {
     let module_path = crate_module_for_path(path);
     let crate_path = crate_path_for_source(path);
-    let mut pub_items = Vec::new();
-    let mut mod_decls = Vec::new();
-    let mut struct_fields = Vec::new();
+    let mut collected = CollectedItems::default();
     collect_public_items(
         &file.items,
         &module_path,
         EXTERNAL_REACH,
         crate_names,
-        &mut pub_items,
-        &mut mod_decls,
-        &mut struct_fields,
+        None,
+        &mut collected,
     );
+    let CollectedItems {
+        public: pub_items,
+        private: private_items,
+        mod_decls,
+        struct_fields,
+    } = collected;
     let mut cfg_regions = Vec::new();
     collect_cfg_regions(&file.items, &mut cfg_regions);
 
@@ -290,6 +329,9 @@ fn analyze_file(
         test_functions: Vec::new(),
         owner: None,
         in_test_region: false,
+        cfg: None,
+        member: false,
+        trait_impl: false,
     };
     fn_collector.visit_file(file);
 
@@ -309,6 +351,7 @@ fn analyze_file(
         module_path,
         doc_head: doc_head(file),
         pub_items,
+        private_items,
         mod_decls,
         struct_fields,
         cfg_regions,
@@ -349,23 +392,32 @@ fn doc_head(file: &File) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join(" "))
 }
 
+/// What `collect_public_items` gathers from one file's item tree.
+#[derive(Default)]
+struct CollectedItems {
+    public: Vec<PubItem>,
+    private: Vec<PrivateItem>,
+    mod_decls: Vec<(String, String)>,
+    struct_fields: Vec<String>,
+}
+
 fn collect_public_items(
     items: &[Item],
     module: &str,
     enclosing_reach: &str,
     crate_names: &BTreeSet<String>,
-    output: &mut Vec<PubItem>,
-    mod_decls: &mut Vec<(String, String)>,
-    struct_fields: &mut Vec<String>,
+    enclosing_cfg: Option<&str>,
+    collected: &mut CollectedItems,
 ) {
     for item in items {
         if is_cfg_excluded(item_attributes(item)) {
             continue;
         }
+        let item_cfg = cfg_predicate(item_attributes(item), enclosing_cfg);
         if let Item::Struct(item) = item
             && let syn::Fields::Named(fields) = &item.fields
         {
-            struct_fields.extend(
+            collected.struct_fields.extend(
                 fields
                     .named
                     .iter()
@@ -378,7 +430,7 @@ fn collect_public_items(
                     && !is_cfg_excluded(&method.attrs)
                     && is_boundary_visible(&method.vis)
                 {
-                    output.push(PubItem {
+                    collected.public.push(PubItem {
                         module: module.to_owned(),
                         name: method.sig.ident.to_string(),
                         kind: "fn".to_owned(),
@@ -392,6 +444,8 @@ fn collect_public_items(
                             module,
                         ),
                         target: None,
+                        cfg: cfg_predicate(&method.attrs, item_cfg.as_deref()),
+                        member: true,
                     });
                 }
             }
@@ -404,7 +458,7 @@ fn collect_public_items(
                     enclosing_reach,
                     module,
                 );
-                output.push(PubItem {
+                collected.public.push(PubItem {
                     module: module.to_owned(),
                     name: item.ident.to_string(),
                     kind: "trait".to_owned(),
@@ -414,12 +468,14 @@ fn collect_public_items(
                     declared: render_visibility(&item.vis),
                     reach: trait_reach.clone(),
                     target: None,
+                    cfg: item_cfg.clone(),
+                    member: false,
                 });
                 for method in &item.items {
                     if let TraitItem::Fn(method) = method
                         && !is_cfg_excluded(&method.attrs)
                     {
-                        output.push(PubItem {
+                        collected.public.push(PubItem {
                             module: module.to_owned(),
                             name: method.sig.ident.to_string(),
                             kind: "fn".to_owned(),
@@ -429,9 +485,19 @@ fn collect_public_items(
                             declared: "inherited".to_owned(),
                             reach: trait_reach.clone(),
                             target: None,
+                            cfg: cfg_predicate(&method.attrs, item_cfg.as_deref()),
+                            member: true,
                         });
                     }
                 }
+            } else {
+                collected.private.push(PrivateItem {
+                    module: module.to_owned(),
+                    name: item.ident.to_string(),
+                    line: item.ident.span().start().line,
+                    end_line: item.span().end().line,
+                    cfg: item_cfg,
+                });
             }
             continue;
         }
@@ -445,9 +511,11 @@ fn collect_public_items(
                 enclosing_reach,
                 module,
             );
-            mod_decls.push((nested_module.clone(), module_reach.clone()));
+            collected
+                .mod_decls
+                .push((nested_module.clone(), module_reach.clone()));
             if is_boundary_visible(&item.vis) {
-                output.push(PubItem {
+                collected.public.push(PubItem {
                     module: module.to_owned(),
                     name: item.ident.to_string(),
                     kind: "mod".to_owned(),
@@ -457,6 +525,8 @@ fn collect_public_items(
                     declared: render_visibility(&item.vis),
                     reach: module_reach.clone(),
                     target: None,
+                    cfg: item_cfg.clone(),
+                    member: false,
                 });
             }
             if let Some((_, items)) = &item.content {
@@ -465,9 +535,8 @@ fn collect_public_items(
                     &nested_module,
                     &module_reach,
                     crate_names,
-                    output,
-                    mod_decls,
-                    struct_fields,
+                    item_cfg.as_deref(),
+                    collected,
                 );
             }
             continue;
@@ -533,7 +602,7 @@ fn collect_public_items(
                 let mut leaves = Vec::new();
                 flatten_use(&item.tree, &mut Vec::new(), &mut leaves);
                 for leaf in leaves {
-                    output.push(PubItem {
+                    collected.public.push(PubItem {
                         module: module.to_owned(),
                         name: leaf.local,
                         kind: "use".to_owned(),
@@ -550,6 +619,8 @@ fn collect_public_items(
                             modules: use_target_modules(module, &leaf.path, crate_names),
                             name: leaf.name,
                         }),
+                        cfg: item_cfg.clone(),
+                        member: false,
                     });
                 }
                 continue;
@@ -557,7 +628,7 @@ fn collect_public_items(
             _ => continue,
         };
         if is_boundary_visible(visibility) {
-            output.push(PubItem {
+            collected.public.push(PubItem {
                 module: module.to_owned(),
                 name,
                 kind: kind.to_owned(),
@@ -571,6 +642,16 @@ fn collect_public_items(
                     module,
                 ),
                 target: None,
+                cfg: item_cfg,
+                member: false,
+            });
+        } else if kind != "fn" {
+            collected.private.push(PrivateItem {
+                module: module.to_owned(),
+                name,
+                line,
+                end_line: item.span().end().line,
+                cfg: item_cfg,
             });
         }
     }
@@ -1017,16 +1098,32 @@ struct FnCollector<'a> {
     test_functions: Vec<FnBody>,
     owner: Option<String>,
     in_test_region: bool,
+    /// The build-configuration predicate of the enclosing `impl`, trait, or
+    /// inline module.
+    cfg: Option<String>,
+    /// Inside an `impl` or trait, so a function found is a method.
+    member: bool,
+    /// The enclosing `impl` implements a trait.
+    trait_impl: bool,
 }
 
 impl FnCollector<'_> {
-    fn push(&mut self, signature: &syn::Signature, span: proc_macro2::Span, block: &syn::Block) {
+    fn push(
+        &mut self,
+        signature: &syn::Signature,
+        attributes: &[syn::Attribute],
+        span: proc_macro2::Span,
+        block: &syn::Block,
+    ) {
         let start = span.start().line;
         let end = span.end().line;
         let mut calls = CallCollector::new(self.source, false);
         calls.visit_block(block);
         let function = FnBody {
             module: self.module.clone(),
+            cfg: cfg_predicate(attributes, self.cfg.as_deref()),
+            member: self.member,
+            trait_impl: self.member && self.trait_impl,
             name: signature.ident.to_string(),
             owner: self.owner.clone(),
             path: self.path.to_path_buf(),
@@ -1180,7 +1277,14 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
         let previous_owner = std::mem::replace(&mut self.owner, owner);
         let previous_test_region = self.in_test_region;
         self.in_test_region |= is_cfg_excluded(&item.attrs);
+        let enclosing = cfg_predicate(&item.attrs, self.cfg.as_deref());
+        let previous_cfg = std::mem::replace(&mut self.cfg, enclosing);
+        let previous_member = std::mem::replace(&mut self.member, true);
+        let previous_trait_impl = std::mem::replace(&mut self.trait_impl, item.trait_.is_some());
         visit::visit_item_impl(self, item);
+        self.trait_impl = previous_trait_impl;
+        self.member = previous_member;
+        self.cfg = previous_cfg;
         self.in_test_region = previous_test_region;
         self.owner = previous_owner;
     }
@@ -1189,8 +1293,10 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
         let previous_owner = self.owner.take();
         let previous_test_region = self.in_test_region;
         self.in_test_region |= is_cfg_excluded(&item.attrs);
-        self.push(&item.sig, item.span(), &item.block);
+        let previous_member = std::mem::replace(&mut self.member, false);
+        self.push(&item.sig, &item.attrs, item.span(), &item.block);
         visit::visit_item_fn(self, item);
+        self.member = previous_member;
         self.in_test_region = previous_test_region;
         self.owner = previous_owner;
     }
@@ -1198,7 +1304,7 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
     fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
         let previous = self.in_test_region;
         self.in_test_region |= is_cfg_excluded(&item.attrs);
-        self.push(&item.sig, item.span(), &item.block);
+        self.push(&item.sig, &item.attrs, item.span(), &item.block);
         visit::visit_impl_item_fn(self, item);
         self.in_test_region = previous;
     }
@@ -1212,7 +1318,10 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
         };
         let previous_module = std::mem::replace(&mut self.module, module);
         self.in_test_region |= is_cfg_excluded(&item.attrs);
+        let enclosing = cfg_predicate(&item.attrs, self.cfg.as_deref());
+        let previous_cfg = std::mem::replace(&mut self.cfg, enclosing);
         visit::visit_item_mod(self, item);
+        self.cfg = previous_cfg;
         self.in_test_region = previous;
         self.module = previous_module;
     }
@@ -1220,7 +1329,14 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
     fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
         let previous = self.in_test_region;
         self.in_test_region |= is_cfg_excluded(&item.attrs);
+        let enclosing = cfg_predicate(&item.attrs, self.cfg.as_deref());
+        let previous_cfg = std::mem::replace(&mut self.cfg, enclosing);
+        let previous_member = std::mem::replace(&mut self.member, true);
+        let previous_trait_impl = std::mem::replace(&mut self.trait_impl, false);
         visit::visit_item_trait(self, item);
+        self.trait_impl = previous_trait_impl;
+        self.member = previous_member;
+        self.cfg = previous_cfg;
         self.in_test_region = previous;
     }
 
@@ -1229,7 +1345,7 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
         let previous_test_region = self.in_test_region;
         self.in_test_region |= is_cfg_excluded(&item.attrs);
         if let Some(block) = &item.default {
-            self.push(&item.sig, item.span(), block);
+            self.push(&item.sig, &item.attrs, item.span(), block);
         }
         visit::visit_trait_item_fn(self, item);
         self.in_test_region = previous_test_region;
@@ -1243,6 +1359,32 @@ fn cfg_kind(attributes: &[syn::Attribute]) -> Option<SourceKind> {
 
 fn is_cfg_excluded(attributes: &[syn::Attribute]) -> bool {
     cfg_kind(attributes).is_some()
+}
+
+/// The non-test `#[cfg(...)]` predicate an item carries, combined with the
+/// predicate of what encloses it: each `cfg` attribute's token text with
+/// whitespace removed, joined by ` & ` after the enclosing one. `None` when
+/// neither is gated. Callers skip test-gated items first, so every
+/// predicate left here is a build configuration.
+fn cfg_predicate(attributes: &[syn::Attribute], enclosing: Option<&str>) -> Option<String> {
+    let own = attributes
+        .iter()
+        .filter_map(|attribute| match &attribute.meta {
+            Meta::List(list) if list.path.is_ident("cfg") => Some(
+                list.tokens
+                    .to_string()
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .collect::<String>(),
+            ),
+            _ => None,
+        });
+    let parts = enclosing
+        .map(str::to_owned)
+        .into_iter()
+        .chain(own)
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(" & "))
 }
 
 struct GuardCollector<'a> {

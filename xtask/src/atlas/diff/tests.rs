@@ -391,12 +391,10 @@ fn diff_expect_rejects_still_defined_delete_item() {
 #[test]
 fn diff_expect_rejects_unmoved_rehome_item() {
     let mut contract = contract(-1);
-    contract.rehome.push(RehomeExpectation {
-        item: "message::Thing".to_owned(),
-        to: "store".to_owned(),
-    });
+    contract.rehome.push(item_rehome("message::Thing", "store"));
     let checks = [RehomeCheck {
         expectation: contract.rehome[0].clone(),
+        item: "message::Thing".to_owned(),
         old: Some(DefinitionSite {
             path: PathBuf::from("src/message.rs"),
             line: 27,
@@ -426,12 +424,10 @@ fn diff_expect_rejects_unmoved_rehome_item() {
 #[test]
 fn diff_expect_accepts_moved_rehome_item() {
     let mut contract = contract(-1);
-    contract.rehome.push(RehomeExpectation {
-        item: "message::Thing".to_owned(),
-        to: "store".to_owned(),
-    });
+    contract.rehome.push(item_rehome("message::Thing", "store"));
     let checks = [RehomeCheck {
         expectation: contract.rehome[0].clone(),
+        item: "message::Thing".to_owned(),
         old: None,
         destinations: vec![DefinitionSite {
             path: PathBuf::from("src/store/model.rs"),
@@ -461,12 +457,10 @@ fn diff_expect_accepts_moved_rehome_item() {
 #[test]
 fn diff_expect_lists_every_site_of_a_rehome_defined_twice() {
     let mut contract = contract(-1);
-    contract.rehome.push(RehomeExpectation {
-        item: "message::Thing".to_owned(),
-        to: "store".to_owned(),
-    });
+    contract.rehome.push(item_rehome("message::Thing", "store"));
     let checks = [RehomeCheck {
         expectation: contract.rehome[0].clone(),
+        item: "message::Thing".to_owned(),
         old: None,
         destinations: vec![
             DefinitionSite {
@@ -847,48 +841,6 @@ fn cx_rounding_matches_survey_display() {
 }
 
 #[test]
-fn thin_cli_requires_an_under_base_cli_item_cap() {
-    let mut contract = contract(0);
-    contract.kind = PassKind::ThinCli;
-    for (item, base, max, landed) in [
-        (Some("cli::run"), Ok(Some(8.0)), 5.0, true),
-        (Some("cli::nested::Owner::run"), Ok(Some(8.0)), 5.0, true),
-        (None, Ok(Some(8.0)), 5.0, false),
-        (Some("client::run"), Ok(Some(8.0)), 5.0, false),
-        (Some("cli::run"), Ok(Some(5.04)), 5.0, false),
-        (Some("cli::run"), Ok(None), 0.0, false),
-        (Some("cli::run"), Err("no metric"), 0.0, false),
-    ] {
-        let checks = [CxCheck {
-            expectation: CxExpectation {
-                item: item.map(str::to_owned),
-                path: item.is_none().then(|| "src/cli".into()),
-                max,
-            },
-            base,
-            current: Ok(Some(0.0)),
-        }];
-        let rows = expectation_rows(
-            &contract,
-            0,
-            ExpectationChecks {
-                cx: &checks,
-                ..Default::default()
-            },
-            &[],
-            true,
-        );
-        assert_eq!(
-            rows.iter()
-                .find(|row| row.assertion == "cli thinning")
-                .expect("thin-cli row emitted")
-                .landed,
-            landed
-        );
-    }
-}
-
-#[test]
 fn cx_pairs_by_name_and_span_and_sums_directory_with_sibling() {
     use super::super::metrics::{FunctionMetric, MetricsReport};
     let mut facts = facts_for_sources(
@@ -970,12 +922,10 @@ fn bin_to_lib_rehome_lands() {
     let item = "cli::loop_cmd::run_one";
     assert!(definition_site(&base.syntax.files, item).is_some());
     let checks = [RehomeCheck {
-        expectation: RehomeExpectation {
-            item: item.into(),
-            to: "harness::schedule".into(),
-        },
+        expectation: item_rehome(item, "harness::schedule"),
+        item: item.into(),
         old: definition_site(&current.syntax.files, item),
-        destinations: definition_sites(&current.syntax.files, "harness::schedule", "run_one"),
+        destinations: definition_sites(&current.syntax.files, "harness::schedule", item, None),
     }];
     let rows = expectation_rows(
         &contract(0),
@@ -993,6 +943,15 @@ fn bin_to_lib_rehome_lands() {
             .unwrap()
             .landed
     );
+}
+
+fn item_rehome(item: &str, to: &str) -> RehomeExpectation {
+    RehomeExpectation {
+        item: Some(item.to_owned()),
+        from: None,
+        to: to.to_owned(),
+        min_decisions: None,
+    }
 }
 
 fn facts_for_source(source: &str, references: References) -> Facts {
@@ -1069,4 +1028,304 @@ fn interface_row(
         current_heaviest: Some(if heaviest_moved { "current" } else { "base" }.to_owned()),
         moved: base != current || heaviest_moved,
     }
+}
+
+#[test]
+fn contract_assembly_from_an_ancestor_skips_the_targets_own_functions() {
+    let root = tempfile::tempdir().unwrap();
+    let sources = vec![
+        Source::new("src/cli.rs", "fn dispatch() {}"),
+        Source::new(
+            "src/cli/exec.rs",
+            "pub fn run_exec() {}\npub fn settle() {}\npub fn spawn() {}",
+        ),
+    ];
+    let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
+    let edge = |from: &str, path: &str, function: &str, item: &str| Edge {
+        from_path: PathBuf::from(path),
+        to_path: PathBuf::from("src/cli/exec.rs"),
+        from: from.to_owned(),
+        from_line: 1,
+        from_fn: Some(FnRef {
+            label: function.to_owned(),
+            line: 1,
+        }),
+        to: "cli::exec".to_owned(),
+        to_line: 1,
+        item: item.to_owned(),
+        kind: EdgeKind::Reference,
+        site_kind: SourceKind::Production,
+        cross_target: false,
+    };
+    let references = References {
+        edges: vec![
+            edge("cli", "src/cli.rs", "dispatch", "run_exec"),
+            edge("cli::exec", "src/cli/exec.rs", "run_exec", "settle"),
+            edge("cli::exec", "src/cli/exec.rs", "run_exec", "spawn"),
+        ],
+        ..References::default()
+    };
+    let facts = Facts {
+        root: root.path().to_path_buf(),
+        scope: PathBuf::from("."),
+        mod_index: super::super::syntax::ModIndex::new(&syntax.files),
+        known_modules: syntax
+            .files
+            .iter()
+            .map(|file| file.module_path.clone())
+            .collect(),
+        defined_names: super::super::facts::defined_names(&syntax),
+        unique_fields: super::super::facts::unique_fields(&syntax),
+        defining_modules: super::super::facts::defining_modules(&syntax),
+        binaries: super::super::modules::BinaryTargets::new(&syntax.files),
+        syntax,
+        sources,
+        crate_names: BTreeSet::new(),
+        sizes: BTreeMap::new(),
+        history: None,
+        metrics: None,
+        references: Some(references),
+    };
+    let expectation = AssemblyExpectation {
+        from: "cli".to_owned(),
+        to: "cli::exec".to_owned(),
+        max_items: 1,
+    };
+
+    assert_eq!(
+        contract_assembly(root.path(), &facts, &expectation, false).unwrap(),
+        1,
+        "`run_exec` inside the target assembles nothing for `cli`"
+    );
+}
+
+fn rows_for(checks: ExpectationChecks<'_>) -> Vec<ExpectationRow> {
+    expectation_rows(&contract(0), 0, checks, &[], true)
+}
+
+fn row<'a>(rows: &'a [ExpectationRow], assertion: &str) -> &'a ExpectationRow {
+    rows.iter()
+        .find(|row| row.assertion == assertion)
+        .unwrap_or_else(|| panic!("no `{assertion}` row in {rows:?}"))
+}
+
+#[test]
+fn delete_of_a_private_function_lands_only_once_it_is_gone() {
+    let key = "cli::exec::settle";
+    for (source, landed, detail) in [
+        (
+            "/// Settles.\nfn settle() {}\nfn run() {}",
+            false,
+            "still defined at src/cli/exec.rs:1",
+        ),
+        ("fn run() {}", true, "deleted"),
+    ] {
+        let current = facts_for_sources(
+            vec![Source::new("src/cli/exec.rs", source)],
+            References::default(),
+        );
+        let checks = [DeleteCheck {
+            expectation: DeleteExpectation { item: key.into() },
+            current: definition_site(&current.syntax.files, key),
+        }];
+        let rows = rows_for(ExpectationChecks {
+            delete: &checks,
+            ..Default::default()
+        });
+        let row = row(&rows, "delete `cli::exec::settle`");
+        assert_eq!((row.landed, row.detail.as_str()), (landed, detail));
+    }
+}
+
+#[test]
+fn private_function_and_method_rehome_land_when_defined_once_under_to() {
+    let base = facts_for_sources(
+        vec![Source::new(
+            "src/cli/exec.rs",
+            "fn settle() {}\nstruct Run;\nimpl Run { fn step(&self) {} }",
+        )],
+        References::default(),
+    );
+    for (key, destination, landed) in [
+        // A documented `pub fn` is one item and one function: one site.
+        (
+            "cli::exec::settle",
+            "/// Settles.\n#[inline]\npub fn settle() {}",
+            true,
+        ),
+        ("cli::exec::settle", "fn settle() {}", true),
+        // The method keeps its owner; a free `step` beside it is no match.
+        (
+            "cli::exec::Run::step",
+            "pub struct Run;\nimpl Run { pub fn step(&self) {} }\nfn step() {}",
+            true,
+        ),
+        // A function and a `pub use` of it are two sites.
+        (
+            "cli::exec::settle",
+            "fn settle() {}\npub use self::settle;",
+            false,
+        ),
+        (
+            "cli::exec::settle",
+            "mod a { pub fn settle() {} }\nfn settle() {}",
+            false,
+        ),
+        ("cli::exec::settle", "fn other() {}", false),
+    ] {
+        let current = facts_for_sources(
+            vec![
+                Source::new("src/cli/exec.rs", "fn run() {}"),
+                Source::new("src/harness/run.rs", destination),
+            ],
+            References::default(),
+        );
+        let checks = [RehomeCheck {
+            expectation: item_rehome(key, "harness"),
+            item: key.into(),
+            old: definition_site(&current.syntax.files, key),
+            destinations: definition_sites(
+                &current.syntax.files,
+                "harness",
+                key,
+                rehome_owner(&base.syntax.files, key),
+            ),
+        }];
+        let rows = rows_for(ExpectationChecks {
+            rehome: &checks,
+            ..Default::default()
+        });
+        let row = row(&rows, &format!("rehome {key} → harness"));
+        assert_eq!(row.landed, landed, "{destination}: {}", row.detail);
+    }
+}
+
+#[test]
+fn item_rehome_of_a_private_function_drifts_while_the_old_site_stands() {
+    let key = "cli::exec::settle";
+    let current = facts_for_sources(
+        vec![
+            Source::new("src/cli/exec.rs", "fn settle() {}"),
+            Source::new("src/harness.rs", "pub fn settle() {}"),
+        ],
+        References::default(),
+    );
+    let checks = [RehomeCheck {
+        expectation: item_rehome(key, "harness"),
+        item: key.into(),
+        old: definition_site(&current.syntax.files, key),
+        destinations: definition_sites(&current.syntax.files, "harness", key, None),
+    }];
+    let rows = rows_for(ExpectationChecks {
+        rehome: &checks,
+        ..Default::default()
+    });
+    let row = row(&rows, "rehome cli::exec::settle → harness");
+    assert!(!row.landed);
+    assert_eq!(row.detail, "still defined at src/cli/exec.rs:1");
+}
+
+fn metric(path: &str, cyclomatic: f64) -> FunctionMetric {
+    FunctionMetric {
+        // The scope-relative directory, as `metrics::analyze` spells it.
+        module: "crates".into(),
+        path: path.into(),
+        name: "f".into(),
+        line: 1,
+        cyclomatic,
+        cognitive: 0.0,
+        sloc: 0.0,
+        score: 0.0,
+    }
+}
+
+fn decision_row_for(base: &[FunctionMetric], current: &[FunctionMetric]) -> ExpectationRow {
+    let checks = [DecisionCheck::measure(
+        "cli::agents_cmd::exec",
+        "harness",
+        40,
+        base,
+        current,
+    )];
+    let rows = rows_for(ExpectationChecks {
+        rehome_logic: &checks,
+        ..Default::default()
+    });
+    row(&rows, "rehome cli::agents_cmd::exec → harness").clone()
+}
+
+const EXEC: &str = "crates/rimz/src/cli/agents_cmd/exec.rs";
+const EXEC_CHILD: &str = "crates/rimz/src/cli/agents_cmd/exec/settle.rs";
+const SIBLING: &str = "crates/rimz/src/cli/agents_cmd/exec_other.rs";
+const HARNESS: &str = "crates/rimz/src/harness/run.rs";
+
+#[test]
+fn decisions_sum_branch_points_under_the_module_path() {
+    let metrics = [
+        metric(EXEC, 11.0),
+        metric(EXEC_CHILD, 3.0),
+        metric(EXEC, 1.0),
+        metric(SIBLING, 50.0),
+    ];
+    assert_eq!(decisions(&metrics, "cli::agents_cmd::exec"), 12);
+    assert_eq!(decisions(&metrics, "harness"), 0);
+    // Extracting a branchless helper leaves the count where it was.
+    assert_eq!(
+        decisions(
+            &[metric(EXEC, 11.0), metric(EXEC, 1.0)],
+            "cli::agents_cmd::exec"
+        ),
+        decisions(&[metric(EXEC, 11.0)], "cli::agents_cmd::exec"),
+    );
+}
+
+#[test]
+fn logic_rehome_lands_when_from_falls_by_min_and_to_rises_no_more() {
+    let row = decision_row_for(
+        &[metric(EXEC, 213.0), metric(HARNESS, 81.0)],
+        &[metric(EXEC, 161.0), metric(HARNESS, 119.0)],
+    );
+    assert!(row.landed, "{}", row.detail);
+    assert_eq!(
+        row.detail,
+        "decisions cli::agents_cmd::exec 212 → 160 (-52, min 40); harness 80 → 118 (+38)"
+    );
+}
+
+#[test]
+fn logic_rehome_drifts_when_from_falls_below_min() {
+    let row = decision_row_for(
+        &[metric(EXEC, 213.0), metric(HARNESS, 81.0)],
+        &[metric(EXEC, 201.0), metric(HARNESS, 81.0)],
+    );
+    assert!(!row.landed);
+    assert!(row.detail.ends_with("; fell 12 < min 40"), "{}", row.detail);
+}
+
+#[test]
+fn logic_rehome_drifts_when_to_rises_more_than_from_fell() {
+    let row = decision_row_for(
+        &[metric(EXEC, 213.0), metric(HARNESS, 81.0)],
+        &[metric(EXEC, 161.0), metric(HARNESS, 141.0)],
+    );
+    assert!(!row.landed);
+    assert!(
+        row.detail.ends_with("; harness rose 60 > 52 moved"),
+        "{}",
+        row.detail
+    );
+}
+
+#[test]
+fn logic_rehome_to_a_new_owner_measures_zero_at_base() {
+    let row = decision_row_for(
+        &[metric(EXEC, 101.0)],
+        &[metric(EXEC, 51.0), metric(HARNESS, 51.0)],
+    );
+    assert!(row.landed, "{}", row.detail);
+    assert!(
+        row.detail.ends_with("harness 0 → 50 (+50)"),
+        "{}",
+        row.detail
+    );
 }

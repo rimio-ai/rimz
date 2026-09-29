@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use super::syntax::{FileSyntax, ModIndex, PubItem};
+use super::syntax::{FileSyntax, FnBody, ModIndex, PrivateItem, PubItem};
 
 pub(super) const EXTERNAL_REACH: &str = "(extern)";
 
@@ -63,10 +63,25 @@ pub(super) struct EscapingItem {
     pub(super) line: usize,
 }
 
+/// Keeps the matches defined in `module` itself when there are any, else
+/// every match: a key names its own module first, then beneath it.
+fn nearest<'a, T>(
+    matches: Vec<(&'a FileSyntax, &'a T)>,
+    in_module: impl Fn(&FileSyntax, &T) -> bool,
+) -> Vec<(&'a FileSyntax, &'a T)> {
+    let exact = matches
+        .iter()
+        .filter(|(file, item)| in_module(file, item))
+        .copied()
+        .collect::<Vec<_>>();
+    if exact.is_empty() { matches } else { exact }
+}
+
 /// Every public item a `module::Name` key names: `Name` defined in `module`
 /// or any module beneath it, so `message::queue_synthetic` finds
-/// `message::deliver::queue_synthetic`. Definitions in the named module
-/// itself win over deeper ones, and a bare `Name` searches the whole crate.
+/// `message::deliver::queue_synthetic`. A free item wins over a method of
+/// the same name (`prefer_free`), then definitions in the named module
+/// itself win over deeper ones; a bare `Name` searches the whole crate.
 pub(super) fn items_for_key<'a>(
     files: &'a [FileSyntax],
     key: &str,
@@ -81,12 +96,279 @@ pub(super) fn items_for_key<'a>(
                 .map(move |item| (file, item))
         })
         .collect::<Vec<_>>();
-    let exact = matches
+    nearest(prefer_free(matches, |item| item.member), |_, item| {
+        item.module == module
+    })
+}
+
+/// Rust path semantics for a name-only key: it names a free item (anything
+/// outside an `impl` or trait) first, and a method only when no free item
+/// matches.
+fn prefer_free<'a, T>(
+    matches: Vec<(&'a FileSyntax, &'a T)>,
+    member: impl Fn(&T) -> bool,
+) -> Vec<(&'a FileSyntax, &'a T)> {
+    if matches.iter().any(|(_, item)| !member(item)) {
+        matches
+            .into_iter()
+            .filter(|(_, item)| !member(item))
+            .collect()
+    } else {
+        matches
+    }
+}
+
+/// Rust path semantics for an owner-qualified key: `Owner::name` names an
+/// inherent method first, and a method of a trait `impl` for `Owner` only when
+/// no inherent method matches.
+fn prefer_inherent<'a>(
+    matches: Vec<(&'a FileSyntax, &'a FnBody)>,
+) -> Vec<(&'a FileSyntax, &'a FnBody)> {
+    if matches.iter().any(|(_, function)| !function.trait_impl) {
+        matches
+            .into_iter()
+            .filter(|(_, function)| !function.trait_impl)
+            .collect()
+    } else {
+        matches
+    }
+}
+
+/// Every production function a `module::name` or `module::Owner::name` key
+/// names, under the key's module. Read as `module::name`, a free function
+/// wins over a method (`prefer_free`); read as `module::Owner::name`, an
+/// inherent method wins over a trait-impl one (`prefer_inherent`); definitions in the key's module
+/// itself win over deeper ones.
+pub(super) fn functions_for_key<'a>(
+    files: &'a [FileSyntax],
+    key: &str,
+) -> Vec<(&'a FileSyntax, &'a FnBody)> {
+    let (module, name) = key.rsplit_once("::").unwrap_or(("", key));
+    let owned = module.rsplit_once("::").map_or(("", module), |split| split);
+    // (module the definition must sit under, required owner)
+    let readings = [(module, None), (owned.0, Some(owned.1))];
+    let owner_fits = |owner: Option<&str>, function: &FnBody| {
+        owner.is_none_or(|owner| function.owner.as_deref() == Some(owner))
+    };
+    let named = files
         .iter()
-        .filter(|(_, item)| item.module == module)
-        .copied()
+        .flat_map(|file| file.fns.iter().map(move |function| (file, function)))
+        .filter(|(_, function)| function.name == name)
         .collect::<Vec<_>>();
-    if exact.is_empty() { matches } else { exact }
+    // Both readings follow Rust path semantics: a name-only key names a free
+    // function before a method (`prefer_free`), and `Owner::name` names an
+    // inherent method before a trait-impl one (`prefer_inherent`).
+    let name_only = prefer_free(
+        named
+            .iter()
+            .copied()
+            .filter(|(_, function)| module_is_within(&function.module, readings[0].0))
+            .collect(),
+        |function| function.member,
+    );
+    let owned = prefer_inherent(
+        named
+            .iter()
+            .copied()
+            .filter(|(_, function)| {
+                module_is_within(&function.module, readings[1].0)
+                    && owner_fits(readings[1].1, function)
+            })
+            .collect(),
+    );
+    let matches = named
+        .into_iter()
+        .filter(|(_, function)| {
+            name_only
+                .iter()
+                .chain(&owned)
+                .any(|(_, kept)| std::ptr::eq(*kept, *function))
+        })
+        .collect::<Vec<_>>();
+    nearest(matches, |_, function| {
+        readings
+            .iter()
+            .any(|(module, owner)| function.module == *module && owner_fits(*owner, function))
+    })
+}
+
+/// Every private production item (type, trait, const, static, type alias) a
+/// `module::Name` key names, under the key's module; definitions in that
+/// module itself win.
+fn private_items_for_key<'a>(
+    files: &'a [FileSyntax],
+    key: &str,
+) -> Vec<(&'a FileSyntax, &'a PrivateItem)> {
+    let (module, name) = key.rsplit_once("::").unwrap_or(("", key));
+    let matches = files
+        .iter()
+        .flat_map(|file| {
+            file.private_items
+                .iter()
+                .filter(|item| item.name == name && module_is_within(&item.module, module))
+                .map(move |item| (file, item))
+        })
+        .collect::<Vec<_>>();
+    nearest(matches, |_, item| item.module == module)
+}
+
+/// What a key resolved to, one variant per resolution tier.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Resolved<'a> {
+    /// A boundary-visible item, `pub use` re-exports included.
+    Visible(&'a PubItem),
+    /// A production function or method no visible item covers.
+    Function(&'a FnBody),
+    /// A private non-function item.
+    Private(&'a PrivateItem),
+}
+
+impl Resolved<'_> {
+    /// What an ambiguity message calls several definitions of this tier.
+    pub(super) fn noun(self) -> &'static str {
+        match self {
+            Self::Visible(_) => "visible items",
+            Self::Function(_) => "production functions",
+            Self::Private(_) => "private items",
+        }
+    }
+}
+
+/// The production function a visible `fn` item declares. A function's span
+/// starts at its attributes and doc comments, the item's line at its name,
+/// so the item sits inside the function's span rather than on its line.
+fn visible_function<'a>(file: &'a FileSyntax, item: &PubItem) -> Option<&'a FnBody> {
+    (item.kind == "fn")
+        .then(|| {
+            file.fns
+                .iter()
+                .filter(|function| {
+                    function.name == item.name
+                        && function.line <= item.line
+                        && item.line <= function.end_line
+                })
+                .max_by_key(|function| function.line)
+        })
+        .flatten()
+}
+
+/// One definition a key resolves to.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct KeyDefinition<'a> {
+    pub(super) file: &'a FileSyntax,
+    pub(super) line: usize,
+    /// The `impl` owner when the key resolved to a method.
+    pub(super) owner: Option<&'a str>,
+    /// The build-configuration predicate gating the definition.
+    pub(super) cfg: Option<&'a str>,
+    pub(super) resolved: Resolved<'a>,
+}
+
+impl<'a> KeyDefinition<'a> {
+    /// The production function this definition is, if it is one.
+    pub(super) fn function(&self) -> Option<&'a FnBody> {
+        match self.resolved {
+            Resolved::Visible(item) => visible_function(self.file, item),
+            Resolved::Function(function) => Some(function),
+            Resolved::Private(_) => None,
+        }
+    }
+}
+
+/// Every definition an item key names, whatever its spelling: `Name`,
+/// `module::Name`, or `module::Owner::name`. The tiers resolve in order and
+/// the first with a match wins: the visibility-qualified items
+/// `items_for_key` finds, then the production functions `functions_for_key`
+/// finds, then private non-function items. Each tier searches the key's
+/// module first, then beneath it. Build-configuration alternatives count as
+/// one definition (`collapse_cfg_alternatives`); several definitions left
+/// are an ambiguity the caller reports by its own rule.
+pub(super) fn definitions_for_key<'a>(
+    files: &'a [FileSyntax],
+    key: &str,
+) -> Vec<KeyDefinition<'a>> {
+    definitions_for_key_where(files, key, |_| true)
+}
+
+/// `definitions_for_key` over the files `keep` admits, applied before a tier
+/// is chosen, so a tier with matches only outside them falls through.
+pub(super) fn definitions_for_key_where<'a>(
+    files: &'a [FileSyntax],
+    key: &str,
+    keep: impl Fn(&FileSyntax) -> bool,
+) -> Vec<KeyDefinition<'a>> {
+    collapse_cfg_alternatives(tier_definitions(files, key, keep))
+}
+
+/// Several definitions that each carry a build-configuration predicate, all
+/// pairwise different, are one definition compiled per configuration (a
+/// `pub use` under `cfg(feature = "sentry")` and its `not(...)` twin, a
+/// `target_os` pair): they collapse to the first in file order. Same-cfg or
+/// ungated definitions stay several.
+fn collapse_cfg_alternatives(mut definitions: Vec<KeyDefinition<'_>>) -> Vec<KeyDefinition<'_>> {
+    if definitions.len() < 2 {
+        return definitions;
+    }
+    let predicates = definitions
+        .iter()
+        .map(|definition| definition.cfg)
+        .collect::<Option<Vec<_>>>();
+    let alternatives = predicates.is_some_and(|predicates| {
+        predicates.iter().collect::<BTreeSet<_>>().len() == predicates.len()
+    });
+    if alternatives {
+        definitions.sort_by(|left, right| {
+            (&left.file.path, left.line).cmp(&(&right.file.path, right.line))
+        });
+        definitions.truncate(1);
+    }
+    definitions
+}
+
+fn tier_definitions<'a>(
+    files: &'a [FileSyntax],
+    key: &str,
+    keep: impl Fn(&FileSyntax) -> bool,
+) -> Vec<KeyDefinition<'a>> {
+    let items = items_for_key(files, key)
+        .into_iter()
+        .filter(|(file, _)| keep(file))
+        .map(|(file, item)| KeyDefinition {
+            file,
+            line: item.line,
+            owner: visible_function(file, item).and_then(|function| function.owner.as_deref()),
+            cfg: item.cfg.as_deref(),
+            resolved: Resolved::Visible(item),
+        })
+        .collect::<Vec<_>>();
+    if !items.is_empty() {
+        return items;
+    }
+    let functions = functions_for_key(files, key)
+        .into_iter()
+        .filter(|(file, _)| keep(file))
+        .map(|(file, function)| KeyDefinition {
+            file,
+            line: function.line,
+            owner: function.owner.as_deref(),
+            cfg: function.cfg.as_deref(),
+            resolved: Resolved::Function(function),
+        })
+        .collect::<Vec<_>>();
+    if !functions.is_empty() {
+        return functions;
+    }
+    private_items_for_key(files, key)
+        .into_iter()
+        .filter(|(file, _)| keep(file))
+        .map(|(file, item)| KeyDefinition {
+            file,
+            line: item.line,
+            owner: None,
+            cfg: item.cfg.as_deref(),
+            resolved: Resolved::Private(item),
+        })
+        .collect()
 }
 
 /// Where a `use` item's references live once the SCIP index resolves them.
@@ -492,238 +774,5 @@ fn crate_name_from_manifest(raw: &str) -> Result<Option<String>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::atlas::{sources::Source, syntax};
-
-    #[test]
-    fn module_rollup_follows_the_requested_scope() {
-        assert_eq!(
-            module_for_path(
-                Path::new("crates/rimz/src/cli/agents_cmd/show.rs"),
-                Path::new("crates/rimz/src/cli")
-            ),
-            "agents_cmd"
-        );
-        assert_eq!(
-            crate_module_for_row(Path::new("crates/rimz/src/cli"), "agents_cmd"),
-            "cli::agents_cmd"
-        );
-        assert_eq!(
-            crate_module_for_path(Path::new("crates/rimz/src/cli/agents_cmd/mod.rs")),
-            "cli::agents_cmd"
-        );
-        assert_eq!(
-            rust_module_for_path(
-                Path::new("crates/rimz/src/cli/agents_cmd/show.rs"),
-                Path::new("crates/rimz/src/cli")
-            )
-            .as_deref(),
-            Some("agents_cmd")
-        );
-        assert_eq!(
-            rust_module_for_path(
-                Path::new("crates/rimz/src/cli/snapshots/surface.snap"),
-                Path::new("crates/rimz/src/cli")
-            ),
-            None
-        );
-        assert_eq!(
-            module_for_path(
-                Path::new("crates/rimz/src/cli/surface_tests.rs"),
-                Path::new("crates/rimz/src/cli")
-            ),
-            "(root)"
-        );
-    }
-
-    #[test]
-    fn crate_modules_fall_back_to_parent_and_stem_outside_src() {
-        assert_eq!(
-            crate_module_for_path(Path::new("crates/rimz/examples/seed_perf_workspace.rs")),
-            "examples::seed_perf_workspace"
-        );
-        assert_eq!(
-            crate_module_for_path(Path::new("crates/rimz/benches/hotpath.rs")),
-            "benches::hotpath"
-        );
-    }
-
-    #[test]
-    fn declaration_only_kinds_are_mods_and_uses() {
-        assert!(is_declaration_only("mod"));
-        assert!(is_declaration_only("use"));
-        assert!(!is_declaration_only("fn"));
-    }
-
-    #[test]
-    fn escaping_items_preserve_duplicate_cross_revision_identities() {
-        let sources = vec![Source::new(
-            "src/agents.rs",
-            "pub struct A;\npub struct B;\nimpl A { pub fn name() {} }\nimpl B { pub fn name() {} }\n",
-        )];
-        let syntax = syntax::analyze_sources(&sources, &BTreeSet::new());
-        let index = syntax::ModIndex::new(&syntax.files);
-
-        let files = syntax.files.iter().collect::<Vec<_>>();
-        let items = escaping_items(&files, Path::new("src"), &index);
-
-        assert_eq!(items["agents"].len(), 4);
-        assert_eq!(
-            items["agents"]
-                .iter()
-                .filter(|item| item.id.name == "name")
-                .count(),
-            2
-        );
-    }
-
-    #[test]
-    fn manifest_crate_names_follow_lib_override_and_rust_normalization() {
-        assert_eq!(
-            crate_name_from_manifest("[package]\nname = \"rimz-presence-zellij\"\n")
-                .unwrap()
-                .as_deref(),
-            Some("rimz_presence_zellij")
-        );
-        assert_eq!(
-            crate_name_from_manifest(
-                "[package]\nname = \"package-name\"\n[lib]\nname = \"import_name\"\n"
-            )
-            .unwrap()
-            .as_deref(),
-            Some("import_name")
-        );
-    }
-
-    #[test]
-    fn module_containment_models_crate_external_reach() {
-        assert!(module_is_within("store", EXTERNAL_REACH));
-        assert!(module_is_within("", EXTERNAL_REACH));
-        assert!(module_is_within(EXTERNAL_REACH, EXTERNAL_REACH));
-        assert!(!module_is_within(EXTERNAL_REACH, ""));
-        assert!(module_is_within("store::event_log", "store"));
-        assert!(!module_is_within("storehouse", "store"));
-    }
-
-    #[test]
-    fn module_endpoints_distinguish_scope_root_from_crate_root() {
-        assert_eq!(module_endpoint("", ""), "(root)");
-        assert_eq!(module_endpoint("", "agents"), "(crate)");
-        assert_eq!(module_endpoint("(crate)", ""), "(root)");
-        assert_eq!(module_endpoint("agents", "agents"), "(root)");
-        assert_eq!(module_endpoint("agents::adapters", "agents"), "adapters");
-        assert_eq!(module_endpoint("(crate)", "agents"), "(crate)");
-    }
-
-    #[test]
-    fn reference_labels_preserve_exact_non_root_modules() {
-        assert_eq!(reference_module_label("", ""), "(root)");
-        assert_eq!(reference_module_label("", "agents"), "(crate)");
-        assert_eq!(
-            reference_module_label("cli::agents_cmd", "agents"),
-            "cli::agents_cmd"
-        );
-    }
-}
-
-#[cfg(test)]
-mod key_tests {
-    use std::collections::BTreeSet;
-
-    use super::*;
-    use crate::atlas::{sources::Source, syntax};
-
-    fn files(sources: &[(&str, &str)]) -> Vec<FileSyntax> {
-        let sources = sources
-            .iter()
-            .map(|(path, text)| Source::new(*path, *text))
-            .collect::<Vec<_>>();
-        syntax::analyze_sources(&sources, &BTreeSet::new()).files
-    }
-
-    #[test]
-    fn items_for_key_prefers_the_named_module_then_searches_beneath() {
-        let files = files(&[
-            (
-                "crates/demo/src/message.rs",
-                "pub mod deliver;\npub fn send() {}\n",
-            ),
-            (
-                "crates/demo/src/message/deliver.rs",
-                "pub fn queue_synthetic() {}\npub fn send() {}\n",
-            ),
-        ]);
-        let names = |key: &str| {
-            items_for_key(&files, key)
-                .into_iter()
-                .map(|(_, item)| format!("{}::{}", item.module, item.name))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            names("message::queue_synthetic"),
-            ["message::deliver::queue_synthetic"]
-        );
-        assert_eq!(names("message::send"), ["message::send"]);
-        assert_eq!(names("message::deliver::send"), ["message::deliver::send"]);
-        assert_eq!(names("send"), ["message::send", "message::deliver::send"]);
-        assert!(names("message::missing").is_empty());
-        assert!(names("cli::send").is_empty());
-    }
-
-    #[test]
-    fn reexports_resolve_to_definitions_through_chains_and_globs() {
-        let files = files(&[
-            (
-                "crates/demo/src/store.rs",
-                "mod snapshot;\npub use snapshot::Snapshot;\npub use snapshot::*;\npub use crate::ids::Id;\npub use anyhow::Result;\npub use snapshot::Missing;\n",
-            ),
-            (
-                "crates/demo/src/store/snapshot.rs",
-                "mod row;\npub use row::{Row as Snapshot, Extra};\n",
-            ),
-            (
-                "crates/demo/src/store/snapshot/row.rs",
-                "pub struct Row;\npub struct Extra;\n",
-            ),
-            ("crates/demo/src/ids.rs", "pub struct Id;\n"),
-        ]);
-        let store = files
-            .iter()
-            .find(|file| file.module_path == "store")
-            .expect("store file");
-        let item = |name: &str| {
-            store
-                .pub_items
-                .iter()
-                .find(|item| item.name == name)
-                .expect("store re-exports the name")
-        };
-        let definition = |name: &str| match resolve_reexport(&files, item(name)) {
-            ReExport::Definition(file, definition) => {
-                format!("{}::{}", file.module_path, definition.name)
-            }
-            other => panic!("{name} resolved to {other:?}"),
-        };
-        assert_eq!(definition("Snapshot"), "store::snapshot::row::Row");
-        assert_eq!(definition("Id"), "ids::Id");
-        let ReExport::Glob(items) = resolve_reexport(&files, item("*")) else {
-            panic!("a glob resolves to a glob");
-        };
-        assert_eq!(
-            items
-                .iter()
-                .map(|(_, item)| item.name.as_str())
-                .collect::<Vec<_>>(),
-            ["Row", "Extra"]
-        );
-        assert!(matches!(
-            resolve_reexport(&files, item("Result")),
-            ReExport::Foreign
-        ));
-        assert!(matches!(
-            resolve_reexport(&files, item("Missing")),
-            ReExport::Unresolved
-        ));
-    }
-}
+#[path = "modules/tests.rs"]
+mod tests;

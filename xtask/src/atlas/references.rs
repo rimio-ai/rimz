@@ -92,6 +92,12 @@ pub(super) struct Edge {
 pub(super) struct References {
     pub(super) items: BTreeMap<ItemKey, ItemRefs>,
     pub(super) edges: Vec<Edge>,
+    /// References to production functions no boundary-visible item covers,
+    /// keyed to the function's own line (`FnBody::line`) in its file's
+    /// module, and to private non-function items (`PrivateItem`), keyed to
+    /// the item's line in its module. Only `inspect --item` on a private
+    /// definition reads them.
+    pub(super) fn_edges: Vec<Edge>,
 }
 
 pub(super) fn read_index(index_path: &Path) -> Result<Index> {
@@ -173,6 +179,29 @@ impl References {
             }
         }
 
+        let edge_to = |site: &ReferenceSite, file: &FileSyntax, module: &str, line, name: &str| {
+            let from_fn = syntax_by_path
+                .get(site.path.as_path())
+                .and_then(|file| file.enclosing_fn(site.line))
+                .map(|function| FnRef {
+                    label: function.label(),
+                    line: function.line,
+                });
+            Edge {
+                from_path: site.path.clone(),
+                to_path: file.path.clone(),
+                from: site.module.clone(),
+                from_line: site.line,
+                from_fn,
+                to: module.to_owned(),
+                to_line: line,
+                item: name.to_owned(),
+                kind: EdgeKind::Reference,
+                site_kind: site.site_kind,
+                cross_target: crate_path_for_source(&site.path) != file.crate_path
+                    || binaries.contains(&site.path) != binaries.contains(&file.path),
+            }
+        };
         let mut references = Self::default();
         for file in &syntax.files {
             for item in &file.pub_items {
@@ -205,30 +234,78 @@ impl References {
                                 item_refs.testkit_count += 1;
                             }
                         }
-                        let from_fn = syntax_by_path
-                            .get(site.path.as_path())
-                            .and_then(|file| file.enclosing_fn(site.line))
-                            .map(|function| FnRef {
-                                label: function.label(),
-                                line: function.line,
-                            });
-                        references.edges.push(Edge {
-                            from_path: site.path.clone(),
-                            to_path: file.path.clone(),
-                            from: site.module.clone(),
-                            from_line: site.line,
-                            from_fn,
-                            to: item.module.clone(),
-                            to_line: item.line,
-                            item: item.name.clone(),
-                            kind: EdgeKind::Reference,
-                            site_kind: site.site_kind,
-                            cross_target: crate_path_for_source(&site.path) != file.crate_path
-                                || binaries.contains(&site.path) != binaries.contains(&file.path),
-                        });
+                        references.edges.push(edge_to(
+                            site,
+                            file,
+                            &item.module,
+                            item.line,
+                            &item.name,
+                        ));
                     }
                 }
                 references.items.insert(ItemKey::new(file, item), item_refs);
+            }
+        }
+        // Production functions no boundary-visible item covers: the first
+        // definition of the function's name inside its span is its own
+        // identifier. Their references feed `inspect --item` on a private
+        // function and nothing else, so caller and assembly measures stay on
+        // the public surface.
+        for file in &syntax.files {
+            let public_lines = file
+                .pub_items
+                .iter()
+                .map(|item| item.line)
+                .collect::<BTreeSet<_>>();
+            for function in &file.fns {
+                let span =
+                    (file.path.clone(), function.line)..=(file.path.clone(), function.end_line);
+                let Some((line, symbols)) =
+                    definitions.range(span).find_map(|((_, line), symbols)| {
+                        let symbols = symbols
+                            .iter()
+                            .copied()
+                            .filter(|symbol| descriptor_tail_matches(symbol, &function.name))
+                            .collect::<Vec<_>>();
+                        (!symbols.is_empty()).then_some((*line, symbols))
+                    })
+                else {
+                    continue;
+                };
+                if public_lines.contains(&line) {
+                    continue;
+                }
+                for site in symbols
+                    .into_iter()
+                    .flat_map(|symbol| occurrences.get(symbol).into_iter().flatten())
+                {
+                    references.fn_edges.push(edge_to(
+                        site,
+                        file,
+                        &file.module_path,
+                        function.line,
+                        &function.name,
+                    ));
+                }
+            }
+            for item in &file.private_items {
+                let Some(symbols) = definitions.get(&(file.path.clone(), item.line)) else {
+                    continue;
+                };
+                for site in symbols
+                    .iter()
+                    .copied()
+                    .filter(|symbol| descriptor_tail_matches(symbol, &item.name))
+                    .flat_map(|symbol| occurrences.get(symbol).into_iter().flatten())
+                {
+                    references.fn_edges.push(edge_to(
+                        site,
+                        file,
+                        &item.module,
+                        item.line,
+                        &item.name,
+                    ));
+                }
             }
         }
         references

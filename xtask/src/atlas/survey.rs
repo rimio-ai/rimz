@@ -9,6 +9,7 @@ use serde_json::{Map, json};
 use super::conform::{self, Direction};
 use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
+use super::inspect;
 use super::ledger::{self, LEDGER_FILE, Ledger};
 use super::modules::{
     crate_module_for_path, crate_module_for_row, module_is_within, path_in_scope,
@@ -17,7 +18,7 @@ use super::output::{self, OutputArgs};
 use super::rank::{self, Hotspot, RankBy, Row, Totals};
 use super::shapes::{self, ShapeFamily};
 use super::syntax::{FileSyntax, FnBody, Spelling, resolve_import_path, resolved_internal_import};
-use super::target::{self, LayerRanks, TARGET_FILE, Target, VerdictKind};
+use super::target::{self, LayerRanks, TARGET_FILE, Target, Verdict, VerdictKind};
 use super::{positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
@@ -40,7 +41,7 @@ const SECTIONS: &[&str] = &[
     "footer",
 ];
 
-/// Distinct scope modules a function must call into before it reads as an
+/// Distinct modules a function must call into before it reads as an
 /// assembler.
 const ASSEMBLER_MIN_MODULES: usize = 3;
 
@@ -68,8 +69,10 @@ struct Probe {
     next: String,
 }
 
-/// One production function that calls into several of the scope's modules:
-/// the caller-side `deepen` candidate. Derived from syntax, callees resolved
+/// One production function that calls into several modules: the scope's
+/// own rows in their crate-relative spelling (`cli/room`), and every module
+/// outside the scope under its top-level crate module (`room`). The
+/// caller-side `deepen` candidate. Derived from syntax, callees resolved
 /// through the file's imports, so `survey` stays index-free; `inspect
 /// --from` measures the same function exactly.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -77,7 +80,7 @@ struct Assembler {
     function: String,
     path: PathBuf,
     line: usize,
-    /// Scope modules called into, each with its distinct callees, most first.
+    /// Modules called into, each with its distinct callees, most first.
     providers: Vec<ProviderSites>,
     callees: usize,
 }
@@ -194,6 +197,7 @@ struct Report {
     guard_families_dropped: detect::GuardDrops,
     suppressed: usize,
     stale: Vec<String>,
+    ambiguous: Vec<String>,
     ledger: LedgerNote,
 }
 
@@ -331,6 +335,11 @@ fn build_report(
         .map(|family| family.key.clone())
         .collect::<BTreeSet<_>>();
     let configured = target::load(&root.join(TARGET_FILE))?;
+    let VerdictKeyCheck { stale, ambiguous } = configured
+        .as_ref()
+        .map_or_else(VerdictKeyCheck::default, |target| {
+            verdict_key_check(target, facts, include_all)
+        });
     let suppressed_shapes = configured.as_ref().map_or_else(BTreeSet::new, |target| {
         target
             .verdicts
@@ -347,20 +356,6 @@ fn build_report(
             .map(|verdict| verdict.key.clone())
             .collect()
     });
-    let mut stale = configured
-        .iter()
-        .flat_map(|target| &target.verdicts)
-        .filter_map(|verdict| match verdict.kind {
-            VerdictKind::Shape if !shape_keys.contains(verdict.key.as_str()) => {
-                Some(format!("shape:{}", verdict.key))
-            }
-            VerdictKind::Guard if !guard_keys.contains(verdict.key.as_str()) => {
-                Some(format!("guard:{}", verdict.key))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    stale.sort();
     let shapes = all_shapes
         .into_iter()
         .filter(|family| !suppressed_shapes.contains(family.name.as_str()))
@@ -416,8 +411,128 @@ fn build_report(
         guard_families_dropped,
         suppressed,
         stale,
+        ambiguous,
         ledger: ledger_note,
     })
+}
+
+/// The `[[verdict]]` record defects, each labelled `kind:key`: keys naming
+/// nothing, and keys naming several definitions (with the candidates).
+#[derive(Debug, Default)]
+struct VerdictKeyCheck {
+    stale: Vec<String>,
+    ambiguous: Vec<String>,
+}
+
+fn verdict_label(verdict: &Verdict) -> String {
+    let kind = match verdict.kind {
+        VerdictKind::Shape => "shape",
+        VerdictKind::Guard => "guard",
+        VerdictKind::Item => "item",
+        VerdictKind::PassThrough => "pass-through",
+    };
+    format!("{kind}:{}", verdict.key)
+}
+
+/// Every shape key one view forms more than one family under, with the
+/// first member of each: the candidates an ambiguous shape verdict names.
+fn shape_collisions_in(shapes: &[ShapeFamily]) -> BTreeMap<String, Vec<String>> {
+    let mut by_name = BTreeMap::<String, Vec<String>>::new();
+    for family in shapes {
+        let first = family.members.first().map_or_else(String::new, |member| {
+            format!(
+                "{}:{} ({})",
+                member.path.display(),
+                member.line,
+                member.name
+            )
+        });
+        by_name.entry(family.name.clone()).or_default().push(first);
+    }
+    by_name.retain(|_, families| families.len() > 1);
+    by_name
+}
+
+/// Every `[[verdict]]` whose key names nothing or names several
+/// definitions. Judged against every file the facts hold rather than the
+/// survey's scope, so the answer does not depend on `--path`: a shape or
+/// guard key against the families of the whole tree and of each crate's
+/// source root, with the run's own `--all` gate. A shape key is ambiguous
+/// when one view forms several families under it; a guard family's key is
+/// its grouping key, so a view never holds two. Item and pass-through keys
+/// resolve as `inspect` resolves them: both are syntax-only.
+fn verdict_key_check(target: &Target, facts: &Facts, include_all: bool) -> VerdictKeyCheck {
+    // A family's key is spelled from the members the detector sees, so one
+    // that forms under a crate's own survey can merge into a wider family
+    // across the whole tree. A key is live when any of those views has it.
+    let mut views = facts
+        .syntax
+        .files
+        .iter()
+        .filter_map(|file| {
+            let source_root = file.crate_path.join("src");
+            file.path.starts_with(&source_root).then_some(source_root)
+        })
+        .collect::<BTreeSet<_>>();
+    views.insert(PathBuf::from("."));
+    let mut shape_keys = BTreeSet::new();
+    // Shape key → the first member of each family one view forms under it,
+    // kept only when a view forms more than one.
+    let mut shape_collisions = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut guard_keys = BTreeSet::new();
+    for view in &views {
+        let (shapes, guards) = if include_all {
+            (
+                shapes::families_all_with_dropped(facts, view).0,
+                detect::guard_families_all_with_dropped(facts, view).0,
+            )
+        } else {
+            (
+                shapes::families(facts, view),
+                detect::guard_families(facts, view),
+            )
+        };
+        for (name, families) in shape_collisions_in(&shapes) {
+            shape_collisions.entry(name).or_default().extend(families);
+        }
+        shape_keys.extend(shapes.into_iter().map(|family| family.name));
+        guard_keys.extend(guards.into_iter().map(|family| family.key));
+    }
+    let items = inspect::check_item_verdicts(target, "", facts);
+    let mut check = VerdictKeyCheck::default();
+    for verdict in &target.verdicts {
+        match verdict.kind {
+            VerdictKind::Shape if !shape_keys.contains(verdict.key.as_str()) => {
+                check.stale.push(verdict_label(verdict));
+            }
+            VerdictKind::Shape => {
+                if let Some(families) = shape_collisions.get(&verdict.key) {
+                    check.ambiguous.push(format!(
+                        "{} — ambiguous: {} shape families: {}",
+                        verdict_label(verdict),
+                        families.len(),
+                        families.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                }
+            }
+            VerdictKind::Guard if !guard_keys.contains(verdict.key.as_str()) => {
+                check.stale.push(verdict_label(verdict));
+            }
+            VerdictKind::Guard | VerdictKind::Item | VerdictKind::PassThrough => {}
+        }
+    }
+    check
+        .stale
+        .extend(items.stale.into_iter().map(verdict_label));
+    check.ambiguous.extend(
+        items
+            .ambiguous
+            .into_iter()
+            .map(|(verdict, ambiguity)| format!("{} — {ambiguity}", verdict_label(verdict))),
+    );
+    check.stale.sort();
+    check.ambiguous.sort();
+    check
 }
 
 /// Rank-row flag for a module a ledger `holds` verdict covers and whose
@@ -439,15 +554,87 @@ fn flag_held_rows(
     problems: &mut Vec<String>,
 ) {
     for row in rows {
-        let directory = scope.join(&row.module);
-        let file = directory.with_extension("rs");
-        match ledger.reopened(root, &row.module, &[&directory, &file]) {
+        let paths = row_history_paths(root, scope, &row.module);
+        let paths = paths.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        match ledger.reopened(root, &ledger_row(scope, &row.module), &paths) {
             Ok(Some(true)) => row.flags.push(REOPEN_FLAG),
             Ok(Some(false)) => row.flags.push(HELD_FLAG),
             Ok(None) => {}
             Err(error) => problems.push(format!("{error:#}")),
         }
     }
+}
+
+/// The paths whose commits a rank row's hold counts. A module row is its
+/// directory and its sibling `<module>.rs`. A `(root)` row is the root file
+/// of the directory it heads: `mod.rs`, `lib.rs`, or `main.rs` inside it, or
+/// the sibling `<directory>.rs`, whichever exist.
+fn row_history_paths(root: &Path, scope: &Path, row: &str) -> Vec<PathBuf> {
+    let Some(parent) = row
+        .strip_suffix("(root)")
+        .map(|parent| parent.trim_end_matches('/'))
+    else {
+        let directory = scope.join(row);
+        let file = directory.with_extension("rs");
+        return vec![directory, file];
+    };
+    let directory = if parent.is_empty() {
+        scope.to_path_buf()
+    } else {
+        scope.join(parent)
+    };
+    let roots = ["mod.rs", "lib.rs", "main.rs"]
+        .map(|file| directory.join(file))
+        .into_iter()
+        .chain([directory.with_extension("rs")])
+        .filter(|path| root.join(path).is_file())
+        .collect::<Vec<_>>();
+    if roots.is_empty() {
+        // No root file on disk: count nothing rather than the whole tree.
+        vec![directory.join("mod.rs")]
+    } else {
+        roots
+    }
+}
+
+/// The ledger's spelling of a scope-relative rank row: the row as the
+/// crate-wide survey ranks it, so `remote` under `crates/rimz/src/cli` reads
+/// `cli/remote` and never borrows the library `remote` row's hold. A scope
+/// outside a crate's `src` keeps the bare row.
+fn ledger_row(scope: &Path, row: &str) -> String {
+    prefixed_row(&ledger_prefix(scope), row)
+}
+
+/// A scope row joined to the scope's `ledger_prefix`.
+fn prefixed_row(prefix: &str, row: &str) -> String {
+    if prefix.is_empty() {
+        row.to_owned()
+    } else {
+        format!("{prefix}/{row}")
+    }
+}
+
+/// The `/`-spelled crate module a scope's rows sit under: `cli` for
+/// `crates/rimz/src/cli`, empty for a crate's `src` or a scope outside one.
+fn ledger_prefix(scope: &Path) -> String {
+    let scope = super::modules::scope_for_matching(scope);
+    if !scope
+        .components()
+        .any(|component| component.as_os_str() == "src")
+    {
+        return String::new();
+    }
+    let mut prefix = crate_module_for_row(scope, "(root)");
+    // A file scope ranks its one file under the file's own name, so the
+    // prefix is the module that declares it.
+    if scope.extension().is_some_and(|extension| extension == "rs")
+        && super::modules::file_module(scope) != "(root)"
+    {
+        prefix = prefix
+            .rsplit_once("::")
+            .map_or_else(String::new, |(parent, _)| parent.to_owned());
+    }
+    prefix.replace("::", "/")
 }
 
 /// Counts every upward dependency site under each target rule that touches
@@ -687,15 +874,19 @@ fn scope_row<'a>(module: &'a str, scope_module: &str) -> &'a str {
         .map_or("(root)", conform::top_module)
 }
 
-/// Resolves one syntax callee to the scope module that defines it: a
+/// Resolves one syntax callee to the crate module that defines it: a
 /// `crate`/`self`/`super` path directly, otherwise through the file's
-/// imports, trimmed to a module the crate defines; method calls and
-/// unimported names are unknown. A crate-root item reads as `(crate)`.
+/// imports, otherwise a path led by a workspace crate's name (the binary
+/// calling its library as `rimz::harness::…`) from that crate's root, the
+/// way `syntax::resolved_internal_import` reads it; each is trimmed to a
+/// module the crate defines. Method calls and unimported names are
+/// unknown. A crate-root item reads as `(crate)`.
 fn callee_module(
     callee: &str,
     file_module: &str,
     imports: &BTreeMap<&str, String>,
     known_modules: &BTreeSet<String>,
+    crate_names: &BTreeSet<String>,
 ) -> Option<String> {
     let segments = callee.split("::").collect::<Vec<_>>();
     let (first, rest) = segments.split_first()?;
@@ -707,6 +898,10 @@ fn callee_module(
                 .collect::<Vec<_>>();
             (resolve_import_path(file_module, &path), String::new())
         }
+        _ if !imports.contains_key(first) && crate_names.contains(*first) => (
+            rest[..rest.len().saturating_sub(1)].join("::"),
+            String::new(),
+        ),
         _ => {
             let base = imports.get(first)?.clone();
             let module = rest[..rest.len().saturating_sub(1)]
@@ -735,6 +930,7 @@ fn assemblers(
     scope: &Path,
 ) -> Vec<Assembler> {
     let scope_module = crate_module_for_row(scope, "(root)");
+    let row_prefix = ledger_prefix(scope);
     let mut assemblers = Vec::new();
     for file in files.iter().filter(|file| path_in_scope(&file.path, scope)) {
         let imports = file
@@ -750,20 +946,34 @@ fn assemblers(
         for function in &file.fns {
             let mut providers = BTreeMap::<String, BTreeSet<&str>>::new();
             for callee in &function.callees {
-                let Some(module) =
-                    callee_module(callee, &file.module_path, &imports, known_modules)
-                else {
+                let Some(module) = callee_module(
+                    callee,
+                    &file.module_path,
+                    &imports,
+                    known_modules,
+                    crate_names,
+                ) else {
                     continue;
                 };
-                if !module_is_within(&module, &scope_module) {
-                    continue;
-                }
-                let row = scope_row(&module, &scope_module);
-                if row == own_row {
-                    continue;
-                }
+                // A scope row reads in its crate-relative spelling (`cli/room`)
+                // and a module outside the scope under its top-level crate
+                // module (`room`), so the two never merge: `run_exec` wiring
+                // `harness` and `store` is an assembler even when the survey
+                // stops at `cli`.
+                let row = if module_is_within(&module, &scope_module) {
+                    let row = scope_row(&module, &scope_module);
+                    if row == own_row {
+                        continue;
+                    }
+                    prefixed_row(&row_prefix, row)
+                } else if module == "(crate)" {
+                    // The library root reads as the crate-wide survey's row.
+                    "(root)".to_owned()
+                } else {
+                    conform::top_module(&module).to_owned()
+                };
                 providers
-                    .entry(row.to_owned())
+                    .entry(row)
                     .or_default()
                     .insert(callee.rsplit("::").next().unwrap_or(callee));
             }
@@ -1076,7 +1286,7 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         }
         writeln!(
             output,
-            "\n{} functions call into {}+ scope modules (syntax-resolved through imports; `inspect --from` measures one exactly)",
+            "\n{} functions call into {}+ modules (syntax-resolved through imports; `inspect --from` measures one exactly)",
             report.assemblers.len(),
             ASSEMBLER_MIN_MODULES
         )
@@ -1168,29 +1378,42 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
             "cx: severity-weighted over-threshold excess summed per function; 0 = every function under its warn thresholds"
         )
         .unwrap();
-        let stale = report
-            .stale
-            .iter()
-            .take(top)
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join(", ");
-        if report.stale.len() > top {
-            writeln!(
-                output,
-                "stale verdict keys: {} (and {} more)",
-                stale,
-                report.stale.len() - top
-            )
-            .unwrap();
-        } else if stale.is_empty() {
-            writeln!(output, "stale verdict keys: none").unwrap();
-        } else {
-            writeln!(output, "stale verdict keys: {stale}").unwrap();
-        }
+        render_verdict_keys(&mut output, "stale", &report.stale, top, true);
+        // Printed beside a `none` stale line so a clean record says so.
+        let clean = report.stale.is_empty();
+        render_verdict_keys(&mut output, "ambiguous", &report.ambiguous, top, clean);
         render_ledger_note(&mut output, &report.ledger, top);
     }
     output
+}
+
+/// One footer line of verdict record defects: the first `top` keys, `none`
+/// when there are none and `show_none` asks for it, else nothing.
+fn render_verdict_keys(
+    output: &mut String,
+    what: &str,
+    keys: &[String],
+    top: usize,
+    show_none: bool,
+) {
+    let shown = keys
+        .iter()
+        .take(top)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if keys.len() > top {
+        writeln!(
+            output,
+            "{what} verdict keys: {shown} (and {} more)",
+            keys.len() - top
+        )
+        .unwrap();
+    } else if !keys.is_empty() {
+        writeln!(output, "{what} verdict keys: {shown}").unwrap();
+    } else if show_none {
+        writeln!(output, "{what} verdict keys: none").unwrap();
+    }
 }
 
 fn render_ledger_note(output: &mut String, note: &LedgerNote, top: usize) {
@@ -1424,6 +1647,7 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
                 "guard_families_dropped_as_predicate_use": report.guard_families_dropped.predicate_use,
                 "suppressed_families": report.suppressed,
                 "stale_verdict_keys": &report.stale,
+                "ambiguous_verdict_keys": &report.ambiguous,
                 "ledger": &report.ledger,
             }),
         );

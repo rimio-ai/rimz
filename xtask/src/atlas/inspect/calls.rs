@@ -386,12 +386,16 @@ pub(super) fn assembly_functions(
             .or_default()
             .insert((edge.item.clone(), edge.to_line));
     }
+    let from_contains_to = from.contains(to);
     let mut by_function = BTreeMap::<FunctionId, (Vec<&Edge>, usize, BTreeSet<usize>)>::new();
     for edge in edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
             && edge.site_kind == SourceKind::Production
             && from.matches(&edge.from, &edge.from_path)
             && to.matches(&edge.to, &edge.to_path)
+            // An ancestor caller contains the target: the target's own
+            // functions are not its callers.
+            && !(from_contains_to && to.matches(&edge.from, &edge.from_path))
             && !is_type_alias_edge(edge, syntax_files)
     }) {
         let Some(function) = &edge.from_fn else {

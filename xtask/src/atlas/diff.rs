@@ -10,10 +10,11 @@ use serde_json::{Map, Value, json};
 use super::conform::{self, Direction};
 use super::contract::{
     AssemblyExpectation, CxExpectation, DeleteExpectation, DependencyExpectation, EscExpectation,
-    PassContract, PassKind, RehomeExpectation,
+    PassContract, PassKind, RehomeExpectation, RehomeForm,
 };
 use super::facts::{Facets, Facts};
 use super::inspect;
+use super::metrics::FunctionMetric;
 use super::modules::{
     ItemId, bounded_names, crate_module_for_path, escaping_items_for_boundary, is_declaration_only,
     module_is_within, path_in_scope,
@@ -159,8 +160,58 @@ struct DeleteCheck {
 #[derive(Clone, Debug)]
 struct RehomeCheck {
     expectation: RehomeExpectation,
+    item: String,
     old: Option<DefinitionSite>,
     destinations: Vec<DefinitionSite>,
+}
+
+/// A logic-form `[[rehome]]` row measured on both sides.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DecisionCheck {
+    from: String,
+    to: String,
+    min_decisions: u64,
+    from_base: u64,
+    from_current: u64,
+    to_base: u64,
+    to_current: u64,
+}
+
+impl DecisionCheck {
+    fn measure(
+        from: &str,
+        to: &str,
+        min_decisions: u64,
+        base: &[FunctionMetric],
+        current: &[FunctionMetric],
+    ) -> Self {
+        Self {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            min_decisions,
+            from_base: decisions(base, from),
+            from_current: decisions(current, from),
+            to_base: decisions(base, to),
+            to_current: decisions(current, to),
+        }
+    }
+}
+
+/// The decisions a module holds: Σ(cyclomatic − 1) over its measured
+/// functions. rust-code-analysis gives every collected function a base
+/// cyclomatic of 1, so the sum counts branch points alone and holds still
+/// when code is extracted into another function or method, where `score`
+/// (cx) moves. A module with no functions measures 0.
+fn decisions(metrics: &[FunctionMetric], module: &str) -> u64 {
+    // `FunctionMetric::module` is the scope-relative top directory, not the
+    // crate module path, so the module comes from the file path the way
+    // `FileSyntax::module_path` does.
+    let total = metrics
+        .iter()
+        .filter(|metric| module_is_within(&crate_module_for_path(&metric.path), module))
+        .map(|metric| (metric.cyclomatic - 1.0).max(0.0))
+        .sum::<f64>();
+    total.round() as u64
 }
 
 #[derive(Clone, Debug)]
@@ -177,6 +228,7 @@ struct ExpectationChecks<'a> {
     esc: &'a [EscCheck],
     delete: &'a [DeleteCheck],
     rehome: &'a [RehomeCheck],
+    rehome_logic: &'a [DecisionCheck],
     dependency: &'a [DependencyCheck],
 }
 
@@ -305,10 +357,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     let paths = contract
         .as_ref()
         .map_or(exploratory_paths, |contract| contract.paths.clone());
-    if contract
-        .as_ref()
-        .is_some_and(|contract| !contract.cx.is_empty())
-    {
+    if contract.as_ref().is_some_and(PassContract::needs_metrics) {
         for facts in [&mut base_facts, &mut current] {
             facts.metrics = Some(super::metrics::analyze_snapshot(
                 &facts.sources,
@@ -510,23 +559,33 @@ fn build_report(
             })
             .collect()
     });
-    let rehome_checks = contract.map_or_else(Vec::new, |contract| {
-        contract
-            .rehome
-            .iter()
-            .map(|expectation| {
-                let (_, name) = expectation
-                    .item
-                    .rsplit_once("::")
-                    .expect("validated rehome item has a module and name");
-                RehomeCheck {
-                    expectation: expectation.clone(),
-                    old: definition_site(&current.syntax.files, &expectation.item),
-                    destinations: definition_sites(&current.syntax.files, &expectation.to, name),
-                }
-            })
-            .collect()
-    });
+    let mut rehome_checks = Vec::new();
+    let mut rehome_logic_checks = Vec::new();
+    for expectation in contract.map_or(&[][..], |contract| &contract.rehome) {
+        match expectation.form()? {
+            RehomeForm::Item(item) => rehome_checks.push(RehomeCheck {
+                expectation: expectation.clone(),
+                item: item.to_owned(),
+                old: definition_site(&current.syntax.files, item),
+                destinations: definition_sites(
+                    &current.syntax.files,
+                    &expectation.to,
+                    item,
+                    rehome_owner(&base.syntax.files, item),
+                ),
+            }),
+            RehomeForm::Logic {
+                from,
+                min_decisions,
+            } => rehome_logic_checks.push(DecisionCheck::measure(
+                from,
+                &expectation.to,
+                min_decisions,
+                metric_rows(base),
+                metric_rows(current),
+            )),
+        }
+    }
     let dependency_checks = contract.map_or_else(Vec::new, |contract| {
         contract
             .dependency
@@ -559,6 +618,7 @@ fn build_report(
                 esc: &esc_checks,
                 delete: &delete_checks,
                 rehome: &rehome_checks,
+                rehome_logic: &rehome_logic_checks,
                 dependency: &dependency_checks,
             },
             &changed_outside,
@@ -914,6 +974,7 @@ fn contract_assembly(
         _ if absent_as_zero => return Ok(0),
         (Err(error), _) | (_, Err(error)) => return Err(error),
     };
+    let from_contains_to = from.contains(&to);
     let mut functions = BTreeMap::<FunctionId, Vec<&Edge>>::new();
     for edge in facts
         .references
@@ -926,6 +987,9 @@ fn contract_assembly(
                 && edge.site_kind == SourceKind::Production
                 && from.matches(&edge.from, &edge.from_path)
                 && to.matches(&edge.to, &edge.to_path)
+                // An ancestor `from` contains `to`: its functions inside
+                // `to` assemble nothing across the boundary.
+                && !(from_contains_to && to.matches(&edge.from, &edge.from_path))
         })
     {
         if let Some(function) = &edge.from_fn {
@@ -1033,33 +1097,115 @@ fn split_changed_paths(
         .partition(|path| in_paths(path, paths))
 }
 
-fn definition_site(files: &[super::syntax::FileSyntax], key: &str) -> Option<DefinitionSite> {
+fn metric_rows(facts: &Facts) -> &[FunctionMetric] {
+    facts
+        .metrics
+        .as_ref()
+        .map_or(&[][..], |metrics| &metrics.functions)
+}
+
+/// Where a key is still defined: a visibility-qualified item, or else a
+/// production function.
+fn definition_site(files: &[FileSyntax], key: &str) -> Option<DefinitionSite> {
     key.contains("::")
-        .then(|| super::modules::items_for_key(files, key))
-        .and_then(|items| items.into_iter().next())
-        .map(|(file, item)| DefinitionSite {
-            path: file.path.clone(),
-            line: item.line,
+        .then(|| super::modules::definitions_for_key(files, key))
+        .and_then(|definitions| definitions.into_iter().next())
+        .map(|definition| DefinitionSite {
+            path: definition.file.path.clone(),
+            line: definition.line,
         })
 }
 
+/// The `impl` owner a rehomed key's base definition carries: a method moves
+/// to a method of the same owner.
+fn rehome_owner<'a>(base: &'a [FileSyntax], key: &str) -> Option<&'a str> {
+    super::modules::definitions_for_key(base, key)
+        .into_iter()
+        .next()
+        .and_then(|definition| definition.owner)
+}
+
+/// Every definition named like `key` under `module`: visibility-qualified
+/// items, and production functions with the key's owner that no such item
+/// already covers, so a `pub fn` counts once and a `pub use` re-export of it
+/// is a second site.
 fn definition_sites(
-    files: &[super::syntax::FileSyntax],
+    files: &[FileSyntax],
     module: &str,
-    name: &str,
+    key: &str,
+    owner: Option<&str>,
 ) -> Vec<DefinitionSite> {
+    let name = key.rsplit_once("::").map_or(key, |(_, name)| name);
     files
         .iter()
         .flat_map(|file| {
-            file.pub_items
+            let named = file
+                .pub_items
                 .iter()
-                .filter(move |item| module_is_within(&item.module, module) && item.name == name)
-                .map(|item| DefinitionSite {
-                    path: file.path.clone(),
-                    line: item.line,
+                .filter(|item| module_is_within(&item.module, module) && item.name == name)
+                .collect::<Vec<_>>();
+            // A function's span starts at its first attribute, an item's
+            // line at its name: the item covers the function it names.
+            let covered = |line: usize, end_line: usize| {
+                named
+                    .iter()
+                    .any(|item| (line..=end_line).contains(&item.line))
+            };
+            let items = named
+                .iter()
+                .filter(|_| owner.is_none())
+                .map(|item| item.line)
+                .collect::<Vec<_>>();
+            let functions = file
+                .fns
+                .iter()
+                .filter(|function| {
+                    module_is_within(&function.module, module)
+                        && function.name == name
+                        && function.owner.as_deref() == owner
+                        // Items carry no owner, so a method counts here.
+                        && (owner.is_some() || !covered(function.line, function.end_line))
                 })
+                .map(|function| function.line);
+            items
+                .into_iter()
+                .chain(functions)
+                .map(|line| DefinitionSite {
+                    path: file.path.clone(),
+                    line,
+                })
+                .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// A logic-form rehome lands when `from` lost at least `min-decisions` and
+/// `to` gained no more than `from` lost.
+fn decision_row(check: &DecisionCheck) -> ExpectationRow {
+    let fell = check.from_base as i64 - check.from_current as i64;
+    let rose = check.to_current as i64 - check.to_base as i64;
+    let min = check.min_decisions as i64;
+    let mut detail = format!(
+        "decisions {} {} → {} ({:+}, min {min}); {} {} → {} ({rose:+})",
+        check.from,
+        check.from_base,
+        check.from_current,
+        -fell,
+        check.to,
+        check.to_base,
+        check.to_current
+    );
+    if fell < min {
+        let _ = write!(detail, "; fell {fell} < min {min}");
+    }
+    if rose > fell {
+        let _ = write!(detail, "; {} rose {rose} > {fell} moved", check.to);
+    }
+    ExpectationRow {
+        assertion: format!("rehome {} → {}", check.from, check.to),
+        landed: fell >= min && rose <= fell,
+        detail,
+    }
 }
 
 /// Name the `[[esc]]` rows a positive module ceiling could have narrowed.
@@ -1138,23 +1284,6 @@ fn expectation_rows(
             detail,
         }
     }));
-    if contract.kind == PassKind::ThinCli {
-        let thinning = checks.cx.iter().find_map(|check| {
-            let item = check.expectation.item.as_ref()?;
-            let base = rounded_cx(check.base.ok()?.unwrap_or(0.0));
-            let max = rounded_cx(check.expectation.max);
-            (item.starts_with("cli::") && max < base)
-                .then(|| format!("cx `{item}` falls {base:.1} → {max:.1}"))
-        });
-        rows.push(ExpectationRow {
-            assertion: "cli thinning".to_owned(),
-            landed: thinning.is_some(),
-            detail: thinning.unwrap_or_else(|| {
-                "a thin-cli contract needs a [[cx]] item row under cli with max below its base"
-                    .to_owned()
-            }),
-        });
-    }
     // A module pass that grants itself room to grow has to pay for it with a
     // narrowing, or it asserts nothing at all.
     if contract.kind == PassKind::Module && contract.max_production_sloc_delta > 0 {
@@ -1230,14 +1359,12 @@ fn expectation_rows(
             ),
         };
         ExpectationRow {
-            assertion: format!(
-                "rehome {} → {}",
-                check.expectation.item, check.expectation.to
-            ),
+            assertion: format!("rehome {} → {}", check.item, check.expectation.to),
             landed,
             detail,
         }
     }));
+    rows.extend(checks.rehome_logic.iter().map(decision_row));
     rows.extend(checks.dependency.iter().map(|check| {
         let landed = check.current <= check.expectation.max_sites;
         let excess = check.current.saturating_sub(check.expectation.max_sites);

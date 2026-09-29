@@ -386,3 +386,45 @@ fn type_aliases_are_not_assembly_items() {
     assert!(!shapes[0].shape.iter().any(|item| item == "Result"));
     assert_eq!(shapes[0].items_unfolded, 5);
 }
+
+#[test]
+fn an_ancestor_callers_functions_inside_the_target_are_not_its_heaviest() {
+    let edge_from = |from: &str, path: &str, function: &str, item: &str| {
+        let mut edge = edge(item, from, Some((function, 1)), SourceKind::Production);
+        edge.from_path = PathBuf::from(path);
+        edge.to = "cli::exec".to_owned();
+        edge.to_path = PathBuf::from("crates/demo/src/cli/exec.rs");
+        edge
+    };
+    let edges = [
+        edge_from("cli", "crates/demo/src/cli.rs", "dispatch", "run_exec"),
+        edge_from(
+            "cli::exec",
+            "crates/demo/src/cli/exec.rs",
+            "run_exec",
+            "settle",
+        ),
+        edge_from(
+            "cli::exec",
+            "crates/demo/src/cli/exec.rs",
+            "run_exec",
+            "spawn",
+        ),
+    ];
+
+    let functions = assembly_functions(&edges, &[], &selector("cli"), &selector("cli::exec"));
+
+    assert_eq!(
+        functions
+            .iter()
+            .map(|function| function.function.as_str())
+            .collect::<Vec<_>>(),
+        ["dispatch"]
+    );
+    let inner = assembly_functions(&edges, &[], &selector("cli::exec"), &selector("cli::exec"));
+    assert_eq!(
+        inner.len(),
+        1,
+        "a `--from` inside the target keeps its own edges"
+    );
+}

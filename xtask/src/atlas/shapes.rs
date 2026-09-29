@@ -855,6 +855,9 @@ mod tests {
             params: Vec::new(),
             callees: ["prepare", "resolve", "launch"].map(str::to_owned).to_vec(),
             forwards: None,
+            cfg: None,
+            member: false,
+            trait_impl: false,
         };
         let functions = vec![
             function("src/fixture.rs", 1, 100),
