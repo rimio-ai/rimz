@@ -1707,8 +1707,12 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
     assert_eq!(parsed.claude["personal"].home, None);
     assert!(!text.contains("[accounts.claude]"), "{text}");
     assert!(
-        text.find("[notifications]") < text.find("[accounts.claude.work]"),
-        "a declared account must not split a table from its heading comments: {text}"
+        text.contains("[accounts.usage_limit_usd]\n# ceilings\n\n[accounts.claude.work]\n"),
+        "a declared account follows the accounts section and its comments: {text}"
+    );
+    assert!(
+        text.find("[accounts.claude.personal]") < text.find("\n\n[notifications]"),
+        "{text}"
     );
 
     assert!(editor.remove_named_account(&claude, &work).expect("remove"));
@@ -1804,4 +1808,49 @@ fn machine_selection_numeric_and_boolean_names_stay_strings() {
             Some(name)
         );
     }
+}
+
+#[test]
+fn account_tables_land_beside_the_templated_accounts_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    let codex = crate::ids::AgentKind::new_unchecked("codex");
+    let rimio = "rimio".parse::<crate::ids::LoginName>().unwrap();
+
+    editor.upsert_named_account(&codex, &rimio, None).unwrap();
+    editor.use_account(&codex, &rimio).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let at = |needle: &str| {
+        text.find(needle)
+            .unwrap_or_else(|| panic!("missing {needle:?}: {text}"))
+    };
+    assert!(
+        at("\n[accounts.usage_limit_usd]\n# Display-only") < at("## [accounts.use]"),
+        "the section's own comments stay under its header: {text}"
+    );
+    assert!(
+        at("## [accounts.use]") < at("\n[accounts.codex.rimio]\n"),
+        "{text}"
+    );
+    assert!(
+        at("\n[accounts.codex.rimio]\n") < at("\n[accounts.use]\ncodex = \"rimio\"\n"),
+        "{text}"
+    );
+    assert!(
+        at("codex = \"rimio\"\n\n[notifications]\n# enabled") > at("\n[accounts.use]\n"),
+        "{text}"
+    );
+    assert_eq!(
+        MachineConfig::load_from(&path, editor.files.agents_home())
+            .unwrap()
+            .accounts
+            .use_accounts
+            .get(&codex)
+            .map(|name| name.as_str().to_owned()),
+        Some("rimio".to_owned())
+    );
 }

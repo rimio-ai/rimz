@@ -666,7 +666,20 @@ fn parse_document(path: &Path, text: &str) -> Result<DocumentMut> {
 
 /// The table at `path`, created as an empty table where the document has none.
 fn table_at_mut<'a>(doc: &'a mut DocumentMut, path: &[String]) -> Result<&'a mut Table> {
-    let position = last_table_position(doc.as_table()) + 1;
+    let position = if !path.is_empty() && item_at(doc, path).is_none() {
+        place_new_table(doc, path).position
+    } else {
+        0
+    };
+    placed_table_at_mut(doc, path, position)
+}
+
+/// [`table_at_mut`], giving each table it creates `position`.
+fn placed_table_at_mut<'a>(
+    doc: &'a mut DocumentMut,
+    path: &[String],
+    position: isize,
+) -> Result<&'a mut Table> {
     let mut table = doc.as_table_mut();
     for segment in path {
         let item = table.entry(segment).or_insert(Item::None);
@@ -701,6 +714,124 @@ fn last_table_position(table: &Table) -> isize {
         })
         .max()
         .unwrap_or(0)
+}
+
+/// Where a new table under `path` is rendered, and the comments above its header.
+struct NewTablePlace {
+    position: isize,
+    /// `Some` when the table goes inside the file rather than at its end.
+    decor: Option<Decor>,
+}
+
+/// Place a new `[accounts.*]` table right after the last `accounts` table, so
+/// `[accounts.use]` lands beside the templated `[accounts]` block rather than at
+/// the end of the file. Later tables shift down one. The comments a section carries
+/// after its last table are stored as the next header's prefix; the part up to
+/// its last blank line stays with the section, above the new header, and the
+/// next header keeps only the comments directly above it. Other sections, an
+/// `accounts` section the document lacks, or one that ends the file, append.
+fn place_new_table(doc: &mut DocumentMut, path: &[String]) -> NewTablePlace {
+    let end = last_table_position(doc.as_table()) + 1;
+    let section_last = path
+        .first()
+        .filter(|section| *section == "accounts")
+        .and_then(|section| doc.as_table().get(section))
+        .and_then(Item::as_table)
+        .and_then(|section| {
+            let mut last = section.position();
+            for_each_table(section, &mut |table| last = last.max(table.position()));
+            last
+        });
+    let Some(after) = section_last.filter(|last| last + 1 < end) else {
+        return NewTablePlace {
+            position: end,
+            decor: None,
+        };
+    };
+    let position = after + 1;
+    let mut next = None;
+    for_each_table_mut(doc.as_table_mut(), &mut |table| {
+        if let Some(at) = table.position().filter(|at| *at >= position) {
+            table.set_position(Some(at + 1));
+            if renders_header(table) && next.is_none_or(|next| at < next) {
+                next = Some(at);
+            }
+        }
+    });
+    let mut decor = Decor::default();
+    decor.set_prefix("\n");
+    let Some(next) = next.map(|at| at + 1) else {
+        return NewTablePlace {
+            position,
+            decor: Some(decor),
+        };
+    };
+    for_each_table_mut(doc.as_table_mut(), &mut |table| {
+        if table.position() != Some(next) || !renders_header(table) {
+            return;
+        }
+        let prefix = table
+            .decor()
+            .prefix()
+            .and_then(|prefix| prefix.as_str())
+            .unwrap_or_default()
+            .to_owned();
+        let lines: Vec<&str> = prefix.split_inclusive('\n').collect();
+        let split = lines
+            .iter()
+            .rposition(|line| line.trim().is_empty())
+            .map_or(0, |blank| blank + 1);
+        let (section_comments, heading) = lines.split_at(split);
+        let section_comments = section_comments.concat();
+        if !section_comments.is_empty() {
+            decor.set_prefix(section_comments);
+        }
+        table
+            .decor_mut()
+            .set_prefix(format!("\n{}", heading.concat()));
+    });
+    NewTablePlace {
+        position,
+        decor: Some(decor),
+    }
+}
+
+/// Whether `table` renders a `[header]` line of its own.
+fn renders_header(table: &Table) -> bool {
+    !table.is_dotted() && (!table.is_implicit() || table.iter().any(|(_, item)| item.is_value()))
+}
+
+/// Visit every table under `table`, depth first, array-of-tables blocks included.
+fn for_each_table(table: &Table, visit: &mut impl FnMut(&Table)) {
+    for (_, item) in table.iter() {
+        let children = item
+            .as_table()
+            .into_iter()
+            .chain(item.as_array_of_tables().into_iter().flatten());
+        for child in children {
+            visit(child);
+            for_each_table(child, visit);
+        }
+    }
+}
+
+/// [`for_each_table`], mutably.
+fn for_each_table_mut(table: &mut Table, visit: &mut impl FnMut(&mut Table)) {
+    for (_, item) in table.iter_mut() {
+        match item {
+            Item::Table(child) => {
+                visit(child);
+                for_each_table_mut(child, visit);
+            }
+            Item::ArrayOfTables(blocks) => {
+                for child in blocks.iter_mut() {
+                    visit(child);
+                    for_each_table_mut(child, visit);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn item_at<'a>(doc: &'a DocumentMut, path: &[String]) -> Option<&'a Item> {
@@ -1194,26 +1325,29 @@ fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> R
     let (leaf, parents) = path.split_last().expect("validated key has a leaf");
     let mut item = value_to_item(value);
     let old = item_at(doc, path);
-    let position = old
-        .and_then(Item::as_table)
-        .and_then(Table::position)
-        .unwrap_or_else(|| last_table_position(doc.as_table()) + 1);
+    let old_position = old.and_then(Item::as_table).and_then(Table::position);
     let new_parent = !parents.is_empty() && item_at(doc, parents).is_none();
-    let appended = new_parent || (old.is_none() && !item.is_value());
-    // A replaced block keeps the comments above its header; an appended one takes the
-    // template's trailing comments, so they stay with its last section, then a blank line.
+    let creates_table = new_parent || (old.is_none() && !item.is_value());
+    // A replaced block keeps the comments above its header. A new one goes beside its
+    // section (see `place_new_table`); one appended at the end takes the template's
+    // trailing comments, so they stay with its last section, then a blank line.
     let mut decor = match old {
         Some(Item::Table(block)) => Some(block.decor().clone()),
         Some(Item::ArrayOfTables(blocks)) => blocks.get(0).map(|block| block.decor().clone()),
         _ => None,
     };
-    if appended {
-        let mut appended_decor = Decor::default();
-        appended_decor.set_prefix(format!("{}\n", doc.trailing().as_str().unwrap_or_default()));
-        decor = Some(appended_decor);
-        doc.set_trailing("");
+    let mut position = old_position.unwrap_or_else(|| last_table_position(doc.as_table()) + 1);
+    if creates_table {
+        let place = place_new_table(doc, path);
+        position = place.position;
+        decor = Some(place.decor.unwrap_or_else(|| {
+            let mut appended = Decor::default();
+            appended.set_prefix(format!("{}\n", doc.trailing().as_str().unwrap_or_default()));
+            doc.set_trailing("");
+            appended
+        }));
     }
-    let table = table_at_mut(doc, parents)?;
+    let table = placed_table_at_mut(doc, parents, position)?;
     match &mut item {
         Item::Table(block) => {
             block.set_position(Some(position));
