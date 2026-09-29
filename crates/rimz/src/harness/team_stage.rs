@@ -15,6 +15,7 @@ use crate::message::compact::{self, CompactErr, CompactOutcome, CompactRequest};
 use crate::message::dispatch::{self, DispatchMode, DispatchOutcome, DispatchRequest};
 use crate::store::event::{EventKind, SignalSource};
 use crate::store::message::{AutoCompact, DeliveryGate, HarnessNotice, MessageSender};
+use crate::store::snapshot::find_agent;
 use crate::store::writer::AgentLifecycleReceipt;
 use crate::workspace::ResolvedWorkspace;
 
@@ -391,12 +392,7 @@ pub fn react_to_lifecycle(
         }
         let member = audit
             .as_ref()
-            .and_then(|audit| {
-                audit
-                    .agents
-                    .iter()
-                    .find(|member| member.kind == event.kind && member.agent_id == event.agent_id)
-            })
+            .and_then(|audit| find_agent(&audit.agents, &event.kind, &event.agent_id))
             .filter(|member| member.team.is_some());
         let registered_member = member.filter(|member| {
             matches!(event.signal, LifecycleSignal::Registered)

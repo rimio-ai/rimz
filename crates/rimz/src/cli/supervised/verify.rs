@@ -9,6 +9,7 @@ use rimz::harness::schedule::runner::{CheckEcho, CheckOutcome, run_check};
 use rimz::message::deliver;
 use rimz::store::message::DeliveryGate;
 use rimz::store::run::RunRecord;
+use rimz::store::snapshot::find_agent;
 
 use super::pane;
 
@@ -37,10 +38,7 @@ pub(super) fn deliver_reprompt(
         .agent_id
         .as_ref()
         .context("verify re-prompt run has no bound agent session")?;
-    let agent = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.kind == record.kind && &agent.agent_id == agent_id)
+    let agent = find_agent(&snapshot.agents, &record.kind, agent_id)
         .context("verify re-prompt target agent is no longer in the rollup")?;
     let (_, delivered) = deliver::nudge_now(
         workspace,

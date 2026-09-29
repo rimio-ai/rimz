@@ -17,6 +17,7 @@ use crate::harness::resume::{
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::mux::{LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, ResumeTab};
 use crate::store::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
+use crate::store::snapshot::find_agent;
 use crate::{Store, channel};
 
 #[derive(Debug, thiserror::Error)]
@@ -557,10 +558,7 @@ fn lost_agent_summaries(
         .map(|(kind, agent_id)| SessionDeathAgent {
             kind: kind.clone(),
             agent_id: agent_id.clone(),
-            name: agents
-                .iter()
-                .find(|agent| agent.kind == *kind && agent.agent_id == *agent_id)
-                .and_then(|agent| agent.name.clone()),
+            name: find_agent(agents, kind, agent_id).and_then(|agent| agent.name.clone()),
         })
         .collect()
 }

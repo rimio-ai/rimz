@@ -16,7 +16,9 @@ use crate::config::{
 };
 use crate::ids::{AgentKind, AgentSessionId, AskId, LinkTier, PaneId};
 use crate::sidebar::unread::OpenedUnread;
-use crate::store::snapshot::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
+use crate::store::snapshot::{
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot, find_agent,
+};
 
 pub use crate::config::NotificationKind;
 
@@ -326,12 +328,10 @@ impl NotificationState {
                 continue;
             }
             let mut pending = pending_notification(opened, notification_kind);
-            pending.agent.ask_id = snapshot
-                .agents
-                .iter()
-                .find(|agent| agent.kind == opened.agent_kind && agent.agent_id == opened.agent_id)
-                .and_then(|agent| agent.open_ask.as_ref())
-                .map(|ask| ask.id.clone());
+            pending.agent.ask_id =
+                find_agent(&snapshot.agents, &opened.agent_kind, &opened.agent_id)
+                    .and_then(|agent| agent.open_ask.as_ref())
+                    .map(|ask| ask.id.clone());
             self.pending.push(pending);
         }
 

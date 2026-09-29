@@ -9,7 +9,10 @@ use crate::agents::{
 use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId, EventId, LoginName, WorkspaceId};
 use crate::store::event::{self, EventEnvelope};
-use crate::store::{session_death, snapshot};
+use crate::store::{
+    session_death,
+    snapshot::{self, find_agent},
+};
 use crate::workspace::record;
 
 use super::{Store, debounce};
@@ -326,16 +329,6 @@ fn derive_lifecycle_events(
             }
         }
     }
-}
-
-fn find_agent<'a>(
-    agents: &'a [AgentState],
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-) -> Option<&'a AgentState> {
-    agents
-        .iter()
-        .find(|state| state.kind == *kind && state.agent_id == *agent_id)
 }
 
 fn root_parent(

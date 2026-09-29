@@ -3,6 +3,7 @@
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::reply::TurnWaitView;
 use crate::store::StoreErr;
+use crate::store::snapshot::find_agent;
 use crate::{RuntimeScope, Store};
 
 use super::fleet::FleetRuns;
@@ -31,10 +32,7 @@ pub fn owed_wake(
     agent_id: &AgentSessionId,
 ) -> Result<Option<OwedWake>, StoreErr> {
     let projection = store.runtime_projection(RuntimeScope::Audit)?;
-    if let Some(launcher) = projection
-        .agents
-        .iter()
-        .find(|agent| &agent.kind == kind && &agent.agent_id == agent_id)
+    if let Some(launcher) = find_agent(&projection.agents, kind, agent_id)
         && super::fleet::has_members(&projection.agents, launcher)
     {
         let runs = super::run::list(store.paths())?;
@@ -44,12 +42,7 @@ pub fn owed_wake(
         }
     }
     let view = TurnWaitView::load(store)?;
-    let Some(agent) = view
-        .snapshot
-        .agents
-        .iter()
-        .find(|agent| &agent.kind == kind && &agent.agent_id == agent_id)
-    else {
+    let Some(agent) = find_agent(&view.snapshot.agents, kind, agent_id) else {
         return Ok(None);
     };
     if !agent.pending_waits.is_empty() {

@@ -13,6 +13,7 @@ use rimz::message::compact::{
 };
 use rimz::message::send::already_compacted_at;
 use rimz::store::message::MessageSender;
+use rimz::store::snapshot::find_agent;
 
 use super::Ctx;
 
@@ -24,10 +25,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         .context("reading idle-compaction delivery snapshot")?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
-    let agent = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.kind == request.kind && agent.agent_id == request.agent_id)
+    let agent = find_agent(&snapshot.agents, &request.kind, &request.agent_id)
         .context("idle-compaction target agent is no longer in the rollup")?;
     let teams = rimz::config::effective::teams(&config, Some(&workspace.project_root));
     let mode = resolve_mode(agent, &teams, config.harness.idle_compact);

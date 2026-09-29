@@ -25,7 +25,10 @@ use crate::disk::paths::StatePaths;
 use crate::harness::owed::OwedWake;
 use crate::ids::{AgentSessionId, PaneId, RunId};
 use crate::store::run::{RunRecord, RunStatus, RunStoreErr, RunVerify};
-use crate::store::{Store, snapshot::SidebarSnapshot};
+use crate::store::{
+    Store,
+    snapshot::{SidebarSnapshot, find_agent},
+};
 
 const FAILURE_TAIL_CAP: usize = 4 * 1024;
 const STRANDED_PARK_REASON: &str =
@@ -856,10 +859,7 @@ pub fn live_status(record: &RunRecord, snapshot: &SidebarSnapshot) -> Option<Run
         return None;
     }
     let agent_id = record.agent_id.as_ref()?;
-    let agent = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.kind == record.kind && &agent.agent_id == agent_id)?;
+    let agent = find_agent(&snapshot.agents, &record.kind, agent_id)?;
     Some(RunLiveStatus {
         agent_status: agent.status,
         phase: agent.phase,
