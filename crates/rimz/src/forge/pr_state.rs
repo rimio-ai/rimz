@@ -51,6 +51,8 @@ impl TargetStamp {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrLink {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) open: Option<OpenPrFacts>,
     /// Head branch this link was resolved for. Legacy path-only links have no
     /// stamp and are re-resolved before reuse.
     #[serde(default)]
@@ -72,6 +74,25 @@ pub struct PrLink {
     /// link is open and its repo's open set was read.
     #[serde(default, skip_serializing_if = "PrStack::is_empty")]
     pub stack: PrStack,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OpenPrFacts {
+    #[serde(default)]
+    pub(crate) head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) behind_by: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) mergeability: Option<SettledMergeability>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state", content = "head")]
+pub(crate) enum SettledMergeability {
+    Mergeable(String),
+    Conflicting(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

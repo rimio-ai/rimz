@@ -21,6 +21,7 @@ fn pr_stack_projection_matches_cache_and_clears_stale_groups() {
     cache.states.insert(
         path.clone(),
         PrLink {
+            open: None,
             stack: stack.clone(),
             branch: Some("feature".to_owned()),
             incarnation: None,
@@ -83,6 +84,7 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            open: None,
             stack: Default::default(),
             branch: None,
             incarnation: None,
@@ -113,6 +115,7 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            open: None,
             stack: Default::default(),
             branch: None,
             incarnation: None,
@@ -137,6 +140,7 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            open: None,
             stack: Default::default(),
             branch: None,
             incarnation: None,
@@ -182,6 +186,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            open: None,
             stack: Default::default(),
             branch: None,
             incarnation: None,
@@ -207,6 +212,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
+            open: None,
             stack: Default::default(),
             branch: None,
             incarnation: None,
@@ -247,6 +253,7 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
         states.insert(
             path.display().to_string(),
             PrLink {
+                open: None,
                 stack: Default::default(),
                 branch: Some(branch.to_owned()),
                 incarnation: None,

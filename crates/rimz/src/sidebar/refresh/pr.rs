@@ -294,6 +294,7 @@ impl Target {
         merge_sha: Option<String>,
     ) -> PrLink {
         PrLink {
+            open: None,
             stack: Default::default(),
             branch: Some(self.branch.clone()),
             incarnation: self.marker_created_at,
@@ -742,7 +743,7 @@ fn probe_github_repo_group(
         };
         batches.push((plan, response));
     }
-    let (states, branch_ci) = project_github_group(group, &batches);
+    let (states, branch_ci) = project_github_group(group, &batches, prior);
     RepoGroupProbe {
         open: batches.into_iter().find_map(|(_, response)| response.open),
         repo_key: repo_key.to_owned(),
@@ -756,6 +757,7 @@ fn probe_github_repo_group(
 fn project_github_group(
     group: &RepoGroup,
     batches: &[(GhQueryPlan, forge::GhBulkResponse)],
+    prior: &BTreeMap<String, PrLink>,
 ) -> (BTreeMap<String, PrLink>, BTreeMap<String, WorktreeCi>) {
     let mut prs = BTreeMap::new();
     let mut commits = BTreeMap::new();
@@ -781,7 +783,22 @@ fn project_github_group(
                 || target.accepts_terminal_pr(pr.number, pr.created_at))
         {
             let link = match pr.state {
-                WorktreePrState::Open => target.pr_link(pr.state, pr.number, pr.head_ci, None),
+                WorktreePrState::Open => {
+                    let mut link = target.pr_link(pr.state, pr.number, pr.head_ci, None);
+                    link.open = pr.open.clone();
+                    if let Some(facts) = &mut link.open
+                        && facts.mergeability.is_none()
+                    {
+                        facts.mergeability = prior
+                            .get(&target.path)
+                            .filter(|prior| {
+                                target.owns_link(prior) && prior.number == Some(pr.number)
+                            })
+                            .and_then(|prior| prior.open.as_ref())
+                            .and_then(|facts| facts.mergeability.clone());
+                    }
+                    link
+                }
                 WorktreePrState::Merged => target.pr_link(
                     pr.state,
                     pr.number,

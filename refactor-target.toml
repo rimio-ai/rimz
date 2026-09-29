@@ -298,7 +298,8 @@ surface-budget = 202
 path = "crates/rimz/src/forge"
 # Shared same-repository PR graph and stack walk feed sidebar enrichment.
 # Forge signal vocabulary is shared with CLI admission.
-surface-budget = 45
+# Open PR facts and settled-at mergeability cross the parser/projection seam.
+surface-budget = 47
 
 [[module]]
 path = "crates/rimz/src/harness"
