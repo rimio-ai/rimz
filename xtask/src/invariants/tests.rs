@@ -12,6 +12,12 @@ fn integration_identity_requires_fixture_home() {
         for bypass in [
             concat!("WorkspaceResolver::", "resolve("),
             concat!("StatePaths::", "for_project_root("),
+            concat!("RuntimePaths::", "for_project_root("),
+            concat!("WorkspaceResolver::", "persisted_project_root("),
+            concat!(
+                "WorkspaceResolver::",
+                "resolve_participant_with_pin_recovery("
+            ),
         ] {
             std::fs::write(&path, bypass).unwrap();
             let err =
@@ -20,7 +26,7 @@ fn integration_identity_requires_fixture_home() {
         }
         std::fs::write(
             &path,
-            "WorkspaceResolver::resolve_under(root, None, home);\nStatePaths::for_project_root_under(root, home);\n",
+            "WorkspaceResolver::resolve_under(root, None, home);\nStatePaths::for_project_root_under(root, home);\nRuntimePaths::for_project_root_under(root, home);\n",
         )
         .unwrap();
         ensure_integration_fixture_home(&root, &[path]).unwrap();
