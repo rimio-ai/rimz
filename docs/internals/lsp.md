@@ -253,6 +253,8 @@ An ambiguous or not-found symbol name lists qualified candidates instead of gues
 
 The external skill's model-invocation switches are ready for a separate release action. This implementation does not change them.
 
+`crates/rimz/src/lsp/check.rs::Context` shares Git listing, path resolution, server selection, and a per-file outline cache between notes checks and source reads. Candidates retain full and selection ranges plus direct-parent indices; `symbol_hits` supplies the same chain matching to both consumers. `crates/rimz/src/lsp/check/show.rs` selects items and zooms large bodies without truncation. Unlike a notes check, a failed show argument leaves later arguments running. `crates/rimz/src/lsp/query.rs::dirty_documents` derives the owning-editor dirty set for query rendering and source headers.
+
 ## Visibility
 
 Automation here is an internal repair, not a user assist, so it keeps diagnostic records rather than assist records: every refused admission, queue timeout, kill, and eviction appends one with the numbers behind it. `evicted` carries the watchdog's kill details plus `for: {root, server}` identifying the requester. Idle stops and restarts need no diagnostic; history carries them. `rimz lsp list` and `rimz doctor` surface running and dormant servers; doctor also shows the last refusal. Both use `cli/render/status.rs::lsp`: dormant is neutral except crashed (alarm) and memory pressure (warn); terminal stopped is neutral. They share state words through `cli/render/mod.rs::lsp_state_label` and row order through `cli/render/status.rs::lsp_order`; doctor shows list's STATE, CHECKOUT, SERVER, RSS, and LEASES columns. Query memory-short errors come from the broker's refusal, never an inference from diagnostics.

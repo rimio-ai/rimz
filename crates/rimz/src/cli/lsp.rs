@@ -55,6 +55,14 @@ enum Command {
     Symbols(Query),
     /// Search workspace symbols.
     Find(ListQuery),
+    /// Read numbered source for one or more file anchors or positions.
+    Show {
+        #[arg(value_name = "ANCHOR", required = true)]
+        anchors: Vec<String>,
+        /// Print the full body instead of an outline for large items.
+        #[arg(long)]
+        full: bool,
+    },
     /// Check every path::symbol anchor in a Markdown file against the outline.
     Check {
         file: PathBuf,
@@ -160,6 +168,36 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             return Ok(rimz::lsp::broker::serve(serde_json::from_str(&request)?)?);
         }
         Command::List { all, json } => return list(all, json, globals),
+        Command::Show { anchors, full } => {
+            let context = query_context(globals)?;
+            let blocks = match check::show(
+                &anchors,
+                full,
+                &context.root,
+                &context.entries,
+                &context.servers,
+            ) {
+                Ok(blocks) => blocks,
+                Err(error) => {
+                    writeln!(render::err(), "{error}")?;
+                    std::process::exit(2);
+                }
+            };
+            let mut out = render::out();
+            let mut code = 0;
+            for (index, (text, exit)) in blocks.iter().enumerate() {
+                if index > 0 {
+                    writeln!(out)?;
+                }
+                write!(out, "{text}")?;
+                code = query_exit(code, *exit);
+            }
+            out.flush()?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            return Ok(());
+        }
         Command::Check { file, json } => {
             let context = query_context(globals)?;
             let report = match check::run(&file, &context.root, &context.entries, &context.servers)
@@ -241,13 +279,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                     values.push(value);
                     continue;
                 }
-                let dirty = entry
-                    .attached
-                    .iter()
-                    .flat_map(|editor| &editor.open)
-                    .filter(|document| document.owner && document.dirty)
-                    .map(|document| document.uri.clone())
-                    .collect();
+                let dirty = query::dirty_documents(&entry);
                 match output {
                     query::Output::Answer { result, .. } if args.json => {
                         format!("{}\n", serde_json::to_string_pretty(&result)?)

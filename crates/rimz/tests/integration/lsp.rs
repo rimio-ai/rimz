@@ -811,6 +811,87 @@ fn lsp_attach_survives_dormancy_and_terminal_stop_unblocks_readers() {
 }
 
 #[test]
+fn lsp_show_batches_source_and_failures() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(
+        env.project_root.join("show.rs"),
+        (1..=210)
+            .map(|n| format!("  line {n}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    std::fs::write(env.project_root.join("notes.py"), "pass\n").unwrap();
+    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    env.rimz()
+        .args([
+            "lsp",
+            "show",
+            "show.rs::Parent::child",
+            "show.rs:208:4",
+            "show.rs:2:4 (1-2)",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            [
+                "show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n",
+                "show.rs:208-209\n   208\t  line 208\n   209\t  line 209\n",
+                "show.rs:1-2\n     1\t  line 1\n     2\t  line 2\n",
+            ]
+            .join("\n"),
+        );
+    env.rimz()
+        .args(["lsp", "show", "show.rs::Parent"])
+        .assert()
+        .success()
+        .stdout(
+            "show.rs:1-205  (outline: 205 lines; --full prints the body)\n     4\tline 4 (3-5)\n",
+        );
+    env.rimz()
+        .args(["lsp", "show", "show.rs::Parent", "--full"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("   205\t  line 205\n"));
+    env.rimz()
+        .args([
+            "lsp",
+            "show",
+            "show.rs:210-211",
+            "gone.rs::x",
+            "show.rs::child",
+        ])
+        .assert()
+        .code(6)
+        .stdout(predicates::str::contains("ambiguous-symbol"));
+    env.rimz()
+        .args([
+            "lsp",
+            "show",
+            "show.rs::child",
+            "notes.py::f",
+            "o/r@v1:gone.rs::x",
+        ])
+        .assert()
+        .code(3)
+        .stdout(predicates::str::contains("external"));
+    env.rimz()
+        .args(["lsp", "show", "show.rs:1-2", "invalid"])
+        .assert()
+        .code(2)
+        .stdout("");
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+}
+
+#[test]
 fn lsp_check_reports_anchor_failures_and_coverage() {
     use serde_json::{Value, json};
 

@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 
 const LINE_SLACK: u32 = 3;
 
+mod show;
+pub use show::show;
+
 pub fn run(
     notes: &Path,
     root: &Path,
@@ -23,45 +26,104 @@ pub fn run(
             )
         })
         .map_err(LspErr::from)?;
-    let output = crate::proc::git_command(root)
-        .args([
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ])
-        .output()
-        .map_err(LspErr::from)?;
-    if !output.status.success() {
-        return Err(LspErr::from(std::io::Error::other(format!(
-            "cannot list checkout files in {}: {}",
-            root.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )))
-        .into());
-    }
-    use std::os::unix::ffi::OsStrExt;
-    let mut files: Vec<_> = output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|path| !path.is_empty())
-        .map(|path| PathBuf::from(std::ffi::OsStr::from_bytes(path)))
-        .filter(|path| root.join(path).is_file())
-        .collect();
-    files.sort();
-    files.dedup();
-    let mut outlines = BTreeMap::new();
+    let mut context = Context::new(root, entries, servers)?;
     let mut lengths = BTreeMap::new();
     let mut verdicts = Vec::new();
-    for mut anchor in extract(&source) {
+    for anchor in extract(&source) {
+        let (anchor, path) = match context.resolve(anchor) {
+            Ok(resolved) => resolved,
+            Err(result) => {
+                verdicts.push(*result);
+                continue;
+            }
+        };
+        if anchor.symbol.is_none() {
+            let lines = match lengths.entry(path.clone()) {
+                std::collections::btree_map::Entry::Occupied(entry) => *entry.get(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let bytes = std::fs::read(root.join(&path)).map_err(LspErr::from)?;
+                    let lines = bytes.iter().filter(|byte| **byte == b'\n').count()
+                        + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n"));
+                    *entry.insert(lines)
+                }
+            };
+            verdicts.push(check_lines(anchor, path.clone(), lines));
+            continue;
+        }
+        let Some(file) = context.outline(&path)? else {
+            let mut result = verdict(anchor, Some(path.clone()), Status::Unchecked);
+            result.detail = unchecked_detail(&path);
+            verdicts.push(result);
+            continue;
+        };
+        verdicts.push(check_symbol(anchor, path, &file.nodes));
+    }
+    Ok(Report::new(notes, root, verdicts))
+}
+
+struct Context<'a> {
+    checkout: &'a Path,
+    entries: &'a [registry::Entry],
+    servers: &'a BTreeMap<String, crate::config::LspServerConfig>,
+    files: Vec<PathBuf>,
+    outlines: BTreeMap<PathBuf, FileOutline>,
+}
+
+struct FileOutline {
+    nodes: Vec<Candidate>,
+    dirty: bool,
+}
+
+impl<'a> Context<'a> {
+    fn new(
+        root: &'a Path,
+        entries: &'a [registry::Entry],
+        servers: &'a BTreeMap<String, crate::config::LspServerConfig>,
+    ) -> Result<Self, query::QueryErr> {
+        let output = crate::proc::git_command(root)
+            .args([
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ])
+            .output()
+            .map_err(LspErr::from)?;
+        if !output.status.success() {
+            return Err(LspErr::from(std::io::Error::other(format!(
+                "cannot list checkout files in {}: {}",
+                root.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
+            .into());
+        }
+        use std::os::unix::ffi::OsStrExt;
+        let mut files: Vec<_> = output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| PathBuf::from(std::ffi::OsStr::from_bytes(path)))
+            .filter(|path| root.join(path).is_file())
+            .collect();
+        files.sort();
+        files.dedup();
+        Ok(Self {
+            checkout: root,
+            entries,
+            servers,
+            files,
+            outlines: BTreeMap::new(),
+        })
+    }
+
+    fn resolve(&self, mut anchor: Anchor) -> Result<(Anchor, PathBuf), Box<Verdict>> {
         if let Some(qualifier) = anchor.qualifier.take() {
             let mut result = verdict(anchor, None, Status::External);
             result.detail = qualifier;
-            verdicts.push(result);
-            continue;
+            return Err(Box::new(result));
         }
-        let matches = resolve(root, &files, &anchor.path);
+        let matches = resolve(self.checkout, &self.files, &anchor.path);
         if matches.len() != 1 {
             let status = if matches.is_empty() {
                 Status::MissingPath
@@ -85,41 +147,46 @@ pub fn run(
                 format!("{} files: {}{more}", matches.len(), names.join(", "))
             };
             result.files = matches;
-            verdicts.push(result);
-            continue;
+            return Err(Box::new(result));
         }
-        let path = &matches[0];
-        if anchor.symbol.is_none() {
-            let lines = match lengths.entry(path.clone()) {
-                std::collections::btree_map::Entry::Occupied(entry) => *entry.get(),
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    let bytes = std::fs::read(root.join(path)).map_err(LspErr::from)?;
-                    let lines = bytes.iter().filter(|byte| **byte == b'\n').count()
-                        + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n"));
-                    *entry.insert(lines)
-                }
-            };
-            verdicts.push(check_lines(anchor, path.clone(), lines));
-            continue;
-        }
+        Ok((anchor, matches[0].clone()))
+    }
+
+    fn is_dirty(&self, path: &Path) -> Result<bool, LspErr> {
+        let uri = url::Url::from_file_path(self.checkout.join(path))
+            .map_err(|()| LspErr::Protocol(format!("not an absolute path: {}", path.display())))?;
+        let key = query::DocumentKey::new(uri.as_str());
+        Ok(self
+            .entries
+            .iter()
+            .flat_map(query::dirty_documents)
+            .any(|dirty| query::DocumentKey::new(&dirty) == key))
+    }
+
+    fn outline(&mut self, path: &Path) -> Result<Option<&FileOutline>, query::QueryErr> {
         let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-        if !servers
+        if !self
+            .servers
             .values()
             .any(|config| config.extensions.iter().any(|ext| ext == extension))
         {
-            let mut result = verdict(anchor, Some(path.clone()), Status::Unchecked);
-            result.detail = format!("no server configured for .{extension}");
-            verdicts.push(result);
-            continue;
+            return Ok(None);
         }
-        let nodes = match outlines.entry(path.clone()) {
+        let dirty = self.is_dirty(path)?;
+        let file = match self.outlines.entry(path.to_owned()) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => {
-                let server = query::select(root, entries.to_vec(), servers, None, Some(path))?;
+                let server = query::select(
+                    self.checkout,
+                    self.entries.to_vec(),
+                    self.servers,
+                    None,
+                    Some(path),
+                )?;
                 let query::Output::Answer { result, .. } = query::execute(
                     &server,
                     query::Verb::Symbols,
-                    &query::Target::File(path.clone()),
+                    &query::Target::File(path.to_owned()),
                 )?
                 else {
                     return Err(LspErr::Protocol(
@@ -127,12 +194,19 @@ pub fn run(
                     )
                     .into());
                 };
-                entry.insert(outline(result)?)
+                entry.insert(FileOutline {
+                    nodes: outline(result)?,
+                    dirty,
+                })
             }
         };
-        verdicts.push(check_symbol(anchor, path.clone(), nodes));
+        Ok(Some(file))
     }
-    Ok(Report::new(notes, root, verdicts))
+}
+
+fn unchecked_detail(path: &Path) -> String {
+    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    format!("no server configured for .{extension}")
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -152,6 +226,12 @@ struct Candidate {
     path: Vec<String>,
     kind: &'static str,
     range: [u32; 2],
+    #[serde(skip)]
+    extent: super::protocol::Range,
+    #[serde(skip)]
+    selection: super::protocol::Range,
+    #[serde(skip)]
+    parent: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -468,6 +548,9 @@ fn outline(value: serde_json::Value) -> super::Result<Vec<Candidate>> {
                     path,
                     kind: query::kind_name(symbol.kind),
                     range: query::span_lines(symbol.location.range),
+                    extent: symbol.location.range,
+                    selection: symbol.location.range,
+                    parent: None,
                 });
             }
         }
@@ -475,22 +558,26 @@ fn outline(value: serde_json::Value) -> super::Result<Vec<Candidate>> {
             let mut pending: Vec<_> = symbols
                 .into_iter()
                 .rev()
-                .map(|symbol| (symbol, Vec::new()))
+                .map(|symbol| (symbol, Vec::new(), None))
                 .collect();
-            while let Some((symbol, mut path)) = pending.pop() {
+            while let Some((symbol, mut path, parent)) = pending.pop() {
                 path.push(symbol.name);
+                let index = nodes.len();
                 nodes.push(Candidate {
                     name: path.join("::"),
                     path: path.clone(),
                     kind: query::kind_name(symbol.kind),
                     range: query::span_lines(symbol.range),
+                    extent: symbol.range,
+                    selection: symbol.selection_range,
+                    parent,
                 });
                 pending.extend(
                     symbol
                         .children
                         .into_iter()
                         .rev()
-                        .map(|child| (child, path.clone())),
+                        .map(|child| (child, path.clone(), Some(index))),
                 );
             }
         }
@@ -537,28 +624,36 @@ fn matches_chain(node: &Candidate, chain: &[String]) -> bool {
 fn check_symbol(anchor: Anchor, path: PathBuf, nodes: &[Candidate]) -> Verdict {
     // Symbol checks are only called for extracted nonempty chains.
     let chain = anchor.symbol.as_ref().expect("symbol anchor has a chain");
-    let hits: Vec<_> = nodes
+    let hits: Vec<_> = symbol_hits(nodes, chain).into_iter().cloned().collect();
+    let found = hits
         .iter()
-        .filter(|node| matches_chain(node, chain))
-        .cloned()
-        .collect();
-    let found = hits.iter().find(|node| {
-        anchor.hint.is_none_or(|[start, end]| {
-            start > 0
-                && start <= end
-                && start <= node.range[1].saturating_add(LINE_SLACK)
-                && end >= node.range[0].saturating_sub(LINE_SLACK)
-        })
-    });
+        .find(|node| anchor.hint.is_none_or(|hint| overlaps(node, hint)));
     if let Some(found) = found {
         let range = found.range;
         let mut result = verdict(anchor, Some(path), Status::Ok);
         result.range = Some(range);
         return result;
     }
-    let (status, candidates) = if hits.is_empty() {
+    let status = if hits.is_empty() {
+        Status::MissingSymbol
+    } else {
+        Status::LineOutside
+    };
+    let (candidates, detail) = candidate_details(nodes, chain, hits);
+    let mut result = verdict(anchor, Some(path), status);
+    result.detail = detail;
+    result.candidates = candidates;
+    result
+}
+
+fn candidate_details(
+    nodes: &[Candidate],
+    chain: &[String],
+    mut candidates: Vec<Candidate>,
+) -> (Vec<Candidate>, String) {
+    if candidates.is_empty() {
         let last = chain.last().expect("extracted symbol chain is nonempty");
-        let mut candidates: Vec<_> = nodes
+        let mut ranked: Vec<_> = nodes
             .iter()
             .filter_map(|node| {
                 let leaf = query::without_generics(node.path.last()?);
@@ -577,20 +672,14 @@ fn check_symbol(anchor: Anchor, path: PathBuf, nodes: &[Candidate]) -> Verdict {
                 Some((rank, node))
             })
             .collect();
-        candidates.sort_by_key(|(rank, _)| *rank);
-        (
-            Status::MissingSymbol,
-            candidates
-                .into_iter()
-                .take(3)
-                .map(|(_, node)| node.clone())
-                .collect(),
-        )
-    } else {
-        (Status::LineOutside, hits)
-    };
-    let mut result = verdict(anchor, Some(path), status);
-    result.detail = if candidates.is_empty() {
+        ranked.sort_by_key(|(rank, _)| *rank);
+        candidates = ranked
+            .into_iter()
+            .take(3)
+            .map(|(_, node)| node.clone())
+            .collect();
+    }
+    let detail = if candidates.is_empty() {
         "no matching outline symbol".into()
     } else {
         candidates
@@ -604,8 +693,21 @@ fn check_symbol(anchor: Anchor, path: PathBuf, nodes: &[Candidate]) -> Verdict {
             .collect::<Vec<_>>()
             .join("; ")
     };
-    result.candidates = candidates;
-    result
+    (candidates, detail)
+}
+
+fn symbol_hits<'a>(nodes: &'a [Candidate], chain: &[String]) -> Vec<&'a Candidate> {
+    nodes
+        .iter()
+        .filter(|node| matches_chain(node, chain))
+        .collect()
+}
+
+fn overlaps(node: &Candidate, [start, end]: [u32; 2]) -> bool {
+    start > 0
+        && start <= end
+        && start <= node.range[1].saturating_add(LINE_SLACK)
+        && end >= node.range[0].saturating_sub(LINE_SLACK)
 }
 
 fn check_lines(anchor: Anchor, path: PathBuf, lines: usize) -> Verdict {
