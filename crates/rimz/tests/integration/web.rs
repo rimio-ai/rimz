@@ -184,8 +184,7 @@ impl WebFixture {
     fn new(log_name: &str) -> Self {
         let env = Env::new();
         env.record(&env.project_root);
-        let workspace =
-            rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+        let workspace = env.resolve_workspace(&env.project_root);
         let (bin_dir, tmux_log) = tmux_shim(&env);
         let ttyd_bin = bin_dir.join("ttyd");
         std::os::unix::fs::symlink(ttyd_shim(), &ttyd_bin).expect("link named ttyd fixture");
@@ -237,8 +236,7 @@ fn web_open_disabled_fails_before_room_side_effects() {
     let env = Env::new();
     env.record(&env.project_root);
     write_machine_config(&env, "[web]\nenabled = false\n");
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let log = env.project_root.join("ttyd-disabled.log");
     let output = env
         .rimz()
@@ -515,7 +513,7 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     let second_root = fixture.env.project_root.join("second-room");
     std::fs::create_dir_all(&second_root).expect("mkdir second room");
     fixture.env.record(&second_root);
-    let second = rimz::WorkspaceResolver::resolve(&second_root, None).expect("resolve second room");
+    let second = fixture.env.resolve_workspace(&second_root);
     let _second_room = crate::common::room::ShimRoom::watch_tmux(
         fixture.env.store_for(&second_root).runtime_paths().clone(),
         &second.session_name,
@@ -708,7 +706,7 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
     let second_root = fixture.env.project_root.join("broadcast-second");
     std::fs::create_dir_all(&second_root).expect("mkdir second room");
     fixture.env.record(&second_root);
-    let second = rimz::WorkspaceResolver::resolve(&second_root, None).expect("resolve second room");
+    let second = fixture.env.resolve_workspace(&second_root);
     let sessions = format!(
         "{}\\n{}",
         fixture.workspace.session_name, second.session_name
@@ -869,7 +867,7 @@ fn broadcast_revocation_stops_old_daemon_before_replacement_validation() {
     let second_root = fixture.env.project_root.join("broadcast-revocation-second");
     std::fs::create_dir_all(&second_root).expect("mkdir second room");
     fixture.env.record(&second_root);
-    let second = rimz::WorkspaceResolver::resolve(&second_root, None).expect("resolve second room");
+    let second = fixture.env.resolve_workspace(&second_root);
     let sessions = format!(
         "{}\\n{}",
         fixture.workspace.session_name, second.session_name
@@ -1486,13 +1484,11 @@ fn web_exec_rejects_known_stopped_session_before_attach() {
     let stopped_root = fixture.env.project_root.join("stopped-room");
     std::fs::create_dir_all(&stopped_root).expect("mkdir stopped room");
     fixture.env.record(&stopped_root);
-    let stopped =
-        rimz::WorkspaceResolver::resolve(&stopped_root, None).expect("resolve stopped workspace");
+    let stopped = fixture.env.resolve_workspace(&stopped_root);
     let second_live_root = fixture.env.project_root.join("second-live-room");
     std::fs::create_dir_all(&second_live_root).expect("mkdir second live room");
     fixture.env.record(&second_live_root);
-    let second_live = rimz::WorkspaceResolver::resolve(&second_live_root, None)
-        .expect("resolve second live workspace");
+    let second_live = fixture.env.resolve_workspace(&second_live_root);
     let live_sessions = format!(
         "{}\\n{}",
         second_live.session_name, fixture.workspace.session_name
@@ -1598,8 +1594,7 @@ fn zellij_room_uses_the_same_shared_ttyd_daemon() {
     let _guard = daemon_test_guard();
     let env = Env::new();
     env.record(&env.project_root);
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let ttyd_log = env.project_root.join("ttyd-zellij.log");
     let zellij_log = env.project_root.join("zellij-web.log");
     let ttyd_bin = env.home_root.join("zellij-web-bin/ttyd");

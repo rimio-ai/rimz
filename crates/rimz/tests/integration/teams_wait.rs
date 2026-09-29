@@ -50,7 +50,7 @@ impl Fixture {
     }
 
     fn seed(&self, name: &str, role: &str, channel: &str, worktree: &Path) {
-        let workspace = rimz::WorkspaceResolver::resolve(&self.env.project_root, None).unwrap();
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
         self.env
             .store()
             .append_event(&EventEnvelope::agent_launched(
@@ -82,7 +82,7 @@ impl Fixture {
     }
 
     fn end(&self, name: &str) {
-        let workspace = rimz::WorkspaceResolver::resolve(&self.env.project_root, None).unwrap();
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
         let observation = AgentLifecycleObservation::new(
             Some(AgentSessionId::from(format!("launch_{name}"))),
             LifecycleSignal::Ended,

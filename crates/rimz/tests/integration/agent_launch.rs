@@ -89,8 +89,7 @@ fn unsupported_plugin_peer_launch_explains_that_no_report_will_come() {
         .assert()
         .success();
     let shim = write_env_dump_shim(&env, "testbot");
-    // The runner's home can mint a different name when a short workspace ID collides.
-    let session_name = env.state_path_for(&env.project_root).dir_name;
+    let session_name = env.resolve_workspace(&env.project_root).session_name;
     let out = env
         .rimz()
         .args([
@@ -147,7 +146,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
     )
     .unwrap();
     let shim = write_env_dump_shim(&env, "claude");
-    let session_name = store.paths().dir_name.as_str();
+    let session_name = env.resolve_workspace(&env.project_root).session_name;
     let out = env
         .rimz()
         .args([
@@ -225,7 +224,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
                 run_id: None,
                 prompt: Some("first task".into()),
             },
-            session_name,
+            &session_name,
             &env.project_root,
             &rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_2"),
         )
@@ -387,8 +386,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
 #[test]
 fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
     let env = Env::new();
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let workspace = env.resolve_workspace(&env.project_root);
     let launch_id = AgentSessionId::from("launch_caller");
     env.store()
         .append_event(&EventEnvelope::agent_launched(
@@ -450,8 +448,7 @@ fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
 /// Seeds a bound `rimz subagents` child and returns the launch id its
 /// process environment carries.
 fn seed_subagent_caller(env: &Env) -> AgentSessionId {
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let workspace = env.resolve_workspace(&env.project_root);
     let launch_id = AgentSessionId::from("launch_subagent");
     env.store()
         .append_event(&EventEnvelope::agent_launched(
@@ -515,8 +512,7 @@ fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
 #[test]
 fn user_shell_subagents_list_inspects_the_channel() {
     let env = Env::new();
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let workspace = env.resolve_workspace(&env.project_root);
     let rows = [
         ("claude", "planner", "planner", None, None, "feat-x"),
         (
@@ -1077,7 +1073,7 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
         "description: Worker\nagent: claude\nmodel: opus\ntools: []",
         "",
     );
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     store
         .append_event(&EventEnvelope::agent_launched(
@@ -1231,8 +1227,7 @@ fn unresolved_subagent_list_caller_falls_back_to_channel_scope() {
 #[test]
 fn launch_identity_and_parentage_survive_event_log_rotation() {
     let env = Env::new();
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
     let agent_id = AgentSessionId::from("provider-rotated-child");
     let launch_id = AgentSessionId::from("launch-rotated-child");
@@ -1370,8 +1365,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
     let shim_dir = write_env_dump_shim(&env, "codex");
     let kind = AgentKind::new_unchecked("codex");
     let session_id = AgentSessionId::from("sess-resumed");
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .append_event(&EventEnvelope::agent_lifecycle(
             workspace.workspace_id,
@@ -2225,7 +2219,7 @@ fn close_pane_exec_reports_startup_failure_before_dropping_to_shell() {
 
 #[cfg(unix)]
 fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
     let event = EventEnvelope::agent_launched(
         workspace.workspace_id,
@@ -2382,8 +2376,7 @@ fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
         std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
         std::fs::set_permissions(&bwrap, permissions).expect("chmod bwrap");
 
-        let workspace =
-            rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+        let workspace = env.resolve_workspace(&env.project_root);
         let kind = AgentKind::new_unchecked("codex");
         let session_id = "closed-codex-session";
         let store = env.store();

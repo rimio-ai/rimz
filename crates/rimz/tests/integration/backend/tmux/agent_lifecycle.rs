@@ -69,7 +69,7 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
         let agent_bin = write_sleeping_agent_shim(&env, "claude");
         trust_claude_shim_path(&env, &agent_bin);
         let ready = env.home_root.join("agent-ready");
-        let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+        let workspace = env.resolve_workspace(&env.project_root);
         let server = TmuxServer::in_runtime_root(&env.runtime_root);
         env.rimz()
             .env("PATH", path_with_front(&agent_bin))
@@ -167,7 +167,7 @@ fn producer_releases_profile_tab_after_agent_exit() {
 fn producer_keeps_a_new_channel_tab_named_after_its_shell_pane() {
     require_tmux!();
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     env.rimz()
         .args(["--mux", "tmux", "start", "--no-attach"])
@@ -264,7 +264,7 @@ fn assert_producer_releases_profile_tab(count: usize) {
             0
         );
     }
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     env.rimz()
         .env("PATH", path_with_front(&agent_bin))
@@ -626,7 +626,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
     for status in [AgentStatus::Idle, AgentStatus::Running] {
         let env = Env::new();
         env.install_agent_hooks("claude");
-        let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+        let workspace = env.resolve_workspace(&env.project_root);
         let server = TmuxServer::in_runtime_root(&env.runtime_root);
         server
             .backend
@@ -770,7 +770,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
 fn resumed_lazy_agent_is_addressable_before_provider_registration() {
     require_tmux!();
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
     let agent_id = "sess-reborn-codex";
     let mut observation =
@@ -950,7 +950,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
 fn restart_unsupported_profile_skills_retains_old_pane_and_state() {
     require_tmux!();
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     server
         .backend
@@ -1100,7 +1100,7 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
             .stdin(std::process::Stdio::null());
         command
     };
-    let workspace = WorkspaceResolver::resolve(&worktree, None).expect("resolve workspace");
+    let workspace = env.resolve_workspace(&worktree);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     let mut options = session_opts(
         &workspace.session_name,
@@ -1286,7 +1286,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     let env = Env::new();
     std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
     init_repo(&env.project_root);
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     let ready = env.home_root.join("cohort-ready");
     std::fs::create_dir(&ready).expect("mkdir readiness records");
@@ -1658,7 +1658,7 @@ fn existing_unmanaged_worktree_launch(doorway: &str, spec: &str) {
         "layout: lead+helper\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}\n  - {role: helper, agent: worker}",
         "Complete the work.",
     );
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     let ready = env.home_root.join("existing-ready");
     std::fs::create_dir(&ready).expect("mkdir readiness records");
@@ -1913,7 +1913,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
     }
     let env = Env::new();
     init_repo(&env.project_root);
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let created = env
         .rimz()
         .args(["worktree", "new", "rimz-clean"])
@@ -2015,7 +2015,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
 fn failing_close_pane_agent_drops_to_shell() {
     require_tmux!();
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     server
         .backend

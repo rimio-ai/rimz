@@ -28,7 +28,7 @@ fn attribution_omits_a_promptless_launch_in_every_mode() {
 
     let env = Env::new();
     env.record(&env.project_root);
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     store
         .begin_agent_launch_batch(
@@ -103,7 +103,7 @@ fn attribution_scopes_to_the_checkout_branch() {
         "initial",
     ]);
     env.record(&env.project_root);
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     let observe = |id: &str, branch: Option<&str>, signal| {
         let mut observation = AgentLifecycleObservation::new(Some(id.into()), signal);
@@ -252,7 +252,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     let sessions = env.home_root.join("codex-sessions");
     let day = sessions.join("2026").join("07").join("23");
     std::fs::create_dir_all(&day).expect("mkdir rollout tree");
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
 
     for (file_ordinal, launch_ordinal, role, session) in [
         (0, 0, "planner", "sess-attribution-planner"),
@@ -529,7 +529,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
         ),
     )
     .expect("write subagent transcript");
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let mut observation =
         AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
     observation.launch.team = Some("forge".to_owned());
@@ -646,7 +646,7 @@ fn attribution_output_modes_conflict_at_the_cli_boundary() {
 fn attribution_markdown_drops_opened_turns_without_recorded_contributions() {
     let env = Env::new();
     env.record(&env.project_root);
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let session = "sess-opened-turn-only";
     let mut registered =
         AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
@@ -718,7 +718,7 @@ fn attribution_default_stays_in_the_callers_checkout() {
     env.record(&env.project_root);
     let sibling = env.home_root.join("sibling-worktree");
     std::fs::create_dir_all(&sibling).expect("mkdir sibling worktree");
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     for (session, channel, worktree) in [
         (
             "sess-main-agent",
@@ -837,7 +837,7 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
     let marker = rimz::worktree::read_marker_for_worktree(&checkout)
         .expect("read worktree marker")
         .expect("managed worktree marker");
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let transcripts = env.home_root.join("attribution-transcripts");
     std::fs::create_dir_all(&transcripts).expect("mkdir transcripts");
     let records = [
@@ -978,7 +978,7 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
 fn attribution_warns_only_for_unreadable_checkouts_in_its_fold() {
     let env = Env::new();
     env.record(&env.project_root);
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
     let broken = env.home_root.join("broken");
     std::fs::create_dir_all(broken.join(".git")).unwrap();
     std::fs::write(broken.join(".git/rimz-worktree.json"), "{").unwrap();
@@ -1053,7 +1053,7 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
         ),
     )
     .expect("write child transcript");
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
 
     let mut parent = AgentLifecycleObservation::new(
         Some("sess-attribution-parent".into()),

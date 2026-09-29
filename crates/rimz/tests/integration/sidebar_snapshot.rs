@@ -386,9 +386,7 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
     let event_log = env.store().paths().events_log.clone();
     let before = std::fs::read(&event_log).unwrap_or_default();
     let pane_fixture = env.write_pane_fixture(std::slice::from_ref(&pane));
-    let session_name = rimz::workspace::WorkspaceResolver::resolve(&env.project_root, None)
-        .expect("resolve workspace")
-        .session_name;
+    let session_name = env.resolve_workspace(&env.project_root).session_name;
     let run_snapshot = || {
         let output = env
             .rimz()

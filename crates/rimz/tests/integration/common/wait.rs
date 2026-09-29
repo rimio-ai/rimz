@@ -47,8 +47,7 @@ pub fn register_agent(
     launch: LaunchParams,
 ) {
     let store = env.store();
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let workspace = env.resolve_workspace(&env.project_root);
     store
         .append_event(&EventEnvelope::agent_launched(
             workspace.workspace_id,

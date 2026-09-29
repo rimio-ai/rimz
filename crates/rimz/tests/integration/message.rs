@@ -3634,7 +3634,7 @@ fn sweep_holds_unconfirmed_prompt_while_compaction_bracket_is_open() {
     let message_id = MessageId::parse(&delivered_id_from_stdout(&out.stdout)).expect("message id");
     assert_text_then_enter(&first_trace, &user_message("hold me"));
 
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let mut observation = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-compact-reconcile")),
         LifecycleSignal::Compacting,
@@ -6012,7 +6012,7 @@ fn register_old_idle_role_agent(
     role: &str,
     age_secs: i64,
 ) -> jiff::Timestamp {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let mut observation = AgentLifecycleObservation::new(
         Some(AgentSessionId::from(session_id)),
         LifecycleSignal::Registered,
@@ -6127,8 +6127,7 @@ impl ReplyAgentFixture {
     }
 
     fn stamp_launch_identity(&self, env: &Env, launch_id: &str, name: &str) {
-        let workspace =
-            rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+        let workspace = env.resolve_workspace(&env.project_root);
         env.store()
             .append_event(&EventEnvelope::agent_launched(
                 workspace.workspace_id,
@@ -6362,7 +6361,7 @@ fn append_lifecycle(
     signal: LifecycleSignal,
     configure: impl FnOnce(&mut AgentLifecycleObservation),
 ) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let mut observation =
         AgentLifecycleObservation::new(Some(AgentSessionId::from(agent_id)), signal);
     observation.worktree_path = Some(env.project_root.display().to_string());
@@ -6709,7 +6708,7 @@ fn seed_provisional_codex_launch(
     stale_pane: &str,
     prompt: Option<&str>,
 ) {
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
     let event = EventEnvelope::agent_launched(
         workspace.workspace_id,

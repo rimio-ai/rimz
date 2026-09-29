@@ -61,8 +61,7 @@ pub struct ShimRoom {
 impl ShimRoom {
     pub fn watch(env: &super::Env, trace: &std::path::Path, panes: &str) -> Self {
         let runtime = env.runtime_paths();
-        let workspace =
-            rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve shim room");
+        let workspace = env.resolve_workspace(&env.project_root);
         let mut topology = rimz::mux::zellij::pane_topology::PaneTopologyCache {
             session_name: workspace.session_name.clone(),
             produced_at_ms: 0,

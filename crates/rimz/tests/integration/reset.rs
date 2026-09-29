@@ -13,14 +13,13 @@ use rimz::harness::run_wake::{ExpectedRunFrame, RunWaiter};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::store::event::EventEnvelope;
 use rimz::store::run::{RunRecord, RunStatus};
-use rimz::workspace::WorkspaceResolver;
 
 use crate::common::Env;
 
 #[test]
 fn reset_replaces_an_old_layout_room_without_starting() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
     let paths = env.state_path_for(&env.project_root);
     let runtime = env.runtime_paths();
     fs::create_dir_all(&runtime.root).unwrap();
@@ -59,7 +58,7 @@ fn reset_replaces_an_old_layout_room_without_starting() {
 #[test]
 fn reset_purges_the_resurrection_cache() {
     let env = Env::new();
-    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let workspace = env.resolve_workspace(&env.project_root);
 
     // Plant a serialized-session cache the way Zellij would, under HOME/.cache;
     // the harness pins XDG_CACHE_HOME to that disposable fallback path.

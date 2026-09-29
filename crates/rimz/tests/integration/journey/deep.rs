@@ -2776,9 +2776,7 @@ fn run_steer(env: &Env, socket: &Path, args: &[&str]) -> std::process::Output {
 }
 
 fn workspace_session(env: &Env) -> String {
-    rimz::WorkspaceResolver::resolve(&env.project_root, None)
-        .expect("resolve workspace")
-        .session_name
+    env.resolve_workspace(&env.project_root).session_name
 }
 
 fn tmux_env(socket: &Path) -> String {

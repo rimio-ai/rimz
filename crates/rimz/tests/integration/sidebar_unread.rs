@@ -186,8 +186,7 @@ command = '''printf '%s|%s|%s|%s\n' "$RIMZ_NOTIFY_KIND" "$RIMZ_NOTIFY_AGENT" "$R
 fn publish_pane_frame(env: &Env, panes: &[rimz::pane::PaneRef]) {
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let workspace = env.resolve_workspace(&env.project_root);
     let frame = rimz::sidebar::frame::assemble_frame(
         panes.to_vec(),
         rimz::utils::time::unix_now_ms(),
