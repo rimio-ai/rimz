@@ -25,6 +25,7 @@ struct Cli {
 ```
 
 - The bare `rimz` default action targets `.`. Path-taking launch stays on `rimz start [PATH]` so mistyped subcommands reach clap as unknown commands.
+- Follow the [CLI layer contract](../../crates/rimz/src/cli/AGENTS.md) for the boundary between handlers and library-owned workflows.
 - `bin_name = "rimz"` keeps help text stable when the executable is invoked via a platform-specific path.
 - Subcommands are a flat `enum Subcmd { ... }`. Use `#[clap(visible_alias = "<short>")]` for discoverable shorthand and `#[clap(hide = true)]` for hooks-only or internal subcommands.
 
