@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent};
 use crate::cli::render;
+use rimz::store::snapshot::find_agent;
 
 #[derive(Default)]
 pub(in crate::cli) struct StopTracker {
@@ -105,11 +106,7 @@ pub(in crate::cli) fn stop_resolved(
     tracker: &mut StopTracker,
 ) -> Result<bool> {
     let peers = rimz::address::addressable_agents(snapshot);
-    let current = snapshot
-        .agents
-        .iter()
-        .find(|candidate| candidate.kind == agent.kind && candidate.agent_id == agent.agent_id)
-        .unwrap_or(agent);
+    let current = find_agent(&snapshot.agents, &agent.kind, &agent.agent_id).unwrap_or(agent);
     stop_live_agent_tree(
         &ctx.workspace,
         &ctx.store,

@@ -15,6 +15,7 @@ use rimz::harness::AutoContinueRequest;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::message::deliver;
 use rimz::store::message::DeliveryGate;
+use rimz::store::snapshot::find_agent;
 
 use super::Ctx;
 
@@ -30,10 +31,7 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
         .context("reading auto-continue delivery snapshot")?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
-    let agent = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.kind == request.kind && agent.agent_id == request.agent_id)
+    let agent = find_agent(&snapshot.agents, &request.kind, &request.agent_id)
         .context("auto-continue target agent is no longer in the rollup")?;
     snapshot
         .agent_panes

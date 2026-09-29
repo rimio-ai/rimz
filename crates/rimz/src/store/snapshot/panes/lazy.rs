@@ -9,6 +9,7 @@ use crate::agents::AgentSpec;
 use crate::agents::{AgentState, SamePaneSessionPolicy, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
+use crate::store::snapshot::find_agent;
 use crate::store::snapshot::process::{pane_command_is_known, row_from_process};
 use crate::store::snapshot::row::{AgentCard, RowCard, SidebarRow};
 
@@ -160,10 +161,8 @@ impl<'a> HookPaneRecoveryContext<'a> {
         phase: HookPaneRecoveryPhase,
         prior_agents: &'a [AgentState],
     ) -> Self {
-        let registered_at = prior_agents
-            .iter()
-            .find(|agent| agent.kind == *kind && agent.agent_id == *agent_id)
-            .and_then(|agent| agent.registered_at);
+        let registered_at =
+            find_agent(prior_agents, kind, agent_id).and_then(|agent| agent.registered_at);
         Self {
             kind,
             agent_id,

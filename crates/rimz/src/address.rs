@@ -36,7 +36,7 @@ use crate::agents::AgentState;
 use crate::agents::petname::{sender_handle, sender_label};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
 use crate::store::message::MessageSender;
-use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
+use crate::store::snapshot::{PaneAgent, SidebarSnapshot, find_agent};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TargetErr {
@@ -339,10 +339,7 @@ pub(crate) fn pane_binding<'snapshot, 'pane>(
         return None;
     }
     if let Some(agent_id) = pane.agent_id.as_ref() {
-        let agent = snapshot
-            .agents
-            .iter()
-            .find(|agent| agent.kind == pane.kind && &agent.agent_id == agent_id)?;
+        let agent = find_agent(&snapshot.agents, &pane.kind, agent_id)?;
         return Some(PaneBinding {
             pane,
             agent: Some(agent),

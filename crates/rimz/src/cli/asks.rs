@@ -10,6 +10,7 @@ use super::{Ctx, GlobalFlags, resolve_open_ask};
 use crate::cli::render;
 use rimz::agents::{AgentState, AskKind, OpenAskDetail, read_open_ask};
 use rimz::ids::AskId;
+use rimz::store::snapshot::find_agent;
 
 #[derive(Debug, Args)]
 pub struct AsksArgs {
@@ -264,11 +265,11 @@ fn view_for_agent(
         .ok_or_else(|| anyhow::anyhow!("agent is not asking anything"))?;
     let (handle, name) = if agent.is_provider_subagent() {
         let parent_kind = agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind);
-        let Some(parent) = agent.parent_agent_id.as_ref().and_then(|parent_id| {
-            agents.iter().find(|candidate| {
-                &candidate.kind == parent_kind && &candidate.agent_id == parent_id
-            })
-        }) else {
+        let Some(parent) = agent
+            .parent_agent_id
+            .as_ref()
+            .and_then(|parent_id| find_agent(agents, parent_kind, parent_id))
+        else {
             return Ok(None);
         };
         let handle = rimz::address::agent_handle(parent, peers, true);

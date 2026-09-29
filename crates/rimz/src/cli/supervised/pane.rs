@@ -17,6 +17,7 @@ use rimz::mux::{
 use rimz::pane::PaneRef;
 use rimz::room::session::MissingSessionReport;
 use rimz::store::run::RunRecord;
+use rimz::store::snapshot::find_agent;
 
 pub(crate) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
@@ -645,10 +646,7 @@ pub(super) fn resolve_run_pane_in_snapshot(
     record: &RunRecord,
 ) -> Option<ResolvedRunPane> {
     let agent_id = record.agent_id.as_ref()?;
-    let pane = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.kind == record.kind && agent.agent_id == *agent_id)
+    let pane = find_agent(&snapshot.agents, &record.kind, agent_id)
         .and_then(|agent| agent.pane.as_ref())?;
     Some(ResolvedRunPane {
         pane_id: pane.pane_id.clone(),
