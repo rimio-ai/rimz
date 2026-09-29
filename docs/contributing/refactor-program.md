@@ -113,6 +113,7 @@ A review fix after the record commit means re-measuring and amending it.
 - Use `[[rehome]]` only for items that leave CLI whole. For CLI-to-CLI edges that close, add `[[dependency]]` rows with leaf `from` modules. Run `conform --tighten --only <owned-path>` on the CLI submodule rules the pass lowers.
 - Give each workflow a small library interface: one typed request in and one typed outcome out, capped by an `[[esc]]` row on the destination. Unit-test the moved logic in the library without spawning a process.
 - Review must establish that logic moved rather than split: a [cx row](./atlas.md#pass-contract-v2) cannot distinguish the two. Rendering stays in CLI; where a renderer makes decisions, split it into a view model and a dumb renderer.
+- A pass that edits the cross-command list in the [CLI layer contract](../../crates/rimz/src/cli/AGENTS.md) maps every CLI-to-CLI import `atlas conform` reports to a named entry before committing.
 
 ## Concurrency
 
