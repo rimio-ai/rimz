@@ -1,15 +1,14 @@
-//! The in-process produce budget at fleet scale.
+//! The in-process produce cost at fleet scale.
 //!
 //! The elder renderer runs `rimz::sidebar::produce::produce_workspace_snapshot` on its
 //! fetch worker once per data tick (docs/internals/performance.md, the 2026-06
 //! warm-producer pass). The contract: a warm steady-state produce — every
 //! fork-bearing input pre-published fresh, the rollup folding O(new bytes)
-//! through the worker's cursor — finishes far inside one data tick even with a
-//! fleet-scale store and pane set, so the reconciling post never starves the
-//! paint behind it. Companion to `compose_budget` in `sidebar_pane`,
-//! which bounds the frame composition over the produced snapshot.
-
-use std::time::{Duration, Instant};
+//! through the worker's cursor — forks no subprocess even with a fleet-scale
+//! store and pane set. These tests pin that count; the wall-clock side lives in
+//! the `fleet::produce_warm` bench (`cargo xtask perf`), because a timing
+//! budget checked while nextest runs the whole suite in parallel fails on load,
+//! not on regressions.
 
 use rimz::sidebar::consumer::RollupCursor;
 use rimz::store::event_log;
@@ -23,7 +22,7 @@ const HISTORY_EVENTS: usize = 2_000;
 const ROUNDS: u32 = 20;
 
 #[test]
-fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
+fn warm_fleet_produce_forks_zero_subprocesses() {
     let h = Harness::new();
     let paths = h.store.paths();
     seed_fleet_store(paths, FLEET, HISTORY_EVENTS).expect("seed event");
@@ -44,18 +43,15 @@ fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
         .expect("cold produce");
 
     // Steady state: one delta per tick, every stamp young — the elder's
-    // common case. Inputs re-publish outside the timed region.
-    let mut elapsed = Duration::ZERO;
+    // common case. Inputs re-publish before each produce.
     let spawns_before = spawn_count();
     for round in 0..ROUNDS {
         let event = registered_lifecycle(&paths.workspace_id, round as usize % FLEET);
         event_log::append(&paths.events_log, &event).expect("append delta");
         h.publish_fresh_produce_inputs(SESSION_NAME, panes.clone());
-        let start = Instant::now();
         let snapshot =
             rimz::sidebar::produce::produce_snapshot(&mut cursor, paths, &h.runtime_paths, &opts)
                 .expect("warm produce");
-        elapsed += start.elapsed();
         assert_eq!(snapshot.agents.len(), FLEET);
     }
     assert_eq!(
@@ -63,13 +59,6 @@ fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
         0,
         "a warm produce with every fork-bearing input pre-published forks no \
          subprocesses"
-    );
-
-    let per_produce = elapsed / ROUNDS;
-    assert!(
-        per_produce < Duration::from_millis(50),
-        "one warm fleet-scale produce took {per_produce:?}; the 1s data tick \
-         leaves no room for an envelope that slow beside the paint it feeds"
     );
 }
 
