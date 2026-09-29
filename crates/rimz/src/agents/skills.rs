@@ -87,6 +87,7 @@ pub enum LaunchSettingsErr {
 pub(crate) fn enumerate(
     provider_root: Option<&Path>,
     library: Option<&Path>,
+    keep: fn(&str) -> bool,
 ) -> Result<BTreeMap<String, SkillDir>, SkillErr> {
     let mut skills = BTreeMap::new();
     for root in provider_root.into_iter().chain(library) {
@@ -105,6 +106,12 @@ pub(crate) fn enumerate(
                 path: root.to_owned(),
                 source,
             })?;
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if !keep(&name) || skills.contains_key(&name) {
+                continue;
+            }
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -114,12 +121,6 @@ pub(crate) fn enumerate(
                 path: marker,
                 source,
             })? {
-                continue;
-            }
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            if skills.contains_key(&name) {
                 continue;
             }
             let source = path
@@ -149,7 +150,7 @@ impl HostSkills {
         else {
             return Ok((HostSkillPlan::Unenforced, None));
         };
-        let skills = enumerate(root, library)?;
+        let skills = enumerate(root, library, |_| true)?;
         for name in listed {
             if !skills.contains_key(name.as_str()) {
                 return Err(SkillErr::UnknownSkill {
@@ -210,7 +211,7 @@ mod tests {
         std::os::unix::fs::symlink(provider.join("missing"), provider.join("broken")).unwrap();
         std::os::unix::fs::symlink(library.join("extra"), provider.join("alias")).unwrap();
         std::fs::create_dir(provider.join("not-a-skill")).unwrap();
-        let skills = enumerate(Some(&provider), Some(&library)).unwrap();
+        let skills = enumerate(Some(&provider), Some(&library), |_| true).unwrap();
         assert_eq!(skills.len(), 3);
         assert_eq!(
             skills["same"].source,
