@@ -306,11 +306,7 @@ pub struct SidebarSnapshot {
 }
 
 impl SidebarSnapshot {
-    pub(crate) fn live_agent_pane(
-        &self,
-        kind: &AgentKind,
-        agent_id: &AgentSessionId,
-    ) -> Option<PaneId> {
+    pub fn live_agent_pane(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> Option<PaneId> {
         self.agent_panes
             .iter()
             .find(|pane| &pane.kind == kind && pane.agent_id.as_ref() == Some(agent_id))
