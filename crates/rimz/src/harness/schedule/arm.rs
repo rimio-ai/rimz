@@ -338,11 +338,7 @@ pub fn default_signal_matches(
         "team" if !matches.contains_key("team") && !matches.contains_key("instance") => {
             let cohort = crate::address::team_cohorts(agents)
                 .into_iter()
-                .find(|cohort| {
-                    cohort.members.iter().any(|member| {
-                        member.kind == scope.kind && member.agent_id == scope.agent_id
-                    })
-                })
+                .find(|cohort| cohort.contains(scope))
                 .ok_or(DeliveryScopeFailure::NoTeam)?;
             matches.insert(
                 "instance".to_owned(),

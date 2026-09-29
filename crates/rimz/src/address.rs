@@ -878,6 +878,15 @@ pub struct TeamCohort<'a> {
     pub members: Vec<&'a AgentState>,
 }
 
+impl TeamCohort<'_> {
+    /// Whether `agent`'s exact provider and session identity is a member.
+    pub fn contains(&self, agent: &AgentState) -> bool {
+        self.members
+            .iter()
+            .any(|member| member.kind == agent.kind && member.agent_id == agent.agent_id)
+    }
+}
+
 /// Group conversation rows by shared launch id and agent-process/pane
 /// incarnation. Relaunches that reuse a launch id remain separate groups, and
 /// unstamped rows form singleton groups.
