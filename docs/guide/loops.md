@@ -111,11 +111,14 @@ A wait on a timer is a guess about when something will happen. A signal is the t
 | --- | --- | --- |
 | `ci.passed`, `ci.failed` | the checks on a commit a worktree branch added settle on success or failure, with or without a pull request | `path`, `branch`, `repo`, plus `head` and `checks_url` when the commit is known, and `number` and `url` when a pull request exists |
 | `pr.merged`, `pr.closed` | the pull request on one of the room's worktree branches leaves the open state | `path`, `branch`, `repo`, `state`, plus `number`, `url`, `head`, and `checks_url` when known |
+| `pr.behind`, `pr.conflicted` (GitHub only) | an open PR first falls behind its base or has confirmed conflicts, including when first seen; fires again on a changed PR head while still in that state, not on repeated readings of the same head | the PR payload above with `state: "open"`, plus `pr_head`, `base` when known, and `behind_by` for `pr.behind`; `head` remains the local worktree HEAD |
 | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | one agent's own lifecycle transitions | `kind`, `session`, `status`, `errored`, plus `handle` when the card has a name |
 | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | a [team](./teams.md) cohort settles: every member at rest with nothing queued and no wait armed, one member waiting on input, one member's turn failing, or the last member ending | `team`, `instance` (`forge#feat-x`), `member`, and `members` with each handle and status |
 | `team.stage` | a team [hands a stage off](./teams.md#hand-off-with-one-command), and again when a resumed owner takes its stage back | `team`, `instance`, `to`, `owner`, `by`, `note`, and `board`, plus `from` on every flip that did not open the board |
 
 Those four families (`ci`, `pr`, `agent`, and `team`), plus `wait` for a watched command's own completion, belong to RimZ. `rimz events emit` refuses every name inside them, so your own signals can never collide with RimZ's.
+
+Use `pr.behind` to react when the base moves ahead of your PR, and `pr.conflicted` when a push needs conflict resolution. GitHub may take time to calculate conflicts after a push; RimZ waits for a settled answer before treating that push as a new conflict. Both signals accept `--match branch=feature` or `--match path=/your/worktree`, just like `pr.merged`.
 
 Subscribe to one name or to a whole family: `--signal ci.failed` for the red verdict, `--signal 'ci.*'` for any verdict. Either subscription observes every name in the family, and what it does with the ones it did not ask for is the useful part. A subscription to `ci.failed` sees the green build too, records it as a skip, and stays quiet; a branch that goes green never wakes an agent that only asked for red. A signal that fails a `--match`, from another branch or another cohort, is ignored outright.
 
