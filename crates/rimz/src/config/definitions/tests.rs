@@ -2,6 +2,103 @@ use super::*;
 use crate::config::{CommandsConfig, SkillName};
 
 #[test]
+fn allowed_tools_inherit_clear_and_replace_on_seats() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "agent: claude\ntools: [Bash, AskUserQuestion]\nallowed-tools: [' Bash(git *) ', Read, Read, 'mcp__my-server__*']",
+        "",
+    );
+    definition(root.path(), "agents/child.md", "agent: worker", "");
+    definition(
+        root.path(),
+        "agents/clear.md",
+        "agent: worker\nallowed-tools: []",
+        "",
+    );
+    definition(
+        root.path(),
+        "subagents/helper.md",
+        "agent: claude\ntools: [Bash]\nallowed-tools: [Read]",
+        "",
+    );
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        &format!("{TEAM_ROLES}\n    allowed-tools: [Write]"),
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let rules = |name: &str| {
+        loaded.agent_profiles.0[name]
+            .allowed_tools
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rules("worker"),
+        ["Bash(git *)", "Read", "mcp__my-server__*"]
+    );
+    assert_eq!(rules("child"), rules("worker"));
+    assert!(rules("clear").is_empty());
+    assert_eq!(rules("probe.lead"), rules("worker"));
+    assert_eq!(rules("probe.judge"), ["Write"]);
+    assert_eq!(
+        loaded.subagent_profiles.0["helper"]
+            .allowed_tools
+            .as_ref()
+            .unwrap()[0]
+            .to_string(),
+        "Read"
+    );
+}
+
+#[test]
+fn allowed_tools_refuse_malformed_rules_with_shape_and_rule() {
+    for rule in [
+        "Bash(git *",
+        "Bash()",
+        "(git)",
+        "",
+        "Bash(git) x",
+        "Bash(git\n*)",
+    ] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/worker.md",
+            &format!(
+                "agent: claude\ntools: [Bash]\nallowed-tools: [{}]",
+                serde_json::to_string(rule).unwrap()
+            ),
+            "",
+        );
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &crate::config::tiers::TierConfig::default(),
+        );
+        let error = loaded
+            .errors
+            .iter()
+            .find(|error| error.path.ends_with("worker.md"))
+            .unwrap();
+        assert!(error.message.contains(&format!("{rule:?}")), "{error}");
+        assert!(
+            error
+                .message
+                .contains("non-empty (specifier) closing the rule"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn model_tiers_preserve_chain_preference_and_shift_effort() {
     let root = fixture();
     definition(

@@ -25,6 +25,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         model_tier: None,
         isolation: None,
         skills: None,
+        allowed_tools: None,
         description: None,
         subagents: None,
         model_reminder: None,
@@ -291,6 +292,22 @@ impl Resolver<'_> {
         let definition = &self.tree.definitions[name];
         let path = &definition.path;
         let kind = profile.agent.as_str();
+        profile.allowed_tools = fm
+            .allowed_tools
+            .as_ref()
+            .map(|rules| {
+                let mut parsed = Vec::new();
+                for rule in rules {
+                    let rule = rule
+                        .parse::<crate::config::ToolRule>()
+                        .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
+                    if !parsed.contains(&rule) {
+                        parsed.push(rule);
+                    }
+                }
+                Ok::<_, DefinitionErr>(parsed)
+            })
+            .transpose()?;
         if let Some(definition) = agents::find_definition(kind) {
             for (field, name, value) in [
                 (PresetField::Model, "model", &fm.model),

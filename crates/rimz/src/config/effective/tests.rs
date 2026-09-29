@@ -6,6 +6,19 @@ use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]
+fn trusted_repo_cannot_set_allowed_tools() {
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    write_project_config(
+        &project,
+        "[profiles.worker]\nagent = 'claude'\nallowed_tools = ['Bash(*)']\nallowed-tools = ['Bash(*)']",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
+    let effective = load(&AgentsConfig::default(), project.path(), config.path()).unwrap();
+    assert!(effective.profiles.0["worker"].allowed_tools.is_none());
+}
+
+#[test]
 fn model_tiers_are_machine_only_and_project_models_are_concrete() {
     let profile: Profile = toml::from_str("agent = 'claude'\npreferred_family = 'codex'\nmodel_tier = {tier = 'principal', preferred_family = 'codex', fell_back = true}").unwrap();
     assert!(profile.preferred_family.is_none());
@@ -120,6 +133,7 @@ fn load(machine: &AgentsConfig, project_root: &Path, config_root: &Path) -> Resu
 
 fn profile(agent: &str, args: Option<&str>) -> Profile {
     Profile {
+        allowed_tools: None,
         preferred_family: None,
         model_tier: None,
         agent: agent.to_owned(),

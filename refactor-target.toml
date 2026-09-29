@@ -242,7 +242,8 @@ upward-dependencies = [
 # Pass 26c: the prompt-cache margin moved in from harness::idle_compact (+1).
 # Machine tiers expose the shared resolver and definition provenance to launch consumers.
 # TierConfig::family_tiers lists a family's tiers for the CLI cross-family refusal (+1).
-surface-budget = 178
+# ToolRule carries validated definition permission rules across launch boundaries (+1).
+surface-budget = 179
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

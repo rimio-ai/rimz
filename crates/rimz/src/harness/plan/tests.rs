@@ -89,6 +89,7 @@ fn cli_model_tiers_use_chain_preference_unless_agent_overrides_it() {
         "claude-coder".into(),
         Profile {
             agent: "claude".into(),
+            allowed_tools: None,
             preferred_family: Some("codex".into()),
             ..toml::from_str("agent = 'claude'").unwrap()
         },
@@ -431,6 +432,7 @@ fn configured_profile(
     args: Option<&str>,
 ) -> Profile {
     Profile {
+        allowed_tools: None,
         preferred_family: None,
         model_tier: None,
         agent: agent.to_owned(),

@@ -53,6 +53,7 @@ mod sidebar;
 mod skills;
 mod theme;
 pub mod tiers;
+mod tool_rules;
 mod web;
 mod worktree;
 
@@ -124,6 +125,7 @@ pub(crate) use theme::InlinePalette;
 #[cfg(test)]
 pub(crate) use theme::{InlineAnsiColors, InlinePrimaryColors};
 pub use theme::{ThemeConfig, ThemeProviderStyle, ThemeStyle};
+pub use tool_rules::ToolRule;
 use web::WebPrefs;
 pub use worktree::{WorktreeBase, WorktreeConfig, WorktreeHooks, WorktreeHooksConfigErr};
 
