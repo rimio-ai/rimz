@@ -162,6 +162,33 @@ pub(super) fn row_lines(
                     inner.push(identity_line(ctx, row, attention, cost_usd).into());
                 }
                 CardSlot::Description => inner.push(description_line(ctx, row, attention).into()),
+                CardSlot::Question => {
+                    if let Some(ask) = agent.queued_asks.first().filter(|_| {
+                        matches!(agent.status, AgentStatus::Running | AgentStatus::Waiting)
+                    }) {
+                        let suffix = if agent.queued_asks.len() > 1 {
+                            format!(" +{}", agent.queued_asks.len() - 1)
+                        } else {
+                            String::new()
+                        };
+                        let prefix = format!("{} ", ctx.theme.glyph(GlyphRole::StatusWaiting));
+                        let detail = ellipsize(
+                            &ask.detail,
+                            cw.saturating_sub(text_width(&prefix) + text_width(&suffix)),
+                        );
+                        let text = ellipsize(&format!("{prefix}{detail}{suffix}"), cw);
+                        inner.push(
+                            Line::styled(
+                                text,
+                                crate::sidebar_pane::render::labels::status_style(
+                                    ctx.theme,
+                                    AgentStatus::Waiting,
+                                ),
+                            )
+                            .into(),
+                        );
+                    }
+                }
                 CardSlot::AwaitingDots => {
                     inner.push(awaiting_prompt_line(ctx.animation_phase, cw).into());
                 }

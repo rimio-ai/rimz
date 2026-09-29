@@ -28,6 +28,7 @@ pub fn lifecycle_event(
 
 fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
+        ask_queue: None,
         agent_id: Some(AgentSessionId::from(agent_id)),
         agent_name: None,
         launch: LaunchParams::default(),

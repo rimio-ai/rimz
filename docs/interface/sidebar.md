@@ -55,6 +55,8 @@ One glyph vocabulary runs through the whole sidebar. The tables group it by wher
 
 A status glyph leads every agent card and labels every bucket of the cockpit's make-up line.
 
+A running or waiting card with async questions adds a yellow `?` line below its description: the oldest question, clipped to the card width, followed by `+N` for additional questions. This reuses the waiting glyph and color without changing the card's status glyph, attention ordering, or notifications. Answer it [in the Codex pane](../reference/cli/asks.md#questions-while-codex-works) with Shift+Left; `rimz answer` refuses async questions.
+
 | glyph | status | meaning | needs you |
 |-------|--------|---------|-----------|
 | `?` | waiting | asked you something: a permission, a plan approval, a question | yes |

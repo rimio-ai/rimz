@@ -29,6 +29,7 @@ fn inject_lifecycle(
     branch: Option<&str>,
 ) {
     let obs = AgentLifecycleObservation {
+        ask_queue: None,
         agent_id: Some(agent_id.into()),
         agent_name: None,
         launch: LaunchParams::default(),

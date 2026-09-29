@@ -11,7 +11,7 @@ use clap::Args;
 use serde::Deserialize;
 
 use super::{Ctx, GlobalFlags, resolve_open_ask};
-use rimz::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
+use rimz::agents::{AnswerPlanErr, AnswerStep, AskDelivery, AskKind, AskReply};
 use rimz::ids::AskId;
 use rimz::mux::PaneWriter;
 use rimz::transcript::{AskAnswer, AskQuestion, TranscriptEntry, TranscriptKind};
@@ -62,7 +62,12 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let peers = rimz::address::addressable_agents(&snapshot);
     let agent = resolve_current_agent(store, &snapshot, &args.target, ctx.channel())
         .unwrap_or_else(|message| answer_exit(2, &message));
-    let detail = rimz::agents::read_open_ask(store.paths(), agent)
+    let target_id = args
+        .target
+        .starts_with("ask_")
+        .then(|| AskId::parse(&args.target))
+        .transpose()?;
+    let detail = rimz::agents::read_open_ask(store.paths(), agent, target_id.as_ref())
         .unwrap_or_else(|err| answer_exit(2, &err.to_string()))
         .unwrap_or_else(|| answer_exit(2, "agent is not asking anything"));
     let ask_id = detail.open.id.clone();
@@ -83,6 +88,14 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         (kind.clone(), agent_id.clone())
     };
     let handle = rimz::address::agent_handle(agent, &peers, true);
+    if detail.delivery == AskDelivery::Async {
+        answer_exit(
+            3,
+            &format!(
+                "{ask_id}: Codex async questions are answered in the pane: focus {handle} and press shift+←"
+            ),
+        );
+    }
     let adapter = rimz::agents::definition_by_kind(kind.as_str())
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
     if let Err(AnswerPlanErr::Unsupported(kind)) =
@@ -110,8 +123,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let still_current = current.agents.iter().any(|agent| {
         agent.kind == kind
             && agent.agent_id == agent_id
-            && agent.is_awaiting_input()
-            && agent.open_ask.as_ref().is_some_and(|ask| ask.id == ask_id)
+            && agent.actionable_asks().any(|(ask, _)| ask.id == ask_id)
     });
     if !still_current {
         answer_exit(2, &format!("ask `{ask_id}` is no longer current"));
@@ -158,10 +170,10 @@ fn resolve_current_agent<'a>(
     target: &str,
     channel: Option<&str>,
 ) -> std::result::Result<&'a rimz::agents::AgentState, String> {
-    let agent = resolve_open_ask(store, snapshot, target, channel, false)
+    let agent = resolve_open_ask(store, snapshot, target, channel)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("ask `{target}` is no longer current"))?;
-    if !agent.is_awaiting_input() || agent.open_ask.is_none() {
+    if agent.actionable_asks().next().is_none() {
         return Err(format!("{target} is not asking anything"));
     }
     Ok(agent)
@@ -405,8 +417,7 @@ fn wait_for_confirmation(
         let still_open = snapshot.agents.iter().any(|agent| {
             &agent.kind == kind
                 && &agent.agent_id == agent_id
-                && agent.is_awaiting_input()
-                && agent.open_ask.as_ref().is_some_and(|ask| &ask.id == ask_id)
+                && agent.actionable_asks().any(|(ask, _)| &ask.id == ask_id)
         });
         if !still_open || transcript_has_answer(store.paths(), ask_id)? {
             return Ok(true);

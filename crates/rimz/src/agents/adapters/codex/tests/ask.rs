@@ -6,6 +6,118 @@ use crate::pane::keys::NamedKey;
 use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
+fn async_reply_envelopes_keep_known_ids_and_suppress_legacy_prompts() {
+    use crate::agents::testkit::hook_observation;
+    let native_key = json!(["request_user_input_async", "call", 0]).to_string();
+    for ids in [vec!["legacy", native_key.as_str()], vec!["legacy"]] {
+        let replies = ids
+            .iter()
+            .map(|id| json!({"questionItemId":id,"answer":"Yes"}))
+            .collect::<Vec<_>>();
+        let prompt = format!(
+            "<send_user_message_question_reply>{}</send_user_message_question_reply>",
+            json!(replies)
+        );
+        let observation = hook_observation(
+            &super::super::CodexAdapter,
+            "UserPromptSubmit",
+            &json!({"session_id":"s", "prompt":prompt}),
+        )
+        .unwrap();
+        assert!(
+            observation.prompt.is_none(),
+            "reply envelope became the card prompt"
+        );
+        let edit = observation.ask_queue.unwrap();
+        assert_eq!(edit.answered.len(), ids.len() - 1);
+        if let Some(answer) = edit.answered.first() {
+            assert_eq!(answer.native_key, native_key);
+        }
+    }
+}
+
+#[test]
+fn async_hook_queues_each_accepted_question_and_decodes_replies() {
+    use crate::agents::testkit::hook_observation;
+    let payload = json!({"session_id":"01a0ebeb-6ef5-7fe1-ae29-b1dd960bf58e","turn_id":"01a0ebec-0d08-7412-9982-6e0b75039794","hook_event_name":"PostToolUse","tool_name":"request_user_input_async","tool_input":{"questions":[{"title":"Which format do you prefer for brief updates?","options":["Bullet points","Short paragraph"]},{"title":"How much detail should I include in routine replies?","options":["Minimal","Moderate","Detailed"]}]},"tool_response":"{\"accepted\":true}","tool_use_id":"call_f5WQLmsqAVg8rlqr4fedugbj"});
+    let observation =
+        hook_observation(&super::super::CodexAdapter, "PostToolUse", &payload).unwrap();
+    let value = serde_json::to_value(observation).unwrap();
+    assert_eq!(value["ask_queue"]["queued"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        value["ask_queue"]["queued"][0]["native_key"],
+        "[\"request_user_input_async\",\"call_f5WQLmsqAVg8rlqr4fedugbj\",0]"
+    );
+    assert_eq!(
+        value["ask_queue"]["queued"][0]["question"]["options"][1],
+        "Short paragraph"
+    );
+    let sol = json!({"session_id":"01a0ebc7-9462-73d3-95a7-cc4b47d87fd0","tool_name":"request_user_input_async","tool_use_id":"call_SiRQhM2aUzaTDnaC7apJsjBT","tool_input":{"questions":[{"title":"What would you like me to do after you capture the state?","options":["Stop after the wait","Continue with a task you send"]}]},"tool_response":"{\"accepted\":true}"});
+    let sol = hook_observation(&super::super::CodexAdapter, "PostToolUse", &sol)
+        .unwrap()
+        .ask_queue
+        .unwrap();
+    assert_eq!(sol.queued.len(), 1);
+    assert_eq!(
+        sol.queued[0].native_key,
+        "[\"request_user_input_async\",\"call_SiRQhM2aUzaTDnaC7apJsjBT\",0]"
+    );
+    assert_eq!(
+        sol.queued[0]
+            .question
+            .options
+            .iter()
+            .map(|option| option.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Stop after the wait", "Continue with a task you send"]
+    );
+    let prompt = "<send_user_message_question_reply>\n[{\"answer\":\"Bullet points\",\"question\":\"Which format do you prefer for brief updates?\",\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"call_f5WQLmsqAVg8rlqr4fedugbj\\\",0]\"}]\n</send_user_message_question_reply>";
+    let value = serde_json::to_value(
+        hook_observation(
+            &super::super::CodexAdapter,
+            "UserPromptSubmit",
+            &json!({"session_id":"s", "prompt":prompt}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(value["ask_queue"]["answered"][0]["answer"], "Bullet points");
+    assert_eq!(
+        value["ask_queue"]["answered"][0]["native_key"],
+        "[\"request_user_input_async\",\"call_f5WQLmsqAVg8rlqr4fedugbj\",0]"
+    );
+    assert!(value["prompt"].is_null());
+    let mut text_only = payload.clone();
+    text_only["tool_input"] = json!({"questions":[{"title":"Explain?"}]});
+    let value = serde_json::to_value(
+        hook_observation(&super::super::CodexAdapter, "PostToolUse", &text_only).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        value["ask_queue"]["queued"][0]["question"]["question"],
+        "Explain?"
+    );
+    for response in [json!("{\"accepted\":false}"), json!(null)] {
+        text_only["tool_response"] = response;
+        let value = serde_json::to_value(
+            hook_observation(&super::super::CodexAdapter, "PostToolUse", &text_only).unwrap(),
+        )
+        .unwrap();
+        assert!(value["ask_queue"].is_null());
+    }
+    let value = serde_json::to_value(
+        hook_observation(
+            &super::super::CodexAdapter,
+            "UserPromptSubmit",
+            &json!({"session_id":"s","prompt":"ordinary prompt"}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(value["ask_queue"].is_null());
+}
+
+#[test]
 fn question_detail_normalizes_verified_codex_schema() {
     let questions = ask::question_detail(
         "request_user_input",

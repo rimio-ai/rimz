@@ -564,6 +564,7 @@ mod tests {
 
     fn lifecycle(workspace: &WorkspaceId, agent_id: &str, agent_pid: Option<u32>) -> EventEnvelope {
         let observation = AgentLifecycleObservation {
+            ask_queue: None,
             agent_id: Some(AgentSessionId::from(agent_id)),
             agent_name: None,
             launch: LaunchParams::default(),

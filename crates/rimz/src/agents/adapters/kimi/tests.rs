@@ -435,6 +435,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             kind_ordinal: None,
         },
         signal: SubagentStarted,
+        ask_queue: None,
         agent_pid: None,
         account_key: None,
         agent_process_start: None,

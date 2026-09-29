@@ -173,8 +173,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         // Codex's native blocking question tool is `request_user_input`.
         // Local rollout corpus on 2026-06-14 (Codex 0.139.0) contained 37
         // real function calls with this name and no `AskUserQuestion` or
-        // `ExitPlanMode` calls. Re-verify against a teed `PreToolUse` stdin
-        // before renaming this hook vocabulary.
+        // `ExitPlanMode` calls.
         blocking: &[("request_user_input", AskKind::Question)],
     },
     capabilities: Capabilities {
@@ -271,10 +270,10 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "Stop + resting rollout Plan item",
     },
     user_question: ConcernCoverage::Wired {
-        via: "PreToolUse:request_user_input",
+        via: "PreToolUse:request_user_input + PostToolUse:request_user_input_async",
     },
     answer: ConcernCoverage::Wired {
-        via: "pane keystroke choreography",
+        via: "blocking pane keystrokes; async questions surface for answers in the pane",
     },
     compaction: ConcernCoverage::Wired {
         via: "PreCompact/PostCompact/SessionStart:compact",
@@ -337,7 +336,7 @@ const CODEX_USER_COVERAGE: UserCoverage = UserCoverage {
         note: "plan plus both rate-limit windows with their fill, reset, and credit balance",
     },
     ask: CapabilityLevel::Full {
-        note: "approvals, plans, and questions raise Waiting and reach rimz asks with their options",
+        note: "blocking prompts surface; async questions surface and are answered in the pane",
     },
     subagents: CapabilityLevel::Full {
         note: "child threads nest under the parent as they start, with name, role, model, and tokens",
@@ -1704,6 +1703,22 @@ fn build_codex_observation(
     };
     observation.prompt =
         SanitizedPrompt::new(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
+    observation.ask_queue = parts
+        .post_tool_use
+        .as_ref()
+        .and_then(ask::queued_questions)
+        .or_else(|| {
+            parts
+                .user_prompt
+                .as_ref()?
+                .prompt
+                .as_deref()
+                .and_then(ask::answered_questions)
+        });
+    if parts.user_prompt.is_some() && observation.ask_queue.is_some() {
+        observation.prompt = None;
+        observation.task = None;
+    }
     observation.transcript_path = transcript
         .path
         .map(|path| path.to_string_lossy().into_owned());

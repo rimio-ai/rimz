@@ -4,6 +4,37 @@ use crate::config::AnimationRole;
 use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph, role_glyph};
 use crate::sidebar_pane::render::theme::Component;
 
+#[test]
+fn running_card_shows_queued_question_without_changing_status() {
+    let parent = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("working"),
+    );
+    let mut value = serde_json::to_value(parent).unwrap();
+    value["queued_asks"] = serde_json::json!([
+        {"id":crate::ids::AskId::new(),"native_key":"first","detail":"Which format?","since":fixed_now()},
+        {"id":crate::ids::AskId::new(),"native_key":"second","detail":"How much detail?","since":fixed_now()}
+    ]);
+    let parent = serde_json::from_value(value).unwrap();
+    let snapshot = snapshot_with(vec![parent]);
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, usize::MAX);
+    assert!(
+        line_texts(&lines)
+            .iter()
+            .any(|line| line.contains("Which format?") && line.contains("+1"))
+    );
+    assert_eq!(snapshot.agents[0].status, AgentStatus::Running);
+    assert_snapshot(
+        "running_async_question",
+        snapshot_to_screen(&snapshot, 54, 24),
+    );
+}
+
 /// A running shell job's lead: the working animation at the test phase.
 fn shell_lead(theme: &Theme, text: &str) -> String {
     format!("{} {text}", role_glyph(theme, AnimationRole::Working, 0))

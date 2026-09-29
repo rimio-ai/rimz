@@ -2,6 +2,37 @@ use super::*;
 use crate::agents::TurnSettle;
 
 #[test]
+fn actionable_asks_put_the_blocking_prompt_before_queued_questions() {
+    let mut agent = test_agent(AgentStatus::Waiting, 1_000);
+    agent.waiting_since = Some(agent.last_activity);
+    let first = AskId::new();
+    let blocking = AskId::new();
+    agent.open_ask = Some(OpenAsk {
+        id: blocking.clone(),
+        kind: AskKind::Permission,
+        detail: None,
+        native_key: None,
+        since: agent.last_activity,
+    });
+    agent.queued_asks.push(QueuedAsk {
+        id: first.clone(),
+        detail: "Question?".to_owned(),
+        native_key: "question".to_owned(),
+        since: agent.last_activity,
+    });
+    let asks = agent.actionable_asks().collect::<Vec<_>>();
+    assert_eq!(
+        asks.iter().map(|(ask, _)| &ask.id).collect::<Vec<_>>(),
+        vec![&blocking, &first]
+    );
+    assert_eq!(asks[0].1, AskDelivery::Blocking);
+    assert_eq!(asks[1].1, AskDelivery::Async);
+    agent.status = AgentStatus::Running;
+    assert_eq!(agent.actionable_asks().count(), 1);
+    assert!(!agent.is_awaiting_input());
+}
+
+#[test]
 fn last_request_anchor_uses_tools_and_clamps_context_resets() {
     let mut agent = test_agent(AgentStatus::Idle, 1_000);
     let ts = |seconds| Timestamp::from_second(seconds).unwrap();

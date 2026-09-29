@@ -1,16 +1,17 @@
 //! Provider-neutral materialization of an agent's current actionable ask.
 //!
-//! [`AgentState::open_ask`] owns current identity and summary. Structured
+//! [`AgentState::actionable_asks`] supplies current identities and summaries. Structured
 //! questions and the agent's ask-time message join from RimZ transcript state
 //! only by exact ask ID; adapter-owned safe options supply the fallback shape.
 
-use crate::agents::{AgentErr, AgentState, AskKind, OpenAsk, definition_by_kind};
+use crate::agents::{AgentErr, AgentState, AskDelivery, AskKind, OpenAsk, definition_by_kind};
 use crate::disk::paths::StatePaths;
-use crate::transcript::{AskQuestion, TranscriptLogErr, latest_open_ask};
+use crate::transcript::{AskQuestion, TranscriptKind, TranscriptLogErr, latest_open_ask, read_all};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenAskDetail {
     pub open: OpenAsk,
+    pub delivery: AskDelivery,
     pub context: Option<String>,
     pub questions: Vec<AskQuestion>,
 }
@@ -26,19 +27,28 @@ pub enum OpenAskReadErr {
 pub fn read_open_ask(
     paths: &StatePaths,
     agent: &AgentState,
+    ask_id: Option<&crate::ids::AskId>,
 ) -> Result<Option<OpenAskDetail>, OpenAskReadErr> {
-    let Some(open) = agent
-        .open_ask
-        .as_ref()
-        .filter(|_| agent.is_awaiting_input())
+    let Some((open, delivery)) = agent
+        .actionable_asks()
+        .find(|(ask, _)| ask_id.is_none_or(|id| &ask.id == id))
     else {
         return Ok(None);
     };
     let adapter = definition_by_kind(agent.kind.as_str())?;
     let (questions, context) = match open.kind {
         AskKind::Question | AskKind::PlanApproval => {
-            latest_open_ask(paths, &agent.kind, &agent.agent_id)?
-                .filter(|entry| entry.id.as_ref() == Some(&open.id))
+            let entry = match delivery {
+                AskDelivery::Blocking => latest_open_ask(paths, &agent.kind, &agent.agent_id)?
+                    .filter(|entry| entry.id.as_ref() == Some(&open.id)),
+                AskDelivery::Async => read_all(paths)?.into_iter().rev().find(|entry| {
+                    entry.entry == TranscriptKind::Ask
+                        && entry.kind == agent.kind
+                        && entry.agent_id == agent.agent_id
+                        && entry.id.as_ref() == Some(&open.id)
+                }),
+            };
+            entry
                 .map(|entry| {
                     let context = entry.text.trim();
                     (
@@ -46,12 +56,13 @@ pub fn read_open_ask(
                         (!context.is_empty()).then(|| context.to_owned()),
                     )
                 })
-                .unwrap_or_else(|| (synthetic_questions(open, adapter), None))
+                .unwrap_or_else(|| (synthetic_questions(&open, adapter), None))
         }
-        AskKind::Permission => (synthetic_questions(open, adapter), None),
+        AskKind::Permission => (synthetic_questions(&open, adapter), None),
     };
     Ok(Some(OpenAskDetail {
-        open: open.clone(),
+        open,
+        delivery,
         context,
         questions,
     }))

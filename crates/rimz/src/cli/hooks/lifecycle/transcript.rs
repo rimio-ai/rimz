@@ -194,7 +194,7 @@ pub(super) fn record_conversation(
         run_id,
     } = input;
     let observation = &recorded.observation;
-    if observation.parent_agent_id.is_some() {
+    if observation.parent_agent_id.is_some() && observation.ask_queue.is_none() {
         return Ok(());
     }
     let Some(agent_id) = observation.agent_id.clone() else {
@@ -232,6 +232,32 @@ pub(super) fn record_conversation(
     };
 
     let message = assistant_message.unwrap_or_default().trim();
+    if let Some(edit) = &observation.ask_queue {
+        for question in &edit.queued {
+            let mut entry = entry_base(rimz::transcript::TranscriptKind::Ask, String::new());
+            entry.id = question.ask_id.clone();
+            entry.questions = vec![question.question.clone()];
+            rimz::transcript::append(store.paths(), &entry)?;
+        }
+        for answer in &edit.answered {
+            let Some(id) = &answer.ask_id else { continue };
+            let mut entry = entry_base(
+                rimz::transcript::TranscriptKind::Answer,
+                answer.answer.clone(),
+            );
+            entry.id = Some(id.clone());
+            entry.from = Some(rimz::transcript::HUMAN_FROM.to_owned());
+            entry.answers = vec![rimz::transcript::AskAnswer {
+                question: None,
+                chosen: vec![answer.answer.clone()],
+                note: None,
+            }];
+            rimz::transcript::append_answer_if_missing(store.paths(), &entry)?;
+        }
+    }
+    if observation.parent_agent_id.is_some() {
+        return Ok(());
+    }
     let mut entry = match &observation.signal {
         LifecycleSignal::TurnStarted { .. } => {
             let mut entries = Vec::new();

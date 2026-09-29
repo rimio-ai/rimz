@@ -281,7 +281,7 @@ An agent's message lands as an ordinary conversation line, so the exchange belon
 
 ## Asks and answers
 
-An agent holding a permission prompt, a plan approval, or a question has handed that prompt its input, and your queued messages wait behind it until it is answered. Answering is part of keeping the fleet moving, so RimZ lets you do it from any shell.
+An agent holding a permission prompt, a plan approval, or a blocking question has handed that prompt its input, and your queued messages wait behind it until it is answered. Answering is part of keeping the fleet moving, so RimZ lets you do it from any shell. Codex can also ask while it keeps working: these async questions appear in `rimz asks` and as a question line on its running card, without holding your messages.
 
 ```sh
 rimz asks                          # open prompts in this channel; --all for every channel
@@ -291,7 +291,7 @@ rimz answer @planner allow         # submit a choice by label
 rimz answer ask_06gc05m0d327d1d0 2 # or by position, against one exact prompt
 ```
 
-With nothing blocked, `rimz asks` says so in one line and names `--all` when the list was scoped to your channel. `rimz answer` drives the agent's own prompt UI with the keys you would press in the pane, and confirms the agent moved on before it returns. One command submits the whole ask: a positional selector per question, commas inside one for a multi-select, and `--text` for free text. An ask with several questions can take mixed choices and text through `--json`. The ask id is a compare-and-swap token, so a prompt that was already answered or superseded receives no stale keystrokes.
+With no open asks, `rimz asks` says so in one line and names `--all` when the list was scoped to your channel. `rimz answer` drives the agent's own prompt UI with the keys you would press in the pane. One command submits the whole ask: a positional selector per question, commas inside one for a multi-select, and `--text` for free text. Each async question is a separate ask, answered in the Codex pane: focus it and press Shift+Left. `rimz answer` refuses these questions without sending input. See [async questions](../reference/cli/asks.md#questions-while-codex-works) for when an answered question leaves the list. An ask with several questions can take mixed choices and text through `--json`. The ask id is a compare-and-swap token, so a prompt that was already answered or superseded receives no stale keystrokes.
 
 Claude, Codex, and Pi accept answers this way, each within limits set by what its prompt can confirm. A Claude permission ask offers `allow`; denial and persistent grants stay in the pane. A plan approval offers the caution-marked `approve`, which turns on auto-accept edits; keep-planning and refinement text stay in the pane. [cli/asks.md](../reference/cli/asks.md#what-each-agent-accepts) has the per-agent table. You can always answer in the pane instead, and if you Escape a question and type free text there, RimZ records that text as the open question's answer rather than a new prompt.
 

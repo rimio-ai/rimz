@@ -4,7 +4,7 @@ This page mirrors the upstream surfaces of OpenAI's Codex CLI that RimZ binds to
 
 ## Baseline and sources
 
-The page describes Codex CLI **0.154.0** (tag `rust-v0.154.0`, commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`, released 2026-09-09), read on 2026-09-13. That is the GitHub latest release and the npm `@openai/codex` `latest` dist-tag. A source reference written as `path:line` is relative to `codex-rs/` at that tag. Generated app-server shapes come from `codex app-server generate-json-schema` run on the 0.154.0 binary, and live rollout samples come from the same build. A fact that exists only on `main` is marked unreleased with its pull request.
+Except for the [async-question observations](#async-questions-observed-on-01580), this page describes Codex CLI **0.154.0** (tag `rust-v0.154.0`, commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`, released 2026-09-09), read on 2026-09-13, when it was the GitHub latest release and the npm `@openai/codex` `latest` dist-tag. A source reference written as `path:line` is relative to `codex-rs/` at that tag. Generated app-server shapes come from `codex app-server generate-json-schema` run on the 0.154.0 binary, and live rollout samples come from the same build. A fact that exists only on `main` is marked unreleased with its pull request.
 
 | Surface | Source |
 | --- | --- |
@@ -167,6 +167,14 @@ The decision shapes a permission or pre-tool hook returns:
 A `PermissionRequest` answer carries only `decision.behavior` and `decision.message`. Claude Code's `updatedInput`, `updatedPermissions`, and `interrupt` fail it.
 
 Exit codes: exit 0 with JSON applies the output, and exit 0 with empty stdout continues. Exit 2 with non-empty stderr blocks, using stderr as the reason, on `PreToolUse`, `PermissionRequest`, `PostToolUse`, `UserPromptSubmit`, `Stop`, and `SubagentStop`; exit 2 with empty stderr, or on the compact events and `Interrupt`, is a failure.
+
+## Async questions (observed on 0.158.0)
+
+`request_user_input_async` takes `questions: [{title, options?: [string]}]`, returns `{"accepted":true}` immediately, and leaves the turn running. Both PreToolUse and PostToolUse fire; PostToolUse carries `tool_use_id`, the input, and `tool_response` as a JSON string (`"{\"accepted\":true}"`). Each question's `questionItemId` is the JSON-encoded string `["request_user_input_async", call_id, index]`. A committed answer fires UserPromptSubmit during the same turn with a prompt containing `<send_user_message_question_reply>`, a JSON array of `{answer, question, questionItemId}`, and the closing tag. Ordinary user prompts do not clear questions; replies clear only the named questions, and completion, interruption, failure, or thread reset clears the queue. The 30-second timer is a countdown, not automatic removal. Local Ctrl+] skips send no hook.
+
+A live trial on 0.158.0 found that pasting a reply envelope into the ordinary composer and pressing Enter cleared the whole pending-question widget, including the unanswered sibling. The UserPromptSubmit hook arrived about 26 seconds later, after four intervening tool boundaries. Composer submission is therefore not equivalent to answering through the question editor.
+
+The default editor keys are Shift+Left to expand/advance, Shift+Right to move backward and then collapse at the first question, digits 1–9 to select and submit, and paste plus Enter for free text. Answering leaves the editor open on the next pending question (wrapping to the first after answering the last). The current index survives collapse. Escape interrupts the turn. A reply may be held until the next tool boundary. Sources: [`request_user_input_async.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/core/src/tools/handlers/request_user_input_async.rs), [`async_questions/state.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/tui/src/bottom_pane/async_questions/state.rs), [`chatwidget/questions.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/tui/src/chatwidget/questions.rs), and [`answered_question.rs`](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/context-fragments/src/answered_question.rs).
 
 ## Project directory trust
 

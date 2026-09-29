@@ -355,6 +355,7 @@ pub mod fleet {
 
     fn registered_observation(slot: usize) -> AgentLifecycleObservation {
         AgentLifecycleObservation {
+            ask_queue: None,
             agent_id: Some(AgentSessionId::from(format!("agent-{slot}"))),
             agent_name: None,
             launch: LaunchParams::default(),

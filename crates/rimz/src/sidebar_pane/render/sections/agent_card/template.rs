@@ -39,6 +39,7 @@ impl CardStage {
 pub(super) enum CardSlot {
     Identity,
     Description,
+    Question,
     AwaitingDots,
     Gauge,
     Tokens,
@@ -52,13 +53,22 @@ pub(super) enum CardSlot {
 
 const IDENTITY: &[CardSlot] = &[CardSlot::Identity];
 const IDENTITY_DESCRIPTION: &[CardSlot] = &[CardSlot::Identity, CardSlot::Description];
-const IDENTITY_DESCRIPTION_GAUGE: &[CardSlot] =
-    &[CardSlot::Identity, CardSlot::Description, CardSlot::Gauge];
-const IDENTITY_AWAITING_GAUGE: &[CardSlot] =
-    &[CardSlot::Identity, CardSlot::AwaitingDots, CardSlot::Gauge];
+const IDENTITY_DESCRIPTION_GAUGE: &[CardSlot] = &[
+    CardSlot::Identity,
+    CardSlot::Description,
+    CardSlot::Question,
+    CardSlot::Gauge,
+];
+const IDENTITY_AWAITING_GAUGE: &[CardSlot] = &[
+    CardSlot::Identity,
+    CardSlot::AwaitingDots,
+    CardSlot::Question,
+    CardSlot::Gauge,
+];
 const ENGAGED: &[CardSlot] = &[
     CardSlot::Identity,
     CardSlot::Description,
+    CardSlot::Question,
     CardSlot::Gauge,
     CardSlot::Tokens,
     CardSlot::Delegation,
@@ -66,6 +76,7 @@ const ENGAGED: &[CardSlot] = &[
 const ENGAGED_EXPANDED: &[CardSlot] = &[
     CardSlot::Identity,
     CardSlot::Description,
+    CardSlot::Question,
     CardSlot::Gauge,
     CardSlot::Tokens,
     CardSlot::Delegation,
@@ -104,6 +115,22 @@ pub(super) fn template(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_unlabeled_card_keeps_the_question_slot() {
+        for status in [AgentStatus::Running, AgentStatus::Waiting] {
+            let slots = template(
+                CardStage::Fresh { labeled: false },
+                status,
+                CardDensityMode::Expanded,
+                CardExpansion {
+                    by_selection: true,
+                    ..Default::default()
+                },
+            );
+            assert!(slots.contains(&CardSlot::Question));
+        }
+    }
 
     const STAGES: [CardStage; 3] = [
         CardStage::Fresh { labeled: false },

@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn queued_asks_stay_running_and_close_individually_or_with_the_turn() {
+    let ids = [crate::ids::AskId::new(), crate::ids::AskId::new()];
+    let mut events = vec![
+        raw_lifecycle_at(
+            "codex",
+            0,
+            json!({"agent_id":"s1", "signal":{"signal":"turn_started"}}),
+        ),
+        raw_lifecycle_at(
+            "codex",
+            10,
+            json!({"agent_id":"s1", "signal":{"signal":"tool_used","mutates":false,"edits":false}, "ask_queue":{"queued":[
+                {"ask_id":ids[0],"native_key":"first","detail":"First?","question":{"question":"First?","options":[],"multi_select":false}},
+                {"ask_id":ids[1],"native_key":"second","detail":"Second?","question":{"question":"Second?","options":[],"multi_select":false}}
+            ]}}),
+        ),
+    ];
+    let states = reduce_agent_states(&events);
+    assert_eq!(states[0].status, AgentStatus::Running);
+    assert!(!states[0].is_awaiting_input());
+    assert!(states[0].waiting_since.is_none());
+    assert_eq!(
+        serde_json::to_value(&states[0]).unwrap()["queued_asks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    events.push(raw_lifecycle_at(
+        "codex",
+        20,
+        json!({"agent_id":"s1", "signal":{"signal":"tool_used","mutates":false,"edits":false}}),
+    ));
+    assert_eq!(
+        serde_json::to_value(&reduce_agent_states(&events)[0]).unwrap()["queued_asks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    events.push(raw_lifecycle_at("codex", 30, json!({"agent_id":"s1", "signal":{"signal":"turn_started"},"ask_queue":{"answered":[{"native_key":"first","answer":"Yes"}]}})));
+    let states = reduce_agent_states(&events);
+    assert_eq!(states[0].status, AgentStatus::Running);
+    let value = serde_json::to_value(&states[0]).unwrap();
+    assert_eq!(value["queued_asks"].as_array().unwrap().len(), 1);
+    assert_eq!(value["queued_asks"][0]["id"], json!(ids[1]));
+    for signal in [
+        json!({"signal":"turn_ended","errored":false,"parked_on_background":false}),
+        json!({"signal":"turn_interrupted"}),
+    ] {
+        let mut closed = events.clone();
+        closed.push(raw_lifecycle_at(
+            "codex",
+            40,
+            json!({"agent_id":"s1","signal":signal}),
+        ));
+        assert!(
+            serde_json::to_value(&reduce_agent_states(&closed)[0]).unwrap()["queued_asks"]
+                .as_array()
+                .is_none_or(Vec::is_empty)
+        );
+    }
+}
+
+#[test]
 fn reaper_ends_rest_active_sessions_without_erasing_failed_verdicts() {
     for event_name in [
         "ReapedSuperseded",
