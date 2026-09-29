@@ -47,13 +47,13 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 
 The receiver's turn-start hook first records and folds the lifecycle event into the snapshot, then reads this card's in-flight messages before confirming delivery, classifies the submitted sections once, records spend user input, and writes transcript entries. The snapshot fold therefore cannot see queue records: it uses the record-less classifier, so a headerless system prompt can still restart `user_turn_started_at`. Spend and transcript consume the same record-aware sections after confirmation; spend counts a human section only when its optional record also passes `is_user_input()` (excluding automated and `Resume`-gated records).
 
-[`store::message::classify_submitted_prompt`](../../../crates/rimz/src/store/message.rs) owns the write-side classification. It aligns confirmed records, parses the [message header](./messaging.md#the-message-header) once per section, and recovers unmatched headerless text from records RimZ has in flight to this card. That read uses `Store::list_messages`, not the queued-only pending list: candidates are `Sent` or `awaiting_late_ack()`. Classification changes no status; `TurnStarted` still confirms only prompts and `Compaction` only commands.
+[`store::message::classify_submitted_prompt`](../../../crates/rimz/src/store/message.rs) owns the write-side classification. It aligns confirmed records, parses the [message header](./messaging.md#the-message-header) once per section, and recovers unmatched headerless text from records RimZ has in flight to this card. That read uses `Store::list_messages`, not the queued-only pending list: candidates are `Sent` or `awaiting_late_ack()`. Classification changes no status; `TurnStarted` still confirms only prompts and `Compaction` only commands. Each section's `SectionOrigin`, defined in [`transcript.rs`](../../../crates/rimz/src/transcript.rs) beside the read side, is recorded through `SectionOrigin::entry_kind_and_from`, the inverse of `TranscriptEntry::origin()`; a round-trip unit test pins that only a human section reads back as the user.
 
 | Header `Type` | Entry |
 | --- | --- |
 | `AGENT_MESSAGE` | `Message`, with structured `from` |
-| `AGENT_REPORT`, `TEAM_REPORT`, or `SUBAGENT_REPORT` | `SubagentReport`, with `from: rimz` |
-| `WAIT`, `SIGNAL`, `STAGE`, `CACHE_KEEPALIVE` | `Wait`, with `from: rimz` |
+| `AGENT_REPORT`, `TEAM_REPORT`, or `SUBAGENT_REPORT` | `SubagentReport`, with the header's sender as `from` |
+| `WAIT`, `SIGNAL`, `STAGE`, `CACHE_KEEPALIVE` | `Wait`, with the header's sender as `from` |
 | `USER_MESSAGE` | `Prompt`, header removed, no `from` |
 | none, matches a confirmed record or a record RimZ has in flight to this card | That record's origin: human → `Prompt` without `from`; agent → `Message` from its handle; subagent report → `SubagentReport`; notice → `Wait`; system → `Prompt` with `from: "rimz"` |
 | none, nothing accounts for it | Human `Prompt`, subject to the launch-run and open-ask cases below |
