@@ -788,7 +788,211 @@ fn contract(max_production_sloc_delta: i64) -> PassContract {
         delete: Vec::new(),
         rehome: Vec::new(),
         dependency: Vec::new(),
+        cx: Vec::new(),
     }
+}
+
+#[test]
+fn cx_rows_round_caps_and_report_absence_and_missing_metrics() {
+    for (base, current, max, landed, detail) in [
+        (
+            Ok(Some(8.0)),
+            Ok(Some(5.04)),
+            5.0,
+            true,
+            "base 8.0 → current 5.0 → max 5.0",
+        ),
+        (Ok(Some(8.0)), Ok(Some(5.16)), 5.04, false, "; excess 0.2"),
+        (Ok(None), Ok(Some(5.0)), 5.0, true, "base absent"),
+        (Ok(Some(8.0)), Ok(None), 0.0, true, "current absent"),
+        (Ok(Some(8.0)), Err("no metric"), 5.0, false, "no metric"),
+        (Err("no metric"), Ok(Some(5.0)), 5.0, false, "no metric"),
+    ] {
+        let checks = [CxCheck {
+            expectation: CxExpectation {
+                item: Some("cli::run".into()),
+                path: None,
+                max,
+            },
+            base,
+            current,
+        }];
+        let rows = expectation_rows(
+            &contract(0),
+            0,
+            ExpectationChecks {
+                cx: &checks,
+                ..Default::default()
+            },
+            &[],
+            true,
+        );
+        let row = rows
+            .iter()
+            .find(|row| row.assertion == "cx cli::run")
+            .expect("cx row emitted");
+        assert_eq!(row.landed, landed);
+        assert!(row.detail.contains(detail), "{}", row.detail);
+    }
+}
+
+#[test]
+fn cx_rounding_matches_survey_display() {
+    for value in [1.25, 1.15, 1.05, 5.04, 5.16] {
+        assert_eq!(
+            rounded_cx(value),
+            format!("{value:.1}").parse::<f64>().unwrap()
+        );
+    }
+}
+
+#[test]
+fn thin_cli_requires_an_under_base_cli_item_cap() {
+    let mut contract = contract(0);
+    contract.kind = PassKind::ThinCli;
+    for (item, base, max, landed) in [
+        (Some("cli::run"), Ok(Some(8.0)), 5.0, true),
+        (Some("cli::nested::Owner::run"), Ok(Some(8.0)), 5.0, true),
+        (None, Ok(Some(8.0)), 5.0, false),
+        (Some("client::run"), Ok(Some(8.0)), 5.0, false),
+        (Some("cli::run"), Ok(Some(5.04)), 5.0, false),
+        (Some("cli::run"), Ok(None), 0.0, false),
+        (Some("cli::run"), Err("no metric"), 0.0, false),
+    ] {
+        let checks = [CxCheck {
+            expectation: CxExpectation {
+                item: item.map(str::to_owned),
+                path: item.is_none().then(|| "src/cli".into()),
+                max,
+            },
+            base,
+            current: Ok(Some(0.0)),
+        }];
+        let rows = expectation_rows(
+            &contract,
+            0,
+            ExpectationChecks {
+                cx: &checks,
+                ..Default::default()
+            },
+            &[],
+            true,
+        );
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.assertion == "cli thinning")
+                .expect("thin-cli row emitted")
+                .landed,
+            landed
+        );
+    }
+}
+
+#[test]
+fn cx_pairs_by_name_and_span_and_sums_directory_with_sibling() {
+    use super::super::metrics::{FunctionMetric, MetricsReport};
+    let mut facts = facts_for_sources(
+        vec![
+            Source::new("src/cli.rs", "#[inline]\nfn run() { fn nested() {} }"),
+            Source::new("src/cli/child.rs", "fn run() {}"),
+            Source::new("src/client.rs", "fn run() {}"),
+        ],
+        References::default(),
+    );
+    facts.metrics = Some(MetricsReport {
+        module_scores: BTreeMap::new(),
+        functions: [
+            ("src/cli.rs", "run", 2, 3.0),
+            ("src/cli.rs", "wrong", 1, 20.0),
+            ("src/cli.rs", "run", 99, 30.0),
+            ("src/cli/child.rs", "run", 1, 4.0),
+            ("src/client.rs", "run", 1, 50.0),
+        ]
+        .into_iter()
+        .map(|(path, name, line, score)| FunctionMetric {
+            path: path.into(),
+            name: name.into(),
+            line,
+            score,
+            module: String::new(),
+            cyclomatic: 0.0,
+            cognitive: 0.0,
+            sloc: 0.0,
+        })
+        .collect(),
+    });
+    let mut row = CxExpectation {
+        item: Some("cli::run".into()),
+        path: None,
+        max: 0.0,
+    };
+    assert_eq!(cx_value(&facts, &row), Ok(Some(3.0)));
+    row.item = Some("cli::nested".into());
+    assert_eq!(cx_value(&facts, &row), Err("no metric"));
+    row.item = Some("cli::absent".into());
+    assert_eq!(cx_value(&facts, &row), Ok(None));
+    row.item = None;
+    row.path = Some("src/cli".into());
+    assert_eq!(cx_value(&facts, &row), Ok(Some(57.0)));
+    row.path = Some("src/cli/child.rs".into());
+    assert_eq!(cx_value(&facts, &row), Ok(Some(4.0)));
+}
+
+#[test]
+fn bin_to_lib_rehome_lands() {
+    let base = facts_for_sources(
+        vec![
+            Source::new("src/main.rs", "mod cli; fn main() {}"),
+            Source::new("src/cli.rs", "mod loop_cmd;"),
+            Source::new("src/cli/loop_cmd.rs", "pub(super) fn run_one() {}"),
+            Source::new("src/lib.rs", "pub mod harness;"),
+            Source::new("src/harness.rs", "pub mod schedule;"),
+            Source::new("src/harness/schedule.rs", ""),
+        ],
+        References::default(),
+    );
+    let current = facts_for_sources(
+        base.sources
+            .iter()
+            .map(|source| {
+                Source::new(
+                    source.path.clone(),
+                    match source.path.to_str().unwrap() {
+                        "src/cli/loop_cmd.rs" => "",
+                        "src/harness/schedule.rs" => "pub fn run_one() {}",
+                        _ => &source.text,
+                    },
+                )
+            })
+            .collect(),
+        References::default(),
+    );
+    let item = "cli::loop_cmd::run_one";
+    assert!(definition_site(&base.syntax.files, item).is_some());
+    let checks = [RehomeCheck {
+        expectation: RehomeExpectation {
+            item: item.into(),
+            to: "harness::schedule".into(),
+        },
+        old: definition_site(&current.syntax.files, item),
+        destinations: definition_sites(&current.syntax.files, "harness::schedule", "run_one"),
+    }];
+    let rows = expectation_rows(
+        &contract(0),
+        0,
+        ExpectationChecks {
+            rehome: &checks,
+            ..Default::default()
+        },
+        &[],
+        true,
+    );
+    assert!(
+        rows.iter()
+            .find(|row| row.assertion.starts_with("rehome "))
+            .unwrap()
+            .landed
+    );
 }
 
 fn facts_for_source(source: &str, references: References) -> Facts {

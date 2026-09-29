@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use super::inspect;
 use super::modules::module_is_within;
-use super::syntax::FileSyntax;
+use super::syntax::{FileSyntax, FnBody};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -27,6 +27,16 @@ pub(super) struct PassContract {
     pub(super) rehome: Vec<RehomeExpectation>,
     #[serde(default)]
     pub(super) dependency: Vec<DependencyExpectation>,
+    #[serde(default)]
+    pub(super) cx: Vec<CxExpectation>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CxExpectation {
+    pub(super) item: Option<String>,
+    pub(super) path: Option<PathBuf>,
+    pub(super) max: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -38,6 +48,9 @@ pub(super) enum PassKind {
     /// Adds a user-decided capability to `xtask/`: its ceiling is priced from
     /// its target, so `diff --expect` asks it for no narrowing.
     Tooling,
+    /// Moves a workflow out of `cli`: `diff --expect` asks it for a `[[cx]]`
+    /// item row under `cli` capped below its base.
+    ThinCli,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -149,7 +162,58 @@ fn validate(
             );
         }
     }
+    for expectation in &contract.cx {
+        let Some(item) = &expectation.item else {
+            continue;
+        };
+        let base = cx_functions(base_syntax_files, item);
+        let current = cx_functions(current_syntax_files, item);
+        if base.is_empty() && current.is_empty() {
+            bail!("pass contract cx item `{item}` is defined at neither base nor current");
+        }
+        for (side, functions) in [("base", base), ("current", current)] {
+            if functions.len() > 1 {
+                let sites = functions
+                    .iter()
+                    .map(|function| format!("{}:{}", function.path.display(), function.line))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!("pass contract cx item `{item}` is ambiguous at {side}: {sites}");
+            }
+            for function in functions {
+                validate_cx_path(&contract, &function.path)?;
+            }
+        }
+    }
     Ok(contract)
+}
+
+pub(super) fn cx_functions<'a>(files: &'a [FileSyntax], item: &str) -> Vec<&'a FnBody> {
+    files
+        .iter()
+        .flat_map(|file| {
+            file.fns.iter().filter(move |function| {
+                format!("{}::{}", file.module_path, function.label()) == item
+            })
+        })
+        .collect()
+}
+
+fn validate_cx_path(contract: &PassContract, path: &Path) -> Result<()> {
+    super::validate_scope(
+        path.to_str()
+            .context("pass contract cx paths must contain valid UTF-8")?,
+        "diff contract cx.path",
+    )?;
+    if !contract.paths.iter().any(|scope| {
+        super::modules::path_in_scope(path, scope) || path == scope.with_extension("rs")
+    }) {
+        bail!(
+            "pass contract cx path `{}` must be inside pass contract paths",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 fn validate_schema(contract: &PassContract) -> Result<()> {
@@ -197,6 +261,15 @@ fn validate_schema(contract: &PassContract) -> Result<()> {
                 "pass contract esc path `{}` must be inside pass contract paths",
                 path.display()
             );
+        }
+    }
+    for expectation in &contract.cx {
+        match (&expectation.item, &expectation.path) {
+            (Some(item), None) => {
+                item_parts("cx", item)?;
+            }
+            (None, Some(path)) => validate_cx_path(contract, path)?,
+            _ => bail!("pass contract cx row must set exactly one of item or path"),
         }
     }
     for expectation in &contract.delete {
@@ -286,6 +359,7 @@ mod tests {
             delete: Vec::new(),
             rehome: Vec::new(),
             dependency: Vec::new(),
+            cx: Vec::new(),
         }
     }
 
@@ -295,6 +369,89 @@ mod tests {
         let mut contract = contract();
         contract.version = 3;
         assert!(validate(root.path(), &syntax, &syntax, contract).is_err());
+    }
+
+    #[test]
+    fn cx_contract_resolves_private_functions_and_methods_on_either_side() {
+        let root = tempfile::tempdir().unwrap();
+        let syntax = super::super::syntax::analyze_sources(
+            &[Source::new(
+                "src/cli.rs",
+                "fn run() {} struct Owner; impl Owner { fn new() {} }",
+            )],
+            &BTreeSet::new(),
+        );
+        for item in ["cli::run", "cli::Owner::new"] {
+            for (base, current) in [
+                (&syntax.files[..], &[][..]),
+                (&[][..], &syntax.files[..]),
+                (&syntax.files[..], &syntax.files[..]),
+            ] {
+                let parsed: PassContract = toml::from_str(&format!("version = 2\nbase = 'main'\nkind = 'thin-cli'\npaths = ['src']\nmax-production-sloc-delta = 0\n[[cx]]\nitem = '{item}'\nmax = 5")).expect("cx schema accepts integer maxima and thin-cli");
+                assert!(validate(root.path(), current, base, parsed).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn cx_contract_rejects_invalid_keys_and_scopes() {
+        let root = tempfile::tempdir().unwrap();
+        let syntax = super::super::syntax::analyze_sources(
+            &[Source::new(
+                "src/cli.rs",
+                "struct Owner; impl A for Owner { fn fmt() {} }\nimpl B for Owner { fn fmt() {} }",
+            )],
+            &BTreeSet::new(),
+        );
+        for (row, message) in [
+            ("item = 'cli::Owner::fmt'", "src/cli.rs:1, src/cli.rs:2"),
+            ("item = 'cli::missing'", "neither base nor current"),
+            ("item = 'cli::missing'\npath = 'src/cli.rs'", "exactly one"),
+            ("", "exactly one"),
+            ("path = 'elsewhere/file.rs'", "inside pass contract paths"),
+        ] {
+            let parsed: PassContract = toml::from_str(&format!("version = 2\nbase = 'main'\npaths = ['src']\nmax-production-sloc-delta = 0\n[[cx]]\n{row}\nmax = 5.0")).expect("cx schema parses before validation");
+            let error = validate(root.path(), &syntax.files, &syntax.files, parsed)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn cx_contract_rejects_out_of_scope_item_and_either_side_ambiguity() {
+        let root = tempfile::tempdir().unwrap();
+        let syntax = super::super::syntax::analyze_sources(
+            &[Source::new("src/cli.rs", "fn run() {}")],
+            &BTreeSet::new(),
+        );
+        let mut contract = contract();
+        contract.assembly.clear();
+        contract.paths = vec!["src/other".into()];
+        contract.cx = vec![CxExpectation {
+            item: Some("cli::run".into()),
+            path: None,
+            max: 5.0,
+        }];
+        for (base, current) in [(&syntax.files[..], &[][..]), (&[][..], &syntax.files[..])] {
+            let error = validate(root.path(), current, base, contract.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("inside pass contract paths"), "{error}");
+        }
+        contract.paths = vec!["src".into()];
+        let ambiguous = [syntax.files[0].clone(), syntax.files[0].clone()];
+        for (base, current) in [
+            (&ambiguous[..], &syntax.files[..]),
+            (&syntax.files[..], &ambiguous[..]),
+        ] {
+            assert!(
+                validate(root.path(), current, base, contract.clone())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("ambiguous")
+            );
+        }
     }
 
     #[test]

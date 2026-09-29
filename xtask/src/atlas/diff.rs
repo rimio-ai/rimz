@@ -9,8 +9,8 @@ use serde_json::{Map, Value, json};
 
 use super::conform::{self, Direction};
 use super::contract::{
-    AssemblyExpectation, DeleteExpectation, DependencyExpectation, EscExpectation, PassContract,
-    PassKind, RehomeExpectation,
+    AssemblyExpectation, CxExpectation, DeleteExpectation, DependencyExpectation, EscExpectation,
+    PassContract, PassKind, RehomeExpectation,
 };
 use super::facts::{Facets, Facts};
 use super::inspect;
@@ -172,11 +172,52 @@ struct DependencyCheck {
 
 #[derive(Default)]
 struct ExpectationChecks<'a> {
+    cx: &'a [CxCheck],
     assembly: &'a [AssemblyCheck],
     esc: &'a [EscCheck],
     delete: &'a [DeleteCheck],
     rehome: &'a [RehomeCheck],
     dependency: &'a [DependencyCheck],
+}
+
+struct CxCheck {
+    expectation: CxExpectation,
+    base: Result<Option<f64>, &'static str>,
+    current: Result<Option<f64>, &'static str>,
+}
+
+fn cx_value(facts: &Facts, expectation: &CxExpectation) -> Result<Option<f64>, &'static str> {
+    if let Some(item) = &expectation.item {
+        let functions = super::contract::cx_functions(&facts.syntax.files, item);
+        let Some(function) = functions.first() else {
+            return Ok(None);
+        };
+        return facts
+            .metrics
+            .as_ref()
+            .and_then(|metrics| {
+                metrics.functions.iter().find(|metric| {
+                    metric.path == function.path
+                        && metric.name == function.name
+                        && (function.line..=function.end_line).contains(&(metric.line as usize))
+                })
+            })
+            .map(|metric| Some(metric.score))
+            .ok_or("no metric");
+    }
+    let path = expectation
+        .path
+        .as_ref()
+        .expect("validated cx row has an item or path");
+    let metrics = facts.metrics.as_ref().ok_or("no metric")?;
+    Ok(Some(
+        metrics
+            .functions
+            .iter()
+            .filter(|metric| in_boundary(&metric.path, path))
+            .map(|metric| metric.score)
+            .sum(),
+    ))
 }
 
 #[derive(Clone, Debug)]
@@ -238,7 +279,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         println!("{USAGE}\n\n{}", output::USAGE);
         return Ok(());
     };
-    let current = Facts::load(
+    let mut current = Facts::load(
         root,
         Path::new("."),
         Facets {
@@ -255,7 +296,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         ),
     };
     let base_commit = resolve_base(root, &base)?;
-    let base_facts = Facts::load_at(root, Path::new("."), &base_commit, true)?;
+    let mut base_facts = Facts::load_at(root, Path::new("."), &base_commit, true)?;
     let contract = contract_path
         .map(|path| {
             super::contract::load(root, path, &current.syntax.files, &base_facts.syntax.files)
@@ -264,6 +305,18 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     let paths = contract
         .as_ref()
         .map_or(exploratory_paths, |contract| contract.paths.clone());
+    if contract
+        .as_ref()
+        .is_some_and(|contract| !contract.cx.is_empty())
+    {
+        for facts in [&mut base_facts, &mut current] {
+            facts.metrics = Some(super::metrics::analyze_snapshot(
+                &facts.sources,
+                &facts.syntax.files,
+                &paths,
+            )?);
+        }
+    }
     let report = build_report(root, base, paths, contract.as_ref(), &base_facts, &current)?;
     let rendered = if args.output.json {
         render_json(&report, &args.output, args.show_internal)?
@@ -485,11 +538,23 @@ fn build_report(
             })
             .collect()
     });
+    let cx_checks = contract.map_or_else(Vec::new, |contract| {
+        contract
+            .cx
+            .iter()
+            .map(|expectation| CxCheck {
+                expectation: expectation.clone(),
+                base: cx_value(base, expectation),
+                current: cx_value(current, expectation),
+            })
+            .collect()
+    });
     let expectations = contract.map_or_else(Vec::new, |contract| {
         expectation_rows(
             contract,
             production.delta,
             ExpectationChecks {
+                cx: &cx_checks,
                 assembly: &assembly_checks,
                 esc: &esc_checks,
                 delete: &delete_checks,
@@ -1019,6 +1084,20 @@ fn describe_unnarrowed(checks: &[EscCheck]) -> String {
     )
 }
 
+fn rounded_cx(value: f64) -> f64 {
+    format!("{value:.1}")
+        .parse()
+        .expect("formatted f64 is a valid f64")
+}
+
+fn describe_cx(value: Result<Option<f64>, &'static str>) -> String {
+    match value {
+        Ok(Some(value)) => format!("{:.1}", rounded_cx(value)),
+        Ok(None) => "absent".to_owned(),
+        Err(error) => error.to_owned(),
+    }
+}
+
 fn expectation_rows(
     contract: &PassContract,
     production_delta: i64,
@@ -1034,6 +1113,48 @@ fn expectation_rows(
             contract.max_production_sloc_delta
         ),
     }];
+    rows.extend(checks.cx.iter().map(|check| {
+        let assertion = match (&check.expectation.item, &check.expectation.path) {
+            (Some(item), _) => format!("cx {item}"),
+            (_, Some(path)) => format!("cx `{}`", path.display()),
+            _ => unreachable!("validated cx row has an item or path"),
+        };
+        let max = rounded_cx(check.expectation.max);
+        let current = check.current.map(|value| rounded_cx(value.unwrap_or(0.0)));
+        let landed = check.base.is_ok() && current.is_ok_and(|current| current <= max);
+        let mut detail = format!(
+            "base {} → current {} → max {max:.1}",
+            describe_cx(check.base),
+            describe_cx(check.current)
+        );
+        if let Ok(current) = current
+            && current > max
+        {
+            let _ = write!(detail, "; excess {:.1}", current - max);
+        }
+        ExpectationRow {
+            assertion,
+            landed,
+            detail,
+        }
+    }));
+    if contract.kind == PassKind::ThinCli {
+        let thinning = checks.cx.iter().find_map(|check| {
+            let item = check.expectation.item.as_ref()?;
+            let base = rounded_cx(check.base.ok()?.unwrap_or(0.0));
+            let max = rounded_cx(check.expectation.max);
+            (item.starts_with("cli::") && max < base)
+                .then(|| format!("cx `{item}` falls {base:.1} → {max:.1}"))
+        });
+        rows.push(ExpectationRow {
+            assertion: "cli thinning".to_owned(),
+            landed: thinning.is_some(),
+            detail: thinning.unwrap_or_else(|| {
+                "a thin-cli contract needs a [[cx]] item row under cli with max below its base"
+                    .to_owned()
+            }),
+        });
+    }
     // A module pass that grants itself room to grow has to pay for it with a
     // narrowing, or it asserts nothing at all.
     if contract.kind == PassKind::Module && contract.max_production_sloc_delta > 0 {
