@@ -8,7 +8,7 @@ use crate::disk::paths::StatePaths;
 use crate::ids::AgentSessionId;
 use crate::store::Store;
 use crate::store::message::{MessageRecord, MessageSender};
-use crate::store::run::{PeerRun, RunStatus};
+use crate::store::run::{PeerRun, RunStatus, RunStoreErr};
 use crate::store::writer::DeliveryAckMatch;
 
 use super::{RecordMutation, Result, RunRecord};
@@ -70,9 +70,13 @@ pub fn record_run_delivery(
     run_id: Option<&crate::ids::RunId>,
 ) -> Result<Option<RunRecord>> {
     if let Some(run_id) = run_id {
-        let record = super::load(paths, run_id)?;
-        if record.subagent {
-            return stamp_subagent_delivery(paths, record, peer, records);
+        // gc removes terminal records while a foreground `-p` peer's pane stays open.
+        match super::load(paths, run_id) {
+            Ok(record) if record.subagent => {
+                return stamp_subagent_delivery(paths, record, peer, records);
+            }
+            Ok(_) | Err(RunStoreErr::NotFound(_)) => {}
+            Err(err) => return Err(err),
         }
     }
     if selection != DeliveryAckMatch::PromptCorrelated || !peer_can_report(adapter) {
