@@ -69,6 +69,48 @@ fn profile(agent: &str) -> Profile {
 }
 
 #[test]
+fn allowed_tools_survive_profile_cells_and_fresh_requests() {
+    let parent = Profile {
+        allowed_tools: Some(vec!["Bash(git *)".parse().unwrap()]),
+        ..profile("claude")
+    };
+    for child_rules in [None, Some(Vec::new()), Some(vec!["Read".parse().unwrap()])] {
+        let expected = child_rules.clone().or_else(|| parent.allowed_tools.clone());
+        let profiles = ProfilesConfig(BTreeMap::from([
+            ("parent".to_owned(), parent.clone()),
+            (
+                "child".to_owned(),
+                Profile {
+                    allowed_tools: child_rules,
+                    ..profile("parent")
+                },
+            ),
+        ]));
+        let resolved = resolve_profile("child", &profiles).unwrap();
+        assert_eq!(resolved.allowed_tools, expected);
+        let cell = agent_cell("child", &profiles, &CommandsConfig::default());
+        assert_eq!(cell.allowed_tools, expected);
+        let request =
+            crate::harness::launch::ExecRequest::fresh(&cell, Default::default(), None, false);
+        assert_eq!(request.allowed_tools, expected);
+    }
+}
+
+#[test]
+fn allowed_tools_rebase_preserves_explicit_empty() {
+    let mut base = ResolvedProfile::bare("codex");
+    base.allowed_tools = Some(vec!["Read".parse().unwrap()]);
+    for rules in [None, Some(Vec::new()), Some(vec!["Write".parse().unwrap()])] {
+        let mut original = ResolvedProfile::bare("claude");
+        original.allowed_tools = rules.clone();
+        assert_eq!(
+            rebase_onto(original, Some(&base)).allowed_tools,
+            rules.or_else(|| base.allowed_tools.clone())
+        );
+    }
+}
+
+#[test]
 fn profile_skills_inherit_replace_and_clear() {
     assert_eq!(
         agent_cell(

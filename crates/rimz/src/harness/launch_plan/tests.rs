@@ -21,6 +21,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        allowed_tools: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -318,7 +319,6 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
         machine_config.agents.profiles.0.insert(
             name.to_owned(),
             crate::config::Profile {
-                allowed_tools: None,
                 preferred_family: None,
                 model_tier: None,
                 agent: agent.to_owned(),
@@ -334,6 +334,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
                 system_prompt_file: None,
                 append_system_prompt_files: Vec::new(),
                 skills: None,
+                allowed_tools: None,
                 args: None,
             },
         );
@@ -342,7 +343,6 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
         machine_config.subagents.profiles.0.insert(
             name.to_owned(),
             crate::config::Profile {
-                allowed_tools: None,
                 preferred_family: None,
                 model_tier: None,
                 agent: "claude".to_owned(),
@@ -358,6 +358,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
                 system_prompt_file: None,
                 append_system_prompt_files: Vec::new(),
                 skills: None,
+                allowed_tools: None,
                 args: None,
             },
         );

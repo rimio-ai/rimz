@@ -319,6 +319,7 @@ fn zellij_agent_exec_command(
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: None,
+        allowed_tools: None,
         provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,

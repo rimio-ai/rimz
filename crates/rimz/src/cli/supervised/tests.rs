@@ -651,6 +651,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         consensus: rimz::harness::team_prompt::Consensus::BuiltIn,
         files: vec!["/team/pipeline.md".into()],
     };
+    let allowed_tools = ["Read".parse().unwrap()];
     let pane = run_pane_cmd(RunPaneCmdArgs {
         isolation_default: None,
         runtime: &runtime,
@@ -668,6 +669,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         append_system_prompt_files: &[],
         team_prompt: Some(&team_prompt),
         skills: None,
+        allowed_tools: Some(&allowed_tools),
         self_cleanup_on_completion: true,
         subagent: true,
         provider_account_binding: None,
@@ -682,6 +684,10 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     assert!(request.close_pane_on_exit);
     assert!(request.exit_on_run_completion);
     assert!(request.subagent);
+    assert_eq!(
+        request.allowed_tools.as_deref(),
+        Some(allowed_tools.as_slice())
+    );
     // Together these select the wrapper's parent-receipt hold before it closes the pane.
     assert_eq!(request.team_prompt, Some(team_prompt));
 }

@@ -747,6 +747,7 @@ fn execute_attempt(
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
         team_prompt: agent_cell.team_prompt.as_ref(),
         skills: agent_cell.skills.as_deref(),
+        allowed_tools: agent_cell.allowed_tools.as_deref(),
         isolation_default: agent_cell.isolation_default,
         self_cleanup_on_completion: request.self_cleanup_on_completion && !request.keep,
         subagent: request.subagent,
