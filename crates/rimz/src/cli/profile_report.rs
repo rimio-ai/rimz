@@ -27,6 +27,8 @@ pub(crate) struct AgentProfileReport {
     pub(crate) effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    allowed_tools: Vec<rimz::config::ToolRule>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) path: Option<PathBuf>,
 }
@@ -50,6 +52,7 @@ pub(crate) fn available_profiles(
             tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
             effort: profile.effort.clone(),
             description: profile.description.clone(),
+            allowed_tools: profile.allowed_tools.clone().unwrap_or_default(),
             path: sources.profile(scope, name).map(PathBuf::from),
         })
         .collect::<Vec<_>>();
@@ -59,6 +62,7 @@ pub(crate) fn available_profiles(
         brand_kind: None,
         agent: None,
         model: None,
+        allowed_tools: Vec::new(),
         tier: None,
         tier_fallback: None,
         effort: None,
@@ -119,6 +123,11 @@ fn subagent_report(
         .get(&profile.name)
         .and_then(|profile| profile.model_tier.as_ref());
     AgentProfileReport {
+        allowed_tools: profiles
+            .0
+            .get(&profile.name)
+            .and_then(|profile| profile.allowed_tools.clone())
+            .unwrap_or_default(),
         tier: tier.map(|tier| tier.tier),
         tier_fallback: tier.map(|tier| tier.fell_back),
         name: profile.name,
@@ -243,6 +252,18 @@ fn profile_cards(
         if let Some(description) = &report.description {
             writeln!(out, "  {description}")?;
         }
+        if !report.allowed_tools.is_empty() {
+            writeln!(
+                out,
+                "  allowed-tools: {}",
+                report
+                    .allowed_tools
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+        }
         if let Some(path) = &report.path {
             writeln!(out, "  {}", render::home_relative(&path.to_string_lossy()))?;
         }
@@ -307,6 +328,7 @@ mod tests {
     fn profiles_render_as_cards_with_independent_model_and_effort_segments() {
         let reports = vec![
             AgentProfileReport {
+                allowed_tools: Vec::new(),
                 tier: None,
                 tier_fallback: None,
                 name: "planner".to_owned(),
@@ -319,6 +341,7 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/.agents/agents/planner.md")),
             },
             AgentProfileReport {
+                allowed_tools: Vec::new(),
                 tier: None,
                 tier_fallback: None,
                 name: "reviewer".to_owned(),
@@ -331,6 +354,7 @@ mod tests {
                 path: None,
             },
             AgentProfileReport {
+                allowed_tools: Vec::new(),
                 tier: None,
                 tier_fallback: None,
                 name: "coder".to_owned(),
@@ -343,6 +367,7 @@ mod tests {
                 path: None,
             },
             AgentProfileReport {
+                allowed_tools: Vec::new(),
                 tier: None,
                 tier_fallback: None,
                 name: "lint".to_owned(),
@@ -384,6 +409,7 @@ mod tests {
     #[test]
     fn paths_are_opt_in_for_json() {
         let mut reports = vec![AgentProfileReport {
+            allowed_tools: Vec::new(),
             tier: None,
             tier_fallback: None,
             name: "planner".to_owned(),
@@ -447,6 +473,73 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn allowed_tools_cards_and_json_follow_profile_and_subagent_catalogs() {
+        for allowed_tools in [
+            Some(vec![
+                "Bash(git *)".parse().unwrap(),
+                "Read".parse().unwrap(),
+            ]),
+            None,
+            Some(Vec::new()),
+        ] {
+            let shown = allowed_tools
+                .as_ref()
+                .is_some_and(|rules| !rules.is_empty());
+            let profiles = rimz::config::ProfilesConfig(
+                [(
+                    "fixer".into(),
+                    rimz::config::Profile {
+                        allowed_tools,
+                        description: Some("Keeps branch current".into()),
+                        ..profile("claude")
+                    },
+                )]
+                .into(),
+            );
+            let commands = rimz::config::CommandsConfig::default();
+            let sources = rimz::config::AgentSpecSources::default();
+            let catalog = rimz::harness::subagent_policy::catalog(
+                None,
+                &Default::default(),
+                &profiles,
+                &commands,
+            );
+            for (reports, listing) in [
+                (
+                    available_profiles(&profiles, &commands, &sources, ProfileScope::Agents),
+                    ProfileListing::Agents {
+                        team_profiles_hidden: false,
+                    },
+                ),
+                (
+                    subagent_reports(catalog, &profiles, &sources),
+                    ProfileListing::Subagents,
+                ),
+            ] {
+                let json = serde_json::to_value(&reports).unwrap();
+                let mut output = Vec::new();
+                profile_cards(&reports, listing, &mut output).unwrap();
+                let output = String::from_utf8(output).unwrap();
+                if shown {
+                    assert_eq!(
+                        json[0]["allowed_tools"],
+                        serde_json::json!(["Bash(git *)", "Read"])
+                    );
+                    assert!(
+                        output.contains(
+                            "  Keeps branch current\n  allowed-tools: Bash(git *), Read\n"
+                        ),
+                        "{output}"
+                    );
+                } else {
+                    assert!(json[0].get("allowed_tools").is_none());
+                    assert!(!output.contains("allowed-tools:"));
+                }
+            }
+        }
     }
 
     #[test]
