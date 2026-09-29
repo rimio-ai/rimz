@@ -142,6 +142,8 @@ These flags apply to every agent cell in the launch, and each adapter renders th
 
 The profile fields these flags override are described in the [configuration guide](../../guide/configuration.md#profiles).
 
+`--model` also accepts a [model tier](../../guide/configuration.md#model-tiers). Each cell prefers the `--agent` replacement's provider when given, otherwise its definition chain's preferred family, otherwise its current provider. Resolution tries that family, then the other family at the same tier, then higher tiers, never lower. A tier that would move the cell to the other provider is refused and names the fix, `--agent <kind> --model <tier>`, so a provider switch, with the argument rules `--agent` documents below, is always one you asked for. Other providers refuse tiers. The selected cell's default effort replaces the profile's effort unless `--effort` is given. CLI effort remains an absolute provider value; relative shifts belong to Markdown definitions.
+
 `--agent` swaps the engine and keeps the job. The replacement profile or kind supplies the provider, and supplies model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer prompt on the `opus` profile's model and effort. When the replacement leaves model or effort unset, a same-provider re-base keeps the cell's values, while a provider change drops the cell's model and keeps its effort. Permission mode, isolation default, budget, `auto-compact`, skills, and prompt files carry over from the original profile, and the replacement fills only what the original left unset. Raw profile `args` carry over on a same-provider re-base; on a provider change they come from the replacement instead, so a named Codex definition can supply its model and generated tool flags when selected as the replacement. Command-line flags still win, and typed fields the new adapter cannot express fail before any pane opens. `--agent` applies to this launch only: `--resume` refuses it, and a later `restart` refuses when the profile resolves back to a different provider.
 
 Isolation resolves as recorded `--isolation` flag, then the profile's `isolation` default, then machine `agents.isolation`. Sandbox isolation runs the bubblewrap preflight and refuses before any pane opens when it fails, including when selected by a profile. The override is recorded on each agent, so `restart`, `fork`, resume, room rebirth, and the agent's `rimz subagents` children keep it. A cohort resume with `--isolation host|sandbox` replaces that recorded override while keeping the conversation. Omitting the flag preserves any recorded override; an agent with none re-reads its profile default on every relaunch. The profile default itself is never recorded as a flag.
@@ -345,12 +347,15 @@ rimz agents profiles --json --path
 
 JSON includes `source` (`profile` or `command`) and, only with `--path`, the absolute `path`.
 
+Tiered profiles show the tier beside the concrete model, with `fallback` when resolution used another family or a higher tier. JSON adds `tier` and `tier_fallback` only for tiered profiles; `model` and `effort` stay concrete. Validation rows use the same tier fields and fallback marker.
+
 ### Explain a launch
 
 `rimz agents explain` prints the launch plan for one agent without launching it. It opens no pane, mints no name or launch id, writes no store record, and creates no prompt files, room tmp, or skill copies.
 
 ```sh
 rimz agents explain coder --model gpt-6-astra --effort high
+rimz agents explain coder --model senior
 rimz agents explain forge.coder --json
 rimz agents explain @coder
 rimz agents explain coder --prompt > prompt.md
@@ -365,6 +370,7 @@ With a profile target, `explain` accepts the launch overrides `--ask`, `--yolo`,
 
 The default report shows:
 
+- a model-tier override's concrete provider, model, and effort alongside the requested tier;
 - the profile chain, including a replacement from `--agent` (`writer ← claude` becomes `writer ← codex`, or `writer ← fast ← codex` when the replacement is profile `fast`);
 - the action, working directory, and effective settings;
 - the provider argv and the wrapped argv;

@@ -96,6 +96,16 @@ pub(super) fn prepare_supervised_launch_layout(
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            tiers: rimz::harness::plan::TierOverrideContext {
+                table: &machine_config.tiers,
+                profiles: effective.profiles_for(scope),
+                cell_profiles: if resolved.team_name.is_some() {
+                    &effective.profiles
+                } else {
+                    effective.profiles_for(scope)
+                },
+                agent_override: request.agent.as_deref(),
+            },
             permission_mode: Some(request.permission_mode.map_or(
                 PermissionModeChoice::Default(PermissionMode::Auto),
                 PermissionModeChoice::Explicit,

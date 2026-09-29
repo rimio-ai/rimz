@@ -148,7 +148,9 @@ fn write_spec(w: &mut impl Write, report: &TeamReport) -> Result<()> {
             .map(|role| render::RosterRow {
                 handle: role.role.clone(),
                 kind: role.kind.clone().unwrap_or_else(|| "-".to_owned()),
-                model: role.model.clone(),
+                model: role.model.as_deref().map(|model| {
+                    crate::cli::profile_report::model_label(model, role.tier, role.tier_fallback)
+                }),
                 leader: report.leader.as_deref() == Some(role.role.as_str()),
             })
             .collect(),
@@ -492,6 +494,8 @@ mod tests {
             layout: Some("planner,coder+reviewer".to_owned()),
             leader: Some("planner".to_owned()),
             roles: vec![RoleReport {
+                tier: None,
+                tier_fallback: None,
                 signals: vec![super::super::list::DeclaredSignal {
                     signal: "ci.failed".to_owned(),
                     matches: BTreeMap::new(),
@@ -512,6 +516,17 @@ mod tests {
             error: None,
             instances,
         }
+    }
+
+    #[test]
+    fn tier_roster_marks_fallback_beside_model() {
+        let mut report = report(Vec::new());
+        report.roles[0].tier = Some(rimz::config::tiers::ModelTier::Principal);
+        report.roles[0].tier_fallback = Some(true);
+        let mut output = Vec::new();
+        write_spec(&mut output, &report).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("fable (principal, fallback)"));
     }
 
     fn live_instance() -> LiveInstance {

@@ -161,7 +161,11 @@ fn rows<'a>(
         table.row([
             render::cell(&row.name).fg(render::palette::identity(&row.kind)),
             render::cell(&row.kind).fg(render::palette::identity(&row.kind)),
-            render::cell(row.model.as_deref().unwrap_or("—")),
+            render::cell(crate::cli::profile_report::model_label(
+                row.model.as_deref().unwrap_or("—"),
+                row.tier,
+                row.tier_fallback,
+            )),
             render::cell(row.effort.as_deref().unwrap_or("—")),
             render::cell(row.source.display().to_string()),
         ]);
@@ -255,6 +259,8 @@ mod tests {
                 .tools
                 .insert(name.into(), tools.map(str::to_owned).to_vec());
             loaded.rows.push(definitions::DefinitionRow {
+                tier: None,
+                tier_fallback: None,
                 name: name.into(),
                 namespace: "agents".into(),
                 kind: "claude".into(),

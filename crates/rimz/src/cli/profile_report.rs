@@ -20,6 +20,10 @@ pub(crate) struct AgentProfileReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tier: Option<rimz::config::tiers::ModelTier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tier_fallback: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
@@ -42,6 +46,8 @@ pub(crate) fn available_profiles(
             brand_kind: Some(provider_brand_kind(&profile.agent, profiles).to_owned()),
             agent: Some(profile.agent.clone()),
             model: profile.model.clone(),
+            tier: profile.model_tier.as_ref().map(|tier| tier.tier),
+            tier_fallback: profile.model_tier.as_ref().map(|tier| tier.fell_back),
             effort: profile.effort.clone(),
             description: profile.description.clone(),
             path: sources.profile(scope, name).map(PathBuf::from),
@@ -53,6 +59,8 @@ pub(crate) fn available_profiles(
         brand_kind: None,
         agent: None,
         model: None,
+        tier: None,
+        tier_fallback: None,
         effort: None,
         description: None,
         path: sources.command(name).map(PathBuf::from),
@@ -106,7 +114,13 @@ fn subagent_report(
         .agent
         .as_deref()
         .map(|agent| provider_brand_kind(agent, profiles).to_owned());
+    let tier = profiles
+        .0
+        .get(&profile.name)
+        .and_then(|profile| profile.model_tier.as_ref());
     AgentProfileReport {
+        tier: tier.map(|tier| tier.tier),
+        tier_fallback: tier.map(|tier| tier.fell_back),
         name: profile.name,
         source,
         brand_kind,
@@ -206,10 +220,14 @@ fn profile_cards(
             writeln!(out)?;
         }
 
+        let model = report
+            .model
+            .as_deref()
+            .map(|model| model_label(model, report.tier, report.tier_fallback));
         let (name_style, segments) = match &report.agent {
             Some(agent) => {
                 let mut segments = vec![agent.as_str()];
-                segments.extend(report.model.as_deref());
+                segments.extend(model.as_deref());
                 segments.extend(report.effort.as_deref());
                 let brand_kind = report.brand_kind.as_deref().unwrap_or(agent);
                 (render::palette::identity(brand_kind).bold(), segments)
@@ -232,14 +250,65 @@ fn profile_cards(
     Ok(())
 }
 
+pub(crate) fn model_label(
+    model: &str,
+    tier: Option<rimz::config::tiers::ModelTier>,
+    fallback: Option<bool>,
+) -> String {
+    match tier {
+        Some(tier) => format!(
+            "{model} ({tier}{})",
+            if fallback == Some(true) {
+                ", fallback"
+            } else {
+                ""
+            }
+        ),
+        None => model.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn tier_profiles_show_concrete_models_and_fallback_in_cards_and_json() {
+        let resolved = rimz::config::tiers::TierConfig::default()
+            .resolve(rimz::config::tiers::ModelTier::Principal, "codex", None)
+            .unwrap();
+        let profiles = rimz::config::ProfilesConfig(std::collections::BTreeMap::from([(
+            "planner".into(),
+            rimz::config::Profile {
+                agent: resolved.kind,
+                model: Some(resolved.model.clone()),
+                effort: Some(resolved.effort),
+                model_tier: Some(resolved.provenance),
+                ..toml::from_str("agent = 'claude'").unwrap()
+            },
+        )]));
+        let reports = available_profiles(
+            &profiles,
+            &Default::default(),
+            &Default::default(),
+            ProfileScope::Agents,
+        );
+        let json = serde_json::to_value(&reports).unwrap();
+        assert_eq!(json[0]["tier"], "principal");
+        assert_eq!(json[0]["model"], resolved.model);
+        let mut output = Vec::new();
+        profile_cards(&reports, ProfileListing::Teams, &mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("principal"));
+        assert!(output.contains("fallback"));
+    }
+
+    #[test]
     fn profiles_render_as_cards_with_independent_model_and_effort_segments() {
         let reports = vec![
             AgentProfileReport {
+                tier: None,
+                tier_fallback: None,
                 name: "planner".to_owned(),
                 source: "profile",
                 brand_kind: Some("codex".to_owned()),
@@ -250,6 +319,8 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/.agents/agents/planner.md")),
             },
             AgentProfileReport {
+                tier: None,
+                tier_fallback: None,
                 name: "reviewer".to_owned(),
                 source: "profile",
                 brand_kind: Some("claude".to_owned()),
@@ -260,6 +331,8 @@ mod tests {
                 path: None,
             },
             AgentProfileReport {
+                tier: None,
+                tier_fallback: None,
                 name: "coder".to_owned(),
                 source: "profile",
                 brand_kind: Some("codex".to_owned()),
@@ -270,6 +343,8 @@ mod tests {
                 path: None,
             },
             AgentProfileReport {
+                tier: None,
+                tier_fallback: None,
                 name: "lint".to_owned(),
                 source: "command",
                 brand_kind: None,
@@ -309,6 +384,8 @@ mod tests {
     #[test]
     fn paths_are_opt_in_for_json() {
         let mut reports = vec![AgentProfileReport {
+            tier: None,
+            tier_fallback: None,
             name: "planner".to_owned(),
             source: "profile",
             brand_kind: Some("codex".to_owned()),

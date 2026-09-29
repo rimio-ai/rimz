@@ -53,6 +53,10 @@ pub(super) struct RoleReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<rimz::config::tiers::ModelTier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier_fallback: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
@@ -319,10 +323,17 @@ fn definition_report(
         .map(|layout| resolved_roles(team, layout))
         .unwrap_or_else(|| unresolved_roles(team, profiles));
     for role in &mut roles {
-        role.signals = team
-            .roles
-            .iter()
-            .find(|binding| binding.role == role.role)
+        let binding = team.roles.iter().find(|binding| binding.role == role.role);
+        if binding.is_none_or(|binding| binding.model.is_none())
+            && let Some(tier) = profiles
+                .0
+                .get(&role.profile)
+                .and_then(|profile| profile.model_tier.as_ref())
+        {
+            role.tier = Some(tier.tier);
+            role.tier_fallback = Some(tier.fell_back);
+        }
+        role.signals = binding
             .into_iter()
             .flat_map(|binding| &binding.signals)
             .map(|binding| DeclaredSignal {
@@ -399,6 +410,8 @@ fn origins(sources: &[PromptSource]) -> Vec<PathBuf> {
 
 fn role_report(role: String, cell: &AgentCell) -> RoleReport {
     RoleReport {
+        tier: None,
+        tier_fallback: None,
         signals: Vec::new(),
         role,
         profile: cell
@@ -425,6 +438,8 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
             // An unresolvable profile leaves the binding's own values as the report.
             let resolved = rimz::harness::spec::resolve_role(binding, profiles).ok();
             RoleReport {
+                tier: None,
+                tier_fallback: None,
                 signals: Vec::new(),
                 role: binding.role.clone(),
                 profile: binding.profile.clone(),

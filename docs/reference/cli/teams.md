@@ -44,6 +44,8 @@ The catalogue merges machine [Markdown definitions](../definitions.md) under `<a
 
 ## List team role profiles
 
+Tiered role listings and `show` rosters display the tier beside the concrete model and mark a fallback. JSON adds `tier` and `tier_fallback` only for tiered roles; `model` remains the resolved provider model.
+
 ```sh
 rimz teams profiles
 rimz teams profiles --path          # add each profile's defining file
@@ -170,7 +172,7 @@ PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` neve
 | `source`, `layout`, `leader`, `error` | Optional. Definition file (`built-in` for `peer`), layout spec, effective leader role, validation error. |
 | `consensus` | Staged teams only: `"builtin"` or the absolute replacement-file path. RimZ keeps a [read-only copy](../definitions.md#the-built-in-consensus-copy) of the built-in text on disk. |
 | `append_system_prompt_files` | Team-level files composed after the consensus, as absolute paths. Omitted when empty. |
-| `roles[]` | `role`, `profile`, and `signals`, plus optional `kind`, `model`, `effort`, `mode`, `system_prompt_file`, and `append_system_prompt_files`. |
+| `roles[]` | `role`, `profile`, and `signals`, plus optional `kind`, `model`, `effort`, `tier`, `tier_fallback`, `mode`, `system_prompt_file`, and `append_system_prompt_files`. |
 | `roles[].append_system_prompt_files` | The role's own resolved profile-chain and role fragments, excluding the team layer. Omitted when empty. |
 | `roles[].signals[]` | Declared bindings: `signal`, `match` (an object), and `prompt` (nullable). |
 | `instances[]` | One record per live cohort, below. |

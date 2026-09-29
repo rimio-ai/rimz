@@ -53,6 +53,8 @@ rimz subagents wait "$first" "$second"
 
 Run `rimz subagents launch --help` for the exact spellings. The global flags are on the [CLI page](../cli.md#global-flags).
 
+`--model` and the fanout JSON `model` field accept [model tiers with the same per-cell resolution and effort precedence as agents](./agents.md#shared-launch-params).
+
 The complete launch prompt is capped at 120 KiB (122,880 bytes), counting any instruction text RimZ adds to the prompt for providers without an appended system prompt. `--prompt-file` keeps the brief out of the shell command, but the provider still receives its contents as one argument. An oversized prompt is refused before any run record exists, and the error names the limit; put supporting detail in a file the child is told to read.
 
 The child works in the parent's checkout, the directory the parent itself was launched in, whatever directory the launch command runs from, unless `--cwd` names another directory. By default it joins the parent's lane; with `--cwd`, its lane follows that directory's basename. When the parent's checkout no longer exists, the launch refuses instead of starting the child elsewhere. Restart and child resume reuse the child's recorded directory.
@@ -237,7 +239,7 @@ rimz subagents profiles --json --path
 
 Agent kinds are launchable directly but are not listed. Direct profiles belong to `rimz agents` and are not listed either, and neither are teams, because a launch creates one agent.
 
-`--json` prints an array of objects with `name` and `source` (`profile` or `command`), plus `agent`, `model`, `effort`, and `description` when set, and the absolute `path` only with `--path`.
+`--json` prints an array of objects with `name` and `source` (`profile` or `command`), plus `agent`, `model`, `effort`, and `description` when set, and the absolute `path` only with `--path`. Tiered profiles also carry `tier` and `tier_fallback`; cards show the tier beside the concrete model and mark a fallback.
 
 A direct definition can restrict what its agents launch with `subagents: [...]` ([configuration guide](../../guide/configuration.md)). Inside such an agent, `profiles` lists only the named entries, and a launch whose `PROFILE` or `--agent` is not in the list is refused before any run or pane exists. `subagents: []` disables delegation for that agent. An empty catalog, including one disabled this way, prints `No profiles or commands configured.` and a configuration hint.
 
