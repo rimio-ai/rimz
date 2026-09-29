@@ -2,7 +2,7 @@
 
 - [dependabot.py](./dependabot.py): read-only planning and locked worker launches, each attempt in a fresh RimZ worktree.
 - [prompt.md](./prompt.md): repair-worker instructions and replacement PR identity.
-- [../../.rimz/config.toml](../../.rimz/config.toml): project schedule (every 8 hours; two-hour timeout; three failure strikes).
+- [../../.rimz/config.toml](../../.rimz/config.toml): project schedule (every 8 hours; seven-day timeout so a worker can wait on a question; three failure strikes).
 - [tests/test_dependabot.py](./tests/test_dependabot.py): duplicate prevention and the attempt-checkout lifecycle against a real Git fixture.
 
 From any checkout of the repository:

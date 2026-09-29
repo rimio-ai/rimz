@@ -10,8 +10,11 @@ timeout = "2h"
 every = "5m"
 
 # The coordinator is read-only at the project root; each repair attempt gets its own fresh deps-repair-* worktree.
+# The long timeout lets a worker wait days on a question in the sidebar; the coordinator stays
+# alive meanwhile, so later fires record `overlapped` and never start a second worker.
 [tasks.dependabot-repair]
-check = "uv run --no-project --script loops/dependabot/dependabot.py run"
-timeout = "2h"
+# The worker is Claude: Codex auto-resolves a question empty after 120s, Claude's waits for the answer.
+check = "uv run --no-project --script loops/dependabot/dependabot.py run --worker-profile opus"
+timeout = "7d"
 every = "8h"
 max-strikes = 3

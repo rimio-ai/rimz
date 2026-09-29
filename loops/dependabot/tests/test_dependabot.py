@@ -388,9 +388,29 @@ class RepairTests(unittest.TestCase):
         args, = run.call_args.args
         self.assertEqual(args[:3], ["rimz", "agents", "astra"])
         self.assertIn("$(do-not-execute)", args[3])
-        self.assertEqual(args[4:], ["-w", "deps/repair-1", "--yolo", "-p", "--timeout", "60m"])
+        self.assertEqual(args[4:], ["-w", "deps/repair-1", "--yolo", "-p"])
         self.assertNotIn("shell", run.call_args.kwargs)
         self.assertEqual(run.call_args.kwargs["cwd"], repair.ROOT)
+
+    def test_worker_timeout_is_opt_in(self):
+        plan = select([source(1)], {1: "failed"})
+        with patch.object(repair.subprocess, "run") as run:
+            repair.launch(plan, "90m")
+        args, = run.call_args.args
+        self.assertEqual(args[-2:], ["--timeout", "90m"])
+
+    def test_run_passes_worker_timeout_through(self):
+        with patch.object(repair.sys, "argv", ["dependabot.py", "run", "--worker-timeout", "3d"]), \
+             patch.object(repair, "run") as run:
+            self.assertEqual(repair.main(), 0)
+        run.assert_called_once_with("3d", "astra")
+
+    def test_worker_profile_is_configurable(self):
+        plan = select([source(1)], {1: "failed"})
+        with patch.object(repair.subprocess, "run") as run:
+            repair.launch(plan, None, "coder")
+        args, = run.call_args.args
+        self.assertEqual(args[:3], ["rimz", "agents", "coder"])
 
 
 if __name__ == "__main__":

@@ -272,13 +272,17 @@ def occupied_repair_lane(report):
             if (agent["placement"]["branch"] or "").startswith(PREFIX) and agent["placement"]["pane"]]
 
 
-def launch(plan):
+def launch(plan, worker_timeout=None, worker_profile="astra"):
     prompt = (TASK_DIR / "prompt.md").read_text()
     prompt += "\n\nDependency repair plan (JSON):\n" + json.dumps(plan)
     # No shell: titles, prompts, paths, and PR metadata remain argv data.
     # Unattended repairs need forge access and writable tool caches outside the worktree.
-    subprocess.run(["rimz", "agents", "astra", prompt, "-w", plan["branch"],
-                    "--yolo", "-p", "--timeout", "60m"], cwd=ROOT, check=True)
+    argv = ["rimz", "agents", worker_profile, prompt, "-w", plan["branch"], "--yolo", "-p"]
+    # Uncapped by default: a worker blocked on a question waits for the human, and this
+    # coordinator stays alive meanwhile, so the loop's overlap guard admits no second worker.
+    if worker_timeout is not None:
+        argv += ["--timeout", worker_timeout]
+    subprocess.run(argv, cwd=ROOT, check=True)
 
 
 def verify_result(plan, rows):
@@ -299,7 +303,7 @@ def verify_result(plan, rows):
     return state
 
 
-def run():
+def run(worker_timeout=None, worker_profile="astra"):
     common = Path(command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
     with (common / "rimz-dependabot-repair.lock").open("a") as lock:
         try:
@@ -325,7 +329,7 @@ def run():
             return
         print(json.dumps(open_checkout(plan)), flush=True)
         try:
-            launch(plan)
+            launch(plan, worker_timeout, worker_profile)
         finally:
             settle_checkout(plan["branch"])
         rows = github("pr", "list", "--repo", plan["repo"], "--head", plan["branch"],
@@ -337,13 +341,20 @@ def run():
 def main():
     parser = argparse.ArgumentParser(description=__doc__, suggest_on_error=True, color=False)
     parser.add_argument("action", choices=("plan", "run"))
+    parser.add_argument("--worker-timeout", metavar="DURATION",
+                        help="cap the repair worker (a rimz duration such as 60m or 3d); "
+                             "default: uncapped, so a worker can wait days on a question")
+    parser.add_argument("--worker-profile", metavar="PROFILE", default="astra",
+                        help="rimz agent profile for the repair worker; a worker that must wait days "
+                             "on a question needs a Claude profile (Codex auto-resolves questions "
+                             "empty after 120s)")
     args = parser.parse_args()
     try:
         if args.action == "plan":
             repo = repo_view()
             print(json.dumps(query_plan(repo, pull_requests(repo))))
         else:
-            run()
+            run(args.worker_timeout, args.worker_profile)
     except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"Dependabot coordinator failed: {error}", file=sys.stderr)
         return 1

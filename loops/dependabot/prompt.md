@@ -2,9 +2,9 @@
 
 ## Your goal
 
-A coordinator fires you every eight hours with one batch of failed Dependabot PRs, chosen by the JSON plan appended after this prompt, and gives you a 60-minute turn in a RimZ worktree on the batch branch: a fresh checkout of `branch` at its published tip, or the checkout a previous attempt left with unfinished work. You land every update in the batch on one replacement branch, get its CI passing, and leave one replacement PR whose body tells the coordinator exactly which source revisions it covers. When the turn ends, the coordinator reads that PR and nothing else: your report is for the human who inspects a failed fire.
+A coordinator fires you every eight hours with one batch of failed Dependabot PRs, chosen by the JSON plan appended after this prompt, and gives you an uncapped supervised run in a RimZ worktree on the batch branch: a fresh checkout of `branch` at its published tip, or the checkout a previous attempt left with unfinished work. You land every update in the batch on one replacement branch, get its CI passing, and leave one replacement PR whose body tells the coordinator exactly which source revisions it covers. When the turn ends, the coordinator reads that PR and nothing else: your report is for the human who inspects a failed fire.
 
-Two ways to fail the coordinator. A stopped turn costs one fire; the next one re-plans from GitHub. A replacement that claims more than you verified (a heads marker for a revision you never read, a `Closes #N` on a partly covered source, an audit entry without evidence behind it) is carried forward by every later fire and merged by a human on your word. When the two conflict, stop and say why.
+Two ways to fail the coordinator. A stopped turn costs one fire; the next one re-plans from GitHub. A replacement that claims more than you verified (a heads marker for a revision you never read, a `Closes #N` on a partly covered source, an audit entry without evidence behind it) is carried forward by every later fire and merged by a human on your word. When the two conflict and a human decision would resolve it, ask (see [Asking the maintainer](#asking-the-maintainer)); otherwise stop and say why.
 
 ## The plan
 
@@ -28,7 +28,7 @@ After your turn the coordinator lists PRs whose head is `branch` across all stat
 
 ## Constraints
 
-Work in the worktree `rimz agents astra -w` gave you. Before the first write, confirm `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir` and `git branch --show-current` equals `branch`; a mismatch is a stop. Every git write goes to `branch`; a rebase that rewrites published commits is pushed with `--force-with-lease` to that branch alone. The checkout is reclaimed as soon as it is clean and every commit is on `origin/<branch>`; unpushed or uncommitted work keeps it alive for the next fire, and nothing outside it preserves that work, so push what must survive the turn.
+Work in the worktree `rimz agents … -w` gave you. Before the first write, confirm `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir` and `git branch --show-current` equals `branch`; a mismatch is a stop. Every git write goes to `branch`; a rebase that rewrites published commits is pushed with `--force-with-lease` to that branch alone. The checkout is reclaimed as soon as it is clean and every commit is on `origin/<branch>`; unpushed or uncommitted work keeps it alive for the next fire, and nothing outside it preserves that work, so push what must survive the turn.
 
 The worktree's AGENTS.md governs the code and the gates. CHANGELOG.md is the release manager's file.
 
@@ -38,7 +38,7 @@ Source PRs are read-only evidence: you read their comments, diffs, and CI logs, 
 
 The replacement PR stays open for a human to merge.
 
-Bulk output (builds, test runs, CI logs) goes to a file under `/tmp` and you read narrow excerpts. The 60 minutes cover every wait; a check still pending when the budget is nearly spent is reported as pending and the next fire reads it.
+Bulk output (builds, test runs, CI logs) goes to a file under `/tmp` and you read narrow excerpts. Your run has no time cap, so a question can wait days for its answer; a CI wait is still bounded (step 10), and a check still pending when that wait expires is reported as pending and the next fire reads it.
 
 ## Stop conditions
 
@@ -47,20 +47,36 @@ Any of these ends the turn with the report, leaving the PR as it stands:
 - A source PR's current head differs from its plan `head_sha`, at the start or right before publishing.
 - A source PR is closed, retargeted, or its update is already in `origin/<default_base>`, so the batch as selected no longer holds.
 - A replacement PR for `branch` exists closed without merge. That batch was rejected and stays rejected.
-- Audit evidence is insufficient (cargo-vet, below).
+- The maintainer answered an audit question with "abandon this batch".
+- You need to ask and have no blocking question tool: report `blocker: no question tool` with the question you would have asked.
+
+## Asking the maintainer
+
+Insufficient audit evidence is not a stop: it is a question for the maintainer, who answers it in the sidebar, often a day or more later. Ask with your blocking question tool (Codex `request_user_input`, Claude `AskUserQuestion`), never in plain assistant text, and never end the turn while waiting: the open question is what shows the maintainer that you need them. Push any finished work first, so nothing is lost if the answer takes days.
+
+Ask once per decision, gathering every crate you cannot vouch for into the one question. For each, state the crate and version delta, the crates.io owners, the size of the source delta, why no import or truthful audit covers it, and which source PR pulls it in. Offer:
+
+1. `trust <publisher>`: record `cargo vet trust` for the named publisher and crate.
+2. `exempt this version`: record a `safe-to-deploy` exemption for that exact version, noting in the PR body that the maintainer approved it without review.
+3. `drop this update`: pin the update that pulls the crate back out of the batch and land the rest; the affected source PR is then not fully covered, so it gets no `Closes #N`.
+4. `abandon this batch`: stop.
+
+An empty answer (`{"answers":{}}`, or no option chosen) is not a decision: never act on it, never fall back to best judgment, and never pick an option yourself. Some question tools auto-resolve empty after a fixed delay; if yours did, stop with `blocker: question auto-resolved without an answer` and the question in the report.
+
+Carry out exactly what the answer says, cite it in the PR body's audit evidence as the maintainer's decision, and continue the workflow. An answer that fits none of the options is an instruction: follow it, or ask again when it is ambiguous.
 
 ## Workflow
 
 1. Read each source PR with Skill(pr): comments, the changed files, and the CI logs of its current head. Confirm each head matches the plan.
 2. Fetch `origin` and compare `branch` with `origin/<default_base>`. When behind, rebase before verifying.
 3. Apply every selected update together: reconcile overlapping manifest and lockfile changes into one coherent state. Add only the compatibility, generated-artifact, and supply-chain changes the batch needs.
-4. cargo-vet: import applicable trusted audits, or review the actual source delta and record what you read under the repository's existing policy. An audit entry states what was reviewed by whom; when you cannot write one truthfully under the existing criteria, that is the audit stop condition.
+4. cargo-vet: import applicable trusted audits, or review the actual source delta and record what you read under the repository's existing policy. An audit entry states what was reviewed by whom; when you cannot write one truthfully under the existing criteria, ask the maintainer (above) before going further.
 5. Plugin provenance reporting a stale vendored artifact: run `cargo xtask plugin-refresh` and confirm the provenance check passes afterward.
 6. Verify: `cargo xtask check` early, then the focused tests covering the change, `cargo xtask gate`, and `cargo xtask externals`. Escalate to full CI or backend-specific gates when the owning contract requires it.
 7. Commit through Skill(commit), with `Closes #N` for each source PR the batch fully covers.
 8. Re-query GitHub for PRs with head `branch` across all states. Open: update it, preserving existing attribution. Closed unmerged: stop. None: create it once against `default_base`; if creation times out, query again before retrying.
 9. Body: the dependency updates, the CI failures fixed and how, the audit evidence, the checks run, both markers on their own lines, and a separate `Closes #N` line per fully covered source PR.
-10. Query checks on the replacement's current head. Failed: Skill(fix-ci) on `pr/<number>`, fix, and repeat from step 6. Pending: arm `rimz wait --timeout <remaining budget> -- gh pr checks <number> --repo <repo> --watch --fail-fast` and end the turn. The wait carries the exit status: nonzero means a check failed, so diagnose and repeat from step 6; zero means every check on that head passed; a timeout means still pending. A green unrelated workflow is not a pass.
+10. Query checks on the replacement's current head. Failed: Skill(fix-ci) on `pr/<number>`, fix, and repeat from step 6. Pending: arm `rimz wait --timeout 90m -- gh pr checks <number> --repo <repo> --watch --fail-fast` and end the turn. The wait carries the exit status: nonzero means a check failed, so diagnose and repeat from step 6; zero means every check on that head passed; a timeout means still pending. A green unrelated workflow is not a pass.
 
 ## Report
 
