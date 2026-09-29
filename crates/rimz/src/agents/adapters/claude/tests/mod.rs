@@ -380,6 +380,38 @@ fn routine_skills_unreadable_root_refuses_with_fix() {
 }
 
 #[test]
+fn routine_skills_ignore_unreadable_non_rimz_dirs() {
+    use crate::agents::capabilities::LaunchCapability;
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let provider = root.path().join("provider");
+    for name in ["rimz-x", "other"] {
+        std::fs::create_dir_all(provider.join(name)).unwrap();
+        std::fs::write(provider.join(name).join("SKILL.md"), "---\n---\n").unwrap();
+    }
+    let other = provider.join("other");
+    std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let denied = other.join("SKILL.md").try_exists().is_err();
+    let mut args = Vec::new();
+    let result = ClaudeAdapter.allow_routine_rimz_args(
+        (root.path(), root.path()),
+        (Some(&provider), None),
+        &[root.path().join("scratch"), root.path().join("shared")],
+        &mut args,
+        &mut None,
+    );
+    std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !denied {
+        return; // Running as root: mode 000 denies nothing, so there is no unreadable entry to skip.
+    }
+    result.unwrap();
+    let value: serde_json::Value = serde_json::from_str(&args[1]).unwrap();
+    let allow = value["permissions"]["allow"].as_array().unwrap();
+    assert!(allow.contains(&json!("Skill(rimz-x)")));
+    assert!(!allow.contains(&json!("Skill(other)")));
+}
+
+#[test]
 fn host_skills_merge_settings_once_and_use_directory_names() {
     use crate::agents::skills::{HostSkills, SkillDir};
     let root = tempfile::tempdir().unwrap();

@@ -57,12 +57,14 @@ fn routine_permissions_cover_actions_children_and_isolations() {
     let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
     let state = StatePaths::under(id, project.path()).unwrap();
     let home = project.path().join("home");
-    std::fs::create_dir_all(home.join("skills/commit")).unwrap();
-    std::fs::write(
-        home.join("skills/commit/SKILL.md"),
-        "---\nname: commit\ndescription: test\n---\nSkill.",
-    )
-    .unwrap();
+    for name in ["commit", "rimz-pin"] {
+        std::fs::create_dir_all(home.join("skills").join(name)).unwrap();
+        std::fs::write(
+            home.join("skills").join(name).join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test\n---\nSkill."),
+        )
+        .unwrap();
+    }
     let ambient = BTreeMap::from([
         ("CLAUDE_CONFIG_DIR".into(), home.display().to_string()),
         (
@@ -132,6 +134,13 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                                 .is_some_and(|allow| allow
                                     .contains(&serde_json::json!("Bash(rimz agents *)"))),
                             enabled
+                        );
+                        assert_eq!(
+                            value["permissions"]["allow"].as_array().is_some_and(
+                                |allow| allow.contains(&serde_json::json!("Skill(rimz-pin)"))
+                            ),
+                            enabled,
+                            "{action} sandbox={sandboxed} child={subagent}"
                         );
                         assert_eq!(
                             value["permissions"]["allow"].as_array().is_some_and(

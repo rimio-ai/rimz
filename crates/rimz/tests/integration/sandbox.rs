@@ -1373,12 +1373,14 @@ fn sandbox_skills_under_host_use_provider_switches() {
             .store()
             .paths()
             .scratch_dir(request.identity.name.as_deref());
-        for skills in [vec!["missing-skill".parse().unwrap()], vec![]] {
-            request.skills = Some(skills);
-            let missing = !request.skills.as_ref().unwrap().is_empty();
-            if kind == "claude" && !missing {
-                request.skills = Some(vec!["commit".parse().unwrap()]);
-            }
+        let mut lists = vec![vec!["missing-skill"], vec![]];
+        if kind == "claude" {
+            lists.push(vec!["commit"]);
+        }
+        for skills in lists {
+            let missing = skills.contains(&"missing-skill");
+            let commit_listed = skills.contains(&"commit");
+            request.skills = Some(skills.iter().map(|name| name.parse().unwrap()).collect());
             let output = env
                 .rimz()
                 .args(exec_args(&env, &request))
@@ -1440,12 +1442,19 @@ fn sandbox_skills_under_host_use_provider_switches() {
                 let permissions = routine.remove("permissions").unwrap();
                 let allow = permissions["allow"].as_array().unwrap();
                 assert!(allow.contains(&serde_json::json!("Skill(rimz-probe)")));
-                assert!(allow.contains(&serde_json::json!("Skill(commit)")));
+                assert_eq!(
+                    allow.contains(&serde_json::json!("Skill(commit)")),
+                    commit_listed
+                );
                 assert!(!allow.contains(&serde_json::json!("Skill(unlisted-dir)")));
                 assert!(routine.remove("autoMode").is_some(), "{routine:?}");
+                let mut overrides = serde_json::json!({"kept":"enabled", "unlisted-dir":"user-invocable-only", "rimz-probe":"user-invocable-only"});
+                if !commit_listed {
+                    overrides["commit"] = serde_json::json!("user-invocable-only");
+                }
                 assert_eq!(
                     settings,
-                    serde_json::json!({"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":{"kept":"enabled", "unlisted-dir":"user-invocable-only", "rimz-probe":"user-invocable-only"}})
+                    serde_json::json!({"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":overrides})
                 );
             }
             assert!(

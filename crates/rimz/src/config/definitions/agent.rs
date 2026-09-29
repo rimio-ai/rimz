@@ -548,6 +548,7 @@ pub(super) fn skill_policy(
                     .and_then(|definition| definition.skills_home(env))
                     .as_deref(),
                 Some(library),
+                |_| true,
             )
             .map_err(|error| DefinitionErr::new(path, error.to_string()))?,
         ),

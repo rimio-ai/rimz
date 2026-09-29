@@ -741,18 +741,15 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
     ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
         use crate::agents::skills::LaunchSettingsErr;
-        let skills = crate::agents::skills::enumerate(skill_roots.0, skill_roots.1)
-            .map_err(LaunchSettingsErr::RoutineSkills)?;
+        let skills = crate::agents::skills::enumerate(skill_roots.0, skill_roots.1, |name| {
+            name.starts_with("rimz-") && !name.contains('*')
+        })
+        .map_err(LaunchSettingsErr::RoutineSkills)?;
         let [scratch, shared] = dirs.each_ref().map(|path| path.display().to_string());
         let allow = ROUTINE_RIMZ_PREFIXES
             .iter()
             .map(|prefix| format!("Bash({prefix} *)"))
-            .chain(
-                skills
-                    .keys()
-                    .filter(|name| name.starts_with("rimz-") && !name.contains('*'))
-                    .map(|name| format!("Skill({name})")),
-            );
+            .chain(skills.keys().map(|name| format!("Skill({name})")));
         let environment = format!(
             "rimz is this machine's agent-coordination CLI. These subcommands are routine \
              coordination: {}. $RIMZ_SCRATCH ({scratch}) and $RIMZ_SHARED ({shared}) are this \
