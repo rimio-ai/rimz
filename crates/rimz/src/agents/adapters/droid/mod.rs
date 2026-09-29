@@ -44,6 +44,7 @@ use crate::agents::PermissionMode;
 use crate::ids::AgentSessionId;
 
 static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
+    tool_rules: crate::agents::skills::ToolRules::Unsupported,
     host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "droid",
     aliases: &[],

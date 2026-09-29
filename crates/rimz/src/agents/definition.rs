@@ -476,6 +476,7 @@ pub struct AgentSpec {
     /// Static process launch contract and its argv renderers.
     pub launch: LaunchSpec,
     pub host_skills: super::skills::HostSkills,
+    pub tool_rules: super::skills::ToolRules,
 }
 
 /// The provider-neutral registry value for one agent integration.

@@ -406,6 +406,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
             }
         });
     AgentSpec {
+        tool_rules: crate::agents::skills::ToolRules::Unsupported,
         host_skills: crate::agents::skills::HostSkills::Unsupported,
         kind: leak_string(manifest.kind.clone()),
         aliases: &[],

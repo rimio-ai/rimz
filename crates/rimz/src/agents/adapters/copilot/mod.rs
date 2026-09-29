@@ -52,6 +52,7 @@ use crate::ids::AgentSessionId;
 use crate::transcript::AskQuestion;
 
 static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
+    tool_rules: crate::agents::skills::ToolRules::Unsupported,
     host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "copilot",
     aliases: &[],

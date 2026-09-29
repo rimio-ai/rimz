@@ -1,4 +1,4 @@
-//! Host skill discovery and provider-owned per-launch restrictions.
+//! Host skill discovery and provider-owned per-launch skill and permission settings.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -34,6 +34,19 @@ pub enum HostSkills {
         render: RenderHostSkills,
     },
 }
+
+#[derive(Clone, Copy, Debug)]
+pub enum ToolRules {
+    Unsupported,
+    Settings { render: RenderToolRules },
+}
+
+type RenderToolRules = fn(
+    &[crate::config::ToolRule],
+    (&Path, &Path),
+    &mut Vec<String>,
+    &mut Option<LaunchSettingsArtifact>,
+) -> Result<(), LaunchSettingsErr>;
 
 /// Publication path, settings, and original source path for chained-merge diagnostics.
 pub(crate) type LaunchSettingsArtifact = (PathBuf, serde_json::Value, PathBuf);

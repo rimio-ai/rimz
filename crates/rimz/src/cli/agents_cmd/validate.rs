@@ -119,37 +119,53 @@ struct Warning {
 }
 
 fn warnings(loaded: &LoadedDefinitions, machine: Isolation) -> Vec<Warning> {
-    loaded
-        .rows
-        .iter()
-        .filter_map(|row| {
-            let profiles = if row.namespace == "subagents" {
-                &loaded.subagent_profiles
-            } else {
-                &loaded.agent_profiles
-            };
-            let profile = profiles.0.get(&row.name)?;
-            if profile.skills.is_none()
-                || Isolation::resolve(None, profile.isolation, machine) != Isolation::Host
-            {
-                return None;
-            }
-            let adapter = rimz::agents::find_definition(&row.kind)?;
-            if !matches!(
+    let mut warnings = Vec::new();
+    for row in &loaded.rows {
+        let profiles = if row.namespace == "subagents" {
+            &loaded.subagent_profiles
+        } else {
+            &loaded.agent_profiles
+        };
+        let Some(profile) = profiles.0.get(&row.name) else {
+            continue;
+        };
+        let Some(adapter) = rimz::agents::find_definition(&row.kind) else {
+            continue;
+        };
+        if profile.skills.is_some()
+            && Isolation::resolve(None, profile.isolation, machine) == Isolation::Host
+            && matches!(
                 adapter.spec().host_skills,
                 rimz::agents::skills::HostSkills::Unsupported
-            ) {
-                return None;
-            }
-            Some(Warning {
+            )
+        {
+            warnings.push(Warning {
                 path: row.source.clone(),
                 message: rimz::harness::launch_plan::LaunchPlanWarning::HostSkillsUnenforced {
                     kind: rimz::ids::AgentKind::new_unchecked(&row.kind),
                 }
                 .to_string(),
-            })
-        })
-        .collect()
+            });
+        }
+        if profile
+            .allowed_tools
+            .as_ref()
+            .is_some_and(|rules| !rules.is_empty())
+            && matches!(
+                adapter.spec().tool_rules,
+                rimz::agents::skills::ToolRules::Unsupported
+            )
+        {
+            warnings.push(Warning {
+                path: row.source.clone(),
+                message: rimz::harness::launch_plan::LaunchPlanWarning::ToolRulesUnsupported {
+                    kind: rimz::ids::AgentKind::new_unchecked(&row.kind),
+                }
+                .to_string(),
+            });
+        }
+    }
+    warnings
 }
 
 fn rows<'a>(
@@ -200,6 +216,31 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allowed_tools_warnings_follow_resolved_kind_and_nonempty_rules() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        for kind in ["claude", "codex"] {
+            std::fs::write(
+                root.path().join(format!("agents/{kind}.md")),
+                "---\ndescription: Base\n---\nBase.",
+            )
+            .unwrap();
+            for (suffix, rules) in [("rules", "[Read]"), ("empty", "[]")] {
+                std::fs::write(root.path().join(format!("agents/{kind}-{suffix}.md")), format!("---\ndescription: Worker\nagent: {kind}\ntools: [Read]\nallowed-tools: {rules}\n---\n")).unwrap();
+            }
+        }
+        let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let warnings = warnings(&loaded, Isolation::Host);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].path.ends_with("codex-rules.md"));
+        assert_eq!(
+            warnings[0].message,
+            "codex has no per-launch permission rules; allowed-tools is not applied and the agent prompts as usual: remove allowed-tools from the definition or run it on claude"
+        );
+    }
 
     #[test]
     fn host_skill_warnings_follow_definition_isolation_and_keep_success() {

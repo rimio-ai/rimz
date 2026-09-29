@@ -141,6 +141,7 @@ fn spawned_as_internal_app_server() -> bool {
 /// Everything `const` about Codex, in one place. See [`AgentSpec`] for
 /// the spec-vs-trait split.
 static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
+    tool_rules: crate::agents::skills::ToolRules::Unsupported,
     host_skills: crate::agents::skills::HostSkills::Switch {
         flag: "-c skills.config",
         effect: "hidden",

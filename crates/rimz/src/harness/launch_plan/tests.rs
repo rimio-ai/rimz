@@ -74,7 +74,16 @@ fn routine_permissions_cover_actions_children_and_isolations() {
         ),
         ("HOME".into(), home.display().to_string()),
     ]);
-    for (enabled, listed) in [(false, false), (false, true), (true, false), (true, true)] {
+    for (enabled, listed, rules) in [
+        (false, false, false),
+        (false, false, true),
+        (false, true, false),
+        (false, true, true),
+        (true, false, false),
+        (true, false, true),
+        (true, true, false),
+        (true, true, true),
+    ] {
         let machine: crate::config::MachineConfig =
             toml::from_str(&format!("[agents]\nallow-routine-rimz = {enabled}")).unwrap();
         let effective =
@@ -87,6 +96,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                     request.subagent = subagent;
                     request.identity.name = Some("otter".into());
                     request.skills = listed.then(|| vec!["commit".parse().unwrap()]);
+                    request.allowed_tools = rules.then(|| vec!["Bash(git *)".parse().unwrap()]);
                     let plan = compile(LaunchPlanInputs {
                         request: &request,
                         cwd: project.path(),
@@ -108,11 +118,17 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         .find(|pair| pair[0] == "--settings");
                     assert_eq!(
                         settings.is_some(),
-                        enabled || listed,
+                        enabled || listed || rules,
                         "{action} sandbox={sandboxed} child={subagent}"
                     );
                     if let Some(settings) = settings {
                         let value: serde_json::Value = serde_json::from_str(&settings[1]).unwrap();
+                        assert_eq!(
+                            value["permissions"]["allow"].as_array().is_some_and(
+                                |allow| allow.contains(&serde_json::json!("Bash(git *)"))
+                            ),
+                            rules
+                        );
                         let dirs = if sandboxed {
                             vec![
                                 PathBuf::from("/tmp/scratchpad"),
@@ -199,6 +215,62 @@ fn sandbox_settings_artifact_is_written_only_on_apply() {
     let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(value["env"]["TOKEN"], "private-secret");
     assert!(value["permissions"]["allow"].is_array());
+}
+
+#[test]
+fn allowed_tools_warn_on_unsupported_kind_without_changing_argv() {
+    let project = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let ambient = BTreeMap::from([("HOME".into(), project.path().display().to_string())]);
+    let compile_request = |request: &ExecRequest| {
+        compile(LaunchPlanInputs {
+            request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: None,
+            ambient_env: &ambient,
+        })
+        .unwrap()
+    };
+    let mut request = request("codex", action_with_args("launch", Vec::new()));
+    let baseline = compile_request(&request);
+    for rules in [Some(vec!["Read".parse().unwrap()]), Some(Vec::new()), None] {
+        request.allowed_tools = rules;
+        let plan = compile_request(&request);
+        assert_eq!(
+            plan.process().provider_argv,
+            baseline.process().provider_argv
+        );
+        let warnings: Vec<_> = plan
+            .warnings
+            .iter()
+            .map(ToString::to_string)
+            .filter(|text| text.contains("allowed-tools"))
+            .collect();
+        if request
+            .allowed_tools
+            .as_ref()
+            .is_some_and(|rules| !rules.is_empty())
+        {
+            assert_eq!(
+                warnings,
+                [
+                    "codex has no per-launch permission rules; allowed-tools is not applied and the agent prompts as usual: remove allowed-tools from the definition or run it on claude"
+                ]
+            );
+        } else {
+            assert!(warnings.is_empty());
+        }
+    }
 }
 
 #[test]
