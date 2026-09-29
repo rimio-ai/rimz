@@ -247,7 +247,8 @@ upward-dependencies = [
 # TierConfig::family_tiers lists a family's tiers for the CLI cross-family refusal (+1).
 # ToolRule carries validated definition permission rules across launch boundaries (+1).
 # MachineConfig::require_readable_core shares birth/worktree refusal; ConfigEditor::use_account preserves machine selection edits (+2).
-surface-budget = 181
+# MachineConfig::model_alias exposes machine pins to the launch wrapper (+1).
+surface-budget = 182
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

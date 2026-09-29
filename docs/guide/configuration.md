@@ -536,6 +536,25 @@ Rebind a model or effort with `rimz config set tiers.senior.claude.model fable` 
 
 Prefer Claude for people and loose intent, and Codex for literal briefs. Put a reviewer on a different family from the coder whose work it reads. A Claude planner can weigh its design against a Codex designer's proposal before settling the plan.
 
+## Model aliases
+
+Like `codex --model`, a provider model ID selects one specific model. RimZ's Codex aliases (`sol`, `astra`, `luna`, and `terra`) instead follow their model family on fresh launches. When you want a stable choice across those launches, pin the alias in your per-machine `~/.rimz/config.toml`:
+
+```toml
+[models.codex]
+sol = "gpt-6.1-sol"
+```
+
+Or write the same setting with:
+
+```sh
+rimz config set models.codex.sol gpt-6.1-sol
+```
+
+The pin wins over the account's model catalog and is never automatically followed to a newer model. Remove the `sol` entry from `[models.codex]` to follow the family again. Restart and resume keep the session's recorded model when its profile requests an alias; use a fresh launch to pick up a changed pin.
+
+Each `[models.<kind>]` table maps any alias name to a non-empty provider model ID. Other providers work too, for example `[models.claude]` with `opus = "chosen-model-id"`. A custom alias in a Markdown definition needs an explicit `agent:` when RimZ cannot infer the provider from a built-in alias. This table belongs only in machine config; project `.rimz/config.toml` refuses `[models]` and asks you to move it.
+
 ## Agent definitions and launch preferences
 
 Reusable agents and teams are Markdown files with YAML frontmatter, one per definition. The `[agents]` tables in `config.toml` hold this machine's launch preferences alongside them: isolation, placement, command shortcuts, worktree defaults, and the two launch limits.

@@ -1126,6 +1126,7 @@ fn parse_edit_value(raw: &str) -> Value {
 fn parse_set_value(path: &[String], raw: &str) -> Value {
     if matches!(path, [root, profiles, _, field] if matches!(root.as_str(), "agents" | "subagents") && profiles == "profiles" && field == "auto-compact")
         || matches!(path, [root, child, _] if root == "accounts" && child == "use")
+        || matches!(path, [root, _, _] if root == "models")
         || is_harness_smart_compact_edit(path)
         || is_harness_flip_compact_edit(path)
         || is_harness_compact_instruction_edit(path)

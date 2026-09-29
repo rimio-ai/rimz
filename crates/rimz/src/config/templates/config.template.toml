@@ -25,6 +25,10 @@
 # claude = { model = "haiku", effort = "xhigh" }
 # codex = { model = "luna", effort = "xhigh" }
 
+# Pin a model alias on fresh launches instead of following its family.
+## [models.codex]
+## sol = "gpt-6.1-sol"
+
 [daemon]
 # The rimzd dashboard's middle column (beside the sidebar and managed hosts).
 # Unset keeps one live-stats pane. List panes to replace or extend it; the
