@@ -70,16 +70,17 @@ pub(super) fn confirm_sent_message_for_lifecycle(
         &workspace.session_name,
         |records, selection| {
             if let Some(peer) = peer.as_ref()
-                && let Err(error) = rimz::harness::run::enroll_peer_run(
+                && let Err(error) = rimz::harness::run::record_run_delivery(
                     store.paths(),
                     peer,
                     agent,
                     records,
                     selection,
                     &workspace.worktree_root,
+                    env_run_id().as_ref(),
                 )
             {
-                warn!(%error, "lifecycle: failed to enroll peer run");
+                warn!(%error, "lifecycle: failed to record run delivery");
             }
         },
     ) {

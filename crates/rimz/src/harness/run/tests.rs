@@ -28,6 +28,160 @@ fn setup_for(kind: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
 }
 
 #[test]
+fn delivery_stamps_subagent_answer_from_confirmed_conversation() {
+    use crate::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+    use crate::store::writer::DeliveryAckMatch;
+
+    for selection in [
+        DeliveryAckMatch::PromptCorrelated,
+        DeliveryAckMatch::OldestSentBatch,
+    ] {
+        let (_dir, paths, mut record) = setup();
+        let card = AgentState::stub("claude", "child", AgentStatus::Idle);
+        record.subagent = true;
+        record.agent_id = Some(card.agent_id.clone());
+        record.status = RunStatus::Running;
+        record.follow_up = Some(FollowUpTurn {
+            started_at: Timestamp::now(),
+            prompt: None,
+        });
+        create(&paths, &record).unwrap();
+        let message = |text: &str| {
+            MessageRecord::new(
+                record.workspace_id.clone(),
+                &card,
+                text.into(),
+                DeliveryGate::Done,
+            )
+        };
+        let first = message("follow-up task\nsecond line");
+        let second = message("additional instruction").with_sender(MessageSender::Agent {
+            kind: card.kind.clone(),
+            agent_id: Some("parent".into()),
+            name: None,
+            profile: None,
+            role: None,
+            channel: None,
+        });
+        let notice = message("notice").with_sender(MessageSender::Harness {
+            notice: HarnessNotice::Stage,
+        });
+        let adapter = crate::agents::definition_by_kind("claude").unwrap();
+        let _guard = WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+        record_run_delivery(
+            &paths,
+            &card,
+            adapter,
+            std::slice::from_ref(&notice),
+            selection,
+            Path::new("/repo"),
+            Some(&record.run_id),
+        )
+        .unwrap();
+        let unstamped = load(&paths, &record.run_id).unwrap();
+        assert!(unstamped.opened_by.is_empty());
+        assert!(unstamped.follow_up.unwrap().prompt.is_none());
+        record_run_delivery(
+            &paths,
+            &card,
+            adapter,
+            &[first.clone(), notice, second.clone()],
+            selection,
+            Path::new("/repo"),
+            Some(&record.run_id),
+        )
+        .unwrap();
+        let stamped = load(&paths, &record.run_id).unwrap();
+        assert_eq!(
+            stamped.opened_by,
+            vec![first.message_id.clone(), second.message_id]
+        );
+        assert_eq!(
+            stamped.follow_up.unwrap().prompt.as_deref(),
+            Some("follow-up task\nsecond line\n\nadditional instruction")
+        );
+        let later = message("later parked delivery");
+        record_run_delivery(
+            &paths,
+            &card,
+            adapter,
+            &[first, later.clone()],
+            selection,
+            Path::new("/repo"),
+            Some(&record.run_id),
+        )
+        .unwrap();
+        let appended = load(&paths, &record.run_id).unwrap();
+        assert_eq!(appended.opened_by.len(), 3);
+        assert_eq!(appended.opened_by.last(), Some(&later.message_id));
+        assert_eq!(
+            appended.follow_up.unwrap().prompt.as_deref(),
+            Some("follow-up task\nsecond line\n\nadditional instruction")
+        );
+        for excluded in [
+            "terminal",
+            "peer",
+            "team",
+            "other-card",
+            "unbound",
+            "not-subagent",
+        ] {
+            let mut excluded_record = record.clone();
+            match excluded {
+                "terminal" => excluded_record.status = RunStatus::Completed,
+                "peer" => {
+                    excluded_record.peer = Some(crate::store::run::PeerRun {
+                        launch_id: "peer-launch".into(),
+                        opened_by: Vec::new(),
+                    })
+                }
+                "team" => {
+                    excluded_record.team = Some(crate::store::run::TeamRun {
+                        launch_id: "team-launch".into(),
+                        instance: "forge#x".into(),
+                    })
+                }
+                "other-card" => excluded_record.agent_id = Some("other".into()),
+                "unbound" => excluded_record.agent_id = None,
+                "not-subagent" => excluded_record.subagent = false,
+                _ => unreachable!(),
+            }
+            crate::store::run::write(&paths.runs_dir, &excluded_record).unwrap();
+            record_run_delivery(
+                &paths,
+                &card,
+                adapter,
+                std::slice::from_ref(&later),
+                selection,
+                Path::new("/repo"),
+                Some(&record.run_id),
+            )
+            .unwrap();
+            assert_eq!(
+                load(&paths, &record.run_id).unwrap(),
+                excluded_record,
+                "{excluded}"
+            );
+        }
+        record.follow_up = None;
+        crate::store::run::write(&paths.runs_dir, &record).unwrap();
+        record_run_delivery(
+            &paths,
+            &card,
+            adapter,
+            std::slice::from_ref(&later),
+            selection,
+            Path::new("/repo"),
+            Some(&record.run_id),
+        )
+        .unwrap();
+        let launch = load(&paths, &record.run_id).unwrap();
+        assert_eq!(launch.opened_by, vec![later.message_id]);
+        assert!(launch.follow_up.is_none());
+    }
+}
+
+#[test]
 fn peer_responses_preserve_each_turn() {
     let (_dir, paths, mut first) = setup();
     first.agent_name = Some("peer".into());
