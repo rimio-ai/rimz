@@ -19,6 +19,26 @@ fn trusted_repo_cannot_set_allowed_tools() {
 }
 
 #[test]
+fn model_aliases_are_machine_only() {
+    for trusted in [false, true] {
+        let project = tempdir().unwrap();
+        let config = tempdir().unwrap();
+        write_project_config(&project, "[models.codex]\nsol = 'gpt-6.1-sol'");
+        if trusted {
+            crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
+        }
+        let result = load(&AgentsConfig::default(), project.path(), config.path());
+        assert!(result.is_err(), "project model aliases must be refused");
+        let error = result.err().unwrap().to_string();
+        assert!(
+            error.contains("project config cannot set [models]"),
+            "{error}"
+        );
+        assert!(error.contains("move it to ~/.rimz/config.toml"), "{error}");
+    }
+}
+
+#[test]
 fn model_tiers_are_machine_only_and_project_models_are_concrete() {
     let profile: Profile = toml::from_str("agent = 'claude'\npreferred_family = 'codex'\nmodel_tier = {tier = 'principal', preferred_family = 'codex', fell_back = true}").unwrap();
     assert!(profile.preferred_family.is_none());

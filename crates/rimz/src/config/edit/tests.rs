@@ -2,6 +2,26 @@ use super::*;
 use crate::config::MachineConfigFileKind as Kind;
 
 #[test]
+fn model_aliases_round_trip_with_config_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    for (alias, id) in [("sol", "gpt-6.1-sol"), ("custom", "123")] {
+        let key = format!("models.codex.{alias}");
+        editor.set(&key, id).unwrap();
+        assert_eq!(editor.get(Some(&key)).unwrap().as_str(), Some(id));
+    }
+    assert!(editor.set("models.codex.sol", "").is_err());
+    assert!(editor.set("models.typo.sol", "id").is_err());
+    assert_eq!(
+        editor.get(Some("models.codex.sol")).unwrap().as_str(),
+        Some("gpt-6.1-sol")
+    );
+}
+
+#[test]
 fn model_tier_cell_can_be_rebound_with_config_set() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(

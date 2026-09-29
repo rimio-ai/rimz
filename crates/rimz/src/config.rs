@@ -449,6 +449,8 @@ impl ConfigNotices {
 #[serde(default)]
 pub struct MachineConfig {
     pub tiers: tiers::TierConfig,
+    #[serde(deserialize_with = "deserialize_model_aliases")]
+    pub models: BTreeMap<crate::ids::AgentKind, BTreeMap<String, String>>,
     pub lsp: LspConfig,
     /// IANA time zone for displayed times and scheduling. Unset or unknown
     /// falls back to the system zone.
@@ -684,6 +686,7 @@ impl MachineConfig {
     fn assemble(core: CoreConfig, theme: ThemeConfig, loop_: LoopConfig) -> Self {
         Self {
             tiers: core.tiers,
+            models: core.models,
             lsp: core.lsp,
             timezone: core.timezone,
             mux: core.mux,
@@ -705,6 +708,11 @@ impl MachineConfig {
             r#loop: loop_,
             notices: ConfigNotices::default(),
         }
+    }
+
+    /// A machine-configured pin, without resolving adapter aliases.
+    pub fn model_alias(&self, kind: &crate::ids::AgentKind, name: &str) -> Option<&str> {
+        self.models.get(kind)?.get(name).map(String::as_str)
     }
 
     fn load_definitions(
@@ -1019,6 +1027,8 @@ pub(crate) fn resolve_time_zone(name: Option<&str>) -> jiff::tz::TimeZone {
 #[serde(default)]
 struct CoreConfig {
     tiers: tiers::TierConfig,
+    #[serde(deserialize_with = "deserialize_model_aliases")]
+    models: BTreeMap<crate::ids::AgentKind, BTreeMap<String, String>>,
     lsp: LspConfig,
     agents: AgentsConfig,
     subagents: SubagentProfilesConfig,
@@ -1036,6 +1046,29 @@ struct CoreConfig {
     gc: GcConfig,
     sentry: SentryConfig,
     web: WebPrefs,
+}
+
+fn deserialize_model_aliases<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<crate::ids::AgentKind, BTreeMap<String, String>>, D::Error> {
+    let models =
+        BTreeMap::<crate::ids::AgentKind, BTreeMap<String, String>>::deserialize(deserializer)?;
+    for (kind, aliases) in &models {
+        if !crate::agents::known_kinds().any(|known| known == kind.as_str()) {
+            return Err(serde::de::Error::custom(format!(
+                "models.{kind}: unknown agent kind; use one of {}",
+                crate::agents::known_kinds().collect::<Vec<_>>().join(", ")
+            )));
+        }
+        for (alias, id) in aliases {
+            if id.trim().is_empty() {
+                return Err(serde::de::Error::custom(format!(
+                    "models.{kind}.{alias}: model ID must not be empty"
+                )));
+            }
+        }
+    }
+    Ok(models)
 }
 
 #[derive(Default, Deserialize)]

@@ -2140,3 +2140,53 @@ fn model_tier_cells_validate_at_machine_load() {
         );
     }
 }
+
+#[test]
+fn model_aliases_load_and_are_known_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let text = "[models.codex]\nsol = 'gpt-6.1-sol'\ncustom = 'chosen-id'\n[models.claude]\nopus = 'pinned-opus'";
+    std::fs::write(&path, text).unwrap();
+    let config = load_no_fragments(&path).unwrap();
+    let codex = crate::ids::AgentKind::new_unchecked("codex");
+    assert_eq!(config.model_alias(&codex, "sol"), Some("gpt-6.1-sol"));
+    assert_eq!(config.model_alias(&codex, "custom"), Some("chosen-id"));
+    assert_eq!(config.model_alias(&codex, "absent"), None);
+    assert_eq!(
+        config.model_alias(&crate::ids::AgentKind::new_unchecked("claude"), "opus"),
+        Some("pinned-opus")
+    );
+    assert!(
+        MachineConfig::parse_text_unknown_keys(&path, text)
+            .unwrap()
+            .is_empty()
+    );
+    let serialized = toml::to_string(&config).unwrap();
+    let round_trip: MachineConfig = toml::from_str(&serialized).unwrap();
+    assert_eq!(round_trip.model_alias(&codex, "sol"), Some("gpt-6.1-sol"));
+}
+
+#[test]
+fn model_aliases_reject_empty_ids_and_unknown_kinds() {
+    for text in [
+        "[models.codex]\nsol = ''",
+        "[models.codex]\nsol = '  '",
+        "[models.typo]\nsol = 'id'",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        assert!(load_no_fragments(&path).is_err(), "{text}");
+        assert!(
+            !load_lenient_no_fragments(&path)
+                .notices
+                .unreadable_files
+                .is_empty(),
+            "{text}"
+        );
+        assert!(
+            MachineConfig::parse_text(&path, text, dir.path()).is_err(),
+            "{text}"
+        );
+    }
+}

@@ -22,6 +22,8 @@ pub enum EffectiveConfigErr {
     ProjectLspPolicy(String),
     #[error("project config cannot set [tiers]; move it to ~/.rimz/config.toml")]
     ProjectTiers,
+    #[error("project config cannot set [models]; move it to ~/.rimz/config.toml")]
+    ProjectModels,
     #[error(transparent)]
     Trust(#[from] trust::TrustErr),
     #[error("cannot access {path}: {source}")]
@@ -178,6 +180,12 @@ pub fn load_with_roots(
         .is_some_and(|value| value.get("tiers").is_some())
     {
         return Err(EffectiveConfigErr::ProjectTiers);
+    }
+    if repo_value
+        .as_ref()
+        .is_some_and(|value| value.get("models").is_some())
+    {
+        return Err(EffectiveConfigErr::ProjectModels);
     }
     if report.state != TrustState::Trusted {
         let untrusted_lsp_servers = repo_value
