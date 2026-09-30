@@ -409,7 +409,7 @@ class RepairTests(unittest.TestCase):
         args, = run.call_args.args
         self.assertEqual(args[:3], ["rimz", "agents", "astra"])
         self.assertIn("$(do-not-execute)", args[3])
-        self.assertEqual(args[4:], ["-w", "deps/repair-1", "--yolo", "-p"])
+        self.assertEqual(args[4:], ["-w", "deps/repair-1", "--yolo", "-p", "--new-tab"])
         self.assertNotIn("shell", run.call_args.kwargs)
         self.assertEqual(run.call_args.kwargs["cwd"], repair.ROOT)
 
