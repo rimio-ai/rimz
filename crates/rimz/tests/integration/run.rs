@@ -2449,6 +2449,49 @@ fn red_verify_at_attempt_cap_exits_123_with_forensics() {
 
 #[cfg(unix)]
 #[test]
+fn verify_reprompt_closed_gate_records_retryable_miss() {
+    let env = Env::new();
+    let store = env.store();
+    let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
+    let mut child =
+        spawn_verifying_print(&env, "verify-closed-gate", 2, &pane_fixture, Some("10s"));
+
+    let mut records = wait_for_run_count(&store, &mut child, 1);
+    let mut completed = records.pop().expect("initial run");
+    register_verify_agent(&env, &store, &mut completed);
+    let mut observation =
+        AgentLifecycleObservation::new(completed.agent_id.clone(), LifecycleSignal::Compacting);
+    observation.pane_id = completed.pane_id.clone();
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            env.resolve_workspace(&env.project_root).session_name,
+            "codex",
+            "PreCompact",
+            &observation,
+        ))
+        .expect("close verify delivery gate during compaction");
+    completed.status = RunStatus::Completed;
+    finish_run(&store, &mut completed);
+
+    let out = child.wait_with_output().expect("wait closed-gate verify");
+    assert!(!out.status.success());
+    let pending = store
+        .list_pending_messages()
+        .expect("pending verify re-prompt");
+    assert_eq!(pending.len(), 1);
+    let message = &pending[0];
+    assert!(message.text.contains("Verification failed"));
+    assert_eq!(message.status, rimz::store::message::MessageStatus::Queued);
+    assert_eq!(message.pane_id, None);
+    assert_eq!(
+        message.last_error.as_deref(),
+        Some("verify re-prompt delivery gate closed"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn verify_reprompt_wait_timeout_stays_terminal() {
     let env = Env::new();
     let store = env.store();

@@ -85,7 +85,7 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Subagent fleet digest | `cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` / `Prompt` |
 | Team report | `cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
 | Prompt-cache keepalive | `cli/agents_cmd/cache_keepalive.rs::run`, text from `harness/cache_keepalive.rs::prompt`, via `message/synthetic.rs::deliver_now` | `Harness { notice: CacheKeepalive }` / `Prompt` |
-| Auto-continue | `cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text via `message/synthetic.rs::SyntheticMessage` and `deliver_now` | `System` / `Prompt` |
+| Auto-continue | `cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text via `message/synthetic.rs::SyntheticMessage` and `deliver_now` (or `attempt_now` for a queued id) | `System` / `Prompt` |
 | Supervised verification reprompt | `harness/prompt_compose.rs::verify_reprompt`, delivered by `cli/supervised/verify.rs::deliver_reprompt` via `message/synthetic.rs::SyntheticMessage` and `deliver_now` | `System` / `Prompt` |
 | Fleet or account budget continuation | `cli/budget.rs::run`, configured resume text via `message/synthetic.rs::SyntheticMessage` | `System` / `Prompt` |
 | Agent budget continuation | `cli/agents_cmd/budget.rs::run_budget`, configured resume text via `message/synthetic.rs::SyntheticMessage` | `System` / `Prompt` |
