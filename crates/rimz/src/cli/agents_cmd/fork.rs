@@ -224,6 +224,7 @@ fn fork_posture(seed: &ForkSeed, profiles: &rimz::config::ProfilesConfig) -> Res
             profile: seed.launch.profile.as_deref(),
             kind: &seed.kind,
             stamped_mode: seed.launch.mode,
+            stamped_tier: seed.launch.tier.as_deref(),
         },
         profiles,
     );
@@ -309,6 +310,7 @@ fn validate_fork_source(
         cwd,
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
+            tier: agent.tier.clone(),
             mode: agent.mode,
             isolation: agent.isolation,
             channel: agent.channel.clone(),
@@ -495,6 +497,12 @@ mod tests {
         agent.team = Some("forge".to_owned());
         agent.role = Some("coder".to_owned());
         agent.mode = Some(rimz::agents::PermissionMode::Yolo);
+        agent.tier = Some(Box::new(rimz::agents::TierStamp {
+            tier: rimz::config::tiers::ModelTier::Senior,
+            model: "gpt-6-astra".to_owned(),
+            used_tier: None,
+            skipped: Vec::new(),
+        }));
 
         let seed = validate_fork_source(&agent, |_| true, |_| true).expect("valid fork");
 
@@ -502,6 +510,7 @@ mod tests {
         assert_eq!(seed.cwd, PathBuf::from("/repo/worktree"));
         assert_eq!(seed.launch.profile.as_deref(), Some("planner"));
         assert_eq!(seed.launch.mode, Some(rimz::agents::PermissionMode::Yolo));
+        assert_eq!(seed.launch.tier, agent.tier);
         assert_eq!(seed.launch.channel.as_deref(), Some("auth"));
         assert_eq!(seed.launch.team, None);
         assert_eq!(seed.launch.role, None);

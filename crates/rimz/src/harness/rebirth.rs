@@ -313,7 +313,9 @@ fn inspect_at(
     };
 
     let recovery_enabled = !disabled && machine.resume.on_rebirth;
-    let teams_and_profiles = effective_teams_and_profiles(machine, project_root);
+    let availability =
+        crate::harness::plan::LaunchAvailability::read(&runtime, &paths, machine, Timestamp::now());
+    let teams_and_profiles = effective_teams_and_profiles(machine, project_root, &availability);
     let planned = if recovery_enabled && recover_agents {
         plan_recovery(
             audit.as_ref().map(|(_, projection)| projection),
@@ -345,9 +347,24 @@ fn inspect_at(
 fn effective_teams_and_profiles(
     machine: &MachineConfig,
     project_root: &Path,
+    availability: &crate::harness::plan::LaunchAvailability,
 ) -> (TeamsConfig, ProfilesConfig) {
     match crate::config::effective::load(machine, project_root) {
-        Ok(launch) => (launch.teams, launch.profiles),
+        Ok(mut launch) => {
+            if let Err(error) = launch.route(
+                &machine.tiers,
+                crate::config::effective::ProfileScope::Agents,
+                None,
+                None,
+                None,
+                None,
+                |kind, model| availability.unavailable(kind, model),
+            ) {
+                tracing::warn!(%error, "cannot route team restore profiles; recovering existing members only");
+                return (TeamsConfig::default(), machine.agents.profiles.clone());
+            }
+            (launch.teams, launch.profiles)
+        }
         Err(err) => {
             let (config, detail) = err
                 .diagnosis()
@@ -357,12 +374,9 @@ fn effective_teams_and_profiles(
                 error = %err,
                 config = %config,
                 detail = %detail,
-                "effective agent config unavailable; team resume uses machine config only"
+                "effective agent config unavailable; recovering existing members with machine profiles only"
             );
-            (
-                machine.agents.teams.clone(),
-                machine.agents.profiles.clone(),
-            )
+            (TeamsConfig::default(), machine.agents.profiles.clone())
         }
     }
 }

@@ -311,9 +311,39 @@ fn posture_for(
             profile,
             kind: &kind,
             stamped_mode,
+            stamped_tier: None,
         },
         profiles,
     )
+}
+
+fn tier_stamp(model: &str) -> Box<crate::agents::TierStamp> {
+    Box::new(crate::agents::TierStamp {
+        tier: crate::config::tiers::ModelTier::Senior,
+        model: model.to_owned(),
+        used_tier: None,
+        skipped: Vec::new(),
+    })
+}
+
+fn routed_profile(effort: Option<&str>) -> Profile {
+    Profile {
+        definition_renders: Some(crate::config::tiers::DefinitionRenders {
+            preference: Default::default(),
+            renders: BTreeMap::from([(
+                "codex".to_owned(),
+                Profile {
+                    args: Some("--search".to_owned()),
+                    effort: Some("low".to_owned()),
+                    ..profile("codex")
+                },
+            )]),
+            exclusions: Default::default(),
+            effort: effort.map(str::to_owned),
+        }),
+        model: Some("opus".to_owned()),
+        ..profile("claude")
+    }
 }
 
 /// [`plan_resume`] for one candidate whose profile posture rides the argv.

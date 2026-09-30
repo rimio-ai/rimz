@@ -5,6 +5,26 @@ use crate::harness::plan::CohortSeed;
 use crate::harness::resume::RecoveryEntry;
 use crate::ids::{MuxName, PaneId};
 
+#[test]
+fn invalid_effective_config_keeps_flat_recovery_without_fresh_team_seats() {
+    let fixture = Fixture::new(&[]);
+    std::fs::create_dir_all(fixture.project.join(".rimz")).unwrap();
+    std::fs::write(fixture.project.join(".rimz/config.toml"), "[tiers]\n").unwrap();
+    let machine = team_machine();
+    let availability = crate::harness::plan::LaunchAvailability::read(
+        &fixture.runtime,
+        &fixture.paths,
+        &machine,
+        Timestamp::UNIX_EPOCH,
+    );
+    let (teams, profiles) = effective_teams_and_profiles(&machine, &fixture.project, &availability);
+    assert!(
+        teams.0.is_empty(),
+        "an unrouted fresh seat must not be planned"
+    );
+    assert_eq!(profiles.0.len(), machine.agents.profiles.0.len());
+}
+
 struct Fixture {
     _dir: tempfile::TempDir,
     paths: StatePaths,
