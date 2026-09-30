@@ -132,7 +132,7 @@ impl LaunchAgents {
         clippy::too_many_arguments,
         reason = "launch target and CLI routing inputs stay explicit"
     )]
-    pub fn route<R>(
+    pub fn route(
         &mut self,
         table: &super::tiers::TierConfig,
         scope: ProfileScope,
@@ -140,7 +140,7 @@ impl LaunchAgents {
         tier: Option<super::tiers::ModelTier>,
         model: Option<&str>,
         family: Option<&str>,
-        mut unavailable: impl FnMut(&str, &str) -> Option<R>,
+        mut unavailable: impl FnMut(&str, &str) -> Option<crate::agents::TierSkipReason>,
     ) -> std::result::Result<bool, super::tiers::TierError> {
         let model = model.map(str::trim).filter(|value| !value.is_empty());
         let family = family.map(str::trim).filter(|value| !value.is_empty());
@@ -218,6 +218,7 @@ impl LaunchAgents {
                     .any(|(scope, target, _)| *scope == profile_scope && target == name);
                 if targeted && model.is_some() && model_tier.is_none() {
                     profile.model_tier = None;
+                    profile.tier_stamp = None;
                     continue;
                 }
                 let requested = targeted
@@ -252,7 +253,17 @@ impl LaunchAgents {
                         .effort
                         .map(str::to_owned)
                 });
-                selected.model = Some(pick.model);
+                selected.model = Some(pick.model.clone());
+                selected.tier_stamp = Some(Box::new(crate::agents::TierStamp {
+                    tier: requested,
+                    model: pick.model,
+                    used_tier: pick.used_tier,
+                    skipped: pick
+                        .skipped
+                        .into_iter()
+                        .map(|(model, reason)| crate::agents::TierSkip { model, reason })
+                        .collect(),
+                }));
                 consumed |=
                     targeted && family.is_none_or(|family| renders.renders.contains_key(family));
                 renders.preference = preference;

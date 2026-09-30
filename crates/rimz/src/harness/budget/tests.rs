@@ -1119,6 +1119,16 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         )
         .is_some_and(|reason| reason.contains("fleet budget exhausted"))
     );
+    let availability = crate::harness::plan::LaunchAvailability::read(
+        &runtime,
+        &state_paths(&runtime),
+        &config,
+        now,
+    );
+    assert!(
+        availability.unavailable("claude", "opus").is_none(),
+        "fleet spend never routes a tier"
+    );
 
     let mut fleet = DailyBudgetScope::Fleet.read_ledger(&runtime, Some(&state_paths(&runtime)));
     fleet.disabled = true;
@@ -1154,6 +1164,127 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
             now
         )
         .is_some_and(|reason| reason.contains("claude@default account budget exhausted"))
+    );
+    let availability = crate::harness::plan::LaunchAvailability::read(
+        &runtime,
+        &state_paths(&runtime),
+        &config,
+        now,
+    );
+    assert!(matches!(
+        availability.unavailable("claude", "opus"),
+        Some(crate::agents::TierSkipReason::DailyCap { .. })
+    ));
+    assert!(availability.unavailable("codex", "gpt-6-astra").is_none());
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_rate_limits_path(),
+        &crate::agents::account::RateLimitsCache {
+            entries: [(
+                LoginKey::default_for(AgentKind::new_unchecked("claude")),
+                crate::agents::account::RateLimitCacheEntry {
+                    limits: crate::agents::AgentRateLimits {
+                        windows: vec![crate::agents::RateLimitWindow {
+                            scope: Some(crate::agents::RateLimitWindowScope {
+                                id: "model:opus".into(),
+                                label: "Opus".into(),
+                            }),
+                            used_percentage: Some(100),
+                            duration_mins: Some(300),
+                            resets_at: Some(now + jiff::SignedDuration::from_hours(1)),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let scoped = crate::harness::plan::LaunchAvailability::read(
+        &runtime,
+        &state_paths(&runtime),
+        &config,
+        now,
+    );
+    assert!(matches!(
+        scoped.unavailable("claude", "opus"),
+        Some(crate::agents::TierSkipReason::Exhausted { .. })
+    ));
+    assert!(
+        scoped.unavailable("codex", "gpt-6-astra").is_none(),
+        "Claude-only model windows never skip Codex"
+    );
+    let mut accounts = crate::agents::account::AccountsCache::default();
+    let key = LoginKey::default_for(AgentKind::new_unchecked("codex"));
+    accounts.logins.insert(
+        key.clone(),
+        crate::agents::account::ProviderRecord {
+            probed_at_ms: 1,
+            ok: false,
+            account: None,
+        },
+    );
+    crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_accounts_path(), &accounts)
+        .unwrap();
+    let unknown = crate::harness::plan::LaunchAvailability::read(
+        &runtime,
+        &state_paths(&runtime),
+        &config,
+        now,
+    );
+    assert!(unknown.unavailable("codex", "gpt-6-astra").is_none());
+    accounts.logins.get_mut(&key).unwrap().ok = true;
+    crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_accounts_path(), &accounts)
+        .unwrap();
+    assert!(
+        unknown.unavailable("codex", "gpt-6-astra").is_none(),
+        "one launch keeps one snapshot"
+    );
+    let logged_out = crate::harness::plan::LaunchAvailability::read(
+        &runtime,
+        &state_paths(&runtime),
+        &config,
+        now,
+    );
+    assert_eq!(
+        logged_out.unavailable("codex", "gpt-6-astra"),
+        Some(crate::agents::TierSkipReason::LoggedOut)
+    );
+    let mut parked =
+        DailyBudgetScope::Account(key.clone()).read_ledger(&runtime, Some(&state_paths(&runtime)));
+    parked.parked = Some(BudgetParkStamp {
+        at: now,
+        at_cost: 12.0,
+    });
+    let scope = DailyBudgetScope::Account(key);
+    scope
+        .write_ledger(&runtime, &state_paths(&runtime), &parked)
+        .unwrap();
+    let config: MachineConfig =
+        toml::from_str("timezone = 'UTC'\n[accounts.budget]\ncodex = '10/day'").unwrap();
+    assert_eq!(
+        scope.exhausted(
+            &runtime,
+            &state_paths(&runtime),
+            &config,
+            now,
+            &Default::default()
+        ),
+        Some((12.0, 10.0))
+    );
+    assert!(
+        scope
+            .exhausted(
+                &runtime,
+                &state_paths(&runtime),
+                &config,
+                now + jiff::SignedDuration::from_hours(24),
+                &Default::default()
+            )
+            .is_none()
     );
 }
 

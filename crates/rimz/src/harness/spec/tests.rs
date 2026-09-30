@@ -51,6 +51,7 @@ fn profile(agent: &str) -> Profile {
         allowed_tools: None,
         definition_renders: None,
         model_tier: None,
+        tier_stamp: None,
         agent: agent.to_owned(),
         isolation: None,
         description: None,
@@ -806,6 +807,12 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             allowed_tools: None,
             definition_renders: None,
             model_tier: None,
+            tier_stamp: Some(Box::new(crate::agents::TierStamp {
+                tier: crate::config::tiers::ModelTier::Senior,
+                model: "claude-model".to_owned(),
+                used_tier: None,
+                skipped: Vec::new(),
+            })),
             agent: "claude".to_owned(),
             isolation: None,
             description: None,
@@ -835,6 +842,10 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
     let cell = agent_at(&spec, 0, 0);
     assert_eq!(cell.kind, "codex");
     assert_eq!(cell.launch.model, None);
+    assert!(
+        cell.launch.tier.is_none(),
+        "an unrouted rebase must not keep the old engine's stamp"
+    );
     assert_eq!(cell.launch.effort.as_deref(), Some("high"));
     assert_eq!(cell.launch.budget.as_deref(), Some("$4.00"));
     assert_eq!(cell.auto_compact.as_deref(), Some("200000"));

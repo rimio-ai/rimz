@@ -310,9 +310,24 @@ impl ProviderCapacity {
                 .all(|window| !window_spent_unreset(window, now))
     }
 
+    pub(crate) fn subscription_exhausted_for_model(
+        &self,
+        now: Timestamp,
+        model: Option<&str>,
+    ) -> bool {
+        self.duration_windows()
+            .chain(self.model_windows(model))
+            .any(|window| window_spent_unreset(window, now))
+    }
+
     fn model_windows(&self, model: Option<&str>) -> impl Iterator<Item = &RateLimitWindow> {
-        let model = model
-            .map(|model| crate::agents::model_display::display_model(model).to_ascii_lowercase());
+        let model = model.map(|model| {
+            let id = super::all_definitions()
+                .flat_map(|definition| definition.spec().launch.definitions.models)
+                .find(|entry| entry.name == model)
+                .map_or(model, |entry| entry.id);
+            crate::agents::model_display::display_model(id).to_ascii_lowercase()
+        });
         self.windows.iter().filter(move |window| {
             let Some(family) = window
                 .scope

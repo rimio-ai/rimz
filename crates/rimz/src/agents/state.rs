@@ -657,6 +657,8 @@ pub struct AgentState {
     /// The provider account stamped by the launch event and carried forward like `profile`; `None` is the provider's own `default` home, including legacy rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<LoginName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<Box<super::TierStamp>>,
     /// The permission posture selected for this launch, carried forward so an
     /// explicit restart can reproduce it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -917,6 +919,8 @@ struct AgentStateWire {
     #[serde(default)]
     login: Option<LoginName>,
     #[serde(default)]
+    tier: Option<Box<super::TierStamp>>,
+    #[serde(default)]
     mode: Option<crate::agents::PermissionMode>,
     #[serde(default)]
     isolation: Option<crate::config::Isolation>,
@@ -1035,6 +1039,7 @@ impl From<AgentStateWire> for AgentState {
             kind_ordinal: wire.kind_ordinal,
             profile: wire.profile,
             login: wire.login,
+            tier: wire.tier,
             mode: wire.mode,
             isolation: wire.isolation,
             effective_isolation: wire.effective_isolation,
@@ -1154,6 +1159,7 @@ impl AgentState {
             kind_ordinal: None,
             profile: None,
             login: None,
+            tier: None,
             mode: None,
             isolation: None,
             effective_isolation: None,

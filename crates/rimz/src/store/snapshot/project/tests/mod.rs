@@ -1019,6 +1019,31 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
 }
 
 #[test]
+fn tier_stamp_survives_observed_model_and_hot_events() {
+    let stamp = json!({"tier": "senior", "model": "gpt-6-astra", "skipped": [{"model": "opus", "reason": "exhausted", "until": "2033-05-18T04:33:20Z"}]});
+    let mut payload = serde_json::to_value(launch_payload("launch_a", "lucid-atlas")).unwrap();
+    payload["tier"] = stamp.clone();
+    let launch = launch_event("codex", serde_json::from_value(payload).unwrap());
+    let mut events = vec![launch];
+    for (offset, signal) in [(1, "registered"), (2, "turn_started")] {
+        events.push(raw_lifecycle_at(
+            "codex",
+            offset,
+            json!({
+                "agent_id": "sess-1", "agent_name": "lucid-atlas",
+                "signal": {"signal": signal}, "model": "observed-model"
+            }),
+        ));
+        let agents = reduce_agent_states(&events);
+        assert_eq!(agents[0].model.as_deref(), Some("observed-model"));
+        let wire = serde_json::to_value(&agents[0]).unwrap();
+        assert_eq!(wire["tier"], stamp);
+        let decoded: crate::agents::AgentState = serde_json::from_value(wire).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap()["tier"], stamp);
+    }
+}
+
+#[test]
 fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
     let launch = launch_event(
         "codex",

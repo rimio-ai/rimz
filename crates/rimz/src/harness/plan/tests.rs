@@ -11,6 +11,70 @@ use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
 
 #[test]
+fn launch_availability_matches_aliases_to_model_sub_caps() {
+    let root = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(root.path());
+    let runtime = RuntimePaths::under(id.clone(), root.path()).unwrap();
+    let state = StatePaths::under(id, root.path()).unwrap();
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let reset = now + jiff::SignedDuration::from_hours(1);
+    for (kind, alias, scope, pin) in [
+        ("claude", "opus", "opus", None),
+        ("codex", "astra", "gpt 6 astra", None),
+        ("codex", "astra", "gpt 6.1 astra", Some("gpt-6.1-astra")),
+    ] {
+        let mut config = MachineConfig::default();
+        if let Some(pin) = pin {
+            config.models.insert(
+                AgentKind::new_unchecked(kind),
+                [(alias.to_owned(), pin.to_owned())].into(),
+            );
+        }
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &runtime.shared_rate_limits_path(),
+            &crate::agents::account::RateLimitsCache {
+                entries: [(
+                    crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)),
+                    crate::agents::account::RateLimitCacheEntry {
+                        limits: crate::agents::AgentRateLimits {
+                            windows: vec![crate::agents::RateLimitWindow {
+                                scope: Some(crate::agents::RateLimitWindowScope {
+                                    id: format!("model:{scope}"),
+                                    label: scope.to_owned(),
+                                }),
+                                used_percentage: Some(100),
+                                duration_mins: Some(300),
+                                resets_at: Some(reset),
+                                ..Default::default()
+                            }],
+                        },
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let availability = LaunchAvailability::read(&runtime, &state, &config, now);
+        assert_eq!(
+            availability.unavailable(kind, alias),
+            Some(TierSkipReason::Exhausted { until: Some(reset) }),
+            "{kind} {alias} with pin {pin:?} must match {scope}",
+        );
+        let other = if kind == "claude" {
+            ("codex", "astra")
+        } else {
+            ("claude", "opus")
+        };
+        assert!(availability.unavailable(other.0, other.1).is_none());
+        if pin.is_some() {
+            assert!(availability.unavailable(kind, "gpt-6-astra").is_none());
+        }
+    }
+}
+
+#[test]
 fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
     use crate::harness::launch::{ExecAction, ExecRequest};
 
@@ -308,6 +372,7 @@ fn configured_profile(
     Profile {
         definition_renders: None,
         model_tier: None,
+        tier_stamp: None,
         agent: agent.to_owned(),
         isolation: None,
         description: None,

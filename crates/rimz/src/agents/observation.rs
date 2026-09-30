@@ -42,9 +42,56 @@ pub struct LaunchedBy {
     pub agent_id: AgentSessionId,
 }
 
+/// The model selected by the launch walk, independent of later hook observations.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierStamp {
+    pub tier: crate::config::tiers::ModelTier,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_tier: Option<crate::config::tiers::ModelTier>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<TierSkip>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierSkip {
+    pub model: String,
+    #[serde(flatten)]
+    pub reason: TierSkipReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum TierSkipReason {
+    LoggedOut,
+    Exhausted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<jiff::Timestamp>,
+    },
+    DailyCap {
+        spend_usd: serde_json::Number,
+        cap_usd: serde_json::Number,
+    },
+}
+
+impl std::fmt::Display for TierSkipReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LoggedOut => f.write_str("logged out"),
+            Self::Exhausted { until: Some(until) } => write!(f, "exhausted until {until}"),
+            Self::Exhausted { until: None } => f.write_str("exhausted"),
+            Self::DailyCap { spend_usd, cap_usd } => {
+                write!(f, "daily cap: ${spend_usd} of ${cap_usd}")
+            }
+        }
+    }
+}
+
 /// Launcher-selected parameters shared by launch and lifecycle event payloads.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<Box<TierStamp>>,
     /// Parent launch id for a pane-backed `rimz subagents` child.
     ///
     /// Fall back to the parent session id when no launch id exists.

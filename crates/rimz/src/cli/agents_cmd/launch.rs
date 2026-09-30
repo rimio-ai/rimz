@@ -122,6 +122,7 @@ pub(super) fn launch_layout(
         args.launch.max_turns,
         lane,
         args.launch.name.is_some(),
+        Some((store.runtime_paths(), store.paths())),
     )
     .inspect_err(|err| {
         if let Some(err) = err.downcast_ref::<rimz::harness::plan::LaunchFinalizeError>() {
@@ -340,6 +341,7 @@ pub(super) fn launch_layout(
             description: args.launch.cohort.description.clone(),
         },
     )?;
+    rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
     let peer_prompt = prepare_peer_prompt(store, launch_batch.identities(), &launch.cwd)
         .inspect_err(|_| {
             let _ = store.fail_agent_launch_batch(&launch_batch);
@@ -737,6 +739,7 @@ fn launch_resume_layout(
             description: None,
         },
     )?;
+    rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
 
     let title = channel.as_deref().map_or_else(
         || rimz::harness::spec::default_tab_title(&layout, None, team_name.as_deref()),

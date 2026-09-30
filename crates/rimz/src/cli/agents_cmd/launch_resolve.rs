@@ -40,6 +40,7 @@ pub(super) fn resolve_finalized_layout(
     max_turns: Option<u32>,
     lane: Option<&str>,
     enforce_name_cardinality: bool,
+    room: Option<(&rimz::RuntimePaths, &rimz::StatePaths)>,
 ) -> Result<FinalizedLaunch> {
     // A bare role in a team's lane names that team's role, not a global profile.
     let mut qualified_spec = None;
@@ -62,6 +63,14 @@ pub(super) fn resolve_finalized_layout(
     }
     let spec = qualified_spec.as_deref().or(spec);
     let mut effective = effective.clone();
+    let availability = room.map(|(runtime, state)| {
+        rimz::harness::plan::LaunchAvailability::read(
+            runtime,
+            state,
+            machine_config,
+            jiff::Timestamp::now(),
+        )
+    });
     let routed = effective.route(
         &machine_config.tiers,
         rimz::config::effective::ProfileScope::Agents,
@@ -69,7 +78,11 @@ pub(super) fn resolve_finalized_layout(
         overrides.tier,
         overrides.model.as_deref(),
         overrides.agent.as_deref(),
-        |_, _| None::<()>,
+        |kind, model| {
+            availability
+                .as_ref()
+                .and_then(|usage| usage.unavailable(kind, model))
+        },
     )?;
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
@@ -82,7 +95,7 @@ pub(super) fn resolve_finalized_layout(
             overrides.agent.as_deref()
         },
     )?;
-    let mut preset = validate_resolved_launch_inputs(
+    let preset = validate_resolved_launch_inputs(
         spec,
         prompt,
         overrides,
@@ -91,9 +104,6 @@ pub(super) fn resolve_finalized_layout(
         &resolved.layout,
         enforce_name_cardinality,
     )?;
-    if routed {
-        preset.model = None;
-    }
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {

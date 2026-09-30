@@ -233,6 +233,8 @@ pub struct Profile {
     pub definition_renders: Option<super::tiers::DefinitionRenders>,
     #[serde(skip)]
     pub model_tier: Option<super::tiers::TierProvenance>,
+    #[serde(skip)]
+    pub tier_stamp: Option<Box<crate::agents::TierStamp>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<Isolation>,
     #[serde(

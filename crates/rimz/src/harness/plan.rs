@@ -1,23 +1,100 @@
 //! Resolve launch layouts from effective config, then compile them into launch
 //! identities and backend-neutral pane commands.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use crate::agents::PermissionMode;
+use crate::agents::account::{ProviderCapacity, ProviderStatus, read_accounts_cache};
+use crate::agents::{PermissionMode, RoomLoginSet, TierSkipReason};
 use crate::config::RoleBinding;
-use crate::disk::paths::RuntimePaths;
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::ancestry::LaunchAncestry;
-use crate::harness::budget::BudgetSpec;
+use crate::harness::budget::{BudgetSpec, DailyBudgetScope};
 use crate::harness::prompt_compose::SystemPromptSources;
 use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
-use crate::ids::{AgentSessionId, EventId};
+use crate::ids::{AgentKind, AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
 use crate::store::{
     writer::AgentLaunchIdentity, writer::AgentLaunchName, writer::AgentLaunchRequest,
 };
+
+pub struct LaunchAvailability {
+    capacities: BTreeMap<AgentKind, ProviderCapacity>,
+    logged_out: BTreeSet<AgentKind>,
+    daily_caps: BTreeMap<AgentKind, TierSkipReason>,
+    model_pins: BTreeMap<AgentKind, BTreeMap<String, String>>,
+    now: jiff::Timestamp,
+}
+
+impl LaunchAvailability {
+    pub fn read(
+        runtime: &RuntimePaths,
+        state: &StatePaths,
+        config: &crate::config::MachineConfig,
+        now: jiff::Timestamp,
+    ) -> Self {
+        let logins = RoomLoginSet::resolve(&state.workspace_record, &config.accounts);
+        let accounts = read_accounts_cache(&runtime.shared_accounts_path());
+        let provider = crate::agents::spending::read_provider_spending_cache(
+            &runtime.shared_provider_spending_path(),
+        );
+        let mut result = Self {
+            capacities: ProviderCapacity::read_all(runtime, &logins),
+            logged_out: Default::default(),
+            daily_caps: Default::default(),
+            model_pins: config.models.clone(),
+            now,
+        };
+        let families: BTreeSet<_> = config
+            .tiers
+            .entries(crate::config::tiers::ModelTier::Intern)
+            .map(|(_, kind, _)| kind)
+            .collect();
+        for kind in families {
+            let Some(login) = logins.key(kind) else {
+                continue;
+            };
+            if ProviderStatus::from_record(accounts.logins.get(&login)) == ProviderStatus::LoggedOut
+            {
+                result.logged_out.insert(login.kind.clone());
+            }
+            if let Some((spend, cap)) = DailyBudgetScope::Account(login.clone())
+                .exhausted(runtime, state, config, now, &provider)
+                && let (Some(spend_usd), Some(cap_usd)) = (
+                    serde_json::Number::from_f64(spend),
+                    serde_json::Number::from_f64(cap),
+                )
+            {
+                result
+                    .daily_caps
+                    .insert(login.kind, TierSkipReason::DailyCap { spend_usd, cap_usd });
+            }
+        }
+        result
+    }
+
+    pub fn unavailable(&self, kind: &str, model: &str) -> Option<TierSkipReason> {
+        if self.logged_out.contains(kind) {
+            return Some(TierSkipReason::LoggedOut);
+        }
+        let model = self
+            .model_pins
+            .get(kind)
+            .and_then(|pins| pins.get(model))
+            .map_or(model, String::as_str);
+        if let Some(capacity) = self.capacities.get(kind)
+            && capacity.subscription_exhausted_for_model(self.now, Some(model))
+        {
+            return Some(TierSkipReason::Exhausted {
+                until: capacity.latest_spent_window_reset_for_model(self.now, Some(model)),
+            });
+        }
+        self.daily_caps.get(kind).cloned()
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum PermissionModeChoice {
@@ -258,6 +335,10 @@ pub fn resolve_single_agent_launch(
 ) -> Result<ResolvedSingleAgentLaunch> {
     let machine_config = crate::config::MachineConfig::load_lenient();
     let mut launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
+    let state = StatePaths::for_project_root(&workspace.project_root)?;
+    let runtime = RuntimePaths::for_state(&state)?;
+    let availability =
+        LaunchAvailability::read(&runtime, &state, &machine_config, jiff::Timestamp::now());
     launch.route(
         &machine_config.tiers,
         crate::config::effective::ProfileScope::Agents,
@@ -265,7 +346,7 @@ pub fn resolve_single_agent_launch(
         None,
         None,
         None,
-        |_, _| None::<()>,
+        |kind, model| availability.unavailable(kind, model),
     )?;
     launch.block_set_failure()?;
     let layout = match crate::harness::spec::resolve_spec(
@@ -621,6 +702,15 @@ fn finalize_agent_cell(
     options: LaunchFinalizeOptions<'_>,
     warnings: &mut Vec<LaunchFinalizeWarning>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
+    let mut preset = options.preset.clone();
+    // Routed cells consumed the CLI model in their walk; exact TOML cells still need it.
+    if cell.launch.tier.is_some() {
+        preset.model = None;
+    }
+    let options = LaunchFinalizeOptions {
+        preset: &preset,
+        ..options
+    };
     let adapter = crate::agents::find_definition(&cell.kind);
     if options.isolation.is_some() {
         cell.launch.isolation = options.isolation;
@@ -677,6 +767,7 @@ fn finalize_agent_cell(
             .filter(|value| !value.is_empty())
         {
             cell.launch.model = Some(model.clone());
+            cell.launch.tier = None;
             overridden.push(crate::agents::PresetField::Model);
         }
         if let Some(effort) = options

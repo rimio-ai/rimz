@@ -726,6 +726,9 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     if let Some(login) = &launch.login {
         state.login = Some(login.clone());
     }
+    if let Some(tier) = &launch.tier {
+        state.tier = Some(tier.clone());
+    }
     if let Some(mode) = launch.mode {
         state.mode = Some(mode);
     }
@@ -913,6 +916,7 @@ fn inherit_launch_identity(
         .clone_from(&predecessor.launch_warnings);
     successor.profile.clone_from(&predecessor.profile);
     successor.login.clone_from(&predecessor.login);
+    successor.tier.clone_from(&predecessor.tier);
     successor.mode = predecessor.mode;
     successor.isolation = predecessor.isolation;
     successor.effective_isolation = predecessor.effective_isolation;

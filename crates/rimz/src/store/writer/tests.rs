@@ -78,6 +78,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             launched_by: None,
             profile: Some("codex-coder".to_owned()),
             login: None,
+            tier: None,
             mode: Some(crate::agents::PermissionMode::Yolo),
             isolation: Some(crate::config::Isolation::Sandbox),
             role: Some("coder".to_owned()),

@@ -41,6 +41,7 @@ fn planner_profiles() -> ProfilesConfig {
         Profile {
             definition_renders: None,
             model_tier: None,
+            tier_stamp: None,
             isolation: None,
             auto_compact: None,
             agent: "claude".to_owned(),
@@ -254,6 +255,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         Profile {
             definition_renders: None,
             model_tier: None,
+            tier_stamp: None,
             isolation: None,
             auto_compact: None,
             agent: "claude".to_owned(),
@@ -276,6 +278,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
         Profile {
             definition_renders: None,
             model_tier: None,
+            tier_stamp: None,
             isolation: None,
             auto_compact: None,
             agent: "codex".to_owned(),
@@ -1424,6 +1427,7 @@ mod launch_options {
             args.launch.max_turns,
             None,
             args.launch.name.is_some(),
+            None,
         )?;
         Ok((finalized.resolved, finalized.preset))
     }
@@ -1488,6 +1492,7 @@ mod launch_options {
                 None,
                 lane,
                 false,
+                None,
             )
             .expect("finalized layout");
             let cell = finalized.resolved.layout.agent_cells().next().unwrap();
@@ -1604,6 +1609,7 @@ mod launch_options {
             rimz::config::Profile {
                 definition_renders: None,
                 model_tier: None,
+                tier_stamp: None,
                 isolation: None,
                 auto_compact: None,
                 agent: "codex".to_owned(),
@@ -1648,6 +1654,7 @@ mod launch_options {
             args.launch.max_turns,
             None,
             args.launch.name.is_some(),
+            None,
         )
         .expect_err("name cardinality wins");
         assert_eq!(

@@ -28,6 +28,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         agent: kind.to_owned(),
         definition_renders: None,
         model_tier: None,
+        tier_stamp: None,
         isolation: None,
         skills: None,
         allowed_tools: None,
