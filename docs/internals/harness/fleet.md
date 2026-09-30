@@ -172,6 +172,18 @@ A trailing launch prompt attaches to exactly one agent identity: a named team's 
 
 `launch::compile_agent_process` is the provider-process compiler. It selects launch, resume, or fork argv from the request, composes trusted project, adapter, and RimZ identity environment in that order, applies the login-shell wrapper, and retains the raw provider argv for PATH preflight. The exec wrapper supplies any materialized prompt argv and environment at the final provider boundary.
 
+### Every path that builds a launch layout
+
+A rule that must hold for every launch (a durable record, a preflight, a stamp) has to hold on each of these paths. Only the first resolves from config at the entry point; the others rebuild from profiles or seeds already in memory, so they are the ones a new rule misses. The last column is where each path writes its `tier_fallback` assist ([loops.md § The assist log](./loops.md#the-assist-log)).
+
+| Path | Builds its layout in | Records a tier fallback |
+| --- | --- | --- |
+| Fresh launch, `rimz agents <spec>` | `crates/rimz/src/cli/agents_cmd/launch_resolve.rs::resolve_finalized_layout` (a named team through `crates/rimz/src/harness/spec.rs::resolve_team`), then `crates/rimz/src/harness/plan.rs::compile_layout_panes` in `crates/rimz/src/cli/agents_cmd/launch.rs::launch_layout` | from the `on_launched` hook of `crates/rimz/src/cli/agents_cmd/placement.rs::execute`, after the tab or pane opens |
+| Same-pane exec, the in-place branch of a fresh or cohort-resume launch | the same compiled panes, handed to `exec_wrapper_in_place` | from the same hook, just before the exec, since a successful exec never returns |
+| Cohort resume, `rimz agents <spec> --resume` | `crates/rimz/src/harness/resume.rs::restore_routed_cells` over the finalized layout, then `compile_layout_panes` in `crates/rimz/src/cli/agents_cmd/launch.rs::launch_resume_layout` | from the `on_launched` hook, as for a fresh launch |
+| Supervised run, `rimz subagents` and `-p` | one pane, built in `crates/rimz/src/cli/supervised/run.rs::execute_attempt` through `crates/rimz/src/cli/supervised.rs::run_pane_cmd` rather than `compile_layout_panes` | after `open_attempt_pane` returns |
+| Team restore, in rebirth and lane resume | `crates/rimz/src/harness/resume.rs::plan_team_restore_tabs` (`resolve_team`, then `restore_routed_cells`), compiled by `crates/rimz/src/harness/resume.rs::materialize_team_restore_tab` | in `materialize_team_restore_tab`, before the multiplexer opens the tab, so a tab that then fails to open still counts |
+
 ### The exec wrapper
 
 Every agent pane runs the hidden `rimz agents exec <kind>` wrapper, which in turn runs the agent. Backends never resolve agent kinds or worktrees; the wrapper does.
