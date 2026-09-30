@@ -34,6 +34,31 @@ fn write_test_carryover(path: &Path, agents: Vec<AgentState>) {
 }
 
 #[test]
+fn record_launch_warnings_appends_one_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    let runtime = RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    store
+        .record_launch_warnings(
+            &AgentKind::new_unchecked("codex"),
+            &AgentSessionId::from("sess-1"),
+            Some(&AgentSessionId::from("launch-1")),
+            "session",
+            vec!["degraded launch".into()],
+        )
+        .unwrap();
+    let events = store.read_events().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].method, "agent.launch_warnings");
+    assert_eq!(
+        events[0].params_value(),
+        json!({"agent_id": "sess-1", "launch_id": "launch-1", "warnings": ["degraded launch"]})
+    );
+}
+
+#[test]
 fn launch_event_builder_preserves_serialized_state_shapes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());

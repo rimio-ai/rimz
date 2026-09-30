@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn launch_warnings_hydrate_a_rotated_row() {
+    let carried = agent("codex", "agent-1", AgentStatus::Idle, 1_000);
+    let warning = EventEnvelope::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/x")),
+        "session",
+        "codex",
+        "agent",
+        "agent.launch_warnings",
+        serde_json::json!({"agent_id": "agent-1", "warnings": ["degraded launch"]}),
+    );
+    let merged = agent_rollup_with_carryover(&[warning], vec![carried]);
+    assert_eq!(merged.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&merged[0]).unwrap()["launch_warnings"],
+        serde_json::json!(["degraded launch"])
+    );
+}
+
+#[test]
 fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
     for (label, carried_seen, live_seen) in [
         ("strictly newer live observation wins", 1_000, 2_000),

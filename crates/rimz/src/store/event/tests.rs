@@ -9,6 +9,38 @@ fn workspace() -> WorkspaceId {
     WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-event-test"))
 }
 
+#[test]
+fn launch_warnings_decode_with_optional_identity_and_future_fields() {
+    for launch_id in [None, Some("launch-1")] {
+        let event = EventEnvelope::new(
+            workspace(),
+            "session",
+            "codex",
+            "agent",
+            "agent.launch_warnings",
+            json!({"agent_id": "sess-1", "launch_id": launch_id,
+                "warnings": ["degraded launch"], "future": true}),
+        );
+        assert!(!matches!(event.kind(), EventKind::Other { .. }));
+        let constructed = EventEnvelope::agent_launch_warnings(
+            workspace(),
+            "session",
+            &AgentKind::new_unchecked("codex"),
+            AgentLaunchWarningsPayload {
+                agent_id: "sess-1".into(),
+                launch_id: launch_id.map(AgentSessionId::from),
+                warnings: vec!["degraded launch".into()],
+            },
+        );
+        assert_eq!(constructed.method, "agent.launch_warnings");
+        assert_eq!(constructed.kind(), event.kind());
+        assert_eq!(
+            constructed.params_value().get("launch_id").is_some(),
+            launch_id.is_some()
+        );
+    }
+}
+
 fn rich_lifecycle_observation() -> (AgentLifecycleObservation, Value) {
     let params = json!({
         "event_name": "Stop", "agent_id": "sess-1", "agent_name": "amber-atlas",

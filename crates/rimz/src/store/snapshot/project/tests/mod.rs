@@ -120,6 +120,104 @@ fn launch_event(kind: &str, payload: AgentLaunchPayload) -> EventEnvelope {
     )
 }
 
+#[test]
+fn launch_warnings_replace_carry_and_ignore_unknown_rows() {
+    let warning = |id: &str, warnings: Vec<&str>| {
+        EventEnvelope::new(
+            workspace(),
+            "session",
+            "codex",
+            "agent",
+            "agent.launch_warnings",
+            json!({"agent_id": id, "launch_id": "launch-1", "warnings": warnings}),
+        )
+    };
+    let mut events = vec![
+        launch_event(
+            "codex",
+            AgentLaunchPayload {
+                state: AgentLaunchState::Starting,
+                ..launch_payload("launch-1", "coder")
+            },
+        ),
+        warning("launch-1", vec!["degraded launch"]),
+    ];
+    let states = reduce_agent_states(&events);
+    assert_eq!(
+        serde_json::to_value(&states[0]).unwrap()["launch_warnings"],
+        json!(["degraded launch"])
+    );
+    events.push(warning("unknown", vec!["ignored"]));
+    assert_eq!(reduce_agent_states(&events).len(), 1);
+    events.push(warning("launch-1", vec![]));
+    let states = reduce_agent_states(&events);
+    assert!(
+        serde_json::to_value(&states[0])
+            .unwrap()
+            .get("launch_warnings")
+            .is_none()
+    );
+}
+
+#[test]
+fn launch_warnings_survive_adoption_turns_and_successor_conversations() {
+    let pane_id = "tmux:%4";
+    let owner_pid = 168;
+    let launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some("launch-1".into()),
+            pane_id: Some(PaneId::parse(pane_id).unwrap()),
+            runtime_owner: Some(RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "launch-1",
+                owner_pid,
+                Some("agent-start".into()),
+            )),
+            ..launch_payload("launch-1", "coder-card")
+        },
+    );
+    let warning = |id: &str, text: &str| {
+        EventEnvelope::new(
+            workspace(),
+            "session",
+            "codex",
+            "agent",
+            "agent.launch_warnings",
+            json!({"agent_id": id, "launch_id": "launch-1", "warnings": [text]}),
+        )
+    };
+    let mut events = vec![
+        launch,
+        warning("launch-1", "original warning"),
+        same_process_registration("primary", "coder-card", 2, pane_id, owner_pid),
+        raw_lifecycle_at(
+            "codex",
+            3,
+            json!({"agent_id": "primary", "signal": {"signal": "turn_started"}}),
+        ),
+        same_process_registration("successor", "successor-card", 4, pane_id, owner_pid),
+    ];
+    let agents = reduce_agent_states(&events);
+    for id in ["primary", "successor"] {
+        let agent = agents.iter().find(|agent| agent.agent_id == id).unwrap();
+        assert_eq!(
+            serde_json::to_value(agent).unwrap()["launch_warnings"],
+            json!(["original warning"])
+        );
+    }
+    events.push(warning("successor", "resume warning"));
+    let agents = reduce_agent_states(&events);
+    let agent = agents
+        .iter()
+        .find(|agent| agent.agent_id == "successor")
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(agent).unwrap()["launch_warnings"],
+        json!(["resume warning"])
+    );
+}
+
 fn attach_event(
     kind: &str,
     agent_id: &str,
