@@ -56,8 +56,8 @@ pub(super) fn serve_request(
 
 /// The one-shot answer with no owner: the current-version provider
 /// publication at any age, as `rimz stats` serves it, with the request's
-/// matching workspace sidecar or an empty tally. `None` means nothing usable
-/// was ever published and the caller must walk.
+/// matching workspace sidecar, the sole surviving sidecar, or an empty tally.
+/// `None` means nothing usable was ever published and the caller must walk.
 pub(super) fn current_publication(
     runtime: &RuntimePaths,
     request: &crate::agents::spending::service::SpendingServiceRequest,
@@ -72,9 +72,14 @@ pub(super) fn current_publication(
         request.worktree_home.as_deref(),
     );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
+    let workspace = scope_hash
+        .as_deref()
+        .and_then(|hash| exact_workspace_cache(runtime, hash))
+        .or_else(|| sole_published_workspace_cache(runtime))
+        .unwrap_or_default();
     Some(SpendingCaches {
         provider,
-        workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
+        workspace,
     })
 }
 
@@ -84,6 +89,19 @@ pub(super) fn serve_direct(
 ) -> SpendingCaches {
     let context = request_context(request, true);
     serve_one_shot(runtime, &context, &mut |_| {})
+}
+
+/// The sole current-version sidecar after a scope miss; twin of
+/// `sidebar::refresh::sole_published_workspace_cache`. The producer prunes old
+/// sidecars, so exactly one survivor is the room's last publication.
+fn sole_published_workspace_cache(runtime: &RuntimePaths) -> Option<WorkspaceSpendingCache> {
+    let mut published = runtime.workspace_spending_files().into_iter();
+    let candidate = published.next()?;
+    if published.next().is_some() {
+        return None;
+    }
+    let cache = super::read_workspace_spending_cache(&candidate);
+    cache.is_current_version().then_some(cache)
 }
 
 /// Run one account-global spending refresh directly in this process. The CLI
@@ -594,17 +612,19 @@ fn matching_workspace_cache(
     runtime: &RuntimePaths,
     scope_hash: Option<&str>,
 ) -> crate::agents::spending::WorkspaceSpendingCache {
-    let Some(scope_hash) = scope_hash else {
-        return Default::default();
-    };
+    scope_hash
+        .and_then(|scope_hash| exact_workspace_cache(runtime, scope_hash))
+        .unwrap_or_default()
+}
+
+fn exact_workspace_cache(
+    runtime: &RuntimePaths,
+    scope_hash: &str,
+) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
     let cache = crate::agents::spending::read_workspace_spending_cache(
         &runtime.workspace_spending_path(scope_hash),
     );
-    if cache.is_current_version() && cache.scope_hash == scope_hash {
-        cache
-    } else {
-        Default::default()
-    }
+    (cache.is_current_version() && cache.scope_hash == scope_hash).then_some(cache)
 }
 
 fn served_within_grace(
