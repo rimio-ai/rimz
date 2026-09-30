@@ -249,19 +249,51 @@ pub(super) fn launch_layout(
     }
 
     let cells = cohort_cells(&layout);
-    if let Some(name) = explicit_worktree_name.as_deref()
-        && args.launch.cohort.from_pr.is_none()
-        && (team_name.is_some() || cells.len() >= 2)
-    {
+    // A choice-less PR lookup discovers the holder without moving its local tip.
+    let mut checkout = args.launch.cohort.from_pr.as_ref().map(|pr| {
+        rimz::worktree::resolve_launch_checkout(
+            workspace,
+            &machine_config.agents.worktree,
+            args.launch.cohort.worktree.as_deref(),
+            Some(pr),
+            None,
+            cwd.as_deref(),
+        )
+    });
+    let cohort_target = if team_name.is_some() || cells.len() >= 2 {
+        match checkout.as_ref() {
+            Some(Ok(launch)) if launch.reused => launch
+                .worktree_name
+                .as_ref()
+                .map(|name| (name.clone(), launch.cwd.clone())),
+            Some(Err(rimz::worktree::WorktreeErr::PrBranchDiverged {
+                holder: Some(path), ..
+            })) => rimz::worktree::read_marker_for_worktree(path)?
+                .map(|marker| (marker.name, path.clone())),
+            Some(_) => None,
+            None => explicit_worktree_name
+                .as_deref()
+                .map(|name| {
+                    reconcile::cohort_worktree_path(
+                        workspace,
+                        &machine_config.agents.worktree,
+                        name,
+                    )
+                    .map(|path| (name.to_owned(), path))
+                })
+                .transpose()?,
+        }
+    } else {
+        None
+    };
+    if let Some((name, path)) = cohort_target {
         let spec_display = args.launch.spec.as_deref().unwrap_or("<spec>");
-        let path =
-            reconcile::cohort_worktree_path(workspace, &machine_config.agents.worktree, name)?;
         match reconcile::reconcile_cohort_launch(
             workspace,
             &machine_config,
             backend,
             store,
-            name,
+            &name,
             &path,
             spec_display,
             team_name.as_deref(),
@@ -272,6 +304,19 @@ pub(super) fn launch_layout(
             reconcile::Reconciled::Done => return Ok(()),
             reconcile::Reconciled::Resume(path) => {
                 validate_resume_inputs(&args.launch, ResumeEntrance::Reconcile)?;
+                if let Some(checkout) = checkout.take()
+                    && crate::cli::settle_launch_checkout(
+                        workspace,
+                        &machine_config.agents.worktree,
+                        args.launch.cohort.worktree.as_deref(),
+                        args.launch.cohort.from_pr.as_ref(),
+                        cwd.as_deref(),
+                        checkout,
+                    )?
+                    .is_none()
+                {
+                    return Ok(());
+                }
                 return launch_resume_layout(
                     args,
                     globals,
@@ -288,18 +333,29 @@ pub(super) fn launch_layout(
                     checked_folder_trust,
                 );
             }
-            reconcile::Reconciled::Continue | reconcile::Reconciled::Removed => {}
+            reconcile::Reconciled::Continue => {}
+            reconcile::Reconciled::Removed => checkout = None,
         }
     }
 
-    let Some(launch) = crate::cli::resolve_launch_checkout(
-        workspace,
-        &machine_config,
-        args.launch.cohort.worktree.as_deref(),
-        args.launch.cohort.from_pr.as_ref(),
-        cwd.as_deref(),
-    )?
-    else {
+    let launch = match checkout {
+        Some(checkout) => crate::cli::settle_launch_checkout(
+            workspace,
+            &machine_config.agents.worktree,
+            args.launch.cohort.worktree.as_deref(),
+            args.launch.cohort.from_pr.as_ref(),
+            cwd.as_deref(),
+            checkout,
+        ),
+        None => crate::cli::resolve_launch_checkout(
+            workspace,
+            &machine_config,
+            args.launch.cohort.worktree.as_deref(),
+            args.launch.cohort.from_pr.as_ref(),
+            cwd.as_deref(),
+        ),
+    }?;
+    let Some(launch) = launch else {
         return Ok(());
     };
     if let Some(team) = team {

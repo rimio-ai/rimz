@@ -776,23 +776,25 @@ pub fn resolve_unmanaged_launch_checkout(
     })
 }
 
-/// Remove one named worktree, refusing unless `force` when `protections` or the
-/// checkout's own Git state says it is unsafe. Callers pass the same
-/// [`ProtectionSet`] the wrapper and `gc` paths build, so an explicit removal
-/// answers to the live room rather than to Git alone.
+/// Remove the named worktree checked out at `path`, refusing unless `force`
+/// when `protections` or the checkout's own Git state says it is unsafe.
+/// Callers pass the tree's real path, which can sit outside the configured
+/// worktree directory, and the same [`ProtectionSet`] the wrapper and `gc`
+/// paths build, so an explicit removal answers to the live room rather than to
+/// Git alone.
 pub fn remove(
     repo_root: &Path,
     config: &WorktreeConfig,
     name: &str,
+    path: &Path,
     force: bool,
     protections: &ProtectionSet,
 ) -> Result<RemovalOutcome> {
     ensure_repo(repo_root)?;
-    let path = worktree_path(repo_root, config, name)?;
-    let marker = owned_marker(name, &path)?;
-    let status = status(&path, &marker)?;
+    let marker = owned_marker(name, path)?;
+    let status = status(path, &marker)?;
     if !force {
-        match protections.assess(&path, status) {
+        match protections.assess(path, status) {
             RemovalAssessment::Removable => {}
             RemovalAssessment::InUse => {
                 return Err(WorktreeErr::InUse {
@@ -806,7 +808,7 @@ pub fn remove(
             }
         }
     }
-    remove_marked_worktree(repo_root, &path, &marker, force, &config.hooks)
+    remove_marked_worktree(repo_root, path, &marker, force, &config.hooks)
 }
 
 /// Resolve one named RimZ-owned worktree without accepting an arbitrary Git

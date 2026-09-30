@@ -818,9 +818,20 @@ fn resolve_launch_checkout(
         require_worktree_config(config)?;
     }
     let config = &config.agents.worktree;
-    let launch = match rimz::worktree::resolve_launch_checkout(
-        workspace, config, worktree, from_pr, None, cwd,
-    ) {
+    let checkout =
+        rimz::worktree::resolve_launch_checkout(workspace, config, worktree, from_pr, None, cwd);
+    settle_launch_checkout(workspace, config, worktree, from_pr, cwd, checkout)
+}
+
+fn settle_launch_checkout(
+    workspace: &rimz::ResolvedWorkspace,
+    config: &rimz::config::WorktreeConfig,
+    worktree: Option<&str>,
+    from_pr: Option<&rimz::forge::PrTarget>,
+    cwd: Option<&std::path::Path>,
+    checkout: rimz::worktree::Result<rimz::worktree::LaunchCheckout>,
+) -> Result<Option<rimz::worktree::LaunchCheckout>> {
+    let launch = match checkout {
         Ok(launch) => launch,
         Err(err @ rimz::worktree::WorktreeErr::PrBranchDiverged { .. }) => {
             let Some(choice) = resolve_pr_branch_choice(&err)? else {
