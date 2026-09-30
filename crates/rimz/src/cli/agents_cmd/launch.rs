@@ -295,6 +295,15 @@ pub(super) fn launch_layout(
     } else {
         None
     };
+    // An inferred lane joins the exact channel it was inferred from, rather than
+    // one recomputed from the caller's cwd — a shell pane that has `cd`'d into a
+    // subdirectory would otherwise stamp that subdirectory's basename.
+    let explicit_channel = args
+        .launch
+        .cohort
+        .channel
+        .as_deref()
+        .or(inferred_lane.as_deref().filter(|_| cwd.is_none()));
     if let Some(team) = team_name.as_deref() {
         let target = if let Some(path) = cwd.as_deref() {
             Some((None, path))
@@ -317,32 +326,43 @@ pub(super) fn launch_layout(
             && let Some(hold) = rimz::harness::resume::inspect_team_hold(&projection.agents, path)
             && hold.team != team
         {
-            let (reason, release) = match hold.reason {
-                rimz::harness::resume::TeamHoldReason::LiveMember => {
-                    ("a member is live".to_owned(), String::new())
-                }
-                rimz::harness::resume::TeamHoldReason::BoardStage(stage) => (
-                    format!("its board is at `{stage}`"),
-                    format!(
-                        ", or mark `{}` `Stage: Done` to release it",
-                        path.join(rimz::harness::board::BOARD_FILE).display()
-                    ),
-                ),
-            };
-            let (place, resume) = match name {
-                Some(name) => (
-                    format!("worktree `{name}`"),
-                    format!("`rimz teams resume {} -w {name}`", hold.team),
-                ),
-                None => (
-                    format!("checkout `{}`", path.display()),
-                    format!("`rimz teams resume {}` from that checkout", hold.team),
-                ),
+            let (reason, release, resume) = team_hold_guidance(&hold, path, name);
+            let place = match name {
+                Some(name) => format!("worktree `{name}`"),
+                None => format!("checkout `{}`", path.display()),
             };
             bail!(
                 "{place} already holds team `{}` ({reason}); one team per checkout: resume it with {resume}, or launch into another worktree{release}",
                 hold.team
             );
+        }
+        if let Some((_, path)) = target
+            && let Some(channel) = rimz::harness::spec::resolve_room_channel(
+                &workspace.project_root,
+                path,
+                Some(team),
+                explicit_channel,
+            )
+            && let Some(hold) =
+                rimz::harness::resume::inspect_channel_hold(&projection.agents, &channel)
+        {
+            let comparable_path = |path: &Path| {
+                std::fs::canonicalize(path)
+                    .unwrap_or_else(|_| rimz::utils::path::normalize_path_lexical(path))
+            };
+            if comparable_path(&hold.checkout) != comparable_path(path) {
+                let marker = rimz::worktree::read_marker_for_worktree(&hold.checkout)?;
+                let (reason, release, resume) = team_hold_guidance(
+                    &hold,
+                    &hold.checkout,
+                    marker.as_ref().map(|marker| marker.name.as_str()),
+                );
+                bail!(
+                    "channel `#{channel}` already carries team `{}` at checkout `{}` ({reason}); one team per channel: resume it with {resume}, or launch on another channel{release}",
+                    hold.team,
+                    hold.checkout.display()
+                );
+            }
         }
     }
     if let Some((name, path)) = cohort_target {
@@ -425,18 +445,11 @@ pub(super) fn launch_layout(
     if let Some(channel) = args.launch.cohort.channel.as_deref() {
         rimz::channel::register(workspace, store.paths(), channel)?;
     }
-    // An inferred lane joins the exact channel it was inferred from, rather than
-    // one recomputed from the caller's cwd — a shell pane that has `cd`'d into a
-    // subdirectory would otherwise stamp that subdirectory's basename.
     let room_channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,
         &launch.cwd,
         team_name.as_deref(),
-        args.launch
-            .cohort
-            .channel
-            .as_deref()
-            .or(inferred_lane.as_deref().filter(|_| cwd.is_none())),
+        explicit_channel,
     );
     let launch_requests = launch_identity_requests(
         &layout,
@@ -554,6 +567,34 @@ pub(super) fn launch_layout(
         )?;
     }
     Ok(())
+}
+
+fn team_hold_guidance(
+    hold: &rimz::harness::resume::TeamHold,
+    checkout: &Path,
+    name: Option<&str>,
+) -> (String, String, String) {
+    let (reason, release) = match &hold.reason {
+        rimz::harness::resume::TeamHoldReason::LiveMember => {
+            ("a member is live".to_owned(), String::new())
+        }
+        rimz::harness::resume::TeamHoldReason::BoardStage(stage) => (
+            format!("its board is at `{stage}`"),
+            format!(
+                ", or mark `{}` `Stage: Done` to release it",
+                checkout.join(rimz::harness::board::BOARD_FILE).display()
+            ),
+        ),
+    };
+    let resume = match name {
+        Some(name) => format!("`rimz teams resume {} -w {name}`", hold.team),
+        None => format!(
+            "`rimz teams resume {}` from `{}`",
+            hold.team,
+            checkout.display()
+        ),
+    };
+    (reason, release, resume)
 }
 
 fn prepare_peer_prompt(

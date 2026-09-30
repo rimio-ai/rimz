@@ -6,7 +6,7 @@ Topic detail lives in [fleet.md](../../../../docs/internals/harness/fleet.md) (s
 
 ## Boundaries
 
-- The harness owns the team-hold rule (`resume::inspect_team_hold`) a fresh team launch refuses on.
+- The harness owns the checkout and channel team-hold rules (`resume::inspect_team_hold` and `resume::inspect_channel_hold`) a fresh team launch refuses on.
 - `run/peer.rs::record_run_delivery` records confirmed delivery under the acknowledgment's existing workspace lock: a hook run id naming a subagent run selects answer stamping; otherwise, including a foreground `-p` peer's own run id, it enrolls launcher-opened peer turns.
 - `team_prompt.rs` owns the embedded consensus, its read-only inspection copy under the definitions root (published, never read back), and the team prompt layer's derivation; `spec` decides the layer once per role cell at team compile, and `prompt_compose` composes it after the role's own prompt.
 - `launch_plan.rs` is the exec wrapper's shared plan/apply boundary: `compile` reads and decides without writing, while `apply` materializes prompt artifacts, room tmp and skill copies, and provider-root skill links in host mode, and refreshes the consensus copy best-effort without ever failing a launch. The exec wrapper executes the plan; `agents explain` renders it without applying. Reminder text is retained from the process compiler's single render, never assembled a second time for inspection.

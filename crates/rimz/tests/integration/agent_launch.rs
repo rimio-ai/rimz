@@ -156,6 +156,75 @@ fn held_team_can_resume_before_done() {
 }
 
 #[test]
+fn channel_hold_refuses_live_launch() {
+    assert_launch_focus(
+        &["teams", "solo", "--channel", "review"],
+        true,
+        "hold-channel-live",
+    );
+}
+
+#[test]
+fn channel_hold_refuses_pending_launch() {
+    assert_launch_focus(
+        &["teams", "solo", "--channel", "review"],
+        true,
+        "hold-channel-board",
+    );
+}
+
+#[test]
+fn channel_hold_refuses_same_team_elsewhere() {
+    assert_launch_focus(
+        &["teams", "duo", "--channel", "review"],
+        true,
+        "hold-channel-live",
+    );
+}
+
+#[test]
+fn channel_hold_refuses_derived_channel() {
+    assert_launch_focus(
+        &["teams", "solo", "-w", "review"],
+        true,
+        "hold-channel-derived",
+    );
+}
+
+#[test]
+fn channel_hold_allows_done_and_same_checkout() {
+    assert_launch_focus(
+        &["teams", "solo", "--channel", "review"],
+        true,
+        "hold-channel-done",
+    );
+    assert_launch_focus(
+        &["teams", "duo", "--channel", "review"],
+        true,
+        "hold-channel-same",
+    );
+}
+
+#[test]
+fn channel_hold_refuses_inferred_role_channel() {
+    assert_launch_focus(
+        &["agents", "lead", "--new-tab"],
+        true,
+        "hold-channel-inferred",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn channel_hold_allows_symlinked_checkout() {
+    assert_launch_focus(
+        &["agents", "duo", "--channel", "review"],
+        true,
+        "hold-channel-symlink",
+    );
+}
+
+#[test]
 fn from_pr_live_cohort_preserves_behind_and_equal_tips() {
     for behind in [true, false] {
         assert_from_pr_launch(Some(LifecycleSignal::Registered), behind, false);
@@ -367,6 +436,21 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         "Complete the work.",
     );
     let hold = action.starts_with("hold-");
+    let channel_hold = action.starts_with("hold-channel-");
+    let root_hold = matches!(
+        action,
+        "hold-root" | "hold-channel-derived" | "hold-channel-same" | "hold-channel-symlink"
+    );
+    let live_hold = matches!(
+        action,
+        "hold-live"
+            | "hold-root"
+            | "hold-channel-live"
+            | "hold-channel-inferred"
+            | "hold-channel-derived"
+            | "hold-channel-same"
+            | "hold-channel-symlink"
+    );
     if hold {
         crate::common::write_definition(
             &env,
@@ -379,14 +463,31 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     let shim = write_env_dump_shim(&env, "claude");
     let workspace = env.resolve_workspace(&env.project_root);
     if matches!(args[1], "restart" | "resume") || action == "cohort" || hold {
-        let worktree = if action == "hold-root" {
-            env.project_root.clone()
+        let worktree = if root_hold {
+            if channel_hold {
+                assert!(init_launch_repo(&env.project_root));
+            }
+            if action == "hold-channel-symlink" {
+                let alias = env.home_root.join("checkout-alias");
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&env.project_root, &alias).unwrap();
+                alias
+            } else {
+                env.project_root.clone()
+            }
         } else if action == "cohort" || hold {
             assert!(init_launch_repo(&env.project_root));
             let path =
                 rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
                     .unwrap();
-            if matches!(action, "hold-done" | "hold-resume") {
+            if matches!(
+                action,
+                "hold-done"
+                    | "hold-resume"
+                    | "hold-channel-live"
+                    | "hold-channel-board"
+                    | "hold-channel-inferred"
+            ) {
                 env.rimz()
                     .args(["worktree", "new", "review"])
                     .assert()
@@ -394,11 +495,18 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             } else if !hold {
                 std::fs::create_dir_all(&path).unwrap();
             }
-            if matches!(action, "hold-board" | "hold-done" | "hold-resume") {
+            if matches!(
+                action,
+                "hold-board"
+                    | "hold-done"
+                    | "hold-resume"
+                    | "hold-channel-board"
+                    | "hold-channel-done"
+            ) {
                 std::fs::create_dir_all(&path).unwrap();
                 std::fs::write(
                     path.join("blackboard.md"),
-                    if action == "hold-done" {
+                    if matches!(action, "hold-done" | "hold-channel-done") {
                         "Stage: Done\n"
                     } else {
                         "Stage: Build (@lead)\n"
@@ -434,7 +542,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                 LifecycleSignal::Registered,
             )
         };
-        if hold && !matches!(action, "hold-live" | "hold-root") {
+        if hold && !live_hold {
             observation.runtime_owner = None;
         }
         env.store()
@@ -446,7 +554,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                 &observation,
             ))
             .unwrap();
-        if hold && !matches!(action, "hold-live" | "hold-root") {
+        if hold && !live_hold {
             env.store()
                 .append_event(&EventEnvelope::agent_lifecycle(
                     workspace.workspace_id.clone(),
@@ -463,6 +571,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     }
     let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
     let events_before = std::fs::read(env.state_path_for(&env.project_root).events_log).unwrap();
+    let channels_before = std::fs::read(env.state_path_for(&env.project_root).channels_record).ok();
     let log = env.home_root.join("mux.log");
     let mut command = env.rimz();
     command.args(["--mux", "zellij"]).args(args)
@@ -476,30 +585,74 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         .env("RIMZ_TEST_ZELLIJ_LOG", &log)
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name));
+    if action == "hold-channel-symlink" {
+        command
+            .arg("--cwd")
+            .arg(env.home_root.join("checkout-alias"));
+    }
     if agent {
         command
             .env("RIMZ_AGENT_KIND", "claude")
             .env("RIMZ_AGENT_ID", "launch-session");
     }
+    if action == "hold-channel-inferred" {
+        command.env(rimz::workspace::ENV_CHANNEL, "review");
+    }
     let output = command.bounded_output().unwrap();
-    if matches!(action, "hold-live" | "hold-board" | "hold-root") {
+    if matches!(
+        action,
+        "hold-live"
+            | "hold-board"
+            | "hold-root"
+            | "hold-channel-live"
+            | "hold-channel-board"
+            | "hold-channel-derived"
+            | "hold-channel-inferred"
+    ) {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success(), "{stderr}");
-        assert!(stderr.contains("already holds team `duo`"), "{stderr}");
-        if action == "hold-root" {
+        assert!(
+            stderr.contains(if channel_hold {
+                "already carries team `duo`"
+            } else {
+                "already holds team `duo`"
+            }),
+            "{stderr}"
+        );
+        if channel_hold {
+            assert!(stderr.contains("channel `#review`"), "{stderr}");
+            assert!(stderr.contains("one team per channel"), "{stderr}");
+            let holder = if root_hold {
+                env.project_root.clone()
+            } else {
+                rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
+                    .unwrap()
+            };
+            assert!(
+                stderr.contains(&format!("at checkout `{}`", holder.display())),
+                "{stderr}"
+            );
+            if action == "hold-channel-board" {
+                assert!(
+                    stderr.contains(&holder.join("blackboard.md").display().to_string()),
+                    "{stderr}"
+                );
+            }
+        }
+        if root_hold {
             assert!(stderr.contains("checkout `"), "{stderr}");
-            assert!(stderr.contains("from that checkout"), "{stderr}");
+            assert!(stderr.contains("rimz teams resume duo` from"), "{stderr}");
         } else {
             assert!(
                 stderr.contains("rimz teams resume duo -w review"),
                 "{stderr}"
             );
         }
-        if action == "hold-board" {
+        if matches!(action, "hold-board" | "hold-channel-board") {
             assert!(stderr.contains("`Stage: Done` to release it"), "{stderr}");
         }
         assert!(
-            stderr.contains(if action != "hold-board" {
+            stderr.contains(if live_hold {
                 "a member is live"
             } else {
                 "its board is at `Build`"
@@ -514,8 +667,12 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             std::fs::read(env.state_path_for(&env.project_root).events_log).unwrap(),
             events_before
         );
+        assert_eq!(
+            std::fs::read(env.state_path_for(&env.project_root).channels_record).ok(),
+            channels_before
+        );
         assert!(!std::fs::read_to_string(&log).unwrap().contains("new-tab"));
-        if action == "hold-live" {
+        if matches!(action, "hold-live" | "hold-channel-derived") {
             assert!(
                 !rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
                     .unwrap()
