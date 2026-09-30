@@ -223,7 +223,11 @@ fn fresh_lane_materializes_new_team_launches() {
     let runtime =
         crate::disk::paths::RuntimePaths::under(workspace, &dir.path().join("runtime")).unwrap();
     let store = Store::open(paths, runtime).unwrap();
-    let tabs = plan.materialize(&store, "rimz-test").unwrap();
+    let materialized = plan.materialize(&store, "rimz-test").unwrap();
+    assert_eq!(materialized.team_launches.len(), 1);
+    assert_eq!(materialized.team_launches[0].tab, 0);
+    assert_eq!(materialized.team_launches[0].batch.identities().len(), 2);
+    let tabs = materialized.tabs;
     assert_eq!(tabs.len(), 1);
     assert_eq!(tabs[0].pane_count(), 2);
     assert_eq!(tabs[0].cwd, Path::new(lane));
@@ -832,10 +836,12 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
         .expect("runtime paths");
     let store = Store::open(paths, runtime).expect("store");
 
-    let tabs = plan
+    let materialized = plan
         .clone()
         .materialize(&store, "rimz-test")
         .expect("strict lane materialization");
+    assert!(materialized.team_launches.is_empty());
+    let tabs = materialized.tabs;
     assert_eq!(tabs.len(), 2);
     assert_eq!(tabs[0].pane_count(), 2);
     assert_eq!(tabs[1].pane_count(), 1);
@@ -858,8 +864,21 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
             RecoveryEntry::Flat(_) => None,
         })
         .expect("team entry");
-    team.cohort.seeds.truncate(1);
+    team.cohort.seeds.fill(CohortSeed::Fresh);
+    let crate::harness::spec::Cell::Agent(cell) = &mut team.layout.columns[0].rows[0] else {
+        panic!("expected team agent");
+    };
+    cell.system_prompt_file = Some(dir.path().join("missing-prompt.md").into());
     assert!(broken.materialize(&store, "rimz-test").is_err());
+    let events = crate::store::event_log::read_all(&store.paths().events_log).unwrap();
+    let failed = events
+        .iter()
+        .filter(|event| {
+            matches!(event.kind(), crate::store::event::EventKind::AgentLaunch(payload)
+            if payload.state == crate::store::event::AgentLaunchState::Failed)
+        })
+        .count();
+    assert_eq!(failed, 2, "compile failure must close both fresh seats");
 }
 
 #[test]

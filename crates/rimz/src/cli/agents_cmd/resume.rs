@@ -169,10 +169,22 @@ pub(super) fn resume_lane(
             report_discovery_skips(plan.discovery_skipped())?;
             report_resume_skips(plan.skipped())?;
             report_posture_warnings(plan.warnings())?;
-            let tabs = plan.materialize(&store, &workspace.session_name)?;
-            let count = tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
-            for tab in tabs {
-                open_resume_tab(&room, tab, focus)?;
+            let plan = plan.materialize(&store, &workspace.session_name)?;
+            let count = plan.tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
+            for (index, tab) in plan.tabs.into_iter().enumerate() {
+                if let Err(error) = open_resume_tab(&room, tab, focus) {
+                    for launch in plan
+                        .team_launches
+                        .iter()
+                        .filter(|launch| launch.tab >= index)
+                    {
+                        let _ = store.fail_agent_launch_batch(&launch.batch);
+                    }
+                    return Err(error);
+                }
+                if let Some(launch) = plan.team_launches.iter().find(|launch| launch.tab == index) {
+                    rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
+                }
             }
             writeln!(
                 std::io::stdout().lock(),
