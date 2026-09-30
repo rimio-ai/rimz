@@ -266,10 +266,11 @@ pub(super) fn launch_layout(
                 .worktree_name
                 .as_ref()
                 .map(|name| (name.clone(), launch.cwd.clone())),
+            // Agents record the marker's lexical path; Git lists the holder realpath'd.
             Some(Err(rimz::worktree::WorktreeErr::PrBranchDiverged {
                 holder: Some(path), ..
             })) => rimz::worktree::read_marker_for_worktree(path)?
-                .map(|marker| (marker.name, path.clone())),
+                .map(|marker| (marker.name, marker.worktree_path)),
             Some(_) => None,
             None => explicit_worktree_name
                 .as_deref()

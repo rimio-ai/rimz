@@ -129,38 +129,50 @@ fn agent_reconcile_live_cohort_keeps_focus() {
 #[test]
 fn from_pr_live_cohort_preserves_behind_and_equal_tips() {
     for behind in [true, false] {
-        assert_from_pr_launch(Some(LifecycleSignal::Registered), behind);
+        assert_from_pr_launch(Some(LifecycleSignal::Registered), behind, false);
     }
 }
 
 #[test]
+fn from_pr_live_cohort_matches_holder_through_symlinked_worktree_dir() {
+    assert_from_pr_launch(Some(LifecycleSignal::Registered), true, true);
+}
+
+#[test]
 fn from_pr_launch_fast_forwards_and_reports_reuse() {
-    assert_from_pr_launch(None, true);
+    assert_from_pr_launch(None, true, false);
 }
 
 #[test]
 fn from_pr_closed_cohort_prints_commands_without_moving_tip() {
-    assert_from_pr_launch(Some(LifecycleSignal::Ended), true);
+    assert_from_pr_launch(Some(LifecycleSignal::Ended), true, false);
 }
 
-fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool) {
+/// `symlinked_dir` routes `agents.worktree.dir` through a symlink, so the
+/// marker's lexical holder path and Git's realpath'd listing differ.
+fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinked_dir: bool) {
     use crate::common::git::{configure_github_origin_rewrite, git_stdout, publish_pr_ref};
 
     let env = Env::new();
     let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
     configure_github_origin_rewrite(&env);
+    let mut config = "[agents]\nisolation = 'host'\n".to_owned();
+    let mut holder = env.home_root.join("project-worktrees/feature");
+    if symlinked_dir {
+        let real = env.home_root.join("real-worktrees");
+        let link = env.home_root.join("linked-worktrees");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        config.push_str(&format!("[agents.worktree]\ndir = '{}'\n", link.display()));
+        holder = link.join("feature");
+    }
+    std::fs::write(env.rimz_home().join("config.toml"), &config).unwrap();
     let tip = if behind { &trunk } else { &pr_head };
     env.rimz()
         .args(["worktree", "new", "feature", "--base", tip])
         .assert()
         .success();
-    let holder = env.home_root.join("project-worktrees/feature");
     crate::common::wait::register_calling_agent(&env);
-    std::fs::write(
-        env.rimz_home().join("config.toml"),
-        "[agents]\nisolation = 'host'\n",
-    )
-    .unwrap();
     crate::common::write_definition(
         &env,
         "agents",
