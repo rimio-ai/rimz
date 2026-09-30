@@ -81,10 +81,53 @@ fn claimed_usage_refuses_and_cancels_a_different_room_login() {
         &runtime,
         &work,
         claim,
-        &RoomLoginSet::native()
+        &RoomLoginSet::native(),
+        |_, _| unreachable!("an unused login must not be probed"),
     ));
     assert!(!account_usage_claim_matches(&runtime, &work, claim));
     assert!(claim_provider_account_usage(&runtime, &work, None).is_some());
+}
+
+#[test]
+fn claimed_usage_keeps_refreshing_a_live_agents_old_login() {
+    let (_dir, runtime) = account_usage_runtime();
+    let work: LoginKey = "claude@work".parse().unwrap();
+    let accounts = toml::from_str("[claude.work]\nhome = '/srv/work'\n").unwrap();
+    let catalog = crate::agents::LoginCatalog::from_config(&accounts).unwrap();
+    let mut agent = crate::agents::AgentState::seed(
+        work.kind.clone(),
+        "root".into(),
+        crate::agents::AgentStatus::Idle,
+        Timestamp::UNIX_EPOCH,
+    );
+    agent.login = Some(work.name.clone());
+    let set = RoomLoginSet::new(Some(Default::default()), Some(catalog), BTreeMap::new())
+        .with_agents(&[agent]);
+    let claim = claim_provider_account_usage(&runtime, &work, None).unwrap();
+    assert!(refresh_claimed_account_usage_with(
+        &runtime,
+        &work,
+        claim,
+        &set,
+        |_, env| {
+            assert_eq!(
+                env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+                Some("/srv/work")
+            );
+            crate::agents::AccountUsageProbe::Found {
+                identity: Default::default(),
+                snapshot: AccountUsageSnapshot {
+                    rate_limits: Some(usage_windows(12)),
+                    ..Default::default()
+                },
+            }
+        },
+    ));
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert_eq!(
+        cache.entries[&work].limits.windows[0].used_percentage,
+        Some(12)
+    );
 }
 
 #[test]

@@ -776,11 +776,12 @@ surface-budget = 17
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
 allowed-dependencies = [
+    "agents",
     "disk",
     "disk::paths",
     "workspace::record",
 ]
-surface-budget = 29
+surface-budget = 30
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"

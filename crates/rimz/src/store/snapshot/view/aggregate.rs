@@ -123,7 +123,7 @@ impl SidebarSnapshot {
     pub(super) fn build_worktree_groups(
         &self,
         mut rows: Vec<SidebarRow>,
-        provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
+        provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
         exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> Vec<SidebarWorktreeGroup> {
         let now = self.now;

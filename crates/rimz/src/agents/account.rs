@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use super::{AgentAccount, RoomLoginSet};
 use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
 use crate::RuntimePaths;
-use crate::ids::{AgentKind, LoginKey};
+use crate::ids::LoginKey;
 
 /// Informational account and CLI-version probes are best-effort enrichment.
 /// Bound every subprocess so one installed but wedged CLI cannot hold the
@@ -236,17 +236,15 @@ impl ProviderCapacity {
     pub(crate) fn read_all(
         runtime: &RuntimePaths,
         logins: &RoomLoginSet,
-    ) -> BTreeMap<AgentKind, Self> {
+    ) -> BTreeMap<LoginKey, Self> {
+        let in_use = logins.keys_in_use();
         read_rate_limits_cache(&runtime.shared_rate_limits_path())
             .entries
             .into_iter()
-            .filter(|(key, entry)| {
-                entry.scope.is_kind_wide()
-                    && logins.default_key(key.kind.as_str()).as_ref() == Some(key)
-            })
+            .filter(|(key, entry)| entry.scope.is_kind_wide() && in_use.contains(key))
             .map(|(key, entry)| {
                 (
-                    key.kind,
+                    key,
                     Self {
                         windows: entry.limits.windows,
                         pacing_max_mins: None,

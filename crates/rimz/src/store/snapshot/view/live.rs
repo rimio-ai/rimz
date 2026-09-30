@@ -196,7 +196,7 @@ impl SidebarSnapshot {
         mut self,
         panes: Vec<PaneRef>,
         exclude: Option<&PaneId>,
-        provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
+        provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
     ) -> Self {
         let panes = self.card_admitted_live_panes(panes, exclude);
         self.fold_admitted_live_panes(&panes, None, None, provider_capacities, &BTreeSet::new());
@@ -220,7 +220,7 @@ impl SidebarSnapshot {
         panes: Vec<PaneRef>,
         lazy_pairings: &LazyAgentPairingResult,
         unread_row_ids: Option<&BTreeSet<String>>,
-        provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
+        provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
         exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> (Self, Vec<DiagEvent>) {
         let diagnostics = self.fold_admitted_live_panes(
@@ -238,7 +238,7 @@ impl SidebarSnapshot {
         panes: &[PaneRef],
         lazy_pairings: Option<&LazyAgentPairingResult>,
         unread_row_ids: Option<&BTreeSet<String>>,
-        provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
+        provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
         exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> Vec<DiagEvent> {
         let mut projection = self.rows_from_panes(panes, lazy_pairings);

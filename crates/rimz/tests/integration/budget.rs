@@ -67,6 +67,29 @@ fn budget_set_raise_clear_and_config_routes() {
         .stdout(contains("source: cleared"));
 
     env.rimz()
+        .args([
+            "budget",
+            "--account",
+            "claude@work",
+            "60/day",
+            "--no-continue",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("scope:  claude@work account"))
+        .stdout(contains("cap:    $60.00/day"));
+    env.rimz()
+        .args(["budget", "--account", "claude"])
+        .assert()
+        .success()
+        .stdout(contains("source: cleared"));
+    env.rimz()
+        .args(["budget", "--account", "claude@missing"])
+        .assert()
+        .failure()
+        .stderr(contains("rimz accounts add"));
+
+    env.rimz()
         .args(["budget", "5", "--no-continue"])
         .assert()
         .failure()

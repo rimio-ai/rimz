@@ -105,7 +105,13 @@ pub fn refresh_claimed_account_usage(
     key: &LoginKey,
     claim_id: Uuid,
 ) -> bool {
-    refresh_claimed_account_usage_with(runtime, key, claim_id, &RoomLoginSet::for_runtime(runtime))
+    refresh_claimed_account_usage_with(
+        runtime,
+        key,
+        claim_id,
+        &crate::store::room_logins_in_use(runtime),
+        |adapter, env| adapter.probe_account_usage(env),
+    )
 }
 
 fn refresh_claimed_account_usage_with(
@@ -113,12 +119,20 @@ fn refresh_claimed_account_usage_with(
     key: &LoginKey,
     claim_id: Uuid,
     set: &RoomLoginSet,
+    probe: impl FnOnce(
+        &crate::agents::AgentDefinition,
+        &std::collections::BTreeMap<String, String>,
+    ) -> crate::agents::AccountUsageProbe,
 ) -> bool {
     let started = Instant::now();
     let kind = key.kind.as_str();
-    let Some(login) = set.default_login(kind).filter(|login| login.key() == *key) else {
+    let Some(login) = set
+        .in_use(kind)
+        .into_iter()
+        .find(|login| login.key() == *key)
+    else {
         cancel_provider_account_usage_claim(runtime, key, claim_id);
-        trace_usage_helper(runtime, kind, "login_changed", 0, 0, 0, started.elapsed());
+        trace_usage_helper(runtime, kind, "login_unused", 0, 0, 0, started.elapsed());
         return false;
     };
     let login_env = set.env(&login);
@@ -172,7 +186,7 @@ fn refresh_claimed_account_usage_with(
         return wrote;
     }
     let direct_started = Instant::now();
-    let direct_probe = adapter.probe_account_usage(&login_env);
+    let direct_probe = probe(adapter, &login_env);
     let direct_ms = duration_ms(direct_started.elapsed());
     let outcome = account_usage_outcome(&direct_probe);
     let publication_started = Instant::now();

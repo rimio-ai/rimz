@@ -527,17 +527,8 @@ pub fn execute_auto_redeem(
     if key.kind.as_str() != CODEX_KIND {
         return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));
     }
-    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
-    let Some(login) = logins
-        .default_login(CODEX_KIND)
-        .filter(|login| login.key() == *key)
-    else {
-        cancel_attempt_reservation(runtime, key, &request_id.to_string());
-        tracing::debug!(
-            kind = key.kind.as_str(),
-            outcome = "login_changed",
-            "auto-redeem: room login changed"
-        );
+    let logins = crate::store::room_logins_in_use(runtime);
+    let Some(login) = redeem_login(runtime, key, &request_id.to_string(), &logins) else {
         return Ok(None);
     };
     if crate::agents::credits::oauth_usage_offline() {
@@ -648,6 +639,27 @@ pub fn execute_auto_redeem(
         report,
         usage: Some((usage_identity, refreshed)),
     }))
+}
+
+fn redeem_login(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    request_id: &str,
+    logins: &crate::agents::RoomLoginSet,
+) -> Option<crate::agents::ProviderLogin> {
+    let login = logins
+        .in_use(CODEX_KIND)
+        .into_iter()
+        .find(|login| login.key() == *key);
+    if login.is_none() {
+        cancel_attempt_reservation(runtime, key, request_id);
+        tracing::debug!(
+            kind = key.kind.as_str(),
+            outcome = "login_unused",
+            "auto-redeem: login no longer in use"
+        );
+    }
+    login
 }
 
 fn consume_reserved_reset_credit(

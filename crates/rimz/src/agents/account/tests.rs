@@ -1,4 +1,5 @@
 use super::*;
+use crate::ids::AgentKind;
 
 #[test]
 fn launch_exhaustion_requires_positive_matching_evidence() {
@@ -62,6 +63,56 @@ fn write_cache(runtime: &RuntimePaths, cache: &RateLimitsCache) {
 }
 
 #[test]
+fn capacity_keeps_both_live_logins_separate() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let (_dir, runtime) = runtime();
+    let accounts = toml::from_str("[claude.work]\nhome = '/srv/work'\n").unwrap();
+    let catalog = crate::agents::LoginCatalog::from_config(&accounts).unwrap();
+    let mut agent = crate::agents::AgentState::seed(
+        AgentKind::new_unchecked("claude"),
+        "root".into(),
+        crate::agents::AgentStatus::Idle,
+        now,
+    );
+    agent.login = Some("work".parse().unwrap());
+    let logins = RoomLoginSet::new(Some(Default::default()), Some(catalog), BTreeMap::new())
+        .with_agents(&[agent]);
+    write_cache(
+        &runtime,
+        &RateLimitsCache {
+            entries: [("claude@default", 0), ("claude@work", 100)]
+                .into_iter()
+                .map(|(key, used)| {
+                    (
+                        key.parse().unwrap(),
+                        RateLimitCacheEntry {
+                            limits: AgentRateLimits {
+                                windows: vec![window(now, Some(used), 3600, Some(300))],
+                            },
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        },
+    );
+    let capacities = ProviderCapacity::read_all(&runtime, &logins);
+    assert_eq!(capacities.len(), 2);
+    let by_name: BTreeMap<_, _> = capacities
+        .into_iter()
+        .map(|(key, capacity)| {
+            (
+                key.to_string(),
+                capacity.subscription_exhausted_for_model(now, None),
+            )
+        })
+        .collect();
+    assert!(!by_name["claude@default"]);
+    assert!(by_name["claude@work"]);
+}
+
+#[test]
 fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let scope = ProviderAccountScope::sub_provider("alibaba", "international");
@@ -113,7 +164,10 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
         .account_key = None;
     write_cache(&runtime, &cache);
     assert!(ProviderCapacity::read(&runtime, &login_key("qwen")).is_some());
-    assert!(ProviderCapacity::read_all(&runtime, &RoomLoginSet::native()).contains_key("qwen"));
+    assert!(
+        ProviderCapacity::read_all(&runtime, &RoomLoginSet::native())
+            .contains_key(&login_key("qwen"))
+    );
 }
 
 #[test]

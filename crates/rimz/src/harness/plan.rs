@@ -42,7 +42,10 @@ impl LaunchAvailability {
             &runtime.shared_provider_spending_path(),
         );
         let mut result = Self {
-            capacities: ProviderCapacity::read_all(runtime, &logins),
+            capacities: ProviderCapacity::read_all(runtime, &logins)
+                .into_iter()
+                .map(|(key, capacity)| (key.kind, capacity))
+                .collect(),
             logged_out: Default::default(),
             daily_caps: Default::default(),
             model_pins: config.models.clone(),
