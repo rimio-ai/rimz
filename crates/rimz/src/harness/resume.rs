@@ -2356,9 +2356,17 @@ pub fn inspect_team_hold(agents: &[AgentState], checkout: &Path) -> Option<TeamH
 
 /// Inspect the team holding a channel before a fresh launch.
 pub fn inspect_channel_hold(agents: &[AgentState], channel: &str) -> Option<TeamHold> {
-    inspect_hold(agents, None, |agent| {
+    let hold = inspect_hold(agents, None, |agent| {
         agent.channel().as_deref() == Some(channel)
-    })
+    })?;
+    if hold.reason == TeamHoldReason::LiveMember {
+        return Some(hold);
+    }
+    // A board names no team: it holds this channel only while the channel's
+    // team is also the newest team at that checkout.
+    inspect_team_hold(agents, &hold.checkout)
+        .is_some_and(|checkout_hold| checkout_hold.team == hold.team)
+        .then_some(hold)
 }
 
 fn inspect_hold(
