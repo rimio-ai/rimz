@@ -428,6 +428,105 @@ fn parse_trigger_rejects_conflicting_fields() {
 }
 
 #[test]
+fn wildcard_matches_require_present_keys_and_preserve_exact_filters() {
+    use signal::SignalResolution::{Deliver, Ignore};
+    for (selector, matches, payload, expected) in [
+        (
+            "pr.conflicted",
+            vec![("branch", "*")],
+            serde_json::json!({"branch":"feature"}),
+            Deliver,
+        ),
+        (
+            "pr.conflicted",
+            vec![("branch", "*")],
+            serde_json::json!({"branch":42}),
+            Deliver,
+        ),
+        (
+            "pr.conflicted",
+            vec![("branch", "*")],
+            serde_json::json!({"branch":null}),
+            Deliver,
+        ),
+        (
+            "pr.conflicted",
+            vec![("branch", "*")],
+            serde_json::json!({}),
+            Ignore,
+        ),
+        (
+            "pr.conflicted",
+            vec![("branch", "feat/*")],
+            serde_json::json!({"branch":"feat/x"}),
+            Ignore,
+        ),
+        (
+            "pr.conflicted",
+            vec![("branch", "feat/*")],
+            serde_json::json!({"branch":"feat/*"}),
+            Deliver,
+        ),
+        (
+            "team.stage",
+            vec![("team", "*"), ("to", "Done")],
+            serde_json::json!({"team":"a", "instance":"a#one", "to":"Done"}),
+            Deliver,
+        ),
+        (
+            "team.stage",
+            vec![("team", "*"), ("to", "Done")],
+            serde_json::json!({"team":"b", "instance":"b#two", "to":"Done"}),
+            Deliver,
+        ),
+        (
+            "team.stage",
+            vec![("team", "*"), ("to", "Done")],
+            serde_json::json!({"team":"a", "to":"Review"}),
+            Ignore,
+        ),
+        (
+            "team.stage",
+            vec![("team", "*"), ("to", "Done")],
+            serde_json::json!({"team":"a"}),
+            Ignore,
+        ),
+    ] {
+        let trigger = Trigger::Signal {
+            selector: selector.parse().unwrap(),
+            matches: matches
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                .collect(),
+        };
+        let signal = signal::Signal {
+            name: selector.parse().unwrap(),
+            payload: payload.as_object().unwrap().clone(),
+            source: crate::store::event::SignalSource::Cli,
+            watch: None,
+        };
+        assert_eq!(trigger.resolve("task", &signal), expected, "{payload}");
+    }
+    let wildcard = Trigger::Signal {
+        selector: "pr.conflicted".parse().unwrap(),
+        matches: std::collections::BTreeMap::from([("branch".to_owned(), "*".to_owned())]),
+    };
+    assert_eq!(wildcard.describe(), "on pr.conflicted [branch=*]");
+}
+
+#[test]
+fn signal_match_values_reject_blanks_but_accept_wildcards() {
+    for value in ["", " \t"] {
+        let matches = std::collections::BTreeMap::from([("branch".to_owned(), value.to_owned())]);
+        let err = parse_signal_selector("task", "pr.conflicted", Some(&matches)).unwrap_err();
+        assert!(err.to_string().contains("task"));
+        assert!(err.to_string().contains("branch"));
+    }
+    let matches = std::collections::BTreeMap::from([("branch".to_owned(), "*".to_owned())]);
+    assert!(parse_signal_selector("task", "pr.conflicted", Some(&matches)).is_ok());
+}
+
+#[test]
 fn triggers_match_names_and_top_level_payload_values() {
     let signal = signal::Signal {
         name: "ci.failed".parse().unwrap(),

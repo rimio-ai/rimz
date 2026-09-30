@@ -363,7 +363,8 @@ path = "crates/rimz/src/harness"
 # `message --wait` claims the answer its printed reply came from through the run report ledger.
 # Exec resolves model postures and reports checked assist appends (+2).
 # Worktree producers share best-effort in-process signal append and fire.
-surface-budget = 588
+# Signal matching, scope presentation and definition validation share the wildcard predicate.
+surface-budget = 589
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
