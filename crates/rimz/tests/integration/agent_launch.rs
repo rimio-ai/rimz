@@ -2117,6 +2117,210 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
 
 #[cfg(unix)]
 #[test]
+fn resume_exec_waits_for_turn_started_before_self_cleanup() {
+    use notify::Watcher as _;
+    use std::time::{Duration, Instant};
+
+    // Like run::WaitResolutionWatch, this needs open notifications, which kqueue lacks.
+    if !cfg!(target_os = "linux") {
+        tracing::warn!("skipping: observing the wrapper's run reads requires Linux inotify");
+        return;
+    }
+    let env = Env::new();
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let kind = AgentKind::new_unchecked("codex");
+    let session_id = AgentSessionId::from("sess-resumed");
+    let observe = |name, signal| {
+        let observation = AgentLifecycleObservation::new(Some(session_id.clone()), signal);
+        store
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: kind.clone(),
+                event_name: name,
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+        observation
+    };
+    observe("SessionStart", LifecycleSignal::Registered);
+    observe("SessionEnd", LifecycleSignal::Ended);
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "finished task".into(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some(session_id.clone());
+    run.subagent = true;
+    run.status = rimz::store::run::RunStatus::Completed;
+    run.joined_at = Some(jiff::Timestamp::now());
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    // No natural provider exit may masquerade as the wrapper's self-cleanup.
+    std::fs::write(shim_dir.join("codex"), "#!/bin/sh\nexec sleep 300\n").unwrap();
+    std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
+        .unwrap();
+    let mut resume = ExecRequest {
+        isolation_default: None,
+        kind: kind.clone(),
+        action: ExecAction::Resume {
+            session_id: session_id.to_string(),
+            extra_args: Vec::new(),
+        },
+        system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
+        team_prompt: None,
+        skills: None,
+        allowed_tools: None,
+        provider_account: ProviderAccountState::Unbound,
+        run_id: Some(run.run_id.clone()),
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: true,
+        subagent: true,
+        identity: ExecIdentity::default(),
+    };
+    resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
+    let mut wrapper = env
+        .rimz()
+        .args(exec_args(&env, &resume))
+        .args([
+            "--root",
+            env.project_root.to_str().unwrap(),
+            "--mux",
+            "zellij",
+        ])
+        .env("SHELL", "/definitely/not/a/shell")
+        .env("PATH", path_with_front(&shim_dir))
+        .env("ZELLIJ_PANE_ID", "4")
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while rimz::harness::run::load(store.paths(), &run.run_id)
+        .unwrap()
+        .provider_pid
+        .is_none()
+    {
+        assert!(Instant::now() < deadline, "provider was not recorded");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let (tx, reads) = std::sync::mpsc::channel();
+    let mut watcher = notify::recommended_watcher(tx).unwrap();
+    watcher
+        .watch(&store.paths().runs_dir, notify::RecursiveMode::NonRecursive)
+        .unwrap();
+    let run_file = store.paths().runs_dir.join(format!("{}.json", run.run_id));
+    // After provider registration there is at most one setup read. Without the hold, the first poll and exit settlement add only four reads (no parent/report fleet).
+    // Six opens therefore prove repeated live monitor polls, not just spawn or teardown.
+    let mut opens = 0;
+    while opens < 6 && wrapper.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "wrapper did not poll the terminal run"
+        );
+        match reads.recv_timeout(Duration::from_millis(50)) {
+            Ok(event) => {
+                let event = event.unwrap();
+                if matches!(
+                    event.kind,
+                    notify::EventKind::Access(notify::event::AccessKind::Open(_))
+                ) && event.paths.contains(&run_file)
+                {
+                    opens += 1;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("run watcher disconnected: {error}"),
+        }
+    }
+    drop(watcher);
+
+    let started = observe(
+        "TurnStarted",
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    rimz::harness::run::record_lifecycle(
+        store.paths(),
+        &run.run_id,
+        kind.as_str(),
+        &started,
+        None,
+        || None,
+    )
+    .unwrap();
+    let reopened = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(reopened.status, rimz::store::run::RunStatus::Running);
+    assert_eq!(reopened.follow_ups, run.follow_ups + 1);
+    let ended = observe(
+        "TurnEnded",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    rimz::harness::run::record_lifecycle(
+        store.paths(),
+        &run.run_id,
+        kind.as_str(),
+        &ended,
+        None,
+        || None,
+    )
+    .unwrap();
+    rimz::harness::run::report::join_and_settle_digest(
+        &store,
+        &workspace.session_name,
+        &run.run_id,
+        None,
+        "test parent received answer",
+    )
+    .unwrap();
+    while wrapper.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "wrapper did not self-clean up after completion"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let lifecycle = store
+        .read_events()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.kind() {
+            EventKind::AgentLifecycle(payload)
+                if payload.observation.agent_id.as_ref() == Some(&session_id) =>
+            {
+                payload.event_name
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let resumed = lifecycle
+        .iter()
+        .position(|name| name == "rimz.agent-resumed")
+        .unwrap();
+    assert_eq!(
+        &lifecycle[resumed..],
+        [
+            "rimz.agent-resumed",
+            "TurnStarted",
+            "TurnEnded",
+            "rimz.agent-ended"
+        ],
+        "self-cleanup must wait for the resumed child's TurnStarted"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn shell_rc_env_reaches_the_spawned_agent() {
     let env = Env::new();
     let shell = write_fake_login_shell(
