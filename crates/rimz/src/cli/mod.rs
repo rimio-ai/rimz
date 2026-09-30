@@ -17,6 +17,7 @@ mod daemon;
 mod doctor;
 mod events;
 mod first_run;
+mod folder_trust;
 mod gc;
 mod help;
 mod hooks;

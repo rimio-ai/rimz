@@ -109,6 +109,7 @@ An install without `AGENT` handles agents one at a time and stops at the first f
 
 ```sh
 rimz trust [status|grant|revoke] [--json]
+rimz trust grant --agents [KIND,...] [--json]
 ```
 
 A repository's `.rimz/config.toml` can declare agents, profiles, teams, loop tasks, env, and accounts, and each of those can run a command. RimZ hashes every command-running field into the executable surface and applies the project config only while this machine holds a grant for that exact hash. The list of hashed fields is in [security and trust](../../guide/security.md#project-trust). Trust is per project root, as resolved from the current directory or [`--root`](../cli.md#global-flags).
@@ -116,10 +117,18 @@ A repository's `.rimz/config.toml` can declare agents, profiles, teams, loop tas
 | Verb | What it does |
 | --- | --- |
 | `status` (the default) | Reads only. Re-hashes the live config and prints the state. |
-| `grant` | Pins the current hash and surface on this machine, and clears a declined `rimz start` trust prompt. When it replaces a grant for a different hash, it prints the surface diff. With no project config it writes nothing and prints `no project config`. |
-| `revoke` | Deletes the grant, leaving the project `untrusted` (or `no project config`). |
+| `grant` | Pins the current hash and surface on this machine, and clears declined project and folder-trust birth prompts. When it replaces a grant for a different hash, it prints the surface diff. With no project config it creates no project grant and prints `no project config`; agent folder trust can still be granted. |
+| `revoke` | Deletes the project grant, leaving the project `untrusted` (or `no project config`). Does not modify agent configuration or revoke provider folder trust. |
 
-All three exit 0 whatever the state, and 1 when the config or the grant record cannot be read or parsed. `--json` works on each verb.
+All three exit 0 whatever the state, and 1 when configuration or a grant record cannot be read or parsed. An agent grant also exits 1 if a requested kind is unknown or undetected, or a write fails; it attempts the remaining selected kinds first. `--json` works on each verb; previews, questions, and grant notices go to stderr.
+
+### Agent folder trust
+
+Every report adds an `agents:` section for detected Codex and Claude binaries, using this room's account for each kind or the provider's native default outside a room. `decided` means the provider will not ask its folder-trust question; `undecided` includes a fix. JSON adds `agents`, with `kind`, `login`, and `state`; undecided rows also carry `key`, `path`, and `fix`.
+
+After the project grant, `rimz trust grant` on a terminal shows proposed provider-file diffs and asks `Also trust this folder for <kinds>?`, default No. Without a terminal it only prints the command to grant; provider files stay untouched. `--agents` explicitly authorizes writes without a question: bare `--agents` selects all undecided kinds, while `--agents codex,claude` or repeated `--agents` selects named kinds. The diffs still print before writes. Already-decided named kinds are left unchanged. Any grant clears the workspace's remembered folder-trust decline.
+
+The grant covers the main repository root, including its worktrees, and only the room's selected account for each provider. Outside Git, the provider's folder rules apply. An unreadable or malformed file is not overwritten; the fix names what to repair. A provider file changed since the preview causes a refusal to overwrite it. Undo a provider grant in that provider's configuration; `rimz trust revoke` only controls RimZ project config. See [folder trust for agents](../../guide/security.md#folder-trust-for-agents) for what these grants enable.
 
 ### Trust states
 
@@ -136,7 +145,7 @@ A trust-gated command refused in an `untrusted` or `stale` project names the fix
 
 ### Status output
 
-A `stale` report ends with the surface diff: one line per changed field, `+` added, `-` removed, `~` changed, with the granted value under `-` and the live value under `+`. Array items are numbered, so `tasks[0]` is the first task in name order.
+A `stale` report includes the surface diff: one line per changed field, `+` added, `-` removed, `~` changed, with the granted value under `-` and the live value under `+`. Array items are numbered, so `tasks[0]` is the first task in name order. This excerpt shows the project-trust portion; the `agents:` section follows it.
 
 ```console
 $ rimz trust
@@ -164,6 +173,7 @@ The hash and grant lines appear only when they have a value. `--json` prints one
 | `current_hash` | `sha256:<hex>` of the live surface, or `null` with no config |
 | `granted_hash`, `granted_at` | The grant's hash and RFC 3339 time, or `null` with no grant |
 | `surface_diff` | `null`, or an array of `{kind, path, granted, current}` where `kind` is `added`, `removed`, or `changed`, `path` is an array of segments, and `granted` or `current` is omitted when that side has no value |
+| `agents` | Folder-trust rows: `kind`, `login`, `state` (`decided` or `undecided`); undecided rows add `key`, `path`, and `fix` |
 
 `surface_diff` is set on `status` for a `stale` project, and on `grant` when the grant replaced one with a different hash.
 

@@ -46,6 +46,48 @@ fn empty_project_reports_no_config() {
 }
 
 #[test]
+fn folder_trust_grant_clears_dismissal_even_without_project_config() {
+    let project = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let path = project_record_path(
+        home.path(),
+        &WorkspaceId::from_project_root(project.path()),
+        "folder-trust-prompt.toml",
+    );
+    write_bytes_atomically(
+        &path,
+        b"dismissed_kinds = ['codex']\ndismissed_at = '2026-01-01T00:00:00Z'\n",
+    )
+    .unwrap();
+    grant_with_roots(project.path(), home.path()).unwrap();
+    assert!(!path.exists());
+}
+
+#[test]
+fn folder_trust_dismissals_accumulate_kinds_and_grant_clears_them() {
+    let project = project_with("[[hooks]]\nevent = 'PreToolUse'\ncommand = 'rimz hooks claude'\n");
+    let home = tempdir().unwrap();
+    assert!(read_folder_trust_dismissal(project.path(), home.path()).is_empty());
+    write_folder_trust_dismissal(project.path(), home.path(), &["codex".to_owned()]).unwrap();
+    assert_eq!(
+        read_folder_trust_dismissal(project.path(), home.path()),
+        ["codex"]
+    );
+    write_folder_trust_dismissal(
+        project.path(),
+        home.path(),
+        &["claude".to_owned(), "codex".to_owned()],
+    )
+    .unwrap();
+    assert_eq!(
+        read_folder_trust_dismissal(project.path(), home.path()),
+        ["claude", "codex"]
+    );
+    grant_with_roots(project.path(), home.path()).unwrap();
+    assert!(read_folder_trust_dismissal(project.path(), home.path()).is_empty());
+}
+
+#[test]
 fn fresh_config_reports_untrusted() {
     let dir = project_with("[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n");
     let config = tempdir().expect("config root");

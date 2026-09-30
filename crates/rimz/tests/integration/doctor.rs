@@ -21,6 +21,35 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+#[test]
+fn doctor_reports_folder_trust_without_writing() {
+    let env = Env::new();
+    let bin = crate::common::write_env_dump_shim(&env, "codex");
+    let config = env.home_root.join("codex.toml");
+    std::fs::write(&config, "").unwrap();
+    let output = env
+        .rimz()
+        .args(["doctor", "--json"])
+        .env("PATH", &bin)
+        .env("RIMZ_CODEX_CONFIG", &config)
+        .output()
+        .unwrap();
+    let report = doctor_json(&output);
+    let row = &report["folder_trust"]["ready"]["rows"][0];
+    assert_eq!(row["kind"], "codex");
+    assert_eq!(row["login"], "default");
+    assert_eq!(row["state"], "undecided");
+    assert!(
+        row["fix"]
+            .as_str()
+            .unwrap()
+            .contains("rimz trust grant --agents codex")
+    );
+    assert_eq!(std::fs::read_to_string(config).unwrap(), "");
+    let output = env.rimz().arg("doctor").env("PATH", &bin).output().unwrap();
+    assert!(String::from_utf8_lossy(&output.stdout).contains("FOLDER TRUST"));
+}
+
 fn inject_lifecycle(
     env: &Env,
     agent_kind: &str,

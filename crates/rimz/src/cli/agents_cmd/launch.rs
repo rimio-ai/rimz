@@ -574,6 +574,22 @@ fn preflight_cell(
         &workspace.worktree_root,
         (isolation == rimz::config::Isolation::Host).then_some(runtime),
     )?;
+    let logins = rimz::agents::RoomLoginSet::for_runtime(runtime);
+    if let Some(login) = logins.login(cell.kind.as_str())
+        && let Some(rimz::agents::FolderTrust::Undecided(gap)) = adapter.folder_trust(
+            &workspace.worktree_root,
+            Some(workspace.launch_repo_root()),
+            &logins.env(&login),
+        )
+    {
+        writeln!(
+            crate::cli::render::err(),
+            "rimz: {} has no trust decision for `{}`; it will stop at its folder-trust prompt in the pane; {}",
+            cell.kind,
+            gap.key.display(),
+            gap.fix(cell.kind.as_str())
+        )?;
+    }
     Ok(())
 }
 

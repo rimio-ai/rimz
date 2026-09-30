@@ -95,7 +95,7 @@ A project puts credentials in `[[agents]]` env, so `CompiledAgentProcess` and `A
 
 ## Storage
 
-Both records are per-machine, under `~/.rimz/trust/<workspace_id>/`, and written with atomic temp-plus-rename through [`disk::atomic::write_bytes_atomically`](../../../crates/rimz/src/disk/atomic.rs).
+Trust records are per-machine, under `~/.rimz/trust/<workspace_id>/`, and written with atomic temp-plus-rename through [`disk::atomic::write_bytes_atomically`](../../../crates/rimz/src/disk/atomic.rs).
 
 `trust.toml` is the grant record:
 
@@ -109,6 +109,10 @@ granted_at   = "2026-05-23T12:34:56Z"
 `surface_json` is the canonical JSON the hash was computed over, kept so a stale grant can report what drifted. A record without `surface_json` fails to parse; there is no hash-only fallback. [`granted_roots`](../../../crates/rimz/src/trust.rs) scans these records to discover roots that have ever been granted, and callers still re-check each root's live state before running anything.
 
 `birth-prompt.toml` records a declined [birth prompt](#granting-trust): `dismissed_hash` and `dismissed_at`. The prompt stays suppressed while the live hash equals `dismissed_hash`, and a grant deletes the file.
+
+`folder-trust-prompt.toml` separately records `dismissed_kinds` and `dismissed_at`. Only an attended folder-trust decline writes it; later declines merge kind names, so a new undecided kind gets an offer without reopening old declines. Any `rimz trust grant`, including a project without config, clears it; an accepted birth offer clears it too. Missing or malformed dismissal data is treated as no dismissal: it can cause another offer but never a grant. The record is owned by `crates/rimz/src/trust.rs::dismiss_folder_trust_prompt`, `crates/rimz/src/trust.rs::dismissed_folder_trust_kinds`, and `crates/rimz/src/trust.rs::clear_folder_trust_dismissal`.
+
+Provider-file previews and writes remain in the agents capability layer. Start asks after the remote-control start gate and account resolution, before room birth. Doctor and trust resolve the recorded account selection, falling back to native defaults without a record. Interactive agents and teams pass through `crates/rimz/src/cli/agents_cmd/launch.rs::preflight_cell`, which warns without refusing. Supervised preflight retains the adapter's headless predicate, so Claude's interactive gap never blocks its headless runs. The shared CLI file-diff renderer preserves the hooks install preview shape. Writes check preview freshness before atomic replacement; that is not an atomic compare-and-swap against concurrent upstream writers.
 
 ## The surface diff
 

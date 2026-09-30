@@ -28,6 +28,7 @@ const CONFIG_REL: &str = ".rimz/config.toml";
 const TRUST_SUBDIR: &str = "trust";
 const TRUST_FILE: &str = "trust.toml";
 const BIRTH_PROMPT_FILE: &str = "birth-prompt.toml";
+const FOLDER_TRUST_PROMPT_FILE: &str = "folder-trust-prompt.toml";
 const HASH_PREFIX: &str = "sha256:";
 
 #[derive(Debug, thiserror::Error)]
@@ -240,6 +241,74 @@ pub fn dismiss_birth_prompt_offer(project_root: &Path, offer: &BirthPromptOffer)
     dismiss_birth_prompt_offer_with_roots(project_root, &rimz_home(), offer)
 }
 
+#[derive(Serialize, Deserialize)]
+struct FolderTrustDismissal {
+    dismissed_kinds: Vec<String>,
+    dismissed_at: Timestamp,
+}
+
+/// Provider kinds whose folder-trust birth offer the user declined.
+pub fn dismissed_folder_trust_kinds(project_root: &Path) -> Vec<String> {
+    read_folder_trust_dismissal(project_root, &rimz_home())
+}
+
+fn read_folder_trust_dismissal(project_root: &Path, config_root: &Path) -> Vec<String> {
+    let path = project_record_path(
+        config_root,
+        &WorkspaceId::from_project_root(project_root),
+        FOLDER_TRUST_PROMPT_FILE,
+    );
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str::<FolderTrustDismissal>(&text).ok())
+        .map_or_else(Vec::new, |record| record.dismissed_kinds)
+}
+
+/// Remember an attended decline without suppressing newly detected kinds.
+pub fn dismiss_folder_trust_prompt(project_root: &Path, kinds: &[String]) -> Result<()> {
+    write_folder_trust_dismissal(project_root, &rimz_home(), kinds)
+}
+
+fn write_folder_trust_dismissal(
+    project_root: &Path,
+    config_root: &Path,
+    kinds: &[String],
+) -> Result<()> {
+    let mut dismissed_kinds = read_folder_trust_dismissal(project_root, config_root);
+    dismissed_kinds.extend_from_slice(kinds);
+    dismissed_kinds.sort();
+    dismissed_kinds.dedup();
+    let record = FolderTrustDismissal {
+        dismissed_kinds,
+        dismissed_at: Timestamp::now(),
+    };
+    let path = project_record_path(
+        config_root,
+        &WorkspaceId::from_project_root(project_root),
+        FOLDER_TRUST_PROMPT_FILE,
+    );
+    write_bytes_atomically(&path, toml::to_string_pretty(&record)?.as_bytes())?;
+    Ok(())
+}
+
+/// Re-open the folder-trust birth offer after an explicit trust grant.
+pub fn clear_folder_trust_dismissal(project_root: &Path) -> Result<()> {
+    remove_folder_trust_dismissal(project_root, &rimz_home())
+}
+
+fn remove_folder_trust_dismissal(project_root: &Path, config_root: &Path) -> Result<()> {
+    let path = project_record_path(
+        config_root,
+        &WorkspaceId::from_project_root(project_root),
+        FOLDER_TRUST_PROMPT_FILE,
+    );
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(TrustErr::Io { path, source }),
+    }
+}
+
 /// Project roots with a durable trust grant on this machine.
 ///
 /// Callers still re-evaluate each root's current trust state before executing
@@ -323,6 +392,7 @@ pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
 }
 
 pub(crate) fn grant_with_roots(project_root: &Path, config_root: &Path) -> Result<TrustReport> {
+    remove_folder_trust_dismissal(project_root, config_root)?;
     let workspace_id = WorkspaceId::from_project_root(project_root);
     let config_path = project_root.join(CONFIG_REL);
     let record_path = trust_record_path(config_root, &workspace_id);
