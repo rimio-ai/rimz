@@ -68,7 +68,7 @@ impl Settled {
 pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
     index: &AgentProjectionIndex<'_>,
-    provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
+    provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
     exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     now: Timestamp,
     stalled_after_secs: u32,
@@ -132,8 +132,10 @@ pub(super) fn project_display_status(
             turn_started_at,
         )
         .map(|error| (error, effective_turn_error_class(error)));
-        let window_spent = rate_limit_kinds.spent.contains(row_name.as_str());
-        let window_reset = rate_limit_kinds.reset.contains(row_name.as_str());
+        let window_spent =
+            source_agent.is_some_and(|state| rate_limit_kinds.spent.contains(&state.login_key()));
+        let window_reset =
+            source_agent.is_some_and(|state| rate_limit_kinds.reset.contains(&state.login_key()));
         let Settled {
             status: projected,
             turn_error_label,
@@ -174,12 +176,12 @@ pub(super) fn project_display_status(
 
 #[derive(Default)]
 struct RateLimitKindSummary {
-    spent: BTreeSet<AgentKind>,
-    reset: BTreeSet<AgentKind>,
+    spent: BTreeSet<crate::ids::LoginKey>,
+    reset: BTreeSet<crate::ids::LoginKey>,
 }
 
 fn rate_limit_window_kinds(
-    provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
+    provider_capacities: &BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
     now: Timestamp,
 ) -> RateLimitKindSummary {
     let mut summary = RateLimitKindSummary::default();

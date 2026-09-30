@@ -205,7 +205,7 @@ pub(crate) fn resume_parked(
             record.parked_at_activity = agent.last_activity;
             write_park(&path, &record);
         }
-        let capacity = provider_capacities.get(&agent.kind);
+        let capacity = provider_capacities.get(&agent.login_key());
         match resume_park(agent, capacity, now) {
             Some(ResumeArm::RateLimit { deadline }) => {
                 arm_park(&path, ParkKind::RateLimit { deadline }, agent.last_activity);

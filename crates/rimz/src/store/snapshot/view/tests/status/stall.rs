@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn exhausted_default_does_not_pause_a_live_named_login() {
+    let default = agent("claude", "default", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(default_stall_secs() + 60);
+    let mut work = default.clone();
+    work.agent_id = "work".into();
+    work.login = Some("work".parse().unwrap());
+    work = work.in_pane("%2");
+    let snapshot = room(vec![default, work]).with_live_panes_and_provider_capacities(
+        vec![
+            pane("%1", "node", "/repo/main"),
+            pane("%2", "node", "/repo/main"),
+        ],
+        None,
+        &provider_capacity(
+            "claude",
+            vec![RateLimitWindow {
+                used_percentage: Some(100),
+                duration_mins: Some(300),
+                resets_at: Some(epoch() + jiff::SignedDuration::from_secs(3600)),
+                ..Default::default()
+            }],
+        ),
+    );
+    assert_eq!(
+        row(&snapshot, "default").status(),
+        Some(AgentStatus::Paused)
+    );
+    assert_eq!(row(&snapshot, "work").status(), Some(AgentStatus::Failed));
+}
+
+#[test]
 fn repeated_tool_loop_escalates_and_self_clears() {
     let mut session = agent("claude", "live-claude", AgentStatus::Running, 0)
         .worktree("/repo/main")

@@ -19,7 +19,7 @@ use rimz::store::message::{DeliveryGate, MessageSender};
 pub struct BudgetArgs {
     /// New `/day` cap, `+AMOUNT`, or `off`/`clear`; omit to inspect.
     value: Option<String>,
-    /// Target this room's account of one provider instead of the fleet.
+    /// Target a provider's room default or an explicit kind@name instead of the fleet.
     #[arg(long, value_name = "KIND")]
     account: Option<String>,
     /// Lift a park without queueing the configured continue prompt.
@@ -34,7 +34,18 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         .as_deref()
         .map(str::trim)
         .filter(|kind| !kind.is_empty())
-        .map(validate_kind)
+        .map(|raw| {
+            let key = if raw.contains('@') {
+                let key = LoginKey::from_str(raw)?;
+                validate_kind(key.kind.as_str())?;
+                LoginCatalog::from_config(&config.accounts)?.select(&key.kind, &key.name)?;
+                Some(key)
+            } else {
+                validate_kind(raw)?;
+                None
+            };
+            Ok::<_, anyhow::Error>((raw, key))
+        })
         .transpose()?;
     let ctx = Ctx::open(globals)?;
     let workspace = &ctx.workspace;
@@ -42,9 +53,10 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let now = Timestamp::now();
     let scope = match account {
         None => DailyBudgetScope::Fleet,
-        Some(kind) => DailyBudgetScope::Account(
+        Some((_, Some(key))) => DailyBudgetScope::Account(key),
+        Some((kind, None)) => DailyBudgetScope::Account(
             RoomLoginSet::for_runtime(store.runtime_paths())
-                .default_key(kind.as_str())
+                .default_key(kind)
                 .with_context(|| {
                     format!("cannot resolve this room's {kind} account; check `rimz accounts list`")
                 })?,

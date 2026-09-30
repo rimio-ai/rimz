@@ -680,6 +680,48 @@ fn spawn_failure_cancels_only_its_matching_reservation() {
 }
 
 #[test]
+fn redeem_keeps_a_live_old_login_and_cancels_only_after_it_ends() {
+    let now = ts(1_700_000_000);
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let key: LoginKey = "codex@work".parse().unwrap();
+    let accounts = toml::from_str("[codex.work]\nhome = '/srv/work'\n").unwrap();
+    let catalog = crate::agents::LoginCatalog::from_config(&accounts).unwrap();
+    let mut agent = crate::agents::AgentState::seed(
+        key.kind.clone(),
+        "root".into(),
+        crate::agents::AgentStatus::Idle,
+        now,
+    );
+    agent.login = Some(key.name.clone());
+    let logins = crate::agents::RoomLoginSet::new(
+        Some(Default::default()),
+        Some(catalog),
+        Default::default(),
+    );
+    assert!(reserve_attempt(
+        &runtime,
+        &key,
+        RedeemReason::ExpiryRescue,
+        now,
+        "request"
+    ));
+    let selected = redeem_login(
+        &runtime,
+        &key,
+        "request",
+        &logins.clone().with_agents(&[agent.clone()]),
+    );
+    assert_eq!(selected.map(|login| login.key()), Some(key.clone()));
+    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key)).is_some());
+    agent.ended_at = Some(now);
+    assert!(redeem_login(&runtime, &key, "request", &logins.with_agents(&[agent])).is_none());
+    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key)).is_none());
+}
+
+#[test]
 fn attempted_errors_retain_the_redeem_decision_report() {
     let report = RedeemReport {
         reason: RedeemReason::BlockedGain,

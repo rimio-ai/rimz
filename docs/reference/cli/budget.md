@@ -43,7 +43,7 @@ Any change lifts the park this agent's cap set. When that park had interrupted a
 
 ## Cap the room and accounts
 
-`rimz budget [VALUE]` inspects or changes the room's fleet cap, and `rimz budget --account <KIND> [VALUE]` the cap on this room's account of one provider. Config is the on-switch: the command adjusts a cap that `harness.budget` or `[accounts.budget].<kind>` armed, and refuses to set one that config never switched on.
+`rimz budget [VALUE]` inspects or changes the room's fleet cap, and `rimz budget --account <KIND> [VALUE]` the cap on this room's default account of one provider. Use `--account <KIND>@<NAME>` to target a particular declared login, including one still used by running agents after a room switch. Config is the on-switch: the command adjusts a cap that `harness.budget` or `[accounts.budget].<kind>` armed, and refuses to set one that config never switched on.
 
 ```sh
 rimz budget                        # fleet cap plus every configured account cap
@@ -60,7 +60,7 @@ rimz budget +25 --account claude   # raise this room's Claude account cap
 | `+AMOUNT` | Raise the cap in effect by `AMOUNT`. A cleared or unarmed cap refuses the raise (``cannot raise a cleared or unset fleet budget; set an absolute `/day` cap first``), and `+AMOUNT/day` is refused. |
 | `off`, `clear` | Disable the cap until a later `AMOUNT/day` re-arms it. Editing the config value does not re-arm it. |
 
-An account cap applies to one provider login and sums that login's spend across every room running on it; each room parks only the panes it owns. `--account` resolves the login this room uses for `KIND`, and fails with ``cannot resolve this room's <kind> account; check `rimz accounts list` `` when the room has none.
+An account cap applies to one provider login and sums that login's spend across every room running on it; each room parks only the panes it owns. A bare `KIND` resolves the room's default login, and fails with ``cannot resolve this room's <kind> account; check `rimz accounts list` `` when the room has none. An explicit `KIND@NAME` must exist in the machine's account catalog. Each login has its own ledger, while the configured cap stays per provider kind.
 
 Account caps need authoritative account-level dollar history, which the built-in Claude, Codex, Grok, OpenCode, and Pi adapters provide (the `spend` column of the [wiring matrix](../agent-support.md#the-wiring-matrix) reads ✓), as does a plugin that declares a spend probe. Any other kind in `[accounts.budget]` is refused by config validation and room start. `rimz budget --account KIND` validates only the targeted kind and names the key to remove if it is ineligible; ineligible siblings do not block it or produce warnings.
 

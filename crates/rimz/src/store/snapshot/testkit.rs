@@ -56,7 +56,7 @@ pub(super) fn room_with_agent_panes(agents: Vec<AgentState>) -> SidebarSnapshot 
 
 pub(super) fn room_with_agent_panes_and_capacities(
     mut agents: Vec<AgentState>,
-    provider_capacities: std::collections::BTreeMap<AgentKind, ProviderCapacity>,
+    provider_capacities: std::collections::BTreeMap<crate::ids::LoginKey, ProviderCapacity>,
 ) -> SidebarSnapshot {
     let mut panes = Vec::new();
     for (idx, agent) in agents.iter_mut().enumerate() {
@@ -93,10 +93,10 @@ pub(super) fn room_with_agent_panes_and_capacities(
 pub(super) fn provider_capacity(
     kind: &str,
     windows: Vec<RateLimitWindow>,
-) -> std::collections::BTreeMap<AgentKind, ProviderCapacity> {
+) -> std::collections::BTreeMap<crate::ids::LoginKey, ProviderCapacity> {
     let mut capacities = std::collections::BTreeMap::new();
     capacities.insert(
-        AgentKind::new_unchecked(kind),
+        crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)),
         ProviderCapacity::from_windows(windows),
     );
     capacities

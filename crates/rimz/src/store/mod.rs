@@ -61,6 +61,17 @@ use crate::store::snapshot::SidebarSnapshot;
 
 pub use crate::store::runtime::{RuntimeProjection, RuntimeScope};
 
+/// Room defaults plus the cached live agents' account stamps.
+pub(crate) fn room_logins_in_use(runtime: &RuntimePaths) -> crate::agents::RoomLoginSet {
+    let agents = StatePaths::for_workspace(runtime.workspace_id.clone())
+        .ok()
+        .and_then(|paths| Store::open_existing(paths, runtime.clone()))
+        .and_then(|store| store.snapshot_cached().ok())
+        .map(|snapshot| snapshot.agents)
+        .unwrap_or_default();
+    crate::agents::RoomLoginSet::for_runtime(runtime).with_agents(&agents)
+}
+
 /// High-level handle to a workspace's durable state. Cheap to clone — the
 /// inner state lives behind an `Arc`. Reads here are lock-free; every
 /// mutator (in `writer.rs`) takes the workspace lock for its critical
