@@ -25,7 +25,7 @@ This page maps Claude Code onto RimZ's internal types: which hook carries which 
 
 The grant key is the canonical main root or cwd. Claude never persists a home-directory grant, so that key returns a gap without a writable preview. Missing homes and unreadable, malformed, or non-object JSON also produce actionable gaps rather than silently appearing decided.
 
-The preview sets `projects.<key>.hasTrustDialogAccepted` using a borrowed JSON parser to locate the edited value, preserving all unrelated bytes and key order. It is accepted only after parsing back to the original value with exactly that leaf changed. The same helper inserts remote-control consent. The neutral [`grant_folder_trust`](../../../crates/rimz/src/agents/folder_trust.rs) writer rejects bytes changed since preview and publishes through the durable atomic writer; consent belongs to its caller. A provider write between that freshness check and replacement is not serialized by this API.
+The preview sets `projects.<key>.hasTrustDialogAccepted` using a borrowed JSON parser to locate the edited value, preserving all unrelated bytes and key order. It is accepted only after parsing back to the original value with exactly that leaf changed. The same helper inserts remote-control consent. The neutral [`grant_folder_trust`](../../../crates/rimz/src/agents/folder_trust.rs) writer rejects bytes changed since preview and publishes through the symlink-following provider-file writer; consent belongs to its caller. A provider write between that freshness check and replacement is not serialized by this API.
 
 ## Hooks and lifecycle
 
@@ -146,7 +146,7 @@ Smart and idle compaction append the configured summary brief after `/compact `.
 
 Claude reports Task-tool children through `SubagentStart` and `SubagentStop`. The child's `agent_id` keys its row, and the payload's `session_id` becomes `parent_agent_id`, so the child nests under its parent ([model.md](./model.md#subagents)). The row's `task` is the child's `agent_type`, falling back to `subagent_type` or `description`.
 
-Identity is never guessed. The shared [`resolve_subagent_identity`](../../../crates/rimz/src/agents/mod.rs) requires a child id distinct from the parent id. An event that fails the check is quarantined: it yields no observation and logs at `error!` under `rimz::agent::lifecycle`, and never folds onto or renames the parent's row.
+Identity is never guessed. The shared [`resolve_subagent_identity`](../../../crates/rimz/src/agents/identity.rs) requires a child id distinct from the parent id. An event that fails the check is quarantined: it yields no observation and logs at `error!` under `rimz::agent::lifecycle`, and never folds onto or renames the parent's row.
 
 Claude stamps `agent_id` on every payload fired inside a subagent, and `decode_hook` treats any payload whose `agent_id` differs from its `session_id` as the child's. A backgrounded child's tool events, permission requests, and compaction events therefore fold onto the child row. This boundary matters for attention: a child's tool events folded onto the parent would advance the parent's `last_activity` past `waiting_since` and release its waiting row while the parent is still blocked.
 

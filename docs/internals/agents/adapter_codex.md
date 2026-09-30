@@ -127,7 +127,7 @@ An undecided launch directory stops Codex at its trust screen before the first p
 
 RimZ reads the one resolved config file, not Codex's merged layer stack. Provider passthrough `--cd`/`-C`, `-c` overrides, and launch-specific environment changes are not modeled.
 
-The preview edits TOML through `toml_edit`, preserving existing comments and order, and sets only `projects.<key>.trust_level` to `trusted`. Its key is the main repository root when supplied, otherwise the nearest marker root. The neutral [`grant_folder_trust`](../../../crates/rimz/src/agents/folder_trust.rs) writer compares the current bytes with the preview's original before durable atomic publication. Detection never grants trust; callers own consent. This is a freshness check before replacement, not a filesystem transaction with an upstream process writing concurrently.
+The preview edits TOML through `toml_edit`, preserving existing comments and order, and sets only `projects.<key>.trust_level` to `trusted`. Its key is the main repository root when supplied, otherwise the nearest marker root. The neutral [`grant_folder_trust`](../../../crates/rimz/src/agents/folder_trust.rs) writer compares the current bytes with the preview's original before publication through the symlink-following provider-file writer. Detection never grants trust; callers own consent. This is a freshness check before replacement, not a filesystem transaction with an upstream process writing concurrently.
 
 ## Session registration and launch quirks
 

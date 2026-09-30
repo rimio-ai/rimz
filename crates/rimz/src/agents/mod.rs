@@ -68,8 +68,8 @@ pub(crate) use account::WindowSurplus;
 #[doc(hidden)]
 pub use account::provider_budget_gate;
 pub use account::{
-    AccountUsageIdentity, ManagedLaunchState, PendingRefill, ProviderAccountBinding,
-    ProviderCapacity, RateLimitCacheEntry, RateLimitsCache,
+    AccountUsageIdentity, ManagedLaunchState, ProviderAccountBinding, ProviderCapacity,
+    RateLimitCacheEntry, RateLimitsCache,
 };
 pub use background_shell::{BackgroundShell, BackgroundShellReport};
 pub use capabilities::ManualSkill;
@@ -84,13 +84,13 @@ use context::{ContextObservation, SessionContextRefresh, SubagentObservation};
 use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
 pub use definition::{
-    AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, CompactInstruction,
-    ConcernCoverage, HookCoverage, IntegrationConcern, PermissionMode, PlanLabel,
-    SamePaneSessionPolicy, UserCapability, program_names_kind,
+    AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage,
+    HookCoverage, IntegrationConcern, PermissionMode, PlanLabel, SamePaneSessionPolicy,
+    UserCapability,
 };
 use definition::{
-    CompactCommand, LaunchPermissionArgs, LaunchSpec, PresetMatchers, PromptStyle, SessionCommand,
-    StaticPresetMatcher,
+    CompactCommand, CompactInstruction, LaunchPermissionArgs, LaunchSpec, PresetMatchers,
+    PromptStyle, SessionCommand, StaticPresetMatcher, program_names_kind,
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
 pub use folder_trust::{
@@ -99,18 +99,17 @@ pub use folder_trust::{
 };
 pub use hook_types::{HookOutput, HookReply, HookRouting};
 use identity::{RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity};
+use lifecycle::LifecycleState;
 pub(crate) use lifecycle::step;
 pub use lifecycle::{
     AskKind, CONDITION_CHECKPOINT, DELIVERY_CHECKPOINT, LIFECYCLE_EVENT_VERSION, LifecycleEvent,
-    LifecycleSignal, LifecycleSignalKind, LifecycleState, LifecycleTransition, SignalSet,
-    Transition, TransitionKind, TurnPhase,
+    LifecycleSignal, LifecycleSignalKind, LifecycleTransition, SignalSet, TurnPhase,
 };
 pub use locate::locate_binary;
 use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use login::{
-    BirthLoginErr, LoginCatalog, LoginConfigErr, LoginErr, LoginMismatch, ProviderLogin,
-    RoomLoginErr, RoomLoginSet, ambient_env, default_named_home, room_login, room_logins,
-    session_login_env,
+    BirthLoginErr, LoginCatalog, LoginConfigErr, LoginMismatch, ProviderLogin, RoomLoginErr,
+    RoomLoginSet, ambient_env, room_login, room_logins, session_login_env,
 };
 pub use managed_source::ManagedIntegration;
 pub use observation::{
@@ -122,13 +121,14 @@ pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
 use payload::{CONTROL_TAG_PREFIXES, optional_payload_string, stop_payload_errored};
 pub use payload::{RimzBlock, SanitizedPrompt, peel_rimz_blocks};
 pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};
-pub use pricing::{PriceBook, TokenSplit};
+pub use pricing::PriceBook;
+use pricing::TokenSplit;
 pub use registry::{
     all_definitions, compact_command, definition_by_kind, find_definition, known_kinds,
     spec_by_kind,
 };
 pub(crate) use registry::{resumed_session_id_for_root, resumed_session_id_from_cmdline};
-pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
+pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode};
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, AskDelivery, BudgetPark,
     BudgetScope, BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, OpenAsk, PendingWait,
@@ -139,8 +139,7 @@ pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_de
 use tools::ToolErr;
 pub use tools::definition_model_kind;
 pub(crate) use tools::{ToolSet, definition_defaults, render_tool_args, tools_required};
-use transcript::TranscriptRole;
-pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition};
+use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};
 use transcript_fs::read_transcript_lines;
 use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
 
