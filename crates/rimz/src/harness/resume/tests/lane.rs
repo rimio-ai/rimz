@@ -441,7 +441,14 @@ fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
         crate::harness::launch::ExecAction::Resume { ref session_id, .. }
             if session_id == "closed"
     ));
-    assert_eq!(live_labels.len(), 1);
+    // The CLI prints each label as-is, so it must already carry exactly one `@`.
+    let [label] = live_labels.as_slice() else {
+        panic!("expected one live label, got {live_labels:?}");
+    };
+    assert!(
+        label.starts_with('@') && !label.starts_with("@@"),
+        "{label}"
+    );
 }
 
 #[test]
