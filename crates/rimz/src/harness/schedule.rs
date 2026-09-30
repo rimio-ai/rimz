@@ -154,6 +154,8 @@ pub enum ScheduleErr {
     TriggerConflict { name: String },
     #[error("schedule `{name}` sets `match` without `signal`")]
     MatchWithoutSignal { name: String },
+    #[error("schedule `{name}` has a blank match value for `{key}`")]
+    BlankMatch { name: String, key: String },
     #[error("schedule `{name}` sets `once` without `signal`")]
     OnceWithoutSignal { name: String },
     #[error("schedule `{name}` sets both `watch` and `check`; the watched command is the check")]
@@ -379,10 +381,10 @@ impl Trigger {
             Self::Signal { selector, matches } => {
                 if selector.family() != signal.name.family()
                     || !matches.iter().all(|(key, expected)| {
-                        signal
-                            .payload
-                            .get(key)
-                            .is_some_and(|value| signal::match_value(value) == *expected)
+                        signal.payload.get(key).is_some_and(|value| {
+                            signal::is_match_wildcard(expected)
+                                || signal::match_value(value) == *expected
+                        })
                     })
                 {
                     return Ignore;
@@ -744,6 +746,14 @@ pub fn parse_signal_selector(
     raw: &str,
     matches: Option<&std::collections::BTreeMap<String, String>>,
 ) -> Result<signal::SignalSelector, ScheduleErr> {
+    if let Some((key, _)) =
+        matches.and_then(|matches| matches.iter().find(|(_, value)| value.trim().is_empty()))
+    {
+        return Err(ScheduleErr::BlankMatch {
+            name: name.to_owned(),
+            key: key.clone(),
+        });
+    }
     let selector: signal::SignalSelector = raw.parse().map_err(|_| ScheduleErr::BadSignal {
         name: name.to_owned(),
         value: raw.to_owned(),

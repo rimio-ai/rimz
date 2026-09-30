@@ -244,6 +244,12 @@ pub(super) fn read_wait_tail(path: &Path) -> std::io::Result<String> {
     Ok(output[start..].to_owned())
 }
 
+const MATCH_WILDCARD: &str = "*";
+
+pub(crate) fn is_match_wildcard(value: &str) -> bool {
+    value == MATCH_WILDCARD
+}
+
 pub(super) fn match_value(value: &Value) -> String {
     match value {
         Value::String(value) => value.clone(),
