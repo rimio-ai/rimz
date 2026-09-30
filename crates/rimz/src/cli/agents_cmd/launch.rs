@@ -105,6 +105,7 @@ pub(super) fn launch_layout(
         None
     };
     let FinalizedLaunch {
+        profiles: _,
         resolved,
         preset: _preset,
         warnings,

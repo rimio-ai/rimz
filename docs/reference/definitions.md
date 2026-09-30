@@ -46,11 +46,12 @@ Follow the project's instructions and report what you verified.
 | --- | --- |
 | `name` | Optional public name; defaults to the filename stem. |
 | `description` | Required nonempty, single-line listing description; not inherited. |
-| `agent` | Registered kind or another definition in the same tree. May be omitted when `model` identifies a kind. |
-| `model` | Model alias, provider model ID, or [model tier](../guide/configuration.md#model-tiers). |
+| `agent` | Registered kind (a family preference for tiers) or another definition in the same tree. May be omitted with `tier` or when `model` identifies a kind. |
+| `model` | Concrete model alias or provider model ID. Tier names are refused; use `tier:` instead. |
+| `tier` | [Model tier](../guide/configuration.md#model-tiers): `intern`, `junior`, `senior`, or `principal`. Mutually exclusive with `model`. |
 | `mode` | `ask`, `auto`, `plan`, or `yolo`. |
 | `isolation` | `host` or `sandbox`; overrides machine policy unless `--isolation` is recorded. Inherited through definitions, unavailable on team roles or repository profiles. |
-| `effort` | Provider-specific absolute effort, or `+N` / `-N` steps from a tier cell's default (YAML integer or string). |
+| `effort` | Provider-specific absolute effort (YAML integer or string), or omit for the selected model's default. Relative `+N` / `-N` values are refused. |
 | `auto-compact` | Native compaction window: integer or string token count from `100k` through `1M`, inclusive; no percentages or decimals. |
 | `budget` | Dollar cap as string or number; a string such as `20/day` selects a daily cap. |
 | `model-reminder` | Boolean controlling the model identity in the launch reminder for solo agents and subagents. Defaults on; team members never show model names. |
@@ -64,13 +65,13 @@ Names must match `[A-Za-z0-9_-]+` and be unique across both definition trees. Re
 
 ### Chains and defaults
 
-The tier names `intern`, `junior`, `senior`, and `principal` resolve through the machine [tier table](../guide/configuration.md#model-tiers). They require a chain rooted in `agent: claude` or `agent: codex`, or a concrete ancestor model implying that kind. This root is the preferred family even when an ancestor falls back to another runtime. Resolution tries that family's cell, then the other family's cell, then moves upward through the tiers, never downward. No cell at or above the requested tier is an error. The selected runtime's tools, skills, supported fields, and kind base are checked after resolution.
+The nearest definition setting `tier:`, `model:`, or a registered `agent:` kind decides the runtime. A `tier:` needs no `agent:`. A concrete model listed in the machine [tier table](../guide/configuration.md#model-tiers) has that tier and prefers the exact entry first; membership compares the configured text, so an alias and a full model ID are distinct entries. A model outside the table runs without tier routing. An explicit kind on the deciding definition prefers that family's entries first. Resolution tries the requested tier's remaining entries in list order, then higher tiers with the preferred family first, never lower. Families unable to render the definition's tools, skills, supported fields, or kind base are excluded with reasons reported by `rimz agents validate`. No eligible entry at or above the requested tier is an error.
 
-Tier names and effort shifts inherit verbatim. Each definition resolves its inherited values afresh; a child setting a tier still inherits its parent's absolute effort if present. A relative effort clamps to the selected family's [effort ladder](../guide/configuration.md#model-tiers); without a tier it is an error. An absolute effort overrides the cell default without validation. Project TOML profiles and roles cannot use tier names: define the tiered profile in Markdown or name a concrete model in TOML. For tier selection guidance, see [choosing a model tier](../guide/configuration.md#choosing-a-model-tier).
+`tier` and `model` inherit as one setting: setting either inherits neither. A child still inherits its parent's absolute effort if present; otherwise the chosen model's default applies. Relative effort is refused even when inherited, with the source named. Project TOML profiles and roles cannot set `tier` or tier-named `model`: define the tiered profile in Markdown or name a concrete model in TOML. Project models run exactly, even when listed in the table. For tier selection guidance, see [choosing a model tier](../guide/configuration.md#choosing-a-model-tier).
 
-`agent:` follows only definitions in its own namespace: an agent cannot inherit a subagent or vice versa. The chain must end at a registered kind. Without `agent:`, a recognized model alias, model ID, or prefix determines the kind: Claude's roster and `claude-` prefix, and Codex's roster and `gpt-` prefix. Unknown models need an explicit kind. A model implying a different kind from the chain is an error.
+`agent:` follows only definitions in its own namespace: an agent cannot inherit a subagent or vice versa. Without `agent:`, a recognized model alias, model ID, or prefix determines the kind: Claude's roster and `claude-` prefix, and Codex's roster and `gpt-` prefix. Unknown models use the chain's kind or require `agent:` when none exists. A model implying a different kind from a registered `agent:` in the same definition is an error; a child model may change its ancestor's kind.
 
-Children inherit `model`, `mode`, `isolation`, `effort`, `auto-compact`, `budget`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
+Children inherit `tier` or `model`, `mode`, `isolation`, `effort`, `auto-compact`, `budget`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
 
 Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases `astra`, `sol`, `luna`, and `terra` follow their account catalog's newest family model at fresh launch, subject to effort support; definitions retain the requested alias. Machine [model alias pins](../guide/configuration.md#model-aliases) take precedence. Resume and fork keep the session's recorded model for alias postures. A kind whose adapter declares native auto-compaction support defaults to `258k`; other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model`, `effort`, or `auto-compact` field. Defaults are filled only when supported.
 
@@ -141,7 +142,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `agent` | Required direct definition name. |
 | `role` | Optional handle, defaulting to `agent`; unique within the team. |
 | `owns` | Stages owned by this role; omitted or null means none. |
-| `model`, `mode`, `effort`, `auto-compact`, `budget`, `model-reminder`, `tools`, `allowed-tools`, `subagents`, `skills` | Overrides with the same types as agent fields, including model tiers and relative effort. A tier prefers the selected definition chain's root family. |
+| `tier`, `model`, `mode`, `effort`, `auto-compact`, `budget`, `model-reminder`, `tools`, `allowed-tools`, `subagents`, `skills` | Overrides with the same types and inheritance as agent fields, including mutually exclusive `tier` and `model`, and absolute effort only. |
 | `traits` | Additional traits for this seat's leaf craft. |
 | `signals` | Optional nonempty signal-binding list. |
 | `flip-compact` | Stage-handoff compaction threshold or `off`. |
@@ -215,7 +216,7 @@ The loader collects independent errors rather than stopping at the first file, a
 | Identity | Unsafe, duplicate, reserved, or address-shadowing names; cross-namespace duplicates; team/profile/command collisions. |
 | Required content | Missing or multiline definition/base description, empty kind base, missing team pipeline, roster, stages, or leader. Ordinary definition bodies may be empty. |
 | Resolution | Missing kind inference, unknown or failed parent, cross-namespace inheritance, cycles, excessive shared chain depth, model/kind mismatch, missing kind base, or an unknown/failed seat definition. |
-| Model tiers | Missing or unsupported preferred family, a relative effort without a tier, or no configured cell at or above the requested tier. Fallback-related definition errors identify the selected runtime and model. Configure cells in machine `config.toml`; project TOML cannot set `[tiers]` or tier-valued models. |
+| Model tiers | Both `tier` and `model` set, a tier name in `model`, an unknown tier (with a suggestion), relative effort, or no eligible model at or above the requested tier. Exclusions identify each family's reason. Configure ordered lists in machine `config.toml`; project TOML cannot set `[tiers]`, `tier`, or tier-valued models. |
 | Traits | Invalid names, unreadable fragments, or named traits without a substitution token. |
 | Tools | Required list missing, malformed entry, unsupported kind, unknown Claude native child type, or an argument that cannot be rendered. |
 | Delegation | Empty/unknown child names, delegation on a child, native `Agent` combined with a RimZ child list, or a child reference rejected by final namespace validation. |
@@ -231,7 +232,7 @@ export RIMZ_HOME=$(mktemp -d) RIMZ_AGENTS_HOME=$RIMZ_HOME
 mkdir -p "$RIMZ_HOME/agents"
 printf -- '---\ndescription: Claude base\n---\nBase prompt.\n' > "$RIMZ_HOME/agents/claude.md"
 printf -- '---\ndescription: Codex base\n---\nBase prompt.\n' > "$RIMZ_HOME/agents/codex.md"
-printf -- '---\ndescription: Scratch seat\nagent: claude\nmodel: senior\ntools: [Bash]\n---\n' > "$RIMZ_HOME/agents/scratch.md"
+printf -- '---\ndescription: Scratch seat\nagent: claude\ntier: senior\ntools: [Bash]\n---\n' > "$RIMZ_HOME/agents/scratch.md"
 rimz agents validate
 ```
 

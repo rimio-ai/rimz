@@ -29,7 +29,7 @@ pub(super) fn run(json: bool) -> Result<()> {
         )?;
     }
     let loaded = load(&home, check, &machine);
-    let mut warnings = warnings(&loaded, machine.agents.isolation);
+    let mut warnings = warnings(&loaded, machine.agents.isolation, &machine.tiers);
     warnings.extend(lsp_warnings(&loaded, &machine));
     if json {
         render::json_pretty(&serde_json::json!({
@@ -118,7 +118,11 @@ struct Warning {
     message: String,
 }
 
-fn warnings(loaded: &LoadedDefinitions, machine: Isolation) -> Vec<Warning> {
+fn warnings(
+    loaded: &LoadedDefinitions,
+    machine: Isolation,
+    tiers: &rimz::config::tiers::TierConfig,
+) -> Vec<Warning> {
     let mut warnings = Vec::new();
     for row in &loaded.rows {
         let profiles = if row.namespace == "subagents" {
@@ -129,6 +133,20 @@ fn warnings(loaded: &LoadedDefinitions, machine: Isolation) -> Vec<Warning> {
         let Some(profile) = profiles.0.get(&row.name) else {
             continue;
         };
+        if let (Some(tier), Some(renders)) = (&profile.model_tier, &profile.definition_renders) {
+            for (family, reason) in &renders.exclusions {
+                if let Some((listed_tier, _, model)) =
+                    tiers.entries(tier.tier).find(|(_, kind, _)| kind == family)
+                {
+                    warnings.push(Warning {
+                        path: row.source.clone(),
+                        message: format!(
+                            "`{listed_tier}` lists {model} ({family}), which cannot run this definition: {reason}"
+                        ),
+                    });
+                }
+            }
+        }
         let Some(adapter) = rimz::agents::find_definition(&row.kind) else {
             continue;
         };
@@ -218,6 +236,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tier_exclusions_warn_once_per_definition_and_family() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        for (name, fields) in [
+            ("claude", ""),
+            ("routed", "tier: junior\ntools: []\n"),
+            ("exact", "agent: claude\nmodel: claude-custom\ntools: []\n"),
+        ] {
+            std::fs::write(
+                root.path().join(format!("agents/{name}.md")),
+                format!("---\ndescription: Test\n{fields}---\nBase."),
+            )
+            .unwrap();
+        }
+        let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let warnings = warnings(&loaded, Isolation::Host, &Default::default());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].path.ends_with("routed.md"));
+        assert!(
+            warnings[0]
+                .message
+                .contains("`junior` lists sol (codex), which cannot run this definition:")
+        );
+        assert!(warnings[0].message.contains("codex.md"));
+    }
+
+    #[test]
     fn allowed_tools_warnings_follow_resolved_kind_and_nonempty_rules() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("agents")).unwrap();
@@ -233,7 +279,7 @@ mod tests {
         }
         let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-        let warnings = warnings(&loaded, Isolation::Host);
+        let warnings = warnings(&loaded, Isolation::Host, &Default::default());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].path.ends_with("codex-rules.md"));
         assert_eq!(
@@ -277,7 +323,7 @@ mod tests {
             &Default::default(),
         );
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-        let warnings = warnings(&loaded, Isolation::Sandbox);
+        let warnings = warnings(&loaded, Isolation::Sandbox, &Default::default());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].path.ends_with("host.md"));
         let json = serde_json::to_value(&warnings).unwrap();

@@ -488,42 +488,34 @@ This section works only in a RimZ built with the non-default `sentry` feature, w
 
 ## Model tiers
 
-A model tier lets a definition name the capability it needs rather than a particular model. Bind each tier and family once in `~/.rimz/config.toml`, then rebind a cell when you want all definitions using it to change together. Existing definitions naming a concrete model keep working unchanged. See [choosing a model tier](#choosing-a-model-tier) for the four levels and family guidance.
+A concrete model names what to run; a model tier names the capability the work needs. Set an ordered list once in `~/.rimz/config.toml`, then change that list instead of editing every definition. A model listed in the table also belongs to its tier, but prefers that exact model first. Models outside the table run exactly as named. See [choosing a model tier](#choosing-a-model-tier) for the four levels and family guidance.
 
 These are the defaults; the generated template leaves them commented:
 
 ```toml
-[tiers.principal]
-claude = { model = "fable", effort = "high" }
-
-[tiers.senior]
-claude = { model = "opus", effort = "xhigh" }
-codex = { model = "astra", effort = "xhigh" }
-
-[tiers.junior]
-claude = { model = "sonnet", effort = "xhigh" }
-codex = { model = "sol", effort = "xhigh" }
-
-[tiers.intern]
-claude = { model = "haiku", effort = "xhigh" }
-codex = { model = "luna", effort = "xhigh" }
+[tiers]
+routing = "fallback"
+principal = ["fable"]
+senior = ["opus", "astra"]
+junior = ["sol", "sonnet"]
+intern = ["luna", "haiku"]
 ```
 
-Each cell requires `model`, an alias or provider model ID. Omit `effort` to use that model's RimZ default. A written `[tiers.<tier>]` replaces the whole row: omitting one family leaves that cell empty, and an empty row leaves both empty. Unwritten rows retain their defaults. Only the four tier names and the families `claude` and `codex` are accepted. A recognized model must belong to its cell's family; an unfamiliar model ID uses the family named by the cell.
+List order is preference. A written tier replaces that tier's whole list; `[]` empties it, and unwritten tiers retain their defaults. Entries must be recognized Claude or Codex aliases or full model IDs. Each entry may belong to only one tier; an alias and a full model ID are distinct entries. Aliases resolve at launch through [model alias pins and the account catalog](#model-aliases). Old per-family tables are refused with the replacement list syntax; effort belongs in definitions, not the table.
 
-In an agent or subagent Markdown definition, replace the concrete model with a tier and name its preferred family:
+In an agent or subagent Markdown definition, replace `model:` with `tier:`. An optional `agent:` prefers a family rather than pinning it:
 
 ```yaml
 agent: codex
-model: senior
-effort: -1
+tier: senior
+effort: high
 ```
 
-Resolution tries the preferred family at that tier, then the other family at the same tier, then each higher tier in turn. It never moves down. The default `principal` on a Codex-rooted definition therefore runs Claude. Descendants still prefer Codex, and all tools and skills must be valid for the runtime actually selected. Both runtimes need their usual kind bases when selected.
+Resolution tries the preferred model or family's entries first, then the remaining entries, then higher tiers with the preferred family first. It never moves down. With no preference, `tier: senior` selects Opus; the example above selects Astra. `agent: codex` with `tier: principal` selects Fable. Families missing a kind base or unable to support the definition's tools or skills are excluded; `rimz agents validate` warns with the reason. No eligible model at or above the requested tier is an error.
 
-The optional `effort` shift moves from the selected cell's default, clamping at the ends. Both families step along `low, medium, high, xhigh, max`, the levels every default tier model supports. A cell's effort must be on its family's ladder. Definitions can instead use an absolute effort, passed to the provider unchanged. The [definitions reference](../reference/definitions.md#chains-and-defaults) specifies inheritance and team roles.
+Set an absolute `effort:` or omit it for the chosen model's default. Relative efforts such as `+1` and `-1` are refused. `tier:` and `model:` are mutually exclusive and inherit as one setting: a child setting either replaces both inherited values. The [definitions reference](../reference/definitions.md#chains-and-defaults) specifies inheritance and team roles.
 
-Rebind a model or effort with `rimz config set tiers.senior.claude.model fable` or `rimz config set tiers.senior.claude.effort high`. Editing one field of an unwritten row first preserves that row's defaults; an already-written row keeps its empty cells. Changes apply when definitions are next loaded, including restart and resume within the same runtime family. A restart that would change providers is refused; choose a fresh launch instead. The table is machine-only; project TOML profiles and roles must name concrete models, not tiers.
+Reorder a tier with `rimz config set tiers.junior '["sonnet", "sol"]'`. Inspect the result with `rimz agents profiles` or `rimz agents explain <profile>`; an upward move is marked `fallback` in listings. Override one launch with `--tier senior`, or prefer a listed model with `--model opus`; the two flags conflict. The table is machine-only; project TOML profiles and roles must name concrete models and do not route through the table.
 
 ### Choosing a model tier
 

@@ -49,11 +49,11 @@ rimz subagents wait "$first" "$second"
 | `--keep` | off | Disable automatic completion cleanup and cleanup on parent exit; hold the pane after provider exit. Explicit stop and the run timeout still apply. |
 | `--isolation host\|sandbox` | the parent's recorded override, else the child's profile default, else `agents.isolation` | A sandboxed parent refuses a host override; host defaults clamp to sandbox with a note. |
 | `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
-| `--model`, `--agent`, `--effort`, `--max-turns`, `-- <ARGS>` | from the profile | Override the model, re-base onto another profile or kind, set reasoning effort, cap agentic turns, or append provider argv. |
+| `--model`, `--tier`, `--agent`, `--effort`, `--max-turns`, `-- <ARGS>` | from the profile | Override the concrete model or tier (mutually exclusive), prefer another family or re-base onto another profile or kind, set reasoning effort, cap agentic turns, or append provider argv. |
 
 Run `rimz subagents launch --help` for the exact spellings. The global flags are on the [CLI page](../cli.md#global-flags).
 
-`--model` and the fanout JSON `model` field accept [model tiers with the same per-cell resolution and effort precedence as agents](./agents.md#shared-launch-params).
+`--tier` and the fanout JSON `tier` field select a [model tier with the same resolution and effort precedence as agents](./agents.md#shared-launch-params). `--model` and JSON `model` accept only concrete models; tier names there are refused. Each task may set `tier` or `model`, not both.
 
 The complete launch prompt is capped at 120 KiB (122,880 bytes), counting any instruction text RimZ adds to the prompt for providers without an appended system prompt. `--prompt-file` keeps the brief out of the shell command, but the provider still receives its contents as one argument. An oversized prompt is refused before any run record exists, and the error names the limit; put supporting detail in a file the child is told to read.
 
@@ -100,6 +100,7 @@ JSON
 | `warn` | no | Warning offsets as duration strings (`["6m", "3m"]`); `[]` disables warnings |
 | `grace` | no | Reporting time after the deadline, as a duration string (`"3m"`); `"0s"` kills at the deadline |
 | `model` | no | Model override |
+| `tier` | no | `intern`, `junior`, `senior`, or `principal`; conflicts with `model` |
 | `agent` | no | Re-base onto another profile or kind |
 | `effort` | no | Reasoning effort |
 | `max_turns` | no | Maximum agentic turns |

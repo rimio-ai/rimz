@@ -11,7 +11,8 @@ use crate::config::{Isolation, Profile, PromptSource, SkillName};
 
 use super::frontmatter::AgentFrontmatter;
 use super::{
-    DefinitionCause, DefinitionErr, LoadedDefinitions, Namespace, SkillCheck, frontmatter, traits,
+    DefinitionCause, DefinitionErr, LoadedDefinitions, Namespace, SkillCatalog, SkillCheck,
+    frontmatter, traits,
 };
 
 #[derive(Clone)]
@@ -74,7 +75,7 @@ impl<'a> Resolver<'a> {
         namespace: &'a str,
         [tree, foreign]: [&'a Namespace; 2],
         bases: &'a BTreeSet<String>,
-        skills: SkillCheck<'a>,
+        skills: &'a SkillCatalog<'a>,
         allowed_children: &'a BTreeSet<String>,
         tiers: &'a TierConfig,
     ) -> Self {
@@ -100,7 +101,7 @@ pub(super) struct Resolver<'a> {
     tree: &'a Namespace,
     foreign: &'a Namespace,
     bases: &'a BTreeSet<String>,
-    skills: SkillCheck<'a>,
+    skills: &'a SkillCatalog<'a>,
     allowed_children: &'a BTreeSet<String>,
     tiers: &'a TierConfig,
     resolved: BTreeMap<String, Option<Resolved>>,
@@ -487,7 +488,7 @@ impl Resolver<'_> {
             }
             profile.subagents = Some(names);
         }
-        let skill_check = match self.skills {
+        let skill_check = match self.skills.check {
             SkillCheck::Check {
                 machine_isolation, ..
             } if (!cfg!(target_os = "linux")
@@ -510,6 +511,7 @@ impl Resolver<'_> {
             fm.skills.as_deref(),
             tools.as_ref(),
             skill_check,
+            self.skills,
         )?;
         let defaults = agents::definition_defaults(kind, fm.model.as_deref());
         profile.isolation = fm.isolation;
@@ -630,6 +632,7 @@ pub(super) fn skill_policy(
     listed: Option<&[String]>,
     tools: Option<&ToolSet>,
     check: SkillCheck<'_>,
+    catalog: &SkillCatalog<'_>,
 ) -> Result<Option<Vec<SkillName>>, DefinitionErr> {
     let Some(listed) = listed else {
         return Ok(None);
@@ -643,16 +646,9 @@ pub(super) fn skill_policy(
     let mut skills = Vec::new();
     let definition = agents::find_definition(kind);
     let discovered = match check {
-        SkillCheck::Check { env, library, .. } => Some(
-            agents::skills::enumerate(
-                definition
-                    .and_then(|definition| definition.skills_home(env))
-                    .as_deref(),
-                Some(library),
-                |_| true,
-            )
-            .map_err(|error| DefinitionErr::new(path, error.to_string()))?,
-        ),
+        SkillCheck::Check { .. } => catalog
+            .enumerate(kind)
+            .map_err(|error| DefinitionErr::new(path, error))?,
         SkillCheck::Skip => None,
     };
     for name in names(path, "skills", listed)? {

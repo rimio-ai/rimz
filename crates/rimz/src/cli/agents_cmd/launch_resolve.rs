@@ -17,6 +17,7 @@ use super::LaunchOverrideArgs;
 
 #[derive(Debug)]
 pub(super) struct FinalizedLaunch {
+    pub(super) profiles: rimz::config::ProfilesConfig,
     pub(super) resolved: ResolvedLaunch,
     pub(super) preset: LaunchPreset,
     pub(super) warnings: Vec<LaunchFinalizeWarning>,
@@ -106,6 +107,7 @@ pub(super) fn resolve_finalized_layout(
         },
     )?;
     Ok(FinalizedLaunch {
+        profiles: effective.profiles,
         resolved,
         preset,
         warnings,

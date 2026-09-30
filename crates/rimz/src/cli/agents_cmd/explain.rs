@@ -49,7 +49,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         .transpose()?;
     let machine = cli::machine_config();
     cli::report_unknown_config_keys(&machine)?;
-    let effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
+    let mut effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
     let state = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = rimz::RuntimePaths::for_state(&state)?;
     let channel = cli::current_channel(&workspace);
@@ -109,6 +109,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             false,
         )?;
         warnings.extend(finalized.warnings.iter().map(ToString::to_string));
+        effective.profiles = finalized.profiles;
         let resolved = finalized.resolved;
         let count = resolved.layout.agent_cells().count();
         let cell_count: usize = resolved
@@ -219,6 +220,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         &args,
         &plan,
         &effective,
+        &machine.tiers,
         bwrap.as_deref(),
         warnings,
         action_note,
@@ -270,6 +272,8 @@ struct ExplainReport<'a> {
     overrides: Vec<String>,
     mode: Option<PermissionMode>,
     model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tier: Option<rimz::config::tiers::ModelTier>,
     effort: Option<&'a str>,
     budget: Option<&'a str>,
     skills: SkillsReport<'a>,
@@ -341,6 +345,7 @@ impl<'a> ExplainReport<'a> {
         args: &'a ExplainArgs,
         plan: &'a LaunchPlan,
         effective: &LaunchAgents,
+        tiers: &rimz::config::tiers::TierConfig,
         bwrap: Option<&'a Path>,
         mut warnings: Vec<String>,
         action_note: Option<String>,
@@ -348,6 +353,20 @@ impl<'a> ExplainReport<'a> {
         let process = plan.process();
         let request = &plan.request;
         let params = &request.identity.params;
+        let routed_profile = params
+            .profile
+            .as_ref()
+            .and_then(|name| effective.profiles.0.get(name))
+            .filter(|profile| {
+                profile.definition_renders.as_ref().is_some_and(|renders| {
+                    args.overrides
+                        .agent
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|family| !family.is_empty())
+                        .is_none_or(|family| renders.renders.contains_key(family))
+                })
+            });
         let adapter = rimz::agents::find_definition(request.kind.as_str())
             .expect("compiled agent has an adapter");
         let profile = params.profile.as_deref().map(|name| ProfileReport {
@@ -490,6 +509,26 @@ impl<'a> ExplainReport<'a> {
             ),
             mode: params.mode,
             model: params.model.as_deref(),
+            tier: if args.target.starts_with('@') || routed_profile.is_none() {
+                None
+            } else if let Some(model) = args
+                .overrides
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+            {
+                tiers.tier_for_model(
+                    rimz::agents::definition_model_kind(model).unwrap_or(request.kind.as_str()),
+                    model,
+                )
+            } else {
+                args.overrides.tier.or_else(|| {
+                    routed_profile
+                        .and_then(|profile| profile.model_tier.as_ref())
+                        .map(|provenance| provenance.tier)
+                })
+            },
             effort: params.effort.as_deref(),
             budget: params.budget.as_deref(),
             skills: SkillsReport {
@@ -659,6 +698,15 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
     );
     for (label, value) in [("model", report.model), ("effort", report.effort)] {
         plan.push(label, render::cell(value.unwrap_or("provider default")));
+    }
+    if let Some(tier) = report.tier {
+        plan.push(
+            "tier",
+            render::cell(format!(
+                "{tier} → {}",
+                report.model.unwrap_or("provider default")
+            )),
+        );
     }
     plan.push("budget", render::cell(report.budget.unwrap_or("no cap")));
     plan.push(
