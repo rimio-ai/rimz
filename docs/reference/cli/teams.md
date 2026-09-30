@@ -336,7 +336,7 @@ Memory: /home/me/proj-worktrees/feat-rate-limits/blackboard.md
 
 The report is parked and delivered at the launcher's next turn boundary. The flip receipt adds a `report` line naming the launcher. A flip out of `Done` prints `report   TEAM_REPORT again at the next Done`, and the next `Done` sends a new report.
 
-The seats do not report their own turns, including turns the launcher opens with `rimz message`, and they add nothing to the launcher's fleet report. No report is sent when you launched the team yourself, when the launch had no prompt, when the leader's provider lacks native turn hooks (the launch receipt says so), when the cohort is stopped or ends before `Done`, when the launcher has ended, or when the board is edited to `Done` by hand instead of flipped.
+The seats do not report their own turns, including turns the launcher opens with `rimz message`, and they add nothing to the launcher's fleet report. When every member ends before `Done`, the launcher receives one failure `TEAM_REPORT` with the last board stage and the leader's last response; if the board already reads `Done` at settlement, it receives the completed report instead. No report is sent when you launched the team yourself, when the launch had no prompt, when the leader's provider lacks native turn hooks (the launch receipt says so), after stop, restart, or room recovery settled the run, when the launcher has ended, or when the board is edited to `Done` by hand while the cohort stays live. Resume opens no new run, so a cohort resumed after death settlement reports nothing at its next `Done`.
 
 ## Record an entry on the board
 

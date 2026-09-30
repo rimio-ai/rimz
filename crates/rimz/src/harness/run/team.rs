@@ -1,8 +1,8 @@
 //! The team-long run an agent-launched team keeps on its leader.
 //!
 //! One run per stretch of work: opened by the launch prompt or by a flip out of
-//! `Done`, fed the leader's final message at every turn end, and settled only by
-//! the flip into `Done`, which reports the leader to the launcher.
+//! `Done`, fed the leader's final message at every turn end, and settled by
+//! the flip into `Done` or the cohort's death, reporting the leader to the launcher.
 
 use std::path::Path;
 
@@ -80,19 +80,27 @@ pub fn open_team_run_for(paths: &StatePaths, instance: &str) -> Result<Option<Ru
         .find(|record| !record.status.is_terminal()))
 }
 
-/// Settle the cohort's open team run as completed, stamping the report that
-/// carries it (`report` is `None` when no launcher is left to tell). Returns
-/// `None` when the run had already settled, so a report goes out once per Done.
-pub fn complete_team_run(
+/// Settle the cohort's open run, stamping its report (absent when no launcher is left):
+/// completed, or failed with `failure` as its tail.
+/// Returns `None` when already settled so racing reporters cancel their own message.
+pub fn settle_team_run(
     paths: &StatePaths,
     run_id: &crate::ids::RunId,
     report: Option<&MessageId>,
+    failure: Option<&str>,
 ) -> Result<Option<RunRecord>> {
+    let status = match failure {
+        Some(_) => RunStatus::Failed,
+        None => RunStatus::Completed,
+    };
     let (record, settled) = super::update_record(paths, run_id, |record, now| {
-        if !record.mark_terminal(RunStatus::Completed, now) {
+        if !record.mark_terminal(status, now) {
             return Ok(RecordMutation::Keep(false));
         }
         record.report_message_id = report.cloned();
+        if let Some(failure) = failure {
+            record.failure_tail = Some(failure.into());
+        }
         Ok(RecordMutation::Write(true))
     })?;
     Ok(settled.then_some(record))

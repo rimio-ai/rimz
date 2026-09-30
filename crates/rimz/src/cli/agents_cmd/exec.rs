@@ -997,13 +997,19 @@ impl RunMonitor {
     /// a live sidebar producer. So the parked run repairs its own fleet before
     /// each strand check. The repair is idempotent and its stamp CAS tolerates
     /// a concurrent reporter, so every outcome and error is logged and ignored:
-    /// it never gates the check that follows it. A park that launched nobody
-    /// costs one projection read, since the reporter answers a launcher with no
-    /// members without listing the runs.
+    /// it never gates the check that follows it. The same repair settles ended
+    /// team cohorts before the fleet reporter runs. A park that launched nobody
+    /// costs one projection read per reporter, since each answers a launcher
+    /// with no members or team seats without listing the runs.
     fn repair_digest(&self, context: &RunExecContext, record: &rimz::store::run::RunRecord) {
         let Some(agent_id) = record.agent_id.as_ref() else {
             return;
         };
+        if let Err(error) =
+            super::team_report::settle_ended_teams(&context.workspace, &context.store, agent_id)
+        {
+            tracing::debug!(run_id = %context.run_id, %error, "could not settle a parked run's ended teams");
+        }
         match super::subagent_report::report_fleet(&context.workspace, &context.store, agent_id) {
             Ok(outcome) => {
                 tracing::debug!(run_id = %context.run_id, ?outcome, "repaired a parked run's fleet digest");

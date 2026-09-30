@@ -67,7 +67,7 @@ pub(super) fn report_fleet(
     report_fleet_with_kind(workspace, store, parent_id, None)
 }
 
-fn report_parent<'a>(
+pub(super) fn report_parent<'a>(
     agents: &'a [AgentState],
     parent_id: &AgentSessionId,
     parent_kind: Option<&AgentKind>,
@@ -266,6 +266,11 @@ pub(super) fn report_settled_child(
 pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::Result<()> {
     let ctx = super::Ctx::for_workspace(request.workspace_id, None)
         .context("resolving subagent digest workspace")?;
+    if let Err(error) =
+        super::team_report::settle_ended_teams(&ctx.workspace, &ctx.store, &request.parent_agent_id)
+    {
+        tracing::debug!(%error, "could not settle ended team runs");
+    }
     settle_peer_turns(&ctx.store, &request.parent_agent_id)
         .context("settling abandoned peer turns")?;
     let outcome = report_fleet(&ctx.workspace, &ctx.store, &request.parent_agent_id)

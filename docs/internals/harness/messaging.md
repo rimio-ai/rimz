@@ -382,7 +382,7 @@ Content:
 | `USER_MESSAGE` | A human's `rimz message` | `@user` |
 | `SUBAGENT_REPORT` | The status-only fleet digest when every row is a `rimz subagents` run | `@rimz` |
 | `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
-| `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
+| `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
 | `WAIT` | A timer, command, or clock wait delivery | `@rimz` |
 | `CACHE_KEEPALIVE` | A neutral prompt-cache ping for a sleeping agent ([policy](./loops.md#prompt-cache-keepalive)) | `@rimz` |
 | `SIGNAL` | Every delivery fired by a `Trigger::Signal` row | `@rimz` |
