@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
+use crate::agents::provider_file;
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
     HookUninstallReport, ManagedIntegration, Result, StatusLineChange, agent_config_path,
     read_optional_file,
     settings_json::{self, PendingWrite},
 };
-use crate::disk::atomic;
 
 use super::super::install_report::report_files;
 use super::{
@@ -555,7 +555,7 @@ fn render_statusline_state(original: &Value) -> Result<String> {
 }
 
 fn write_statusline_state(path: &Path, original: &Value) -> Result<()> {
-    atomic::write_bytes_atomically(path, render_statusline_state(original)?.as_bytes())?;
+    provider_file::write_bytes(path, render_statusline_state(original)?.as_bytes())?;
     Ok(())
 }
 

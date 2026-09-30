@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::disk::atomic::{self, AtomicErr};
+use crate::agents::provider_file;
+use crate::disk::atomic::AtomicErr;
 
 const CONSENT_KEY: &str = "remoteDialogSeen";
 const GLOBAL_CONFIG_FILE: &str = ".claude.json";
@@ -136,7 +137,7 @@ pub(crate) fn seed(path: &Path) -> Result<ConsentState, AtomicErr> {
             source,
         })?;
     }
-    atomic::write_bytes_atomically(path, next.as_bytes())?;
+    provider_file::write_bytes(path, next.as_bytes())?;
     Ok(ConsentState::Seeded)
 }
 

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::disk::atomic;
+use super::provider_file;
 
 use super::hook_types::HookEventSpec;
 use super::managed_json_hooks::ManagedJsonHookSpec;
@@ -172,7 +172,7 @@ impl ManagedSource {
         };
         let original = read_optional_file(self.agent, path)?;
         self.refuse_unmarked(path, original.as_deref())?;
-        atomic::write_bytes_atomically(path, source.as_bytes())?;
+        provider_file::write_bytes(path, source.as_bytes())?;
         Ok(HookInstallReport {
             agent: self.agent,
             files: vec![HookInstallFileReport {

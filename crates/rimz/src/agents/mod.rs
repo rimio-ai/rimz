@@ -35,6 +35,7 @@ mod open_ask;
 pub(crate) mod payload;
 pub mod petname;
 pub mod pricing;
+mod provider_file;
 pub(crate) mod question;
 pub mod registry;
 pub mod runtime_control;

@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::agents::provider_file;
 use crate::agents::{
     AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, ManagedIntegration,
     Result, read_optional_file,
 };
-use crate::disk::atomic;
 
 use super::KIMI_HOOKS;
 
@@ -156,7 +156,7 @@ fn render(table: &toml::Table) -> Result<String> {
 }
 
 fn write(path: &Path, table: &toml::Table) -> Result<()> {
-    atomic::write_bytes_atomically(path, render(table)?.as_bytes())?;
+    provider_file::write_bytes(path, render(table)?.as_bytes())?;
     Ok(())
 }
 

@@ -50,6 +50,7 @@ pub(crate) type Result<T> = std::result::Result<T, AtomicErr>;
 /// atomic rename. fsync is applied to the temp file before the rename.
 /// Used by writers (TOML, anything pre-serialised) that own their own
 /// encoding; JSON callers prefer [`write_temp_then_rename`].
+/// Renaming over `path` replaces a symlink with a regular file; resolve the link first to write through it.
 #[must_use = "durability barrier; check the result"]
 pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     replace_whole_file(path, Fsync::Durable, None, |writer, tmp| {

@@ -5,11 +5,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::agents::provider_file;
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
     HookUninstallReport, ManagedIntegration, Result, read_optional_file,
 };
-use crate::disk::atomic;
 
 use super::super::hook_types::HookEventSpec;
 use super::{
@@ -252,7 +252,7 @@ pub(super) fn read_existing_table(path: &Path) -> Result<toml::Table> {
 
 fn write_table(path: &Path, table: &toml::Table) -> Result<()> {
     let text = render_table(table)?;
-    atomic::write_bytes_atomically(path, text.as_bytes())?;
+    provider_file::write_bytes(path, text.as_bytes())?;
     Ok(())
 }
 

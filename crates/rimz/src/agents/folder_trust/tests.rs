@@ -170,7 +170,9 @@ fn grants_refuse_changed_bytes_and_non_grantable_gaps() {
 #[test]
 fn grants_publish_approved_bytes_for_missing_and_existing_files() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("nested/config");
+    let target = dir.path().join("nested/config");
+    let path = dir.path().join("shared-config");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
     for original in [None, Some("first".to_owned())] {
         let candidate = if original.is_none() {
             "first"
@@ -187,6 +189,8 @@ fn grants_publish_approved_bytes_for_missing_and_existing_files() {
         };
         grant_folder_trust(&gap).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), candidate);
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), candidate);
     }
 }
 
