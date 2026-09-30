@@ -4,6 +4,92 @@
 use super::*;
 
 #[test]
+fn team_hold_table() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().to_str().unwrap();
+    let present = team_agent("claude", "present", "lead", path, 10);
+    let ended = AgentState {
+        ended_at: Some(Timestamp::now()),
+        ..present.clone()
+    };
+    let other = AgentState {
+        team: Some("other".into()),
+        ..team_agent("claude", "other", "lead", path, 0)
+    };
+    let ended_other = AgentState {
+        ended_at: Some(Timestamp::now()),
+        ..other.clone()
+    };
+    let live_hold = Some(TeamHold {
+        team: "forge".into(),
+        reason: TeamHoldReason::LiveMember,
+    });
+    let board_hold = Some(TeamHold {
+        team: "forge".into(),
+        reason: TeamHoldReason::BoardStage("Plan".into()),
+    });
+    let cases = [
+        (vec![present.clone()], None, live_hold.clone()),
+        (
+            vec![ended.clone()],
+            Some("Stage: Plan (@planner)"),
+            board_hold,
+        ),
+        (vec![ended.clone()], Some("Stage: Done"), None),
+        (vec![ended.clone()], None, None),
+        (vec![ended.clone()], Some("No stage"), None),
+        (vec![], Some("Stage: Plan"), None),
+        (
+            vec![team_agent("claude", "elsewhere", "lead", "/other", 0)],
+            None,
+            None,
+        ),
+        (
+            vec![present.clone(), ended_other.clone()],
+            Some("Stage: Plan"),
+            live_hold.clone(),
+        ),
+        (
+            vec![AgentState {
+                worktree_path: Some(root.path().join("child/..").display().to_string()),
+                ..present.clone()
+            }],
+            None,
+            live_hold,
+        ),
+        (
+            vec![present, other],
+            None,
+            Some(TeamHold {
+                team: "other".into(),
+                reason: TeamHoldReason::LiveMember,
+            }),
+        ),
+        (
+            vec![ended, ended_other],
+            Some("Stage: Plan"),
+            Some(TeamHold {
+                team: "other".into(),
+                reason: TeamHoldReason::BoardStage("Plan".into()),
+            }),
+        ),
+    ];
+    for (index, (agents, board, expected)) in cases.into_iter().enumerate() {
+        let board_path = root.path().join("blackboard.md");
+        if let Some(board) = board {
+            std::fs::write(&board_path, board).unwrap();
+        } else if board_path.exists() {
+            std::fs::remove_file(&board_path).unwrap();
+        }
+        assert_eq!(
+            inspect_team_hold(&agents, root.path()),
+            expected,
+            "case {index}"
+        );
+    }
+}
+
+#[test]
 fn team_restore_routes_fresh_seats_before_planning() {
     let root = tempfile::tempdir().unwrap();
     let (teams, mut profiles, commands) = team_configs();
