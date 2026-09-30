@@ -102,6 +102,7 @@ Validation rejects the shapes that cannot mean anything:
 | --- | --- |
 | `TriggerConflict` | two trigger families on one row |
 | `MatchWithoutSignal`, `OnceWithoutSignal` | `match` or `once` with no `signal` |
+| `BlankMatch` | a match value empty after trimming; the error names the task and key |
 | `WatchWithCheck` | `watch` with a separate `check` guard |
 | `BadSignal`, `BadWatch` | an unparseable selector or an empty watch command, file path, or pattern |
 | `BadCheckWatch` | an invalid or zero check interval, or check polarity `any` |
@@ -117,7 +118,7 @@ A `Watch` row is always one-shot, and a `Signal` row is one-shot only with `once
 | `Watch` | the internal `wait.<task-name>` signal for this row | never | everything else, so one watcher's completion never fires another wait |
 | `Schedule` | never | never | always; clocks are not signals |
 
-A `match` key compares a JSON string payload value to the raw text and any other JSON value to its compact encoding.
+A `match` key compares a JSON string payload value to the raw text and any other JSON value to its compact encoding. The whole value `"*"` instead requires that the payload carries the top-level key, including when its value is `null`. Missing keys never match. Other values remain exact: `feat/*` is literal, not a glob. Thus `from = "*"` on `team.stage` excludes the first flip, whose payload omits `from`.
 
 ## Schedule shapes
 
@@ -477,7 +478,7 @@ Pending waits also feed `harness::owed::owed_wake` through `TurnWaitView::load`,
 
 A team role declares standing subscriptions for its own seat. Each `[[agents.teams.<name>.roles]]` entry has a `signals` array of inline tables with `signal`, an optional string-valued `match`, and an optional `prompt`; the containing role is the receiver. `prepare_team` validates the selectors and explicit other-agent matches for `agent.*`. Each role's complete ordered binding list enters the executable trust hash, and an empty list leaves the hash unchanged, so moving bindings between roles needs a fresh grant.
 
-A fresh `launch_layout` refuses a team binding scoped implicitly to the root checkout's CI or PR state, before any pane or worktree side effect, and names the fixes: an explicit branch or path match, or `-w <worktree>`. A launch from a linked worktree passes, a `--from-pr` launch skips the check, and resume does not apply it.
+A fresh `launch_layout` refuses a team binding scoped implicitly to the root checkout's CI or PR state, before any pane or worktree side effect, and names the fixes: an explicit branch or path match, `branch = "*"` for every checkout RimZ watches, or `-w <worktree>`. A launch from a linked worktree passes, a `--from-pr` launch skips the check, and resume does not apply it. `team = "*"` or `instance = "*"` disables the cohort default; on `team.*` this includes the four lifecycle signals as well as stage flips. Neither `handle = "*"` nor `session = "*"` satisfies the explicit other-agent requirement for `agent.*`.
 
 After a committed lifecycle `Registered`, the hook calls `team_stage::react_to_lifecycle`, which reads the strict effective trusted config and calls `schedule::team::arm_member` for a root team member, never a subagent. It uses the member's adopted session identity, role, channel, and worktree, so launch, resume, restart, and role re-add share one registration path. All binding specs are built before anything persists. The rows carry `TaskEntry.team = "<team>#<channel>"`, target the member's exact kind and session, and deliver at the next `done` boundary.
 
