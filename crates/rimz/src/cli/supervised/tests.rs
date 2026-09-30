@@ -305,6 +305,66 @@ fn subagent_launch_waits_for_wrapper_pane_bind_but_caps_the_wait() {
     ));
 }
 
+#[test]
+fn resumed_registration_satisfies_the_bind_wait() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let store = rimz::Store::open(
+        StatePaths::under(workspace.clone(), dir.path()).unwrap(),
+        RuntimePaths::under(workspace.clone(), &dir.path().join("rt")).unwrap(),
+    )
+    .unwrap();
+    let kind = AgentKind::new_unchecked("codex");
+    let id = AgentSessionId::from("child");
+    let launch_id = AgentSessionId::from("launch_child");
+    let stamp = |name, signal| {
+        store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                workspace.clone(),
+                "room",
+                kind.as_str(),
+                name,
+                &AgentLifecycleObservation::new(Some(id.clone()), signal),
+            ))
+            .unwrap();
+    };
+    stamp("SessionStart", LifecycleSignal::Registered);
+    stamp("SessionEnd", LifecycleSignal::Ended);
+    store
+        .attach_agent_pane(
+            &kind,
+            &id,
+            Some(&launch_id),
+            "room",
+            &PaneId::parse("tmux:%2").unwrap(),
+            rimz::store::runtime::current_process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "child",
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+    let bound = || {
+        super::pane::launch_has_bound_pane(
+            &store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .unwrap()
+                .agents,
+            &kind,
+            &launch_id,
+        )
+    };
+    assert!(!bound());
+    stamp("rimz.agent-resumed", LifecycleSignal::Registered);
+    assert!(super::pane::wait_for_subagent_pane_bind_with(
+        bound,
+        Duration::ZERO,
+        Duration::ZERO
+    ));
+}
+
 fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
     SupervisedRunRequest {
         spec: "codex".to_owned(),

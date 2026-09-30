@@ -344,6 +344,87 @@ fn attach_moves_only_pane_and_runtime_owner() {
 }
 
 #[test]
+fn resumed_registration_revives_the_attached_card() {
+    for kind in ["codex", "claude"] {
+        let prior = reduce_agent_states(&[
+            raw_lifecycle_at(
+                kind,
+                1,
+                json!({
+                    "agent_id": "child", "agent_name": "otter",
+                    "signal": { "signal": "registered" },
+                    "parent_agent_id": "parent", "parent_agent_kind": kind,
+                    "launch_depth": 1,
+                }),
+            ),
+            raw_lifecycle_at(
+                kind,
+                2,
+                json!({
+                    "agent_id": "child", "signal": { "signal": "ended" },
+                }),
+            ),
+        ])
+        .pop()
+        .unwrap();
+        assert!(prior.ended_at.is_some());
+        assert_eq!(prior.parent_agent_id.as_deref(), Some("parent"));
+        assert_eq!(prior.launch_depth, Some(1));
+        let mut events = vec![
+            attach_event(
+                kind,
+                "child",
+                Some("launch-resumed"),
+                "tmux:%4",
+                Some(84),
+                84,
+            ),
+            EventEnvelope::agent_lifecycle(
+                workspace(),
+                "session",
+                kind,
+                "rimz.agent-resumed",
+                &crate::agents::AgentLifecycleObservation::new(
+                    Some("child".into()),
+                    crate::agents::LifecycleSignal::Registered,
+                ),
+            ),
+        ];
+        for provider_hook in [false, true] {
+            if provider_hook {
+                events.push(EventEnvelope::agent_lifecycle(
+                    workspace(),
+                    "session",
+                    kind,
+                    "SessionStart",
+                    &crate::agents::AgentLifecycleObservation::new(
+                        Some("child".into()),
+                        crate::agents::LifecycleSignal::Registered,
+                    ),
+                ));
+            }
+            let resumed = reduce_agent_states_seeded(
+                BTreeMap::from([((prior.kind.clone(), prior.agent_id.clone()), prior.clone())]),
+                &events,
+            )
+            .into_values()
+            .next()
+            .unwrap();
+            assert_eq!(resumed.ended_at, None);
+            assert_eq!(resumed.status, AgentStatus::Idle);
+            assert_eq!(resumed.launch_id.as_deref(), Some("launch-resumed"));
+            assert_eq!(resumed.pane.as_ref().unwrap().pane_id.as_str(), "tmux:%4");
+            assert_eq!(resumed.runtime_owner.as_ref().unwrap().pid, 84);
+            assert_eq!(resumed.parent_agent_id, prior.parent_agent_id);
+            assert_eq!(resumed.parent_agent_kind, prior.parent_agent_kind);
+            assert_eq!(resumed.launch_depth, prior.launch_depth);
+            assert_eq!(resumed.name, prior.name);
+            assert_eq!(resumed.registered_at, prior.registered_at);
+        }
+    }
+}
+
+#[test]
 fn legacy_attach_for_unknown_session_mints_no_card() {
     assert!(
         reduce_agent_states(&[attach_event(

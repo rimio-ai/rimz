@@ -1920,79 +1920,140 @@ fn profile_default_exec_stamps_effective_isolation_not_an_override() {
 #[cfg(unix)]
 #[test]
 fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
-    let env = Env::new();
-    let shim_dir = write_env_dump_shim(&env, "codex");
     let kind = AgentKind::new_unchecked("codex");
-    let session_id = AgentSessionId::from("sess-resumed");
-    let workspace = env.resolve_workspace(&env.project_root);
-    env.store()
-        .append_event(&EventEnvelope::agent_lifecycle(
-            workspace.workspace_id,
-            &workspace.session_name,
-            kind.as_str(),
-            "SessionStart",
-            &AgentLifecycleObservation::new(Some(session_id.clone()), LifecycleSignal::Registered),
-        ))
-        .expect("seed resumed session");
+    // (wrapped, subagent): a direct-exec resume, a wrapped root resume, a wrapped subagent resume.
+    for (wrapped, subagent) in [(false, false), (true, false), (true, true)] {
+        let env = Env::new();
+        let shim_dir = write_env_dump_shim(&env, "codex");
+        let session_id = AgentSessionId::from("sess-resumed");
+        let workspace = env.resolve_workspace(&env.project_root);
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                kind.as_str(),
+                "SessionStart",
+                &AgentLifecycleObservation::new(
+                    Some(session_id.clone()),
+                    LifecycleSignal::Registered,
+                ),
+            ))
+            .expect("seed resumed session");
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id,
+                &workspace.session_name,
+                kind.as_str(),
+                "SessionEnd",
+                &AgentLifecycleObservation::new(Some(session_id.clone()), LifecycleSignal::Ended),
+            ))
+            .unwrap();
 
-    let dump = env.home_root.join("codex-resume.env");
-    let mut resume = ExecRequest {
-        isolation_default: None,
-        kind: kind.clone(),
-        action: ExecAction::Resume {
-            session_id: session_id.to_string(),
-            extra_args: Vec::new(),
-        },
-        system_prompt_file: None,
-        append_system_prompt_files: Vec::new(),
-        team_prompt: None,
-        skills: None,
-        allowed_tools: None,
-        provider_account: ProviderAccountState::Unbound,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: false,
-        exit_on_run_completion: false,
-        subagent: false,
-        identity: ExecIdentity::default(),
-    };
-    resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
-    env.rimz()
-        .args(exec_args(&env, &resume))
-        .arg("--root")
-        .arg(&env.project_root)
-        .env("SHELL", "/definitely/not/a/shell")
-        .env("PATH", path_with_front(&shim_dir))
-        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .env("TMUX_PANE", "%4")
-        .assert_success_within_timeout("codex resume attach");
+        let dump = env.home_root.join("codex-resume.env");
+        let mut resume = ExecRequest {
+            isolation_default: None,
+            kind: kind.clone(),
+            action: ExecAction::Resume {
+                session_id: session_id.to_string(),
+                extra_args: Vec::new(),
+            },
+            system_prompt_file: None,
+            append_system_prompt_files: Vec::new(),
+            team_prompt: None,
+            skills: None,
+            allowed_tools: None,
+            provider_account: ProviderAccountState::Unbound,
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: false,
+            exit_on_run_completion: false,
+            subagent: false,
+            identity: ExecIdentity::default(),
+        };
+        resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
+        resume.close_pane_on_exit = wrapped && !subagent;
+        if subagent {
+            let mut run = rimz::store::run::RunRecord::new(
+                env.workspace_id.clone(),
+                kind.clone(),
+                rimz::agents::PermissionMode::Auto,
+                "finished task".into(),
+                env.project_root.clone(),
+            );
+            run.agent_id = Some(session_id.clone());
+            run.subagent = true;
+            run.status = rimz::store::run::RunStatus::Completed;
+            run.joined_at = Some(jiff::Timestamp::now());
+            rimz::harness::run::create(env.store().paths(), &run).unwrap();
+            resume.run_id = Some(run.run_id);
+            resume.subagent = true;
+        }
+        env.rimz()
+            .args(exec_args(&env, &resume))
+            .arg("--root")
+            .arg(&env.project_root)
+            .env("SHELL", "/definitely/not/a/shell")
+            .env("PATH", path_with_front(&shim_dir))
+            .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+            .env("TMUX_PANE", "%4")
+            .assert_success_within_timeout("codex resume attach");
 
-    let store = env.store();
-    let attaches = store
-        .read_events()
-        .expect("read events")
-        .into_iter()
-        .filter_map(|event| match event.kind() {
-            EventKind::AgentAttach(payload) => Some(payload),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(attaches.len(), 1);
-    let attach = &attaches[0];
-    assert_eq!(attach.agent_id, session_id);
-    assert_eq!(attach.isolation, Some(rimz::config::Isolation::Host));
-    assert_eq!(
-        attach.effective_isolation,
-        Some(rimz::config::Isolation::Host)
-    );
-    assert_eq!(attach.pane_id.as_str(), "tmux:%4");
-    assert_eq!(attach.pane_pid, Some(attach.runtime_owner.pid));
-    assert_ne!(attach.runtime_owner.pid, 0);
-    assert_eq!(
-        attach.runtime_owner.kind,
-        rimz::pane::RuntimeOwnerKind::Agent
-    );
-    assert_eq!(attach.runtime_owner.subject_id, "sess-resumed");
+        let store = env.store();
+        let events = store.read_events().unwrap();
+        let lifecycle = events
+            .iter()
+            .skip(2)
+            .filter_map(|event| match event.kind() {
+                EventKind::AgentAttach(_) => Some("attach".to_owned()),
+                EventKind::AgentLifecycle(payload) => {
+                    let observation = payload.observation;
+                    assert_eq!(observation.agent_id.as_ref(), Some(&session_id));
+                    match payload.event_name.as_deref() {
+                        Some("rimz.agent-resumed") => {
+                            assert_eq!(observation.signal, LifecycleSignal::Registered)
+                        }
+                        Some("rimz.agent-ended") => {
+                            assert_eq!(observation.signal, LifecycleSignal::Ended)
+                        }
+                        _ => panic!("unexpected lifecycle event"),
+                    }
+                    payload.event_name
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let expected = match (wrapped, subagent) {
+            (true, true) => vec!["attach", "attach", "rimz.agent-resumed", "rimz.agent-ended"],
+            (true, false) => vec!["attach", "attach", "rimz.agent-ended"],
+            (false, _) => vec!["attach"],
+        };
+        assert_eq!(lifecycle, expected);
+        let attaches = store
+            .read_events()
+            .expect("read events")
+            .into_iter()
+            .filter_map(|event| match event.kind() {
+                EventKind::AgentAttach(payload) => Some(payload),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(attaches.len(), if wrapped { 2 } else { 1 });
+        let attach = &attaches[0];
+        assert_eq!(attach.agent_id, session_id);
+        assert_eq!(attach.isolation, Some(rimz::config::Isolation::Host));
+        assert_eq!(
+            attach.effective_isolation,
+            Some(rimz::config::Isolation::Host)
+        );
+        assert_eq!(attach.pane_id.as_str(), "tmux:%4");
+        assert_eq!(attach.pane_pid, Some(attach.runtime_owner.pid));
+        assert_ne!(attach.runtime_owner.pid, 0);
+        assert_eq!(
+            attach.runtime_owner.kind,
+            rimz::pane::RuntimeOwnerKind::Agent
+        );
+        assert_eq!(attach.runtime_owner.subject_id, "sess-resumed");
+    }
 
     for action in [
         ExecAction::Launch {
@@ -2039,6 +2100,17 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
                 .expect("read non-resume events")
                 .iter()
                 .all(|event| !matches!(event.kind(), EventKind::AgentAttach(_)))
+        );
+        let is_resume_stamp = |event: &EventEnvelope| {
+            matches!(event.kind(), EventKind::AgentLifecycle(payload)
+                if payload.event_name.as_deref() == Some("rimz.agent-resumed"))
+        };
+        assert!(
+            !env.store()
+                .read_events()
+                .unwrap()
+                .iter()
+                .any(is_resume_stamp)
         );
     }
 }
