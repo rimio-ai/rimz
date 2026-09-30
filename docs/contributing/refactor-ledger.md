@@ -145,7 +145,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/auto_gc` | holds; landed pass-23b | `25faa1bf6` | 30 | reached from the binary. |
 | `harness/fleet` | holds; landed pass-23b | `25faa1bf6` | 30 | reached from the binary. |
 | `harness/idle_compact` | holds; landed pass-26c | `38b487c52` | 30 | reached from the binary; reads the cache margin from `config`. |
-| `harness/board` | holds | `38b487c52` | 30 | `BoardErr`, `BoardSection` and `RecordReceipt` floored by `record`, which the teams CLI calls. |
+| `harness/board` | holds | `38b487c52` | 30 | `BoardErr` and `BoardSection` floored by `record`, which the teams CLI calls. |
 | `harness/cache_keepalive` | holds | `38b487c52` | 30 | request type stays `pub` for the integration crate. |
 | `harness/deadline` | holds; landed pass-26c | `38b487c52` | 30 | rung selection `pub(super)` for `run`; stop channel private. |
 | `harness/launch_env` | holds | `38b487c52` | 30 | already `pub(super)`; `LaunchEnv` floored by the launch reminders render. |
