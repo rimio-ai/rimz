@@ -615,7 +615,7 @@ impl Env {
         self.runtime_paths_for(&self.state_path_for(&self.project_root))
     }
 
-    pub fn publish_accounts(&self, accounts: &rimz::sidebar::refresh::AccountsCache) {
+    pub fn publish_accounts(&self, accounts: &rimz::agents::account::AccountsCache) {
         rimz::disk::atomic::write_temp_then_rename_cache(
             &self.runtime_paths().shared_accounts_path(),
             accounts,

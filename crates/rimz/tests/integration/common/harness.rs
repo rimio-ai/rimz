@@ -70,12 +70,12 @@ impl Harness {
                 ..Default::default()
             },
         );
-        let accounts = rimz::sidebar::refresh::AccountsCache {
+        let accounts = rimz::agents::account::AccountsCache {
             logins: rimz::agents::known_kinds()
                 .map(|kind| {
                     (
                         rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
-                        rimz::sidebar::refresh::ProviderRecord {
+                        rimz::agents::account::ProviderRecord {
                             probed_at_ms: now_ms,
                             ok: false,
                             account: None,

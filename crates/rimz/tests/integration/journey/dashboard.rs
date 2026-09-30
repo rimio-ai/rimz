@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use jiff::{SignedDuration, Timestamp};
 use rimz::agents::AgentAccount;
+use rimz::agents::account::{AccountsCache, ProviderRecord};
 use rimz::agents::spending::{SpendTally, SpendWindow, Spending};
 use rimz::ids::MuxName;
-use rimz::sidebar::refresh::{AccountsCache, ProviderRecord};
 use rimz::utils::time::unix_now_ms;
 use serde_json::json;
 

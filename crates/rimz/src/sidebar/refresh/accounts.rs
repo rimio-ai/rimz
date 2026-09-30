@@ -3,10 +3,8 @@ use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
-
 use crate::RuntimePaths;
-use crate::agents::account::AccountProbe;
+use crate::agents::account::{AccountProbe, AccountsCache, ProviderRecord, read_accounts_cache};
 use crate::agents::{AgentAccount, ProviderLogin, RoomLoginSet};
 use crate::ids::LoginKey;
 use crate::sidebar::timing::{ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL};
@@ -56,41 +54,6 @@ struct ProbeBatch {
     results: Vec<ProviderProbeResult>,
     worker_count: usize,
     total_ms: u64,
-}
-
-/// The producer's published account probe state, keyed by login so one
-/// transient failure retries without expiring every account's successful read.
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AccountsCache {
-    pub logins: BTreeMap<LoginKey, ProviderRecord>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProviderRecord {
-    pub probed_at_ms: u64,
-    /// A failed probe retries on `ACCOUNTS_RETRY_TTL`; a confident result rides
-    /// `ACCOUNTS_TTL`.
-    pub ok: bool,
-    /// Probed account facts; `None` is an authoritative logged-out result.
-    pub account: Option<AgentAccount>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderStatus {
-    LoggedIn,
-    LoggedOut,
-    Unavailable,
-}
-
-impl ProviderStatus {
-    pub fn from_record(record: Option<&ProviderRecord>) -> Self {
-        match record {
-            Some(record) if record.ok && record.account.is_some() => Self::LoggedIn,
-            Some(record) if record.ok => Self::LoggedOut,
-            Some(_) | None => Self::Unavailable,
-        }
-    }
 }
 
 /// Resolve provider accounts for the producer behind a process-wide
@@ -576,12 +539,6 @@ fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
             crate::agents::find_definition(agent.kind.as_str()).map(|_| agent.kind.to_string())
         })
         .collect()
-}
-
-/// Read the producer's published account cache, or an empty cache on a cold,
-/// corrupt, or old-schema file. Read-only and fork-free.
-fn read_accounts_cache(path: &Path) -> AccountsCache {
-    crate::disk::atomic::read_json_cache(path)
 }
 
 /// Publish the probed account cache atomically so readers never observe a

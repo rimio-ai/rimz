@@ -113,12 +113,12 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     let state = fixture.env.state_path_for(&fixture.env.project_root);
     let runtime = fixture.env.runtime_paths();
     let now_ms = unix_now_ms();
-    let accounts = rimz::sidebar::refresh::AccountsCache {
+    let accounts = rimz::agents::account::AccountsCache {
         logins: rimz::agents::known_kinds()
             .map(|kind| {
                 (
                     rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
-                    rimz::sidebar::refresh::ProviderRecord {
+                    rimz::agents::account::ProviderRecord {
                         probed_at_ms: now_ms,
                         ok: true,
                         account: None,
@@ -273,12 +273,12 @@ fn directory_room_without_git_backed_rows_forks_no_git() {
     let now_ms = unix_now_ms();
     fixture
         .env
-        .publish_accounts(&rimz::sidebar::refresh::AccountsCache {
+        .publish_accounts(&rimz::agents::account::AccountsCache {
             logins: rimz::agents::known_kinds()
                 .map(|kind| {
                     (
                         rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
-                        rimz::sidebar::refresh::ProviderRecord {
+                        rimz::agents::account::ProviderRecord {
                             probed_at_ms: now_ms,
                             ok: true,
                             account: None,

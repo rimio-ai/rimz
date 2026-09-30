@@ -135,7 +135,8 @@ upward-dependencies = ["address"]
 # LoginCatalog::select_machine names the [accounts.use] source for birth, accounts list, and doctor (+1).
 # Account-scoped model alias resolution shares request, catalog source, outcome, and cache membership with launch orchestration (+10).
 # Folder trust shares decisions, previews, guarded writes and room-login rows (+8).
-surface-budget = 933
+# Account-cache types, status projection, and reader moved from sidebar for launch consumers.
+surface-budget = 938
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -477,7 +478,9 @@ surface-budget = 52
 [[module]]
 path = "crates/rimz/src/sidebar"
 # accounts::cached_account supplies published account facts to both idle-compaction consumers without probing.
-surface-budget = 233
+# Account-cache types and status projection now belong to agents.
+# Consumers import those types directly; the refresh re-exports are gone.
+surface-budget = 226
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -3229,7 +3232,7 @@ reason = "Renderer loop-state and state tests assert the clear stamp; narrowing 
 
 [[verdict]]
 kind = "item"
-key = "sidebar::refresh::accounts::read_accounts_cache"
+key = "agents::account::read_accounts_cache"
 reason = "Not a collapsible pass-through: it pins T for disk::atomic::read_json_cache, which no call site can infer from a later field read, and it pairs with write_accounts_cache's failure logging. Collapsing removes three lines and adds a turbofish at every reader (pass 23c)."
 
 [[verdict]]
