@@ -96,7 +96,7 @@ pub struct FolderTrustRow {
 pub fn folder_trust_rows(
     logins: &RoomLoginSet,
     cwd: &Path,
-    repo_root: Option<&Path>,
+    repo_root: &Path,
 ) -> Vec<FolderTrustRow> {
     rows_with_locator(logins, cwd, repo_root, super::locate_binary)
 }
@@ -104,7 +104,7 @@ pub fn folder_trust_rows(
 fn rows_with_locator(
     logins: &RoomLoginSet,
     cwd: &Path,
-    repo_root: Option<&Path>,
+    repo_root: &Path,
     locate: impl Fn(&super::AgentSpec) -> Option<PathBuf>,
 ) -> Vec<FolderTrustRow> {
     super::all_definitions()
@@ -112,7 +112,7 @@ fn rows_with_locator(
             locate(adapter.spec())?;
             let kind = adapter.spec().kind;
             let login = logins.login(kind)?;
-            let trust = adapter.folder_trust(cwd, repo_root, &logins.env(&login))?;
+            let trust = adapter.folder_trust(cwd, Some(repo_root), &logins.env(&login))?;
             Some(FolderTrustRow {
                 kind,
                 login: login.name().clone(),

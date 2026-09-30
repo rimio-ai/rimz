@@ -821,7 +821,7 @@ fn prompt_folder_trust(
     let rows = rimz::agents::folder_trust_rows(
         logins,
         &workspace.worktree_root,
-        Some(workspace.launch_repo_root()),
+        workspace.launch_repo_root(),
     );
     let FolderTrustOffer {
         rows,
