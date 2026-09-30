@@ -109,6 +109,7 @@ pub struct ProjectTasks {
 /// profiles/teams. Repo entries are inert until trust is granted, and a repo
 /// profile may inherit only repo profiles or built-in kinds so the hashed
 /// executable surface stays closed.
+#[derive(Clone)]
 pub struct LaunchAgents {
     pub env_reminder: bool,
     pub allow_routine_rimz: bool,
@@ -122,6 +123,149 @@ pub struct LaunchAgents {
     repo_sources: AgentSpecSources,
     state: TrustState,
     config_path: PathBuf,
+}
+
+impl LaunchAgents {
+    /// Overlay a fresh launch without changing the memoized machine profiles.
+    /// Returns whether rendered definitions consumed the family request. Finalization applies model overrides only to cells without a routed stamp.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "launch target and CLI routing inputs stay explicit"
+    )]
+    pub fn route<R>(
+        &mut self,
+        table: &super::tiers::TierConfig,
+        scope: ProfileScope,
+        launched_profile: Option<&str>,
+        tier: Option<super::tiers::ModelTier>,
+        model: Option<&str>,
+        family: Option<&str>,
+        mut unavailable: impl FnMut(&str, &str) -> Option<R>,
+    ) -> std::result::Result<bool, super::tiers::TierError> {
+        let model = model.map(str::trim).filter(|value| !value.is_empty());
+        let family = family.map(str::trim).filter(|value| !value.is_empty());
+        if tier.is_some() && model.is_some() {
+            return Err(super::tiers::TierError(
+                "choose one of --tier and --model".to_owned(),
+            ));
+        }
+        if let Some(tier) = model.and_then(super::tiers::ModelTier::from_model) {
+            return Err(super::tiers::TierError(format!("use `--tier {tier}`")));
+        }
+        let model_kind = model.and_then(crate::agents::definition_model_kind);
+        let model_tier = model_kind
+            .zip(model)
+            .and_then(|(kind, model)| table.tier_for_model(kind, model));
+        let targets = launched_profile
+            .map(str::trim)
+            .map(|name| {
+                let (name, _) = agents_spec::split_inline_role(
+                    name,
+                    self.profiles_for(scope),
+                    &CommandsConfig::default(),
+                );
+                let role = self.teams.role_spec(name);
+                let team = self
+                    .teams
+                    .0
+                    .get(name)
+                    .or_else(|| role.and_then(|(team, _)| self.teams.0.get(team)));
+                if let Some(team) = team {
+                    team.roles
+                        .iter()
+                        .filter(|binding| role.is_none_or(|(_, role)| binding.role == role))
+                        .map(|binding| {
+                            (
+                                ProfileScope::Agents,
+                                binding.profile.clone(),
+                                binding.role.clone(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![(scope, name.to_owned(), name.to_owned())]
+                }
+            })
+            .unwrap_or_default();
+        if tier.is_some() {
+            if targets.is_empty() {
+                return Err(super::tiers::TierError("--tier needs Markdown definitions; model tiers resolve in Markdown definitions".to_owned()));
+            }
+            for (scope, name, role) in &targets {
+                if !self
+                    .profiles_for(*scope)
+                    .0
+                    .get(name)
+                    .is_some_and(|profile| profile.definition_renders.is_some())
+                {
+                    return Err(super::tiers::TierError(format!(
+                        "{role}: --tier needs Markdown definitions; model tiers resolve in Markdown definitions"
+                    )));
+                }
+            }
+        }
+        let mut consumed = false;
+        for (profile_scope, profiles) in [
+            (ProfileScope::Agents, &mut self.profiles),
+            (ProfileScope::Subagents, &mut self.subagent_profiles),
+        ] {
+            for (name, profile) in &mut profiles.0 {
+                let Some(mut renders) = profile.definition_renders.clone() else {
+                    continue;
+                };
+                let targeted = targets
+                    .iter()
+                    .any(|(scope, target, _)| *scope == profile_scope && target == name);
+                if targeted && model.is_some() && model_tier.is_none() {
+                    profile.model_tier = None;
+                    continue;
+                }
+                let requested = targeted
+                    .then_some(tier.or(model_tier))
+                    .flatten()
+                    .or_else(|| profile.model_tier.as_ref().map(|route| route.tier));
+                let Some(requested) = requested else {
+                    continue;
+                };
+                let preference =
+                    if targeted && (tier.is_some() || model.is_some() || family.is_some()) {
+                        super::tiers::TierPreference {
+                            model: model.map(str::to_owned),
+                            family: model_kind
+                                .or(family)
+                                .map(str::to_owned)
+                                .or_else(|| renders.preference.family.clone()),
+                        }
+                    } else {
+                        renders.preference.clone()
+                    };
+                let pick = table.walk(
+                    requested,
+                    &preference,
+                    |kind| renders.renders.contains_key(kind),
+                    &mut unavailable,
+                )?;
+                // Only successful complete family renders are eligible for the walk.
+                let mut selected = renders.renders[&pick.kind].clone();
+                selected.effort = renders.effort.clone().or_else(|| {
+                    crate::agents::definition_defaults(&pick.kind, Some(&pick.model))
+                        .effort
+                        .map(str::to_owned)
+                });
+                selected.model = Some(pick.model);
+                consumed |=
+                    targeted && family.is_none_or(|family| renders.renders.contains_key(family));
+                renders.preference = preference;
+                selected.model_tier = Some(super::tiers::TierProvenance {
+                    tier: requested,
+                    fell_back: pick.used_tier.is_some(),
+                });
+                selected.definition_renders = Some(renders);
+                *profile = selected;
+            }
+        }
+        Ok(consumed)
+    }
 }
 
 /// Read `agents` and `subagents.profiles` from the machine snapshot without reloading it.
@@ -638,6 +782,36 @@ fn project_lsp_policy_key(value: &toml::Value) -> Option<&'static str> {
 }
 
 fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig, toml::de::Error> {
+    for profiles in [
+        value.get("profiles"),
+        value
+            .get("subagents")
+            .and_then(|subagents| subagents.get("profiles")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(toml::Value::as_table)
+    {
+        for (name, profile) in profiles {
+            reject_project_tier_key(profile, name)?;
+        }
+    }
+    if let Some(teams) = value
+        .get("agents")
+        .and_then(|agents| agents.get("teams"))
+        .and_then(toml::Value::as_table)
+    {
+        for (name, team) in teams {
+            for role in team
+                .get("roles")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                reject_project_tier_key(role, name)?;
+            }
+        }
+    }
     let env_reminder = value
         .get("agents")
         .and_then(toml::Value::as_table)
@@ -709,6 +883,18 @@ fn reject_project_tier(key: &str, model: Option<&str>) -> std::result::Result<()
     if let Some(tier) = model.and_then(super::tiers::ModelTier::from_model) {
         return Err(serde::de::Error::custom(format!(
             "project {key} = '{tier}': model tiers resolve in Markdown definitions; name a concrete model"
+        )));
+    }
+    Ok(())
+}
+
+fn reject_project_tier_key(
+    value: &toml::Value,
+    name: &str,
+) -> std::result::Result<(), toml::de::Error> {
+    if value.get("tier").is_some() {
+        return Err(serde::de::Error::custom(format!(
+            "project {name} sets tier: model tiers resolve in Markdown definitions; name a concrete model"
         )));
     }
     Ok(())

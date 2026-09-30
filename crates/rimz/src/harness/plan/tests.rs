@@ -10,131 +10,6 @@ use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
 
-fn tier_context() -> TierOverrideContext<'static> {
-    static MACHINE: std::sync::LazyLock<MachineConfig> =
-        std::sync::LazyLock::new(MachineConfig::default);
-    TierOverrideContext {
-        table: &MACHINE.tiers,
-        profiles: &MACHINE.agents.profiles,
-        cell_profiles: &MACHINE.agents.profiles,
-        agent_override: None,
-    }
-}
-
-#[test]
-fn cli_model_tiers_resolve_each_family_and_refuse_a_runtime_switch() {
-    let mut layout = LayoutSpec::single(preset_cell("codex", &[], None, None));
-    let error = finalize(
-        &mut layout,
-        &crate::agents::LaunchPreset {
-            model: Some("principal".into()),
-            ..Default::default()
-        },
-        &[],
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        error.contains(
-            "only claude has a principal model (fable); codex tiers are senior (astra), junior (sol), intern (luna). To run fable, use `--agent claude --model principal`"
-        ),
-        "{error}"
-    );
-    for (kind, tier, effort, expected_kind, model, expected_effort) in [
-        ("claude", "senior", None, "claude", "opus", "xhigh"),
-        ("codex", "senior", None, "codex", "astra", "xhigh"),
-        ("claude", "principal", None, "claude", "fable", "high"),
-        ("claude", "principal", Some("max"), "claude", "fable", "max"),
-    ] {
-        let mut layout = LayoutSpec::single(preset_cell(kind, &[], Some("old"), Some("low")));
-        finalize(
-            &mut layout,
-            &crate::agents::LaunchPreset {
-                model: Some(tier.into()),
-                effort: effort.map(str::to_owned),
-                ..Default::default()
-            },
-            &[],
-        )
-        .unwrap();
-        let cell = layout.agent_cells().next().unwrap();
-        assert_eq!(cell.kind.as_str(), expected_kind);
-        assert_eq!(cell.launch.model, Some(model.to_owned()));
-        assert_eq!(cell.launch.effort.as_deref(), Some(expected_effort));
-        assert!(!cell.args.iter().any(|arg| arg == tier || arg == "old"));
-    }
-}
-
-#[test]
-fn cli_model_tiers_refuse_other_runtimes() {
-    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("grok")));
-    let error = finalize(
-        &mut layout,
-        &crate::agents::LaunchPreset {
-            model: Some("senior".into()),
-            ..Default::default()
-        },
-        &[],
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("claude or codex"));
-}
-
-#[test]
-fn cli_model_tiers_use_chain_preference_unless_agent_overrides_it() {
-    let profiles = crate::config::ProfilesConfig(std::collections::BTreeMap::from([(
-        "claude-coder".into(),
-        Profile {
-            agent: "claude".into(),
-            preferred_family: Some("codex".into()),
-            ..toml::from_str("agent = 'claude'").unwrap()
-        },
-    )]));
-    // `--agent` rebases the cell before finalization, so its kind matches.
-    for (kind, agent_override, expected) in [
-        ("claude", None, Err("`--agent codex --model senior`")),
-        ("claude", Some("claude"), Ok("opus")),
-        ("codex", Some("codex"), Ok("astra")),
-    ] {
-        let mut layout = LayoutSpec::single(preset_cell(kind, &[], None, None));
-        let result = finalize_launch_layout(
-            &mut layout,
-            LaunchFinalizeOptions {
-                tiers: TierOverrideContext {
-                    profiles: &profiles,
-                    cell_profiles: &profiles,
-                    agent_override,
-                    ..tier_context()
-                },
-                permission_mode: None,
-                isolation: None,
-                preset: &crate::agents::LaunchPreset {
-                    model: Some("senior".into()),
-                    ..Default::default()
-                },
-                passthrough: &[],
-                budget: None,
-                max_turns: None,
-            },
-        );
-        match expected {
-            Ok(model) => {
-                result.unwrap();
-                let cell = layout.agent_cells().next().unwrap();
-                assert_eq!(cell.kind.as_str(), kind);
-                assert_eq!(cell.launch.model, Some(model.to_owned()));
-            }
-            Err(fix) => {
-                let error = result.unwrap_err().to_string();
-                assert!(
-                    error.contains("the profile prefers codex") && error.contains(fix),
-                    "{error}"
-                );
-            }
-        }
-    }
-}
-
 #[test]
 fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
     use crate::harness::launch::{ExecAction, ExecRequest};
@@ -412,7 +287,6 @@ fn finalize<'a>(
     finalize_launch_layout(
         layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: None,
             isolation: None,
             preset,
@@ -432,7 +306,7 @@ fn configured_profile(
     args: Option<&str>,
 ) -> Profile {
     Profile {
-        preferred_family: None,
+        definition_renders: None,
         model_tier: None,
         agent: agent.to_owned(),
         isolation: None,
@@ -950,7 +824,6 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: None,
             isolation: None,
             preset: &crate::agents::LaunchPreset {
@@ -986,7 +859,6 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
     let err = finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: None,
             isolation: None,
             preset: &crate::agents::LaunchPreset::default(),
@@ -1230,7 +1102,6 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
             isolation: None,
             preset: &preset,
@@ -1288,7 +1159,6 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Yolo)),
             isolation: Some(crate::config::Isolation::Sandbox),
             preset: &preset,
@@ -1317,7 +1187,6 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
             isolation: None,
             preset: &preset,
@@ -1345,7 +1214,6 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     let err = finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
             isolation: None,
             preset: &preset,
@@ -1387,7 +1255,6 @@ fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
             finalize_launch_layout(
                 &mut resolved.layout,
                 LaunchFinalizeOptions {
-                    tiers: tier_context(),
                     permission_mode: Some(PermissionModeChoice::Explicit(chosen)),
                     isolation: None,
                     preset: &crate::agents::LaunchPreset::default(),
@@ -1432,7 +1299,6 @@ fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Ask)),
             isolation: None,
             preset: &crate::agents::LaunchPreset::default(),
@@ -1482,7 +1348,6 @@ fn launch_options_apply_without_overwriting_spec_identity() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Yolo)),
             isolation: None,
             preset: &crate::agents::LaunchPreset {
@@ -1829,7 +1694,6 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: None,
             isolation: None,
             preset: &preset,
@@ -1857,7 +1721,6 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     let err = finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: None,
             isolation: None,
             preset: &preset,
@@ -1904,7 +1767,6 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
-            tiers: tier_context(),
             permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
             isolation: None,
             preset: &Default::default(),
@@ -2229,7 +2091,6 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
         finalize_launch_layout(
             &mut layout,
             LaunchFinalizeOptions {
-                tiers: tier_context(),
                 permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
                 isolation: flag,
                 preset: &preset,

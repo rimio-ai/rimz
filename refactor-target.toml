@@ -128,14 +128,14 @@ upward-dependencies = ["address"]
 # `is_team_seat` keeps team seats out of peer runs and the launcher's fleet digest.
 # Auto-continue shares model-aware reset and capacity queries with agents policy.
 # AgentState::transition and AgentState::turn_ids hand one row's lifecycle inputs to the snapshot fold and the writer.
-# Model tiers use the adapter-owned effort ladders.
+# Tier effort uses model defaults or an absolute definition value; the ladder helper is gone (-1).
 # LaunchCapability carries provider-owned routine RimZ and listed-skill permission settings.
 # Async-ask observation edits, queue projections and actionable access cross the adapter/store/CLI seams.
 # ToolRules declares per-launch permission-rule support for launch and validation (+1).
 # LoginCatalog::select_machine names the [accounts.use] source for birth, accounts list, and doctor (+1).
 # Account-scoped model alias resolution shares request, catalog source, outcome, and cache membership with launch orchestration (+10).
 # Folder trust shares decisions, previews, guarded writes and room-login rows (+8).
-surface-budget = 934
+surface-budget = 933
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -246,11 +246,11 @@ upward-dependencies = [
 # Pass 26a: tightened config surface; config/lsp reopens after 30 scoped commits.
 # Pass 26c: the prompt-cache margin moved in from harness::idle_compact (+1).
 # Machine tiers expose the shared resolver and definition provenance to launch consumers.
-# TierConfig::family_tiers lists a family's tiers for the CLI cross-family refusal (+1).
+# Ordered tier walks, preferences, picks, family renders, routing policy and the launch overlay replace the old resolver (+5).
 # ToolRule carries validated definition permission rules across launch boundaries (+1).
 # MachineConfig::require_readable_core shares birth/worktree refusal; ConfigEditor::use_account preserves machine selection edits (+2).
 # MachineConfig::model_alias exposes machine pins to the launch wrapper (+1).
-surface-budget = 182
+surface-budget = 187
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -806,8 +806,8 @@ allowed-dependencies = [
 # Typed explicit-vs-default permission mode and resumed-seed isolation cross into the CLI launcher.
 # Shared child isolation cap, outcome, clamp source, and refusal.
 # Posture-owned exec request construction shared by relaunch doorways (pass 28f).
-# TierOverrideContext carries machine bindings and profile preferences into finalization.
-surface-budget = 35
+# Tier selection is a config overlay before spec resolution; finalization no longer carries tier context (-1).
+surface-budget = 34
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"

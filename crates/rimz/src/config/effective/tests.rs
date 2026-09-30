@@ -6,6 +6,130 @@ use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]
+fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for kind in ["claude", "codex"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            "---\ndescription: Base\n---\nBase.",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.path().join("agents/worker.md"),
+        "---\ndescription: Worker\ntier: senior\ntools: [Bash]\n---\nCraft.",
+    )
+    .unwrap();
+    for (name, runtime) in [
+        ("principal", "tier: principal"),
+        ("exact", "agent: claude\nmodel: claude-future"),
+        ("other", "tier: principal"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Worker\n{runtime}\ntools: [Bash]\n---\nCraft."),
+        )
+        .unwrap();
+    }
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &machine.tiers,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    let project = tempdir().unwrap();
+    let mut launch = load_with_roots(&machine, project.path(), root.path()).unwrap();
+    launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("worker"),
+            None,
+            None,
+            Some("codex"),
+            |_, _| None::<()>,
+        )
+        .unwrap();
+    let selected = &launch.profiles.0["worker"];
+    assert_eq!(selected.agent, "codex");
+    assert_eq!(selected.model.as_deref(), Some("astra"));
+    let resolved = crate::harness::spec::resolve_profile("worker", &launch.profiles).unwrap();
+    assert!(
+        resolved
+            .system_prompt_file
+            .as_ref()
+            .unwrap()
+            .origin()
+            .ends_with("agents/codex.md")
+    );
+    assert_eq!(machine.agents.profiles.0["worker"].agent, "claude");
+    let wire = serde_json::to_value(selected).unwrap();
+    assert!(wire.get("model_tier").is_none());
+    assert!(wire.get("renders").is_none());
+    assert_eq!(
+        launch.profiles.0["other"].model,
+        machine.agents.profiles.0["other"].model
+    );
+    for name in ["principal", "exact", "claude"] {
+        assert!(
+            launch
+                .route(
+                    &machine.tiers,
+                    ProfileScope::Agents,
+                    Some(name),
+                    Some(super::super::tiers::ModelTier::Intern),
+                    None,
+                    Some("codex"),
+                    |_, _| None::<()>
+                )
+                .unwrap()
+        );
+        assert_eq!(launch.profiles.0[name].agent, "codex");
+        assert_eq!(launch.profiles.0[name].model.as_deref(), Some("luna"));
+        assert_eq!(
+            launch.profiles.0["other"].model,
+            machine.agents.profiles.0["other"].model
+        );
+    }
+    launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("exact:author"),
+            Some(super::super::tiers::ModelTier::Senior),
+            None,
+            Some("codex"),
+            |_, _| None::<()>,
+        )
+        .unwrap();
+    assert_eq!(launch.profiles.0["exact"].model.as_deref(), Some("astra"));
+    launch.profiles.0.insert(
+        "project".into(),
+        toml::from_str("agent = 'claude'\nmodel = 'opus'").unwrap(),
+    );
+    let error = launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("project"),
+            Some(super::super::tiers::ModelTier::Senior),
+            None,
+            None,
+            |_, _| None::<()>,
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("model tiers resolve in Markdown definitions")
+    );
+}
+
+#[test]
 fn trusted_repo_cannot_set_allowed_tools() {
     let project = tempdir().unwrap();
     let config = tempdir().unwrap();
@@ -40,10 +164,13 @@ fn model_aliases_are_machine_only() {
 
 #[test]
 fn model_tiers_are_machine_only_and_project_models_are_concrete() {
-    let profile: Profile = toml::from_str("agent = 'claude'\npreferred_family = 'codex'\nmodel_tier = {tier = 'principal', preferred_family = 'codex', fell_back = true}").unwrap();
-    assert!(profile.preferred_family.is_none());
+    let profile: Profile = toml::from_str("agent = 'claude'\ndefinition_renders = {}\nmodel_tier = {tier = 'principal', fell_back = true}").unwrap();
+    assert!(profile.definition_renders.is_none());
     assert!(profile.model_tier.is_none());
     for text in [
+        "[profiles.worker]\nagent = 'claude'\ntier = 'senior'",
+        "[subagents.profiles.worker]\nagent = 'codex'\ntier = 'intern'",
+        "[agents.teams.work]\nroles = [{role = 'worker', profile = 'claude', tier = 'junior'}]",
         "[profiles.worker]\nagent = 'claude'\nmodel = 'senior'",
         "[subagents.profiles.worker]\nagent = 'codex'\nmodel = 'intern'",
         "[agents.teams.work]\nroles = [{role = 'worker', profile = 'claude', model = 'junior'}]",
@@ -154,7 +281,7 @@ fn load(machine: &AgentsConfig, project_root: &Path, config_root: &Path) -> Resu
 fn profile(agent: &str, args: Option<&str>) -> Profile {
     Profile {
         allowed_tools: None,
-        preferred_family: None,
+        definition_renders: None,
         model_tier: None,
         agent: agent.to_owned(),
         isolation: None,

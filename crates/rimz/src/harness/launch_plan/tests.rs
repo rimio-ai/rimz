@@ -532,7 +532,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
         machine_config.agents.profiles.0.insert(
             name.to_owned(),
             crate::config::Profile {
-                preferred_family: None,
+                definition_renders: None,
                 model_tier: None,
                 agent: agent.to_owned(),
                 isolation: None,
@@ -556,7 +556,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
         machine_config.subagents.profiles.0.insert(
             name.to_owned(),
             crate::config::Profile {
-                preferred_family: None,
+                definition_renders: None,
                 model_tier: None,
                 agent: "claude".to_owned(),
                 isolation: None,

@@ -27,21 +27,12 @@ pub enum PermissionModeChoice {
 
 #[derive(Clone, Copy, Debug)]
 pub struct LaunchFinalizeOptions<'a> {
-    pub tiers: TierOverrideContext<'a>,
     pub permission_mode: Option<PermissionModeChoice>,
     pub isolation: Option<crate::config::Isolation>,
     pub preset: &'a crate::agents::LaunchPreset,
     pub passthrough: &'a [String],
     pub budget: Option<BudgetSpec>,
     pub max_turns: Option<u32>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct TierOverrideContext<'a> {
-    pub table: &'a crate::config::tiers::TierConfig,
-    pub profiles: &'a crate::config::ProfilesConfig,
-    pub cell_profiles: &'a crate::config::ProfilesConfig,
-    pub agent_override: Option<&'a str>,
 }
 
 #[derive(Clone, Debug)]
@@ -266,7 +257,16 @@ pub fn resolve_single_agent_launch(
     workspace: &crate::workspace::ResolvedWorkspace,
 ) -> Result<ResolvedSingleAgentLaunch> {
     let machine_config = crate::config::MachineConfig::load_lenient();
-    let launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
+    let mut launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
+    launch.route(
+        &machine_config.tiers,
+        crate::config::effective::ProfileScope::Agents,
+        Some(spec),
+        None,
+        None,
+        None,
+        |_, _| None::<()>,
+    )?;
     launch.block_set_failure()?;
     let layout = match crate::harness::spec::resolve_spec(
         Some(spec),
@@ -543,11 +543,6 @@ impl fmt::Display for LaunchFinalizeWarning {
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LaunchFinalizeError {
-    #[error("--model {tier}: {reason}")]
-    ModelTier {
-        tier: crate::config::tiers::ModelTier,
-        reason: String,
-    },
     #[error("unknown agent kind `{kind}`")]
     UnknownAdapter { kind: String },
     #[error(transparent)]
@@ -581,7 +576,6 @@ impl LaunchFinalizeError {
         match self {
             Self::UnsupportedMaxTurns { warnings, .. } => warnings,
             Self::UnknownAdapter { .. }
-            | Self::ModelTier { .. }
             | Self::PromptFile(_)
             | Self::UnsupportedPresetField { .. }
             | Self::UnsupportedSystemPrompt { .. }
@@ -622,97 +616,11 @@ pub fn finalize_launch_layout(
     Ok(warnings)
 }
 
-fn resolve_tier_override(
-    cell: &mut AgentCell,
-    preset: &mut crate::agents::LaunchPreset,
-    context: TierOverrideContext<'_>,
-) -> std::result::Result<(), LaunchFinalizeError> {
-    if let Some(tier) = preset
-        .model
-        .as_deref()
-        .and_then(crate::config::tiers::ModelTier::from_model)
-    {
-        let fail = |reason: String| LaunchFinalizeError::ModelTier { tier, reason };
-        let replacement = context
-            .agent_override
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(|name| crate::harness::spec::resolve_profile_rebased(name, None, context.profiles))
-            .transpose()
-            .map_err(|error| fail(error.to_string()))?;
-        let preferred = replacement
-            .as_ref()
-            .map(|profile| profile.kind.as_str())
-            .or_else(|| {
-                cell.launch
-                    .profile
-                    .as_ref()
-                    .and_then(|name| context.cell_profiles.0.get(name))
-                    .and_then(|profile| profile.preferred_family.as_deref())
-            })
-            .unwrap_or(cell.kind.as_str());
-        // CLI efforts are absolute provider values, not definition shifts.
-        let resolved = context
-            .table
-            .resolve(tier, preferred, None)
-            .map_err(|error| fail(error.to_string()))?;
-        // A rebase would drop the definition's rendered tool limits, so the
-        // runtime switch stays an explicit `--agent`.
-        if cell.kind.as_str() != resolved.kind {
-            let fix = format!("`--agent {} --model {tier}`", resolved.kind);
-            if resolved.kind == preferred {
-                return Err(fail(format!(
-                    "resolves to {} {}, but this agent runs on {} (the profile prefers {preferred}); to switch runtimes, run with {fix}",
-                    resolved.kind, resolved.model, cell.kind
-                )));
-            }
-            let has_tier = |family: &str| {
-                context
-                    .table
-                    .family_tiers(family)
-                    .iter()
-                    .any(|(cell_tier, _)| *cell_tier == tier)
-            };
-            let supplier = if has_tier(&resolved.kind) {
-                format!("only {} has a {tier} model", resolved.kind)
-            } else {
-                format!("only {} has a model at {tier} or above", resolved.kind)
-            };
-            let listed = context
-                .table
-                .family_tiers(preferred)
-                .iter()
-                .map(|(cell_tier, model)| format!("{cell_tier} ({model})"))
-                .collect::<Vec<_>>();
-            let own = if listed.is_empty() {
-                format!("{preferred} has no tiers configured")
-            } else {
-                format!("{preferred} tiers are {}", listed.join(", "))
-            };
-            return Err(fail(format!(
-                "{supplier} ({}); {own}. To run {}, use {fix}",
-                resolved.model, resolved.model
-            )));
-        }
-        preset.model = Some(resolved.model);
-        if preset.effort.is_none() {
-            preset.effort = Some(resolved.effort);
-        }
-    }
-    Ok(())
-}
-
 fn finalize_agent_cell(
     cell: &mut AgentCell,
     options: LaunchFinalizeOptions<'_>,
     warnings: &mut Vec<LaunchFinalizeWarning>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
-    let mut preset = options.preset.clone();
-    resolve_tier_override(cell, &mut preset, options.tiers)?;
-    let options = LaunchFinalizeOptions {
-        preset: &preset,
-        ..options
-    };
     let adapter = crate::agents::find_definition(&cell.kind);
     if options.isolation.is_some() {
         cell.launch.isolation = options.isolation;

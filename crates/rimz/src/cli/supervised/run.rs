@@ -71,13 +71,26 @@ pub(super) fn prepare_supervised_launch_layout(
     scope: rimz::config::effective::ProfileScope,
     isolation: Option<rimz::config::Isolation>,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
-    let effective = rimz::config::effective::load(machine_config, &workspace.project_root)?;
+    let mut effective = rimz::config::effective::load(machine_config, &workspace.project_root)?;
+    let routed = effective.route(
+        &machine_config.tiers,
+        scope,
+        Some(spec),
+        request.tier,
+        request.model.as_deref(),
+        request.agent.as_deref(),
+        |_, _| None::<()>,
+    )?;
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         scope,
         &machine_config.agents.commands,
         Some(spec),
-        request.agent.as_deref(),
+        if routed {
+            None
+        } else {
+            request.agent.as_deref()
+        },
     )?;
     rimz::harness::plan::reject_prompt_that_looks_like_spec(
         Some(spec),
@@ -87,7 +100,11 @@ pub(super) fn prepare_supervised_launch_layout(
         &effective.teams,
     )?;
     let preset = rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
+        model: if routed {
+            None
+        } else {
+            rimz::harness::plan::normalized_preset_value(request.model.as_deref())
+        },
         effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
         auto_compact: None,
         system_prompt_file: request.system_prompt_file.clone(),
@@ -96,16 +113,6 @@ pub(super) fn prepare_supervised_launch_layout(
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            tiers: rimz::harness::plan::TierOverrideContext {
-                table: &machine_config.tiers,
-                profiles: effective.profiles_for(scope),
-                cell_profiles: if resolved.team_name.is_some() {
-                    &effective.profiles
-                } else {
-                    effective.profiles_for(scope)
-                },
-                agent_override: request.agent.as_deref(),
-            },
             permission_mode: Some(request.permission_mode.map_or(
                 PermissionModeChoice::Default(PermissionMode::Auto),
                 PermissionModeChoice::Explicit,

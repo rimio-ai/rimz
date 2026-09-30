@@ -281,6 +281,33 @@ pub fn load(
             }
         }
     }
+    // Only kind bases have been materialized yet; each family keeps its own base prompt.
+    let families: BTreeSet<_> = tiers
+        .entries(super::tiers::ModelTier::Intern)
+        .map(|(_, kind, _)| kind)
+        .collect();
+    let mut renders = BTreeMap::new();
+    let mut exclusions = BTreeMap::new();
+    for kind in families {
+        if let Some(profile) = loaded.agent_profiles.0.get(kind) {
+            renders.insert(kind.to_owned(), profile.clone());
+        } else {
+            exclusions.insert(kind.to_owned(), missing_kind_base(agents_home, kind));
+        }
+    }
+    for profiles in [&mut loaded.agent_profiles, &mut loaded.subagent_profiles] {
+        for profile in profiles.0.values_mut() {
+            profile.definition_renders = Some(super::tiers::DefinitionRenders {
+                preference: super::tiers::TierPreference {
+                    model: None,
+                    family: Some(profile.agent.clone()),
+                },
+                renders: renders.clone(),
+                exclusions: exclusions.clone(),
+                effort: None,
+            });
+        }
+    }
     // A public name belongs to exactly one tree; neither copy is loadable.
     for name in agents.definitions.keys() {
         if subagents.failed.contains(name) || subagents.definitions.contains_key(name) {

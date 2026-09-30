@@ -295,16 +295,16 @@ mod tests {
 
     #[test]
     fn tier_profiles_show_concrete_models_and_fallback_in_cards_and_json() {
-        let resolved = rimz::config::tiers::TierConfig::default()
-            .resolve(rimz::config::tiers::ModelTier::Principal, "codex", None)
-            .unwrap();
         let profiles = rimz::config::ProfilesConfig(std::collections::BTreeMap::from([(
             "planner".into(),
             rimz::config::Profile {
-                agent: resolved.kind,
-                model: Some(resolved.model.clone()),
-                effort: Some(resolved.effort),
-                model_tier: Some(resolved.provenance),
+                agent: "claude".into(),
+                model: Some("fable".into()),
+                effort: Some("high".into()),
+                model_tier: Some(rimz::config::tiers::TierProvenance {
+                    tier: rimz::config::tiers::ModelTier::Senior,
+                    fell_back: true,
+                }),
                 ..toml::from_str("agent = 'claude'").unwrap()
             },
         )]));
@@ -315,12 +315,12 @@ mod tests {
             ProfileScope::Agents,
         );
         let json = serde_json::to_value(&reports).unwrap();
-        assert_eq!(json[0]["tier"], "principal");
-        assert_eq!(json[0]["model"], resolved.model);
+        assert_eq!(json[0]["tier"], "senior");
+        assert_eq!(json[0]["model"], "fable");
         let mut output = Vec::new();
         profile_cards(&reports, ProfileListing::Teams, &mut output).unwrap();
         let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("principal"));
+        assert!(output.contains("senior"));
         assert!(output.contains("fallback"));
     }
 
@@ -622,7 +622,7 @@ mod tests {
     fn profile(agent: &str) -> rimz::config::Profile {
         rimz::config::Profile {
             allowed_tools: None,
-            preferred_family: None,
+            definition_renders: None,
             model_tier: None,
             isolation: None,
             auto_compact: None,

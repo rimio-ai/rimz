@@ -4,12 +4,12 @@ use rimz::config::RoleBinding;
 
 #[test]
 fn tier_role_reports_keep_concrete_models_and_show_fallback() {
-    let tier = rimz::config::tiers::TierConfig::default()
-        .resolve(rimz::config::tiers::ModelTier::Principal, "codex", None)
-        .unwrap();
     let mut profile: rimz::config::Profile = toml::from_str("agent = 'claude'").unwrap();
-    profile.model = Some(tier.model.clone());
-    profile.model_tier = Some(tier.provenance);
+    profile.model = Some("fable".into());
+    profile.model_tier = Some(rimz::config::tiers::TierProvenance {
+        tier: rimz::config::tiers::ModelTier::Senior,
+        fell_back: true,
+    });
     let profiles = ProfilesConfig(BTreeMap::from([("planner".into(), profile)]));
     let mut team = team();
     team.roles[0].profile = "planner".into();
@@ -23,8 +23,8 @@ fn tier_role_reports_keep_concrete_models_and_show_fallback() {
         Vec::new(),
     );
     let json = serde_json::to_value(&report).unwrap();
-    assert_eq!(json["roles"][0]["tier"], "principal");
-    assert_eq!(json["roles"][0]["model"], tier.model);
+    assert_eq!(json["roles"][0]["tier"], "senior");
+    assert_eq!(json["roles"][0]["model"], "fable");
     assert_eq!(json["roles"][0]["tier_fallback"], true);
 }
 
