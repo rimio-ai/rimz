@@ -944,8 +944,29 @@ fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
 fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    // Every rimz process here, hooks included, reaches the trace shim rather
+    // than a live multiplexer; the empty trace at the end proves none tried.
+    let trace_name = "zellij-pane-returns-trace.log";
+    let trace = env.project_root.join(trace_name);
+    let shim = zellij_trace_shim();
+    let pane_env: &[(&str, &str)] = &[
+        ("ZELLIJ_PANE_ID", "3"),
+        ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
+        ("RIMZ_TEST_ZELLIJ_LOG", trace.to_str().expect("trace path")),
+    ];
     register_running_agent(&env, "sess-pane-returns", "feature-pane-returns", pane_env);
+    // The Stop hook opens the Done gate, so the missing pane is the first blocker the check reaches.
+    // The wake is queued after it: a Stop with a queued head spawns a detached
+    // `message deliver` the test cannot await, which would race the sweeps below.
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-pane-returns",
+            "worktree_branch": "feature-pane-returns",
+        }),
+        pane_env,
+    );
     let snapshot = env.store().snapshot_cached().expect("snapshot");
     let wake = MessageRecord::new(
         env.workspace_id.clone(),
@@ -957,19 +978,9 @@ fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
         notice: HarnessNotice::Wait,
     });
     env.store().queue_message(&wake, "rimz-test").unwrap();
-    // The Stop hook opens the Done gate, so the missing pane is the first blocker the check reaches.
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-pane-returns",
-            "worktree_branch": "feature-pane-returns",
-        }),
-        pane_env,
-    );
     let no_panes = env.write_pane_fixture(&[]);
     run_success(
-        env.rimz()
+        traced_rimz(&env, trace_name)
             .env("RIMZ_TEST_PANE_LIST", &no_panes)
             .args(["message", "sweep"]),
         "sweep an unbindable wake",
@@ -992,7 +1003,7 @@ fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
     );
     let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     run_success(
-        env.rimz()
+        traced_rimz(&env, trace_name)
             .env("RIMZ_TEST_PANE_LIST", &panes)
             .args(["message", "sweep"]),
         "sweep a gated wake",
@@ -1002,16 +1013,16 @@ fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
     assert_eq!(queued.status, MessageStatus::Queued);
     assert_eq!(queued.last_error, None);
     let shown = run_success(
-        env.rimz().env("RIMZ_TEST_PANE_LIST", &panes).args([
-            "message",
-            "show",
-            wake.message_id.as_str(),
-        ]),
+        traced_rimz(&env, trace_name)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args(["message", "show", wake.message_id.as_str()]),
         "show a gated wake",
     );
     let shown = String::from_utf8_lossy(&shown.stdout);
     assert!(!shown.contains("stuck:"), "{shown}");
     assert!(shown.contains("waiting:"), "{shown}");
+    let calls = trace_lines(&trace);
+    assert!(calls.is_empty(), "no path may reach zellij: {calls:?}");
 }
 
 #[test]
