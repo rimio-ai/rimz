@@ -218,11 +218,12 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 5 | The receiver card exists in the snapshot | `ReceiverGone` | The agent reappearing, or GC archiving the record |
 | 6 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
 | 7 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
-| 8 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting or the overload marker clearing |
-| 9 | No open blocking prompt reserving input | `AskWaiting` | Answering the ask, or `--force` |
-| 10 | A live pane can receive a paste | `NoPane` | A pane appearing; affinity is cleared so any bound pane will do |
+| 8 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation, normally `Registered`, or one delivery window elapsing; lazy-registering providers skip this check |
+| 9 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting or the overload marker clearing |
+| 10 | No open blocking prompt reserving input | `AskWaiting` | Answering the ask, or `--force` |
+| 11 | A live pane can receive a paste | `NoPane` | A pane appearing; affinity is cleared so any bound pane will do |
 
-All ten pass and the verdict is `Ready`.
+All eleven pass and the verdict is `Ready`.
 
 A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks, so `NoPane` is the one verdict that can outlive every other gate.
 
@@ -238,9 +239,9 @@ For `ReceiverGone`, `rimz message show` consults the audit rollup. When the dura
 
 Three paths converge on the same helper.
 
-**Lifecycle hooks.** The lifecycle reactor declares [`DELIVERY_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs) as `TurnEnded`, `TurnInterrupted`, and `CompactionEnded`. On one of those it finds the FIFO head for the event's card and spawns a detached `rimz message deliver --message-id <id>`. `Registered`, subagent stops, and compaction starts do not check the queue.
+**Lifecycle hooks.** The lifecycle reactor declares [`DELIVERY_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs) as `Registered`, `TurnEnded`, `TurnInterrupted`, and `CompactionEnded`. On one of those it finds the FIFO head for the event's card and spawns a detached `rimz message deliver --message-id <id>`. Registration releases messages parked while a resumed provider starts; the helper still settles and re-checks the gates before claiming. Subagent stops and compaction starts do not check the queue.
 
-The same reactor nudges the sweep when the event's agent is referenced by an unmet condition: `after` conditions on `DELIVERY_CHECKPOINT`, and `when` conditions on the wider [`CONDITION_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs), which adds `Registered`, `TurnStarted`, `AwaitingInput`, and the subagent edges because a dwell can start or break on any of them. Both actions run after the `LifecycleEvent` commits, and the helper re-checks durable state before claiming.
+The same reactor nudges the sweep when the event's agent is referenced by an unmet condition: `after` conditions on `DELIVERY_CHECKPOINT`, and `when` conditions on the wider [`CONDITION_CHECKPOINT`](../../../crates/rimz/src/agents/lifecycle/event.rs), which adds `TurnStarted`, `AwaitingInput`, and the subagent edges because a dwell can start or break on any of them. Both actions run after the `LifecycleEvent` commits, and the helper re-checks durable state before claiming.
 
 **The elder sweep.** The room's elected sidebar elder spawns `rimz message sweep` when the wake stamp comes due ([Scheduling and wakeups](#scheduling-and-wakeups)).
 

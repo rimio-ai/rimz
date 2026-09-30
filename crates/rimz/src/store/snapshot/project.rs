@@ -768,6 +768,8 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.event.timestamp,
     );
     fold_launch_params(&mut state, &input.observation.launch);
+    state.resumed_at =
+        (input.event_name == Some("rimz.agent-resumed")).then_some(input.event.timestamp);
     let ended_at =
         matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
     let ends_session_shells = matches!(

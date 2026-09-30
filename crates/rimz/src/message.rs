@@ -196,6 +196,14 @@ pub fn parse_when_duration(raw: &str) -> Result<u64, String> {
     Ok(duration.as_secs())
 }
 
+fn provider_start_pending(agent: &AgentState, now: Timestamp) -> bool {
+    agent.resumed_at.is_some_and(|resumed_at| {
+        now < resumed_at + MessageBody::Prompt.delivery_window()
+            && !crate::agents::spec_by_kind(agent.kind.as_str())
+                .is_some_and(|definition| definition.capabilities.registers_lazily)
+    })
+}
+
 fn gate_open_for_agent(
     gate: DeliveryGate,
     agent: &AgentState,

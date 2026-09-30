@@ -158,6 +158,15 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
     store: &Store,
     event: &rimz::agents::LifecycleEvent,
 ) {
+    spawn_queue_delivery_with(workspace, store, event, spawn_refresh_detached);
+}
+
+fn spawn_queue_delivery_with(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    event: &rimz::agents::LifecycleEvent,
+    mut spawn: impl FnMut(&rimz::agents::RefreshSpawn),
+) {
     let delivery_checkpoint = rimz::agents::DELIVERY_CHECKPOINT.contains(&event.signal);
     let condition_checkpoint = rimz::agents::CONDITION_CHECKPOINT.contains(&event.signal);
     if !delivery_checkpoint && !condition_checkpoint {
@@ -192,7 +201,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
                     condition.met_at.is_none() && condition.card_ref().matches(card)
                 })
     }) {
-        spawn_refresh_detached(&rimz::agents::RefreshSpawn {
+        spawn(&rimz::agents::RefreshSpawn {
             args: vec![
                 "--root".to_owned(),
                 workspace.project_root.display().to_string(),
@@ -215,7 +224,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
     ) else {
         return;
     };
-    spawn_refresh_detached(&rimz::agents::RefreshSpawn {
+    spawn(&rimz::agents::RefreshSpawn {
         args: vec![
             "--root".to_owned(),
             workspace.project_root.display().to_string(),

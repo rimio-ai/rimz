@@ -140,6 +140,7 @@ pub enum DeliveryVerdict {
         status: Option<AgentStatus>,
     },
     ResumeUnrecovered,
+    ProviderStarting,
     AskWaiting,
     NoPane {
         pinned_pane_id: Option<PaneId>,
@@ -576,7 +577,9 @@ pub struct DeliveryCheck {
 
 impl DeliveryCheck {
     pub fn gate_ready(&self) -> bool {
-        self.gate.open && self.gate.resume_recovered != Some(false)
+        self.gate.open
+            && !self.gate.provider_start_pending
+            && self.gate.resume_recovered != Some(false)
     }
 
     /// Derived from [`Self::verdict`] so the gate ordering has one home.
@@ -621,6 +624,9 @@ impl DeliveryCheck {
                 gate: self.gate.gate,
                 status: self.gate.status,
             };
+        }
+        if self.gate.provider_start_pending {
+            return DeliveryVerdict::ProviderStarting;
         }
         if self.gate.resume_recovered == Some(false) {
             return DeliveryVerdict::ResumeUnrecovered;
@@ -688,6 +694,7 @@ pub struct AgentCheck {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct GateCheck {
+    pub provider_start_pending: bool,
     pub gate: DeliveryGate,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatus>,
@@ -838,6 +845,8 @@ fn evaluate_delivery<'a>(
             present: agent.is_some(),
         },
         gate: GateCheck {
+            provider_start_pending: agent
+                .is_some_and(|agent| super::provider_start_pending(agent, now)),
             gate: message.gate,
             status,
             compacting,
@@ -1027,6 +1036,60 @@ pub(super) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resumed_provider_refuses_delivery_before_resume_recovery() {
+        let now = Timestamp::from_second(10_000).unwrap();
+        let mut receiver = agent("session", AgentStatus::Idle);
+        receiver.kind = crate::ids::AgentKind::new_unchecked("claude");
+        receiver.resumed_at = Some(now);
+        let candidate = message(&receiver, 1, "hello");
+        let live = snapshot(receiver, true, now);
+        let mut check = explain(&candidate, std::slice::from_ref(&candidate), &live, now);
+        assert_eq!(check.verdict(), DeliveryVerdict::ProviderStarting);
+        assert!(matches!(
+            delivery_candidate(
+                std::slice::from_ref(&candidate),
+                &live,
+                &candidate.message_id,
+                DeliveryPolicy::Boundary,
+                now
+            ),
+            Candidacy::Refused(DeliveryVerdict::ProviderStarting)
+        ));
+        for policy in [
+            DeliveryPolicy::Steer { force: false },
+            DeliveryPolicy::Interrupt { force: false },
+        ] {
+            assert!(matches!(
+                delivery_candidate(
+                    std::slice::from_ref(&candidate),
+                    &live,
+                    &candidate.message_id,
+                    policy,
+                    now
+                ),
+                Candidacy::Ready(_)
+            ));
+        }
+        check.gate.resume_recovered = Some(false);
+        assert_eq!(check.verdict(), DeliveryVerdict::ProviderStarting);
+        check.gate.open = false;
+        assert!(matches!(
+            check.verdict(),
+            DeliveryVerdict::GateClosed { .. }
+        ));
+        assert_eq!(
+            explain(
+                &candidate,
+                std::slice::from_ref(&candidate),
+                &live,
+                now + MessageBody::Prompt.delivery_window()
+            )
+            .verdict(),
+            DeliveryVerdict::Ready
+        );
+    }
 
     use crate::agents::AgentState;
     use crate::ids::WorkspaceId;
@@ -1313,6 +1376,7 @@ mod tests {
             },
             agent: AgentCheck { present: true },
             gate: GateCheck {
+                provider_start_pending: false,
                 gate: DeliveryGate::Done,
                 status: Some(AgentStatus::Idle),
                 compacting: false,
