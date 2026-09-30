@@ -272,6 +272,23 @@ fn focused_worktree_paths_keys_on_viewed_row_panes() {
 }
 
 #[test]
+fn repo_root_pane_is_included_in_git_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let root_cwd = dir.path().to_string_lossy().into_owned();
+    let snapshot = SidebarSnapshot::build_with_agents(workspace, vec![], Timestamp::now())
+        .with_root_class(crate::workspace::RootClass::Repo)
+        .with_project_root(Some(dir.path().to_path_buf()))
+        .with_live_panes(vec![pane("terminal_0", "zsh", &root_cwd)], None);
+    assert_eq!(snapshot.worktree_groups.len(), 1);
+    assert_eq!(
+        snapshot.worktree_groups[0].kind,
+        SidebarWorktreeKind::Worktree
+    );
+    assert_eq!(needed_worktree_paths(&snapshot), vec![root_cwd]);
+}
+
+#[test]
 fn root_pod_is_excluded_from_git_reads() {
     // The root pod of a non-repo room is a known non-repo: it never enters
     // the producer's git fan-out, while a git-backed row's resolved worktree
