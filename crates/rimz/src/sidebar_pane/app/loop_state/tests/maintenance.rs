@@ -86,7 +86,9 @@ fn rejected_final_defers_one_gate_deadline_reevaluation() {
     let mut rig = Rig::new();
     rig.state.current = agent_snapshot(&rig.ws);
 
+    let fold_started = Instant::now();
     rig.fold(snapshot(&rig.ws), SnapshotSource::Published);
+    let first_fold = fold_started.elapsed();
 
     assert_eq!(
         rig.state.gate.rule,
@@ -110,21 +112,27 @@ fn rejected_final_defers_one_gate_deadline_reevaluation() {
         rig.next_request().is_none(),
         "repeated rejected finals remain one deferred fetch"
     );
-    // Each rejection derives the same absolute deadline from two clocks: a
-    // nanosecond `Instant` plus a gate remainder the wall clock quantizes to
-    // whole milliseconds. Re-arming therefore lands within one quantum of the
-    // first deadline rather than exactly on it; a second reevaluation of its
-    // own would sit seconds out.
+    // Each rejection derives the same absolute deadline from two clocks read
+    // one after the other: an `Instant` plus a gate remainder the wall clock
+    // quantizes to whole milliseconds. A stall between those reads in the
+    // first fold lands its deadline late by the stall, so re-arming, which
+    // keeps the earlier deadline, may pull it forward by up to the first
+    // fold's duration plus one quantum. It never moves later: a second
+    // reevaluation of its own would sit seconds out.
     let rearmed = rig
         .fetch
         .next_deadline()
         .expect("the deferred reevaluation survives");
-    let drift = rearmed
-        .saturating_duration_since(deadline)
-        .max(deadline.saturating_duration_since(rearmed));
     assert!(
-        drift <= Duration::from_millis(1),
-        "the first gate deadline remains authoritative; moved by {drift:?}"
+        rearmed <= deadline,
+        "re-arming never pushes the first gate deadline out; moved by {:?}",
+        rearmed.saturating_duration_since(deadline)
+    );
+    let pulled_forward = deadline.saturating_duration_since(rearmed);
+    assert!(
+        pulled_forward <= first_fold + Duration::from_millis(1),
+        "the first gate deadline remains authoritative; pulled forward by \
+         {pulled_forward:?} after a {first_fold:?} first fold"
     );
 }
 
