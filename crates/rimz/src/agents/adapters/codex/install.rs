@@ -197,13 +197,23 @@ fn untrusted_hook_events(path: &Path, include: impl Fn(&HookEventSpec) -> bool) 
         .and_then(toml::Value::as_table)
         .and_then(|hooks| hooks.get("state"))
         .and_then(toml::Value::as_table);
+    let canonical = path
+        .parent()
+        .and_then(|home| home.canonicalize().ok())
+        .map(|home| home.join("config.toml"));
     CODEX_HOOKS
         .iter()
         .filter(|hook| include(hook))
         .filter(|hook| has_rimz_hook_command(&root, hook.event))
         .filter(|hook| {
-            let needle = format!(":{}:", snake_event_token(hook.event));
-            !state.is_some_and(|state| state.keys().any(|key| key.contains(&needle)))
+            let token = snake_event_token(hook.event);
+            ![Some(path), canonical.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|prefix| {
+                    let needle = format!("{}:{token}:", prefix.display());
+                    state.is_some_and(|state| state.keys().any(|key| key.starts_with(&needle)))
+                })
         })
         .map(|hook| hook.event.to_owned())
         .collect()
