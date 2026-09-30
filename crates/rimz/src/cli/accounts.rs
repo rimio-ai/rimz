@@ -120,6 +120,7 @@ fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
                 ),
                 Some(existing) => existing,
                 None => {
+                    login.check_exported_home(&rimz::agents::ambient_env())?;
                     ConfigEditor::machine().upsert_named_account(kind, &name, home.as_deref())?;
                     login
                 }

@@ -133,7 +133,7 @@ upward-dependencies = ["address"]
 # Async-ask observation edits, queue projections and actionable access cross the adapter/store/CLI seams.
 # ToolRules declares per-launch permission-rule support for launch and validation (+1).
 # LoginCatalog::select_machine names the [accounts.use] source for birth, accounts list, and doctor (+1).
-surface-budget = 915
+surface-budget = 916
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

@@ -72,6 +72,15 @@ pub enum LoginConfigErr {
         name: LoginName,
         home: PathBuf,
     },
+    #[error(
+        "`{env_key}` is exported as `{home}`, the home of {kind} account `{name}`, so the `default` account launches into it too; unset `{env_key}` and run `rimz accounts use {kind} {name}` to start new rooms on it"
+    )]
+    ExportedHome {
+        kind: AgentKind,
+        name: LoginName,
+        env_key: &'static str,
+        home: PathBuf,
+    },
 }
 
 fn render_names(names: &[LoginName]) -> String {
@@ -159,6 +168,33 @@ impl ProviderLogin {
     /// adapter itself resolves it.
     pub fn home_dir(&self, ambient: &BTreeMap<String, String>) -> Option<PathBuf> {
         crate::agents::find_definition(self.kind.as_str())?.config_home(&self.env(ambient))
+    }
+
+    /// Refuses a named account whose home the exported provider variable
+    /// (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) already names: `default` resolves to
+    /// that home too, so two logins would share one provider home. The catalog
+    /// cannot check this at load, since a room pane on this account exports its
+    /// home by design; `rimz accounts add` and `rimz doctor` ask instead.
+    pub fn check_exported_home(
+        &self,
+        ambient: &BTreeMap<String, String>,
+    ) -> Result<(), LoginConfigErr> {
+        let (Some(home), Some(env_key)) = (self.home(), config_home_env_key(&self.kind)) else {
+            return Ok(());
+        };
+        if !ambient.get(env_key).is_some_and(|value| !value.is_empty()) {
+            return Ok(());
+        }
+        let default = Self::default_for(self.kind.clone()).home_dir(ambient);
+        if default.map(|path| normalize_path_lexical(&path)) != Some(normalize_path_lexical(home)) {
+            return Ok(());
+        }
+        Err(LoginConfigErr::ExportedHome {
+            kind: self.kind.clone(),
+            name: self.name.clone(),
+            env_key,
+            home: home.to_path_buf(),
+        })
     }
 }
 

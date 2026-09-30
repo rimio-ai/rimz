@@ -435,3 +435,63 @@ fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
     let unreadable = RoomLoginSet::new(None, None, ambient);
     assert_eq!(unreadable.login("codex"), None);
 }
+
+#[test]
+fn exported_provider_home_naming_an_account_is_refused() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[codex.rimio]\nhome = \"/srv/rimio\"\n[claude.work]\nhome = \"/srv/work\""),
+        Some(Path::new("/home/u")),
+    )
+    .expect("catalog");
+    let rimio = catalog.select(&kind("codex"), &name("rimio")).unwrap();
+    let work = catalog.select(&kind("claude"), &name("work")).unwrap();
+    let ambient = |key: &str, value: &str| {
+        BTreeMap::from([
+            ("HOME".to_owned(), "/home/u".to_owned()),
+            (key.to_owned(), value.to_owned()),
+        ])
+    };
+
+    assert!(matches!(
+        rimio.check_exported_home(&ambient("CODEX_HOME", "/srv/./rimio/")),
+        Err(LoginConfigErr::ExportedHome {
+            env_key: "CODEX_HOME",
+            ..
+        })
+    ));
+    assert!(matches!(
+        work.check_exported_home(&ambient("CLAUDE_CONFIG_DIR", "/srv/work")),
+        Err(LoginConfigErr::ExportedHome {
+            env_key: "CLAUDE_CONFIG_DIR",
+            ..
+        })
+    ));
+    let message = rimio
+        .check_exported_home(&ambient("CODEX_HOME", "/srv/rimio"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("rimz accounts use codex rimio"),
+        "{message}"
+    );
+
+    assert_eq!(
+        rimio.check_exported_home(&ambient("CODEX_HOME", "/srv/other")),
+        Ok(())
+    );
+    assert_eq!(
+        rimio.check_exported_home(&ambient("CODEX_HOME", "")),
+        Ok(())
+    );
+    assert_eq!(
+        rimio.check_exported_home(&ambient("CLAUDE_CONFIG_DIR", "/srv/rimio")),
+        Ok(())
+    );
+    let default = catalog
+        .select(&kind("codex"), &LoginName::default_login())
+        .unwrap();
+    assert_eq!(
+        default.check_exported_home(&ambient("CODEX_HOME", "/srv/rimio")),
+        Ok(())
+    );
+}
