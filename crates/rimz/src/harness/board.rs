@@ -63,13 +63,7 @@ pub struct RecordRequest<'a> {
     pub now: Timestamp,
 }
 
-#[derive(Debug)]
-pub struct RecordReceipt {
-    pub board: PathBuf,
-    pub entry: String,
-}
-
-pub fn record(request: RecordRequest<'_>) -> Result<RecordReceipt, BoardErr> {
+pub fn record(request: RecordRequest<'_>) -> Result<(), BoardErr> {
     let entry = entry_line(request.now, request.by, request.text)?;
     let board = LockedBoard::open(request.store, request.worktree)?;
     let text = if board.text.is_empty() {
@@ -78,10 +72,7 @@ pub fn record(request: RecordRequest<'_>) -> Result<RecordReceipt, BoardErr> {
         &board.text
     };
     board.write(&append_section(text, request.section.heading(), &entry))?;
-    Ok(RecordReceipt {
-        board: board.path,
-        entry,
-    })
+    Ok(())
 }
 
 fn append_section(text: &str, heading: &str, entry: &str) -> String {
@@ -288,7 +279,7 @@ mod tests {
             if empty {
                 std::fs::write(root.path().join("blackboard.md"), "").unwrap();
             }
-            let receipt = record(RecordRequest {
+            record(RecordRequest {
                 store: &store,
                 worktree: root.path(),
                 section: BoardSection::Goal,
@@ -297,12 +288,11 @@ mod tests {
                 now: Timestamp::UNIX_EPOCH,
             })
             .unwrap();
-            assert_eq!(receipt.board, root.path().join("blackboard.md"));
+            let entry = entry_line(Timestamp::UNIX_EPOCH, "user", "Ship").unwrap();
             assert_eq!(
-                std::fs::read_to_string(receipt.board).unwrap(),
+                std::fs::read_to_string(root.path().join("blackboard.md")).unwrap(),
                 format!(
-                    "# Blackboard\n\n## Goal\n{}\n\n## Decisions\n\n## Progress\n\n## Result\n",
-                    receipt.entry
+                    "# Blackboard\n\n## Goal\n{entry}\n\n## Decisions\n\n## Progress\n\n## Result\n"
                 )
             );
         }
