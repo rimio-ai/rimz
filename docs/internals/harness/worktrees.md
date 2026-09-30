@@ -61,6 +61,8 @@ Fresh trees from `create` and `create_from_pr` walk the same six steps; PR holde
 
 A launch that names an existing marked tree reuses it; ordinary `rimz worktree new` refuses with `Exists`, but `new --from-pr` can reuse a same-repository branch holder. `CreatedWorktree.reused` distinguishes reuse from creation. A reused tree is never re-seeded and reports zero included and linked counts. The `new` CLI prints `reused NAME` with only path and branch lines, and skips channel archival. `rimz worktree new` also refuses a name a named channel already holds (`channel::ensure_worktree_name_available`) and, after fresh creation, archives any messages left in that channel with the reason `channel recreated`.
 
+`crates/rimz/src/worktree.rs::create` computes an optional `crates/rimz/src/worktree.rs::StaleBase` from the resolved `base_branch` before adding a fresh non-PR tree. This moment-of-creation observation travels through `CreatedWorktree` and `LaunchCheckout`, not the durable marker. `crates/rimz/src/cli/worktree.rs::new_worktree` and `crates/rimz/src/cli/mod.rs::resolve_launch_checkout` print it on stderr after successful creation. The check is enrichment: it reads local refs without fetching and stays silent on any Git or parse failure; reuse and PR paths leave it absent.
+
 ### Lifecycle hooks
 
 The hook event names `worktree.created` and `worktree.removed` are also [loop signals](../../reference/cli/events.md#reserved-families), with separate successful-operation emission boundaries.

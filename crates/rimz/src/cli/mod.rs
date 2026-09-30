@@ -888,6 +888,13 @@ fn settle_launch_checkout(
             "review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
         )?;
     }
+    if let Some(stale) = &launch.stale_base {
+        writeln!(
+            render::err(),
+            "warning: {stale}; fast-forward {} first, or set agents.worktree.base to fresh",
+            stale.branch
+        )?;
+    }
     Ok(Some(launch))
 }
 

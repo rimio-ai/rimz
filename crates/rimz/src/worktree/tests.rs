@@ -404,6 +404,7 @@ fn launch_checkout_falls_back_to_the_room_repo_without_a_current_repo() {
 #[test]
 fn generated_launch_name_is_exposed_only_for_bare_checkout() {
     let generated = LaunchCheckout {
+        stale_base: None,
         reused: false,
         created: None,
         cwd: PathBuf::from("/code/query-engine-worktrees/swift-orbit"),
@@ -940,6 +941,54 @@ fn reused_worktree_keeps_seeded_and_linked_destinations_unchanged() {
             .expect("linked destination")
             .is_symlink()
     );
+}
+
+#[test]
+fn stale_base_is_reported_only_for_fresh_local_tracking_bases() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let fresh = |name, base| create(&repo, &config, Some(name), base, None, false).unwrap();
+    assert_eq!(fresh("no-upstream", None).stale_base, None);
+    let origin = dir.path().join("origin.git");
+    git_run(&repo, ["clone", "--bare", ".", origin.to_str().unwrap()]).unwrap();
+    git_run(&repo, ["remote", "add", "origin", origin.to_str().unwrap()]).unwrap();
+    for _ in 0..2 {
+        git_run(&repo, ["commit", "--allow-empty", "-m", "upstream"]).unwrap();
+    }
+    git_run(&repo, ["push", "-u", "origin", "main"]).unwrap();
+    assert_eq!(fresh("up-to-date", None).stale_base, None);
+    git_run(&repo, ["reset", "--hard", "HEAD~2"]).unwrap();
+    let expected = Some(StaleBase {
+        branch: "main".to_owned(),
+        upstream: "origin/main".to_owned(),
+        behind: 2,
+    });
+    assert_eq!(fresh("behind", None).stale_base, expected);
+    assert_eq!(
+        fresh("explicit", Some(WorktreeBase::Explicit("main".to_owned()))).stale_base,
+        expected
+    );
+    let remote = fresh(
+        "remote",
+        Some(WorktreeBase::Explicit("origin/main".to_owned())),
+    );
+    assert_eq!(remote.stale_base, None);
+    assert_eq!(remote.marker.base_branch.as_deref(), Some("origin/main"));
+    let mut workspace = workspace(RootClass::Repo);
+    workspace.project_root = repo.clone();
+    workspace.cwd_project_root = Some(repo.clone());
+    workspace.worktree_root = repo.clone();
+    let launch =
+        || resolve_launch_checkout(&workspace, &config, Some("launch"), None, None, None).unwrap();
+    assert_eq!(launch().stale_base, expected);
+    assert_eq!(launch().stale_base, None);
+    git_run(&repo, ["checkout", "--detach"]).unwrap();
+    assert_eq!(fresh("detached", Some(WorktreeBase::Head)).stale_base, None);
+    git_run(&repo, ["checkout", "main"]).unwrap();
+    git_run(&repo, ["reset", "--hard", "origin/main"]).unwrap();
+    git_run(&repo, ["commit", "--allow-empty", "-m", "ahead"]).unwrap();
+    assert_eq!(fresh("ahead", None).stale_base, None);
 }
 
 fn init_test_repo(parent: &Path) -> PathBuf {

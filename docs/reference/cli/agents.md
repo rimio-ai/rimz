@@ -162,6 +162,8 @@ A launch runs in the current directory's checkout by default. These flags choose
 | `--from-pr <NUMBER\|URL>` | Reuse the marked tree holding a same-repository PR's head branch, or create a tree named `pr-<N>` unless `-w NAME` names it. An explicit name must match an existing holder. |
 | `--channel <NAME>` | Launch into the durable named channel `NAME` in the selected directory, registering it when missing, in a tab named `#NAME`. Manage channels with [`rimz channel`](./channel.md). |
 
+Fresh worktree launches print the same [stale-base warning](./worktree.md#create-a-worktree) as `worktree new`, with the remedy to fast-forward the base first or set `agents.worktree.base` to `fresh`.
+
 Spell the worktree name without the channel's `#`. `-w feat-a` gives channel `#feat-a`; `-w '#feat-a'` fails with `invalid worktree name`; and an unquoted `-w #feat-a` in a shell with comments enabled reaches RimZ as a bare `-w` and generates a name. A branch-style name is accepted: `-w feat/great` creates branch `feat/great` with worktree, channel, and tab `feat-great`.
 
 A `--from-pr` URL must match the `origin` remote. With `gh` or `tea` available, RimZ configures the source branch's push destination; on an unsupported forge the checkout is review-only, with pushes unconfigured. A reused tree may have no recorded PR number, which RimZ fills in, but one recording another PR refuses. Differing local and PR tips use the [PR checkout choice and non-interactive rules](./worktree.md#check-out-a-pull-request). Worktrees RimZ creates carry a marker and are cleaned up with [`rimz worktree remove`](./worktree.md) or `rimz gc`; the [worktrees guide](../../guide/worktrees.md) covers the workflow.

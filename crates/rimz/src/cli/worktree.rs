@@ -202,6 +202,14 @@ fn new_worktree(
         super::emit_worktree_created(&store, workspace, &created.marker);
         archival.context("archiving messages for recreated worktree channel")?;
     }
+    if let Some(stale) = &created.stale_base {
+        writeln!(
+            render::err(),
+            "warning: {stale}; fast-forward {} first, or pass --base {}",
+            stale.branch,
+            stale.upstream
+        )?;
+    }
     report_created(&created, config.hooks.created.is_some());
     Ok(())
 }

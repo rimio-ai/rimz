@@ -406,6 +406,7 @@ fn same_repo_checkout(
             write_marker(&marker.worktree_path, &marker)?;
         }
         return Ok(CreatedWorktree {
+            stale_base: None,
             marker,
             reused: true,
             included: 0,

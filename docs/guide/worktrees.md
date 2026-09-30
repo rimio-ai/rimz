@@ -171,6 +171,8 @@ rimz config set agents.worktree.base fresh                  # branch from origin
 
 `base` is `head` (the default), `fresh`, or any Git ref you name. Both keys read the main repository even when you launch from one of its linked worktrees, so `head` means the branch checked out in your main clone, not the one under your cursor, and `dir` puts the new tree beside that clone. `rimz worktree new --base <ref> --branch <name>` overrides the base and the branch name for one tree; the directory always comes from `dir`. Both fields are written up in [configuration → worktrees](./configuration.md#worktrees).
 
+A stale main checkout gives the whole cohort a stale starting point. The [stale-base warning](../reference/cli/worktree.md#create-a-worktree) tells you when to fast-forward that base or choose `fresh` (`--base origin/main` for a single `worktree new`).
+
 If the repository you are standing in differs from the active room's, RimZ prints both paths and asks before creating anything, and warns that this room will not list, remove, or garbage-collect a tree made under the other root. A non-interactive caller states the choice with `--root <git-root>` instead of answering.
 
 ## Cleanup, once work lands
