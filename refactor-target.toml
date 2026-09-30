@@ -815,7 +815,8 @@ allowed-dependencies = [
 # Posture-owned exec request construction shared by relaunch doorways (pass 28f).
 # Tier selection is a config overlay before spec resolution; finalization no longer carries tier context (-1).
 # One fork-free usage snapshot supplies all fresh-launch tier walks.
-surface-budget = 37
+# Stamped cohort resume reapplies explicit presets through the shared cell finalizer.
+surface-budget = 38
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"
@@ -825,6 +826,7 @@ allowed-dependencies = [
     "config",
     "disk::paths",
     "harness::ancestry",
+    "harness::assist_log",
     "harness::plan",
     "harness::spec",
     "address",
@@ -838,7 +840,9 @@ allowed-dependencies = [
 ]
 # Rebirth admission reads distinct checkout roots before materializing tabs.
 # Resume tabs carry the pane identity pin from `workspace::pane_pin_env`.
-surface-budget = 49
+# Cohort preflight shares stamped-family reconstruction with unattended restore.
+# Team restore records fallback assists only for newly allocated seats.
+surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"

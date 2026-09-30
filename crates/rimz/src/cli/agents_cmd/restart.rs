@@ -309,6 +309,7 @@ fn restart_posture(
             profile: agent.profile.as_deref(),
             kind: &agent.kind,
             stamped_mode: agent.mode,
+            stamped_tier: agent.tier.as_deref(),
         },
         &launch.profiles,
     );
@@ -344,6 +345,7 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         isolation_default: posture.launch.isolation_default,
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
+            tier: agent.tier.clone(),
             role: agent.role.clone(),
             mode: posture.launch.mode,
             isolation: agent.isolation,

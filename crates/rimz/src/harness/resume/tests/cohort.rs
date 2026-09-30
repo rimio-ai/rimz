@@ -4,6 +4,83 @@
 use super::*;
 
 #[test]
+fn team_restore_routes_fresh_seats_before_planning() {
+    let root = tempfile::tempdir().unwrap();
+    let (teams, mut profiles, commands) = team_configs();
+    let mut routed = routed_profile(None);
+    routed.model_tier = Some(crate::config::tiers::TierProvenance {
+        tier: crate::config::tiers::ModelTier::Senior,
+        fell_back: false,
+    });
+    routed
+        .definition_renders
+        .as_mut()
+        .unwrap()
+        .renders
+        .insert("claude".into(), profile("claude"));
+    profiles.0.insert("claude-plan".into(), routed);
+    let mut machine = crate::config::MachineConfig::default();
+    machine.agents.teams = teams;
+    machine.agents.profiles = profiles;
+    machine.agents.commands = commands;
+    let config = LaneRestoreConfig::load(&machine, root.path(), |kind, _| {
+        (kind == "claude").then_some(crate::agents::TierSkipReason::LoggedOut)
+    })
+    .unwrap();
+    let coder = team_agent("codex", "coder", "coder", "/repo/forge", 5);
+    for fresh in [false, true] {
+        let tabs = plan_team_restore_tabs(
+            std::slice::from_ref(&coder),
+            &NO_LOGINS,
+            &config.teams,
+            &config.profiles,
+            &config.commands,
+            Some(Path::new("/repo")),
+            &WORKSPACE,
+            |_| true,
+            |_| true,
+            fresh,
+        );
+        assert_eq!(tabs.len(), 1);
+        let cell = tabs[0].layout.agent_cells().next().unwrap();
+        assert_eq!(cell.kind.as_str(), "codex");
+        assert_eq!(cell.launch.model.as_deref(), Some("astra"));
+        assert_eq!(cell.launch.tier.as_ref().unwrap().skipped.len(), 1);
+        assert!(matches!(tabs[0].cohort.seeds[0], CohortSeed::Fresh));
+    }
+}
+
+#[test]
+fn stamped_cohort_resume_reapplies_explicit_model_and_effort() {
+    let profiles = profiles("planner", routed_profile(Some("medium")));
+    let agent = AgentState {
+        profile: Some("planner".into()),
+        tier: Some(tier_stamp("astra")),
+        ..agent("codex", "fallback", "/repo/forge", 1)
+    };
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+    ));
+    let preset = crate::agents::LaunchPreset {
+        model: Some("sol".into()),
+        effort: Some("low".into()),
+        ..Default::default()
+    };
+    restore_routed_cells(
+        &mut layout,
+        &[CohortSeed::Resume(Box::new(agent))],
+        &profiles,
+        &preset,
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(cell.launch.model.as_deref(), Some("sol"));
+    assert_eq!(cell.launch.effort.as_deref(), Some("low"));
+    assert!(cell.args.iter().any(|arg| arg == "sol"));
+    assert!(cell.args.iter().any(|arg| arg.contains("low")));
+}
+
+#[test]
 fn cohort_resume_ignores_launched_children() {
     let parent = AgentState {
         profile: Some("astra".to_owned()),
@@ -89,6 +166,99 @@ fn single_cell_resume_matches_requested_profile() {
     let plan = cohort(&agents[..2], &[cohort_cell("codex", None)], None)
         .expect("bare kind also matches profiled roots");
     assert_eq!(resume_id(&plan.seeds[0]), Some("debugger-session"));
+}
+
+#[test]
+fn single_cell_resume_matches_a_stamped_cross_family_profile() {
+    let agent = AgentState {
+        profile: Some("planner".to_owned()),
+        tier: Some(tier_stamp("astra")),
+        ..agent("codex", "fallback", "/code/feature", 1)
+    };
+    let plan = cohort(&[agent], &[profile_cell("claude", "planner")], None)
+        .expect("the stamped profile matches across families");
+    assert_eq!(resume_id(&plan.seeds[0]), Some("fallback"));
+}
+
+#[test]
+fn roleless_team_resume_matches_a_stamped_cross_family_profile() {
+    let planner = AgentState {
+        profile: Some("planner".to_owned()),
+        tier: Some(tier_stamp("astra")),
+        team: Some("forge".to_owned()),
+        ..agent("codex", "fallback", "/code/feature", 1)
+    };
+    for tier in [Some(tier_stamp("opus")), None] {
+        let worker = AgentState {
+            profile: Some("worker".to_owned()),
+            tier,
+            team: Some("forge".to_owned()),
+            ..agent("claude", "worker", "/code/feature", 0)
+        };
+        let plan = cohort(
+            &[planner.clone(), worker],
+            &[
+                profile_cell("claude", "planner"),
+                profile_cell("claude", "worker"),
+            ],
+            Some("forge"),
+        )
+        .expect("a roleless team member still matches its stamped profile");
+        assert_eq!(resume_id(&plan.seeds[0]), Some("fallback"));
+        assert_eq!(resume_id(&plan.seeds[1]), Some("worker"));
+    }
+}
+
+#[test]
+fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
+    let (teams, mut profiles, commands) = team_configs();
+    profiles
+        .0
+        .insert("claude-plan".to_owned(), routed_profile(Some("medium")));
+    let stamp = tier_stamp("astra");
+    let planner = AgentState {
+        profile: Some("claude-plan".to_owned()),
+        tier: Some(stamp.clone()),
+        ..team_agent("codex", "planner", "planner", "/repo/forge", 3)
+    };
+    let coder = team_agent("codex", "coder", "coder", "/repo/forge", 5);
+    let tabs = plan_team_restore_tabs(
+        &[planner, coder],
+        &NO_LOGINS,
+        &teams,
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        &WORKSPACE,
+        |_| true,
+        |_| true,
+        false,
+    );
+    assert_eq!(tabs.len(), 1);
+    let tab = &tabs[0];
+    let panes = compile_layout_panes(
+        &tab.layout,
+        LayoutPaneParams {
+            runtime: &RUNTIME,
+            cwd: &tab.cwd,
+            cleanup_worktree: false,
+            in_place: false,
+            resume_seeds: Some(&tab.cohort.seeds),
+            launch_identities: &[],
+            fallback_channel: None,
+        },
+    )
+    .unwrap();
+    let request = decode_exec_request(&panes.columns[0].panes[0].argv);
+    assert_eq!(request.kind.as_str(), "codex");
+    assert_eq!(
+        request.identity.params.model.as_deref(),
+        Some(stamp.model.as_str())
+    );
+    assert_eq!(request.identity.params.tier, Some(stamp));
+    assert!(
+        matches!(request.action, crate::harness::launch::ExecAction::Resume { extra_args, .. } if extra_args.iter().any(|arg| arg == "--search"))
+    );
 }
 
 #[test]

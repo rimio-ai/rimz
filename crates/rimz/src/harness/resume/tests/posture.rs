@@ -4,7 +4,7 @@
 use super::*;
 
 #[test]
-fn resume_reresolves_a_rebound_model_tier() {
+fn resume_preserves_a_stamped_model_after_a_tier_rebind() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("definitions");
     std::fs::create_dir_all(home.join("agents")).unwrap();
@@ -37,10 +37,118 @@ fn resume_reresolves_a_rebound_model_tier() {
     let config: crate::config::MachineConfig =
         toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let rebound = load(&config.tiers);
-    let posture = posture_for("claude", Some("planner"), None, &rebound.agent_profiles);
+    let model = "opus";
+    let stamp = tier_stamp(model);
+    let posture = resolve_posture(
+        PostureRequest {
+            profile: Some("planner"),
+            kind: &AgentKind::new_unchecked("claude"),
+            stamped_mode: None,
+            stamped_tier: Some(&stamp),
+        },
+        &rebound.agent_profiles,
+    );
     assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
-    assert_eq!(posture.launch.model.as_deref(), Some("fable"));
+    assert_eq!(posture.launch.model.as_deref(), Some(model));
     assert_eq!(posture.launch.effort.as_deref(), Some("medium"));
+}
+
+#[test]
+fn fallen_back_resume_uses_stamped_family_render_and_model_defaults() {
+    for effort in [None, Some("medium")] {
+        let profiles = profiles("planner", routed_profile(effort));
+        let stamp = tier_stamp("astra");
+        let plan = plan_profiled(
+            AgentState {
+                profile: Some("planner".to_owned()),
+                model: Some("hook-observed-model".to_owned()),
+                tier: Some(stamp.clone()),
+                ..agent("codex", "a1", "/code/qe", 1)
+            },
+            &profiles,
+        );
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+        let request = decode_exec_request(&single_pane_argv(&plan));
+        assert_eq!(request.kind.as_str(), "codex");
+        assert_eq!(
+            request.identity.params.model.as_deref(),
+            Some(stamp.model.as_str())
+        );
+        assert_eq!(request.identity.params.tier, Some(stamp));
+        let expected = effort.or(crate::agents::definition_defaults("codex", Some("astra")).effort);
+        assert_eq!(request.identity.params.effort.as_deref(), expected);
+        assert!(
+            matches!(request.action, crate::harness::launch::ExecAction::Resume { extra_args, .. } if extra_args.iter().any(|arg| arg == "--search"))
+        );
+    }
+}
+
+#[test]
+fn stamped_alias_resume_replays_the_recorded_session_model() {
+    let profiles = profiles("planner", routed_profile(None));
+    let stamp = tier_stamp("astra");
+    let posture = resolve_posture(
+        PostureRequest {
+            profile: Some("planner"),
+            kind: &AgentKind::new_unchecked("codex"),
+            stamped_mode: None,
+            stamped_tier: Some(&stamp),
+        },
+        &profiles,
+    );
+    assert!(posture.degraded.is_none());
+    assert_eq!(posture.launch.model.as_deref(), Some("astra"));
+    let plan = plan_profiled(
+        AgentState {
+            profile: Some("planner".into()),
+            model: Some("gpt-6.1-astra".into()),
+            tier: Some(stamp.clone()),
+            ..agent("codex", "a1", "/code/qe", 1)
+        },
+        &profiles,
+    );
+    let mut request = decode_exec_request(&single_pane_argv(&plan));
+    let root = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
+    let machine = toml::from_str("[models.codex]\nastra = 'gpt-6.2-astra'").unwrap();
+    let (warnings, movement) = crate::harness::launch_plan::resolve_model(
+        &mut request,
+        &machine,
+        &runtime,
+        &crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked("codex")),
+        Some("gpt-6.1-astra"),
+        None,
+        &Default::default(),
+    )
+    .unwrap();
+    assert!(warnings.is_empty());
+    assert!(movement.is_none());
+    assert_eq!(
+        request.identity.params.model.as_deref(),
+        Some("gpt-6.1-astra")
+    );
+    assert_eq!(request.identity.params.tier, Some(stamp));
+    assert!(
+        request
+            .action
+            .extra_args()
+            .windows(2)
+            .any(|args| args == ["--model", "gpt-6.1-astra"])
+    );
+    request.identity.params.model = Some("sol".into());
+    let machine = toml::from_str("[models.codex]\nsol = 'gpt-6-sol'").unwrap();
+    crate::harness::launch_plan::resolve_model(
+        &mut request,
+        &machine,
+        &runtime,
+        &crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked("codex")),
+        Some("gpt-6.1-astra"),
+        None,
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(request.identity.params.model.as_deref(), Some("gpt-6-sol"));
 }
 
 #[test]
@@ -293,4 +401,21 @@ fn posture_reports_a_provider_switch_rather_than_refusing() {
         posture.degraded,
         Some(PostureDegrade::KindChanged { .. })
     ));
+}
+
+#[test]
+fn stamped_resume_degrades_when_the_profile_loses_its_family_render() {
+    let profiles = profiles("planner", profile("codex"));
+    let plan = plan_profiled(
+        AgentState {
+            profile: Some("planner".to_owned()),
+            tier: Some(tier_stamp("astra")),
+            ..agent("codex", "a1", "/code/qe", 1)
+        },
+        &profiles,
+    );
+    assert_eq!(plan.warnings.len(), 1);
+    assert!(plan.warnings[0].contains("this session is codex"));
+    let request = decode_exec_request(&single_pane_argv(&plan));
+    assert_eq!(request.identity.params.model, None);
 }

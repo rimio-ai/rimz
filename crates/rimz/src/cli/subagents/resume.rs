@@ -55,6 +55,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
             profile: child.profile.as_deref(),
             kind: &child.kind,
             stamped_mode: child.mode,
+            stamped_tier: child.tier.as_deref(),
         },
         launch.profiles_for(rimz::config::effective::ProfileScope::Subagents),
     );

@@ -1473,95 +1473,114 @@ fn explain_redacts_trusted_project_env_in_json_and_human_output() {
 #[cfg(unix)]
 #[test]
 fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
-    let env = Env::new();
-    let provider_home = env.home_root.join(".claude");
-    std::fs::create_dir_all(provider_home.join("projects")).expect("empty conversation catalog");
-    let config_dir = env.rimz_home();
-    std::fs::create_dir_all(&config_dir).expect("mkdir config");
-    std::fs::write(
-        config_dir.join("config.toml"),
-        "[agents]\nisolation = \"host\"\n",
-    )
-    .expect("write current profile");
-    crate::common::write_definition(
-        &env,
-        "agents",
-        "worker",
-        "description: Worker\nagent: claude\nmodel: opus\ntools: []",
-        "",
-    );
-    let workspace = env.resolve_workspace(&env.project_root);
-    let store = env.store();
-    store
-        .append_event(&EventEnvelope::agent_launched(
-            workspace.workspace_id,
-            &workspace.session_name,
-            &AgentKind::new_unchecked("claude"),
-            AgentLaunchPayload {
-                agent_id: AgentSessionId::from("missing-conversation"),
-                launch_id: Some(AgentSessionId::from("launch_explain_worker")),
-                agent_name: "worker".to_owned(),
-                agent_name_explicit: true,
-                launch: LaunchParams {
-                    profile: Some("worker".to_owned()),
-                    model: Some("fable".to_owned()),
-                    isolation: Some(rimz::config::Isolation::Host),
-                    ..Default::default()
+    for stamped in [false, true] {
+        let env = Env::new();
+        let provider_home = env.home_root.join(".claude");
+        std::fs::create_dir_all(provider_home.join("projects"))
+            .expect("empty conversation catalog");
+        let config_dir = env.rimz_home();
+        std::fs::create_dir_all(&config_dir).expect("mkdir config");
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[agents]\nisolation = \"host\"\n",
+        )
+        .expect("write current profile");
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "worker",
+            "description: Worker\nagent: claude\nmodel: opus\ntools: []",
+            "",
+        );
+        let workspace = env.resolve_workspace(&env.project_root);
+        let store = env.store();
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id,
+                &workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    agent_id: AgentSessionId::from("missing-conversation"),
+                    launch_id: Some(AgentSessionId::from("launch_explain_worker")),
+                    agent_name: "worker".to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams {
+                        profile: Some("worker".to_owned()),
+                        model: Some("fable".to_owned()),
+                        tier: stamped.then(|| {
+                            Box::new(rimz::agents::TierStamp {
+                                tier: rimz::config::tiers::ModelTier::Senior,
+                                model: "claude-fable-5-1".to_owned(),
+                                used_tier: Some(rimz::config::tiers::ModelTier::Principal),
+                                skipped: vec![rimz::agents::TierSkip {
+                                    model: "astra".to_owned(),
+                                    reason: rimz::agents::TierSkipReason::LoggedOut,
+                                }],
+                            })
+                        }),
+                        isolation: Some(rimz::config::Isolation::Host),
+                        ..Default::default()
+                    },
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
                 },
-                state: AgentLaunchState::Bound,
-                run_id: None,
-                pane_id: None,
-                runtime_owner: None,
-                worktree_path: Some(env.project_root.display().to_string()),
-                worktree_branch: None,
-                prompt: None,
-                description: None,
-            },
-        ))
-        .expect("seed durable seat");
-    let before = serde_json::to_value(store.read_events().unwrap()).unwrap();
-    let output = env
-        .rimz()
-        .env("CLAUDE_CONFIG_DIR", &provider_home)
-        .args(["agents", "explain", "@worker", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(report["action"], "launch");
-    assert_eq!(report["action_note"], "no recorded conversation");
-    assert_eq!(report["name"], "worker");
-    assert_eq!(report["launch_id"], "launch_explain_worker");
-    assert_eq!(report["model"], "opus");
-    assert_eq!(report["isolation_source"], "recorded --isolation");
-    assert_eq!(report["env"]["RIMZ_AGENT_NAME"], "worker");
-    assert!(
-        report["provider_argv"]
-            .as_array()
-            .unwrap()
-            .windows(2)
-            .any(|pair| pair[0] == "--model" && pair[1] == "opus")
-    );
-    for overrides in [
-        &["--model", "fable"][..],
-        &["--yolo"],
-        &["--budget", "1"],
-        &["--", "--foo"],
-    ] {
-        env.rimz()
-            .args(["agents", "explain", "@worker"])
-            .args(overrides)
+            ))
+            .expect("seed durable seat");
+        let before = serde_json::to_value(store.read_events().unwrap()).unwrap();
+        let output = env
+            .rimz()
+            .env("CLAUDE_CONFIG_DIR", &provider_home)
+            .args(["agents", "explain", "@worker", "--json"])
             .assert()
-            .failure()
-            .stderr(contains("overrides apply to profile plans"));
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(report["action"], "launch");
+        assert_eq!(report["action_note"], "no recorded conversation");
+        assert_eq!(report["name"], "worker");
+        assert_eq!(report["launch_id"], "launch_explain_worker");
+        let expected_model = if stamped { "claude-fable-5-1" } else { "opus" };
+        assert_eq!(report["model"], expected_model);
+        if stamped {
+            assert_eq!(report["tier"], "senior");
+            assert_eq!(report["tier_skipped"][0]["reason"], "logged_out");
+        }
+        assert_eq!(report["isolation_source"], "recorded --isolation");
+        assert_eq!(report["env"]["RIMZ_AGENT_NAME"], "worker");
+        assert!(
+            report["provider_argv"]
+                .as_array()
+                .unwrap()
+                .windows(2)
+                .any(|pair| pair[0] == "--model" && pair[1] == expected_model)
+        );
+        for overrides in [
+            &["--model", "fable"][..],
+            &["--yolo"],
+            &["--budget", "1"],
+            &["--", "--foo"],
+        ] {
+            env.rimz()
+                .args(["agents", "explain", "@worker"])
+                .args(overrides)
+                .assert()
+                .failure()
+                .stderr(contains("overrides apply to profile plans"));
+        }
+        assert_eq!(
+            serde_json::to_value(store.read_events().unwrap()).unwrap(),
+            before
+        );
+        assert!(!env.runtime_paths().prompt_dir().exists());
     }
-    assert_eq!(
-        serde_json::to_value(store.read_events().unwrap()).unwrap(),
-        before
-    );
-    assert!(!env.runtime_paths().prompt_dir().exists());
 }
 
 #[cfg(unix)]

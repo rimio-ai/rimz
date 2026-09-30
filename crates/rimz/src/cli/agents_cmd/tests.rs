@@ -714,6 +714,11 @@ mod parse {
         }
         for (input, override_args, message) in [
             (
+                "--tier",
+                vec!["--tier", "senior"],
+                "`--tier` does not apply to resumed sessions; launch fresh instead",
+            ),
+            (
                 "PROMPT",
                 vec!["ship"],
                 "a resumed session takes no prompt; send it after it opens with `rimz message`",

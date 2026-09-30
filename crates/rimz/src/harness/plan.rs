@@ -162,6 +162,7 @@ pub(super) struct ResumeLaunchIdentity {
     pub launch_depth: Option<u8>,
     pub launched_by: Option<crate::agents::LaunchedBy>,
     pub isolation: Option<crate::config::Isolation>,
+    pub tier: Option<Box<crate::agents::TierStamp>>,
 }
 
 impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
@@ -181,6 +182,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             launch_depth: agent.launch_depth,
             launched_by: agent.launched_by.clone(),
             isolation: agent.isolation,
+            tier: agent.tier.clone(),
         }
     }
 }
@@ -697,7 +699,7 @@ pub fn finalize_launch_layout(
     Ok(warnings)
 }
 
-fn finalize_agent_cell(
+pub(super) fn finalize_agent_cell(
     cell: &mut AgentCell,
     options: LaunchFinalizeOptions<'_>,
     warnings: &mut Vec<LaunchFinalizeWarning>,
@@ -1122,6 +1124,7 @@ pub(super) fn resume_command(
         model: posture.model.clone(),
         effort: posture.effort.clone(),
         budget: posture.budget.clone(),
+        tier: identity.tier.clone(),
         ..Default::default()
     };
     let result = crate::harness::launch::exec_argv(

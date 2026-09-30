@@ -77,6 +77,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
                 profile: agent.profile.as_deref(),
                 kind: &agent.kind,
                 stamped_mode: agent.mode,
+                stamped_tier: agent.tier.as_deref(),
             },
             &effective.profiles,
         );
@@ -512,7 +513,9 @@ impl<'a> ExplainReport<'a> {
             ),
             mode: params.mode,
             model: params.model.as_deref(),
-            tier: if args.target.starts_with('@') || routed_profile.is_none() {
+            tier: if let Some(stamp) = &params.tier {
+                Some(stamp.tier)
+            } else if args.target.starts_with('@') || routed_profile.is_none() {
                 None
             } else if let Some(model) = args
                 .overrides

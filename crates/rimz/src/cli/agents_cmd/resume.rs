@@ -70,10 +70,17 @@ pub(super) fn resume_lane(
         rimz::store::runtime::agent_liveness,
         |path| discover_lane_sessions(path, &catalog, &logins),
         || {
-            LaneRestoreConfig::load(&machine_config, &workspace.project_root).map_err(|error| {
-                LaneResumeError::RestoreConfig {
-                    message: error.to_string(),
-                }
+            let availability = rimz::harness::plan::LaunchAvailability::read(
+                store.runtime_paths(),
+                store.paths(),
+                &machine_config,
+                jiff::Timestamp::now(),
+            );
+            LaneRestoreConfig::load(&machine_config, &workspace.project_root, |kind, model| {
+                availability.unavailable(kind, model)
+            })
+            .map_err(|error| LaneResumeError::RestoreConfig {
+                message: error.to_string(),
             })
         },
     )?;

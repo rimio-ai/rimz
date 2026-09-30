@@ -121,7 +121,14 @@ pub fn resolve_model(
     if !is_alias {
         return Ok((warnings, movement));
     }
-    let replay = if matches!(request.action, launch::ExecAction::Launch { .. }) {
+    let replay = if matches!(request.action, launch::ExecAction::Launch { .. })
+        || request
+            .identity
+            .params
+            .tier
+            .as_ref()
+            .is_some_and(|stamp| stamp.model != alias)
+    {
         None
     } else {
         let recorded_model = recorded_model.filter(|model| {

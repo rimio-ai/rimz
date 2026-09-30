@@ -34,6 +34,11 @@ pub(super) fn validate_resume_inputs(
             "--agent",
             "`--agent` changes which session resume matches; resume the spec as launched",
         )
+    } else if overrides.tier.is_some() {
+        (
+            "--tier",
+            "`--tier` does not apply to resumed sessions; launch fresh instead",
+        )
     } else if overrides.system_prompt_file.is_some() {
         (
             "--system-prompt-file",
@@ -220,6 +225,7 @@ pub(super) fn launch_layout(
             &ctx,
             &machine_config,
             &teams,
+            &effective.profiles,
             layout,
             team_name,
             single_cell,
@@ -327,6 +333,7 @@ pub(super) fn launch_layout(
                     &ctx,
                     &machine_config,
                     &teams,
+                    &effective.profiles,
                     layout,
                     team_name,
                     single_cell,
@@ -671,7 +678,8 @@ fn launch_resume_layout(
     ctx: &Ctx,
     machine_config: &rimz::config::MachineConfig,
     teams: &rimz::config::TeamsConfig,
-    layout: LayoutSpec,
+    profiles: &rimz::config::ProfilesConfig,
+    mut layout: LayoutSpec,
     team_name: Option<String>,
     single_cell: bool,
     worktree_filter: Option<&Path>,
@@ -707,6 +715,12 @@ fn launch_resume_layout(
         rimz::harness::resume::resume_session_present,
     )
     .map_err(|err| cohort_resume_error(err, spec, scope.as_deref(), &agents, teams))?;
+    rimz::harness::resume::restore_routed_cells(
+        &mut layout,
+        &plan.seeds,
+        profiles,
+        &launch_override_preset(&args.launch.overrides)?,
+    )?;
     for (cell, seed) in layout.agent_cells().zip(&plan.seeds) {
         let isolation = match seed {
             rimz::harness::plan::CohortSeed::Resume(agent) => {

@@ -65,8 +65,18 @@ impl LaneRestoreConfig {
     pub fn load(
         machine: &crate::config::MachineConfig,
         project_root: &Path,
+        unavailable: impl FnMut(&str, &str) -> Option<crate::agents::TierSkipReason>,
     ) -> anyhow::Result<Self> {
-        let launch = crate::config::effective::load(machine, project_root)?;
+        let mut launch = crate::config::effective::load(machine, project_root)?;
+        launch.route(
+            &machine.tiers,
+            crate::config::effective::ProfileScope::Agents,
+            None,
+            None,
+            None,
+            None,
+            unavailable,
+        )?;
         Ok(Self {
             teams: launch.teams,
             profiles: launch.profiles,
@@ -349,6 +359,7 @@ pub struct PostureRequest<'a> {
     pub kind: &'a AgentKind,
     /// The permission mode recorded on the original launch event.
     pub stamped_mode: Option<PermissionMode>,
+    pub stamped_tier: Option<&'a crate::agents::TierStamp>,
 }
 
 /// Resolve a stored profile name back into the posture it launches with.
@@ -367,7 +378,40 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
     let Some(name) = request.profile else {
         return ResumePosture::bare(request.stamped_mode, request.kind);
     };
-    let cell = match crate::harness::spec::profile_cell(name, profiles) {
+    let mut profiles = std::borrow::Cow::Borrowed(profiles);
+    if let Some(stamp) = request.stamped_tier
+        && let Some(profile) = profiles.0.get(name)
+    {
+        let rendered = profile.definition_renders.as_ref().and_then(|renders| {
+            renders.renders.get(request.kind.as_str()).map(|profile| {
+                let mut profile = profile.clone();
+                profile.model = Some(stamp.model.clone());
+                profile.effort = renders.effort.clone().or_else(|| {
+                    crate::agents::definition_defaults(request.kind.as_str(), Some(&stamp.model))
+                        .effort
+                        .map(str::to_owned)
+                });
+                profile.tier_stamp = Some(Box::new(stamp.clone()));
+                profile
+            })
+        });
+        let Some(rendered) = rendered else {
+            let now = crate::harness::spec::profile_cell(name, &profiles)
+                .map(|cell| cell.kind)
+                .unwrap_or_else(|_| request.kind.clone());
+            return ResumePosture::degrade(
+                request.stamped_mode,
+                request.kind,
+                PostureDegrade::KindChanged {
+                    profile: name.to_owned(),
+                    was: request.kind.clone(),
+                    now,
+                },
+            );
+        };
+        profiles.to_mut().0.insert(name.to_owned(), rendered);
+    }
+    let cell = match crate::harness::spec::profile_cell(name, &profiles) {
         Ok(cell) => cell,
         Err(err) => {
             return ResumePosture::degrade(
@@ -803,6 +847,7 @@ impl ResumeCandidate {
                 launch_depth: None,
                 launched_by: None,
                 isolation: None,
+                tier: None,
             },
             stamped_mode: None,
             cwd: observation.workspace.clone(),
@@ -1549,6 +1594,7 @@ fn materialize_team_restore_tab(
     let identities = batch
         .as_ref()
         .map_or(&[] as &[_], |batch| batch.identities());
+    crate::harness::assist_log::record_tier_fallbacks(identities);
     let layout = compile_layout_panes(
         &planned.layout,
         LayoutPaneParams {
@@ -1609,7 +1655,7 @@ fn plan_team_restore_tabs(
 
     let mut tabs = Vec::new();
     for ((team, cwd), group) in groups {
-        let Ok(layout) = crate::harness::spec::resolve_team(&team, teams, profiles, commands)
+        let Ok(mut layout) = crate::harness::spec::resolve_team(&team, teams, profiles, commands)
         else {
             continue;
         };
@@ -1645,6 +1691,11 @@ fn plan_team_restore_tabs(
             };
             cohort
         };
+        // Failed stamped renders fall through to flat recovery, which reports the degradation and keeps the stored provider.
+        if restore_routed_cells(&mut layout, &cohort.seeds, profiles, &Default::default()).is_err()
+        {
+            continue;
+        }
         let channel = project_root
             .and_then(|project_root| {
                 crate::harness::spec::resolve_room_channel(
@@ -1880,6 +1931,7 @@ fn plan_resume_candidates_detailed(
                 profile: candidate.identity.profile.as_deref(),
                 kind: &candidate.identity.kind,
                 stamped_mode: candidate.stamped_mode,
+                stamped_tier: candidate.identity.tier.as_deref(),
             },
             ctx.profiles,
         );
@@ -2104,6 +2156,82 @@ pub fn plan_cohort_resume(
     })
 }
 
+/// Rebuild stamped cohort members before preflight and pane compilation. Unstamped members retain the finalized layout's existing resume behavior.
+pub fn restore_routed_cells(
+    layout: &mut LayoutSpec,
+    seeds: &[CohortSeed],
+    profiles: &ProfilesConfig,
+    preset: &crate::agents::LaunchPreset,
+) -> Result<(), PostureDegrade> {
+    for (cell, seed) in layout.agent_cells_mut().zip(seeds) {
+        let CohortSeed::Resume(agent) = seed else {
+            continue;
+        };
+        if agent.tier.is_none() {
+            continue;
+        }
+        let posture = resolve_posture(
+            PostureRequest {
+                profile: agent.profile.as_deref(),
+                kind: &agent.kind,
+                stamped_mode: agent.mode,
+                stamped_tier: agent.tier.as_deref(),
+            },
+            profiles,
+        );
+        if let Some(reason) = posture.degraded {
+            return Err(reason);
+        }
+        let mut posture = posture.launch;
+        if let Some(mode) = cell.launch.mode
+            && let Some(adapter) = find_definition(agent.kind.as_str())
+        {
+            adapter
+                .spec()
+                .launch
+                .strip_permission_args(&mut posture.args);
+            posture
+                .args
+                .extend(adapter.spec().launch.permission_args(mode));
+            posture.mode = Some(mode);
+        }
+        cell.kind.clone_from(&agent.kind);
+        cell.args = posture.args;
+        cell.auto_compact = None;
+        cell.system_prompt_file = posture.system_prompt_file;
+        cell.append_system_prompt_files = posture.append_system_prompt_files;
+        cell.skills = posture.skills;
+        cell.allowed_tools = posture.allowed_tools;
+        cell.isolation_default = posture.isolation_default;
+        cell.launch.model = posture.model;
+        cell.launch.effort = posture.effort;
+        cell.launch.mode = posture.mode;
+        cell.launch.tier.clone_from(&agent.tier);
+        if !preset.is_empty() {
+            if preset.model.is_some() {
+                cell.launch.tier = None;
+            }
+            crate::harness::plan::finalize_agent_cell(
+                cell,
+                crate::harness::plan::LaunchFinalizeOptions {
+                    permission_mode: None,
+                    isolation: None,
+                    preset,
+                    passthrough: &[],
+                    budget: None,
+                    max_turns: None,
+                },
+                &mut Vec::new(),
+            )
+            .map_err(|error| PostureDegrade::Unresolved {
+                profile: agent.profile.clone().unwrap_or_default(),
+                reason: error.to_string(),
+            })?;
+        }
+    }
+    Ok(())
+}
+
 fn cohort_spec_label(cells: &[CohortCell], team: Option<&str>) -> String {
     if let Some(team) = team {
         return team.to_owned();
@@ -2240,9 +2368,28 @@ fn match_team_cohort<'a>(
                 !claimed.contains(&agent.agent_id) && agent.role.as_deref() == Some(role)
             })
         } else {
-            pool.iter()
+            let mut available = pool
+                .iter()
                 .copied()
-                .find(|agent| !claimed.contains(&agent.agent_id) && agent.kind == cell.kind)
+                .filter(|agent| !claimed.contains(&agent.agent_id));
+            available
+                .clone()
+                .find(|agent| {
+                    agent.tier.is_some()
+                        && cell
+                            .profile
+                            .as_deref()
+                            .is_some_and(|profile| agent.profile.as_deref() == Some(profile))
+                })
+                .or_else(|| {
+                    available.find(|agent| {
+                        agent.kind == cell.kind
+                            && (agent.tier.is_none()
+                                || cell.profile.as_deref().is_none_or(|profile| {
+                                    agent.profile.as_deref() == Some(profile)
+                                }))
+                    })
+                })
         };
         if let Some(agent) = agent {
             claimed.insert(agent.agent_id.clone());
@@ -2257,7 +2404,7 @@ fn match_single_cohort<'a>(
     cell: &CohortCell,
 ) -> Vec<Option<&'a AgentState>> {
     vec![candidates.iter().copied().find(|agent| {
-        agent.kind == cell.kind
+        (agent.kind == cell.kind || (agent.tier.is_some() && cell.profile.is_some()))
             && cell
                 .profile
                 .as_deref()

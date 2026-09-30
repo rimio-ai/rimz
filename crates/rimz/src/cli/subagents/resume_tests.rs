@@ -35,6 +35,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
             profile: None,
             kind: &child.kind,
             stamped_mode: None,
+            stamped_tier: None,
         },
         &Default::default(),
     );
