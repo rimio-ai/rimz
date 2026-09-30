@@ -82,6 +82,7 @@ impl RuntimePaths {
             self.cohort_spend_path(),
             self.pipeline_path(),
             self.pr_state_path(),
+            self.trunk_state_path(),
             self.focus_anchor_path(),
             self.focus_anchor_lock(),
             self.codex_app_server_socket_path(),

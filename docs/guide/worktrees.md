@@ -138,6 +138,8 @@ error: worktree.created hook failed: exit status: 3
   tree removed; fix agents.worktree.hooks.created
 ```
 
+The same names are also [loop signals](../reference/cli/events.md#reserved-families), separate from hook execution.
+
 Both scripts receive these environment variables, overriding any inherited values with the tree being created or removed:
 
 | Variable | Value |

@@ -26,6 +26,14 @@ fn signal_vocabulary_shape_and_cap_are_pinned() {
     );
     assert!("x".repeat(64).parse::<SignalName>().is_ok());
     assert!("x".repeat(65).parse::<SignalName>().is_err());
+    for family in ["agent", "wait", "team", "ci", "pr", "trunk", "worktree"] {
+        assert!(
+            format!("{family}.custom")
+                .parse::<SignalName>()
+                .unwrap()
+                .is_reserved()
+        );
+    }
     assert_eq!(
         "x.*".parse::<SignalSelector>().expect("family selector"),
         SignalSelector::Family("x".into())
@@ -46,6 +54,8 @@ fn signal_vocabulary_shape_and_cap_are_pinned() {
         (SignalSource::Watch, "watch"),
         (SignalSource::Lifecycle, "lifecycle"),
         (SignalSource::Forge, "forge"),
+        (SignalSource::Git, "git"),
+        (SignalSource::Worktree, "worktree"),
         (SignalSource::Team, "team"),
     ] {
         let serialized = serde_json::to_value(source).expect("signal source JSON");

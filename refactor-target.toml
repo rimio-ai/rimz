@@ -302,7 +302,8 @@ allowed-dependencies = [
 # Checked executable copying shares the durable publication funnel.
 # Sidebar workers lease account-global pixel slots through one classed lock accessor.
 # Assist logging exposes the checked rotating append for launch-time warnings (+1).
-surface-budget = 205
+# The trunk signal lane owns a separate classed runtime cache path.
+surface-budget = 206
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -361,7 +362,8 @@ path = "crates/rimz/src/harness"
 # Caller-aware launch focus crosses the harness/CLI boundary.
 # `message --wait` claims the answer its printed reply came from through the run report ledger.
 # Exec resolves model postures and reports checked assist appends (+2).
-surface-budget = 587
+# Worktree producers share best-effort in-process signal append and fire.
+surface-budget = 588
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -516,7 +518,8 @@ path = "crates/rimz/src/store"
 # AnswerClaim names that borrowed view and carries the earlier answer without another lookup.
 # Exec-wrapper warnings add their durable payload, event constructor, and writer boundary.
 # SidebarSnapshot::apply_machine_config stamps the per-machine config for the fold spine and the room-less CLI read.
-surface-budget = 343
+# Git-source admission shares the typed trunk signal vocabulary.
+surface-budget = 344
 
 [[module]]
 path = "crates/rimz/src/theme"

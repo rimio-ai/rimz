@@ -61,6 +61,8 @@ A launch that names an existing marked tree reuses it; ordinary `rimz worktree n
 
 ### Lifecycle hooks
 
+The hook event names `worktree.created` and `worktree.removed` are also [loop signals](../../reference/cli/events.md#reserved-families), with separate successful-operation emission boundaries.
+
 [`WorktreeHooks`](../../../crates/rimz/src/config/worktree.rs) carries the optional commands from machine config. Validation refuses blank commands both on config load and at lifecycle entrypoints, since launch config loading is lenient. Project config neither overrides the machine hooks nor includes them in its executable-surface hash. Seed manifests remain non-executing. The [guide](../../guide/worktrees.md#prepare-the-tree-with-a-hook) owns the command and environment contract.
 
 There are exactly two fire sites: `finish_worktree` calls `hooks::run_hook` with `WorktreeHookEvent::Created` after marker, includes, and links; `remove_marked_worktree` calls it with `Removed` after successful Git removal and before branch deletion. Reuse never enters `finish_worktree`. Rollback uses the same removal funnel, so it also fires `removed` to undo partial setup; a tree that adopted an existing local branch stops there and keeps the branch. Skips, refused removals, and dry-run sweeps never reach the removal fire site.

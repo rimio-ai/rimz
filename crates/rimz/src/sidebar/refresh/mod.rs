@@ -31,6 +31,7 @@ pub(super) mod rate_limits;
 mod runner;
 pub mod sessions;
 mod trace;
+mod trunk;
 pub mod usage;
 
 pub use accounts::{AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts};
@@ -315,6 +316,7 @@ pub(super) fn refresh_heavy_lanes(
     );
     pipeline::refresh_pipeline_for(base, runtime, config, &teams);
     let pr_cache = produce_pr_states(base, runtime);
+    trunk::produce_trunk_state(base, runtime, config.sidebar.trunk.as_deref());
 
     RefreshedLanes {
         spending,

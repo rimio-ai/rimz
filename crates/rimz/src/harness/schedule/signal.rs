@@ -597,6 +597,17 @@ fn audit_agents(project_root: &Path) -> Vec<crate::agents::AgentState> {
     })
 }
 
+/// Record and fire a best-effort signal after its originating operation succeeded.
+pub fn emit_in_process(store: &Store, session_name: &str, project_root: &Path, signal: &Signal) {
+    if let Err(error) = store.append_signal(session_name, signal.into()) {
+        tracing::warn!(%error, name = %signal.name, "could not append signal");
+        return;
+    }
+    if let Err(error) = fire_signal(store.runtime_paths(), project_root, signal) {
+        tracing::warn!(%error, name = %signal.name, "could not fire signal tasks");
+    }
+}
+
 /// Fire matching tasks in the emitter process. Signal events are never replayed.
 pub fn fire_signal(
     runtime: &RuntimePaths,

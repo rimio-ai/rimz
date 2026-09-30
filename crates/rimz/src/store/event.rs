@@ -54,7 +54,22 @@ lifetime_fields!(transcript_path; account_key; role, team, channel, profile, log
 
 pub(crate) const MAX_SIGNAL_NAME_BYTES: usize = 64;
 
-const RESERVED_FAMILIES: &[&str] = &["agent", "wait", "team", "ci", "pr"];
+const RESERVED_FAMILIES: &[&str] = &["agent", "wait", "team", "ci", "pr", "trunk", "worktree"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitSignal {
+    TrunkMoved,
+}
+
+impl GitSignal {
+    pub const ALL: &[Self] = &[Self::TrunkMoved];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TrunkMoved => "trunk.moved",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SignalName(String);
@@ -132,6 +147,8 @@ pub enum SignalSource {
     Watch,
     Lifecycle,
     Forge,
+    Git,
+    Worktree,
     Team,
 }
 

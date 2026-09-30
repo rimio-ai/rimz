@@ -224,6 +224,8 @@ fn removal_retirement_returns_both_independent_results() {
     let runtime = crate::RuntimePaths::under(workspace_id, runtime.path()).expect("runtime");
     let store = crate::Store::open(paths, runtime).expect("store");
     let removed = RemovalOutcome {
+        repo_root: PathBuf::from("/repo"),
+        from_pr: None,
         worktree_name: "demo".to_owned(),
         branch: "demo".to_owned(),
         removed_path: PathBuf::from("/repo-worktrees/demo"),
@@ -403,6 +405,7 @@ fn launch_checkout_falls_back_to_the_room_repo_without_a_current_repo() {
 fn generated_launch_name_is_exposed_only_for_bare_checkout() {
     let generated = LaunchCheckout {
         reused: false,
+        created: None,
         cwd: PathBuf::from("/code/query-engine-worktrees/swift-orbit"),
         branch: Some("swift-orbit".to_owned()),
         repo_root: Some(PathBuf::from("/code/query-engine")),

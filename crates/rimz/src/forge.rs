@@ -14,6 +14,7 @@ pub mod pr_state;
 pub enum ForgeSignal {
     CiPassed,
     CiFailed,
+    PrOpened,
     PrMerged,
     PrClosed,
     PrBehind,
@@ -24,6 +25,7 @@ impl ForgeSignal {
     pub const ALL: &[Self] = &[
         Self::CiPassed,
         Self::CiFailed,
+        Self::PrOpened,
         Self::PrMerged,
         Self::PrClosed,
         Self::PrBehind,
@@ -34,6 +36,7 @@ impl ForgeSignal {
         match self {
             Self::CiPassed => "ci.passed",
             Self::CiFailed => "ci.failed",
+            Self::PrOpened => "pr.opened",
             Self::PrMerged => "pr.merged",
             Self::PrClosed => "pr.closed",
             Self::PrBehind => "pr.behind",

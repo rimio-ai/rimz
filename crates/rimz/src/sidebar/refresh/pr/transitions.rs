@@ -27,6 +27,25 @@ pub(super) fn transitions(
             continue;
         }
         let prior_link = prior.states.get(path).filter(|link| stamp.owns_link(link));
+        if next_link.state == WorktreePrState::Open
+            && prior.repos.get(repo).is_some_and(|probe| probe.ok)
+            && !prior_link.is_some_and(|link| {
+                link.state == WorktreePrState::Open && link.number == next_link.number
+            })
+        {
+            signals.push((
+                ForgeSignal::PrOpened.as_str(),
+                payload(
+                    next,
+                    path,
+                    stamp,
+                    repo,
+                    Some(next_link),
+                    Some(ForgeSignal::PrOpened),
+                    remote,
+                ),
+            ));
+        }
         for signal in [ForgeSignal::PrBehind, ForgeSignal::PrConflicted] {
             if let Some(key) = open_key(Some(next_link), signal)
                 && Some(key) != open_key(prior_link, signal)
@@ -192,7 +211,9 @@ fn payload(
     let state = match signal {
         Some(ForgeSignal::PrMerged) => Some("merged"),
         Some(ForgeSignal::PrClosed) => Some("closed"),
-        Some(ForgeSignal::PrBehind | ForgeSignal::PrConflicted) => Some("open"),
+        Some(ForgeSignal::PrOpened | ForgeSignal::PrBehind | ForgeSignal::PrConflicted) => {
+            Some("open")
+        }
         _ => None,
     };
     if let Some(state) = state {

@@ -30,6 +30,98 @@ use crate::common::{
 };
 
 #[test]
+fn trunk_signal_fires_only_through_git_source() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "trunk",
+            "--signal",
+            "trunk.moved",
+            "--check",
+            "true",
+        ],
+    );
+    let refused = env
+        .rimz()
+        .args(["events", "emit", "trunk.moved"])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("reserved"));
+    loop_ok(&env, &["events", "emit", "trunk.moved", "--source", "git"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !read_loop_run_records(&env)
+        .iter()
+        .any(|r| r.task == "trunk" && r.result == LoopRunResult::Completed)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        read_loop_run_records(&env)
+            .iter()
+            .any(|r| r.task == "trunk" && r.result == LoopRunResult::Completed)
+    );
+}
+
+#[test]
+fn worktree_created_fires_a_loop_subscriber() {
+    let env = Env::new();
+    for args in [
+        vec!["init", "-b", "main"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+    ] {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&env.project_root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "created",
+            "--signal",
+            "worktree.created",
+            "--check",
+            "true",
+        ],
+    );
+    loop_ok(&env, &["worktree", "new", "signal-test"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !read_loop_run_records(&env)
+        .iter()
+        .any(|r| r.task == "created" && r.result == LoopRunResult::Completed)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        read_loop_run_records(&env)
+            .iter()
+            .any(|r| r.task == "created" && r.result == LoopRunResult::Completed)
+    );
+}
+
+#[test]
 fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
     let env = Env::new();
     for (name, signal) in [("behind", "pr.behind"), ("merged", "pr.merged")] {

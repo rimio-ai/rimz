@@ -605,7 +605,7 @@ fn signal_names_pin_the_public_grammar() {
     }
     assert!("agent.idle".parse::<SignalName>().unwrap().is_reserved());
     assert!("wait.task".parse::<SignalName>().unwrap().is_reserved());
-    for family in ["agent", "wait", "team", "ci", "pr"] {
+    for family in ["agent", "wait", "team", "ci", "pr", "trunk", "worktree"] {
         let name = format!("{family}.done").parse::<SignalName>().unwrap();
         assert_eq!(name.family(), family);
         assert!(name.is_reserved());

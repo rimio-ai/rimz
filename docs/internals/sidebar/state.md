@@ -209,6 +209,8 @@ These files are the multiplexer's side of the channel, written outside the sideb
 
 The fetch worker publishes process metrics and group roots alongside pane production. The cache refresher owns the rest, and asks the separately elected spending service to refresh spend.
 
+The project-root trunk lane publishes `lanes/trunk-state.json` separately from per-worktree diff stats and emits through a detached helper. Its baseline and single-flight contract live in [Trunk and worktree signals](../harness/loops.md#trunk-and-worktree-signals).
+
 | Lane | Scope | Carries |
 | --- | --- | --- |
 | `lanes/diff-stats.json` | Room | Per-worktree git facts in two stamped halves: edit-sensitive (added and removed lines, dirty and untracked state, branch, merge or rebase in progress) and commit-shaped (ahead and behind, landed marker, did-work marker, `--from-pr` provenance), plus the group-root set. The landed and did-work proofs are [worktrees.md → What the sidebar asks](../harness/worktrees.md#what-the-sidebar-asks). |
@@ -251,6 +253,7 @@ A repository is due when its tier TTL has passed, when a target's HEAD differs f
 | Change | Signal |
 | --- | --- |
 | A link leaves the open state | `pr.merged` or `pr.closed` |
+| A continuous target has a successful prior repository probe and gains an owned open PR without a prior owned open link of the same number | `pr.opened` |
 | An open GitHub PR is behind its live base (`behindBy > 0`), on entry or a changed forge head | `pr.behind` |
 | An open GitHub PR has settled conflicting mergeability, on entry or a changed settled-at head | `pr.conflicted` |
 | A PR's CI verdict, or a PR-less path's verdict for a commit the branch added (trunk exempt), settles to passing or failing | `ci.passed` or `ci.failed` |
@@ -356,7 +359,7 @@ A push channel lets a change a writer already knows about reach every renderer w
 - **The Zellij presence plugin** publishes topology snapshots and client observations through `rimz sidebar wake`. The host accepts one writer under the topology lock, derives focus, runs the projector, publishes `lanes/pane-topology.json`, and stamps `live/presence.stamp`. What the plugin sends, how often, and how competing writers are fenced and retired is [multiplexers.md → The Zellij presence plugin](../multiplexers.md#the-zellij-presence-plugin).
 - **The tmux control-mode watch**, run by the elder, keeps only out-of-order stream state, maps subscription and focus lines into the same transitions, stamps `live/presence.stamp`, and feeds the same projector ([multiplexers.md → The control-mode presence watch](../multiplexers.md#the-control-mode-presence-watch)).
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs)) watches each live session whose adapter declares `transcript_tail_context`, Codex and Copilot included, and runs the stat-gated refresh on write to cover mid-turn gaps between progress hooks. A watcher that never starts costs nothing, because the producer-tick refresh stays unconditional.
-- **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, rechecks the election each pass, refreshes the heavy lanes from the last published pane frame, fires due loop tasks (including the watch-lost backstop for a dead `rimz wait` watcher), wakes due scheduled messages, and emits [forge signals](#pr-state). A panic resets only its rollup cursor, and the next tick retries from cache.
+- **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, rechecks the election each pass, refreshes the heavy lanes from the last published pane frame, fires due loop tasks (including the watch-lost backstop for a dead `rimz wait` watcher), wakes due scheduled messages, and emits [forge signals](#pr-state) and [trunk signals](../harness/loops.md#trunk-and-worktree-signals). A panic resets only its rollup cursor, and the next tick retries from cache.
 
 ### What presence data drives
 

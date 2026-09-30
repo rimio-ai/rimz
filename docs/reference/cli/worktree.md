@@ -32,6 +32,8 @@ Named channels and worktrees share one namespace in a repository room ([channel 
 
 ## Create a worktree
 
+The hook event names `worktree.created` and `worktree.removed` are also [loop signals](./events.md#reserved-families).
+
 ```console
 $ rimz worktree new feat-a
 created feat-a

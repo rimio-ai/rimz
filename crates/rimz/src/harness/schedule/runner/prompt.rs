@@ -132,6 +132,12 @@ fn signal_headline(signal: &Signal) -> String {
             }
         }
         "agent" => append_identity(&mut headline, &signal.payload, "handle"),
+        "trunk" => {
+            if let Some(trunk) = signal.payload.get("trunk").and_then(Value::as_str) {
+                headline.push_str(&format!(" on {trunk}"));
+            }
+        }
+        "worktree" => append_identity(&mut headline, &signal.payload, "branch"),
         "team" => append_identity(&mut headline, &signal.payload, "instance"),
         _ => {}
     }

@@ -6,6 +6,8 @@
 
 use std::time::Duration;
 
+pub(super) const TRUNK_STATE_TTL: Duration = Duration::from_secs(5);
+
 use jiff::SignedDuration;
 
 /// The realtime event store's receiver-clock TTL. Events are a latency hint:

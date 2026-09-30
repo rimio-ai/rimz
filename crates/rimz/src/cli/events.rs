@@ -39,7 +39,7 @@ enum EventsSubcmd {
         #[arg(long, value_name = "OBJECT")]
         json: Option<String>,
         /// Internal producer provenance.
-        #[arg(long, hide = true, value_parser = ["cli", "forge"], default_value = "cli")]
+        #[arg(long, hide = true, value_parser = ["cli", "forge", "git"], default_value = "cli")]
         source: String,
     },
 }
@@ -142,6 +142,16 @@ fn validate_emit_source(
     use rimz::store::event::SignalSource;
 
     match source {
+        "git" => {
+            let names = rimz::store::event::GitSignal::ALL
+                .iter()
+                .map(|signal| signal.as_str())
+                .collect::<Vec<_>>();
+            if !names.contains(&name.as_str()) {
+                anyhow::bail!("--source git accepts only {}", names.join(", "));
+            }
+            Ok(SignalSource::Git)
+        }
         "forge" => {
             let names = rimz::forge::ForgeSignal::ALL
                 .iter()
@@ -201,12 +211,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn git_source_accepts_only_trunk_moved() {
+        let name = "trunk.moved".parse().unwrap();
+        assert!(validate_emit_source(&name, "cli").is_err());
+        assert!(validate_emit_source(&name, "forge").is_err());
+        assert!(validate_emit_source(&name, "git").is_ok());
+        for raw in [
+            "trunk.other",
+            "worktree.created",
+            "worktree.removed",
+            "pr.opened",
+        ] {
+            assert!(validate_emit_source(&raw.parse().unwrap(), "cli").is_err());
+            assert!(validate_emit_source(&raw.parse().unwrap(), "git").is_err());
+        }
+    }
+
+    #[test]
     fn reserved_families_reject_custom_emit_but_accept_internal_forge() {
         use rimz::store::event::SignalSource;
 
         for raw in [
             "ci.passed",
             "ci.failed",
+            "pr.opened",
             "pr.merged",
             "pr.closed",
             "pr.behind",
@@ -225,6 +253,7 @@ mod tests {
         for raw in [
             "ci.passed",
             "ci.failed",
+            "pr.opened",
             "pr.merged",
             "pr.closed",
             "pr.behind",

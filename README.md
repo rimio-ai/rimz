@@ -269,7 +269,7 @@ rimz wait --pid 16776                        # an existing process exits
 rimz wait --run 'gh run watch --exit-status' # a command exits, with its output in the message
 ```
 
-**Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#signals-the-rooms-event-bus) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.merged` and `pr.closed`, and agent and team lifecycle signals from what the room already watches, and anything can emit its own. A CI or pull request subscription follows the calling agent's own worktree branch.
+**Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#signals-the-rooms-event-bus) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.opened`, `pr.merged` and `pr.closed`, `trunk.moved`, `worktree.created` and `worktree.removed`, and agent and team lifecycle signals from what the room already watches, and anything can emit its own. A CI or pull request subscription follows the calling agent's own worktree branch.
 
 The GitHub-only signals `pr.behind` and `pr.conflicted` report an open PR falling behind its base or gaining confirmed conflicts, including on first sight. They fire on entry or a changed PR head while the state persists, not on repeated readings of the same head. Their PR payload has `state: "open"` and adds `pr_head`, `base` when known, and `behind_by` for `pr.behind`.
 

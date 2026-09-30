@@ -84,7 +84,9 @@ $ rimz events follow --replay
 | `source` | Appended by | Names |
 | --- | --- | --- |
 | `cli` | `rimz events emit` | Any valid name outside the reserved families. |
-| `forge` | The room's sidebar, when a worktree branch's CI or pull request changes state | `ci.passed`, `ci.failed`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted` |
+| `forge` | The room's sidebar, when a worktree branch's CI or pull request changes state | `ci.passed`, `ci.failed`, `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted` |
+| `git` | The room's sidebar, when the project trunk ref moves | `trunk.moved` |
+| `worktree` | Successful managed worktree creation or removal | `worktree.created`, `worktree.removed` |
 | `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort | `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
 | `team` | A team stage flip, and the re-wake of the stage owner when it registers | `team.stage` |
 | `watch` | The watcher of a `rimz wait` command, check, PID, or file watch, at a check-in and its final outcome | `wait.<task-name>` |
@@ -129,7 +131,7 @@ If firing fails after the append, `emit` exits 1 with `firing signal tasks`, and
 
 ### Reserved families
 
-Five families belong to RimZ, and `emit` refuses every name in them, including names RimZ never produces (`ci.custom`):
+Seven families belong to RimZ, and `emit` refuses every name in them, including names RimZ never produces (`ci.custom`):
 
 ```console
 $ rimz events emit ci.passed
@@ -142,9 +144,13 @@ error: signal name `ci.passed` is reserved for RimZ
 | `team` | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | `lifecycle` |
 | `team` | `team.stage` ([payload](./teams.md#the-teamstage-signal)) | `team` |
 | `ci` | `ci.passed`, `ci.failed` | `forge` |
-| `pr` | `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted` | `forge` |
+| `pr` | `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted` | `forge` |
+| `trunk` | `trunk.moved` | `git` |
+| `worktree` | `worktree.created`, `worktree.removed` | `worktree` |
 | `wait` | `wait.<task-name>` | `watch` |
 
-The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the six `ci` and `pr` names above. The flag performs no caller check, so the reserved families keep scripts from colliding with RimZ's names but do not authenticate a forge signal. What each built-in signal's payload carries is in [the loops guide](../../guide/loops.md#signals-the-rooms-event-bus) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
+The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the seven `ci` and `pr` names above. The hidden `--source git` accepts only `trunk.moved`; there is no CLI `worktree` source. These flags perform no caller check, so reserved families prevent name collisions, not authenticated provenance. What each built-in signal's payload carries is in [the loops guide](../../guide/loops.md#signals-the-rooms-event-bus) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
+
+`pr.opened` reports a newly observed open PR after a successful prior probe, not a PR already present when monitoring starts. `trunk.moved` reports a changed commit on the same trunk ref. Worktree signals follow successful managed operations, with creation after its hook succeeds; reuse and failed-creation rollback are silent. See [trunk and worktree signals](../../internals/harness/loops.md#trunk-and-worktree-signals) for the producer contract.
 
 `pr.behind` and `pr.conflicted` are GitHub-only signals for open PRs. They fire on entry (first sight included), or when the PR head changes while still behind or confirmed conflicting; repeated readings of the same head do not repeat the signal. Conflict detection waits for GitHub's settled mergeability reading. Both carry the `pr.merged` payload with `state: "open"`, plus `pr_head` (the forge head, or the head where conflicts were confirmed), `base` when known, and `behind_by` for `pr.behind` only. `head` remains the local worktree HEAD. Match them by `branch` or `path` just like `pr.merged`.

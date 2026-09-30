@@ -10,6 +10,28 @@ const PATH: &str = "/repo/worktree";
 const REPO: &str = "gh:github.com:org/repo";
 
 #[test]
+fn opened_requires_a_successful_continuous_prior_without_the_same_open_pr() {
+    let next = pr_cache(WorktreePrState::Open, None);
+    let mut merged = pr_cache(WorktreePrState::Merged, None);
+    merged.states.get_mut(PATH).unwrap().number = Some(41);
+    for prior in [base_cache(), merged] {
+        let signals = production_transitions(&prior, &next);
+        assert_eq!(signal_names(&signals), vec!["pr.opened"]);
+        assert_eq!(signals[0].1["state"], "open");
+        assert_eq!(signals[0].1["number"], 42);
+        assert_eq!(
+            transition_argv(Path::new(PATH), signals[0].0, &signals[0].1)[6],
+            "forge"
+        );
+    }
+    let mut failed = base_cache();
+    failed.repos.get_mut(REPO).unwrap().ok = false;
+    for prior in [PrStateCache::default(), failed, next.clone()] {
+        assert!(production_transitions(&prior, &next).is_empty());
+    }
+}
+
+#[test]
 fn behind_signals_follow_head_and_state_entries() {
     for sequence in [
         vec![("a", 1, true), ("a", 2, false), ("a", 2, false)],
@@ -62,7 +84,7 @@ fn first_seen_adverse_prs_require_continuity_ownership_and_success() {
     let next = open_reading(&prior, "a", 1, "CONFLICTING");
     assert_eq!(
         signal_names(&production_transitions(&prior, &next)),
-        vec!["pr.behind", "pr.conflicted"]
+        vec!["pr.opened", "pr.behind", "pr.conflicted"]
     );
     assert!(production_transitions(&PrStateCache::default(), &next).is_empty());
 
@@ -74,7 +96,7 @@ fn first_seen_adverse_prs_require_continuity_ownership_and_success() {
     assert!(production_transitions(&prior, &unowned).is_empty());
     assert_eq!(
         signal_names(&production_transitions(&unowned, &next)),
-        vec!["pr.behind", "pr.conflicted"]
+        vec!["pr.opened", "pr.behind", "pr.conflicted"]
     );
 
     let mut merged = next.clone();
@@ -85,7 +107,7 @@ fn first_seen_adverse_prs_require_continuity_ownership_and_success() {
     );
     assert_eq!(
         signal_names(&production_transitions(&merged, &next)),
-        vec!["pr.behind", "pr.conflicted"]
+        vec!["pr.opened", "pr.behind", "pr.conflicted"]
     );
 }
 

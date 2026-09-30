@@ -846,7 +846,7 @@ rimz events emit
     --json <OBJECT>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
-    --source <SOURCE>  [action=set takes=1..=1 hidden default=cli values=cli|forge]
+    --source <SOURCE>  [action=set takes=1..=1 hidden default=cli values=cli|forge|git]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 

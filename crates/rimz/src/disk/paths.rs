@@ -793,6 +793,10 @@ impl RuntimePaths {
         self.lane_path("pr-state.json")
     }
 
+    pub(crate) fn trunk_state_path(&self) -> PathBuf {
+        self.lane_path("trunk-state.json")
+    }
+
     /// The workspace's last jump scroll anchor: the pane a jump focused plus the
     /// viewport offset that keeps its card where the user clicked. Renderers read
     /// it on the fold that adopts the focus, so a cross-tab jump lands the card at

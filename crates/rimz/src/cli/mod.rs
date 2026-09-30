@@ -865,6 +865,12 @@ fn resolve_launch_checkout(
             launch.branch.as_deref().unwrap_or_default()
         )?;
     }
+    if let Some(marker) = &launch.created {
+        match open_store(workspace) {
+            Ok(store) => emit_worktree_created(&store, workspace, marker),
+            Err(error) => tracing::debug!(%error, "skipping worktree signal: store unavailable"),
+        }
+    }
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
             std::io::stderr(),
@@ -872,6 +878,46 @@ fn resolve_launch_checkout(
         )?;
     }
     Ok(Some(launch))
+}
+
+fn emit_worktree_created(
+    store: &rimz::Store,
+    workspace: &rimz::ResolvedWorkspace,
+    marker: &rimz::worktree::WorktreeMarker,
+) {
+    let mut payload = serde_json::Map::from_iter([
+        ("name".into(), serde_json::json!(marker.name)),
+        ("branch".into(), serde_json::json!(marker.branch)),
+        (
+            "path".into(),
+            serde_json::json!(marker.worktree_path.to_string_lossy()),
+        ),
+        (
+            "repo".into(),
+            serde_json::json!(marker.repo_root.to_string_lossy()),
+        ),
+        (
+            "base".into(),
+            serde_json::json!(marker.base_branch.as_deref().unwrap_or(&marker.base_ref)),
+        ),
+    ]);
+    if let Some(number) = marker.from_pr {
+        payload.insert("from_pr".into(), serde_json::json!(number));
+    }
+    let signal = rimz::harness::schedule::signal::Signal {
+        name: "worktree.created"
+            .parse()
+            .expect("built-in signal name is valid"),
+        payload,
+        source: rimz::store::event::SignalSource::Worktree,
+        watch: None,
+    };
+    rimz::harness::schedule::signal::emit_in_process(
+        store,
+        &workspace.session_name,
+        &workspace.project_root,
+        &signal,
+    );
 }
 
 fn check_launch_room(globals: &GlobalFlags) -> Result<()> {

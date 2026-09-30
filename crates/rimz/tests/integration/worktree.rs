@@ -82,6 +82,46 @@ fn unreadable_machine_config_refuses_worktree_creation() {
         .stderr(contains(config.display().to_string()));
 }
 
+#[cfg(unix)]
+#[test]
+fn launch_creation_signals_once_and_reuse_is_silent() {
+    use crate::common::{CommandTimeoutExt, write_failing_agent_shim, write_fake_login_shell};
+
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.install_agent_hooks("claude");
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let shim = write_failing_agent_shim(&env, "claude", 7);
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    for _ in 0..2 {
+        // Launch transport may be unavailable; creation precedes it.
+        let output = env
+            .rimz()
+            .args(["agents", "claude", "-p", "test signal", "-w", "demo"])
+            .env("SHELL", &shell)
+            .env("PATH", crate::common::path_with_front(&shim))
+            .bounded_output()
+            .unwrap();
+        assert!(
+            env.home_root.join("project-worktrees/demo").exists(),
+            "{output:?}"
+        );
+        let signals: Vec<Value> = env
+            .read_events()
+            .into_iter()
+            .map(|event| serde_json::from_str::<Value>(event.params.get()).unwrap())
+            .filter(|event| event["name"] == "worktree.created")
+            .collect();
+        assert_eq!(signals.len(), 1, "{output:?}");
+        assert_eq!(signals[0]["payload"]["name"], "demo");
+    }
+}
+
 #[test]
 fn worktree_hooks_run_and_report_without_streaming_output() {
     let env = Env::new();
@@ -115,6 +155,26 @@ fn worktree_hooks_run_and_report_without_streaming_output() {
         std::fs::read_to_string(env.project_root.join("hook-removed")).unwrap(),
         "removed\n"
     );
+    let signals: Vec<Value> = env
+        .read_events()
+        .into_iter()
+        .filter(|event| event.method == "signal.emit")
+        .map(|event| serde_json::from_str(event.params.get()).unwrap())
+        .collect();
+    assert_eq!(signals.len(), 2);
+    for (event, name) in signals.iter().zip(["worktree.created", "worktree.removed"]) {
+        assert_eq!(event["name"], name);
+        assert_eq!(event["source"], "worktree");
+        assert_eq!(event["payload"]["name"], "demo");
+        assert_eq!(event["payload"]["branch"], "demo");
+        assert_eq!(
+            event["payload"]["path"],
+            marker.worktree_path.to_str().unwrap()
+        );
+        assert_eq!(event["payload"]["repo"], marker.repo_root.to_str().unwrap());
+    }
+    assert!(signals[0]["payload"]["base"].is_string());
+    assert_eq!(signals[1]["payload"]["branch_deleted"], true);
 }
 
 #[test]
@@ -138,6 +198,11 @@ fn failed_worktree_hook_reports_output_and_removes_tree_and_branch() {
         .stderr(contains("agents.worktree.hooks.created"));
     assert!(!env.home_root.join("project-worktrees/demo").exists());
     assert!(!git_stdout(&env.project_root, &["branch", "--list", "demo"]).contains("demo"));
+    assert!(
+        env.read_events()
+            .iter()
+            .all(|event| event.method != "signal.emit")
+    );
 }
 
 #[test]
@@ -434,6 +499,14 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
         .stdout(contains("kept: pending — not merged yet"));
     assert!(!landed.exists(), "safe checkout is swept");
     assert!(pending.exists(), "unmerged checkout is retained");
+    let removed: Vec<Value> = env
+        .read_events()
+        .into_iter()
+        .map(|event| serde_json::from_str::<Value>(event.params.get()).unwrap())
+        .filter(|event| event["name"] == "worktree.removed")
+        .collect();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0]["payload"]["name"], "landed");
 }
 
 #[test]

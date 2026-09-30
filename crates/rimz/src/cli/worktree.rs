@@ -194,13 +194,13 @@ fn new_worktree(
         )?
     };
     if !created.reused {
-        store
-            .archive_channel_messages(
-                &created.marker.name,
-                "channel recreated",
-                &workspace.session_name,
-            )
-            .context("archiving messages for recreated worktree channel")?;
+        let archival = store.archive_channel_messages(
+            &created.marker.name,
+            "channel recreated",
+            &workspace.session_name,
+        );
+        super::emit_worktree_created(&store, workspace, &created.marker);
+        archival.context("archiving messages for recreated worktree channel")?;
     }
     report_created(&created, config.hooks.created.is_some());
     Ok(())

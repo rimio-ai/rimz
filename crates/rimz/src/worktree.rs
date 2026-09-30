@@ -216,6 +216,8 @@ pub struct PushDestination {
 /// Checkout selected for an agent launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchCheckout {
+    /// Present only after a fresh managed creation, including its hook, succeeded.
+    pub created: Option<WorktreeMarker>,
     pub cwd: PathBuf,
     pub reused: bool,
     pub branch: Option<String>,
@@ -517,6 +519,8 @@ impl ProtectionSet {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemovalOutcome {
+    repo_root: PathBuf,
+    from_pr: Option<u64>,
     worktree_name: String,
     branch: String,
     removed_path: PathBuf,
@@ -554,6 +558,40 @@ pub fn retire_removal(
         store.retire_worktree_sessions(&removed.removed_path, Some(removed.branch()));
     let message_archival =
         store.archive_channel_messages(&removed.worktree_name, archive_reason, session_name);
+    let mut signal = crate::harness::schedule::signal::Signal {
+        name: "worktree.removed"
+            .parse()
+            .expect("built-in signal name is valid"),
+        payload: serde_json::Map::from_iter([
+            ("name".into(), serde_json::json!(removed.worktree_name)),
+            ("branch".into(), serde_json::json!(removed.branch)),
+            (
+                "path".into(),
+                serde_json::json!(removed.removed_path.to_string_lossy()),
+            ),
+            (
+                "repo".into(),
+                serde_json::json!(removed.repo_root.to_string_lossy()),
+            ),
+            (
+                "branch_deleted".into(),
+                serde_json::json!(removed.branch_deletion == BranchDeletion::Deleted),
+            ),
+        ]),
+        source: crate::store::event::SignalSource::Worktree,
+        watch: None,
+    };
+    if let Some(number) = removed.from_pr {
+        signal
+            .payload
+            .insert("from_pr".into(), serde_json::json!(number));
+    }
+    crate::harness::schedule::signal::emit_in_process(
+        store,
+        session_name,
+        &removed.repo_root,
+        &signal,
+    );
     RemovalRetirement {
         session_retirement,
         message_archival,
@@ -614,6 +652,7 @@ pub fn resolve_launch_checkout(
     if let Some(cwd) = cwd {
         return Ok(LaunchCheckout {
             reused: false,
+            created: None,
             cwd: cwd.to_path_buf(),
             branch: current_branch(cwd),
             repo_root: None,
@@ -630,10 +669,12 @@ pub fn resolve_launch_checkout(
         }
         let name = worktree.map(str::trim).filter(|name| !name.is_empty());
         let created = create_from_pr(repo_root, config, pr, name, None, name.is_some(), pr_branch)?;
+        let created_marker = (!created.reused).then(|| created.marker.clone());
         let review_only_reason = created.review_only_reason;
         let marker = created.marker;
         return Ok(LaunchCheckout {
             reused: created.reused,
+            created: created_marker,
             branch: current_branch(&marker.worktree_path),
             cwd: marker.worktree_path,
             repo_root: Some(repo_root.to_path_buf()),
@@ -647,6 +688,7 @@ pub fn resolve_launch_checkout(
     let Some(raw_name) = worktree else {
         return Ok(LaunchCheckout {
             reused: false,
+            created: None,
             branch: current_branch(&workspace.worktree_root),
             cwd: workspace.worktree_root.clone(),
             repo_root: workspace.cwd_project_root.clone(),
@@ -668,9 +710,11 @@ pub fn resolve_launch_checkout(
         None,
         !name.is_empty(),
     )?;
+    let created_marker = (!created.reused).then(|| created.marker.clone());
     let marker = created.marker;
     Ok(LaunchCheckout {
         reused: created.reused,
+        created: created_marker,
         branch: current_branch(&marker.worktree_path),
         cwd: marker.worktree_path,
         repo_root: Some(repo_root.to_path_buf()),
@@ -721,6 +765,7 @@ pub fn resolve_unmanaged_launch_checkout(
     }
     Ok(LaunchCheckout {
         reused: false,
+        created: None,
         branch: current_branch(&path),
         cwd: path,
         repo_root: Some(repo_root.to_path_buf()),
@@ -990,6 +1035,8 @@ pub fn remove_marked_worktree(
     remove_checkout(repo_root, path, marker, force, hooks)?;
     let branch_deletion = delete_branch(repo_root, marker, force)?;
     Ok(RemovalOutcome {
+        repo_root: repo_root.to_path_buf(),
+        from_pr: marker.from_pr,
         worktree_name: marker.name.clone(),
         branch: marker.branch.clone(),
         removed_path: path.to_owned(),
