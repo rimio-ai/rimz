@@ -13,8 +13,8 @@ use crate::forge;
 use super::{
     Checkout, CreatedWorktree, FreshWorktree, MarkerProvenance, PushDestination, Result,
     WorktreeCreateTarget, WorktreeErr, add_worktree, ensure_repo, git_network_output, git_run,
-    git_stdout, is_ancestor, parse_worktree_list, resolve_base_commit, resolve_branch,
-    resolve_fresh_worktree, trunk_ref,
+    git_stdout, is_ancestor, parse_worktree_list, read_marker_for_worktree, resolve_base_commit,
+    resolve_branch, resolve_fresh_worktree, trunk_ref, write_marker,
 };
 
 const PR_HEAD_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -22,6 +22,123 @@ const PR_HEAD_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 // room for ordinary remote latency and repository negotiation.
 const PR_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
 static TEMP_REF_NONCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrBranchChoice {
+    Local,
+    Remote,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrBranchDivergence {
+    Behind {
+        behind: u32,
+    },
+    Rebased {
+        ahead: u32,
+        behind: u32,
+    },
+    Diverged {
+        ahead: u32,
+        behind: u32,
+        conflicts: bool,
+    },
+}
+
+fn classify_divergence(repo: &Path, local: &str, remote: &str) -> Result<PrBranchDivergence> {
+    let counts = git_stdout(
+        repo,
+        [
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{local}...{remote}"),
+        ],
+    )?;
+    let mut counts = counts.split_whitespace();
+    let mut count = || {
+        counts
+            .next()
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or_else(|| WorktreeErr::Parse("invalid ahead/behind counts".into()))
+    };
+    let ahead = count()?;
+    let behind = count()?;
+    if is_ancestor(repo, local, remote) {
+        return Ok(PrBranchDivergence::Behind { behind });
+    }
+    let patches = git_stdout(
+        repo,
+        [
+            "log",
+            "--cherry-pick",
+            "--right-only",
+            "--no-merges",
+            &format!("{remote}...{local}"),
+        ],
+    )?;
+    if patches.is_empty() {
+        return Ok(PrBranchDivergence::Rebased { ahead, behind });
+    }
+    let conflicts = git_stdout(repo, ["merge-tree", "--write-tree", local, remote]).is_err();
+    Ok(PrBranchDivergence::Diverged {
+        ahead,
+        behind,
+        conflicts,
+    })
+}
+
+impl std::fmt::Display for PrBranchDivergence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Behind { behind } => write!(f, "{behind} commits behind the PR head"),
+            Self::Rebased { ahead, behind } => write!(
+                f,
+                "the PR head was rebased: {ahead} local commits are all contained in it ({behind} PR commits are not local)"
+            ),
+            Self::Diverged {
+                ahead,
+                behind,
+                conflicts,
+            } => write!(
+                f,
+                "{ahead} local commits are not in the PR head ({behind} PR commits are not local); they {}",
+                if *conflicts {
+                    "conflict"
+                } else {
+                    "merge cleanly"
+                }
+            ),
+        }
+    }
+}
+
+pub(super) fn alignment_commands(branch: &str, holder: Option<&Path>) -> String {
+    let quote = |value: &str| {
+        shlex::Quoter::new()
+            .allow_nul(true)
+            .quote(value)
+            .expect("allow_nul disables the quoter's only error")
+            .into_owned()
+    };
+    let remote = quote(&format!("origin/{branch}"));
+    let branch = quote(branch);
+    let take_remote = match holder {
+        Some(path) => format!(
+            "git -C {} reset --keep {remote}",
+            quote(&path.to_string_lossy())
+        ),
+        None => format!("git branch -f {branch} {remote}"),
+    };
+    let changes = if holder.is_some() {
+        " (commit or stash changes there first)"
+    } else {
+        ""
+    };
+    format!(
+        "take the PR head with `{take_remote}`{changes}, or push the local tip with `git push origin {branch}`; then rerun, or rerun in a terminal to choose"
+    )
+}
 
 struct PrContext<'a> {
     hooks: &'a WorktreeHooks,
@@ -38,22 +155,23 @@ pub fn create_from_pr(
     name: Option<&str>,
     branch: Option<&str>,
     reuse_existing: bool,
+    choice: Option<PrBranchChoice>,
 ) -> Result<CreatedWorktree> {
     config.hooks.validate()?;
     ensure_repo(repo_root)?;
     let default_name = format!("pr-{}", pr.number);
-    let fresh = match resolve_fresh_worktree(
+    let target = resolve_fresh_worktree(
         repo_root,
         config,
         name,
         Some(default_name.as_str()),
         reuse_existing,
-    )? {
-        WorktreeCreateTarget::Fresh(fresh) => fresh,
-        WorktreeCreateTarget::Reuse(reused) => {
+    );
+    let target = match target {
+        Ok(WorktreeCreateTarget::Reuse(reused)) if reused.marker.from_pr.is_some() => {
             if reused.marker.from_pr != Some(pr.number) {
                 return Err(WorktreeErr::PrWorktreeMismatch {
-                    name: reused.marker.name.clone(),
+                    name: reused.marker.name,
                     existing: reused.marker.from_pr,
                     requested: pr.number,
                 });
@@ -61,10 +179,12 @@ pub fn create_from_pr(
             let remote = origin_remote(repo_root, pr.number)?;
             let remote_repo = forge::RemoteRepo::parse(&remote);
             validate_pr_origin(pr, &remote, remote_repo.as_ref())?;
-            return Ok(reused);
+            return Ok(*reused);
         }
+        target => target,
     };
-    let review_branch = branch.or(fresh.branch.as_deref());
+    let requested = name.map(super::parse_requested_name).transpose()?;
+    let review_branch = branch.or(requested.as_ref().and_then(|name| name.branch.as_deref()));
 
     let remote = origin_remote(repo_root, pr.number)?;
     let remote_repo = forge::RemoteRepo::parse(&remote);
@@ -83,6 +203,7 @@ pub fn create_from_pr(
     };
 
     if let Some(branch) = review_branch {
+        let fresh = require_fresh(target)?;
         let branch = resolve_branch(Some(branch), None, &fresh.name)?;
         return review_only_checkout(repo_root, fresh, &context, branch, None);
     }
@@ -92,6 +213,7 @@ pub fn create_from_pr(
         .as_ref()
         .and_then(|remote| remote.forge_cli().map(|cli| (remote, cli)))
     else {
+        let fresh = require_fresh(target)?;
         let branch = resolve_branch(None, fresh.branch.as_deref(), &fresh.name)?;
         return review_only_checkout(
             repo_root,
@@ -103,6 +225,7 @@ pub fn create_from_pr(
     };
     let program = cli.program();
     if which::which(program).is_err() {
+        let fresh = require_fresh(target)?;
         let branch = resolve_branch(None, fresh.branch.as_deref(), &fresh.name)?;
         return review_only_checkout(
             repo_root,
@@ -127,9 +250,26 @@ pub fn create_from_pr(
     };
 
     if same_repo {
-        same_repo_checkout(repo_root, fresh, &context, head.branch)
+        same_repo_checkout(
+            repo_root,
+            target,
+            &context,
+            head.branch,
+            requested.as_ref().map(|name| name.name.as_str()),
+            choice,
+        )
     } else {
-        fork_checkout(repo_root, fresh, &context, head)
+        fork_checkout(repo_root, require_fresh(target)?, &context, head)
+    }
+}
+
+fn require_fresh(target: Result<WorktreeCreateTarget>) -> Result<FreshWorktree> {
+    match target? {
+        WorktreeCreateTarget::Fresh(fresh) => Ok(fresh),
+        WorktreeCreateTarget::Reuse(reused) => Err(WorktreeErr::Exists {
+            name: reused.marker.name,
+            path: reused.marker.worktree_path,
+        }),
     }
 }
 
@@ -183,9 +323,11 @@ fn review_only_checkout(
 
 fn same_repo_checkout(
     repo_root: &Path,
-    fresh: FreshWorktree,
+    target: Result<WorktreeCreateTarget>,
     context: &PrContext<'_>,
     branch: String,
+    requested_name: Option<&str>,
+    choice: Option<PrBranchChoice>,
 ) -> Result<CreatedWorktree> {
     validate_pr_branch(repo_root, context.number, &branch)?;
     let remote_ref = format!("origin/{branch}");
@@ -203,11 +345,76 @@ fn same_repo_checkout(
     )
     .map_err(pr_fetch_err(context.number, &context.remote))?;
     let remote_head = git_stdout(repo_root, ["rev-parse", remote_ref.as_str()])?;
+    let holder = branch_worktree(repo_root, &branch)?;
+    let marker = match holder.as_ref() {
+        Some((path, main)) => {
+            if *main {
+                return Err(WorktreeErr::PrBranchConflict {
+                    branch,
+                    detail: format!(
+                        "it is checked out in the main checkout at {}; switch that checkout to another branch",
+                        path.display()
+                    ),
+                });
+            }
+            let marker = read_marker_for_worktree(path)?.ok_or_else(|| WorktreeErr::PrBranchConflict { branch: branch.clone(), detail: format!("it is checked out at {}, which RimZ does not manage; free the branch there or remove that checkout", path.display()) })?;
+            if marker
+                .from_pr
+                .is_some_and(|number| number != context.number)
+            {
+                return Err(WorktreeErr::PrWorktreeMismatch {
+                    name: marker.name,
+                    existing: marker.from_pr,
+                    requested: context.number,
+                });
+            }
+            if requested_name.is_some_and(|name| name != marker.name) {
+                return Err(WorktreeErr::PrBranchConflict {
+                    branch,
+                    detail: format!(
+                        "it is checked out at {}; omit -w, or pass -w {}",
+                        path.display(),
+                        marker.name
+                    ),
+                });
+            }
+            Some(marker)
+        }
+        None => None,
+    };
+    // Validate the destination before a choice can move a branch.
+    let fresh = if holder.is_none() {
+        Some(require_fresh(target)?)
+    } else {
+        None
+    };
     let provenance = pr_marker_provenance(repo_root, &remote_head, context.number);
-    let checkout = match prepare_local_pr_branch(repo_root, &branch, &remote_ref, &remote_head)? {
+    let checkout = match prepare_local_pr_branch(
+        repo_root,
+        &branch,
+        &remote_ref,
+        &remote_head,
+        holder.as_ref().map(|(path, _)| path.as_path()),
+        choice,
+    )? {
         LocalPrBranch::New => Checkout::Tracking(&remote_ref),
         LocalPrBranch::Existing => Checkout::Existing,
     };
+    if let Some(mut marker) = marker {
+        if marker.from_pr.is_none() {
+            marker.from_pr = Some(context.number);
+            write_marker(&marker.worktree_path, &marker)?;
+        }
+        return Ok(CreatedWorktree {
+            marker,
+            reused: true,
+            included: 0,
+            linked: 0,
+            push_destination: None,
+            review_only_reason: None,
+        });
+    }
+    let fresh = fresh.expect("a checkout without a holder has a validated fresh destination");
     add_worktree(
         repo_root,
         fresh.name,
@@ -433,29 +640,35 @@ fn prepare_local_pr_branch(
     branch: &str,
     remote_ref: &str,
     remote_head: &str,
+    holder: Option<&Path>,
+    choice: Option<PrBranchChoice>,
 ) -> Result<LocalPrBranch> {
     let Some(local_head) = local_branch_tip(repo_root, branch) else {
         return Ok(LocalPrBranch::New);
     };
-    if let Some(path) = branch_worktree(repo_root, branch)? {
-        return Err(WorktreeErr::PrBranchConflict {
-            branch: branch.to_owned(),
-            detail: format!("it is checked out at {}", path.display()),
-        });
-    }
     if local_head != remote_head {
-        if is_ancestor(repo_root, &local_head, remote_head) {
-            git_run(repo_root, ["branch", "-f", branch, remote_ref])?;
-        } else {
-            let detail = if is_ancestor(repo_root, remote_head, &local_head) {
-                "the local branch is ahead of the PR head"
-            } else {
-                "the local branch has diverged from the PR head"
-            };
-            return Err(WorktreeErr::PrBranchConflict {
+        let divergence = classify_divergence(repo_root, &local_head, remote_head)?;
+        let Some(choice) = choice else {
+            return Err(WorktreeErr::PrBranchDiverged {
                 branch: branch.to_owned(),
-                detail: detail.to_owned(),
+                holder: holder.map(Path::to_path_buf),
+                divergence,
             });
+        };
+        if choice == PrBranchChoice::Remote {
+            if let Some(path) = holder {
+                git_run(path, ["reset", "--keep", remote_ref]).map_err(|err| {
+                    WorktreeErr::PrBranchConflict {
+                        branch: branch.to_owned(),
+                        detail: format!(
+                            "could not align {}; commit or stash changes there first: {err}",
+                            path.display()
+                        ),
+                    }
+                })?;
+            } else {
+                git_run(repo_root, ["branch", "-f", branch, remote_ref])?;
+            }
         }
     }
     git_run(
@@ -474,18 +687,102 @@ fn local_branch_tip(repo_root: &Path, branch: &str) -> Option<String> {
     .ok()
 }
 
-fn branch_worktree(repo_root: &Path, branch: &str) -> Result<Option<PathBuf>> {
+fn branch_worktree(repo_root: &Path, branch: &str) -> Result<Option<(PathBuf, bool)>> {
     let rows = parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
     Ok(rows
         .into_iter()
-        .find(|row| row.branch.as_deref() == Some(branch))
-        .map(|row| row.path))
+        .enumerate()
+        .find(|(_, row)| row.branch.as_deref() == Some(branch))
+        .map(|(index, row)| (row.path, index == 0)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::worktree::read_marker_for_worktree;
+
+    #[test]
+    fn adopted_local_tip_survives_failed_creation_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git_run(&repo, ["init"]).unwrap();
+        git_run(&repo, ["config", "user.email", "rimz@example.test"]).unwrap();
+        git_run(&repo, ["config", "user.name", "Test"]).unwrap();
+        git_run(&repo, ["commit", "--allow-empty", "-m", "local work"]).unwrap();
+        git_run(&repo, ["branch", "feature"]).unwrap();
+        let head = git_stdout(&repo, ["rev-parse", "feature"]).unwrap();
+        let path = dir.path().join("feature");
+        let result = add_worktree(
+            &repo,
+            "feature".into(),
+            path.clone(),
+            "feature".into(),
+            pr_marker_provenance(&repo, &head, 1),
+            Checkout::Existing,
+            &WorktreeHooks {
+                created: Some("exit 1".into()),
+                ..WorktreeHooks::default()
+            },
+        );
+        assert!(matches!(result, Err(WorktreeErr::CreatedHook { .. })));
+        assert!(!path.exists());
+        assert_eq!(local_branch_tip(&repo, "feature"), Some(head));
+    }
+
+    #[test]
+    fn classifies_behind_rebased_and_both_merge_outcomes() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git_run(repo, ["init"]).unwrap();
+        git_run(repo, ["config", "user.name", "Test"]).unwrap();
+        git_run(repo, ["config", "user.email", "test@example.test"]).unwrap();
+        git_run(repo, ["commit", "--allow-empty", "-m", "base"]).unwrap();
+        let base = git_stdout(repo, ["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(repo.join("patch"), "remote").unwrap();
+        git_run(repo, ["add", "."]).unwrap();
+        git_run(repo, ["commit", "-m", "patch"]).unwrap();
+        let remote = git_stdout(repo, ["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            classify_divergence(repo, &base, &remote).unwrap(),
+            PrBranchDivergence::Behind { behind: 1 }
+        );
+        git_run(repo, ["reset", "--hard", &base]).unwrap();
+        std::fs::write(repo.join("other"), "base").unwrap();
+        git_run(repo, ["add", "."]).unwrap();
+        git_run(repo, ["commit", "-m", "other"]).unwrap();
+        let local = git_stdout(repo, ["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            classify_divergence(repo, &local, &remote).unwrap(),
+            PrBranchDivergence::Diverged {
+                ahead: 1,
+                behind: 1,
+                conflicts: false
+            }
+        );
+        git_run(repo, ["cherry-pick", &remote]).unwrap();
+        let rebased = git_stdout(repo, ["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            classify_divergence(repo, &remote, &rebased).unwrap(),
+            PrBranchDivergence::Rebased {
+                ahead: 1,
+                behind: 2
+            }
+        );
+        git_run(repo, ["reset", "--hard", &base]).unwrap();
+        std::fs::write(repo.join("patch"), "local").unwrap();
+        git_run(repo, ["add", "."]).unwrap();
+        git_run(repo, ["commit", "-m", "conflict"]).unwrap();
+        let local = git_stdout(repo, ["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            classify_divergence(repo, &local, &remote).unwrap(),
+            PrBranchDivergence::Diverged {
+                ahead: 1,
+                behind: 1,
+                conflicts: true
+            }
+        );
+    }
 
     #[test]
     fn pr_worktree_marker_records_pr_number() {

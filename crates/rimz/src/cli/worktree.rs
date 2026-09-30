@@ -161,14 +161,28 @@ fn new_worktree(
         rimz::channel::ensure_worktree_name_available(store.paths(), name)?;
     }
     let created = if let Some(pr) = from_pr.as_ref() {
-        rimz::worktree::create_from_pr(
-            &workspace.project_root,
-            config,
-            pr,
-            name.as_deref(),
-            branch.as_deref(),
-            false,
-        )?
+        let create = |choice| {
+            rimz::worktree::create_from_pr(
+                &workspace.project_root,
+                config,
+                pr,
+                name.as_deref(),
+                branch.as_deref(),
+                false,
+                choice,
+            )
+        };
+        match create(None) {
+            Ok(created) => created,
+            Err(err @ rimz::worktree::WorktreeErr::PrBranchDiverged { .. }) => {
+                let Some(choice) = super::resolve_pr_branch_choice(&err)? else {
+                    writeln!(render::err(), "nothing changed.")?;
+                    return Ok(());
+                };
+                create(Some(choice))?
+            }
+            Err(err) => return Err(err.into()),
+        }
     } else {
         rimz::worktree::create(
             &workspace.project_root,
@@ -179,13 +193,15 @@ fn new_worktree(
             false,
         )?
     };
-    store
-        .archive_channel_messages(
-            &created.marker.name,
-            "channel recreated",
-            &workspace.session_name,
-        )
-        .context("archiving messages for recreated worktree channel")?;
+    if !created.reused {
+        store
+            .archive_channel_messages(
+                &created.marker.name,
+                "channel recreated",
+                &workspace.session_name,
+            )
+            .context("archiving messages for recreated worktree channel")?;
+    }
     report_created(&created, config.hooks.created.is_some());
     Ok(())
 }
@@ -193,12 +209,19 @@ fn new_worktree(
 #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
 fn report_created(created: &rimz::worktree::CreatedWorktree, created_hook_ran: bool) {
     let marker = &created.marker;
-    println!("created {}", marker.name);
+    println!(
+        "{} {}",
+        if created.reused { "reused" } else { "created" },
+        marker.name
+    );
     println!(
         "  path   : {}",
         render::home_relative_path(&marker.worktree_path)
     );
     println!("  branch : {}", marker.branch);
+    if created.reused {
+        return;
+    }
     if let Some(destination) = created.push_destination.as_ref() {
         let remote = &destination.remote;
         let merge_ref = &destination.merge_ref;
