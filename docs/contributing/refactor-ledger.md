@@ -4,12 +4,12 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `8169df102`, before round 31: 4631 scoped commits (pace window 1158), 24 admission intents, 236 holds; no parse failures, ledger problems, pending restamps, or stale or ambiguous verdict keys. After pass 31a: no open shape family; the residual synthetic-message family is held by verdict.
+- **Survey:** base `a5b528fd2`, pass 31b: 4701 scoped commits (pace window 1176), 24 admission intents, 239 holds; no parse failures, ledger problems, pending restamps, or stale or ambiguous verdict keys. The one open shape family it found, the synthetic-message delivery workflow, landed in pass 31a; the residual synthetic-message family is held by verdict.
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
-- **Reopened:** `agents/state` and `agents/(root)` (scoped churn past its row's count; `(root)` rows count their root file's commits since the history-path fix).
+- **Reopened:** `agents/adapters/codex` (scoped churn past its row's count; not reviewed in pass 31b).
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
-- **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
+- **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles. The survey also lists same-layer `harness ↔ worktree`.
 - **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 48, `cli/agents_cmd/mod.rs` 24, `cli/transcript` 18, `cli/agents_cmd/exec.rs` 13, `cli/room` 12); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
 
 ## Module verdicts
@@ -20,8 +20,11 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | --- | --- | --- | --- | --- |
 | `address` | holds; landed pass-14 | `b269429c2` | 30 | grammar, renderer, pane binding and launch lineage at L4; one channel reconciler. |
 | `agents` | holds; landed pass-18a | `045e858e8` | 30 | root exports only outside-spelled names; hook representation private; install defaults stay trait defaults. |
-| `agents/(root)` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
-| `agents/state` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`; owns the budget window/scope/park types. |
+| `agents/(root)` | holds; landed pass-31b | `a5b528fd2` | 30 | outside-spelled facade with signature-floor exceptions and private internal helpers. |
+| `agents/state` | holds; landed pass-31b | `a5b528fd2` | 30 | one prompt rule and error-marker projection with direct current-layout decoding. |
+| `agents/folder_trust` | holds; landed pass-31b | `a5b528fd2` | 30 | room-login rows require the known repo root while adapter decisions remain optional-root. |
+| `agents/account_links` | holds; landed pass-31b | `a5b528fd2` | 30 | guarded settings sharing with signature-floored error and report types. |
+| `agents/provider_file` | holds; landed pass-31b | `a5b528fd2` | 30 | symlink-following writer also serves pricing snapshots under the provider-file invariant. |
 | `agents/context` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
 | `agents/definition` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
 | `agents/adapters` | landed pass-2 | — | — | sibling families are provider policy over shared helpers; interiors are per-adapter rows. |

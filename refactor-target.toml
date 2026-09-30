@@ -140,7 +140,8 @@ upward-dependencies = ["address"]
 # Named-account settings sharing exposes entry kinds, adoption capabilities, and the link report/error workflow (+8).
 # Account declaration and settings sharing reuse the same canonical-home refusal (+1).
 # Launch rejection and version-floor capability inputs, version types, and the shared floor check (+7).
-surface-budget = 958
+# Pass 31b: narrow internal helpers and aliases; move attention defaults to config (-33).
+surface-budget = 925
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -2164,12 +2165,47 @@ reason = "The six install defaults no adapter overrides stay trait defaults: the
 [[verdict]]
 kind = "item"
 key = "agents::state::COMPACTING_WINDOW_SECS"
-reason = "Read by the integration crate (tests/integration/message.rs, hooks.rs) as the fixture's timing constant; stays pub with DEFAULT_TOOL_REPEAT_ATTENTION_AFTER (pass 18a)."
+reason = "Read by the integration crate (tests/integration/message.rs, hooks.rs) as the fixture's timing constant; stays pub for those timing fixtures (passes 18a, 31b)."
 
 [[verdict]]
 kind = "item"
 key = "agents::HookRouting"
-reason = "Returned by HookOutput::routing while hook_types is pub(crate); the root re-export is the only public path, as OpenAskReadErr is for read_open_ask (pass 18a)."
+reason = "Returned by HookOutput::routing while hook_types is pub(crate); the root re-export is the only public path (passes 18a, 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::OpenAskReadErr"
+reason = "The read_open_ask error type lives in private open_ask; the root re-export is its only public path (pass 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::Emblem"
+reason = "Returned by emblem_for from private emblems; the root re-export is its only public path (pass 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::BackgroundShellReport"
+reason = "A public HookOutput field exposes this private background_shell type; the root re-export is its only public path (pass 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::ManagedIntegration"
+reason = "InstallationCapability::managed_integration returns this private managed_source type; the root re-export is its only public path (pass 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::AnsweredQuestion"
+reason = "Public AskQueueEdit fields expose this private observation type; the root re-export is its only public path (pass 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::QueuedQuestion"
+reason = "Public AskQueueEdit fields expose this private observation type; the root re-export is its only public path (pass 31b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::preflight_hooks"
+reason = "The lifecycle flag has three live policies: login and dispatch use None, reply and scheduled sends use NotUnsupported, supervised launch uses Wired (pass 31b)."
 
 [[verdict]]
 kind = "item"
@@ -4569,4 +4605,4 @@ reason = "After mirror types and duplicate bookkeeping are deleted, the ordered 
 [[verdict]]
 kind = "shape"
 key = "PendingWrite::optional+report_files+settings_json::commit_pair+settings_json::read_optional_bytes+settings_json::render_json"
-reason = "The read, render and two-file commit transaction already live once in settings_json; the uninstalls keep provider policy: copilot strips the statusline and removes hooks through a callback that rolls settings back on failure, cursor rewrites hooks and config in place and removes the shared statusline state record only after the last config file restores the displaced statusline. A shared sequence needs a closure per step and saves no lines (round-31 prep)."
+reason = "The read, render and two-file commit transaction already live once in settings_json; the uninstalls keep provider policy: copilot strips the statusline and removes hooks through a callback that rolls settings back on failure, cursor rewrites hooks and config in place and removes the shared statusline state record only after the last config file restores the displaced statusline. A shared sequence needs a closure per step and saves no lines (round-31 prep; key live again, pass 31b)."
