@@ -96,7 +96,7 @@ pub enum StoreErr {
     #[error("{0}")]
     AgentLaunchIdentity(String),
     #[error(
-        "this room already uses accounts {current}, not {requested}; run `rimz reset` to choose again"
+        "this room already uses accounts {current}, not {requested}; switch it with `rimz accounts use --room`"
     )]
     RoomLoginsFrozen { current: String, requested: String },
     #[error("cannot access {path}: {source}")]

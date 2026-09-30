@@ -30,7 +30,7 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -84,6 +84,8 @@ fn render_banner(info: &BrokerInfo<'_>) -> String {
 /// client handshakes need no round-trip. The auth stamp tracks the credential
 /// file the child read at spawn so an account switch respawns it before serving.
 struct ChildIo {
+    program: PathBuf,
+    login_key: crate::ids::LoginKey,
     login_env: BTreeMap<String, String>,
     transport: FramedTransport,
     init_result: Value,
@@ -92,9 +94,13 @@ struct ChildIo {
 
 impl ChildIo {
     /// Kill the dead child and replace this with a freshly handshaked one.
-    fn respawn(&mut self) -> Result<(), AppServerErr> {
+    fn respawn(
+        &mut self,
+        key: crate::ids::LoginKey,
+        login_env: &BTreeMap<String, String>,
+    ) -> Result<(), AppServerErr> {
         self.transport.stop_child();
-        *self = spawn_and_handshake(&self.login_env)?;
+        *self = spawn_and_handshake(&self.program, key, login_env)?;
         Ok(())
     }
 }
@@ -103,12 +109,18 @@ impl ChildIo {
 /// and cache the result. The child's stdin/stdout are the JSON-RPC channel;
 /// stderr is nulled (the fresh-stdio invariant — the pane shows this broker's own
 /// `tracing`, not the child's diagnostics).
-fn spawn_and_handshake(login_env: &BTreeMap<String, String>) -> Result<ChildIo, AppServerErr> {
-    let mut transport = FramedTransport::spawn(&codex_bin(), HANDSHAKE_DEADLINE, login_env)?;
+fn spawn_and_handshake(
+    program: &Path,
+    login_key: crate::ids::LoginKey,
+    login_env: &BTreeMap<String, String>,
+) -> Result<ChildIo, AppServerErr> {
+    let mut transport = FramedTransport::spawn(program, HANDSHAKE_DEADLINE, login_env)?;
     let auth_stamp = oauth_usage::credentials_stamp(login_env);
     transport.set_deadline(HANDSHAKE_DEADLINE);
     let init_result = initialize(&mut transport, None)?;
     Ok(ChildIo {
+        program: program.to_owned(),
+        login_key,
         login_env: login_env.clone(),
         transport,
         init_result,
@@ -127,23 +139,32 @@ fn lock(shared: &Mutex<ChildIo>) -> std::sync::MutexGuard<'_, ChildIo> {
 /// locked round-trip; an EOF/IO failure respawns the child once and retries.
 fn serve_request(
     shared: &Mutex<ChildIo>,
+    resolve_login: &dyn Fn() -> Result<crate::agents::ProviderLogin, crate::agents::RoomLoginErr>,
     method: &str,
     params: Value,
 ) -> Result<Value, AppServerErr> {
-    if method == "initialize" {
-        return Ok(lock(shared).init_result.clone());
-    }
     let mut io = lock(shared);
-    let auth_stamp = oauth_usage::credentials_stamp(&io.login_env);
-    if io.auth_stamp != auth_stamp {
-        tracing::info!("codex auth changed; respawning app-server child");
-        io.respawn()?;
+    if method == "initialize" {
+        return Ok(io.init_result.clone());
+    }
+    match resolve_login() {
+        Ok(login) => {
+            let login_env = login.env(&crate::agents::ambient_env());
+            let auth_stamp = oauth_usage::credentials_stamp(&login_env);
+            if io.login_key != login.key() || io.auth_stamp != auth_stamp {
+                tracing::info!("codex login or auth changed; respawning app-server child");
+                io.respawn(login.key(), &login_env)?;
+            }
+        }
+        Err(error) => tracing::warn!(%error, "keeping current codex app-server login"),
     }
     io.transport.set_deadline(REQUEST_DEADLINE);
     match io.transport.request(method, params.clone()) {
         Err(AppServerErr::Closed | AppServerErr::Io(_)) => {
             tracing::warn!("codex app-server child gone; respawning");
-            io.respawn()?;
+            let key = io.login_key.clone();
+            let login_env = io.login_env.clone();
+            io.respawn(key, &login_env)?;
             io.transport.set_deadline(REQUEST_DEADLINE);
             io.transport.request(method, params)
         }
@@ -155,7 +176,13 @@ fn serve_request(
 /// (carry an `id`) get a forwarded response; notifications carry none —
 /// `initialized` is swallowed (the child is already initialized), others are
 /// forwarded best-effort. Returns when the client disconnects.
-fn handle_client(stream: UnixStream, shared: Arc<Mutex<ChildIo>>) {
+fn handle_client(
+    stream: UnixStream,
+    shared: Arc<Mutex<ChildIo>>,
+    resolve_login: Arc<
+        impl Fn() -> Result<crate::agents::ProviderLogin, crate::agents::RoomLoginErr>,
+    >,
+) {
     let Ok(read_half) = stream.try_clone() else {
         return;
     };
@@ -186,7 +213,7 @@ fn handle_client(stream: UnixStream, shared: Arc<Mutex<ChildIo>>) {
                 }
             }
             Some(id) => {
-                let frame = match serve_request(&shared, &method, params) {
+                let frame = match serve_request(&shared, resolve_login.as_ref(), &method, params) {
                     Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
                     Err(err) => json!({
                         "jsonrpc": "2.0",
@@ -207,10 +234,18 @@ fn handle_client(stream: UnixStream, shared: Arc<Mutex<ChildIo>>) {
 /// `codex` is unavailable so the pane closes and enrichment cold-spawns instead.
 pub(in crate::agents) fn serve(
     info: BrokerInfo<'_>,
-    login_env: &BTreeMap<String, String>,
+    resolve_login: impl Fn() -> Result<crate::agents::ProviderLogin, crate::agents::RoomLoginErr>
+    + Send
+    + Sync
+    + 'static,
 ) -> std::io::Result<()> {
     let socket_path = info.socket_path;
-    let child = match spawn_and_handshake(login_env) {
+    let login = resolve_login().map_err(std::io::Error::other)?;
+    let child = match spawn_and_handshake(
+        &codex_bin(),
+        login.key(),
+        &login.env(&crate::agents::ambient_env()),
+    ) {
         Ok(io) => io,
         Err(err) => {
             tracing::warn!(
@@ -244,11 +279,13 @@ pub(in crate::agents) fn serve(
     drop(stdout);
 
     let shared = Arc::new(Mutex::new(child));
+    let resolve_login = Arc::new(resolve_login);
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let shared = Arc::clone(&shared);
-                std::thread::spawn(move || handle_client(stream, shared));
+                let resolve_login = Arc::clone(&resolve_login);
+                std::thread::spawn(move || handle_client(stream, shared, resolve_login));
             }
             Err(err) => tracing::warn!(error = %err, "broker accept failed"),
         }
@@ -259,6 +296,54 @@ pub(in crate::agents) fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_next_request_respawns_under_the_resolved_login() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("codex");
+        std::fs::write(&program, "#!/bin/sh\nrequest_id=0\nwhile read -r line; do\ncase \"$line\" in *'\"id\"'*) request_id=$((request_id + 1)); printf '{\"id\":%s,\"result\":{\"home\":\"%s\"}}\\n' \"$request_id\" \"$CODEX_HOME\";; esac\ndone\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let login = |name: &str| {
+            crate::agents::ProviderLogin::named(
+                crate::ids::AgentKind::new_unchecked("codex"),
+                name.parse().unwrap(),
+                dir.path().join(name),
+            )
+            .unwrap()
+        };
+        let work = login("work");
+        let next = login("spare");
+        let shared = Mutex::new(
+            spawn_and_handshake(&program, work.key(), &work.env(&BTreeMap::new())).unwrap(),
+        );
+        assert_eq!(
+            serve_request(&shared, &|| Ok(work.clone()), "initialize", Value::Null).unwrap()["home"],
+            work.home().unwrap().to_str().unwrap()
+        );
+        assert_eq!(
+            serve_request(&shared, &|| Ok(next.clone()), "initialize", Value::Null).unwrap()["home"],
+            work.home().unwrap().to_str().unwrap()
+        );
+        assert_eq!(
+            serve_request(&shared, &|| Ok(next.clone()), "account/read", Value::Null).unwrap()["home"],
+            next.home().unwrap().to_str().unwrap()
+        );
+        assert_eq!(
+            serve_request(
+                &shared,
+                &|| crate::agents::session_login(
+                    &crate::ids::AgentKind::new_unchecked("codex"),
+                    Some(&"removed".parse().unwrap()),
+                    &Default::default(),
+                ),
+                "account/read",
+                Value::Null,
+            )
+            .unwrap()["home"],
+            next.home().unwrap().to_str().unwrap()
+        );
+    }
 
     #[test]
     fn render_banner_clears_screen_then_shows_session_socket_and_status() {

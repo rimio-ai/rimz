@@ -60,7 +60,7 @@
 ## [accounts.codex.personal]
 
 # Account selections for new rooms, below --account and trusted project choices.
-# Existing rooms keep their accounts until `rimz reset`.
+# For future launches in a running room, use `rimz accounts use --room` there.
 ## [accounts.use]
 ## codex = "personal"
 

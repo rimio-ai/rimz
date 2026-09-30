@@ -742,6 +742,7 @@ fn preflight_cell(
         &rimz::config::MachineConfig::load_lenient().accounts,
     )?;
     request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
+    login.preflight(&rimz::agents::ambient_env())?;
     request.skills.clone_from(&cell.skills);
     request.isolation_default = cell.isolation_default;
     request.action = rimz::harness::launch::ExecAction::Launch {

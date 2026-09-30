@@ -1840,6 +1840,7 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         "cursor",
         "conv-cursor-recovery",
         None,
+        None,
     );
 
     let snapshot = env
@@ -1876,6 +1877,7 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         &env.runtime_paths(),
         "cursor",
         "conv-cursor-recovery",
+        None,
         None,
     );
 

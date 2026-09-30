@@ -306,6 +306,8 @@ A long-lived `CLAUDE_CODE_OAUTH_TOKEN` blocks because it can make model requests
 
 ### Consent
 
+A running Remote Control host keeps the environment it was spawned with when `rimz accounts use --room` changes the room's launch default. The next host spawn uses the new default; the switch does not replace a live host pane.
+
 `claude remote-control` asks `Enable Remote Control? (y/n)` once per machine and records the answer as `remoteDialogSeen` in `${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json` (`RIMZ_CLAUDE_GLOBAL_CONFIG` overrides the path). An unattended host pane would block on that prompt, so `prepare_runtime_control` seeds the key through [`remote_consent.rs`](../../../crates/rimz/src/agents/adapters/claude/remote_consent.rs) when remote control is enabled. It inserts `"remoteDialogSeen": true` as the root object's first member so the rest of a file RimZ does not own keeps its order and formatting, re-parses the result, and replaces the file atomically. Seeding only fills a missing key: an explicit non-`true` value stays, and readiness refuses with the fix. Claude records the key whether the answer was `y` or `n`, so the key alone never proves consent; the RimZ config toggle is the operator's intent.
 
 ### Liveness

@@ -110,6 +110,29 @@ fn write_recovered_window(runtime: &RuntimePaths) {
 }
 
 #[test]
+fn resume_gate_uses_the_agents_stamped_capacity() {
+    let (_dir, runtime) = temp_runtime();
+    write_recovered_window(&runtime);
+    let mut cache: RateLimitsCache =
+        serde_json::from_slice(&std::fs::read(runtime.shared_rate_limits_path()).unwrap()).unwrap();
+    cache.entries.insert(
+        "claude@work".parse().unwrap(),
+        crate::agents::account::RateLimitCacheEntry {
+            limits: AgentRateLimits {
+                windows: vec![window(100, 9_000)],
+            },
+            ..Default::default()
+        },
+    );
+    write_rate_limits_cache(&runtime, &cache);
+    let mut agent = parked_agent(1_000, 5_990, TurnErrorClass::PausedRateLimit, "limit");
+    agent.login = Some("work".parse().unwrap());
+    assert!(!resume_gate_recovered(&runtime, &agent, ts(6_000)));
+    agent.login = None;
+    assert!(resume_gate_recovered(&runtime, &agent, ts(6_000)));
+}
+
+#[test]
 fn exact_qwen_cache_does_not_arm_session_resume_controls() {
     let (_dir, runtime) = temp_runtime();
     write_rate_limits_cache(

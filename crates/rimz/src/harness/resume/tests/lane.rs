@@ -969,4 +969,20 @@ fn lane_resumes_a_closed_member_after_the_room_switches() {
         .logins(&room)
         .run();
     assert!(result.is_ok(), "{result:?}");
+    let LaneResumeAction::RestoreClosed { plan, .. } = result.unwrap() else {
+        panic!("closed lane restore")
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(dir.path());
+    let store = crate::Store::open(
+        crate::StatePaths::under(id.clone(), dir.path()).unwrap(),
+        crate::RuntimePaths::under(id, dir.path()).unwrap(),
+    )
+    .unwrap();
+    let plan = plan.materialize(&store, "room").unwrap();
+    crate::harness::launch_plan::testkit::assert_claude_stamped_home(
+        &decode_exec_request(&first_argv(&plan.tabs[0])),
+        dir.path(),
+        None,
+    );
 }

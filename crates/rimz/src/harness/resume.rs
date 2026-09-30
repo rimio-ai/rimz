@@ -98,8 +98,7 @@ pub struct LaneResumeRequest<'a> {
     pub max: usize,
     pub rimz_bin: &'a Path,
     pub runtime: &'a RuntimePaths,
-    /// The room's frozen account selection; a closed member born under another
-    /// account refuses the resume.
+    /// The room's defaults for locally discovered sessions; recorded members keep their own stamps.
     pub logins: &'a RoomLogins,
 }
 

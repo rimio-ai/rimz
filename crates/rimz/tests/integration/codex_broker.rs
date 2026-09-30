@@ -16,6 +16,74 @@ use serde_json::{Value, json};
 
 use crate::common::Env;
 
+#[test]
+fn old_login_context_refresh_does_not_connect_to_room_broker() {
+    let env = Env::new();
+    assert!(
+        env.rimz()
+            .args(["accounts", "add", "codex", "work"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let kind = rimz::ids::AgentKind::new_unchecked("codex");
+    store
+        .begin_agent_launch_batch(
+            &[rimz::store::writer::AgentLaunchRequest {
+                kind: kind.clone(),
+                login: rimz::store::writer::LaunchLogin::Pinned("work".parse().unwrap()),
+                agent_id: "old-login".into(),
+                name: rimz::store::writer::AgentLaunchName::Explicit("old-login".into()),
+                launch: Default::default(),
+                run_id: None,
+                prompt: None,
+            }],
+            rimz::store::writer::AgentLaunchScope {
+                session_name: workspace.session_name.clone(),
+                cwd: env.project_root.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    store
+        .switch_room_login(&workspace, &kind, &"default".parse().unwrap())
+        .unwrap();
+    let socket = env.runtime_paths().codex_app_server_socket_path();
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let request = rimz::agents::LifecycleRefreshRequest {
+        kind,
+        session_id: "old-login".into(),
+        workspace_id: workspace.workspace_id,
+        model: None,
+        server_url: None,
+    };
+    let output = env
+        .rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "refresh-context",
+            &request,
+        ))
+        .env("RIMZ_CODEX_BIN", codex_appserver_stub())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "old-login refresh must never touch the current-login broker"
+    );
+}
+
 /// Absolute path to the built `codex app-server` stub fixture.
 fn codex_appserver_stub() -> std::path::PathBuf {
     crate::common::cargo_bin(

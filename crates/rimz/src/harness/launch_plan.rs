@@ -468,3 +468,66 @@ fn apply_materialized_system_prompt(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "testkit")]
+pub mod testkit {
+    /// Assert the consumer's compiled home with a different room default.
+    pub fn assert_claude_stamped_home(
+        request: &super::ExecRequest,
+        root: &std::path::Path,
+        expected: Option<&str>,
+    ) {
+        use super::*;
+        let mut machine = crate::config::MachineConfig::default();
+        for name in ["work", "personal", "spare"] {
+            machine
+                .accounts
+                .named_mut(&crate::ids::AgentKind::new_unchecked("claude"))
+                .unwrap()
+                .insert(
+                    name.parse().unwrap(),
+                    crate::config::NamedAccount {
+                        home: Some(root.join(name)),
+                    },
+                );
+        }
+        let workspace = crate::WorkspaceResolver::resolve_under(root, None, root).unwrap();
+        let state = StatePaths::under(workspace.workspace_id.clone(), root).unwrap();
+        state.ensure_dirs().unwrap();
+        let runtime = RuntimePaths::under(workspace.workspace_id.clone(), root).unwrap();
+        let mut record = crate::workspace::record::WorkspaceRecord::from_resolved(&workspace);
+        record.logins = Some(
+            [(
+                crate::ids::AgentKind::new_unchecked("claude"),
+                "spare".parse().unwrap(),
+            )]
+            .into(),
+        );
+        crate::workspace::record::write(&state, &record).unwrap();
+        let effective = crate::config::effective::load_with_roots(&machine, root, root).unwrap();
+        let mut request = request.clone();
+        request.identity.params.isolation = Some(crate::config::Isolation::Host);
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: root,
+            project_root: root,
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: Some(&effective),
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: None,
+            ambient_env: &BTreeMap::new(),
+        })
+        .unwrap();
+        assert_eq!(plan.login.name().as_str(), expected.unwrap_or("default"));
+        assert_eq!(
+            plan.process()
+                .env
+                .get("CLAUDE_CONFIG_DIR")
+                .map(PathBuf::from),
+            expected.map(|name| root.join(name))
+        );
+    }
+}

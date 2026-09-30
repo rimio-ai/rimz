@@ -57,7 +57,13 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
     drop(file);
 
     // The watcher's debounce flush invokes exactly this refresh per session.
-    refresh_session_transcript_context_from_watch(runtime, "codex", SESSION_ID, Some("gpt-5"));
+    refresh_session_transcript_context_from_watch(
+        runtime,
+        "codex",
+        SESSION_ID,
+        Some("gpt-5"),
+        None,
+    );
 
     let merged = agent_context::read_one(runtime, "codex", SESSION_ID).expect("merged sidecar");
     let tokens = merged.context.tokens.as_ref().expect("tokens merged");
@@ -82,7 +88,13 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
         runtime, "codex", SESSION_ID,
     ))
     .expect("sidecar");
-    refresh_session_transcript_context_from_watch(runtime, "codex", SESSION_ID, Some("gpt-5"));
+    refresh_session_transcript_context_from_watch(
+        runtime,
+        "codex",
+        SESSION_ID,
+        Some("gpt-5"),
+        None,
+    );
     let after = std::fs::read(rimz::store::agent_context::path_for(
         runtime, "codex", SESSION_ID,
     ))
@@ -119,6 +131,7 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
         "cursor",
         SESSION_ID,
         Some("cursor/model"),
+        None,
     );
     let first = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("first refresh");
     let first_stat = first.transcript_stat.expect("first stat");
@@ -149,6 +162,7 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
         "cursor",
         SESSION_ID,
         Some("cursor/model"),
+        None,
     );
 
     let merged = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("merged sidecar");
@@ -173,6 +187,7 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
         "cursor",
         SESSION_ID,
         Some("cursor/model"),
+        None,
     );
     let after = std::fs::read(rimz::store::agent_context::path_for(
         runtime, "cursor", SESSION_ID,

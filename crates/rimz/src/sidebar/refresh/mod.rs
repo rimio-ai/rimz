@@ -252,7 +252,7 @@ pub(super) fn refresh_heavy_lanes(
     // evaluate the already-known reset credits.
     credits::apply_credits_cache(&mut panels, runtime, &config.accounts, &logins);
 
-    refresh_live_sessions(base, runtime, &logins);
+    refresh_live_sessions(base, runtime);
     refresh_account_usage(&panels, runtime, &logins);
     let resume_messages = read_auto_continue_resume_messages(
         store.as_ref(),

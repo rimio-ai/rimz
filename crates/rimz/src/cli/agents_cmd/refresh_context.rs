@@ -29,12 +29,29 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     let kind = request.kind.as_str();
     let session_id = request.session_id.as_str();
     let prior = rimz::store::agent_context::read_one(&runtime, kind, session_id);
-    let logins = agents::RoomLoginSet::for_runtime(&runtime);
-    // A room account that no longer resolves has no home to refresh from.
-    let Some(login) = logins.default_login(kind) else {
+    let state = StatePaths::for_workspace(workspace_id.clone())?;
+    let defaults = agents::room_logins(&state.workspace_record).ok();
+    let snapshot = Store::open(state, runtime.clone())?.snapshot_cached()?;
+    let Some(agent) = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.kind.as_str() == kind && agent.agent_id.as_str() == session_id)
+    else {
         return Ok(());
     };
-    let login_env = logins.env(&login);
+    let Ok(login) = agents::session_login(
+        &request.kind,
+        agent.login.as_ref(),
+        &rimz::config::MachineConfig::load_lenient().accounts,
+    ) else {
+        return Ok(());
+    };
+    let login_env = login.env(&agents::ambient_env());
+    let broker_socket = defaults
+        .filter(|defaults| {
+            defaults.get(&request.kind).cloned().unwrap_or_default() == *login.name()
+        })
+        .map(|_| runtime.codex_app_server_socket_path());
     let Some(refresh) = definition.refresh_session_context(&agents::SessionContextInput {
         login_env: &login_env,
         session_id,
@@ -42,14 +59,21 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
         server_url: request.server_url.as_deref(),
         prior: prior.as_ref(),
         pricing_cache_path: &runtime.shared_pricing_cache_path(),
-        broker_socket: Some(&runtime.codex_app_server_socket_path()),
+        broker_socket: broker_socket.as_deref(),
     }) else {
         return Ok(());
     };
 
     let mut wrote = false;
     if let Some(mut local) = refresh.local {
-        confirm_turn_death_from_pane(&runtime, &workspace_id, kind, session_id, &mut local);
+        confirm_turn_death_from_pane(
+            &runtime,
+            &workspace_id,
+            kind,
+            session_id,
+            &login.key(),
+            &mut local,
+        );
         rimz::store::agent_context::merge_local_context(
             &runtime,
             definition.spec(),
@@ -61,9 +85,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
         wrote = true;
     }
 
-    if let Some(realtime) = refresh.realtime_usage
-        && let Some(login) = agents::RoomLoginSet::for_runtime(&runtime).default_login(kind)
-    {
+    if let Some(realtime) = refresh.realtime_usage {
         wrote |=
             rimz::sidebar::refresh::complete_realtime_account_usage(&runtime, &login, realtime);
     }
@@ -95,6 +117,7 @@ fn confirm_turn_death_from_pane(
     workspace_id: &WorkspaceId,
     kind: &str,
     session_id: &str,
+    login: &rimz::ids::LoginKey,
     refresh: &mut agents::LocalContextRefresh,
 ) {
     let agents::FieldPatch::Set(error) = &mut refresh.context.turn_error else {
@@ -106,6 +129,7 @@ fn confirm_turn_death_from_pane(
     let pane = session_pane(runtime, workspace_id, kind, session_id);
     rimz::sidebar::refresh::sessions::confirm_codex_turn_death_from_pane(
         runtime,
+        login,
         pane.as_ref(),
         error,
     );

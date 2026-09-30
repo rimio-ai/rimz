@@ -1527,7 +1527,7 @@ fn render_accounts(
         let (health, status) = match (&row.problem, row.room) {
             (Some(problem), true) => (Health::Alarm, problem.as_str()),
             (Some(problem), false) => (Health::Warn, problem.as_str()),
-            (None, true) => (Health::Ok, "this room's account"),
+            (None, true) => (Health::Ok, "this room's launch default"),
             (None, false) => (Health::Ok, "ready"),
         };
         table.row([

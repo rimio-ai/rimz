@@ -788,7 +788,7 @@ fn start_freezes_room_accounts_until_reset() {
         let stderr = String::from_utf8_lossy(&refused.stderr);
         assert!(!refused.status.success(), "{stderr}");
         assert!(
-            stderr.contains("this room uses claude account `default`, not `work`; accounts are fixed until reset, so run `rimz reset --account claude=work`"),
+            stderr.contains("this room uses claude account `default`, not `work`; switch it with `rimz accounts use --room claude work`"),
             "{stderr}"
         );
     }

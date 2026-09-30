@@ -68,7 +68,7 @@ fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> LiveRoo
     }
 }
 
-/// Decide the provider accounts a room is born under: its frozen record wins,
+/// Decide the provider accounts a room is born under: its recorded defaults win,
 /// then the explicit request, then the trusted project's `[accounts]`, then
 /// the machine's `[accounts.use]`, and every selected account must be usable
 /// before anything launches.

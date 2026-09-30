@@ -1179,4 +1179,17 @@ fn cohort_resume_keeps_the_member_account_after_the_room_switches() {
         agent.login.as_ref().map(crate::ids::LoginName::as_str),
         Some("personal")
     );
+    let argv = crate::harness::plan::resume_command(
+        Path::new(RIMZ_BIN),
+        &RUNTIME,
+        &crate::harness::plan::ResumeLaunchIdentity::from(agent.as_ref()),
+        None,
+        &crate::harness::plan::ResumeLaunchPosture::default(),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    crate::harness::launch_plan::testkit::assert_claude_stamped_home(
+        &decode_exec_request(&argv),
+        dir.path(),
+        Some("personal"),
+    );
 }
