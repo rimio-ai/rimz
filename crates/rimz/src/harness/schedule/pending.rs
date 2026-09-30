@@ -172,8 +172,7 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
                 let Some(team) = &run.team else { continue };
                 let stage = crate::harness::scratch::board_stage(&run.worktree_path)
                     .map(|stage| stage.name);
-                // A board hand-edited to Done leaves the run open with no report coming.
-                if stage.as_deref() == Some("Done") {
+                if !fleet::team_stage_pending(stage.as_deref()) {
                     continue;
                 }
                 waits.push(PendingWait {

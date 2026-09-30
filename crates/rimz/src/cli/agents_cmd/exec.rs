@@ -1847,6 +1847,15 @@ mod tests {
     /// complete on the digest's turn instead of failing stranded.
     #[test]
     fn parked_monitor_repairs_a_lost_fleet_digest_instead_of_failing() {
+        assert_parked_monitor_repairs_report(false);
+    }
+
+    #[test]
+    fn parked_monitor_settles_a_dead_team_and_waits_for_its_report() {
+        assert_parked_monitor_repairs_report(true);
+    }
+
+    fn assert_parked_monitor_repairs_report(team: bool) {
         let dir = tempfile::tempdir().unwrap();
         let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
         let paths =
@@ -1863,8 +1872,17 @@ mod tests {
             observation.agent_name = Some(name.to_owned());
             observation.pane_id = Some(rimz::ids::PaneId::parse(pane).unwrap());
             if let Some(parent) = parent {
-                observation.launch.parent_agent_id = Some(AgentSessionId::from(parent));
-                observation.launch.parent_agent_kind = Some(kind.clone());
+                if team {
+                    observation.launch.team = Some("forge".into());
+                    observation.launch.channel = Some("x".into());
+                    observation.launch.launched_by = Some(Box::new(rimz::agents::LaunchedBy {
+                        kind: kind.clone(),
+                        agent_id: parent.into(),
+                    }));
+                } else {
+                    observation.launch.parent_agent_id = Some(AgentSessionId::from(parent));
+                    observation.launch.parent_agent_kind = Some(kind.clone());
+                }
                 observation.launch.launch_depth = Some(1);
             }
             store
@@ -1879,6 +1897,21 @@ mod tests {
         };
         register("parent", "tmux:%1", None);
         register("child", "tmux:%2", Some("parent"));
+
+        if team {
+            store
+                .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                    session_name: "room",
+                    agent_kind: kind.clone(),
+                    event_name: "test",
+                    observation: &rimz::agents::AgentLifecycleObservation::new(
+                        Some("child".into()),
+                        rimz::agents::LifecycleSignal::Ended,
+                    ),
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        }
 
         let run = |session: &str, status: rimz::store::run::RunStatus| {
             let mut record = rimz::store::run::RunRecord::new(
@@ -1896,16 +1929,26 @@ mod tests {
         let mut parent_run = run("parent", rimz::store::run::RunStatus::Running);
         parent_run.parked_at = Some(jiff::Timestamp::now());
         let mut child_run = run("child", rimz::store::run::RunStatus::Completed);
-        child_run.subagent = true;
+        if team {
+            child_run.status = rimz::store::run::RunStatus::Running;
+            child_run.team = Some(rimz::store::run::TeamRun {
+                launch_id: "child".into(),
+                instance: "forge#x".into(),
+            });
+        } else {
+            child_run.subagent = true;
+        }
         for record in [&parent_run, &child_run] {
             rimz::harness::run::create(store.paths(), record).unwrap();
         }
         let parent_id = AgentSessionId::from("parent");
-        assert_eq!(
-            rimz::harness::owed::owed_wake(&store, &kind, &parent_id).unwrap(),
-            Some(rimz::harness::owed::OwedWake::Subagents),
-            "a settled child nobody reported holds the park",
-        );
+        if !team {
+            assert_eq!(
+                rimz::harness::owed::owed_wake(&store, &kind, &parent_id).unwrap(),
+                Some(rimz::harness::owed::OwedWake::Subagents),
+                "a settled child nobody reported holds the park",
+            );
+        }
 
         let context = RunExecContext {
             run_id: parent_run.run_id.clone(),
@@ -1930,6 +1973,21 @@ mod tests {
             "the repair turns the owed fleet into a digest in flight",
         );
         assert_eq!(context.store.list_messages().unwrap().len(), 1);
+        if team {
+            let messages = context.store.list_messages().unwrap();
+            assert_eq!(
+                messages[0].sender,
+                rimz::store::message::MessageSender::Harness {
+                    notice: rimz::store::message::HarnessNotice::TeamReport,
+                }
+            );
+            assert_eq!(
+                rimz::harness::run::load(context.store.paths(), &child_run.run_id)
+                    .unwrap()
+                    .status,
+                rimz::store::run::RunStatus::Failed
+            );
+        }
         let parked = context.load_record().unwrap();
         assert_eq!(parked.status, rimz::store::run::RunStatus::Running);
         assert_eq!(parked.parked_at, parent_run.parked_at);

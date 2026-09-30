@@ -50,6 +50,11 @@ fn team_cohort_gone(agents: &[AgentState], instance: &str) -> bool {
         })
 }
 
+/// A hand-edited Done board leaves its run open with no report coming.
+pub(super) fn team_stage_pending(stage: Option<&str>) -> bool {
+    stage != Some(crate::config::DONE_STAGE)
+}
+
 /// Open runs belonging to this launcher whose whole cohort has ended.
 pub fn ended_team_runs<'a>(
     agents: &[AgentState],
