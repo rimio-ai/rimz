@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn resume_prompt_is_queued_to_the_leader_before_registration() {
+    use rimz::harness::plan::CohortSeed;
+    use rimz::store::message::{DeliveryGate, MessageSender};
+    for fresh in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let id = rimz::WorkspaceId::from_project_root(dir.path());
+        let store = rimz::Store::open(
+            rimz::StatePaths::under(id.clone(), &dir.path().join("state")).unwrap(),
+            rimz::RuntimePaths::under(id, &dir.path().join("runtime")).unwrap(),
+        )
+        .unwrap();
+        let mut leader = test_agent("leader-session");
+        leader.name = Some("leader".into());
+        let seeds = vec![
+            CohortSeed::Fresh,
+            CohortSeed::Resume(test_agent("worker-session").into()),
+            if fresh {
+                CohortSeed::Fresh
+            } else {
+                CohortSeed::Resume(leader.into())
+            },
+        ];
+        let identities = vec![
+            launch_identity("codex", "worker"),
+            launch_identity("codex", "leader"),
+        ];
+        queue_resume_prompt(&store, "room", &seeds, &identities, "say hi", 2).unwrap();
+        let messages = store.list_messages().unwrap();
+        assert_eq!(
+            messages.len(),
+            1,
+            "prompt must be durable before any pane opens"
+        );
+        let message = &messages[0];
+        assert_eq!(message.sender, MessageSender::Human);
+        assert_eq!(message.gate, DeliveryGate::Done);
+        assert_eq!(message.text, "say hi");
+        assert_eq!(message.agent_name.as_deref(), Some("leader"));
+        assert_eq!(
+            message.agent_id.as_str(),
+            if fresh {
+                "launch-leader"
+            } else {
+                "leader-session"
+            }
+        );
+        assert!(message.enter);
+    }
+}
+
+#[test]
 fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
     let dir = tempfile::tempdir().unwrap();
     let id = rimz::WorkspaceId::from_project_root(dir.path());

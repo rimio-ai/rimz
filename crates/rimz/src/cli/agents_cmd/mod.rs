@@ -207,7 +207,7 @@ pub(crate) struct CohortLaunchArgs {
     pub(crate) new_tab: bool,
 }
 
-#[derive(Debug, Default, PartialEq, Args)]
+#[derive(Clone, Debug, Default, PartialEq, Args)]
 pub(crate) struct LaunchOverrideArgs {
     /// Let the agent ask before tool use where supported.
     #[arg(long, conflicts_with = "yolo")]
@@ -215,13 +215,13 @@ pub(crate) struct LaunchOverrideArgs {
     /// Skip provider permission prompts where supported.
     #[arg(long)]
     pub(crate) yolo: bool,
-    /// Model for the launched agents.
+    /// Model for the agents; on resume, becomes the saved launch record.
     #[arg(long, value_name = "MODEL", conflicts_with = "tier")]
     pub(crate) model: Option<String>,
-    /// Capability tier for the launched agents.
+    /// Capability tier; on resume, picks a same-provider entry and saves the launch record.
     #[arg(long, value_name = "TIER")]
     pub(crate) tier: Option<rimz::config::tiers::ModelTier>,
-    /// Prefer this provider kind, or re-base onto a replacement profile.
+    /// Prefer this provider kind, or re-base onto a replacement profile. On resume, must match the provider and becomes the saved launch record.
     #[arg(long, value_name = "PROFILE|KIND")]
     pub(crate) agent: Option<String>,
     /// Replace each agent's base system prompt with a file's contents.
@@ -258,6 +258,7 @@ pub(crate) struct AgentLaunchArgs {
     pub(crate) spec: Option<String>,
     /// Prompt delivered to the layout's leader agent (a team's `leader` role,
     /// defaulting to its first role; otherwise the first agent cell).
+    /// On resume, queued as a user message after reopening.
     #[arg(value_name = "PROMPT", allow_hyphen_values = true, value_parser = parse_agent_prompt)]
     pub(crate) prompt: Option<String>,
     #[command(flatten)]

@@ -24,22 +24,7 @@ pub(super) fn validate_resume_inputs(
     entrance: ResumeEntrance,
 ) -> Result<()> {
     let overrides = &args.overrides;
-    let (input, message) = if args.prompt.is_some() {
-        (
-            "PROMPT",
-            "a resumed session takes no prompt; send it after it opens with `rimz message`",
-        )
-    } else if overrides.agent.is_some() {
-        (
-            "--agent",
-            "`--agent` changes which session resume matches; resume the spec as launched",
-        )
-    } else if overrides.tier.is_some() {
-        (
-            "--tier",
-            "`--tier` does not apply to resumed sessions; launch fresh instead",
-        )
-    } else if overrides.system_prompt_file.is_some() {
+    let (input, message) = if overrides.system_prompt_file.is_some() {
         (
             "--system-prompt-file",
             "resume takes system-prompt files from the current profile; update the profile or launch fresh instead of passing `--system-prompt-file`",
@@ -109,6 +94,9 @@ pub(super) fn launch_layout(
     } else {
         None
     };
+    let mut matching_overrides = args.launch.overrides.clone();
+    matching_overrides.agent = None;
+    matching_overrides.tier = None;
     let FinalizedLaunch {
         profiles: _,
         resolved,
@@ -121,8 +109,15 @@ pub(super) fn launch_layout(
         &machine_config,
         &effective,
         args.launch.spec.as_deref(),
-        args.launch.prompt.as_deref(),
-        &args.launch.overrides,
+        args.launch
+            .prompt
+            .as_deref()
+            .filter(|_| !args.launch.cohort.resume),
+        if args.launch.cohort.resume {
+            &matching_overrides
+        } else {
+            &args.launch.overrides
+        },
         args.launch.cohort.budget,
         args.launch.max_turns,
         lane,
@@ -384,6 +379,21 @@ pub(super) fn launch_layout(
             reconcile::Reconciled::Done => return Ok(()),
             reconcile::Reconciled::Resume(path) => {
                 validate_resume_inputs(&args.launch, ResumeEntrance::Reconcile)?;
+                let layout = resolve_finalized_layout(
+                    snapshot.as_ref(),
+                    &machine_config,
+                    &effective,
+                    args.launch.spec.as_deref(),
+                    None,
+                    &matching_overrides,
+                    args.launch.cohort.budget,
+                    args.launch.max_turns,
+                    lane,
+                    false,
+                    Some((store.runtime_paths(), store.paths())),
+                )?
+                .resolved
+                .layout;
                 if let Some(checkout) = checkout.take()
                     && crate::cli::settle_launch_checkout(
                         workspace,
@@ -715,6 +725,45 @@ fn write_peer_receipt(
     Ok(())
 }
 
+fn queue_resume_prompt(
+    store: &rimz::Store,
+    session_name: &str,
+    seeds: &[rimz::harness::plan::CohortSeed],
+    identities: &[AgentLaunchIdentity],
+    prompt: &str,
+    leader: usize,
+) -> Result<()> {
+    use rimz::harness::plan::CohortSeed;
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageSender};
+    let (kind, agent_id, name) = match &seeds[leader] {
+        CohortSeed::Resume(agent) => (&agent.kind, &agent.agent_id, agent.name.clone()),
+        CohortSeed::Fresh => {
+            let index = seeds[..leader]
+                .iter()
+                .filter(|seed| matches!(seed, CohortSeed::Fresh))
+                .count();
+            let identity = &identities[index];
+            (
+                &identity.kind,
+                &identity.agent_id,
+                Some(identity.name.clone()),
+            )
+        }
+    };
+    let message = MessageRecord::new_for_card(
+        store.paths().workspace_id.clone(),
+        kind.clone(),
+        agent_id.clone(),
+        name,
+        prompt.to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Human);
+    store.queue_message(&message, session_name)?;
+    Ok(())
+}
+
 fn preflight_cell(
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
@@ -824,6 +873,13 @@ fn launch_resume_layout(
         rimz::harness::resume::resume_session_present,
     )
     .map_err(|err| cohort_resume_error(err, spec, scope.as_deref(), &agents, teams))?;
+    let availability = rimz::harness::plan::LaunchAvailability::read(
+        store.runtime_paths(),
+        store.paths(),
+        machine_config,
+        jiff::Timestamp::now(),
+    );
+    let unavailable = |kind: &str, model: &str| availability.unavailable(kind, model);
     rimz::harness::resume::restore_routed_cells(
         &mut layout,
         &plan.seeds,
@@ -835,7 +891,13 @@ fn launch_resume_layout(
                 args.launch.overrides.yolo,
             )?,
             preset: launch_override_preset(&args.launch.overrides)?,
-            ..Default::default()
+            agent: args.launch.overrides.agent.as_deref(),
+            tier: args
+                .launch
+                .overrides
+                .tier
+                .map(|tier| (tier, &machine_config.tiers)),
+            unavailable: Some(&unavailable),
         },
     )?;
     let mut preflighted_logins = Vec::new();
@@ -958,6 +1020,22 @@ fn launch_resume_layout(
     let team = team_name.as_deref().and_then(|name| teams.0.get(name));
     panes.focused_pane = team_leader_pane(&layout, team);
     let leader = team.and_then(|team| team.leader.as_deref());
+    if let Some(prompt) = args
+        .launch
+        .prompt
+        .as_deref()
+        .filter(|prompt| !prompt.trim().is_empty())
+    {
+        queue_resume_prompt(
+            store,
+            &workspace.session_name,
+            &plan.seeds,
+            launch_batch.identities(),
+            prompt,
+            rimz::harness::spec::prompt_leader(&layout, team)?,
+        )?;
+        rimz::message::deliver::register_message_wake(workspace, store)?;
+    }
     if in_place {
         write_resume_receipt(
             &mut render::out(),
@@ -983,7 +1061,22 @@ fn launch_resume_layout(
             focus,
             errors: LAUNCH_PLACEMENT_ERRORS,
         },
-        || rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities()),
+        || {
+            rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
+            if args.launch.overrides.tier.is_some() {
+                for (cell, seed) in layout.agent_cells().zip(&plan.seeds) {
+                    let rimz::harness::plan::CohortSeed::Resume(agent) = seed else {
+                        continue;
+                    };
+                    rimz::harness::assist_log::record_tier_fallback(
+                        &agent.kind,
+                        &agent.agent_id,
+                        agent.name.as_deref(),
+                        &cell.launch,
+                    );
+                }
+            }
+        },
     )?;
     if !in_place {
         write_resume_receipt(

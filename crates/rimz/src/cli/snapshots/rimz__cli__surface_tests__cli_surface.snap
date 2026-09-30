@@ -2976,14 +2976,21 @@ rimz teams restart
 
 rimz teams resume
     <name>  [action=set takes=1..=1 required]
+    <prompt>  [action=set takes=1..=1]
+    --agent <PROFILE|KIND>  [action=set takes=1..=1]
+    --ask  [action=set-true takes=0..=0]
     --bg  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --effort <LEVEL>  [action=set takes=1..=1]
     -h, --help  [action=help takes=0..=0]
     --isolation <host|sandbox>  [action=set takes=1..=1]
+    --model <MODEL>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --tier <TIER>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     -w, --worktree <NAME>  [action=set takes=0..=1]
+    --yolo  [action=set-true takes=0..=0]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz teams show (aliases: inspect)
