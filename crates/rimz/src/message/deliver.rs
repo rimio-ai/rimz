@@ -23,7 +23,7 @@ use crate::{RuntimePaths, Store};
 
 use super::send;
 
-type Result<T> = std::result::Result<T, DeliverErr>;
+pub(super) type Result<T> = std::result::Result<T, DeliverErr>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeliverErr {
@@ -168,78 +168,6 @@ fn is_no_pane_blocker(blocker: &str) -> bool {
 enum DeliveryReport {
     Sent,
     Stopped(Option<DeliveryVerdict>),
-}
-
-/// Build verbatim System text against an agent card; every synthetic record carries the agent's channel and submits.
-fn synthetic_record(
-    workspace_id: crate::ids::WorkspaceId,
-    agent: &crate::agents::AgentState,
-    text: String,
-    gate: DeliveryGate,
-    pane_id: Option<&PaneId>,
-) -> MessageRecord {
-    let record = MessageRecord::new(workspace_id, agent, text, gate)
-        .with_channel(agent.channel())
-        .with_sender(MessageSender::System);
-    match pane_id {
-        Some(pane_id) => record.with_pane_id(pane_id.clone()),
-        None => record,
-    }
-}
-
-/// Queue synthetic text with no pane affinity, delivered at the next `Done` boundary.
-pub fn queue_synthetic(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    agent: &crate::agents::AgentState,
-    text: String,
-) -> Result<MessageId> {
-    let message = synthetic_record(
-        workspace.workspace_id.clone(),
-        agent,
-        text,
-        DeliveryGate::Done,
-        None,
-    );
-    store.queue_message(&message, &workspace.session_name)?;
-    Ok(message.message_id)
-}
-
-/// Queue a nudge against a known pane and attempt boundary delivery in the same
-/// pass. Returns the record id and whether the attempt delivered.
-pub fn nudge_now(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    agent: &crate::agents::AgentState,
-    text: String,
-    gate: DeliveryGate,
-    pane_id: &PaneId,
-) -> Result<(MessageId, bool)> {
-    let message = synthetic_record(
-        workspace.workspace_id.clone(),
-        agent,
-        text,
-        gate,
-        Some(pane_id),
-    );
-    let delivered = deliver_now(workspace, store, &message)?;
-    Ok((message.message_id, delivered))
-}
-
-/// Queue attributed text and attempt boundary delivery, retaining the caller's id on failure.
-pub fn deliver_now(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    message: &MessageRecord,
-) -> Result<bool> {
-    store.queue_message(message, &workspace.session_name)?;
-    deliver_one(
-        workspace,
-        store,
-        &message.message_id,
-        message.pane_id.as_ref().map(PaneId::mux),
-        DeliveryPolicy::Boundary,
-    )
 }
 
 pub fn deliver_one(
@@ -1117,40 +1045,6 @@ mod tests {
         waiting.waiting_since = Some(waiting.last_activity);
         assert!(!receiver_readiness(&waiting, DeliveryGate::Done, false, now).accepts_prompt());
         assert!(receiver_readiness(&waiting, DeliveryGate::Done, true, now).accepts_prompt());
-    }
-
-    #[test]
-    fn nudge_record_rides_a_system_sender_and_carries_the_agents_channel() {
-        let mut agent = agent("sess-parked", AgentStatus::Paused);
-        agent.channel = Some("auth".to_owned());
-        let pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_4");
-
-        let resume = synthetic_record(
-            workspace_id(),
-            &agent,
-            "continue".to_owned(),
-            DeliveryGate::Resume,
-            Some(&pane_id),
-        );
-        // A resume nudge is system-initiated and stays verbatim; its gate keeps
-        // it out of `is_user_input`.
-        assert_eq!(resume.sender, crate::store::message::MessageSender::System);
-        assert!(!resume.is_user_input());
-        assert!(resume.enter, "a nudge always submits");
-        assert_eq!(resume.gate, DeliveryGate::Resume);
-        assert_eq!(resume.channel.as_deref(), Some("auth"));
-        assert_eq!(resume.pane_id.as_ref(), Some(&pane_id));
-        assert_eq!(resume.status, MessageStatus::Queued);
-
-        let parked = synthetic_record(
-            workspace_id(),
-            &agent,
-            "continue".to_owned(),
-            DeliveryGate::Done,
-            None,
-        );
-        assert_eq!(parked.pane_id, None);
-        assert_eq!(parked.gate, DeliveryGate::Done);
     }
 
     #[test]

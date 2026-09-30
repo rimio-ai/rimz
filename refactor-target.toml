@@ -407,7 +407,8 @@ upward-dependencies = [
 # The no-pane blocker sentence is one formatter for the durable record and `message show`.
 # Typed delivery timing and its dispatch accessor are shared with CLI reporting.
 # Attributed boundary nudges share queue-and-deliver with system nudges and retain their id on failure.
-surface-budget = 74
+# The synthetic request type and public submodule join the surface; two entry functions replace three.
+surface-budget = 76
 
 [[module]]
 path = "crates/rimz/src/mux"

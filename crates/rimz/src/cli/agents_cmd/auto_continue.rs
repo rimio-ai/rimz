@@ -13,9 +13,10 @@ use jiff::Timestamp;
 
 use rimz::harness::AutoContinueRequest;
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::message::deliver;
-use rimz::store::message::DeliveryGate;
+use rimz::message::synthetic::{self, SyntheticMessage};
+use rimz::store::message::{DeliveryGate, MessageSender};
 use rimz::store::snapshot::find_agent;
+use rimz::store::writer::DeliveryFailureDisposition;
 
 use super::Ctx;
 
@@ -43,17 +44,19 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
         })
         .context("auto-continue target pane is no longer bound to the agent")?;
 
-    let (message_id, delivered) = match request.message_id {
+    let reason = format!("resume delivery gate closed ({})", request.reason);
+    let (message_id, outcome) = match request.message_id {
         Some(message_id) => {
-            let delivered = deliver::deliver_one(
+            let outcome = synthetic::attempt_now(
                 workspace,
                 store,
                 &message_id,
-                Some(request.pane_id.mux()),
-                deliver::DeliveryPolicy::Boundary,
+                Some(&request.pane_id),
+                DeliveryFailureDisposition::Retry,
+                &reason,
             )
-            .context("delivering auto-continue resume message")?;
-            (message_id, delivered)
+            .context("delivering auto-continue resume message");
+            (message_id, outcome)
         }
         None => {
             let gate = if request.reason == "budget_day_reset" {
@@ -61,32 +64,26 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
             } else {
                 DeliveryGate::Resume
             };
-            deliver::nudge_now(
+            let message = SyntheticMessage {
+                agent,
+                text: text.to_owned(),
+                sender: MessageSender::System,
+                gate,
+                pane_id: Some(request.pane_id),
+            }
+            .record(workspace);
+            let outcome = synthetic::deliver_now(
                 workspace,
                 store,
-                agent,
-                text.to_owned(),
-                gate,
-                &request.pane_id,
+                &message,
+                DeliveryFailureDisposition::Retry,
+                &reason,
             )
-            .context("queueing and delivering auto-continue resume message")?
+            .context("queueing and delivering auto-continue resume message");
+            (message.message_id, outcome)
         }
     };
-    let delivery_failure = if !delivered {
-        let failure_reason = format!("resume delivery gate closed ({})", request.reason);
-        store
-            .record_message_delivery_failures(
-                std::slice::from_ref(&message_id),
-                None,
-                rimz::store::writer::DeliveryFailureDisposition::Retry,
-                &failure_reason,
-                &workspace.session_name,
-            )
-            .context("recording auto-continue delivery miss")
-            .err()
-    } else {
-        None
-    };
+    let delivered = matches!(outcome, Ok(true));
     rimz::harness::assist_log::append(&AssistRecord {
         at: Timestamp::now(),
         assist: Assist::AutoContinue {
@@ -99,8 +96,6 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
             message_id: message_id.to_string(),
         },
     });
-    if let Some(err) = delivery_failure {
-        return Err(err);
-    }
+    outcome?;
     Ok(())
 }

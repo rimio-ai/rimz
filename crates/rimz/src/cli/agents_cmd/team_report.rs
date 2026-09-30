@@ -11,8 +11,9 @@ use rimz::disk::summary::FileSummary;
 use rimz::harness::run;
 use rimz::ids::{AgentSessionId, MessageId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
+use rimz::message::synthetic::SyntheticMessage;
 use rimz::sandbox::TmpView;
-use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
 use rimz::store::run::{RunRecord, RunStatus};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{RuntimeScope, Store};
@@ -163,19 +164,16 @@ fn report_team(
         view.agent_path(board).display()
     );
     let pane_id = launcher.pane.as_ref().map(|pane| &pane.pane_id);
-    let mut message = MessageRecord::new(
-        workspace.workspace_id.clone(),
-        launcher,
+    let message = SyntheticMessage {
+        agent: launcher,
         text,
-        DeliveryGate::Done,
-    )
-    .with_channel(launcher.channel())
-    .with_sender(MessageSender::Harness {
-        notice: HarnessNotice::TeamReport,
-    });
-    if let Some(pane_id) = pane_id {
-        message = message.with_pane_id(pane_id.clone());
+        sender: MessageSender::Harness {
+            notice: HarnessNotice::TeamReport,
+        },
+        gate: DeliveryGate::Done,
+        pane_id: pane_id.cloned(),
     }
+    .record(workspace);
     let message_id: MessageId = message.message_id.clone();
     // Queue before settling: a crash in between re-reports at the next Done
     // rather than losing this one.

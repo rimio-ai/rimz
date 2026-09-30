@@ -82,11 +82,13 @@ These are the producers of queued or launch-time text. Paths are relative to `cr
 | Site | Module and composing symbol | Sender / body queued |
 | --- | --- | --- |
 | Human or agent message; `--no-from` | `cli/message/dispatch.rs::send_message`, caller text; `cli/send.rs::sender_for` resolves identity | `Human` or `Agent` / `Prompt`; `--no-from` uses `System` / `Prompt` |
-| Subagent fleet digest | `cli/agents_cmd/subagent_report.rs::compose_digest` | `Harness { notice: SubagentReport }` / `Prompt` |
-| Auto-continue | `cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text via `message/deliver.rs::nudge_now` | `System` / `Prompt` |
-| Supervised verification reprompt | `harness/prompt_compose.rs::verify_reprompt`, delivered by `cli/supervised/verify.rs::deliver_reprompt` | `System` / `Prompt` |
-| Fleet or account budget continuation | `cli/budget.rs::run`, configured resume text via `message/deliver.rs::queue_synthetic` | `System` / `Prompt` |
-| Agent budget continuation | `cli/agents_cmd/budget.rs::run_budget`, configured resume text via `message/deliver.rs::queue_synthetic` | `System` / `Prompt` |
+| Subagent fleet digest | `cli/agents_cmd/subagent_report.rs::report_fleet_with_kind`, text from `compose_digest` | `Harness { notice: SubagentReport }` / `Prompt` |
+| Team report | `cli/agents_cmd/team_report.rs::report_team` | `Harness { notice: TeamReport }` / `Prompt` |
+| Prompt-cache keepalive | `cli/agents_cmd/cache_keepalive.rs::run`, text from `harness/cache_keepalive.rs::prompt`, via `message/synthetic.rs::deliver_now` | `Harness { notice: CacheKeepalive }` / `Prompt` |
+| Auto-continue | `cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text via `message/synthetic.rs::SyntheticMessage` and `deliver_now` | `System` / `Prompt` |
+| Supervised verification reprompt | `harness/prompt_compose.rs::verify_reprompt`, delivered by `cli/supervised/verify.rs::deliver_reprompt` via `message/synthetic.rs::SyntheticMessage` and `deliver_now` | `System` / `Prompt` |
+| Fleet or account budget continuation | `cli/budget.rs::run`, configured resume text via `message/synthetic.rs::SyntheticMessage` | `System` / `Prompt` |
+| Agent budget continuation | `cli/agents_cmd/budget.rs::run_budget`, configured resume text via `message/synthetic.rs::SyntheticMessage` | `System` / `Prompt` |
 | Idle compaction | `cli/agents_cmd/idle_compact.rs::run_idle_compact`, `agents::compact_command`, `message/compact.rs::send_compact` | `System` / `Command` |
 | Stage-flip compaction | `harness/team_stage.rs::compact_flipper`, `agents::compact_command`, `message/compact.rs::send_compact` | `System` / `Command` |
 | Operator compaction | `cli/agents_cmd/compact.rs::compact_agent`, adapter compact command, `message/compact.rs::send_compact` | Operator's `Human` or `Agent` / `Command` |
