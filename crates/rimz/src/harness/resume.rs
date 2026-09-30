@@ -675,11 +675,13 @@ impl RecoveryPlan {
         team: Vec<PlannedTeamTab>,
         flat: DetailedResumePlan,
     ) -> Self {
+        let mut flat_tabs = flat.tabs;
+        disambiguate_flat_labels_from_teams(&team, &mut flat_tabs);
         let mut entries = team
             .into_iter()
             .map(RecoveryEntry::Team)
             .collect::<Vec<_>>();
-        entries.extend(flat.tabs.into_iter().map(RecoveryEntry::Flat));
+        entries.extend(flat_tabs.into_iter().map(RecoveryEntry::Flat));
         Self {
             teams,
             entries,
@@ -2712,6 +2714,31 @@ fn disambiguate_resume_tab_labels(tabs: &mut [PlannedResumeTab]) {
         let base = parent_prefixed_label(&tabs[index].tab.cwd)
             .unwrap_or_else(|| tabs[index].tab.label.clone());
         tabs[index].tab.label = unique_label(&base, &mut used);
+    }
+}
+
+/// Team and flat tabs are labelled apart, and both use `#<channel>`, so a team
+/// and a standalone agent in one channel would otherwise share a tab name,
+/// which tmux seeding treats as one window. The team keeps its label; the flat
+/// tab takes the next free name.
+fn disambiguate_flat_labels_from_teams(team: &[PlannedTeamTab], flat: &mut [PlannedResumeTab]) {
+    let team_labels: HashSet<&str> = team.iter().map(|planned| planned.label.as_str()).collect();
+    let mut used: HashSet<String> = team_labels
+        .iter()
+        .map(|label| (*label).to_owned())
+        .chain(flat.iter().map(|planned| planned.tab.label.clone()))
+        .collect();
+    for planned in flat.iter_mut() {
+        if !team_labels.contains(planned.tab.label.as_str()) {
+            continue;
+        }
+        let base = match planned.identity {
+            ResumeTabIdentity::Cwd(_) => {
+                parent_prefixed_label(&planned.tab.cwd).unwrap_or_else(|| planned.tab.label.clone())
+            }
+            ResumeTabIdentity::Channel(_) => planned.tab.label.clone(),
+        };
+        planned.tab.label = unique_label(&base, &mut used);
     }
 }
 

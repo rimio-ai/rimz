@@ -606,6 +606,41 @@ fn lane_all_closed_restores_team_first_within_the_cap() {
 }
 
 #[test]
+fn lane_restore_gives_a_team_and_a_standalone_agent_in_one_channel_distinct_tabs() {
+    let (teams, profiles, commands) = team_configs();
+    let in_auth = |agent: AgentState| AgentState {
+        channel: Some("auth".to_owned()),
+        ..agent
+    };
+    let agents = [
+        in_auth(team_agent("claude", "planner", "planner", "/lane", 1)),
+        in_auth(team_agent("codex", "coder", "coder", "/lane", 2)),
+        in_auth(agent("claude", "flat", "/lane", 3)),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .max(128)
+        .restore(|| {
+            Ok(LaneRestoreConfig {
+                teams,
+                profiles,
+                commands,
+            })
+        })
+        .run()
+        .unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected closed restore");
+    };
+
+    assert_eq!(
+        plan.recovery.labels(),
+        ["#auth", "#auth-2"],
+        "the team keeps the channel label; the standalone tab is renamed so tmux seeds both"
+    );
+}
+
+#[test]
 fn lane_all_closed_drops_launched_children_of_team_and_flat_roots() {
     let (teams, profiles, commands) = team_configs();
     let agents = [
