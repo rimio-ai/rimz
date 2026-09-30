@@ -1180,8 +1180,16 @@ fn displayed_turn_error_projects_active_running_marker() {
     agent.context = Some(context_error(TurnErrorClass::PausedOverloaded, 1_010));
 
     assert_eq!(
-        agent.displayed_turn_error(),
-        Some((TurnErrorClass::PausedOverloaded, Some("provider parked")))
+        agent.displayed_turn_error().map(|(class, error)| (
+            class,
+            error.label.as_deref(),
+            error.at.as_second()
+        )),
+        Some((
+            TurnErrorClass::PausedOverloaded,
+            Some("provider parked"),
+            1_010
+        ))
     );
 }
 
@@ -1192,8 +1200,12 @@ fn displayed_turn_error_projects_terminal_marker_in_current_turn() {
     agent.context = Some(context_error(TurnErrorClass::Failed, 1_010));
 
     assert_eq!(
-        agent.displayed_turn_error(),
-        Some((TurnErrorClass::Failed, Some("provider parked")))
+        agent.displayed_turn_error().map(|(class, error)| (
+            class,
+            error.label.as_deref(),
+            error.at.as_second()
+        )),
+        Some((TurnErrorClass::Failed, Some("provider parked"), 1_010))
     );
 }
 

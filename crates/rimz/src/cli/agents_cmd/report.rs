@@ -285,11 +285,11 @@ pub(super) fn build_entry(
         .map(|card| (card.status, card.phase))
         .unwrap_or_else(|| fallback_status_projection(agent));
     let displayed_error = agent.displayed_turn_error();
-    let turn_error = displayed_error.map(|(class, state_label)| TurnErrorReport {
+    let turn_error = displayed_error.map(|(class, error)| TurnErrorReport {
         class,
         label: row
             .and_then(SidebarRow::turn_error_label)
-            .or(state_label)
+            .or(error.label.as_deref())
             .map(ToOwned::to_owned),
     });
     let description = render::agent_activity_line(agent, card);

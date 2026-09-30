@@ -1391,16 +1391,16 @@ impl AgentState {
     }
 
     /// Provider API error currently explaining this row's displayed state. The
-    /// returned class includes legacy label remapping, and the label is the
-    /// upstream text to surface on user-facing cards.
-    pub fn displayed_turn_error(&self) -> Option<(TurnErrorClass, Option<&str>)> {
+    /// returned class includes legacy label remapping; the marker retains the
+    /// upstream label and timestamp for display and resume decisions.
+    pub fn displayed_turn_error(&self) -> Option<(TurnErrorClass, &AgentTurnError)> {
         let error = display_turn_error(
             self.status,
             self.context.as_ref(),
             self.last_activity,
             self.turn_started_at,
         )?;
-        Some((effective_turn_error_class(error), error.label.as_deref()))
+        Some((effective_turn_error_class(error), error))
     }
 
     /// Tokens currently occupying the window: the folded statusline breakdown,
