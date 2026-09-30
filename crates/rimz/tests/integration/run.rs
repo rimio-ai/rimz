@@ -994,15 +994,12 @@ fn supervised_codex_without_project_trust_refuses_before_launch() {
         .expect("refuse untrusted supervised checkout");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let config = env.agent_config_path("codex");
     for expected in [
         "trust",
         "prompt",
         "codex",
-        "projects",
-        "trust_level",
+        "rimz trust grant --agents codex",
         env.project_root.to_str().expect("project path"),
-        config.to_str().expect("config path"),
     ] {
         assert!(stderr.contains(expected), "missing {expected:?}: {stderr}");
     }
@@ -1014,6 +1011,32 @@ fn supervised_codex_without_project_trust_refuses_before_launch() {
     );
     assert!(store.snapshot().expect("snapshot").agents.is_empty());
     assert!(!trace_path.exists(), "preflight must not invoke the mux");
+}
+
+#[test]
+fn supervised_claude_without_folder_trust_passes_preflight() {
+    let env = Env::new();
+    let config = env.home_root.join(".claude.json");
+    let login_env = std::collections::BTreeMap::from([(
+        "RIMZ_CLAUDE_GLOBAL_CONFIG".to_owned(),
+        config.display().to_string(),
+    )]);
+    let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+    assert!(matches!(
+        adapter.folder_trust(&env.project_root, Some(&env.project_root), &login_env),
+        Some(rimz::agents::FolderTrust::Undecided(_))
+    ));
+    assert!(
+        rimz::agents::preflight_launch_dir(
+            adapter,
+            &env.project_root,
+            Some(&env.project_root),
+            &login_env,
+        )
+        .is_ok(),
+        "Claude headless launches do not show the folder-trust dialog"
+    );
+    assert!(!config.exists(), "preflight must not grant folder trust");
 }
 
 #[test]

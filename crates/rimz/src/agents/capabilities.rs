@@ -116,15 +116,18 @@ pub trait HookCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait InstallationCapability: CoreCapability {
-    /// The fix when this agent would stop at a directory-trust prompt instead
-    /// of taking its task. Any recorded trust level counts as decided.
-    /// `repo_root` is the checkout's main repository root, when it has one.
-    fn launch_dir_trust_gap(
+    /// Whether folder-trust onboarding also blocks headless launches.
+    fn headless_requires_folder_trust(&self) -> bool {
+        false
+    }
+
+    /// A modeled folder-trust decision, or no model for this provider.
+    fn folder_trust(
         &self,
         _cwd: &Path,
         _repo_root: Option<&Path>,
         _login_env: &BTreeMap<String, String>,
-    ) -> Option<String> {
+    ) -> Option<super::FolderTrust> {
         None
     }
 

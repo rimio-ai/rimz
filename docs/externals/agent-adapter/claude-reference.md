@@ -1,6 +1,6 @@
 # Claude Code protocol reference
 
-This page mirrors the Claude Code surfaces RimZ binds to: hook events with their stdin payloads and stdout decisions, the statusline JSON, the launch flags, agent view, Remote Control, project storage and managed pricing, the auth and OAuth usage surface, and the transcript JSONL. It records what upstream ships. How RimZ maps each surface onto its own types is [adapter_claude.md](../../internals/agents/adapter_claude.md); the agent-neutral model is [model.md](../../internals/agents/model.md) and the account and spend model is [providers.md](../../internals/agents/providers.md).
+This page mirrors the Claude Code surfaces RimZ binds to: hook events with their stdin payloads and stdout decisions, the statusline JSON, the launch flags and folder trust, agent view, Remote Control, project storage and managed pricing, the auth and OAuth usage surface, and the transcript JSONL. It records what upstream ships. How RimZ maps each surface onto its own types is [adapter_claude.md](../../internals/agents/adapter_claude.md); the agent-neutral model is [model.md](../../internals/agents/model.md) and the account and spend model is [providers.md](../../internals/agents/providers.md).
 
 Coverage is depth on what RimZ wires and breadth as an index. The hook events, statusline fields, and decision shapes the adapter parses or emits get full shapes; the rest of the upstream catalog is listed so a contributor wiring something new knows it exists.
 
@@ -24,6 +24,14 @@ Coverage is depth on what RimZ wires and breadth as an index. The hook events, s
 | Credential storage | <https://code.claude.com/docs/en/authentication> |
 | Release history and version boundaries | <https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md> |
 | `claude auth status` JSON, Keychain item name, OAuth usage endpoint, bridge pointer, transcript JSONL | No public schema; read from the 2.1.270 binary and its output |
+
+## Folder trust
+
+Baseline for this section: Claude Code 2.1.285, as probed on 2026-09-30. Upstream describes the trust boundary in [security](https://code.claude.com/docs/en/security), the global config in [settings](https://code.claude.com/docs/en/settings), and configuration-home selection in [environment variables](https://code.claude.com/docs/en/env-vars). The persisted key and path-matching details below were observed in that build, not a published schema.
+
+Interactive startup asks for folder trust before running project-controlled configuration. Acceptance is `projects["<absolute path>"].hasTrustDialogAccepted: true` in `${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json`. A `CLAUDE_CONFIG_DIR` probe wrote only under the selected directory. A Git repository uses its root, and a linked worktree uses the main checkout's root. Outside Git, acceptance for the start directory covers its subdirectories. Trust at `$HOME` is session-only and never persisted. Existing `false` entries do not count as acceptance.
+
+`claude -p` does not show this dialog. `--dangerously-skip-permissions` has a separate first-run permission prompt; it is not documented as skipping folder trust. A folder-trust grant enables project-controlled configuration under the upstream trust boundary, not merely removal of a cosmetic screen.
 
 ## Hooks
 

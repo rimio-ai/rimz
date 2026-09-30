@@ -134,7 +134,8 @@ upward-dependencies = ["address"]
 # ToolRules declares per-launch permission-rule support for launch and validation (+1).
 # LoginCatalog::select_machine names the [accounts.use] source for birth, accounts list, and doctor (+1).
 # Account-scoped model alias resolution shares request, catalog source, outcome, and cache membership with launch orchestration (+10).
-surface-budget = 926
+# Folder trust shares decisions, previews, guarded writes and room-login rows (+8).
+surface-budget = 934
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

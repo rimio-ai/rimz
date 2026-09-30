@@ -114,16 +114,18 @@ Resolution falls back from a fresh catalog to the cached catalog at any age, the
 
 ### Directory trust preflight
 
-An undecided launch directory stops Codex at its trust screen before the first prompt, so a supervised `rimz agents -p` run started there would sit in `Pending` until its deadline. [`preflight_agent`](../../../crates/rimz/src/cli/supervised.rs) therefore checks Codex's `[projects]` trust for the resolved checkout after the hook preflight and before the run record, the store append, and any mux action; a `--worktree` launch has already created its tree by then. Interactive `rimz agents codex` launches skip the check, because a human at the pane can answer the screen.
+An undecided launch directory stops Codex at its trust screen before the first prompt, so a supervised `rimz agents -p` run started there would sit in `Pending` until its deadline. [`preflight_agent`](../../../crates/rimz/src/cli/supervised.rs) therefore checks Codex's `[projects]` trust for the resolved checkout after the hook preflight and before the run record, the store append, and any mux action; a `--worktree` launch has already created its tree by then. Interactive `rimz agents codex` launches only warn, because a human at the pane can answer the screen.
 
-[`trust_gap_at`](../../../crates/rimz/src/agents/adapters/codex/project_trust.rs) is read-only: it never records a level or answers the prompt. It follows [upstream's rules](../../externals/agent-adapter/codex-reference.md#project-directory-trust), which stay the authority:
+[`trust_gap_at`](../../../crates/rimz/src/agents/adapters/codex/project_trust.rs) returns a `FolderTrust` decision without writing. An undecided result includes the target path, canonical grant key, and exact original/candidate text, or a repair instruction when a preview cannot be made. It follows [upstream's rules](../../externals/agent-adapter/codex-reference.md#project-directory-trust), which stay the authority:
 
 - The launch is decided when any `trust_level`, `trusted` or `untrusted`, is recorded for the launch cwd, the nearest `project_root_markers` ancestor (default `.git`), or the main repository root. Each key matches both canonicalized and as written.
 - The main repository root is `LaunchCheckout.repo_root`, which the workspace resolver already walked up from a linked worktree, so the check runs no git probe. An explicit `--root` replaces it, and a peer launch may then need its own trust entry.
-- A refusal names both fixes: run `codex` once in the directory, or add `[projects."<root>"]` with `trust_level = "trusted"`.
+- A refusal names both fixes: `rimz trust grant --agents codex`, or answer Codex's folder-trust prompt once at the grant key.
 - Valid TOML with malformed trust values refuses with a repair instruction even when another key would match. A missing or unreadable file normally fails the hook preflight first; this check still reports it if the file changes between the reads.
 
 RimZ reads the one resolved config file, not Codex's merged layer stack. Provider passthrough `--cd`/`-C`, `-c` overrides, and launch-specific environment changes are not modeled.
+
+The preview edits TOML through `toml_edit`, preserving existing comments and order, and sets only `projects.<key>.trust_level` to `trusted`. Its key is the main repository root when supplied, otherwise the nearest marker root. The neutral [`grant_folder_trust`](../../../crates/rimz/src/agents/folder_trust.rs) writer compares the current bytes with the preview's original before durable atomic publication. Detection never grants trust; callers own consent. This is a freshness check before replacement, not a filesystem transaction with an upstream process writing concurrently.
 
 ## Session registration and launch quirks
 

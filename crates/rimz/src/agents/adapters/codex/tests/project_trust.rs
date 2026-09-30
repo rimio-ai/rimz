@@ -1,6 +1,13 @@
 use std::path::Path;
 
-use super::super::project_trust::trust_gap_at;
+use crate::agents::{FolderTrust, FolderTrustGap};
+
+fn trust_gap_at(config: &Path, cwd: &Path, repo_root: Option<&Path>) -> Option<FolderTrustGap> {
+    match super::super::project_trust::trust_gap_at(config, cwd, repo_root) {
+        FolderTrust::Decided => None,
+        FolderTrust::Undecided(gap) => Some(gap),
+    }
+}
 
 fn write_trust(config: &Path, entries: &[(&Path, &str)], markers: Option<&[&str]>) {
     let mut root = toml::Table::new();
@@ -98,9 +105,9 @@ fn missing_project_trust_names_manual_fixes_without_writing_config() {
     std::fs::create_dir(&cwd).unwrap();
     let config = dir.path().join("config.toml");
     for repo in [None, Some(dir.path())] {
-        let fix = trust_gap_at(&config, &cwd, repo).unwrap();
-        assert!(fix.contains(config.to_str().unwrap()));
-        assert!(fix.contains(cwd.to_str().unwrap()));
+        let gap = trust_gap_at(&config, &cwd, repo).unwrap();
+        assert_eq!(gap.path, config);
+        assert!(gap.fix("codex").contains("rimz trust grant --agents codex"));
         let key = toml::Value::String(
             repo.unwrap_or(&cwd)
                 .canonicalize()
@@ -108,11 +115,28 @@ fn missing_project_trust_names_manual_fixes_without_writing_config() {
                 .to_string_lossy()
                 .into_owned(),
         );
-        assert!(fix.contains(&format!("[projects.{key}]")));
+        assert!(
+            gap.grant
+                .unwrap()
+                .candidate
+                .contains(&format!("[projects.{key}]"))
+        );
     }
     assert!(!config.exists());
     write_trust(&config, &[], None);
     assert!(trust_gap_at(&config, &cwd, None).is_some());
+}
+
+#[test]
+fn inline_projects_keep_trailing_comments_in_the_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let original = "projects = {}\n# trailing comment\n";
+    std::fs::write(&config, original).unwrap();
+    let gap = trust_gap_at(&config, dir.path(), None).unwrap();
+    let preview = gap.grant.unwrap();
+    assert!(preview.candidate.ends_with("# trailing comment\n"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
 }
 
 #[test]
@@ -122,7 +146,9 @@ fn malformed_project_trust_requires_repair_even_with_a_valid_fallback() {
     std::fs::create_dir(&cwd).unwrap();
     let config = dir.path().join("config.toml");
     write_trust(&config, &[(&cwd, "invalid"), (dir.path(), "trusted")], None);
-    let fix = trust_gap_at(&config, &cwd, Some(dir.path())).unwrap();
+    let fix = trust_gap_at(&config, &cwd, Some(dir.path()))
+        .unwrap()
+        .fix("codex");
     assert!(fix.contains("repair"));
     assert!(fix.contains("invalid"));
     for text in [
@@ -131,7 +157,7 @@ fn malformed_project_trust_requires_repair_even_with_a_valid_fallback() {
         "[projects.somewhere]\ntrust_level = true",
     ] {
         std::fs::write(&config, text).unwrap();
-        let fix = trust_gap_at(&config, &cwd, None).unwrap();
+        let fix = trust_gap_at(&config, &cwd, None).unwrap().fix("codex");
         assert!(fix.contains("repair"), "{fix}");
         assert!(fix.contains(config.to_str().unwrap()));
     }
@@ -174,7 +200,7 @@ fn codex_config_path_honors_codex_home_and_override() {
             crate::agents::preflight_launch_dir(adapter, cwd, None, &login_env).unwrap_err();
         assert_eq!(error.kind, "codex");
         assert_eq!(error.dir, cwd);
-        assert!(error.fix.contains(path.to_str().unwrap()));
+        assert!(error.fix.contains("rimz trust grant --agents codex"));
         write_trust(&path, &[(cwd, "untrusted")], None);
         assert!(crate::agents::preflight_launch_dir(adapter, cwd, None, &login_env).is_ok());
     }
