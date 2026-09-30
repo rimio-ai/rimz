@@ -133,8 +133,7 @@ impl BudgetPark {
     }
 }
 
-/// One armed one-shot delivery aimed at this session, read from the loop
-/// instance catalog when a snapshot is enriched. Never folded from the log.
+/// One pending wake aimed at this session, projected from the loop catalog or launched runs during enrichment. Never folded from the log.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingWait {
     pub name: String,
@@ -145,6 +144,20 @@ pub struct PendingWait {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum PendingWaitTrigger {
+    /// A launched child or peer turn; the wait name is its handle and armed_at is the run start.
+    Subagent {
+        active_at: Timestamp,
+        #[serde(default)]
+        deadline_at: Option<Timestamp>,
+        /// Terminal status of a run no digest has carried yet; absent while running.
+        #[serde(default)]
+        settled: Option<String>,
+    },
+    /// An agent-launched team; the wait name is its instance and armed_at is the run start.
+    Team {
+        #[serde(default)]
+        stage: Option<String>,
+    },
     Timer {
         due: Timestamp,
         #[serde(default)]
@@ -176,6 +189,8 @@ impl PendingWait {
     pub fn label(&self, now: Timestamp) -> String {
         let headline = self.trigger.headline(now);
         match &self.trigger {
+            PendingWaitTrigger::Subagent { .. } => format!("wakes when {} reports", self.name),
+            PendingWaitTrigger::Team { .. } => format!("wakes when {} reaches Done", self.name),
             PendingWaitTrigger::Timer { due, .. } if *due <= now => "wakes now".to_owned(),
             PendingWaitTrigger::Timer { .. } => format!("wakes {headline}"),
             PendingWaitTrigger::Pid { .. } => {
@@ -193,6 +208,8 @@ impl PendingWait {
 impl PendingWaitTrigger {
     pub(crate) fn kind_word(&self) -> &'static str {
         match self {
+            Self::Subagent { .. } => "subagent",
+            Self::Team { .. } => "team",
             Self::Timer { .. } => "timer",
             Self::Pid { .. } => "pid",
             Self::Command { .. } => "command",
@@ -207,6 +224,20 @@ impl PendingWaitTrigger {
         use crate::theme::fmt::duration_label;
 
         match self {
+            Self::Subagent {
+                active_at, settled, ..
+            } => settled.as_ref().map_or_else(
+                || {
+                    format!(
+                        "active {} ago",
+                        crate::utils::time::format_duration_coarse(
+                            now.duration_since(*active_at).as_secs()
+                        )
+                    )
+                },
+                |status| format!("{status}, reporting"),
+            ),
+            Self::Team { stage } => format!("stage {}", stage.as_deref().unwrap_or("unknown")),
             Self::Timer { due, .. } => {
                 if *due <= now {
                     "due".to_owned()
