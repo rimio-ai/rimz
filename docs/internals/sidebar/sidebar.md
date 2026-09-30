@@ -28,7 +28,7 @@ One pass builds one frame, in this order.
 
 Steps 1 through 8 run in the elected producer and are published once for every renderer in the session; the split, caches, and timings are [state.md](./state.md#one-fetch-cycle). Step 9 runs in each renderer.
 
-Two commands split a bug between the halves. `rimz sidebar snapshot --json` runs steps 1 through 8 and prints the result: if the wrong answer is already in the JSON, the bug is in the producer. `rimz sidebar frame` renders that snapshot without capturing through the mux, so a correct snapshot with a wrong frame points at `sidebar_pane/`.
+Two commands split a bug between the halves. `rimz sidebar snapshot --json` runs steps 1 through 8 and prints the result: if the wrong answer is already in the JSON, the bug is in the producer. `rimz sidebar frame` renders that snapshot without capturing through the mux, so a correct snapshot with a wrong frame points at `sidebar_pane/`. Both take `--workspace-id`; an id with no state on this machine and no `--session-name` names no room, so both skip the producer and render the empty rollup, creating nothing under the state or runtime roots.
 
 ## Where the code lives
 

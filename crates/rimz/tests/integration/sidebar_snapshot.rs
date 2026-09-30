@@ -217,6 +217,89 @@ fn frame_emits_plain_text_over_a_pipe() {
     );
 }
 
+const ROOM_LESS_ID: &str = "ws_abcdef0123456789abcdef01";
+
+fn assert_no_dir_named_for_room_less_id(env: &Env) {
+    fn walk(dir: &Path, hits: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().contains(&ROOM_LESS_ID[3..]))
+            {
+                hits.push(path.clone());
+            }
+            walk(&path, hits);
+        }
+    }
+    let mut hits = Vec::new();
+    walk(&env.runtime_root, &mut hits);
+    walk(&env.rimz_home(), &mut hits);
+    assert!(hits.is_empty(), "room-less read scaffolded: {hits:?}");
+}
+
+#[test]
+fn snapshot_for_a_room_less_id_is_empty_and_creates_nothing() {
+    let env = Env::new();
+
+    let output = env
+        .rimz()
+        .args([
+            "sidebar",
+            "snapshot",
+            "--workspace-id",
+            ROOM_LESS_ID,
+            "--json",
+        ])
+        .output()
+        .expect("spawn sidebar snapshot");
+
+    assert!(
+        output.status.success(),
+        "snapshot failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("snapshot json");
+    assert_eq!(snapshot["agents"], serde_json::json!([]));
+    assert_eq!(snapshot["display_name"], ROOM_LESS_ID);
+    assert_no_dir_named_for_room_less_id(&env);
+}
+
+#[test]
+fn frame_for_a_room_less_id_renders_and_creates_nothing() {
+    let env = Env::new();
+
+    let output = env
+        .rimz()
+        .args([
+            "sidebar",
+            "frame",
+            "--workspace-id",
+            ROOM_LESS_ID,
+            "--width",
+            "40",
+            "--height",
+            "12",
+        ])
+        .output()
+        .expect("spawn sidebar frame");
+
+    assert!(
+        output.status.success(),
+        "frame failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.stdout.is_empty(), "frame stdout is empty");
+    assert_no_dir_named_for_room_less_id(&env);
+}
+
 #[test]
 fn sidebar_lights_claude_rc_badge_from_claude_startup_setting() {
     let env = Env::new();
