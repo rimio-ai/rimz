@@ -13,7 +13,7 @@ use std::str::FromStr;
 /// A simple three-part CLI version. Agent CLIs do not need semver metadata for
 /// RimZ's gates; ordered numeric major/minor/patch is the contract.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) struct CliVersion {
+pub struct CliVersion {
     pub major: u64,
     pub minor: u64,
     pub patch: u64,
@@ -36,7 +36,7 @@ impl std::fmt::Display for CliVersion {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub(super) enum VersionParseErr {
+pub enum VersionParseErr {
     #[error("missing version token")]
     Empty,
     #[error("expected two or three numeric dot-separated version segments")]
@@ -115,9 +115,72 @@ pub(super) fn conventional_cli_version(stdout: &str, stderr: &str) -> Option<Str
         .map(|version| version.to_string())
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "{kind} {found} at {path} is older than {minimum}, the first release with {flags}, which RimZ passes on every launch; upgrade {display_name}"
+)]
+pub struct LaunchVersionErr {
+    kind: &'static str,
+    display_name: &'static str,
+    path: std::path::PathBuf,
+    found: CliVersion,
+    minimum: CliVersion,
+    flags: Box<str>,
+}
+
+/// Check the resolved launch binary, abstaining when its version is unreadable.
+pub fn check_launch_version_floor(
+    adapter: &super::AgentDefinition,
+    path: &std::path::Path,
+) -> Result<(), LaunchVersionErr> {
+    if adapter.min_version().is_none() {
+        return Ok(());
+    }
+    let found = probe_cli_version(path).and_then(|version| version.parse().ok());
+    check_launch_version(adapter, path, found)
+}
+
+fn check_launch_version(
+    adapter: &super::AgentDefinition,
+    path: &std::path::Path,
+    found: Option<CliVersion>,
+) -> Result<(), LaunchVersionErr> {
+    if let Some((minimum, found)) = adapter.min_version().zip(found)
+        && found < minimum
+    {
+        return Err(LaunchVersionErr {
+            kind: adapter.spec().kind,
+            display_name: adapter.spec().display_name,
+            path: path.to_owned(),
+            found,
+            minimum,
+            flags: adapter.spec().launch.fixed_args.join(" ").into_boxed_str(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_version_floor_refuses_only_known_old_versions() {
+        let codex = crate::agents::find_definition("codex").unwrap();
+        let path = std::path::Path::new("/opt/bin/codex");
+        for raw in [None, Some("0.156.0"), Some("0.159.2"), Some("0.156.0-beta")] {
+            assert!(check_launch_version(codex, path, raw.and_then(|v| v.parse().ok())).is_ok());
+        }
+        let error = check_launch_version(codex, path, Some(CliVersion::new(0, 155, 9)))
+            .expect_err("old Codex must refuse");
+        let message = error.to_string();
+        assert!(message.contains("0.155.9"));
+        assert!(message.contains("0.156.0"));
+        assert!(message.contains("/opt/bin/codex"));
+        assert!(message.contains("upgrade Codex"));
+        let claude = crate::agents::find_definition("claude").unwrap();
+        assert!(check_launch_version(claude, path, Some(CliVersion::new(0, 0, 1))).is_ok());
+    }
 
     #[test]
     fn from_str_parses_leading_token_and_rejects_garbage() {

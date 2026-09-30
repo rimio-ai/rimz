@@ -626,7 +626,7 @@ fn prepare_supervised(
             rimz::agents::ambient_env(),
         ),
     )?;
-    supervised::preflight_program(&process)?;
+    supervised::preflight_program(adapter, &process)?;
     if !request.subagent {
         crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
     }

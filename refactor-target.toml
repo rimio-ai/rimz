@@ -139,7 +139,8 @@ upward-dependencies = ["address"]
 # Launch tier stamps and positive exhaustion evidence cross into launch/store consumers.
 # Named-account settings sharing exposes entry kinds, adoption capabilities, and the link report/error workflow (+8).
 # Account declaration and settings sharing reuse the same canonical-home refusal (+1).
-surface-budget = 951
+# Launch rejection and version-floor capability inputs, version types, and the shared floor check (+7).
+surface-budget = 958
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -869,7 +870,8 @@ allowed-dependencies = [
 # Validated envelope access establishes failure cleanup before prompt-file I/O.
 # Mount-input pins are reapplied through the compiled shell wrapper.
 # Fresh requests and selectively redacted process plans serve launch inspection.
-surface-budget = 42
+# Argument rejection uses the existing action accessor (+1).
+surface-budget = 43
 
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"

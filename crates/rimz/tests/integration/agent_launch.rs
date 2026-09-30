@@ -2053,7 +2053,7 @@ fn missing_shell_path_falls_back_to_direct_exec() {
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
-        dumped.lines().any(|line| line == "ARGC=2") && dumped.contains("<system_reminder>"),
+        dumped.lines().any(|line| line == "ARGC=3") && dumped.contains("<system_reminder>"),
         "direct fallback did not run the agent shim:\n{dumped}"
     );
 }
@@ -2314,17 +2314,17 @@ fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
-        dumped.lines().any(|line| line == "ARGC=4"),
+        dumped.lines().any(|line| line == "ARGC=5"),
         "launch argv did not contain the reminder, terminator, and prompt:\n{dumped}"
     );
     assert!(
-        dumped.lines().any(|line| line == "ARGV_3=--"),
+        dumped.lines().any(|line| line == "ARGV_4=--"),
         "launch argv did not protect the prompt with --:\n{dumped}"
     );
     assert!(
         dumped
             .lines()
-            .any(|line| line == format!("ARGV_4={prompt}")),
+            .any(|line| line == format!("ARGV_5={prompt}")),
         "prompt argv element was changed by the shell wrapper:\n{dumped}"
     );
 }

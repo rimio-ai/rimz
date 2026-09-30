@@ -131,14 +131,16 @@ pub(super) fn preflight_agent(
 }
 
 pub(super) fn preflight_program(
+    adapter: &AgentDefinition,
     process: &rimz::harness::launch::CompiledAgentProcess,
 ) -> Result<()> {
     let program = &process.provider_program;
-    let resolves = rimz::harness::launch::program_resolves_after_shell_rc(&process.env, program)
+    let path = rimz::harness::launch::resolve_program_after_shell_rc(&process.env, program)
         .with_context(|| format!("checking `{program}` after shell startup"))?;
-    if !resolves {
+    let Some(path) = path else {
         bail!("finding `{program}` on PATH after shell startup");
-    }
+    };
+    rimz::agents::version::check_launch_version_floor(adapter, &path)?;
     Ok(())
 }
 

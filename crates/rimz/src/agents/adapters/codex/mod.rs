@@ -184,18 +184,17 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         transcript_tail_context: true,
         // Codex has no background-task parking.
         // Codex fires no `SessionStart` on a plain CLI launch — it rides the
-        // first `UserPromptSubmit` — and its hooks fire from the app-server
-        // with no mux pane env, so a session is unstamped. Both make a Codex
-        // instance present before any session binds: the sidebar binds it to
-        // its pane by cwd and renders a wired-but-unprompted `codex` pane as
-        // an idle agent.
+        // first `UserPromptSubmit`. Managed panes run embedded (--no-daemon);
+        // a user-run `codex` may still be daemon-routed and arrive unstamped.
+        // The sidebar binds an instance to its pane by cwd before a session
+        // binds and renders a wired-but-unprompted pane as an idle agent.
         registers_lazily: true,
         local_session_discovery: true,
         daemon_hooked_sessions: true,
         direct_account_usage: true,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
         remote_control: RemoteControlCapability {
-            pane_sessions: true,
+            pane_sessions: false,
             background_sessions: true,
         },
     },
@@ -216,15 +215,15 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
     launch: super::LaunchSpec {
         definitions: DEFINITIONS,
         program: Some("codex"),
-        fixed_args: &[],
+        fixed_args: &["--no-daemon"],
         prompt: super::PromptStyle::PositionalAfterDoubleDash,
         resume: Some(super::SessionCommand {
             before_id: &["codex", "resume"],
-            after_id: &[],
+            after_id: &["--no-daemon"],
         }),
         fork: Some(super::SessionCommand {
             before_id: &["codex", "fork"],
-            after_id: &[],
+            after_id: &["--no-daemon"],
         }),
         permission: super::LaunchPermissionArgs {
             ask: &[],
@@ -319,9 +318,7 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "hook tool names + rollout response items",
         gap: "live hooks miss web-search and other non-hooked calls",
     },
-    remote_control: ConcernCoverage::Wired {
-        via: "pane/background",
-    },
+    remote_control: ConcernCoverage::Wired { via: "background" },
 };
 
 const CODEX_USER_COVERAGE: UserCoverage = UserCoverage {
@@ -876,6 +873,8 @@ impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
     }
 }
 
+const MIN_NO_DAEMON: super::version::CliVersion = super::version::CliVersion::new(0, 156, 0);
+
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
     fn shared_home_entries(&self) -> &'static [crate::agents::capabilities::SharedHomeEntry] {
         use crate::agents::capabilities::{SharedHomeEntry, SharedHomeKind::File};
@@ -889,6 +888,23 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                 kind: File,
             },
         ]
+    }
+
+    fn min_version(&self) -> Option<super::version::CliVersion> {
+        Some(MIN_NO_DAEMON)
+    }
+
+    fn rejected_extra_arg(
+        &self,
+        extra_args: &[String],
+    ) -> Option<crate::agents::capabilities::RejectedLaunchArg> {
+        (!crate::agents::PresetArgMatcher::Flag(vec!["--remote".to_owned()])
+            .occurrences(extra_args)
+            .is_empty())
+        .then_some(crate::agents::capabilities::RejectedLaunchArg {
+            flag: "--remote",
+            reason: "managed panes run embedded (--no-daemon); remove --remote from the launch args",
+        })
     }
 
     fn resolve_model_alias(

@@ -271,11 +271,25 @@ pub struct SharedHomeEntry {
     pub kind: SharedHomeKind,
 }
 
+#[derive(Debug)]
+pub struct RejectedLaunchArg {
+    pub flag: &'static str,
+    pub reason: &'static str,
+}
+
 #[doc(hidden)]
 pub trait LaunchCapability: CoreCapability {
     /// Settings and user content shared with the provider's own home, never account data.
     fn shared_home_entries(&self) -> &'static [SharedHomeEntry] {
         &[]
+    }
+
+    fn rejected_extra_arg(&self, _extra_args: &[String]) -> Option<RejectedLaunchArg> {
+        None
+    }
+
+    fn min_version(&self) -> Option<version::CliVersion> {
+        None
     }
 
     fn is_model_alias(&self, name: &str) -> bool {
