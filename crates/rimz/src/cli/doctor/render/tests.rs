@@ -448,6 +448,7 @@ fn storage_fixture() -> Storage {
 
 fn report_fixture() -> DoctorReport {
     DoctorReport {
+        folder_trust: None,
         schema: "rimz.doctor.v1",
         lsp: Probe::Ready(super::super::model::Lsp {
             checks: vec![],

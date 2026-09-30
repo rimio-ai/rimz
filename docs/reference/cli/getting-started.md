@@ -70,16 +70,17 @@ Inside a session, `rimz start --account` fails instead, because accounts apply o
 
 ### Prompts at room birth
 
-A `rimz start` that creates the session, run from a terminal, can ask up to four things before it attaches. A start that reattaches a running session asks none of them; `rimz attach` asks only the recovery question.
+A `rimz start` that creates the session, run from a terminal, can ask up to five things before it attaches. A start that reattaches a running session asks none of them; `rimz attach` asks only the recovery question.
 
 | Prompt | When | Default |
 | --- | --- | --- |
 | First-run questions: truecolor, Nerd Font icons, pet, hands-off automation (`[y/n/choose]` over auto-continue, Codex auto-redeem when `codex` is installed, and idle team compaction) | This start wrote the machine config for the first time | The current settings; idle compaction defaults on, the other automation rows off ([setup](../../guide/setup.md)) |
 | Install or refresh hooks for the listed agents | A detected agent has no RimZ hooks, or a stale RimZ-owned integration | Enter installs all; `n` or end of input installs none |
 | Trust this project's config | The project ships `.rimz/config.toml` with an ungranted executable surface, and you have not declined this version | No |
+| Trust this folder for the listed agents | Detected Codex or Claude has no folder-trust decision under the room's account; shows the proposed file changes first. A decline is remembered per workspace and agent kind; `rimz trust grant` clears it | No |
 | Recover prior agents | The room is reborn with agents from its previous session | Yes |
 
-A start without a terminal on stdin, including a remote reconnect, asks nothing: it prints a notice for missing hooks, leaves trust unchanged, and recovers prior agents. The commands behind these prompts are in [agent hooks](./hooks-trust.md#agent-hooks) and [project trust](./hooks-trust.md#project-trust); the trust model is in the [security guide](../../guide/security.md).
+A start without a terminal on stdin, including a remote reconnect, asks nothing: it prints notices for missing hooks and undecided agent folder trust, leaves trust unchanged, and recovers prior agents. It does not remember a decline. The commands behind these prompts are in [agent hooks](./hooks-trust.md#agent-hooks) and [project trust](./hooks-trust.md#project-trust); the trust model is in the [security guide](../../guide/security.md).
 
 ### Resume on rebirth
 
@@ -221,6 +222,7 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `MACHINE CONFIG` | Parse and validation errors in the machine config files and `~/.rimz` fragments, with paths and fixes. |
 | `SANDBOX` | Isolation mode, bubblewrap path and version, mount probe result. |
 | `HOOKS` | Agents reporting to RimZ, a row with the fix for each agent whose hooks need a command, agents not found on the machine. |
+| `FOLDER TRUST` | Conditional on a resolved workspace. Detected agents' folder-trust decisions under this room's accounts (native defaults outside a room). A decided summary and undecided rows with account and fix; JSON: `folder_trust.ready.rows`. |
 | `ACCOUNTS` | Conditional. Each named account's home and status, marking this room's account and the machine selection for new rooms. Dangling selections carry a problem and fix. JSON rows include `machine_default`. |
 | `AGENT PLUGINS` | Conditional. Each plugin manifest, its validation result, and its probes. |
 | `LOOP TASKS` | Configured loop tasks with target, trigger, root, room state, and loop timer state. Warns when a live clock task has neither an open room nor an active timer. |

@@ -6,7 +6,7 @@ The design commitments behind everything below are in [DESIGN.md](../../DESIGN.m
 
 ## What RimZ changes on your machine
 
-Four things, plus one file in a room running Copilot. The command that takes each one back is named with it, and the last paragraph of this section takes back the lot.
+Five things, plus one file in a room running Copilot. Each one's removal is named with it; provider folder-trust decisions stay yours even after uninstalling RimZ.
 
 **Reporting hooks in your agent CLIs' own configs.** To show an agent live in the sidebar, RimZ adds a hook to that agent's own configuration: a line in `~/.claude/settings.json`, a block in Codex's `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default), and for Copilot, Amp, Pi, and OpenCode, whose extension point is a file rather than a config entry, one RimZ-owned integration file. Run `rimz hooks install --dry-run` for the exact per-agent diff before anything is written. The install is additive: your existing hooks stay, and what RimZ adds only reports events back to RimZ. Answering a prompt stays with you, in the agent's own UI. `rimz hooks uninstall` removes exactly what was added and restores any statusline RimZ wrapped. The whole flow is walked in [set up your machine](./setup.md#install-agent-hooks).
 
@@ -15,6 +15,8 @@ Four things, plus one file in a room running Copilot. The command that takes eac
 **Files under `~/.rimz/`.** Configuration and durable room state, plain files you can read and edit, with `RIMZ_HOME` relocating all of it. One subtree deserves care: `accounts/` holds the provider homes `rimz accounts add` creates, each a full provider home with its credentials and transcripts. Treat it the way you treat `~/.ssh`, and keep it out of a dotfiles repository you publish. The layout is in [where RimZ keeps its files](./configuration.md#where-rimz-keeps-its-files).
 
 **A permission grant for the Zellij presence plugin.** On Zellij, RimZ seeds a permission grant for the plugin it ships so your first attach is not interrupted by a prompt. Your `config.kdl` stays untouched, and the grant is yours to revoke. [The Zellij presence plugin](#the-zellij-presence-plugin) has it in full.
+
+**Agent folder-trust decisions, when you approve them.** RimZ can write Codex and Claude's own trust settings after showing the proposed changes. Undo those decisions in the provider's configuration, not with `rimz trust revoke`; [folder trust for agents](#folder-trust-for-agents) explains what they enable.
 
 A room running Copilot gets one more file. RimZ points Copilot's own telemetry exporter at `agent-telemetry/copilot-otel.jsonl` under the room's runtime directory on tmpfs, with message-content capture switched off, and reads the model and token counts for that conversation back out of it. Closing the room removes it, and an exporter you configured yourself is left alone.
 
@@ -64,6 +66,14 @@ The hash covers every field that can cause a process to run:
 Every name in those tables is hashed too, so renaming a profile drifts the grant. Any field RimZ can execute has to enter this hash, and a unit test guards the projection by hashing one config per field, every field in the lists above included, and failing when two of them collide. The mechanics, the grant record, and the diff are in [the trust internals](../internals/harness/trust.md); the command is in [the trust reference](../reference/cli/hooks-trust.md#project-trust).
 
 Per-machine loop schedules are a separate matter. A `check = "<shell>"` line in your own `~/.rimz/loop.toml` is your command, not a repository's. A clone can supply only project `[tasks]`, and those need both a trust grant for the config and a machine-local `rimz loop enable <name>` before they run unattended. Until trust, a same-named machine task remains the runnable definition; after trust, the project definition is visible but disabled here by default.
+
+### Folder trust for agents
+
+Codex and Claude can stop at a folder-trust screen before they report anything to RimZ. `rimz start` offers to record the decision for detected agents, under the accounts the room will use. `rimz doctor` and `rimz trust` show which agents remain undecided; interactive launches warn and let you answer in the agent's pane.
+
+A folder grant tells the provider to accept that repository, not just its RimZ configuration. Codex can then load the repository's `.codex/` configuration, hooks, and rules; Claude accepts the project for its normal interactive tooling. RimZ shows the exact file changes before writing and asks with No as the default. `rimz trust grant --agents` is explicit consent without a question, still with the changes displayed. Without a terminal or that flag, provider files stay untouched.
+
+The grant covers the main repository and its worktrees, for this room's selected account only. A declined start offer stays quiet for those agent kinds until `rimz trust grant`; a newly detected undecided kind gets its own offer. To undo a grant, remove the relevant trust decision from Codex's `config.toml` or Claude's `.claude.json` at the path the grant printed. `rimz trust revoke` and uninstall do not change those provider-owned decisions. The [trust reference](../reference/cli/hooks-trust.md#agent-folder-trust) lists the flags and states.
 
 ### Notification handlers
 

@@ -103,6 +103,17 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         disk_usage: runtime::collect_storage(),
         protocols: ws.map(protocol::collect_protocols),
         trust: ws.map(agents::collect_trust),
+        folder_trust: ws.map(|ws| match crate::cli::folder_trust::collect(ws) {
+            Ok(rows) => model::Probe::Ready(model::FolderTrust {
+                rows: rows
+                    .iter()
+                    .map(crate::cli::folder_trust::Row::from)
+                    .collect(),
+            }),
+            Err(error) => model::Probe::Unavailable {
+                error: error.to_string(),
+            },
+        }),
         agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
         history_cleared_at,
         messages: ws.map(|ws| messages::collect_messages(ws, history_cleared_at)),

@@ -167,6 +167,71 @@ fn trust_status_json_emits_canonical_fields() {
     assert!(parsed["surface_diff"].is_null());
 }
 
+#[cfg(unix)]
+#[test]
+fn folder_trust_status_grant_and_revoke_scope() {
+    let env = Env::new();
+    let bin = write_env_dump_shim(&env, "codex");
+    let config = env.home_root.join("codex.toml");
+    std::fs::write(&config, "# preserved\n").unwrap();
+    let command = || {
+        let mut cmd = env.rimz();
+        cmd.env("PATH", &bin).env("RIMZ_CODEX_CONFIG", &config);
+        cmd
+    };
+    let output = command().args(["trust", "--json"]).output().unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["agents"][0]["kind"], "codex");
+    assert_eq!(report["agents"][0]["state"], "undecided");
+    command()
+        .args(["trust", "grant"])
+        .assert()
+        .success()
+        .stderr(contains(
+            "trust: codex undecided; run `rimz trust grant --agents`",
+        ));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "# preserved\n");
+    command()
+        .args(["trust", "grant", "--agents", "codex"])
+        .assert()
+        .success();
+    let granted = std::fs::read_to_string(&config).unwrap();
+    assert!(granted.starts_with("# preserved\n"));
+    assert!(granted.contains("trust_level = \"trusted\""));
+    let output = command().args(["trust", "--json"]).output().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["agents"][0]["state"], "decided");
+    command().args(["trust", "revoke"]).assert().success();
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), granted);
+    command()
+        .args(["trust", "grant", "--agents", "absent,codex"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown or undetected"))
+        .stderr(contains("codex already decided"));
+    command()
+        .args([
+            "trust", "grant", "--agents", "codex", "--agents", "codex", "--json",
+        ])
+        .assert()
+        .success()
+        .stderr(contains("codex already decided"));
+    std::fs::write(&config, "# preserved\n").unwrap();
+    command()
+        .args(["trust", "grant", "--agents"])
+        .assert()
+        .success();
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), granted);
+    std::fs::write(&config, "[").unwrap();
+    command()
+        .args(["trust", "grant", "--agents", "codex"])
+        .assert()
+        .failure()
+        .stderr(contains("repair or make readable"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "[");
+}
+
 #[test]
 fn trust_status_shows_stale_field_diff() {
     let env = Env::new();

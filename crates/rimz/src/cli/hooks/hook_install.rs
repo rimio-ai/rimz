@@ -7,12 +7,9 @@ use anyhow::Result;
 use rimz::agents::{
     HookInstallFilePreview, HookInstallPreview, HookInstallReport, StatusLineChange,
 };
-use similar::TextDiff;
 use unicode_width::UnicodeWidthStr;
 
 use crate::cli::{first_run, render};
-
-const DIFF_CONTEXT_LINES: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum InstallDisposition {
@@ -306,26 +303,15 @@ pub(super) fn render_dry_run(
         }
         write_agent_table_entry(out, preview, &layout)?;
         for file in &preview.files {
-            for line in preview_file_diff(file).lines() {
-                writeln!(out, "    {}", color_diff_line(line))?;
-            }
+            render::diff::preview_file_diff(
+                out,
+                &file.path,
+                file.original.as_deref(),
+                &file.candidate,
+            )?;
         }
     }
     Ok(())
-}
-
-fn color_diff_line(line: &str) -> String {
-    if line.starts_with("+++") || line.starts_with("---") {
-        render::paint(render::palette::accent().bold(), line)
-    } else if line.starts_with('+') {
-        render::paint(render::palette::good(), line)
-    } else if line.starts_with('-') {
-        render::paint(render::palette::alarm(), line)
-    } else if line.starts_with("@@") {
-        render::paint(render::palette::warn().bold(), line)
-    } else {
-        render::paint(render::palette::faint(), line)
-    }
 }
 
 pub(super) fn write_install_result(
@@ -419,34 +405,6 @@ fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPrevi
         "No terminal input — nothing installed or refreshed. RimZ continues into the room; install or refresh agents later with rimz hooks install.",
     )?;
     Ok(())
-}
-
-fn preview_file_diff(file: &HookInstallFilePreview) -> String {
-    let path = file.path.display().to_string();
-    match file.original.as_deref() {
-        Some(original) => {
-            let diff = TextDiff::from_lines(original, &file.candidate);
-            let rendered = diff
-                .unified_diff()
-                .context_radius(DIFF_CONTEXT_LINES)
-                .header(&path, &path)
-                .to_string();
-            if rendered.is_empty() {
-                format!("--- {path}\n+++ {path}\n@@ no changes @@\n")
-            } else {
-                rendered
-            }
-        }
-        None => {
-            let mut out = format!("--- /dev/null\n+++ {path}\n@@ new file @@\n");
-            for line in file.candidate.lines() {
-                out.push('+');
-                out.push_str(line);
-                out.push('\n');
-            }
-            out
-        }
-    }
 }
 
 fn write_consent_footer(out: &mut dyn Write) -> Result<()> {

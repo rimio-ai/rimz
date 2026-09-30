@@ -535,7 +535,7 @@ surface-budget = 24
 [[module]]
 path = "crates/rimz/src/trust.rs"
 upward-dependencies = ["agents"]
-surface-budget = 32
+surface-budget = 35
 
 [[module]]
 path = "crates/rimz/src/tui.rs"

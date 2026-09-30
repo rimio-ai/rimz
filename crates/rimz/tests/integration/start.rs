@@ -442,12 +442,17 @@ fn start_opens_the_room_when_the_invalid_notifications_table_is_switched_off() {
 fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let birth = Env::new();
     let birth_bin = seed_actionable_agent(&birth);
+    let codex = birth_bin.join("codex");
+    std::fs::copy(birth_bin.join("agy"), &codex).unwrap();
+    let config = birth.home_root.join("codex.toml");
+    std::fs::write(&config, "").unwrap();
     let birth_workspace = birth.resolve_workspace(&birth.project_root);
     let birth_heartbeat = seed_sidebar_heartbeat(&birth, &birth_workspace.session_name, "birth");
     let birth_trace = birth.project_root.join("zellij-birth.log");
     let _birth_room = ShimRoom::watch(&birth, &birth_trace, MATERIALIZED_ROOM_PANES);
     let mut birth_command = birth.rimz();
     configure_actionable_hooks(&mut birth_command, &birth, &birth_bin, &birth_trace, "");
+    birth_command.env("RIMZ_CODEX_CONFIG", &config);
     let birth_output = birth_command
         .bounded_output()
         .expect("run absent-room start");
@@ -457,7 +462,12 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
         String::from_utf8_lossy(&birth_output.stderr)
     );
     let birth_stderr = String::from_utf8_lossy(&birth_output.stderr);
-    assert!(birth_stderr.contains("RimZ found 1 coding agent: antigravity."));
+    assert!(birth_stderr.contains("RimZ found 2 coding agents: codex, antigravity."));
+    assert!(
+        birth_stderr.contains("codex has no trust decision"),
+        "{birth_stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "");
     assert!(birth_stderr.contains("No terminal input — nothing installed or refreshed."));
     assert!(
         !birth_heartbeat.exists(),

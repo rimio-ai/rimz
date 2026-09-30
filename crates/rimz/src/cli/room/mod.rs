@@ -579,6 +579,20 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         None
     };
 
+    if let RoomEntry::Start { workspace, .. } = &entry
+        && !was_live
+        && let Some(logins) = &logins
+    {
+        let logins = rimz::agents::RoomLoginSet::new(
+            Some(logins.clone()),
+            rimz::agents::LoginCatalog::from_config(&machine_config.accounts).ok(),
+            rimz::agents::ambient_env(),
+        );
+        if let Err(error) = prompt_folder_trust(workspace, &logins) {
+            writeln!(crate::cli::render::err(), "rimz: folder trust: {error}")?;
+        }
+    }
+
     let source = match &entry {
         RoomEntry::Start { workspace, .. }
         | RoomEntry::StartDetached { workspace, .. }
@@ -760,6 +774,69 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn prompt_folder_trust(
+    workspace: &rimz::ResolvedWorkspace,
+    logins: &rimz::agents::RoomLoginSet,
+) -> Result<()> {
+    use rimz::agents::FolderTrust;
+    let dismissed = rimz::trust::dismissed_folder_trust_kinds(&workspace.project_root);
+    let rows = rimz::agents::folder_trust_rows(
+        logins,
+        &workspace.worktree_root,
+        Some(workspace.launch_repo_root()),
+    );
+    let rows: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            matches!(row.trust, FolderTrust::Undecided(_))
+                && !dismissed.iter().any(|kind| kind == row.kind)
+        })
+        .collect();
+    if rows.is_empty() {
+        return Ok(());
+    }
+    if !start_attended() {
+        for row in rows {
+            if let FolderTrust::Undecided(gap) = &row.trust {
+                writeln!(
+                    crate::cli::render::err(),
+                    "rimz: {} has no trust decision for `{}`; {}",
+                    row.kind,
+                    gap.key.display(),
+                    gap.fix(row.kind)
+                )?;
+            }
+        }
+        return Ok(());
+    }
+    let kinds = crate::cli::folder_trust::preview(&rows)?;
+    if kinds.is_empty() {
+        return Ok(());
+    }
+    if crate::cli::confirm_with_default(
+        &format!(
+            "Trust this folder for {} (their folder-trust prompts stop appearing)?",
+            kinds.join(", ")
+        ),
+        false,
+    )? {
+        let grantable: Vec<_> = rows
+            .into_iter()
+            .filter(|row| kinds.iter().any(|kind| kind == row.kind))
+            .collect();
+        rimz::trust::clear_folder_trust_dismissal(&workspace.project_root)?;
+        crate::cli::folder_trust::grant(&grantable, "rimz")?;
+    } else {
+        let kinds: Vec<_> = rows.iter().map(|row| row.kind.to_owned()).collect();
+        rimz::trust::dismiss_folder_trust_prompt(&workspace.project_root, &kinds)?;
+        writeln!(
+            crate::cli::render::err(),
+            "rimz: left undecided; run `rimz trust grant --agents` when ready."
+        )?;
+    }
+    Ok(())
 }
 
 fn prompt_project_trust(project_root: &Path) {

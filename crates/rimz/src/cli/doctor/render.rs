@@ -17,7 +17,7 @@ use rimz::trust::TrustState;
 
 use super::model::{
     Accounts, AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport,
-    DoctorState, DuplicateSessions, Home, HookStatus, Host, LogScope, LoopTasks,
+    DoctorState, DuplicateSessions, FolderTrust, Home, HookStatus, Host, LogScope, LoopTasks,
     MachineConfigHealth, MachineConfigProblemKind, MessageProblemRow, Messages, Mux, MuxBinaryRow,
     MuxLog, PluginRow, Presence, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry,
     PresencePlugins, Probe, Protocols, RemoteAgent, RemoteControl, Room, RoomState, SessionHealth,
@@ -181,6 +181,9 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_machine_config(w, &report.machine_config, &mut tally)?;
     render_sandbox(w, &report.sandbox, &mut tally)?;
     render_hooks(w, report, &mut tally)?;
+    if let Some(trust) = &report.folder_trust {
+        render_folder_trust(w, trust, &mut tally)?;
+    }
     render_accounts(w, &report.accounts, &mut tally)?;
     render_plugins(w, report, &mut tally)?;
     render_loop(w, &report.loop_tasks, &mut tally)?;
@@ -1355,6 +1358,51 @@ fn floor_cell(tally: &mut Tally, meets: bool, min: (u32, u32, u32)) -> Cell {
         health,
         format!("{label} (>= {maj}.{min_v}.{patch} required)"),
     )
+}
+
+fn render_folder_trust(
+    w: &mut impl Write,
+    trust: &Probe<FolderTrust>,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    use crate::cli::folder_trust::State;
+    section(w, tally, "FOLDER TRUST")?;
+    let trust = match trust {
+        Probe::Ready(trust) => trust,
+        Probe::Unavailable { error } => return note(tally, w, Health::Warn, error),
+    };
+    if trust.rows.is_empty() {
+        return detail(w, palette::muted(), "no detected agent models folder trust");
+    }
+    let decided: Vec<_> = trust
+        .rows
+        .iter()
+        .filter(|row| matches!(row.state, State::Decided))
+        .map(|row| row.kind)
+        .collect();
+    if !decided.is_empty() {
+        detail(
+            w,
+            palette::muted(),
+            &format!("{} decided: {}", decided.len(), decided.join(", ")),
+        )?;
+    }
+    if decided.len() == trust.rows.len() {
+        return Ok(());
+    }
+    let mut table = Table::new(["", "AGENT", "LOGIN", "STATUS", "FIX"]);
+    for row in &trust.rows {
+        if let State::Undecided { fix, .. } = &row.state {
+            table.row([
+                badge(tally, Health::Warn),
+                cell(row.kind),
+                cell(row.login.as_str()),
+                cell("undecided").fg(style_of(Health::Warn)),
+                cell(fix),
+            ]);
+        }
+    }
+    table.render(w)
 }
 
 /// Hook wiring, sorted by what the reader can act on.

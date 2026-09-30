@@ -48,6 +48,8 @@ pub(super) struct DoctorReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) trust: Option<Probe<Trust>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) folder_trust: Option<Probe<FolderTrust>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agents: Option<AgentRollup>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) history_cleared_at: Option<Timestamp>,
@@ -57,6 +59,11 @@ pub(super) struct DoctorReport {
     pub(super) diagnostics: Option<Diagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_incident: Option<LastIncident>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct FolderTrust {
+    pub(super) rows: Vec<crate::cli::folder_trust::Row>,
 }
 
 #[derive(Debug, Serialize)]

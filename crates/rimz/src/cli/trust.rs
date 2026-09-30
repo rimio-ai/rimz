@@ -8,12 +8,13 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use similar::{ChangeTag, TextDiff};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::GlobalFlags;
+use super::{GlobalFlags, folder_trust};
 use crate::cli::render;
+use rimz::agents::FolderTrust;
 use rimz::trust::{self, SurfaceDiffEntry, SurfaceDiffKind, TrustReport, TrustState};
 use rimz::workspace::WorkspaceResolver;
 
@@ -31,7 +32,11 @@ enum TrustSubcmd {
     /// Show the trust state for the current workspace.
     Status,
     /// Pin the current executable-surface hash as trusted.
-    Grant,
+    Grant {
+        /// Also grant folder trust for detected agents (all, or selected kinds).
+        #[arg(long, num_args = 0.., value_delimiter = ',', action = clap::ArgAction::Append)]
+        agents: Option<Vec<String>>,
+    },
     /// Drop the trust grant; the next read of project config is untrusted.
     Revoke,
 }
@@ -39,19 +44,96 @@ enum TrustSubcmd {
 pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let report = match args.command.unwrap_or(TrustSubcmd::Status) {
+    let command = args.command.unwrap_or(TrustSubcmd::Status);
+    let report = match &command {
         TrustSubcmd::Status => {
             trust::status(&workspace.project_root).context("reading trust state")?
         }
-        TrustSubcmd::Grant => trust::grant(&workspace.project_root).context("granting trust")?,
+        TrustSubcmd::Grant { .. } => {
+            trust::grant(&workspace.project_root).context("granting trust")?
+        }
         TrustSubcmd::Revoke => trust::revoke(&workspace.project_root).context("revoking trust")?,
     };
-    print_report(&report, args.json)?;
+    let mut rows = match folder_trust::collect(&workspace) {
+        Ok(rows) => rows,
+        Err(error) if !matches!(command, TrustSubcmd::Grant { agents: Some(_) }) => {
+            writeln!(render::err(), "trust: agents: {error:#}")?;
+            Vec::new()
+        }
+        Err(error) => return Err(error.context("resolving agent folder trust")),
+    };
+    if !args.json {
+        print_project_report(&report)?;
+    }
+    let mut succeeded = true;
+    if let TrustSubcmd::Grant { agents } = command {
+        if let Some(kinds) = agents {
+            let selected: Vec<_> = rows
+                .iter()
+                .filter(|row| {
+                    if kinds.is_empty() {
+                        matches!(row.trust, FolderTrust::Undecided(_))
+                    } else {
+                        kinds.iter().any(|kind| kind == row.kind)
+                    }
+                })
+                .collect();
+            for kind in &kinds {
+                if !rows.iter().any(|row| row.kind == kind) {
+                    writeln!(
+                        render::err(),
+                        "trust: {kind}: unknown or undetected agent with folder trust"
+                    )?;
+                    succeeded = false;
+                }
+            }
+            folder_trust::preview(&selected)?;
+            succeeded &= folder_trust::grant(&selected, "trust")?;
+        } else if io::stdin().is_terminal() {
+            let undecided: Vec<_> = rows
+                .iter()
+                .filter(|row| matches!(row.trust, FolderTrust::Undecided(_)))
+                .collect();
+            let kinds = folder_trust::preview(&undecided)?;
+            if !kinds.is_empty()
+                && super::confirm_with_default(
+                    &format!("Also trust this folder for {}?", kinds.join(", ")),
+                    false,
+                )?
+            {
+                let grantable: Vec<_> = undecided
+                    .into_iter()
+                    .filter(|row| kinds.iter().any(|kind| kind == row.kind))
+                    .collect();
+                succeeded = folder_trust::grant(&grantable, "trust")?;
+            }
+        } else {
+            for row in &rows {
+                if matches!(row.trust, FolderTrust::Undecided(_)) {
+                    writeln!(
+                        render::err(),
+                        "trust: {} undecided; run `rimz trust grant --agents` to write it",
+                        row.kind
+                    )?;
+                }
+            }
+        }
+        if let Ok(fresh) = folder_trust::collect(&workspace) {
+            rows = fresh;
+        }
+    }
+    if args.json {
+        print_json_report(&report, &rows)?;
+    } else {
+        print_agent_report(&rows)?;
+    }
+    anyhow::ensure!(succeeded, "one or more agent folder-trust grants failed");
     Ok(())
 }
 
 #[derive(Serialize)]
 struct ReportJson<'a> {
+    agents: Vec<folder_trust::Row>,
     state: &'a str,
     workspace_id: &'a str,
     project_root: String,
@@ -63,20 +145,22 @@ struct ReportJson<'a> {
     surface_diff: Option<&'a [SurfaceDiffEntry]>,
 }
 
-fn print_report(report: &TrustReport, as_json: bool) -> Result<()> {
-    if as_json {
-        return render::json_pretty(&ReportJson {
-            state: report.state.as_str(),
-            workspace_id: report.workspace_id.as_str(),
-            project_root: report.project_root.display().to_string(),
-            config_path: report.config_path.display().to_string(),
-            record_path: report.record_path.display().to_string(),
-            current_hash: report.current_hash.as_deref(),
-            granted_hash: report.granted_hash.as_deref(),
-            granted_at: report.granted_at.map(|t| t.to_string()),
-            surface_diff: report.surface_diff.as_deref(),
-        });
-    }
+fn print_json_report(report: &TrustReport, rows: &[rimz::agents::FolderTrustRow]) -> Result<()> {
+    render::json_pretty(&ReportJson {
+        agents: rows.iter().map(folder_trust::Row::from).collect(),
+        state: report.state.as_str(),
+        workspace_id: report.workspace_id.as_str(),
+        project_root: report.project_root.display().to_string(),
+        config_path: report.config_path.display().to_string(),
+        record_path: report.record_path.display().to_string(),
+        current_hash: report.current_hash.as_deref(),
+        granted_hash: report.granted_hash.as_deref(),
+        granted_at: report.granted_at.map(|t| t.to_string()),
+        surface_diff: report.surface_diff.as_deref(),
+    })
+}
+
+fn print_project_report(report: &TrustReport) -> Result<()> {
     let mut out = render::out();
     writeln!(
         out,
@@ -135,6 +219,24 @@ fn trust_banner(state: TrustState) -> &'static str {
         TrustState::Trusted => "trusted",
         TrustState::Stale => "stale — executable surface changed since last grant",
     }
+}
+
+fn print_agent_report(rows: &[rimz::agents::FolderTrustRow]) -> Result<()> {
+    let mut out = render::out();
+    writeln!(out, "  agents:")?;
+    for row in rows {
+        let state = match &row.trust {
+            FolderTrust::Decided => "decided".to_owned(),
+            FolderTrust::Undecided(gap) => format!("undecided → {}", gap.fix(row.kind)),
+        };
+        writeln!(
+            out,
+            "    {} ({})  {state}",
+            render::paint(render::palette::identity(row.kind), row.kind),
+            row.login
+        )?;
+    }
+    Ok(())
 }
 
 /// Re-pin trust after a project mutation this command performed itself.
