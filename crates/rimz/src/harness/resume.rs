@@ -763,7 +763,12 @@ impl RecoveryPlan {
                             resume.tabs.push(tab);
                         }
                         Err(err) => match materializer {
-                            RecoveryMaterializer::Strict(_) => return Err(err),
+                            RecoveryMaterializer::Strict(_) => {
+                                for launch in &resume.team_launches {
+                                    let _ = store.fail_agent_launch_batch(&launch.batch);
+                                }
+                                return Err(err);
+                            }
                             RecoveryMaterializer::BestEffort { workspace_id, .. } => {
                                 tracing::warn!(workspace = %workspace_id, team = %planned.team, error = %err, "team resume materialization skipped");
                             }

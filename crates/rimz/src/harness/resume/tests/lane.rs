@@ -865,10 +865,12 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
         })
         .expect("team entry");
     team.cohort.seeds.fill(CohortSeed::Fresh);
+    let healthy = RecoveryEntry::Team(team.clone());
     let crate::harness::spec::Cell::Agent(cell) = &mut team.layout.columns[0].rows[0] else {
         panic!("expected team agent");
     };
     cell.system_prompt_file = Some(dir.path().join("missing-prompt.md").into());
+    broken.recovery.entries.insert(0, healthy);
     assert!(broken.materialize(&store, "rimz-test").is_err());
     let events = crate::store::event_log::read_all(&store.paths().events_log).unwrap();
     let failed = events
@@ -878,7 +880,10 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
             if payload.state == crate::store::event::AgentLaunchState::Failed)
         })
         .count();
-    assert_eq!(failed, 2, "compile failure must close both fresh seats");
+    assert_eq!(
+        failed, 4,
+        "a failing team tab must close its own fresh seats and those of the team tab materialized before it"
+    );
 }
 
 #[test]
