@@ -25,6 +25,8 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 
 Creation writes the marker. Reusing a same-repository PR head's tree may fill a missing `from_pr` through the same atomic writer, preserving every other field, including `version` and `created_at`. Thus `created_at` is the birth of the tree's current incarnation: a tree removed and recreated under the same name gets a fresh one. The filled PR number makes the tree discoverable by PR resume and the sidebar's PR matching.
 
+The marker's `worktree_path` is the tree's identity everywhere a cohort or agent is matched to a tree. It is the configured directory joined verbatim, so when the `[agents.worktree] dir` template passes through a symlink it differs from the realpath `git worktree list` reports; the realpath is used only to find the marker and to check Git identity.
+
 `base_branch` and `from_pr` are `#[serde(default)]` options, so markers written before those fields existed still deserialize and their trees still clean up; two tests in [`worktree/tests.rs`](../../../crates/rimz/src/worktree/tests.rs) pin that. A new marker field needs the same treatment.
 
 ## Module map
@@ -116,7 +118,7 @@ For differing tips, `crates/rimz/src/worktree/pr.rs::classify_divergence` counts
 
 Reuse fills only a missing `from_pr` through `write_marker`, then skips seeding and hooks. Fork and review-only strategies still require a fresh tree.
 
-For a named team or a layout with at least two agent cells, `crates/rimz/src/cli/agents_cmd/launch.rs::launch_layout` orders PR checkout as lookup, cohort reconciliation, tip choice, then checkout settlement. The first `create_from_pr` call has no tip choice: its invariant is that it never moves an existing local branch tip (fresh paths may create branches). The lookup may fetch remote refs, set upstream for an equal tip, or fill a missing marker PR number. Reconciliation uses the holder's actual path, not the configured worktree directory. A live cohort, cancellation, or unattended closed cohort returns before tip choice or new launch rows. A resume settles the chosen tip first; removing the tree discards the pending checkout and resolves it anew. Single-agent specs outside a named team and supervised launches retain the ordinary checkout path.
+For a named team or a layout with at least two agent cells, `crates/rimz/src/cli/agents_cmd/launch.rs::launch_layout` orders PR checkout as lookup, cohort reconciliation, tip choice, then checkout settlement. The first `create_from_pr` call has no tip choice: its invariant is that it never moves an existing local branch tip (fresh paths may create branches). The lookup may fetch remote refs, set upstream for an equal tip, or fill a missing marker PR number. Reconciliation keys on the `worktree_path` recorded in the holder's marker, which may lie outside the configured worktree directory. A live cohort, cancellation, or unattended closed cohort returns before tip choice or new launch rows. A resume settles the chosen tip first; removing the tree discards the pending checkout and resolves it anew. Single-agent specs outside a named team and supervised launches retain the ordinary checkout path.
 
 Network calls are bounded: `PR_HEAD_COMMAND_TIMEOUT` (10 seconds) for the forge CLI query and `PR_FETCH_TIMEOUT` (120 seconds) for a fetch, which runs with `GIT_TERMINAL_PROMPT=0` so a credential prompt fails instead of hanging a launch.
 
