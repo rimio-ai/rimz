@@ -11,7 +11,7 @@ use rimz::ids::AgentSessionId;
 use rimz::store::gc::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 use rimz::store::message::{DeliveryGate, MessageRecord};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
-use rimz::{MuxName, SidebarInstanceId};
+use rimz::{MuxName, SidebarInstanceId, StatePaths};
 use serde_json::json;
 
 use crate::common::Env;
@@ -437,17 +437,22 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
     let workspaces = env.rimz_home().join("ws");
     std::fs::create_dir_all(&workspaces).expect("mkdir workspaces");
 
-    // An abandoned `rimz start` scaffold: empty subdirs, no workspace.json.
-    let scaffold = workspaces.join("scaffold-abcd");
-    for sub in ["snapshots", "runs", "locks"] {
-        std::fs::create_dir_all(scaffold.join(sub)).expect("mkdir scaffold sub");
-    }
+    // An abandoned `rimz start` scaffold: the classed dirs `ensure_dirs`
+    // creates plus the lock dir, all empty, and no workspace.json.
+    let paths =
+        StatePaths::for_project_root_under(&env.home_root.join("scaffold"), &env.rimz_home())
+            .expect("scaffold paths");
+    paths.ensure_dirs().expect("mkdir scaffold dirs");
+    let lock_dir = paths.workspace_lock.parent().expect("lock dir");
+    std::fs::create_dir_all(lock_dir).expect("mkdir scaffold lock dir");
+    let scaffold = paths.root;
 
     // An unreadable record that still holds history: kept and reported.
     let history = workspaces.join("history-abcd");
-    std::fs::create_dir_all(history.join("log")).expect("mkdir history");
+    let events_log = StatePaths::history_paths(&history).events_log;
+    std::fs::create_dir_all(events_log.parent().expect("log dir")).expect("mkdir history");
     std::fs::write(history.join("workspace.json"), b"{ not json").expect("garbled record");
-    std::fs::write(history.join("log/events.log.jsonl"), b"{}\n").expect("history");
+    std::fs::write(&events_log, b"{}\n").expect("history");
 
     env.rimz()
         .args(["gc", "--all", "--older-than", "1h"])

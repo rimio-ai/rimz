@@ -161,6 +161,8 @@ fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StatePaths;
+    use crate::ids::WorkspaceDirName;
     use tempfile::tempdir;
 
     #[test]
@@ -223,17 +225,23 @@ mod tests {
         write_record(&workspaces.join("gone-abcd"), &gone_id, &gone_root);
         fs::create_dir_all(runtime.join("gone-abcd")).unwrap();
 
-        // 3. Abandoned scaffold: empty snapshots/runs/locks, no record.
-        let scaffold_dir = workspaces.join("unfinished");
-        for sub in ["snapshots", "runs", "locks"] {
-            fs::create_dir_all(scaffold_dir.join(sub)).unwrap();
-        }
+        // 3. Abandoned scaffold: the classed dirs `ensure_dirs` creates plus
+        // the lock dir, all empty, and no record.
+        let scaffold = StatePaths::under_named(
+            WorkspaceId::from_project_root(&temp.path().join("unfinished")),
+            WorkspaceDirName::parse("unfinished-abcd").unwrap(),
+            temp.path(),
+        );
+        scaffold.ensure_dirs().unwrap();
+        fs::create_dir_all(scaffold.workspace_lock.parent().unwrap()).unwrap();
+        let scaffold_dir = scaffold.root;
 
         // 4. Unreadable record but real history: retained, never deleted.
         let history_dir = workspaces.join("history");
-        fs::create_dir_all(history_dir.join("log")).unwrap();
+        let history = StatePaths::history_paths(&history_dir);
+        fs::create_dir_all(history.events_log.parent().unwrap()).unwrap();
         fs::write(history_dir.join("workspace.json"), b"{ not json").unwrap();
-        fs::write(history_dir.join("log/events.log.jsonl"), b"{}\n").unwrap();
+        fs::write(&history.events_log, b"{}\n").unwrap();
 
         let report = prune_dead_workspaces_under(&workspaces, &runtime, false).unwrap();
 
@@ -271,7 +279,7 @@ mod tests {
                 .find(|row| row.reason == PruneReason::AbandonedScaffold)
                 .unwrap()
                 .dir_name,
-            "unfinished"
+            "unfinished-abcd"
         );
         assert_eq!(report.retained_unreadable[0].0, "history");
         assert!(!scaffold_dir.exists());
