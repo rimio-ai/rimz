@@ -5,6 +5,74 @@ use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph, rol
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
+fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    parent.pending_waits.push(PendingWait {
+        name: "calm-fox".into(),
+        trigger: PendingWaitTrigger::Subagent {
+            active_at: fixed_now(),
+            deadline_at: None,
+            settled: Some("done".into()),
+        },
+        armed_at: Some(fixed_now()),
+    });
+    let mut child = agent(
+        "child",
+        "claude",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("child-result"),
+    );
+    child.parent_agent_id = Some("parent".into());
+    let snapshot = snapshot_with(vec![parent, child]);
+    let screen = snapshot_to_screen(&snapshot, 64, 30);
+    assert!(screen.contains("wakes when calm-fox reports"), "{screen}");
+    assert_eq!(screen.matches("child-result").count(), 1, "{screen}");
+    assert!(!screen.contains('⧖'), "{screen}");
+    assert!(!screen.contains("reporting"), "{screen}");
+}
+
+#[test]
+fn team_wait_draws_a_static_counted_stage_entry_and_sleeping_description() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    parent.pending_waits.push(PendingWait {
+        name: "forge#feat-x".into(),
+        trigger: PendingWaitTrigger::Team {
+            stage: Some("Review".into()),
+        },
+        armed_at: Some(fixed_now()),
+    });
+    let snapshot = snapshot_with(vec![parent]);
+    let screen = snapshot_to_screen(&snapshot, 64, 30);
+    assert!(
+        screen.contains("wakes when forge#feat-x reaches Done"),
+        "{screen}"
+    );
+    assert!(screen.contains("waits (1)"), "{screen}");
+    let theme = Theme::fixed(false);
+    let lead = theme.glyph(GlyphRole::CardWaitSignal);
+    assert!(
+        screen.contains(&format!("{lead} team · stage Review")),
+        "{screen}"
+    );
+}
+
+#[test]
 fn running_card_shows_queued_question_without_changing_status() {
     let parent = agent(
         "codex-1",

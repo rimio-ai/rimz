@@ -1,4 +1,4 @@
-//! Type-led wait entries share the subagent layout and pin armed age right. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, and file waits take one line. Live watches retain the working animation; timers and signals retain their static leads. Waits precede background shells, with signals last.
+//! Type-led wait entries share the subagent layout and pin armed age right. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells, with signals last. Subagent waits use the child's own row instead.
 
 use jiff::Timestamp;
 
@@ -8,6 +8,12 @@ use crate::agents::{
 use crate::proc::command::{command_program_basename, program_label};
 
 use super::*;
+
+pub(super) fn visible_waits(waits: &[PendingWait]) -> impl Iterator<Item = &PendingWait> {
+    waits
+        .iter()
+        .filter(|wait| !matches!(wait.trigger, PendingWaitTrigger::Subagent { .. }))
+}
 
 /// A wait its watcher is actively working on: it animates while armed.
 pub(super) fn is_live_watch(trigger: &PendingWaitTrigger) -> bool {
@@ -25,8 +31,7 @@ pub(super) fn wait_entry_lines(
     waits: &[PendingWait],
     shells: &[BackgroundShell],
 ) -> Vec<Line<'static>> {
-    let (signals, others): (Vec<_>, Vec<_>) = waits
-        .iter()
+    let (signals, others): (Vec<_>, Vec<_>) = visible_waits(waits)
         .partition(|wait| matches!(wait.trigger, PendingWaitTrigger::Signal { .. }));
     let mut lines = Vec::new();
     for entry in others
@@ -44,7 +49,9 @@ fn wait_entry(ctx: &RowCtx<'_>, wait: &PendingWait) -> Entry {
     let theme = ctx.theme;
     let lead = match wait.trigger {
         PendingWaitTrigger::Timer { .. } => theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
-        PendingWaitTrigger::Signal { .. } => theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
+        PendingWaitTrigger::Signal { .. } | PendingWaitTrigger::Team { .. } => {
+            theme.glyph(GlyphRole::CardWaitSignal).to_owned()
+        }
         _ => role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
     };
     entry(

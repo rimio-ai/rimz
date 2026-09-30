@@ -106,9 +106,7 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
             .iter()
             .any(|child| child.status == AgentStatus::Running)
             || !agent.background_shells.is_empty()
-            || agent
-                .pending_waits
-                .iter()
+            || waits::visible_waits(&agent.pending_waits)
                 .any(|wait| waits::is_live_watch(&wait.trigger)))
 }
 
@@ -268,7 +266,8 @@ pub(super) fn row_lines(
 /// The standing delegation line carries lifetime children, their known cost,
 /// and pending waits with background shells. Expansion only appends their entries.
 fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
-    let wait_count = agent.pending_waits.len() + agent.background_shells.len();
+    let wait_count =
+        waits::visible_waits(&agent.pending_waits).count() + agent.background_shells.len();
     if agent.sub_agent_count == 0 && wait_count == 0 {
         return None;
     }
