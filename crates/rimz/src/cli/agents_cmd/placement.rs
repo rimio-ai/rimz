@@ -132,6 +132,7 @@ pub(super) fn execute(
     store: &rimz::Store,
     batch: &AgentLaunchBatch,
     request: PlacementRequest,
+    on_launched: impl Fn(),
 ) -> Result<()> {
     if request.placement == Placement::SamePane
         && let Some(anchor) = own_pane_id(request.mux)
@@ -154,16 +155,22 @@ pub(super) fn execute(
         Placement::NewPane => errors.new_pane,
         Placement::SamePane => errors.same_pane,
     };
+    let in_place = request.placement == Placement::SamePane;
     let result = prepare(request).and_then(|prepared| match prepared {
         PreparedPlacement::NewTab(options) => backend.open_tab(&options).map_err(Into::into),
         PreparedPlacement::NewPane(options) => backend.split_pane(options).map_err(Into::into),
         PreparedPlacement::SamePane { argv, env, cwd } => {
+            // A successful exec never returns, so the launch counts as placed here.
+            on_launched();
             Err(exec_wrapper_in_place(&argv, env, &cwd))
         }
     });
     if let Err(err) = result {
         let _ = store.fail_agent_launch_batch(batch);
         return Err(err).context(context);
+    }
+    if !in_place {
+        on_launched();
     }
     Ok(())
 }

@@ -1594,7 +1594,6 @@ fn materialize_team_restore_tab(
     let identities = batch
         .as_ref()
         .map_or(&[] as &[_], |batch| batch.identities());
-    crate::harness::assist_log::record_tier_fallbacks(identities);
     let layout = compile_layout_panes(
         &planned.layout,
         LayoutPaneParams {
@@ -1608,6 +1607,7 @@ fn materialize_team_restore_tab(
         },
     )
     .context("building team restore layout")?;
+    crate::harness::assist_log::record_tier_fallbacks(identities);
     Ok(ResumeTab {
         label: planned.label.clone(),
         cwd: planned.cwd.clone(),

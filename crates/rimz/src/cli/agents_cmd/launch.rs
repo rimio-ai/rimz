@@ -408,7 +408,6 @@ pub(super) fn launch_layout(
             description: args.launch.cohort.description.clone(),
         },
     )?;
-    rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
     let peer_prompt = prepare_peer_prompt(store, launch_batch.identities(), &launch.cwd)
         .inspect_err(|_| {
             let _ = store.fail_agent_launch_batch(&launch_batch);
@@ -480,6 +479,7 @@ pub(super) fn launch_layout(
             focus,
             errors: LAUNCH_PLACEMENT_ERRORS,
         },
+        || rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities()),
     )
     .inspect_err(|_| fail_peer_prompt())?;
     if !in_place {
@@ -813,7 +813,6 @@ fn launch_resume_layout(
             description: None,
         },
     )?;
-    rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
 
     let title = channel.as_deref().map_or_else(
         || rimz::harness::spec::default_tab_title(&layout, None, team_name.as_deref()),
@@ -860,6 +859,7 @@ fn launch_resume_layout(
             focus,
             errors: LAUNCH_PLACEMENT_ERRORS,
         },
+        || rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities()),
     )?;
     if !in_place {
         write_resume_receipt(
