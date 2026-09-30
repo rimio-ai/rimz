@@ -3687,6 +3687,67 @@ fn end_wait_agent(env: &Env, store: &rimz::Store, session_id: &str) {
         .expect("end wait agent");
 }
 
+/// Watches the runs directory for a spawned `agents wait` resolving its
+/// targets. The command reads one snapshot, then lists the run records while
+/// resolving each reference against it, so its first open of the directory
+/// proves every agent live now is already resolved; one removed after that
+/// is seen gone only by the polls. Linux-only: kqueue reports no opens.
+#[cfg(target_os = "linux")]
+struct WaitResolutionWatch {
+    _watcher: notify::RecommendedWatcher,
+    events: std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+}
+
+#[cfg(target_os = "linux")]
+impl WaitResolutionWatch {
+    /// Arm before spawning the wait, after the fixture's last run write.
+    fn arm(store: &rimz::Store) -> Self {
+        use notify::Watcher as _;
+        let (tx, events) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(tx).expect("create runs watcher");
+        watcher
+            .watch(&store.paths().runs_dir, notify::RecursiveMode::NonRecursive)
+            .expect("watch runs directory");
+        Self {
+            _watcher: watcher,
+            events,
+        }
+    }
+
+    fn wait_resolved(&self, child: &mut std::process::Child) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self
+                .events
+                .recv_timeout(remaining.min(Duration::from_millis(100)))
+            {
+                Ok(Ok(event))
+                    if matches!(
+                        event.kind,
+                        notify::EventKind::Access(notify::event::AccessKind::Open(_))
+                    ) =>
+                {
+                    return;
+                }
+                Ok(result) => {
+                    result.expect("runs watcher event");
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(err) => panic!("runs watcher closed: {err}"),
+            }
+            assert!(
+                child.try_wait().expect("poll wait").is_none(),
+                "wait exited before resolving its targets"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the wait to resolve its targets"
+            );
+        }
+    }
+}
+
 #[test]
 fn wait_single_run_prints_full_human_output_and_terminal_exit() {
     let env = Env::new();
@@ -4305,21 +4366,23 @@ fn wait_single_disappearing_agent_returns_resolution_error() {
     assert!(!stderr.contains("swift-otter: agent disappeared while waiting"));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn wait_multi_disappearing_agent_records_failed_entry_and_diagnostic() {
     let env = Env::new();
     let store = env.store();
     register_running_wait_agent(&env, &store, "swift-otter", "sess-wait-multi");
     let mut fox = create_running_named_run(&env, &store, "quiet-fox");
+    let resolution = WaitResolutionWatch::arm(&store);
 
-    let child = env
+    let mut child = env
         .rimz()
         .args(["agents", "wait", "swift-otter", "quiet-fox", "--json"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn multi agent wait");
-    std::thread::sleep(Duration::from_millis(100));
+    resolution.wait_resolved(&mut child);
     end_wait_agent(&env, &store, "sess-wait-multi");
     write_run_status(&store, &mut fox, RunStatus::Completed);
 
