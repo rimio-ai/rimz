@@ -28,6 +28,28 @@ struct Harness {
     args: SubagentsArgs,
 }
 
+#[test]
+fn tier_flag_and_fanout_field_are_accepted() {
+    let parsed = Harness::try_parse_from(["subagents", "claude", "Task", "--tier", "senior"]);
+    assert!(parsed.is_ok(), "{parsed:?}");
+    assert!(
+        Harness::try_parse_from([
+            "subagents",
+            "claude",
+            "Task",
+            "--tier",
+            "senior",
+            "--model",
+            "opus"
+        ])
+        .is_err()
+    );
+    let task = serde_json::from_str::<FanoutTask>(
+        r#"{"profile":"claude","prompt":"Task","tier":"senior"}"#,
+    );
+    assert!(task.is_ok(), "{task:?}");
+}
+
 #[derive(Debug, Parser)]
 struct AgentsHarness {
     #[command(flatten)]
@@ -534,7 +556,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
         "agent-only".to_owned(),
         rimz::config::Profile {
             allowed_tools: None,
-            preferred_family: None,
+            definition_renders: None,
             model_tier: None,
             isolation: None,
             auto_compact: None,
@@ -556,7 +578,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
         "planner".to_owned(),
         rimz::config::Profile {
             allowed_tools: None,
-            preferred_family: None,
+            definition_renders: None,
             model_tier: None,
             isolation: None,
             auto_compact: None,
@@ -578,7 +600,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
         "claude".to_owned(),
         rimz::config::Profile {
             allowed_tools: None,
-            preferred_family: None,
+            definition_renders: None,
             model_tier: None,
             isolation: None,
             auto_compact: None,

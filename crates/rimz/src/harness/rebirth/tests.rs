@@ -1044,7 +1044,7 @@ fn team_machine() -> MachineConfig {
         "claude-plan".to_owned(),
         Profile {
             allowed_tools: None,
-            preferred_family: None,
+            definition_renders: None,
             model_tier: None,
             isolation: None,
             auto_compact: None,
@@ -1066,7 +1066,7 @@ fn team_machine() -> MachineConfig {
         "codex-code".to_owned(),
         Profile {
             allowed_tools: None,
-            preferred_family: None,
+            definition_renders: None,
             model_tier: None,
             isolation: None,
             auto_compact: None,

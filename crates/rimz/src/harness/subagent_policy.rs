@@ -148,7 +148,7 @@ mod tests {
             "planner".to_owned(),
             Profile {
                 allowed_tools: None,
-                preferred_family: None,
+                definition_renders: None,
                 model_tier: None,
                 isolation: None,
                 auto_compact: None,
@@ -201,7 +201,7 @@ mod tests {
             "explorer".to_owned(),
             Profile {
                 allowed_tools: None,
-                preferred_family: None,
+                definition_renders: None,
                 model_tier: None,
                 isolation: None,
                 auto_compact: None,

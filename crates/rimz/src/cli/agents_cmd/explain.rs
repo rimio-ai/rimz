@@ -548,23 +548,20 @@ fn applied_overrides(
 ) -> Vec<String> {
     let mut flags = Vec::new();
     let overrides = &args.overrides;
+    if let Some(tier) = overrides.tier {
+        flags.push(format!(
+            "--tier {tier} → {kind} {} ({})",
+            model.unwrap_or("-"),
+            effort.unwrap_or("-")
+        ));
+    }
     for (flag, value) in [
         ("--model", &overrides.model),
         ("--agent", &overrides.agent),
         ("--effort", &overrides.effort),
     ] {
         if let Some(value) = value {
-            if flag == "--model"
-                && rimz::config::tiers::ModelTier::from_model(value.trim()).is_some()
-            {
-                flags.push(format!(
-                    "{flag} {value} → {kind} {} ({})",
-                    model.unwrap_or("-"),
-                    effort.unwrap_or("-")
-                ));
-            } else {
-                flags.push(format!("{flag} {value}"));
-            }
+            flags.push(format!("{flag} {value}"));
         }
     }
     if overrides.ask {
@@ -852,12 +849,12 @@ mod tests {
 
     #[test]
     fn explain_tier_override_names_its_resolution() {
-        let args = ParserArgs::try_parse_from(["explain", "coder", "--model", "principal"])
+        let args = ParserArgs::try_parse_from(["explain", "coder", "--tier", "principal"])
             .unwrap()
             .explain;
         assert_eq!(
             applied_overrides(&args, &[], "claude", Some("fable"), Some("high")),
-            ["--model principal → claude fable (high)"]
+            ["--tier principal → claude fable (high)"]
         );
     }
 

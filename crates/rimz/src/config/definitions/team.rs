@@ -293,22 +293,12 @@ impl SeatLoader<'_> {
                 .as_ref()
                 .and_then(|name| self.agents.definitions.get(name));
         }
-        let tier = fm
+        let kind = fm
             .model
             .as_deref()
-            .and_then(crate::config::tiers::ModelTier::from_model);
-        let kind = if tier.is_some() {
-            original
-                .preferred_family
-                .as_deref()
-                .unwrap_or(&original.agent)
-        } else {
-            fm.model
-                .as_deref()
-                .and_then(agents::definition_model_kind)
-                .unwrap_or(&original.agent)
-        };
-        if tier.is_none() && !self.bases.contains(kind) {
+            .and_then(agents::definition_model_kind)
+            .unwrap_or(&original.agent);
+        if fm.tier.is_none() && !self.bases.contains(kind) {
             return Err(DefinitionErr::new(
                 path,
                 format!(
@@ -317,7 +307,19 @@ impl SeatLoader<'_> {
                 ),
             ));
         }
-        fm.agent = Some(kind.to_owned());
+        fm.agent = if role.tier.is_some() {
+            None
+        } else if role.model.is_some() {
+            Some(kind.to_owned())
+        } else if let Some(route) = &original.definition_renders {
+            route
+                .preference
+                .family
+                .clone()
+                .or_else(|| Some(kind.to_owned()))
+        } else {
+            Some(kind.to_owned())
+        };
         fm.description = definition.frontmatter.description.clone();
         let mut traits = Vec::new();
         for name in definition
@@ -375,15 +377,19 @@ impl SeatLoader<'_> {
         let mut profile = seat.agent_profiles.0.remove(&role.agent).ok_or_else(|| {
             DefinitionErr::new(path, format!("seat '{}' failed to resolve", role.agent))
         })?;
-        profile
-            .preferred_family
-            .clone_from(&original.preferred_family);
         let mut crafts: Vec<_> = original
             .append_system_prompt_files
             .iter()
             .filter(|source| source.origin() != definition.path)
             .cloned()
             .collect();
+        if let Some(route) = &mut profile.definition_renders {
+            for rendered in route.renders.values_mut() {
+                let mut inherited = crafts.clone();
+                inherited.append(&mut rendered.append_system_prompt_files);
+                rendered.append_system_prompt_files = inherited;
+            }
+        }
         crafts.append(&mut profile.append_system_prompt_files);
         profile.append_system_prompt_files = crafts;
         Ok(profile)

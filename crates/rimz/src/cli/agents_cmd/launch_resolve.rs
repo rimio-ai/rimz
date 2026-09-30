@@ -60,31 +60,42 @@ pub(super) fn resolve_finalized_layout(
         }
     }
     let spec = qualified_spec.as_deref().or(spec);
+    let mut effective = effective.clone();
+    let routed = effective.route(
+        &machine_config.tiers,
+        rimz::config::effective::ProfileScope::Agents,
+        spec,
+        overrides.tier,
+        overrides.model.as_deref(),
+        overrides.agent.as_deref(),
+        |_, _| None::<()>,
+    )?;
     let mut resolved = rimz::harness::plan::resolve_launch(
-        effective,
+        &effective,
         rimz::config::effective::ProfileScope::Agents,
         &machine_config.agents.commands,
         spec,
-        rimz::harness::plan::normalized_preset_value(overrides.agent.as_deref()).as_deref(),
+        if routed {
+            None
+        } else {
+            overrides.agent.as_deref()
+        },
     )?;
-    let preset = validate_resolved_launch_inputs(
+    let mut preset = validate_resolved_launch_inputs(
         spec,
         prompt,
         overrides,
-        effective,
+        &effective,
         &machine_config.agents.commands,
         &resolved.layout,
         enforce_name_cardinality,
     )?;
+    if routed {
+        preset.model = None;
+    }
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            tiers: rimz::harness::plan::TierOverrideContext {
-                table: &machine_config.tiers,
-                profiles: &effective.profiles,
-                cell_profiles: &effective.profiles,
-                agent_override: overrides.agent.as_deref(),
-            },
             permission_mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?
                 .map(PermissionModeChoice::Explicit),
             isolation: overrides.isolation,

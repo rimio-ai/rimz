@@ -126,6 +126,7 @@ struct FanoutTask {
     prompt: Option<String>,
     prompt_file: Option<PathBuf>,
     model: Option<String>,
+    tier: Option<rimz::config::tiers::ModelTier>,
     agent: Option<String>,
     effort: Option<String>,
     timeout: Option<String>,
@@ -156,9 +157,12 @@ struct SubagentLaunchArgs {
     #[arg(long = "prompt-file", value_name = "PATH", conflicts_with = "prompt")]
     prompt_file: Option<PathBuf>,
     /// Model for the child.
-    #[arg(long, value_name = "MODEL")]
+    #[arg(long, value_name = "MODEL", conflicts_with = "tier")]
     model: Option<String>,
-    /// Re-base the profile onto another profile or provider kind.
+    /// Capability tier for the child.
+    #[arg(long, value_name = "TIER")]
+    tier: Option<rimz::config::tiers::ModelTier>,
+    /// Prefer this provider kind, or re-base onto a replacement profile.
     #[arg(long, value_name = "PROFILE|KIND")]
     agent: Option<String>,
     /// Reasoning effort for the child.
@@ -449,6 +453,7 @@ impl FanoutTask {
             prompt: self.prompt,
             prompt_file: self.prompt_file,
             model: self.model,
+            tier: self.tier,
             agent: self.agent,
             effort: self.effort,
             isolation: None,
@@ -471,6 +476,9 @@ impl SubagentLaunchArgs {
         self,
         defaults: &rimz::config::SubagentsConfig,
     ) -> Result<agents_cmd::AgentLaunchArgs> {
+        if self.model.is_some() && self.tier.is_some() {
+            bail!("choose one of model and tier");
+        }
         let profile = self.profile.context("a subagent needs a profile")?;
         if self.wait == Some(None)
             && let Some(prompt) = self.prompt.as_deref()
@@ -534,6 +542,7 @@ impl SubagentLaunchArgs {
             },
             overrides: agents_cmd::LaunchOverrideArgs {
                 model: self.model,
+                tier: self.tier,
                 agent: self.agent,
                 effort: self.effort,
                 isolation: self.isolation,
@@ -571,6 +580,7 @@ fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
         || args.cwd.is_some()
         || args.prompt_file.is_some()
         || args.model.is_some()
+        || args.tier.is_some()
         || args.agent.is_some()
         || args.effort.is_some()
         || args.isolation.is_some()

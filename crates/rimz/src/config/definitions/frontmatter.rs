@@ -18,6 +18,7 @@ pub(super) struct AgentFrontmatter {
     pub isolation: Option<crate::config::Isolation>,
     pub description: Option<String>,
     pub model: Option<String>,
+    pub tier: Option<String>,
     pub mode: Option<PermissionMode>,
     pub effort: Option<String>,
     #[serde(default, deserialize_with = "token_count")]
@@ -39,6 +40,10 @@ pub(super) struct AgentFrontmatter {
 
 impl AgentFrontmatter {
     pub(super) fn inherit(&mut self, parent: &Self) {
+        if self.model.is_none() && self.tier.is_none() {
+            self.model.clone_from(&parent.model);
+            self.tier.clone_from(&parent.tier);
+        }
         macro_rules! inherit {
             ($($field:ident),* $(,)?) => { $(
                 if self.$field.is_none() {
@@ -48,7 +53,6 @@ impl AgentFrontmatter {
         }
         inherit!(
             isolation,
-            model,
             mode,
             effort,
             auto_compact,
@@ -92,6 +96,7 @@ pub(super) struct RoleFrontmatter {
     #[serde(default, deserialize_with = "list")]
     pub owns: Option<Vec<String>>,
     pub model: Option<String>,
+    pub tier: Option<String>,
     pub mode: Option<PermissionMode>,
     pub effort: Option<String>,
     #[serde(default, deserialize_with = "token_count")]
@@ -123,6 +128,7 @@ impl RoleFrontmatter {
     pub(super) fn overlay(&self) -> AgentFrontmatter {
         AgentFrontmatter {
             model: self.model.clone(),
+            tier: self.tier.clone(),
             mode: self.mode,
             effort: self.effort.clone(),
             auto_compact: self.auto_compact.clone(),

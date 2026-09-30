@@ -416,7 +416,6 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
     crate::agents::definition::DefinitionSpec {
         mode: Some(crate::agents::PermissionMode::Auto),
         effort: Some("xhigh"),
-        effort_ladder: &["low", "medium", "high", "xhigh", "max"],
         models: &[
             crate::agents::definition::DefinitionModel {
                 name: "opus",

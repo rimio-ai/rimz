@@ -24,12 +24,22 @@ struct AgentsHarness {
     args: AgentsArgs,
 }
 
+#[test]
+fn tier_flag_is_separate_from_the_concrete_model_flag() {
+    let parsed = AgentsHarness::try_parse_from(["agents", "claude", "--tier", "senior"]);
+    assert!(parsed.is_ok(), "{parsed:?}");
+    assert!(
+        AgentsHarness::try_parse_from(["agents", "claude", "--tier", "senior", "--model", "opus"])
+            .is_err()
+    );
+}
+
 fn planner_profiles() -> ProfilesConfig {
     let mut profiles = ProfilesConfig::default();
     profiles.0.insert(
         "planner".to_owned(),
         Profile {
-            preferred_family: None,
+            definition_renders: None,
             model_tier: None,
             isolation: None,
             auto_compact: None,
@@ -242,7 +252,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
         Profile {
-            preferred_family: None,
+            definition_renders: None,
             model_tier: None,
             isolation: None,
             auto_compact: None,
@@ -264,7 +274,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.subagents.profiles.0.insert(
         "child-only".to_owned(),
         Profile {
-            preferred_family: None,
+            definition_renders: None,
             model_tier: None,
             isolation: None,
             auto_compact: None,
@@ -952,6 +962,7 @@ mod parse {
             (&["rimz", "--from-pr", "1"], "--from-pr requires"),
             (&["rimz", "--", "term"], "missing agent spec"),
             (&["rimz", "--model", "opus"], "require an agent spec"),
+            (&["rimz", "--tier", "senior"], "require an agent spec"),
             (&["rimz", "--fresh"], "require an agent spec"),
             (&["rimz", "--isolation", "sandbox"], "require an agent spec"),
             (&["rimz", "-p", "--max-turns", "3"], "require an agent spec"),
@@ -1223,6 +1234,48 @@ fn refresh_targets_honor_channel_filter() {
 
 mod launch_options {
     use super::*;
+
+    #[test]
+    fn tier_override_changes_the_interactive_launch_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        for kind in ["claude", "codex"] {
+            std::fs::write(
+                root.path().join(format!("agents/{kind}.md")),
+                "---\ndescription: Base\n---\nBase.",
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            root.path().join("agents/worker.md"),
+            "---\ndescription: Worker\nagent: codex\ntier: senior\ntools: [Bash]\n---\nCraft.",
+        )
+        .unwrap();
+        let mut machine = MachineConfig::default();
+        let definitions = rimz::config::definitions::load(
+            root.path(),
+            rimz::config::definitions::SkillCheck::Skip,
+            &machine.agents.commands,
+            &machine.tiers,
+        );
+        assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+        machine.agents.profiles = definitions.agent_profiles;
+        let args = AgentsHarness::try_parse_from([
+            "agents",
+            "worker",
+            "--tier",
+            "principal",
+            "--agent",
+            "codex",
+        ])
+        .unwrap()
+        .args;
+        let (resolved, _) = resolve_and_validate(&args, &machine, root.path()).unwrap();
+        let cell = resolved.layout.agent_cells().next().unwrap();
+        assert_eq!(cell.kind.as_str(), "claude");
+        assert_eq!(cell.launch.model.as_deref(), Some("fable"));
+        assert!(cell.args.iter().any(|arg| arg == "--tools"));
+    }
 
     #[test]
     fn loop_check_launch_is_blocking_bounded_and_owned() {
@@ -1549,7 +1602,7 @@ mod launch_options {
         machine.agents.profiles.0.insert(
             "warn".to_owned(),
             rimz::config::Profile {
-                preferred_family: None,
+                definition_renders: None,
                 model_tier: None,
                 isolation: None,
                 auto_compact: None,
@@ -1606,12 +1659,6 @@ mod launch_options {
         let warnings = rimz::harness::plan::finalize_launch_layout(
             &mut warning_layout,
             LaunchFinalizeOptions {
-                tiers: rimz::harness::plan::TierOverrideContext {
-                    table: &machine.tiers,
-                    profiles: &effective.profiles,
-                    cell_profiles: &effective.profiles,
-                    agent_override: None,
-                },
                 permission_mode: None,
                 isolation: None,
                 preset: &LaunchPreset::default(),

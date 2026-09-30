@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::{self, ManualSkill, PresetField, ToolSet};
-use crate::config::tiers::{ModelTier, TierConfig};
+use crate::config::tiers::{
+    DefinitionRenders, ModelTier, TierConfig, TierPreference, TierProvenance,
+};
 use crate::config::{Isolation, Profile, PromptSource, SkillName};
 
 use super::frontmatter::AgentFrontmatter;
@@ -16,12 +18,14 @@ use super::{
 struct Resolved {
     frontmatter: AgentFrontmatter,
     profile: Profile,
+    preference: TierPreference,
+    runtime_kind: Option<String>,
 }
 
 pub(super) fn empty_profile(kind: &str) -> Profile {
     Profile {
         agent: kind.to_owned(),
-        preferred_family: Some(kind.to_owned()),
+        definition_renders: None,
         model_tier: None,
         isolation: None,
         skills: None,
@@ -145,6 +149,41 @@ impl Resolver<'_> {
         let definition = &self.tree.definitions[name];
         let path = &definition.path;
         let mut fm = definition.frontmatter.clone();
+        if fm.model.is_some() && fm.tier.is_some() {
+            return Err(DefinitionErr::new(
+                path,
+                "sets both `tier:` and `model:`; keep one",
+            ));
+        }
+        if let Some(tier) = fm.model.as_deref().and_then(ModelTier::from_model) {
+            return Err(DefinitionErr::new(
+                path,
+                format!("model is a tier; use `tier: {tier}`"),
+            ));
+        }
+        let own_kind = fm
+            .agent
+            .as_deref()
+            .and_then(agents::find_definition)
+            .map(|definition| definition.spec().kind);
+        let model_kind = fm.model.as_deref().and_then(agents::definition_model_kind);
+        let mut runtime_kind = model_kind.or(own_kind).map(str::to_owned);
+        if let (Some(kind), Some(implied)) = (own_kind, model_kind)
+            && kind != implied
+        {
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "runs on '{kind}' but model '{}' runs on '{implied}'; set a {kind} model or follow the {implied} base",
+                    fm.model.as_deref().unwrap_or_default()
+                ),
+            ));
+        }
+        let own_runtime = fm.model.is_some() || fm.tier.is_some() || own_kind.is_some();
+        let mut preference = TierPreference {
+            model: fm.model.clone(),
+            family: model_kind.or(own_kind).map(str::to_owned),
+        };
         let parent_name = fm
             .agent
             .clone()
@@ -154,22 +193,12 @@ impl Resolver<'_> {
                     .and_then(agents::definition_model_kind)
                     .map(str::to_owned)
             })
+            .or_else(|| fm.tier.as_ref().map(|_| String::new()))
             .ok_or_else(|| {
-                if fm
-                    .model
-                    .as_deref()
-                    .and_then(ModelTier::from_model)
-                    .is_some()
-                {
-                    return DefinitionErr::new(
-                        path,
-                        "model is a tier; name the preferred family in `agent:` (claude or codex)",
-                    );
-                }
                 DefinitionErr::new(
                     path,
                     format!(
-                        "has no `agent:` and {}; name one",
+                        "has no `agent:` and {}; set `agent:`",
                         fm.model.as_ref().map_or_else(
                             || "it sets no model".to_owned(),
                             |model| format!("model '{model}' names no runtime")
@@ -177,7 +206,9 @@ impl Resolver<'_> {
                     ),
                 )
             })?;
-        let mut profile = if let Some(kind) = agents::find_definition(&parent_name) {
+        let mut profile = if parent_name.is_empty() {
+            empty_profile("")
+        } else if let Some(kind) = agents::find_definition(&parent_name) {
             empty_profile(kind.spec().kind)
         } else if self.tree.definitions.contains_key(&parent_name)
             || self.tree.failed.contains(&parent_name)
@@ -192,8 +223,13 @@ impl Resolver<'_> {
                 })
             })?;
             fm.inherit(&parent.frontmatter);
+            if runtime_kind.is_none() {
+                runtime_kind = parent.runtime_kind;
+            }
+            if !own_runtime {
+                preference = parent.preference;
+            }
             let mut profile = empty_profile(&parent.profile.agent);
-            profile.preferred_family = parent.profile.preferred_family;
             profile.append_system_prompt_files = parent.profile.append_system_prompt_files;
             profile
         } else {
@@ -210,26 +246,10 @@ impl Resolver<'_> {
             ));
         };
         let unresolved = fm.clone();
-        if let Some(tier) = fm.model.as_deref().and_then(ModelTier::from_model) {
-            let resolved = self
-                .tiers
-                .resolve(
-                    tier,
-                    profile
-                        .preferred_family
-                        .as_deref()
-                        .unwrap_or(&profile.agent),
-                    fm.effort.as_deref(),
-                )
-                .map_err(|error| DefinitionErr::new(path, error.to_string()))?;
-            profile.agent = resolved.kind;
-            fm.model = Some(resolved.model);
-            fm.effort = Some(resolved.effort);
-            profile.model_tier = Some(resolved.provenance);
-        } else if let Some(shift) = fm
+        if let Some(shift) = fm
             .effort
             .as_deref()
-            .filter(|effort| super::super::tiers::is_relative_effort(effort))
+            .filter(|effort| super::super::tiers::relative_effort(effort))
         {
             let source = if definition.frontmatter.effort.is_some() {
                 String::new()
@@ -239,32 +259,99 @@ impl Resolver<'_> {
             return Err(DefinitionErr::new(
                 path,
                 format!(
-                    "effort {shift}{source} shifts a tier's default; name a tier in `model:` or use an absolute effort"
+                    "effort {shift}{source} is relative; set an absolute effort or omit it for the chosen model's default"
                 ),
             ));
         }
-        let fallback = profile
-            .model_tier
-            .as_ref()
-            .filter(|tier| tier.fell_back)
-            .map(|tier| {
-                format!(
-                    "tier {} resolved to {} {} because {} has no model at that tier",
-                    tier.tier,
-                    profile.agent,
-                    fm.model.as_deref().unwrap_or_default(),
-                    tier.preferred_family
+        if let Some(kind) = fm.model.as_deref().and_then(agents::definition_model_kind) {
+            profile.agent = kind.to_owned();
+        } else if fm.model.is_some() {
+            profile.agent = runtime_kind.clone().ok_or_else(|| {
+                DefinitionErr::new(
+                    path,
+                    "model names no runtime and the chain has no family; set `agent:`",
                 )
+            })?;
+        }
+        let tier = fm
+            .tier
+            .as_deref()
+            .map(str::parse::<ModelTier>)
+            .transpose()
+            .map_err(|error| DefinitionErr::new(path, error.to_string()))?
+            .or_else(|| {
+                fm.model
+                    .as_deref()
+                    .and_then(|model| self.tiers.tier_for_model(&profile.agent, model))
             });
-        let profile = self.finish(name, fm, profile).map_err(|mut error| {
-            if let Some(fallback) = fallback {
-                error.message = format!("{fallback}; {}", error.message);
+        let mut renders = BTreeMap::new();
+        let mut exclusions = BTreeMap::new();
+        for (_, kind, model) in self.tiers.entries(ModelTier::Intern) {
+            if renders.contains_key(kind) || exclusions.contains_key(kind) {
+                continue;
             }
-            error
-        })?;
+            let mut candidate = profile.clone();
+            candidate.agent = kind.to_owned();
+            let mut candidate_fm = fm.clone();
+            candidate_fm.model = Some(model.to_owned());
+            match self.finish(name, candidate_fm, candidate) {
+                Ok(rendered) => {
+                    renders.insert(kind.to_owned(), rendered);
+                }
+                Err(error) => {
+                    exclusions.insert(kind.to_owned(), error.message);
+                }
+            }
+        }
+        let mut profile = if let Some(tier) = tier {
+            let pick = self
+                .tiers
+                .walk(
+                    tier,
+                    &preference,
+                    |kind| renders.contains_key(kind),
+                    |_, _| None::<()>,
+                )
+                .map_err(|error| {
+                    DefinitionErr::new(
+                        path,
+                        format!(
+                            "{error}; {}",
+                            exclusions
+                                .iter()
+                                .map(|(kind, reason)| format!("{kind}: {reason}"))
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        ),
+                    )
+                })?;
+            // The walk only selects a family whose complete render succeeded.
+            let mut selected = renders[&pick.kind].clone();
+            selected.model = Some(pick.model.clone());
+            selected.effort = fm.effort.clone().or_else(|| {
+                agents::definition_defaults(&pick.kind, Some(&pick.model))
+                    .effort
+                    .map(str::to_owned)
+            });
+            selected.model_tier = Some(TierProvenance {
+                tier,
+                fell_back: pick.used_tier.is_some(),
+            });
+            selected
+        } else {
+            self.finish(name, fm.clone(), profile)?
+        };
+        profile.definition_renders = Some(DefinitionRenders {
+            preference: preference.clone(),
+            renders,
+            exclusions,
+            effort: fm.effort,
+        });
         Ok(Resolved {
             frontmatter: unresolved,
             profile,
+            preference,
+            runtime_kind,
         })
     }
 

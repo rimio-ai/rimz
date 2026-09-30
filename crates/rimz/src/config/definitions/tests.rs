@@ -2,6 +2,168 @@ use super::*;
 use crate::config::{CommandsConfig, SkillName};
 
 #[test]
+fn unknown_model_cannot_invent_a_family_from_a_tier_only_parent() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "tier: senior\ntools: [Bash]",
+        "Parent.",
+    );
+    definition(
+        root.path(),
+        "agents/child.md",
+        "agent: parent\nmodel: unknown-model",
+        "Child.",
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
+    assert!(loaded.errors.iter().any(|error| error.path.ends_with("child.md") && error.message.contains("set `agent:`")), "{:?}", loaded.errors);
+}
+
+#[test]
+fn tier_frontmatter_refusals_explain_the_fix() {
+    for (fields, fragments) in [
+        ("agent: claude\nmodel: senior", vec!["use `tier: senior`"]),
+        (
+            "tier: principle",
+            vec!["principal", "intern", "junior", "senior"],
+        ),
+        ("tier: senior\nmodel: opus", vec!["keep one"]),
+        ("tier: senior\neffort: +1", vec!["absolute effort", "omit"]),
+        (
+            "agent: codex\nmodel: opus",
+            vec!["runs on 'codex'", "runs on 'claude'"],
+        ),
+    ] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/probe.md",
+            &format!("{fields}\ntools: [Bash]"),
+            "",
+        );
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &crate::config::tiers::TierConfig::default(),
+        );
+        let message = loaded
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        for fragment in fragments {
+            assert!(
+                message.contains(fragment),
+                "{fields}: expected {fragment:?} in {message}"
+            );
+        }
+    }
+}
+
+#[test]
+fn tiers_skip_unrenderable_families_before_choosing_a_profile() {
+    let root = fixture();
+    std::fs::remove_file(root.path().join("agents/codex.md")).unwrap();
+    definition(
+        root.path(),
+        "agents/probe.md",
+        "agent: codex\ntier: senior\ntools: [Bash]",
+        "Craft.",
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert_eq!(loaded.agent_profiles.0["probe"].agent, "claude");
+    std::fs::remove_file(root.path().join("agents/claude.md")).unwrap();
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+    );
+    assert!(!loaded.agent_profiles.0.contains_key("probe"));
+    let message = loaded
+        .errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        message.contains("codex")
+            && message.contains("claude")
+            && message.contains("base is missing"),
+        "{message}"
+    );
+}
+
+#[test]
+fn tier_key_and_concrete_model_choose_the_nearest_runtime() {
+    for (parent, child, kind, model) in [
+        (
+            "agent: codex\nmodel: astra",
+            "agent: parent\ntier: principal",
+            "claude",
+            "fable",
+        ),
+        (
+            "agent: codex\ntier: senior",
+            "agent: parent\nmodel: opus",
+            "claude",
+            "opus",
+        ),
+        (
+            "agent: codex\nmodel: astra",
+            "tier: senior",
+            "claude",
+            "opus",
+        ),
+        (
+            "agent: claude\nmodel: opus",
+            "agent: codex\ntier: senior",
+            "codex",
+            "astra",
+        ),
+    ] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/parent.md",
+            &format!("{parent}\ntools: [Bash]"),
+            "Parent.",
+        );
+        definition(
+            root.path(),
+            "agents/child.md",
+            &format!("{child}\ntools: [Bash]"),
+            "Child.",
+        );
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &crate::config::tiers::TierConfig::default(),
+        );
+        assert!(loaded.errors.is_empty(), "{child}: {:?}", loaded.errors);
+        let profile = &loaded.agent_profiles.0["child"];
+        assert_eq!(profile.agent, kind, "{child}");
+        assert_eq!(profile.model, Some(model.to_owned()), "{child}");
+        assert!(profile.model_tier.is_some(), "{child}");
+    }
+}
+
+#[test]
 fn allowed_tools_inherit_clear_and_replace_on_seats() {
     let root = fixture();
     definition(
@@ -99,30 +261,30 @@ fn allowed_tools_refuse_malformed_rules_with_shape_and_rule() {
 }
 
 #[test]
-fn model_tiers_preserve_chain_preference_and_shift_effort() {
+fn model_tiers_choose_the_nearest_preference_and_absolute_effort() {
     let root = fixture();
     definition(
         root.path(),
         "agents/parent.md",
-        "agent: codex\nmodel: principal\ntools: [Bash]",
+        "agent: codex\ntier: principal\ntools: [Bash]",
         "Parent.",
     );
     definition(
         root.path(),
         "agents/child.md",
-        "agent: parent\nmodel: senior\neffort: -1",
+        "agent: parent\ntier: senior\neffort: high",
         "Child.",
     );
     definition(
         root.path(),
         "agents/claude-tier.md",
-        "agent: claude\nmodel: junior\neffort: '+1'\ntools: [Bash]",
+        "agent: claude\ntier: junior\neffort: max\ntools: [Bash]",
         "Claude.",
     );
     definition(
         root.path(),
         "agents/claude-integer.md",
-        "agent: claude\nmodel: principal\neffort: +1\ntools: [Bash]",
+        "agent: claude\ntier: principal\neffort: xhigh\ntools: [Bash]",
         "Integer.",
     );
     let loaded = clean(root.path());
@@ -130,15 +292,24 @@ fn model_tiers_preserve_chain_preference_and_shift_effort() {
     assert_eq!(parent.agent, "claude");
     let provenance = parent.model_tier.as_ref().unwrap();
     assert_eq!(provenance.tier.to_string(), "principal");
-    assert_eq!(provenance.preferred_family, "codex");
-    assert!(provenance.fell_back);
+    assert_eq!(
+        parent
+            .definition_renders
+            .as_ref()
+            .unwrap()
+            .preference
+            .family
+            .as_deref(),
+        Some("codex")
+    );
+    assert!(!provenance.fell_back);
     let row = loaded.rows.iter().find(|row| row.name == "parent").unwrap();
     assert_eq!(serde_json::to_value(row).unwrap()["tier"], "principal");
     assert_eq!(parent.model, Some("fable".to_owned()));
     let child = &loaded.agent_profiles.0["child"];
-    assert_eq!(child.agent, "codex");
+    assert_eq!(child.agent, "claude");
     assert!(!child.model_tier.as_ref().unwrap().fell_back);
-    assert_eq!(child.model, Some("astra".to_owned()));
+    assert_eq!(child.model, Some("opus".to_owned()));
     assert_eq!(child.effort.as_deref(), Some("high"));
     assert_eq!(
         loaded.agent_profiles.0["claude-tier"].effort.as_deref(),
@@ -170,7 +341,7 @@ fn model_tiers_are_identity_migrations() {
         definition(
             root.path(),
             "agents/tiered.md",
-            &format!("agent: {family}\nmodel: {tier}\ntools: [Bash]"),
+            &format!("agent: {family}\ntier: {tier}\ntools: [Bash]"),
             "Craft.",
         );
         let loaded = clean(root.path());
@@ -184,17 +355,17 @@ fn model_tiers_are_identity_migrations() {
 }
 
 #[test]
-fn model_tiers_refuse_missing_or_unsupported_family_and_unbased_shift() {
+fn model_tiers_refuse_the_old_key_relative_effort_and_unrenderable_tools() {
     for (fields, message) in [
-        ("model: senior", "preferred family"),
-        ("agent: grok\nmodel: senior", "claude or codex"),
+        ("model: senior", "use `tier: senior`"),
+        ("agent: grok\nmodel: senior", "use `tier: senior`"),
         (
             "model: opus\neffort: '+1'\ntools: [Bash]",
-            "effort +1 shifts a tier's default",
+            "effort +1 is relative",
         ),
         (
-            "agent: codex\nmodel: principal\ntools: ['Agent(Unknown)']",
-            "tier principal resolved to claude fable because codex has no model at that tier",
+            "agent: codex\ntier: principal\ntools: ['Agent(Unknown)']",
+            "no eligible model at tier principal or above",
         ),
     ] {
         let root = fixture();
@@ -205,7 +376,7 @@ fn model_tiers_refuse_missing_or_unsupported_family_and_unbased_shift() {
     definition(
         root.path(),
         "agents/tiered.md",
-        "agent: codex\nmodel: senior\neffort: -1\ntools: [Bash]",
+        "agent: codex\ntier: senior\neffort: -1\ntools: [Bash]",
         "Craft.",
     );
     definition(root.path(), "agents/middle.md", "agent: tiered", "Craft.");
@@ -215,29 +386,30 @@ fn model_tiers_refuse_missing_or_unsupported_family_and_unbased_shift() {
         "agent: middle\nmodel: gpt-6-sol",
         "Craft.",
     );
-    error(root.path(), "effort -1 (inherited from 'tiered') shifts");
+    error(root.path(), "effort -1 is relative");
+    error(root.path(), "follows `tiered`, which failed to load");
 }
 
 #[test]
-fn model_tiers_seats_resolve_from_root_family() {
-    for (family, model) in [("claude", "sonnet"), ("codex", "sol")] {
+fn model_tiers_seats_use_the_role_tier_over_the_root_family() {
+    for family in ["claude", "codex"] {
         let root = team_fixture();
         definition(
             root.path(),
             "agents/worker.md",
-            &format!("agent: {family}\nmodel: principal\ntools: [Bash]"),
+            &format!("agent: {family}\ntier: principal\ntools: [Bash]"),
             "Craft.",
         );
         team_definition(
             root.path(),
             TEAM_STAGES,
-            &format!("{TEAM_ROLES}\n    model: junior\n    effort: -1"),
+            &format!("{TEAM_ROLES}\n    tier: junior\n    effort: high"),
             "Pipeline.",
         );
         let loaded = clean(root.path());
         let seat = &loaded.agent_profiles.0["probe.judge"];
-        assert_eq!(seat.agent, family);
-        assert_eq!(seat.model, Some(model.to_owned()));
+        assert_eq!(seat.agent, "codex");
+        assert_eq!(seat.model, Some("sol".to_owned()));
         assert_eq!(seat.effort.as_deref(), Some("high"));
     }
 }
@@ -545,6 +717,28 @@ fn team_signal_wildcards_preserve_branch_scope_but_reject_self_wakes() {
             );
         }
     }
+}
+
+#[test]
+fn team_seats_keep_an_unplaceable_models_inherited_runtime() {
+    let root = team_fixture();
+    definition(
+        root.path(),
+        "agents/base.md",
+        "agent: claude\ntools: [Bash]",
+        "Base.",
+    );
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "agent: base\nmodel: my-custom-id",
+        "Custom.",
+    );
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let loaded = clean(root.path());
+    let seat = &loaded.agent_profiles.0["probe.judge"];
+    assert_eq!(seat.agent, "claude");
+    assert_eq!(seat.model.as_deref(), Some("my-custom-id"));
 }
 
 #[test]
@@ -982,14 +1176,10 @@ fn team_skills_check_reflect_and_the_overridden_runtime() {
     );
     let loaded = load_checked(root.path());
     assert!(loaded.agent_profiles.0.contains_key("worker"));
-    assert!(loaded.teams.0.is_empty());
-    assert_eq!(loaded.errors.len(), 1);
-    assert_eq!(loaded.errors[0].path, root.path().join("teams/probe.md"));
-    assert!(
-        loaded.errors[0].message.contains("user-only"),
-        "{:?}",
-        loaded.errors
-    );
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    let judge = &loaded.agent_profiles.0["probe.judge"];
+    assert_eq!(judge.agent, "claude");
+    assert!(judge.definition_renders.as_ref().unwrap().exclusions["codex"].contains("user-only"));
     std::fs::remove_file(root.path().join("skills/work/agents/openai.yaml")).unwrap();
     std::fs::remove_file(root.path().join("skills/reflect/SKILL.md")).unwrap();
     let loaded = load_checked(root.path());

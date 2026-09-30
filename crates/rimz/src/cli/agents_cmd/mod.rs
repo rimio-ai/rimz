@@ -216,9 +216,12 @@ pub(crate) struct LaunchOverrideArgs {
     #[arg(long)]
     pub(crate) yolo: bool,
     /// Model for the launched agents.
-    #[arg(long, value_name = "MODEL")]
+    #[arg(long, value_name = "MODEL", conflicts_with = "tier")]
     pub(crate) model: Option<String>,
-    /// Re-base the spec's agent cells onto this profile or provider kind.
+    /// Capability tier for the launched agents.
+    #[arg(long, value_name = "TIER")]
+    pub(crate) tier: Option<rimz::config::tiers::ModelTier>,
+    /// Prefer this provider kind, or re-base onto a replacement profile.
     #[arg(long, value_name = "PROFILE|KIND")]
     pub(crate) agent: Option<String>,
     /// Replace each agent's base system prompt with a file's contents.
@@ -949,6 +952,7 @@ fn into_supervised_request(
     request.agent =
         rimz::harness::plan::normalized_preset_value(args.launch.overrides.agent.as_deref());
     request.model = args.launch.overrides.model;
+    request.tier = args.launch.overrides.tier;
     request.isolation = args.launch.overrides.isolation;
     request.system_prompt_file = system_prompt_file;
     request.append_system_prompt_files = append_system_prompt_files;

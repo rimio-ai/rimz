@@ -15,7 +15,7 @@ fn resume_reresolves_a_rebound_model_tier() {
     .unwrap();
     std::fs::write(
         home.join("agents/planner.md"),
-        "---\ndescription: Planner.\nagent: claude\nmodel: senior\ntools: [Bash]\n---\nPlan.",
+        "---\ndescription: Planner.\nagent: claude\ntier: senior\neffort: medium\ntools: [Bash]\n---\nPlan.",
     )
     .unwrap();
     let path = root.path().join("config.toml");
@@ -33,11 +33,7 @@ fn resume_reresolves_a_rebound_model_tier() {
         initial.agent_profiles.0["planner"].model.as_deref(),
         Some("opus")
     );
-    std::fs::write(
-        &path,
-        "[tiers.senior]\nclaude = {model = 'fable', effort = 'medium'}",
-    )
-    .unwrap();
+    std::fs::write(&path, "[tiers]\nsenior = ['fable']\nprincipal = []").unwrap();
     let config: crate::config::MachineConfig =
         toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let rebound = load(&config.tiers);

@@ -22,52 +22,52 @@ fn model_aliases_round_trip_with_config_set() {
 }
 
 #[test]
-fn model_tier_cell_can_be_rebound_with_config_set() {
+fn model_tier_list_can_be_rebound_with_config_set() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
         dir.path().join("config.toml"),
         dir.path().join("definitions"),
     ));
-    editor.set("tiers.senior.claude.model", "fable").unwrap();
-    editor.set("tiers.senior.claude.effort", "medium").unwrap();
+    editor.set("tiers.junior", "[\"sonnet\", \"sol\"]").unwrap();
+    editor.set("tiers.routing", "off").unwrap();
     assert_eq!(
         editor
-            .get(Some("tiers.senior.claude.model"))
+            .get(Some("tiers.junior"))
             .unwrap()
-            .as_str(),
-        Some("fable")
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["sonnet", "sol"]
     );
     assert_eq!(
-        editor
-            .get(Some("tiers.senior.claude.effort"))
-            .unwrap()
-            .as_str(),
-        Some("medium")
+        editor.get(Some("tiers.routing")).unwrap().as_str(),
+        Some("off")
     );
-    assert!(editor.set("tiers.senior.claude.effort", "invalid").is_err());
+    assert!(editor.set("tiers.routing", "invalid").is_err());
 }
 
 #[test]
-fn model_tier_effort_edit_keeps_the_unwritten_row_defaults() {
+fn model_tier_list_edit_keeps_the_unwritten_tier_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
         dir.path().join("config.toml"),
         dir.path().join("definitions"),
     ));
-    editor.set("tiers.senior.claude.effort", "medium").unwrap();
+    editor.set("tiers.senior", "[]").unwrap();
     assert_eq!(
         editor
-            .get(Some("tiers.senior.claude.model"))
+            .get(Some("tiers.senior"))
             .unwrap()
-            .as_str(),
-        Some("opus")
+            .as_array()
+            .unwrap()
+            .len(),
+        0
     );
     assert_eq!(
-        editor
-            .get(Some("tiers.senior.codex.model"))
-            .unwrap()
-            .as_str(),
-        Some("astra")
+        editor.get(Some("tiers.principal")).unwrap()[0].as_str(),
+        Some("fable")
     );
 }
 

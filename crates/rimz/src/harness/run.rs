@@ -143,6 +143,7 @@ pub struct SupervisedRunRequest {
     /// its parent's.
     pub isolation: Option<crate::config::Isolation>,
     pub agent: Option<String>,
+    pub tier: Option<crate::config::tiers::ModelTier>,
     pub model: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,
@@ -187,6 +188,7 @@ impl SupervisedRunRequest {
             permission_mode,
             isolation: None,
             agent: None,
+            tier: None,
             model: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
