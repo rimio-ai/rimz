@@ -7,6 +7,11 @@ pub fn cargo_bin(name: &str, cargo_env_path: &str) -> PathBuf {
     archive_extracted_bin(name).unwrap_or_else(|| PathBuf::from(cargo_env_path))
 }
 
+/// The `zellij-trace` test binary: a fake `zellij` that logs each call.
+pub fn zellij_trace_shim() -> PathBuf {
+    cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
+}
+
 fn archive_extracted_bin(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let debug_dir = exe.parent()?.parent()?;

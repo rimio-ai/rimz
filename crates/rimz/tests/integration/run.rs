@@ -1,10 +1,12 @@
-use crate::common::Env;
 #[cfg(unix)]
 use crate::common::room::{bind_child_panes, seed_live_zellij_room};
 #[cfg(unix)]
 use crate::common::{
     CommandTimeoutExt, path_with_front, write_failing_agent_shim, write_fake_login_shell,
 };
+use crate::common::{Env, zellij_trace_shim};
+#[cfg(unix)]
+use crate::common::{trust_codex_preflight_hooks, trust_codex_project};
 use jiff::Timestamp;
 use rimz::agents::PermissionMode;
 use rimz::agents::{
@@ -529,7 +531,7 @@ fn kiro_supervised_run_requires_hooks_before_recording_or_launching() {
 fn fresh_background_supervised_run_uses_shared_room_birth() {
     let env = Env::new();
     env.install_agent_hooks("codex");
-    trust_codex_hooks(&env);
+    trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, &env.project_root);
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
@@ -761,7 +763,7 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
     )
     .expect("write fanout tasks");
     env.install_agent_hooks("codex");
-    trust_codex_hooks(&env);
+    trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
@@ -979,7 +981,7 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
 fn supervised_codex_without_project_trust_refuses_before_launch() {
     let env = Env::new();
     env.install_agent_hooks("codex");
-    trust_codex_hooks(&env);
+    trust_codex_preflight_hooks(&env);
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     let trace_path = env.project_root.join("untrusted-supervised.log");
     let output = env
@@ -2178,7 +2180,7 @@ fn spawn_retrying_print(
     prompt: &str,
 ) -> std::process::Child {
     env.install_agent_hooks("codex");
-    trust_codex_hooks(env);
+    trust_codex_preflight_hooks(env);
     trust_codex_project(env, &env.project_root);
     let agent_bin = write_failing_agent_shim(env, "codex", 1);
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
@@ -2227,7 +2229,7 @@ fn spawn_verifying_print(
     timeout: Option<&str>,
 ) -> std::process::Child {
     env.install_agent_hooks("codex");
-    trust_codex_hooks(env);
+    trust_codex_preflight_hooks(env);
     trust_codex_project(env, &env.project_root);
     let agent_bin = write_failing_agent_shim(env, "codex", 1);
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
@@ -2464,52 +2466,6 @@ fn finish_run(store: &rimz::Store, record: &mut RunRecord) {
     record.completed_at = Some(record.updated_at);
     rimz::harness::run::create(store.paths(), record).expect("write terminal run");
     rimz::store::run::wake_run(store.runtime_paths(), record);
-}
-
-#[cfg(unix)]
-fn trust_codex_hooks(env: &Env) {
-    let config = env.agent_config_path("codex");
-    let mut text = std::fs::read_to_string(&config).expect("read codex config");
-    // Leave forward-compatible Interrupt advisory to exercise preflight.
-    for token in [
-        "session_start",
-        "user_prompt_submit",
-        "subagent_start",
-        "subagent_stop",
-        "stop",
-        "permission_request",
-        "pre_tool_use",
-        "post_tool_use",
-        "pre_compact",
-        "post_compact",
-    ] {
-        text.push_str(&format!(
-            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
-            config.display(),
-        ));
-    }
-    std::fs::write(&config, text).expect("write trust state");
-}
-
-#[cfg(unix)]
-fn trust_codex_project(env: &Env, project: &std::path::Path) {
-    let config = env.agent_config_path("codex");
-    let mut table: toml::Table = std::fs::read_to_string(&config)
-        .expect("read codex config")
-        .parse()
-        .expect("parse codex config");
-    table.insert(
-        "projects".to_owned(),
-        toml::Value::Table(toml::Table::from_iter([(
-            project.display().to_string(),
-            toml::Value::Table(toml::Table::from_iter([(
-                "trust_level".to_owned(),
-                toml::Value::String("trusted".to_owned()),
-            )])),
-        )])),
-    );
-    std::fs::write(&config, toml::to_string(&table).expect("serialize trust"))
-        .expect("write project trust");
 }
 
 #[test]
@@ -3377,10 +3333,6 @@ fn assert_agent_ids(json: &serde_json::Value, expected: &[&str]) {
         .map(|agent| agent["id"].as_str().expect("id"))
         .collect();
     assert_eq!(actual, expected, "scoped list returned {json:#}");
-}
-
-fn zellij_trace_shim() -> std::path::PathBuf {
-    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }
 
 #[test]

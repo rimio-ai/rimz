@@ -16,13 +16,13 @@ use rimz::store::message::{
     MessageStatus, WhenCondition,
 };
 
-use crate::common::Env;
+use crate::common::{Env, trust_codex_preflight_hooks, zellij_trace_shim};
 
 fn interrupt_fixture(kind: &str) -> (Env, PathBuf) {
     let env = Env::new();
     env.install_agent_hooks(kind);
     if kind == "codex" {
-        trust_codex_hooks(&env);
+        trust_codex_preflight_hooks(&env);
     }
     for (event, signal) in [
         ("SessionStart", LifecycleSignal::Registered),
@@ -2600,7 +2600,7 @@ fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     env.install_agent_hooks("codex");
-    trust_codex_hooks(&env);
+    trust_codex_preflight_hooks(&env);
     let receiver_owner = dummy_agent_process();
     let receiver_owner_pid = receiver_owner.id();
     reap_later(receiver_owner);
@@ -4170,7 +4170,7 @@ fn send_now_submit_failure_leaves_sent_record() {
 fn queue_deliver_folds_provisional_message_to_registered_card_name() {
     let env = Env::new();
     env.install_agent_hooks("codex");
-    trust_codex_hooks(&env);
+    trust_codex_preflight_hooks(&env);
     seed_provisional_codex_launch(
         &env,
         "launch_deferred_fold",
@@ -5761,10 +5761,6 @@ fn boundary_fanout_preserves_target_order_on_hook_failure() {
     }
 }
 
-fn zellij_trace_shim() -> PathBuf {
-    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
-}
-
 fn traced_rimz(env: &Env, log_name: impl AsRef<Path>) -> std::process::Command {
     let mut cmd = env.rimz();
     cmd.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
@@ -6396,30 +6392,6 @@ fn append_lifecycle(
     env.store().append_event(&event).expect("append lifecycle");
 }
 
-fn trust_codex_hooks(env: &Env) {
-    let config = env.agent_config_path("codex");
-    let mut text = std::fs::read_to_string(&config).expect("read codex config");
-    // Leave forward-compatible Interrupt advisory to exercise preflight.
-    for token in [
-        "session_start",
-        "user_prompt_submit",
-        "subagent_start",
-        "subagent_stop",
-        "stop",
-        "permission_request",
-        "pre_tool_use",
-        "post_tool_use",
-        "pre_compact",
-        "post_compact",
-    ] {
-        text.push_str(&format!(
-            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
-            config.display(),
-        ));
-    }
-    std::fs::write(&config, text).expect("write trust state");
-}
-
 fn queue_add(env: &Env, target: &str, text: &str) -> String {
     let out = run_success(env.rimz().args(["message", target, "--", text]), "message");
     queued_id_from_stdout(&out.stdout)
@@ -6829,7 +6801,7 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
 fn provisional_without_live_frame_parks_queue_and_steer() {
     let env = Env::new();
     env.install_agent_hooks("codex");
-    trust_codex_hooks(&env);
+    trust_codex_preflight_hooks(&env);
     seed_provisional_codex_launch(
         &env,
         "launch_no_frame",

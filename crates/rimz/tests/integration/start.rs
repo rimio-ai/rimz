@@ -11,13 +11,9 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::common::room::ShimRoom;
-use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env};
+use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env, zellij_trace_shim};
 
 const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
-
-fn zellij_trace_shim() -> PathBuf {
-    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
-}
 
 fn seed_actionable_agent(env: &Env) -> PathBuf {
     let bin_dir = env.home_root.join("agent-bin");
