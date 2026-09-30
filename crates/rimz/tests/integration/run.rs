@@ -4338,20 +4338,22 @@ fn wait_any_same_poll_selects_first_input_reference() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn wait_single_disappearing_agent_returns_resolution_error() {
     let env = Env::new();
     let store = env.store();
     register_running_wait_agent(&env, &store, "swift-otter", "sess-wait-single");
+    let resolution = WaitResolutionWatch::arm(&store);
 
-    let child = env
+    let mut child = env
         .rimz()
         .args(["agents", "wait", "swift-otter", "--timeout", "3s"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn single agent wait");
-    std::thread::sleep(Duration::from_millis(100));
+    resolution.wait_resolved(&mut child);
     end_wait_agent(&env, &store, "sess-wait-single");
 
     let out = child
