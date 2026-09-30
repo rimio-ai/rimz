@@ -149,6 +149,15 @@ pub enum WorktreeErr {
         "local PR branch `{branch}` conflicts with the remote head ({detail}); resolve the local branch or pass --branch <name> for a review-only checkout"
     )]
     PrBranchConflict { branch: String, detail: String },
+    #[error(
+        "could not move local PR branch `{branch}` to the PR head in {}; commit or stash changes there first: {detail}",
+        holder.display()
+    )]
+    PrBranchAlignFailed {
+        branch: String,
+        holder: PathBuf,
+        detail: String,
+    },
     #[error("local PR branch `{branch}` differs from the PR head: {divergence}; {}", pr::alignment_commands(branch, holder.as_deref()))]
     PrBranchDiverged {
         branch: String,

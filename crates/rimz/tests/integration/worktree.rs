@@ -1560,8 +1560,10 @@ fn worktree_new_from_pr_holder_fast_forward_protects_dirty_files() {
             output
                 .assert()
                 .failure()
+                .stderr(contains("could not move local PR branch `feature`"))
                 .stderr(contains("commit or stash"))
-                .stderr(contains(path.to_str().unwrap()));
+                .stderr(contains(path.to_str().unwrap()))
+                .stderr(contains("--branch").not());
             assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), trunk);
             assert_eq!(
                 std::fs::read_to_string(path.join("feature.txt")).unwrap(),
