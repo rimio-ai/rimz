@@ -738,6 +738,8 @@ fn reject_project_task_state_fields(
             "deadline",
             "watch",
             "once",
+            "when",
+            "for",
         ] {
             if table.contains_key(field) {
                 return Err(ProjectTasksErr::UnsupportedField {
@@ -753,6 +755,9 @@ fn reject_project_task_state_fields(
                         }
                         "watch" => "watched commands are machine state; use `rimz wait`",
                         "once" => "one-shot subscriptions are machine state; remove `once`",
+                        "when" | "for" => {
+                            "project tasks cannot use conditions yet; add it with `rimz loop add` without `--project`"
+                        }
                         _ => unreachable!("field list is fixed"),
                     },
                 });

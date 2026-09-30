@@ -135,8 +135,12 @@ fn add_delivery(
                 ..TaskEntry::default()
             },
         )?;
-        let schedule::Trigger::Schedule(clock) = parsed.trigger else {
-            unreachable!("the entry contains only clock fields")
+        let clock = match parsed.trigger {
+            schedule::Trigger::Schedule(clock) => clock,
+            // This branch constructs an entry containing only clock fields.
+            schedule::Trigger::Condition { .. }
+            | schedule::Trigger::Signal { .. }
+            | schedule::Trigger::Watch(_) => unreachable!("the entry contains only clock fields"),
         };
         DeliveryTrigger::Clock(clock)
     };

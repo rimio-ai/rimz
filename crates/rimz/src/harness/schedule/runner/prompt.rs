@@ -9,6 +9,7 @@ use crate::harness::schedule::signal::{Signal, elapsed_label};
 pub(super) enum Evidence<'a> {
     Scheduled,
     Signal(&'a Signal),
+    Condition(&'a super::super::when::ConditionEvidence),
     Manual,
 }
 
@@ -50,6 +51,14 @@ pub(super) fn compose_wait(
             body.push_str(&format!("\nAnother check-in: rimz wait --in {delay}"));
         }
     }
+    if let Evidence::Condition(condition) = &evidence {
+        body.push('\n');
+        // String keys and optional string readings are always JSON-serializable.
+        body.push_str(
+            &serde_json::to_string(&condition.readings)
+                .expect("condition readings are JSON strings"),
+        );
+    }
     if !note.is_empty() {
         body.push_str("\n\n");
         body.push_str(note);
@@ -58,6 +67,14 @@ pub(super) fn compose_wait(
 }
 
 fn wait_line(task: &TaskEntry, meta: Option<&WaitMeta>, evidence: &Evidence<'_>) -> String {
+    if let Evidence::Condition(condition) = evidence {
+        return format!("waited on {}", condition.when);
+    }
+    if let Some(clauses) = &task.when
+        && let Ok(expr) = super::super::when::WhenExpr::parse(clauses)
+    {
+        return format!("waited on {expr}");
+    }
     if let Some(spec) = &task.watch {
         return spec.headline();
     }
@@ -96,6 +113,10 @@ fn verdict_line(
             },
         },
         Evidence::Manual => "fired by hand".to_owned(),
+        Evidence::Condition(condition) => condition
+            .hold
+            .as_ref()
+            .map_or_else(|| "fired".to_owned(), |hold| format!("held {hold}")),
         Evidence::Scheduled if meta.is_some_and(|meta| meta.delay.is_some()) => return None,
         Evidence::Scheduled => "fired".to_owned(),
     };

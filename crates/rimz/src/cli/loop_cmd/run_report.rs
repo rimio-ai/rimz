@@ -478,6 +478,14 @@ pub(super) fn write_record_forensics(
     if let Some(signal) = &record.signal {
         write_detail_link(out, "signal", signal.name.as_str())?;
     }
+    if let Some(condition) = &record.condition {
+        let held = condition
+            .hold
+            .as_ref()
+            .map_or_else(String::new, |hold| format!(" · held {hold}"));
+        write_detail_link(out, "when", &format!("{}{held}", condition.when))?;
+        writeln!(out, "  {}", serde_json::to_string(&condition.readings)?)?;
+    }
     if let Some(message_id) = &record.message_id {
         write_detail_link(out, "message", message_id.as_str())?;
     }

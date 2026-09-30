@@ -20,6 +20,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         check: None,
         watch: None,
         signal: None,
+        condition: None,
         message_id: None,
         run_id: None,
         transcript_path: None,

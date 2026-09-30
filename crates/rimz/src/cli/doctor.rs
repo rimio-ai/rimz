@@ -330,9 +330,12 @@ fn unscheduled_clock(
     use rimz::harness::schedule::{Trigger, arming::ArmState};
     !room_open
         && !timer_active
-        && trigger
-            .as_ref()
-            .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Schedule(_)))
+        && trigger.as_ref().is_ok_and(|parsed| {
+            matches!(
+                parsed.trigger,
+                Trigger::Schedule(_) | Trigger::Condition { .. }
+            )
+        })
         && ArmState::resolve(record, source, now) == ArmState::Live
 }
 

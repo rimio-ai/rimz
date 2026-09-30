@@ -705,6 +705,14 @@ fn untrusted_project_tasks_stay_visible_with_state() {
 fn project_tasks_reject_machine_local_fields() {
     let cases = [
         (
+            "[tasks.wait]\nagent = \"codex\"\nwhen = [\"team.stage=Done\"]\n",
+            "when",
+        ),
+        (
+            "[tasks.wait]\nagent = \"codex\"\nevery = \"1h\"\nfor = \"30m\"\n",
+            "for",
+        ),
+        (
             "[tasks.wait]\nagent = \"codex\"\ndir = \"/tmp/linked\"\nevery = \"day\"\nat = \"08:00\"\n",
             "dir",
         ),

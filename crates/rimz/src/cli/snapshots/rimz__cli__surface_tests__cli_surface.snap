@@ -1591,6 +1591,7 @@ rimz loop rename
 rimz loop run [hidden]
     <name>  [action=set takes=1..=1 required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --condition-json <CONDITION_JSON>  [action=set takes=1..=1 hidden]
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]

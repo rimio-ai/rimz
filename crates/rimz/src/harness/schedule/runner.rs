@@ -286,6 +286,7 @@ pub struct TaskFire<'a> {
     check_echo: Option<CheckEcho>,
     check_trip: Option<CheckTrip>,
     signal: Option<TriggerSignal>,
+    condition: Option<super::when::ConditionEvidence>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
     run_lock_path: fn(&str, &TaskEntry) -> Result<PathBuf>,
@@ -329,6 +330,7 @@ impl<'a> TaskFire<'a> {
             check_echo: Some(check_echo),
             check_trip: None,
             signal,
+            condition: None,
             started,
             run_lock: None,
             run_lock_path,
@@ -339,6 +341,11 @@ impl<'a> TaskFire<'a> {
 
     pub fn take_check_trip(&mut self) -> Option<CheckTrip> {
         self.check_trip.take()
+    }
+
+    pub fn with_condition(mut self, condition: Option<super::when::ConditionEvidence>) -> Self {
+        self.condition = condition;
+        self
     }
 
     pub fn prepare(
@@ -759,7 +766,7 @@ impl<'a> TaskFire<'a> {
     fn watch_spec(&self) -> Option<&WatchSpec> {
         match &self.task.trigger().as_ref().ok()?.trigger {
             Trigger::Watch(spec) => Some(spec),
-            _ => None,
+            Trigger::Schedule(_) | Trigger::Signal { .. } | Trigger::Condition { .. } => None,
         }
     }
 
@@ -778,9 +785,16 @@ impl<'a> TaskFire<'a> {
 
     fn resolve_effect_prompt(&self, fired_check: Option<&FiredCheck>) -> Result<String> {
         let mut body = resolve_task_prompt(&self.name, &self.entry)?;
-        let signal_trigger = self.entry.signal.is_some() || self.entry.watch.is_some();
-        if self.entry.wait.is_some() || signal_trigger || self.signal.is_some() {
-            let evidence = if let Some(signal) = &self.signal {
+        let signal_trigger =
+            self.entry.signal.is_some() || self.entry.watch.is_some() || self.entry.when.is_some();
+        if self.entry.wait.is_some()
+            || signal_trigger
+            || self.signal.is_some()
+            || self.condition.is_some()
+        {
+            let evidence = if let Some(condition) = &self.condition {
+                prompt::Evidence::Condition(condition)
+            } else if let Some(signal) = &self.signal {
                 prompt::Evidence::Signal(signal)
             } else if signal_trigger {
                 prompt::Evidence::Manual
@@ -812,6 +826,7 @@ impl<'a> TaskFire<'a> {
             name: signal.name.clone(),
             payload: signal.payload.clone(),
         });
+        record.condition = self.condition.clone();
         record
     }
 

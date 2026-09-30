@@ -108,6 +108,7 @@ fn row(
             None => ("schedule", "waiting", None, None),
         },
         Trigger::Signal { .. } => ("signal", "waiting", None, None),
+        Trigger::Condition { .. } => ("condition", "waiting", None, None),
         Trigger::Watch(spec) => {
             let pid = watcher_info(ctx.runtime(), name)?.map(|info| info.pid);
             // A watch armed under cache keepalive records no check-in limit.
@@ -128,7 +129,7 @@ fn row(
     let meta = match &parsed.trigger {
         Trigger::Watch(_) => entry.wait_meta.as_ref(),
         Trigger::Schedule(_) if delay.is_some() => entry.wait_meta.as_ref(),
-        _ => None,
+        Trigger::Schedule(_) | Trigger::Signal { .. } | Trigger::Condition { .. } => None,
     };
     let dir = entry
         .dir
@@ -142,7 +143,9 @@ fn row(
                 None => trigger,
             }
         }
-        _ => parsed.describe(),
+        Trigger::Schedule(_) | Trigger::Signal { .. } | Trigger::Condition { .. } => {
+            parsed.describe()
+        }
     };
     let state = match arm_state {
         ArmState::Live => state,

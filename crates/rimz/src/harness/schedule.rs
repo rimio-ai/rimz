@@ -34,6 +34,7 @@ pub mod runner;
 pub mod signal;
 pub mod strikes;
 pub mod team;
+pub mod when;
 
 pub use fire::last_stamps;
 
@@ -149,15 +150,26 @@ pub enum ScheduleErr {
     )]
     TimeConflict { name: String },
     #[error(
-        "schedule `{name}` sets conflicting trigger fields; use one of `signal`, `watch`, `cron`, `every`, or bare `at`"
+        "schedule `{name}` sets conflicting trigger fields; use one of `when`, `signal`, `watch`, `cron`, `every`, or bare `at`"
     )]
     TriggerConflict { name: String },
     #[error("schedule `{name}` sets `match` without `signal`")]
     MatchWithoutSignal { name: String },
     #[error("schedule `{name}` has a blank match value for `{key}`")]
     BlankMatch { name: String, key: String },
-    #[error("schedule `{name}` sets `once` without `signal`")]
+    #[error("schedule `{name}` sets `once` without `signal` or `when`")]
     OnceWithoutSignal { name: String },
+    #[error("schedule `{name}` sets `for` without `when`")]
+    ForWithoutWhen { name: String },
+    #[error(
+        "schedule `{name}` has invalid `for` value `{value}`; use a positive duration in s, m, h, or d"
+    )]
+    BadFor { name: String, value: String },
+    #[error("schedule `{name}`: {source}")]
+    BadWhen {
+        name: String,
+        source: Box<when::WhenError>,
+    },
     #[error("schedule `{name}` sets both `watch` and `check`; the watched command is the check")]
     WatchWithCheck { name: String },
     #[error("schedule `{name}` has an invalid signal name `{value}`")]
@@ -217,7 +229,10 @@ impl TaskShape {
 }
 
 fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
-    (entry.signal.is_none() && entry.every.is_none() && entry.cron.is_none())
+    (entry.signal.is_none()
+        && entry.when.is_none()
+        && entry.every.is_none()
+        && entry.cron.is_none())
         || entry.deadline.is_some()
         || entry.once == Some(true)
         || entry.watch.is_some()
@@ -352,6 +367,10 @@ pub enum Trigger {
         matches: std::collections::BTreeMap<String, String>,
     },
     Watch(crate::config::WatchSpec),
+    Condition {
+        expr: when::WhenExpr,
+        hold: Option<Duration>,
+    },
 }
 
 impl Trigger {
@@ -371,13 +390,20 @@ impl Trigger {
                 }
             }
             Self::Watch(spec) => spec.describe(),
+            Self::Condition { expr, hold } => {
+                let mut description = format!("when {expr}");
+                if let Some(hold) = hold {
+                    description.push_str(&format!(", for {}", arm::duration_label(*hold)));
+                }
+                description
+            }
         }
     }
 
     fn resolve(&self, task_name: &str, signal: &signal::Signal) -> signal::SignalResolution {
         use signal::SignalResolution::{Deliver, Ignore, Skip};
         match self {
-            Self::Schedule(_) => Ignore,
+            Self::Schedule(_) | Self::Condition { .. } => Ignore,
             Self::Signal { selector, matches } => {
                 if selector.family() != signal.name.family()
                     || !matches.iter().all(|(key, expected)| {
@@ -658,7 +684,14 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
     let has_schedule = entry.at.is_some() || entry.every.is_some() || entry.cron.is_some();
     let has_signal = entry.signal.is_some();
     let has_watch = entry.watch.is_some();
-    if usize::from(has_schedule) + usize::from(has_signal) + usize::from(has_watch) > 1 {
+    let has_when = entry.when.is_some();
+    if usize::from(has_schedule)
+        + usize::from(has_signal)
+        + usize::from(has_watch)
+        + usize::from(has_when)
+        > 1
+        || (has_when && entry.deadline.is_some())
+    {
         return Err(ScheduleErr::TriggerConflict {
             name: name.to_owned(),
         });
@@ -668,7 +701,12 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             name: name.to_owned(),
         });
     }
-    if entry.once.is_some() && !has_signal {
+    if entry.hold.is_some() && !has_when {
+        return Err(ScheduleErr::ForWithoutWhen {
+            name: name.to_owned(),
+        });
+    }
+    if entry.once.is_some() && !has_signal && !has_when {
         return Err(ScheduleErr::OnceWithoutSignal {
             name: name.to_owned(),
         });
@@ -678,7 +716,34 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             name: name.to_owned(),
         });
     }
-    let trigger = if let Some(raw) = entry.signal.as_deref() {
+    let trigger = if let Some(clauses) = &entry.when {
+        let expr = when::WhenExpr::parse(clauses).map_err(|source| ScheduleErr::BadWhen {
+            name: name.to_owned(),
+            source: Box::new(source),
+        })?;
+        let hold = entry
+            .hold
+            .as_deref()
+            .map(|value| {
+                parse_duration_units(
+                    value,
+                    &[
+                        DurationUnit::Second,
+                        DurationUnit::Minute,
+                        DurationUnit::Hour,
+                        DurationUnit::Day,
+                    ],
+                )
+                .ok()
+                .filter(|duration| !duration.is_zero())
+                .ok_or_else(|| ScheduleErr::BadFor {
+                    name: name.to_owned(),
+                    value: value.to_owned(),
+                })
+            })
+            .transpose()?;
+        Trigger::Condition { expr, hold }
+    } else if let Some(raw) = entry.signal.as_deref() {
         let selector = parse_signal_selector(name, raw, entry.matches.as_ref())?;
         Trigger::Signal {
             selector,

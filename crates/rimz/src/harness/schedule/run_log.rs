@@ -22,6 +22,8 @@ use crate::store::event::SignalName;
 use crate::store::run::RunStatus;
 use serde_json::{Map, Value};
 
+pub type ConditionRecord = super::when::ConditionEvidence;
+
 const NAME: &str = "loop-runs.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;
 const CHECK_OUTPUT_CAP: usize = 4 * 1024;
@@ -97,6 +99,8 @@ pub struct LoopRunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<SignalRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<ConditionRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
@@ -132,6 +136,7 @@ impl LoopRunRecord {
             check: None,
             watch: None,
             signal: None,
+            condition: None,
             message_id: None,
             run_id: None,
             transcript_path: None,
@@ -491,6 +496,7 @@ mod tests {
             check: None,
             watch: None,
             signal: None,
+            condition: None,
             message_id: None,
             run_id: None,
             transcript_path: None,

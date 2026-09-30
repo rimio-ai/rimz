@@ -407,7 +407,12 @@ impl TaskCatalog {
         if task
             .trigger()
             .as_ref()
-            .is_ok_and(|parsed| matches!(parsed.trigger, super::Trigger::Watch(_)))
+            .is_ok_and(|parsed| match parsed.trigger {
+                super::Trigger::Watch(_) => true,
+                super::Trigger::Schedule(_)
+                | super::Trigger::Signal { .. }
+                | super::Trigger::Condition { .. } => false,
+            })
             && let Some(runtime) =
                 WorkspaceResolver::persisted_project_root(task.entry().resolved_root())
                     .ok()
@@ -801,6 +806,13 @@ mod tests {
         });
         assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
         assert_eq!(TaskSource::from_entry(&entry), TaskSource::Instance);
+
+        entry.signal = None;
+        entry.deadline = None;
+        entry.when = Some(vec!["team.stage=Done".to_owned()]);
+        assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
+        entry.once = Some(true);
+        assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
     }
 
     #[test]

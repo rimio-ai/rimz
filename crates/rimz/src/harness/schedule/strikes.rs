@@ -165,6 +165,7 @@ mod tests {
             check,
             watch: None,
             signal: None,
+            condition: None,
             message_id: None,
             run_id: None,
             transcript_path: None,

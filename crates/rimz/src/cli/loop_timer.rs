@@ -118,7 +118,7 @@ pub(super) fn tick(now: &Zoned) -> Result<()> {
             tracing::warn!(root = %root.display(), error = %err, "loop tick could not prepare runtime paths");
             continue;
         }
-        rimz::harness::schedule::fire::fire_due_tasks(&runtime, Some(&root), now, host);
+        rimz::harness::schedule::fire::fire_due_tasks(&runtime, Some(&root), now, host, None);
     }
     Ok(())
 }
