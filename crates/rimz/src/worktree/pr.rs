@@ -658,12 +658,10 @@ fn prepare_local_pr_branch(
         if choice == PrBranchChoice::Remote {
             if let Some(path) = holder {
                 git_run(path, ["reset", "--keep", remote_ref]).map_err(|err| {
-                    WorktreeErr::PrBranchConflict {
+                    WorktreeErr::PrBranchAlignFailed {
                         branch: branch.to_owned(),
-                        detail: format!(
-                            "could not align {}; commit or stash changes there first: {err}",
-                            path.display()
-                        ),
+                        holder: path.to_path_buf(),
+                        detail: err.to_string(),
                     }
                 })?;
             } else {
