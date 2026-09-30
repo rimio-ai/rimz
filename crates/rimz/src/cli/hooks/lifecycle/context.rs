@@ -364,7 +364,7 @@ pub(super) fn supplement_realtime_cost(
         return;
     }
 
-    let refresh = refresh.get_or_insert_with(rimz::agents::LocalContextRefresh::sparse);
+    let refresh = refresh.get_or_insert_default();
     refresh.context.cost = rimz::agents::FieldPatch::Set(cost);
     refresh.transcript_path = Some(path.to_string_lossy().into_owned());
     refresh.transcript_stat = Some(stat);
@@ -425,7 +425,7 @@ mod tests {
             _trigger: rimz::agents::RefreshTrigger<'_>,
             _ctx: &rimz::agents::LocalContextRefreshCtx<'_>,
         ) -> Option<rimz::agents::LocalContextRefresh> {
-            let mut refresh = rimz::agents::LocalContextRefresh::sparse();
+            let mut refresh = rimz::agents::LocalContextRefresh::default();
             refresh.context.session_preview =
                 rimz::agents::FieldPatch::Set("final local context".to_owned());
             Some(refresh)

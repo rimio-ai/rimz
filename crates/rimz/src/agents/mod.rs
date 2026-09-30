@@ -410,6 +410,13 @@ pub enum HookIngressDecision {
     Accept(HookIngressAcceptance),
 }
 
+/// One provider turn priced for a live-session accumulator.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocallyPricedTurnCost {
+    pub turn_id: String,
+    pub cost_usd: f64,
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct ClassificationSample {
@@ -437,13 +444,6 @@ pub struct TurnCostFixture {
 #[derive(Clone, Debug)]
 pub struct ContextCostFixture {
     pub payload: Value,
-}
-
-/// One provider turn priced for a live-session accumulator.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LocallyPricedTurnCost {
-    pub turn_id: String,
-    pub cost_usd: f64,
 }
 
 #[cfg(test)]
@@ -616,7 +616,7 @@ pub struct LifecycleRefreshRequest {
 
 /// The detached `rimz agents refresh-context` helper request: the one command
 /// that runs `ContextCapability::refresh_session_context` for any provider.
-pub fn refresh_context_argv(kind: &str, ctx: &LifecycleRefreshCtx<'_>) -> Vec<String> {
+fn refresh_context_argv(kind: &str, ctx: &LifecycleRefreshCtx<'_>) -> Vec<String> {
     crate::child_process::agent_helper_argv(
         "refresh-context",
         &LifecycleRefreshRequest {
@@ -697,7 +697,7 @@ impl LocalSpendFold {
         fold
     }
 
-    pub fn absorb(&mut self, entries: &[spending::CachedEntry]) {
+    fn absorb(&mut self, entries: &[spending::CachedEntry]) {
         self.dedup_window_ready = true;
         for entry in entries {
             let request = FoldedRequest::from(entry);
@@ -758,7 +758,7 @@ impl LocalSpendFold {
         self.cache_read = self.cache_read.saturating_sub(request.cache_read);
     }
 
-    pub fn session_usage(&self) -> Option<AgentSessionUsage> {
+    fn session_usage(&self) -> Option<AgentSessionUsage> {
         (self.input > 0 || self.output > 0 || self.cache_write > 0 || self.cache_read > 0)
             .then_some(AgentSessionUsage {
                 input_tokens: Some(self.input),
@@ -830,7 +830,7 @@ impl TranscriptStat {
     /// Newest usable whole-second modification time across every file in this
     /// logical source. Spending age checks operate in Unix seconds, so times
     /// before the epoch retain the existing best-effort zero fallback.
-    pub fn newest_mtime_secs(&self) -> u64 {
+    fn newest_mtime_secs(&self) -> u64 {
         let newest = self.companion.map_or(self.mtime_secs, |companion| {
             self.mtime_secs.max(companion.mtime_secs)
         });
@@ -905,14 +905,9 @@ pub struct LocalContextRefresh {
 }
 
 impl LocalContextRefresh {
-    /// Sparse enrichment updates only fields explicitly set by its producer.
-    pub fn sparse() -> Self {
-        Self::default()
-    }
-
     /// A current local snapshot owns the latest-turn attention markers and
     /// reports an absent token reading while preserving an established gauge.
-    pub fn authoritative_current() -> Self {
+    fn authoritative_current() -> Self {
         Self {
             context: LocalContextPatch::authoritative_current(),
             ..Self::default()

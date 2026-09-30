@@ -329,7 +329,7 @@ fn name_only_local_refresh_preserves_transcript_gate() {
     prior.transcript_stat = Some(stat());
     write_record(&runtime, &prior).unwrap();
 
-    let mut refresh = LocalContextRefresh::sparse();
+    let mut refresh = LocalContextRefresh::default();
     refresh.context.session_name = FieldPatch::Set("Generated title".to_owned());
     refresh.transcript_path.clone_from(&prior.transcript_path);
     refresh.transcript_stat = prior.transcript_stat;

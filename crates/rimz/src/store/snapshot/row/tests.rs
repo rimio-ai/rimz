@@ -276,7 +276,11 @@ fn agent_card_activity_description_matches_agent_state_precedence() {
     state.first_prompt = card.first_prompt.clone();
     state.prompt = card.prompt.clone();
 
-    assert_eq!(card.activity_description(), state.activity_description());
+    assert_eq!(
+        card.activity_description()
+            .and_then(single_line_description),
+        state.activity_line()
+    );
     assert_eq!(
         card.activity_description()
             .and_then(single_line_description)
@@ -287,11 +291,19 @@ fn agent_card_activity_description_matches_agent_state_precedence() {
     card.task = Some("<system-reminder>control</system-reminder>".to_owned());
     state.task = card.task.clone();
     assert_eq!(card.activity_description(), Some("first prompt"));
-    assert_eq!(card.activity_description(), state.activity_description());
+    assert_eq!(
+        card.activity_description()
+            .and_then(single_line_description),
+        state.activity_line()
+    );
     card.first_prompt = Some("<task-notification>control</task-notification>".to_owned());
     state.first_prompt = card.first_prompt.clone();
     assert_eq!(card.activity_description(), Some("latest prompt"));
-    assert_eq!(card.activity_description(), state.activity_description());
+    assert_eq!(
+        card.activity_description()
+            .and_then(single_line_description),
+        state.activity_line()
+    );
 }
 
 #[test]
