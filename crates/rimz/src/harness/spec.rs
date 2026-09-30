@@ -1911,10 +1911,10 @@ fn validate_team_signals(name: &str, team: &Team) -> Result<()> {
         })?;
         if selector.family() == "agent"
             && !["handle", "session"].iter().any(|key| {
-                binding
-                    .matches
-                    .get(*key)
-                    .is_some_and(|value| !value.trim().is_empty())
+                binding.matches.get(*key).is_some_and(|value| {
+                    !value.trim().is_empty()
+                        && !crate::harness::schedule::signal::is_match_wildcard(value)
+                })
             })
         {
             return Err(LayoutErr::UnscopedTeamAgentSignal {

@@ -305,7 +305,7 @@ fn ended_pinned_sessions<'a>(
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryScopeFailure {
     #[error(
-        "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Pass --match branch=<name> or --match path=<worktree-path>, or watch it with: rimz wait --run 'gh run watch --exit-status'"
+        "A ci.* or pr.* binding from the root checkout needs an explicit scope. Pass --match branch=<name>, --match path=<worktree-path>, or --match branch='*' for every checkout RimZ watches, or watch it with: rimz wait --run 'gh run watch --exit-status'"
     )]
     RootCheckout,
     #[error("team.* waits need a team member; pass --match instance=<team#channel>")]
@@ -362,10 +362,14 @@ pub fn validate_self_signal(
         handle.split_once('#').map_or(handle, |(name, _)| name)
     }
     let other = matches.get("handle").is_some_and(|handle| {
-        !handle.is_empty() && handle_name(handle) != handle_name(&target.handle)
-    }) || matches
-        .get("session")
-        .is_some_and(|session| !session.is_empty() && session != &target.session);
+        !handle.is_empty()
+            && !super::signal::is_match_wildcard(handle)
+            && handle_name(handle) != handle_name(&target.handle)
+    }) || matches.get("session").is_some_and(|session| {
+        !session.is_empty()
+            && !super::signal::is_match_wildcard(session)
+            && session != &target.session
+    });
     if other {
         return Ok(());
     }
@@ -510,6 +514,22 @@ pub fn duration_label(duration: Duration) -> String {
 mod tests {
     use super::*;
     use jiff::Timestamp;
+
+    #[test]
+    fn self_signal_requires_a_concrete_other_agent() {
+        let target = TaskTarget {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            session: "self".into(),
+            handle: "@self".to_owned(),
+        };
+        for key in ["handle", "session"] {
+            let matches = BTreeMap::from([(key.to_owned(), "*".to_owned())]);
+            assert!(matches!(
+                validate_self_signal(&"agent.ended".parse().unwrap(), &matches, &target),
+                Err(DeliveryScopeFailure::SelfSignal)
+            ));
+        }
+    }
 
     /// The retirement predicate: a pinned session is retired on positive
     /// evidence of its own durable end, and on nothing else.

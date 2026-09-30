@@ -36,7 +36,7 @@ pub enum TeamBindingFailure {
     #[error(transparent)]
     Arm(#[from] arm::ArmFailure),
     #[error(
-        "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Set match = {{ branch = \"<name>\" }} or match = {{ path = \"<worktree-path>\" }}, launch with -w <worktree>, or watch it with: rimz wait --run 'gh run watch --exit-status'"
+        "A ci.* or pr.* binding from the root checkout needs an explicit scope. Set match = {{ branch = \"<name>\" }}, match = {{ path = \"<worktree-path>\" }}, or match = {{ branch = \"*\" }} for every checkout RimZ watches, launch with -w <worktree>, or watch it with: rimz wait --run 'gh run watch --exit-status'"
     )]
     RootCheckout,
 }
@@ -224,6 +224,10 @@ mod tests {
             team.roles[0].signals[0]
                 .matches
                 .insert(key.to_owned(), "feature".to_owned());
+            assert!(validate_launch("forge", &team, &workspace, None).is_ok());
+            team.roles[0].signals[0]
+                .matches
+                .insert(key.to_owned(), "*".to_owned());
             assert!(validate_launch("forge", &team, &workspace, None).is_ok());
             team.roles[0].signals[0].matches.clear();
         }

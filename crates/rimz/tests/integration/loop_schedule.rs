@@ -175,6 +175,103 @@ fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
 }
 
 #[test]
+fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
+    let env = Env::new();
+    if !init_git_repo(&env.project_root) {
+        return;
+    }
+    let cwd = env.home_root.join("feature-team");
+    assert!(git_ok(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature-team",
+            cwd.to_str().unwrap()
+        ]
+    ));
+    env.install_agent_hooks("claude");
+    env.write_config(&env.project_root, r#"
+        [profiles.claude]
+        agent = "claude"
+        [[agents.teams.forge.roles]]
+        role = "coder"
+        profile = "claude"
+        signals = [{ signal = "pr.conflicted", match = { branch = "*" } }, { signal = "team.stage", match = { team = "*", to = "Done" } }]
+    "#);
+    loop_ok(&env, &["trust", "grant"]);
+    let launch = env.rimz().args(["teams", "forge"]).output().unwrap();
+    let error = String::from_utf8_lossy(&launch.stderr);
+    assert!(!error.contains("root checkout"), "{error}");
+    assert!(!error.contains("unknown team"), "{error}");
+    seed_team_signal_member(&env, &env.project_root, "sess-any", None);
+    team_signal_hook(&env, &env.project_root, "sess-any", "SessionStart");
+    let armed = read_loop_instances(&env);
+    assert_eq!(armed.0.len(), 2, "launch stderr: {error}");
+    for (name, matches) in [
+        (
+            "team-forge-feature-team-coder-pr-conflicted",
+            BTreeMap::from([("branch".to_owned(), "*".to_owned())]),
+        ),
+        (
+            "team-forge-feature-team-coder-team-stage",
+            BTreeMap::from([
+                ("team".to_owned(), "*".to_owned()),
+                ("to".to_owned(), "Done".to_owned()),
+            ]),
+        ),
+    ] {
+        let entry = &armed.0[name];
+        assert_eq!(
+            entry.team.as_ref().unwrap().to_string(),
+            "forge#feature-team"
+        );
+        assert_eq!(entry.matches.as_ref(), Some(&matches));
+    }
+    let listing = loop_ok(&env, &["loop", "list"]);
+    assert_eq!(listing.matches("listening").count(), 2, "{listing}");
+    team_signal_hook(&env, &env.project_root, "sess-any", "UserPromptSubmit");
+    for payload in [
+        json!({"path":cwd,"repo":"o/r","number":7}),
+        json!({"branch":"feature-team","path":cwd,"repo":"o/r","number":7}),
+    ] {
+        let output = env
+            .rimz()
+            .current_dir(&cwd)
+            .args([
+                "events",
+                "emit",
+                "pr.conflicted",
+                "--source",
+                "forge",
+                "--json",
+                &payload.to_string(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if payload.get("branch").is_none() {
+            assert!(read_loop_run_records(&env).is_empty());
+            assert!(env.store().list_pending_messages().unwrap().is_empty());
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(read_loop_run_records(&env).iter().any(|record| record.task
+        == "team-forge-feature-team-coder-pr-conflicted"
+        && record.result == LoopRunResult::Delivered));
+    assert_pending_message(&env, "sess-any", "feature-team");
+}
+
+#[test]
 fn team_signal_binding_registers_delivers_and_retires() {
     let env = Env::new();
     let Some(cwd) = team_signal_fixture(&env) else {
@@ -468,7 +565,7 @@ fn team_signal_launch_refuses_root_before_side_effects() {
         "{error}"
     );
     assert!(
-        error.contains("CI on the root checkout is not watched"),
+        error.contains("root checkout needs an explicit scope"),
         "{error}"
     );
     assert!(error.contains("launch with -w"), "{error}");
@@ -878,10 +975,32 @@ fn loop_signal_defaults_follow_the_caller_worktree_and_team() {
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(
-        error.contains("CI on the root checkout is not watched"),
+        error.contains("root checkout needs an explicit scope"),
         "{error}"
     );
     assert!(!read_loop_instances(&env).0.contains_key("root-ci"));
+    let output = calling_loop(&env, "sess-scope-target")
+        .args([
+            "loop",
+            "add",
+            "root-any",
+            "--wait",
+            "--signal",
+            "ci.failed",
+            "--match",
+            "branch=*",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        read_loop_instances(&env).0["root-any"].matches,
+        Some(BTreeMap::from([("branch".to_owned(), "*".to_owned())]))
+    );
 }
 
 #[test]

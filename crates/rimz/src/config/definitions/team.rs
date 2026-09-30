@@ -472,8 +472,11 @@ fn signals(
             ));
         }
         if signal.starts_with("agent.")
-            && !matches.contains_key("handle")
-            && !matches.contains_key("session")
+            && !["handle", "session"].iter().any(|key| {
+                matches.get(*key).is_some_and(|value| {
+                    !crate::harness::schedule::signal::is_match_wildcard(value)
+                })
+            })
         {
             return Err(DefinitionErr::new(
                 path,
