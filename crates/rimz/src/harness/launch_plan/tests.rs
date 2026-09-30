@@ -972,13 +972,17 @@ fn room_with_accounts(
 }
 
 #[test]
-fn the_room_account_sets_the_provider_home_on_the_launched_process() {
+fn the_stamped_account_sets_the_provider_home_after_the_room_switches() {
     let project = tempfile::tempdir().expect("project");
     let home = project.path().join("claude-work");
     let (machine, state) = room_with_accounts(
         project.path(),
-        &format!("[claude.work]\nhome = {:?}", home.display().to_string()),
-        &[("claude", "work")],
+        &format!(
+            "[claude.work]\nhome = {:?}\n[claude.personal]\nhome = {:?}",
+            home.display().to_string(),
+            project.path().join("personal").display().to_string()
+        ),
+        &[("claude", "personal")],
     );
     let effective =
         crate::config::effective::load_with_roots(&machine, project.path(), project.path())
@@ -988,32 +992,35 @@ fn the_room_account_sets_the_provider_home_on_the_launched_process() {
         project.path(),
     )
     .expect("runtime paths");
-    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    for action in ["launch", "resume", "fork"] {
+        let mut request = request("claude", action_with_args(action, Vec::new()));
+        request.identity.params.login = Some("work".parse().unwrap());
 
-    let plan = compile(LaunchPlanInputs {
-        request: &request,
-        cwd: project.path(),
-        project_root: project.path(),
-        rimz_bin: Path::new("/bin/rimz"),
-        runtime: &runtime,
-        state: &state,
-        effective: Some(&effective),
-        commands: &machine.agents.commands,
-        accounts: &machine.accounts,
-        bwrap: None,
-        ambient_env: &BTreeMap::new(),
-    })
-    .expect("compile");
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: Some(&effective),
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: None,
+            ambient_env: &BTreeMap::new(),
+        })
+        .expect("compile");
 
-    assert_eq!(plan.login.key().to_string(), "claude@work");
-    assert_eq!(
-        plan.process()
-            .env
-            .get("CLAUDE_CONFIG_DIR")
-            .map(String::as_str),
-        Some(home.to_string_lossy().as_ref())
-    );
-    assert_eq!(plan.process().env.get("CODEX_HOME"), None);
+        assert_eq!(plan.login.key().to_string(), "claude@work");
+        assert_eq!(
+            plan.process()
+                .env
+                .get("CLAUDE_CONFIG_DIR")
+                .map(String::as_str),
+            Some(home.to_string_lossy().as_ref())
+        );
+        assert_eq!(plan.process().env.get("CODEX_HOME"), None);
+    }
 }
 
 #[test]
@@ -1056,7 +1063,7 @@ fn the_default_account_leaves_the_provider_home_to_the_provider() {
 }
 
 #[test]
-fn a_room_account_the_config_no_longer_declares_fails_the_launch() {
+fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
     let project = tempfile::tempdir().expect("project");
     let (machine, state) = room_with_accounts(project.path(), "", &[("claude", "work")]);
     let effective =
@@ -1067,7 +1074,8 @@ fn a_room_account_the_config_no_longer_declares_fails_the_launch() {
         project.path(),
     )
     .expect("runtime");
-    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    request.identity.params.login = Some("work".parse().unwrap());
 
     let error = compile(LaunchPlanInputs {
         request: &request,
@@ -1094,7 +1102,7 @@ fn a_room_account_the_config_no_longer_declares_fails_the_launch() {
 }
 
 #[test]
-fn the_sandbox_binds_and_pins_the_room_account_home() {
+fn the_sandbox_binds_and_pins_the_stamped_account_home() {
     let project = tempfile::tempdir().expect("project");
     let home = project.path().join("codex-personal");
     std::fs::create_dir_all(&home).expect("account home");
@@ -1111,7 +1119,8 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
         project.path(),
     )
     .expect("runtime paths");
-    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
+    request.identity.params.login = Some("personal".parse().unwrap());
 
     for (cwd, expected) in [
         (project.path().to_path_buf(), project.path().to_path_buf()),

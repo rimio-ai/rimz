@@ -90,10 +90,10 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .and_then(|state| rimz::RuntimePaths::for_state(&state).map(|runtime| (runtime, state)))
         .inspect_err(|_| fail())?;
     let ambient_env = rimz::agents::ambient_env();
-    let login = rimz::agents::room_login(
-        &state.workspace_record,
-        &machine_config.accounts,
+    let login = rimz::agents::session_login(
         &request.kind,
+        request.identity.params.login.as_ref(),
+        &machine_config.accounts,
     )
     .inspect_err(|_| fail())?;
     let recorded_model = match &request.action {

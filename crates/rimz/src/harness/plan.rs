@@ -149,6 +149,7 @@ pub struct CohortResumePlan {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ResumeLaunchIdentity {
     pub kind: crate::ids::AgentKind,
+    pub login: Option<crate::ids::LoginName>,
     pub session_id: AgentSessionId,
     pub launch_id: Option<AgentSessionId>,
     pub name: Option<String>,
@@ -169,6 +170,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
     fn from(agent: &crate::agents::AgentState) -> Self {
         Self {
             kind: agent.kind.clone(),
+            login: agent.login.clone(),
             session_id: agent.agent_id.clone(),
             launch_id: agent.launch_id.clone(),
             name: agent.name.clone(),
@@ -1114,6 +1116,7 @@ pub(super) fn resume_command(
         .filter(|channel| !channel.is_empty())
         .or_else(|| fallback_channel.filter(|channel| !channel.is_empty()));
     let params = crate::agents::LaunchParams {
+        login: identity.login.clone(),
         launch_depth: identity.launch_depth,
         launched_by: identity.launched_by.clone().map(Box::new),
         profile: identity.profile.clone(),

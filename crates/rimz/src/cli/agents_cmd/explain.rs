@@ -89,8 +89,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| workspace.worktree_root.clone());
-        let logins = rimz::agents::room_logins(&state.workspace_record)?;
-        let (action, note) = restart::relaunch_action(&agent, &logins, &cwd)?;
+        let (action, note) = restart::relaunch_action(&agent, &cwd)?;
         (
             restart::relaunch_request(&agent, &posture, action, None),
             cwd,
@@ -169,11 +168,19 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             None,
             ancestry.as_ref(),
         )?;
-        let params = identities
+        let mut params = identities
             .into_iter()
             .next()
             .expect("one cell yields one identity request")
             .launch;
+        // A preview has no allocating batch; resolve its prospective account without writing a launch.
+        let login = rimz::store::writer::LaunchLogin::from_ancestry(ancestry.as_ref(), &cell.kind)
+            .resolve(
+                &cell.kind,
+                &rimz::agents::room_logins(&state.workspace_record)?,
+                &machine.accounts,
+            )?;
+        params.login = (!login.is_default()).then(|| login.name().clone());
         let request = ExecRequest::fresh(
             cell,
             ExecIdentity {

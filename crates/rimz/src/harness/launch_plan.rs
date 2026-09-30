@@ -217,10 +217,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     {
         reminders.env = Some(super::launch_env::read());
     }
-    let login = crate::agents::room_login(
-        &inputs.state.workspace_record,
-        inputs.accounts,
+    let login = crate::agents::session_login(
         &request.kind,
+        request.identity.params.login.as_ref(),
+        inputs.accounts,
     )?;
     let mut extra_env = prompt.materialized.env.clone();
     extra_env.extend(login.env(&BTreeMap::new()));

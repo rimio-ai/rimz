@@ -425,37 +425,6 @@ fn deciding_machine_selection_refuses_unknown_names_and_unsupported_kinds() {
 }
 
 #[test]
-fn mismatch_reads_an_absent_stamp_as_the_default_account() {
-    let session = AgentSessionId::from("s-1");
-    assert_eq!(
-        LoginMismatch::between(&kind("claude"), &session, None, None),
-        None
-    );
-    assert_eq!(
-        LoginMismatch::between(
-            &kind("claude"),
-            &session,
-            Some(&LoginName::default_login()),
-            None
-        ),
-        None
-    );
-    let mismatch = LoginMismatch::between(
-        &kind("claude"),
-        &session,
-        Some(&name("personal")),
-        Some(&name("work")),
-    )
-    .expect("mismatch");
-    assert_eq!(
-        mismatch.to_string(),
-        "cannot resume claude session `s-1`: session account is `personal`, room account is `work`; \
-         use a room started with `rimz start --account claude=personal`, or run \
-         `rimz reset --account claude=personal` here"
-    );
-}
-
-#[test]
 fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
     let catalog = LoginCatalog::from_config_under(
         &accounts("[claude.work]\nhome = \"/srv/work\"\n"),

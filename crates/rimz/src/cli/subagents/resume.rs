@@ -89,8 +89,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         child.kind.as_str(),
         &cwd,
     )?;
-    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
-    let (action, fresh_reason) = agents_cmd::relaunch_action(child, &logins, &cwd)?;
+    let (action, fresh_reason) = agents_cmd::relaunch_action(child, &cwd)?;
     if let Some(reason) = fresh_reason {
         bail!("{reason}");
     }

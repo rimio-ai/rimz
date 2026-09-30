@@ -185,6 +185,15 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     )
     .expect("write stale record");
 
+    let guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+    let before = record::read(&paths.workspace_record).unwrap();
+    known_workspaces_under(&workspaces_dir_under(&state_root)).unwrap();
+    assert_eq!(
+        record::read(&paths.workspace_record).unwrap().project_root,
+        before.project_root,
+        "discovery must not rewrite a record while another writer holds its lock"
+    );
+    drop(guard);
     let known = known_workspaces_under(&workspaces_dir_under(&state_root)).expect("enumerate");
     assert_eq!(known.len(), 1);
     assert_eq!(known[0].workspace_id, workspace_id);

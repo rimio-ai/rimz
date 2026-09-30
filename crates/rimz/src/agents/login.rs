@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::AccountsConfig;
-use crate::ids::{AgentKind, AgentSessionId, LoginKey, LoginName, RoomLogins};
+use crate::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
 use crate::utils::path::normalize_path_lexical;
 
 /// Selecting a login that the machine config does not describe.
@@ -748,38 +748,6 @@ fn native_home(kind: &AgentKind, home: Option<&Path>) -> Option<PathBuf> {
         .map(|home| BTreeMap::from([("HOME".to_owned(), home.to_string_lossy().into_owned())]))
         .unwrap_or_default();
     adapter.config_home(&env)
-}
-
-/// A session that cannot be resumed because it was born under another account.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "cannot resume {kind} session `{session_id}`: session account is `{session_login}`, room account is `{room_login}`; use a room started with `rimz start --account {kind}={session_login}`, or run `rimz reset --account {kind}={session_login}` here"
-)]
-pub struct LoginMismatch {
-    pub kind: AgentKind,
-    pub session_id: AgentSessionId,
-    pub session_login: LoginName,
-    pub room_login: LoginName,
-}
-
-impl LoginMismatch {
-    /// The mismatch between a session's birth stamp and the room's selection,
-    /// or `None` when the two agree. `None` on either side is `default`.
-    pub fn between(
-        kind: &AgentKind,
-        session_id: &AgentSessionId,
-        session_login: Option<&LoginName>,
-        room_login: Option<&LoginName>,
-    ) -> Option<Self> {
-        let session = session_login.cloned().unwrap_or_default();
-        let room = room_login.cloned().unwrap_or_default();
-        (session != room).then(|| Self {
-            kind: kind.clone(),
-            session_id: session_id.clone(),
-            session_login: session,
-            room_login: room,
-        })
-    }
 }
 
 #[cfg(test)]
