@@ -37,7 +37,7 @@ These are the promises the product is built on. A change to one is a product dec
 - **Transcript origin is explicit.** RimZ-introduced text never renders as the user merely because it lacks a header: one write-side classifier and one read-side projection preserve its recorded author ([contract and remaining launch gap](./docs/internals/harness/transcript.md#writing-entries)). `rimz pane send` is the boundary: it is the raw keystroke primitive, carries no record by design, and its caller is the author.
 - **Sidebar is read-only on the store.** Sidebar code reads via `rimz sidebar snapshot`; store-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
-- **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, and privacy settings are product behaviour.
+- **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, provider folder-trust grants, and privacy settings are product behaviour.
 
 ## Room quick reference
 
