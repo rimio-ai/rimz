@@ -30,6 +30,17 @@ impl BoardSection {
     }
 }
 
+impl std::fmt::Display for BoardSection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Goal => "Goal",
+            Self::Decisions => "Decisions",
+            Self::Result => "Result",
+        };
+        f.write_str(name)
+    }
+}
+
 impl std::str::FromStr for BoardSection {
     type Err = BoardErr;
     fn from_str(value: &str) -> Result<Self, Self::Err> {

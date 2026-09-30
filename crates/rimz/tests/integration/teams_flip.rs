@@ -32,18 +32,20 @@ roles:
 #[test]
 fn record_bootstraps_without_a_cohort_or_side_effects_then_flip_uses_the_board() {
     let fixture = Fixture::new();
-    let entry = success(
+    let receipt = success(
         fixture
             .command()
-            .args(["teams", "record", "Goal", "Ship it."])
+            .args(["teams", "record", "goal", "Ship it."])
             .output()
             .unwrap(),
     );
-    assert!(entry.contains(" @user: Ship it.\n"), "{entry}");
-    assert_eq!(
-        std::fs::read_to_string(fixture.board()).unwrap(),
-        format!("# Blackboard\n\n## Goal\n{entry}\n## Decisions\n\n## Progress\n\n## Result\n")
-    );
+    assert_eq!(receipt, "recorded Goal @user\n");
+    let bootstrapped = std::fs::read_to_string(fixture.board()).unwrap();
+    let entry = bootstrapped
+        .strip_prefix("# Blackboard\n\n## Goal\n")
+        .and_then(|rest| rest.strip_suffix("\n## Decisions\n\n## Progress\n\n## Result\n"))
+        .unwrap_or_else(|| panic!("{bootstrapped}"));
+    assert!(entry.ends_with(" @user: Ship it.\n"), "{entry}");
     assert!(fixture.signals().is_empty());
     assert!(
         fixture
@@ -57,13 +59,13 @@ fn record_bootstraps_without_a_cohort_or_side_effects_then_flip_uses_the_board()
     success(fixture.flip("Build", Some("coder"), Some("Start.")));
     let board = std::fs::read_to_string(fixture.board()).unwrap();
     assert!(board.starts_with("# Blackboard\nStage: Build (@coder)\n"));
-    assert!(board.contains(&entry));
+    assert!(board.contains(entry));
     assert_eq!(board.matches("## Progress").count(), 1);
     assert!(board.contains("@coder: opened Build"));
 }
 
 #[test]
-fn record_member_multiline_stdin_and_file_print_exact_receipts() {
+fn record_member_multiline_stdin_and_file_print_one_line_receipts() {
     let fixture = Fixture::new();
     fixture.seed("coder", None);
     std::fs::write(fixture.board(), BOARD).unwrap();
@@ -80,18 +82,17 @@ fn record_member_multiline_stdin_and_file_print_exact_receipts() {
         .spawn_payload(command, "first\r\n## Injected\n\nStage: Done\n")
         .wait_with_output()
         .unwrap();
-    let entry = success(output);
-    assert!(
-        entry.ends_with("@coder: first\n  ## Injected\n\n  Stage: Done\n"),
-        "{entry}"
-    );
+    assert_eq!(success(output), "recorded Goal @coder\n");
     let board = std::fs::read_to_string(fixture.board()).unwrap();
-    assert!(board.contains(&entry));
+    assert!(
+        board.contains("@coder: first\n  ## Injected\n\n  Stage: Done\n"),
+        "{board}"
+    );
     assert!(board.contains("Stage: Build (@coder)"));
     assert!(!board.contains("\n## Injected"));
     let file = fixture.env.project_root.join("entry.txt");
     std::fs::write(&file, "Outcome\nnext").unwrap();
-    let entry = success(
+    let receipt = success(
         fixture
             .command()
             .args(["teams", "record", "Result", "--file"])
@@ -99,11 +100,11 @@ fn record_member_multiline_stdin_and_file_print_exact_receipts() {
             .output()
             .unwrap(),
     );
-    assert!(entry.ends_with("@user: Outcome\n  next\n"));
+    assert_eq!(receipt, "recorded Result @user\n");
     assert!(
         std::fs::read_to_string(fixture.board())
             .unwrap()
-            .contains(&entry)
+            .contains("@user: Outcome\n  next\n")
     );
     assert!(fixture.signals().is_empty());
     assert!(
@@ -519,7 +520,6 @@ fn flip_cli_persists_board_signal_and_owner_note() {
     insta::assert_snapshot!(output.replace(fixture.env.project_root.file_name().unwrap().to_str().unwrap(), "<worktree>"), @"
     Flipped Build -> Review by @user  (forge#feature-team · <worktree>)
       Build → [Review] → Done
-      note     Review the consumer boundary. Keep the evidence. Ready.
       owner    @reviewer, woken at its next turn boundary
     ");
     let board = std::fs::read_to_string(fixture.board()).unwrap();
@@ -752,7 +752,6 @@ fn flip_bootstraps_a_missing_board_or_stage_without_losing_prose() {
         insta::assert_snapshot!(output.replace(fixture.env.project_root.file_name().unwrap().to_str().unwrap(), "<worktree>"), @"
             Opened Review by @user  (forge#feature-team · <worktree>)
               Build → [Review] → Done
-              note     Start the review.
               owner    @reviewer, woken at its next turn boundary
             ");
         }

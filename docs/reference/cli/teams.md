@@ -367,7 +367,7 @@ Continuation lines are indented two spaces. The command appends after the sectio
 ## Result
 ```
 
-There is no Stage line until a flip. Success exits 0 and prints exactly the appended entry, including all its lines. Recording does not flip the stage, send messages, compact agents, or require a clean worktree or trusted team definition. To amend or remove an existing line, edit the board directly; direct edits take no board lock.
+There is no Stage line until a flip. Success exits 0 and prints one line naming the section and author, such as `recorded Decisions @planner` or `recorded Goal @user`; the entry itself is not echoed. The section prints in its canonical capitalization whatever the input casing. A TEXT argument inside double quotes is expanded by the shell first, so pass text holding backticks or `$` through `--stdin` with a quoted heredoc (`<<'EOF'`). Recording does not flip the stage, send messages, compact agents, or require a clean worktree or trusted team definition. To amend or remove an existing line, edit the board directly; direct edits take no board lock.
 
 | Error | Result |
 | --- | --- |
@@ -428,12 +428,11 @@ To undo a mistaken flip, flip back to the intended stage; both entries stay in t
 ```text
 Flipped Plan -> Implement by @planner  (forge#feat-rate-limits · feat-rate-limits)
   Explore → Plan → [Implement] → Review → Submit → Reflect → Done
-  note     plan ready in plan-notes.md; three advisories carried in
   owner    @coder, woken at its next turn boundary
   compact  queued for you: 204k tokens, over 180k
 ```
 
-The header reads `Opened <stage>` on a board with no prior stage and names the flipper, the cohort, and the worktree directory. The pipeline line appears only when the team declares `stages`, and a multiline note prints on one line.
+The header reads `Opened <stage>` on a board with no prior stage and names the flipper, the cohort, and the worktree directory. The pipeline line appears only when the team declares `stages`. The note is not echoed; it lands in the board's ledger line.
 
 | `owner` row | Meaning |
 | --- | --- |

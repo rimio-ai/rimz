@@ -132,7 +132,6 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
             team_stage::stage_strip(&pipeline, Some(&receipt.to))
         )?;
     }
-    writeln!(out, "  note     {}", args.note.replace(['\r', '\n'], " "))?;
     match receipt.delivery {
         Delivery::Sent { .. } | Delivery::Queued { .. } => {
             // The domain only delivers a stage after resolving its owner.
