@@ -12,6 +12,10 @@ expression: entry
   "role": "coder",
   "team": "forge",
   "mode": "yolo",
+  "launch_warnings": [
+    "tool rules unsupported",
+    "skill shadowed"
+  ],
   "me": true,
   "status": "running",
   "pending_waits": [],

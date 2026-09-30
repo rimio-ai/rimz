@@ -13,6 +13,9 @@ expression: report
     "role": null,
     "team": null,
     "mode": null,
+    "launch_warnings": [
+      "tool rules unsupported"
+    ],
     "me": false,
     "status": "idle",
     "pending_waits": [],

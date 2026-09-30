@@ -12,6 +12,7 @@ expression: entry
   "role": null,
   "team": null,
   "mode": null,
+  "launch_warnings": [],
   "me": false,
   "status": "idle",
   "pending_waits": [],
