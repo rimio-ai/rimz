@@ -1,4 +1,4 @@
-//! Read-only projection of armed one-shot deliveries from the loop catalog.
+//! Read-only pending wakes: catalog deliveries and unsettled launched runs.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -112,11 +112,75 @@ pub fn pending_waits_by_session(
 
 pub(crate) fn project_pending_waits(
     snapshot: &mut SidebarSnapshot,
+    paths: &crate::StatePaths,
     project_root: Option<&Path>,
     config: &MachineConfig,
 ) {
     let now = snapshot.now.to_zoned(config.time_zone());
     SessionWaits::load_at(project_root, || now).attach(snapshot);
+    project_run_waits(snapshot, paths);
+}
+
+fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) {
+    use crate::harness::fleet::{self, FleetRuns};
+    use crate::store::run::{self, RunStatus};
+
+    if !snapshot.agents.iter().any(|agent| {
+        fleet::has_members(&snapshot.agents, agent)
+            || (agent.is_team_seat() && agent.launched_by.is_some())
+    }) {
+        return;
+    }
+    let runs = match run::list(&paths.runs_dir) {
+        Ok(runs) => runs,
+        Err(error) => {
+            tracing::debug!(%error, "failed to read pending launched runs");
+            return;
+        }
+    };
+    let peers = crate::address::addressable_agents(snapshot);
+    let projected: Vec<Vec<PendingWait>> = snapshot
+        .agents
+        .iter()
+        .map(|agent| {
+            let mut waits: Vec<_> = FleetRuns::of(&snapshot.agents, &runs, agent)
+                .unsettled()
+                .into_iter()
+                .map(|(child, run)| PendingWait {
+                    name: crate::address::agent_handle(child, &peers, false),
+                    armed_at: Some(run.started_at),
+                    trigger: PendingWaitTrigger::Subagent {
+                        active_at: child.last_activity,
+                        deadline_at: run.deadline_at,
+                        settled: run.status.is_terminal().then(|| {
+                            if run.status == RunStatus::Completed {
+                                "done".to_owned()
+                            } else {
+                                run.status.as_str().replace('_', " ")
+                            }
+                        }),
+                    },
+                })
+                .collect();
+            for run in fleet::open_team_runs(&snapshot.agents, &runs, agent) {
+                if let Some(team) = &run.team {
+                    waits.push(PendingWait {
+                        name: team.instance.clone(),
+                        armed_at: Some(run.started_at),
+                        trigger: PendingWaitTrigger::Team {
+                            stage: crate::harness::scratch::board_stage(&run.worktree_path)
+                                .map(|stage| stage.name),
+                        },
+                    });
+                }
+            }
+            waits
+        })
+        .collect();
+    for (agent, mut waits) in snapshot.agents.iter_mut().zip(projected) {
+        waits.append(&mut agent.pending_waits);
+        agent.pending_waits = waits;
+    }
 }
 
 /// Armed one-shot deliveries keyed by the session they wake. Turn-completion
@@ -173,6 +237,131 @@ impl SessionWaits {
 mod tests {
     use super::*;
     use crate::config::TaskEntry;
+
+    #[test]
+    fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
+        use crate::agents::{AgentState, AgentStatus, PermissionMode};
+        use crate::store::run::{self, RunRecord, RunStatus, TeamRun};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        let now = jiff::Timestamp::from_second(4_000).unwrap();
+        let parent = AgentState::stub("claude", "parent", AgentStatus::Idle);
+        let children = ["calm-fox", "bright-owl"].map(|name| {
+            let mut child = AgentState::stub("claude", name, AgentStatus::Idle);
+            child.name = Some(name.into());
+            child.parent_agent_id = Some(parent.agent_id.clone());
+            child.parent_agent_kind = Some(parent.kind.clone());
+            child.launch_depth = Some(1);
+            child.last_activity = now;
+            child
+        });
+        let mut leader = AgentState::stub("claude", "leader", AgentStatus::Idle);
+        leader.team = Some("forge".into());
+        leader.launch_id = Some("leader-launch".into());
+        leader.launched_by = Some(crate::agents::LaunchedBy {
+            kind: parent.kind.clone(),
+            agent_id: parent.agent_id.clone(),
+        });
+        let mut runs: Vec<_> = children
+            .iter()
+            .chain([&leader])
+            .map(|child| {
+                let mut run = RunRecord::new(
+                    paths.workspace_id.clone(),
+                    child.kind.clone(),
+                    PermissionMode::Auto,
+                    "work".into(),
+                    dir.path().into(),
+                );
+                run.agent_id = Some(child.agent_id.clone());
+                run.started_at = jiff::Timestamp::UNIX_EPOCH;
+                run.deadline_at = Some(now);
+                run
+            })
+            .collect();
+        runs[1].status = RunStatus::Completed;
+        runs[2].team = Some(TeamRun {
+            launch_id: "leader-launch".into(),
+            instance: "forge#feat-x".into(),
+        });
+        for run in &runs {
+            run::write(&paths.runs_dir, run).unwrap();
+        }
+        let agents = [vec![parent], children.to_vec(), vec![leader]].concat();
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
+        project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
+        assert_eq!(
+            snapshot.agents[0].pending_waits.len(),
+            3,
+            "two fleet rows and one team run"
+        );
+        assert_eq!(snapshot.agents[0].effective_status(), AgentStatus::Sleeping);
+        for wait in &snapshot.agents[0].pending_waits[..2] {
+            assert_eq!(wait.armed_at, Some(jiff::Timestamp::UNIX_EPOCH));
+            let PendingWaitTrigger::Subagent {
+                active_at,
+                deadline_at,
+                settled,
+            } = &wait.trigger
+            else {
+                panic!("subagent comes before team")
+            };
+            assert_eq!(*active_at, now);
+            assert_eq!(*deadline_at, Some(now));
+            assert_eq!(
+                settled.as_deref(),
+                (wait.name == "@bright-owl").then_some("done")
+            );
+            assert!(["@calm-fox", "@bright-owl"].contains(&wait.name.as_str()));
+        }
+        assert_eq!(
+            snapshot.agents[0].pending_waits[2].trigger,
+            PendingWaitTrigger::Team { stage: None }
+        );
+        std::fs::write(
+            dir.path().join("blackboard.md"),
+            "Stage: Review (@reviewer)\n",
+        )
+        .unwrap();
+        let catalog_wait = PendingWait {
+            name: "ci".into(),
+            trigger: PendingWaitTrigger::Signal {
+                selector: "pr.checks".into(),
+            },
+            armed_at: None,
+        };
+        snapshot.agents[0].pending_waits = vec![catalog_wait.clone()];
+        project_run_waits(&mut snapshot, &paths);
+        assert_eq!(
+            snapshot.agents[0].pending_waits[2].trigger,
+            PendingWaitTrigger::Team {
+                stage: Some("Review".into())
+            }
+        );
+        assert_eq!(snapshot.agents[0].pending_waits[3], catalog_wait);
+        for (index, run) in runs.iter_mut().enumerate() {
+            run.status = RunStatus::Completed;
+            if index == 0 {
+                run.joined_at = Some(now);
+            } else {
+                run.report_message_id = Some(crate::MessageId::new());
+            }
+            run::write(&paths.runs_dir, run).unwrap();
+        }
+        project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
+        assert!(snapshot.agents[0].pending_waits.is_empty());
+        assert_ne!(snapshot.agents[0].effective_status(), AgentStatus::Sleeping);
+        snapshot.agents.truncate(1);
+        std::fs::remove_dir_all(&paths.runs_dir).unwrap();
+        project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
+        assert!(snapshot.agents[0].pending_waits.is_empty());
+        assert!(!paths.runs_dir.exists());
+    }
 
     #[test]
     fn pending_wait_requires_an_ephemeral_valid_trigger_and_one_shot_clock() {
