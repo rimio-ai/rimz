@@ -1178,7 +1178,7 @@ fn refresh_local_context_under(
     let enriched = refresh.get_or_insert_with(|| LocalContextRefresh {
         transcript_path: ctx.prior_transcript_path.map(str::to_owned),
         transcript_stat: ctx.prior_transcript_stat.copied(),
-        ..LocalContextRefresh::sparse()
+        ..LocalContextRefresh::default()
     });
     enriched.context.session_name = FieldPatch::Set(session_name);
     refresh
