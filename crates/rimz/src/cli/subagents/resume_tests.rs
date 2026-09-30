@@ -3,6 +3,18 @@ use jiff::Timestamp;
 use rimz::harness::launch::ExecIdentity;
 
 #[test]
+fn bind_timeout_names_the_child_and_recovery() {
+    let mut child = AgentState::stub("codex", "child", rimz::agents::AgentStatus::Idle);
+    child.name = Some("otter".into());
+    let error = resume_bind_timeout(&child).to_string();
+    assert!(error.contains("@otter"));
+    assert!(
+        error.contains("check its pane, or launch a new child"),
+        "{error}"
+    );
+}
+
+#[test]
 fn only_the_parent_can_resolve_an_ended_child_for_resume() {
     let parent = AgentState::stub("claude", "parent", rimz::agents::AgentStatus::Running);
     let peer = AgentState::stub("claude", "peer", rimz::agents::AgentStatus::Running);

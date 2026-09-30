@@ -6,6 +6,8 @@ use std::sync::mpsc;
 
 const PARK_STRAND_POLL: Duration = Duration::from_secs(5);
 const PARENT_RECEIPT_POLL: Duration = Duration::from_secs(1);
+const AGENT_ENDED_EVENT: &str = "rimz.agent-ended";
+const AGENT_RESUMED_EVENT: &str = "rimz.agent-resumed";
 
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let mut launch_warnings = Vec::new();
@@ -311,6 +313,17 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 child.id(),
             ),
             request.identity.params.isolation,
+        );
+    }
+    // A root resume may fork to a new session id; only a subagent's parent addresses the resumed id.
+    if let Some(target) = attach_target.as_ref().filter(|_| request.subagent) {
+        append_agent_lifecycle_trace(
+            &invocation,
+            target.0.clone(),
+            target.1.clone(),
+            rimz::agents::LifecycleSignal::Registered,
+            AGENT_RESUMED_EVENT,
+            "agent resume start stamp",
         );
     }
     if let Some(context) = run_context.as_ref() {
@@ -1269,7 +1282,7 @@ fn record_own_agent_end_trace(
                 kind.clone(),
                 agent_id.clone(),
                 rimz::agents::LifecycleSignal::Ended,
-                "rimz.agent-ended",
+                AGENT_ENDED_EVENT,
                 "agent exit end stamp",
             );
             Some((kind, agent_id))
@@ -2146,6 +2159,20 @@ mod tests {
         assert!(
             !monitor.poll(&context, now),
             "pane send before TurnStarted still holds the child"
+        );
+        store
+            .confirm_delivered_for_card(
+                &kind,
+                &child.agent_id,
+                child.name.as_deref(),
+                rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
+                "room",
+            )
+            .unwrap();
+        now += Duration::from_secs(1);
+        assert!(
+            monitor.poll(&context, now),
+            "terminal follow-up releases the child"
         );
     }
 
