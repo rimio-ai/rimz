@@ -220,6 +220,7 @@ struct PreparedRun {
     launch: rimz::worktree::LaunchCheckout,
     store: rimz::Store,
     kind: AgentKind,
+    login: rimz::ids::LoginName,
     room_channel: Option<String>,
     prompt: String,
     output_format: OutputFormat,
@@ -586,6 +587,16 @@ fn prepare_supervised(
     };
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
+    let logins = rimz::room::resolve_birth_logins(
+        &workspace.project_root,
+        &machine_config,
+        &rimz::ids::RoomLogins::new(),
+        false,
+    )?;
+    let login =
+        rimz::store::writer::LaunchLogin::from_ancestry(ancestry.as_ref(), &agent_cell.kind)
+            .resolve(&agent_cell.kind, &logins, &machine_config.accounts)?;
+    preflight_launch.login = (!login.is_default()).then(|| login.name().clone());
     let launch_invocation = rimz::harness::launch::ExecRequest {
         action: rimz::harness::launch::ExecAction::Launch {
             prompt: Some(prompt.to_string()),
@@ -611,21 +622,7 @@ fn prepare_supervised(
     )?;
     // Judge the agent's hooks in the account home it will run under before
     // probing the program or touching the multiplexer.
-    let logins = rimz::room::resolve_birth_logins(
-        &workspace.project_root,
-        &machine_config,
-        &rimz::ids::RoomLogins::new(),
-        false,
-    )?;
-    supervised::preflight_agent(
-        adapter,
-        &launch,
-        &rimz::agents::RoomLoginSet::new(
-            Some(logins.clone()),
-            rimz::agents::LoginCatalog::from_config(&machine_config.accounts).ok(),
-            rimz::agents::ambient_env(),
-        ),
-    )?;
+    supervised::preflight_agent(adapter, &launch, &login)?;
     supervised::preflight_program(adapter, &process)?;
     if !request.subagent {
         crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
@@ -654,6 +651,7 @@ fn prepare_supervised(
         launch,
         store,
         kind,
+        login: login.name().clone(),
         room_channel,
         prompt: prompt.into_owned(),
         output_format: presentation.output_format,
@@ -724,6 +722,7 @@ fn execute_attempt(
         prepared.ancestry.as_ref(),
     )?;
     for request in &mut launch_requests {
+        request.login = rimz::store::writer::LaunchLogin::Pinned(prepared.login.clone());
         if attempt > 0
             && let AgentLaunchName::Explicit(name) = &request.name
         {
@@ -964,16 +963,14 @@ pub(in crate::cli) fn run_supervised(
         logins
     };
     room.freeze_logins(&logins)?;
-    let login_key = rimz::agents::RoomLoginSet::resolve(
-        &rimz::StatePaths::for_workspace(prepared.store.runtime_paths().workspace_id.clone())?
-            .workspace_record,
-        &prepared.machine_config.accounts,
-    )
-    .default_key(prepared.kind.as_str());
+    let login_key = rimz::ids::LoginKey {
+        kind: prepared.kind.clone(),
+        name: prepared.login.clone(),
+    };
     let provider_budget_gate = || {
         rimz::agents::provider_budget_gate(
             prepared.store.runtime_paths(),
-            login_key.as_ref()?,
+            &login_key,
             prepared.managed_launch.binding()?,
             jiff::Timestamp::now(),
         )
@@ -1005,7 +1002,7 @@ pub(in crate::cli) fn run_supervised(
         if let Some(reason) = rimz::harness::budget::scope_gate(
             prepared.store.runtime_paths(),
             prepared.store.paths(),
-            login_key.as_ref(),
+            Some(&login_key),
             &prepared.machine_config,
             jiff::Timestamp::now(),
         ) {

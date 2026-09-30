@@ -114,6 +114,8 @@ pub enum AgentProcessCompileErr {
     },
     #[error(transparent)]
     LaunchSettings(#[from] crate::agents::skills::LaunchSettingsErr),
+    #[error(transparent)]
+    Login(#[from] crate::agents::RoomLoginErr),
     #[error("unknown agent kind `{kind}`")]
     UnknownAgent { kind: String },
     #[error("agent `{kind}` has no launch command")]
@@ -686,12 +688,17 @@ fn compile_agent_process(
     cwd: &Path,
     host_runtime: Option<&RuntimePaths>,
 ) -> AgentProcessResult<CompiledAgentProcess> {
+    let login = crate::agents::session_login(
+        &request.kind,
+        request.identity.params.login.as_ref(),
+        &crate::config::MachineConfig::load_lenient().accounts,
+    )?;
     compile_agent_process_with_extra_env(
         host_runtime,
         project_root,
         request,
         cwd,
-        &BTreeMap::new(),
+        &login.env(&BTreeMap::new()),
         &LaunchReminders::default(),
     )
 }

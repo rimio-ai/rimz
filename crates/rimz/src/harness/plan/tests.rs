@@ -1918,7 +1918,7 @@ fn launch_request_names_and_metadata() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].login,
-        crate::store::writer::LaunchLogin::Pinned("work".parse().unwrap())
+        crate::store::writer::LaunchLogin::RoomDefault
     );
     assert_eq!(
         requests[0].name,
@@ -1965,7 +1965,7 @@ fn launch_request_names_and_metadata() {
     assert_eq!(peer_requests[0].launch.parent_agent_id, None);
     assert_eq!(
         peer_requests[0].login,
-        crate::store::writer::LaunchLogin::Pinned(Default::default())
+        crate::store::writer::LaunchLogin::RoomDefault
     );
     assert_eq!(peer_requests[0].launch.parent_agent_kind, None);
     assert_eq!(peer_requests[0].launch.launch_depth, Some(2));
