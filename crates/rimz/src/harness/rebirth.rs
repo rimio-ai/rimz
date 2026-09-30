@@ -395,13 +395,8 @@ fn plan_recovery(
         return RecoveryPlan::default();
     };
     let agents = scope_to_roster(projection.agents.clone(), roster);
-    let logins = crate::workspace::record::read(&paths.workspace_record)
-        .ok()
-        .and_then(|record| record.logins)
-        .unwrap_or_default();
     let (team, flat_agents) = split_team_and_flat(
         &agents,
-        &logins,
         teams,
         profiles,
         &machine.agents.commands,
@@ -425,7 +420,6 @@ fn plan_recovery(
             runtime,
             profiles,
             max: machine.resume.max.saturating_sub(team_panes),
-            logins: &logins,
         },
         Path::is_dir,
         resume_session_present,

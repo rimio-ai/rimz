@@ -193,8 +193,17 @@ pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWor
         let record_path = path.join("workspace.json");
         match record::read(&record_path) {
             Ok(record) => {
-                let Some(candidate) =
-                    normalize_known_workspace_record(dir_name, &record_path, record)
+                let paths = crate::disk::paths::StatePaths::under_named(
+                    record.workspace_id.clone(),
+                    dir_name.clone(),
+                    workspaces_root.parent().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "workspace directory has no home",
+                        )
+                    })?,
+                );
+                let Some(candidate) = normalize_known_workspace_record(dir_name, &paths, record)
                 else {
                     continue;
                 };
@@ -232,9 +241,10 @@ struct KnownWorkspaceCandidate {
 
 fn normalize_known_workspace_record(
     dir_name: crate::ids::WorkspaceDirName,
-    record_path: &Path,
+    paths: &crate::disk::paths::StatePaths,
     mut record: WorkspaceRecord,
 ) -> Option<KnownWorkspaceCandidate> {
+    let record_path = &paths.workspace_record;
     let workspace_id = record.workspace_id.clone();
     if !dir_name.may_name(&workspace_id) {
         tracing::warn!(workspace = %workspace_id, directory = %dir_name, "skipping workspace record whose id does not match its directory");
@@ -253,15 +263,21 @@ fn normalize_known_workspace_record(
         }
 
         if record.project_root != project_root {
-            record.project_root = project_root;
-            record.updated_at = jiff::Timestamp::now();
-            if let Err(err) = record::write_path(record_path, &record) {
-                tracing::warn!(
-                    path = %record_path.display(),
-                    error = %err,
-                    "repairing workspace record failed; using repaired value in memory",
-                );
+            // Enumeration never waits on a writer (which may itself be enumerating).
+            // Re-read under the lock so repairs preserve concurrent account switches.
+            match crate::disk::lock::WorkspaceLock::try_acquire(&paths.workspace_lock) {
+                Ok(Some(_guard)) => {
+                    record = record::read(record_path).ok()?;
+                    record.project_root = project_root.clone();
+                    record.updated_at = jiff::Timestamp::now();
+                    if let Err(err) = record::write(paths, &record) {
+                        tracing::warn!(path = %record_path.display(), error = %err, "repairing workspace record failed; using repaired value in memory");
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => tracing::warn!(error = %err, "skipping workspace record repair"),
             }
+            record.project_root = project_root;
         }
     }
 

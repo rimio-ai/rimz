@@ -102,15 +102,17 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     seed.launch.model.clone_from(&posture.launch.model);
     seed.launch.effort.clone_from(&posture.launch.effort);
     seed.launch.budget.clone_from(&posture.launch.budget);
+    let mut preflight = posture.launch.exec_request(
+        seed.kind.clone(),
+        rimz::harness::launch::ExecAction::Fork {
+            session_id: seed.source_session_id.to_string(),
+            extra_args: Vec::new(),
+        },
+    );
+    preflight.identity.params.clone_from(&seed.launch);
     rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
-        &posture.launch.exec_request(
-            seed.kind.clone(),
-            rimz::harness::launch::ExecAction::Fork {
-                session_id: seed.source_session_id.to_string(),
-                extra_args: Vec::new(),
-            },
-        ),
+        &preflight,
         &seed.cwd,
         (isolation == rimz::config::Isolation::Host).then_some(store.runtime_paths()),
     )?;
@@ -125,7 +127,9 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let backend = room.backend();
 
     let request = AgentLaunchRequest {
-        login: rimz::store::writer::LaunchLogin::RoomDefault,
+        login: rimz::store::writer::LaunchLogin::Pinned(
+            seed.launch.login.clone().unwrap_or_default(),
+        ),
         kind: seed.kind.clone(),
         agent_id: mint_launch_id(),
         name: args
@@ -313,6 +317,7 @@ fn validate_fork_source(
         cwd,
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
+            login: agent.login.clone(),
             tier: agent.tier.clone(),
             mode: agent.mode,
             isolation: agent.isolation,
@@ -507,8 +512,10 @@ mod tests {
             skipped: Vec::new(),
         }));
 
+        agent.login = Some("work".parse().unwrap());
         let seed = validate_fork_source(&agent, |_| true, |_| true).expect("valid fork");
 
+        assert_eq!(seed.launch.login, agent.login);
         assert_eq!(seed.source_session_id, AgentSessionId::from("session-1"));
         assert_eq!(seed.cwd, PathBuf::from("/repo/worktree"));
         assert_eq!(seed.launch.profile.as_deref(), Some("planner"));

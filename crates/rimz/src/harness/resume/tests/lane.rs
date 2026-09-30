@@ -4,6 +4,20 @@
 use super::*;
 
 #[test]
+fn discovered_sessions_carry_the_account_they_were_discovered_under() {
+    let observation = local_session("claude", "local", 1, 2);
+    let candidate = ResumeCandidate::from_observation(&observation, &claude_room("work")).unwrap();
+    assert_eq!(
+        candidate
+            .identity
+            .login
+            .as_ref()
+            .map(crate::ids::LoginName::as_str),
+        Some("work")
+    );
+}
+
+#[test]
 fn discovered_lane_never_resumes_or_lists_recorded_children() {
     let agents = [child_agent(
         "claude",
@@ -304,11 +318,11 @@ fn concurrent_session_set_selects_the_newest_overlap_cluster() {
 fn discovered_candidate_requires_session_and_workspace() {
     let mut observation = local_session("claude", "only", 9, 10);
     observation.session_id = AgentSessionId::from("");
-    assert!(ResumeCandidate::from_observation(&observation).is_none());
+    assert!(ResumeCandidate::from_observation(&observation, &NO_LOGINS).is_none());
 
     observation.session_id = AgentSessionId::from("only");
     observation.workspace = PathBuf::new();
-    assert!(ResumeCandidate::from_observation(&observation).is_none());
+    assert!(ResumeCandidate::from_observation(&observation, &NO_LOGINS).is_none());
 }
 
 /// Lane selectors resolve to a place before anything is planned. A durable
@@ -946,23 +960,13 @@ fn recovery_plan_sorts_equal_freshness_by_label() {
 }
 
 #[test]
-fn lane_refuses_a_closed_member_from_another_account() {
+fn lane_resumes_a_closed_member_after_the_room_switches() {
     let agents = [agent("claude", "closed", "/lane", 1)];
     let room = claude_room("work");
 
-    let error = LaneCase::new(LaneResumeSelector::Current, &agents)
+    let result = LaneCase::new(LaneResumeSelector::Current, &agents)
         .current_root("/lane")
         .logins(&room)
-        .run()
-        .unwrap_err();
-
-    assert_eq!(
-        error,
-        LaneResumeError::LoginMismatch(LoginMismatch {
-            kind: AgentKind::new_unchecked("claude"),
-            session_id: "closed".into(),
-            session_login: crate::ids::LoginName::default_login(),
-            room_login: "work".parse().expect("login name"),
-        })
-    );
+        .run();
+    assert!(result.is_ok(), "{result:?}");
 }

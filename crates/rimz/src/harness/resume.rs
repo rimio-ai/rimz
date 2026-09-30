@@ -20,7 +20,7 @@ use jiff::Timestamp;
 use crate::Store;
 use crate::agents::PermissionMode;
 use crate::agents::find_definition;
-use crate::agents::{AgentState, LocalSessionObservation, LoginMismatch};
+use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::RuntimePaths;
 use crate::harness::plan::{
@@ -114,7 +114,6 @@ impl<'a> LaneResumeRequest<'a> {
             runtime: self.runtime,
             profiles,
             max: self.max,
-            logins: self.logins,
         }
     }
 }
@@ -158,8 +157,6 @@ pub enum LaneResumeError {
     LiveNoPane,
     #[error("{message}")]
     RestoreConfig { message: String },
-    #[error(transparent)]
-    LoginMismatch(#[from] LoginMismatch),
 }
 
 /// All-closed lane plan awaiting durable identity allocation.
@@ -256,9 +253,6 @@ pub enum ResumeSkipReason {
     /// The profile now requires system-prompt replacement that the provider
     /// cannot express.
     PromptUnsupported,
-    /// The session was born under another account than the room launches
-    /// under, and its conversation lives in that account's home.
-    LoginMismatch,
     /// A fresh lane restores team tabs, not standalone roots.
     FreshRelaunch(String),
 }
@@ -270,7 +264,6 @@ impl ResumeSkipReason {
             Self::NoConversation => "no saved conversation",
             Self::OverCap => "over the resume cap",
             Self::PromptUnsupported => "no prompt replacement",
-            Self::LoginMismatch => "different account",
             Self::FreshRelaunch(spec) => {
                 return format!("no saved team to restore; relaunch with {spec}").into();
             }
@@ -532,7 +525,6 @@ pub(super) struct PlannedTeamTab {
 pub enum CohortResumeErr {
     NothingToResume { spec: String },
     MembersStillLive { labels: Vec<String> },
-    LoginMismatch(LoginMismatch),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -824,23 +816,14 @@ struct ResumeCandidate {
     pane_id: Option<PaneId>,
     last_activity: Timestamp,
     conversation_present: bool,
-    /// Set when the session was born under another account than the room's.
-    login_mismatch: Option<LoginMismatch>,
 }
 
 impl ResumeCandidate {
-    fn from_agent(
-        agent: &AgentState,
-        logins: &RoomLogins,
-        conversation_present: impl FnOnce() -> bool,
-    ) -> Option<Self> {
+    fn from_agent(agent: &AgentState, conversation_present: impl FnOnce() -> bool) -> Option<Self> {
         if !root_session(agent) {
             return None;
         }
-        Some(Self {
-            login_mismatch: login_mismatch(agent, logins),
-            ..Self::from_agent_identity(agent, conversation_present())
-        })
+        Some(Self::from_agent_identity(agent, conversation_present()))
     }
 
     fn from_agent_identity(agent: &AgentState, conversation_present: bool) -> Self {
@@ -851,17 +834,23 @@ impl ResumeCandidate {
             pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
             last_activity: agent.last_activity,
             conversation_present,
-            login_mismatch: None,
         }
     }
 
-    fn from_observation(observation: &LocalSessionObservation) -> Option<Self> {
+    fn from_observation(
+        observation: &LocalSessionObservation,
+        logins: &RoomLogins,
+    ) -> Option<Self> {
         if observation.session_id.is_empty() || observation.workspace.as_os_str().is_empty() {
             return None;
         }
         Some(Self {
             identity: ResumeLaunchIdentity {
                 kind: observation.kind.clone(),
+                login: logins
+                    .get(&observation.kind)
+                    .filter(|name| !name.is_default())
+                    .cloned(),
                 session_id: observation.session_id.clone(),
                 launch_id: None,
                 name: None,
@@ -882,9 +871,6 @@ impl ResumeCandidate {
             pane_id: None,
             last_activity: observation.last_activity,
             conversation_present: true,
-            // Discovery reads the room's own provider home, so every observed
-            // session belongs to the room's account.
-            login_mismatch: None,
         })
     }
 
@@ -1024,13 +1010,6 @@ pub fn plan_lane_resume(
             session_backed,
             restore_config()?,
         );
-    }
-    if let Some(mismatch) = closed
-        .iter()
-        .filter(|agent| !agent.agent_id.is_provisional())
-        .find_map(|agent| login_mismatch(agent, request.logins))
-    {
-        return Err(mismatch.into());
     }
 
     // Only the branches that plan a relaunch read the effective config; a lane
@@ -1296,7 +1275,7 @@ fn plan_discovered_lane(
     let (resume, discovery_skipped) = concurrent_session_set(observations);
     let candidates = resume
         .iter()
-        .filter_map(ResumeCandidate::from_observation)
+        .filter_map(|observation| ResumeCandidate::from_observation(observation, request.logins))
         .collect::<Vec<_>>();
     let preflight_kinds = candidates
         .iter()
@@ -1393,7 +1372,6 @@ fn plan_closed_lane(
 ) -> Result<LaneResumeAction, LaneResumeError> {
     let (team, flat_agents) = split_team_and_flat(
         &closed,
-        request.logins,
         &restore.teams,
         &restore.profiles,
         &restore.commands,
@@ -1659,7 +1637,6 @@ fn materialize_team_restore_tab(
 )]
 fn plan_team_restore_tabs(
     agents: &[AgentState],
-    logins: &RoomLogins,
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -1712,11 +1689,8 @@ fn plan_team_restore_tabs(
             }
         } else {
             let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
-            // A cohort with a member born under another account plans no tab; its
-            // members fall through to the flat planner, which skips them visibly.
             let Ok(cohort) = plan_cohort_resume(
                 &group_agents,
-                logins,
                 |_| AgentLiveness::Dead,
                 &cells,
                 Some(&team),
@@ -1767,7 +1741,6 @@ fn plan_team_restore_tabs(
 )]
 pub(super) fn split_team_and_flat(
     agents: &[AgentState],
-    logins: &RoomLogins,
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -1779,7 +1752,6 @@ pub(super) fn split_team_and_flat(
 ) -> (Vec<PlannedTeamTab>, Vec<AgentState>) {
     let team = plan_team_restore_tabs(
         agents,
-        logins,
         teams,
         profiles,
         commands,
@@ -1863,9 +1835,6 @@ pub struct ResumeContext<'a> {
     pub runtime: &'a RuntimePaths,
     pub profiles: &'a ProfilesConfig,
     pub max: usize,
-    /// The room's frozen account selection; sessions born under another
-    /// account are skipped.
-    pub logins: &'a RoomLogins,
 }
 
 pub fn plan_resume(
@@ -1888,9 +1857,7 @@ pub(super) fn plan_resume_detailed(
     let candidates = agents
         .iter()
         .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
-        .filter_map(|agent| {
-            ResumeCandidate::from_agent(agent, ctx.logins, || session_backed(agent))
-        })
+        .filter_map(|agent| ResumeCandidate::from_agent(agent, || session_backed(agent)))
         .collect();
     plan_resume_candidates_detailed(candidates, ctx, worktree_exists)
 }
@@ -1912,7 +1879,7 @@ fn plan_resume_candidates_detailed(
     let mut seen: HashSet<ResumeCandidateKey> = HashSet::new();
     let mut plan = DetailedResumePlan::default();
     let mut tabs: Vec<PlannedResumeTab> = Vec::new();
-    for mut candidate in candidates {
+    for candidate in candidates {
         // An older relaunch that re-used a pane is superseded by the newest
         // stamp. Rebirth-retired stamps fall back to provider session identity.
         if !seen.insert(candidate.key()) {
@@ -1925,14 +1892,6 @@ fn plan_resume_candidates_detailed(
                 candidate.identity.kind.clone(),
                 candidate.identity.session_id.clone(),
             ));
-            continue;
-        }
-        if let Some(mismatch) = candidate.login_mismatch.take() {
-            plan.warnings.push(mismatch.to_string());
-            plan.skipped.push(ResumeSkip {
-                label,
-                reason: ResumeSkipReason::LoginMismatch,
-            });
             continue;
         }
         if !supports_candidate_resume(&candidate) {
@@ -2100,7 +2059,6 @@ fn candidate_room_channel(
 /// and worktree existence so the matching rules stay pure and testable.
 pub fn plan_cohort_resume(
     agents: &[AgentState],
-    logins: &RoomLogins,
     liveness: impl Fn(&AgentState) -> AgentLiveness,
     cells: &[CohortCell],
     team: Option<&str>,
@@ -2125,13 +2083,6 @@ pub fn plan_cohort_resume(
         .collect::<Vec<_>>();
     if !live.is_empty() {
         return Err(CohortResumeErr::MembersStillLive { labels: live });
-    }
-    if let Some(mismatch) = matches
-        .iter()
-        .flatten()
-        .find_map(|agent| login_mismatch(agent, logins))
-    {
-        return Err(CohortResumeErr::LoginMismatch(mismatch));
     }
 
     let newest = matches
@@ -2688,16 +2639,6 @@ fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
             .resume_command(&candidate.identity.session_id, &candidate.cwd)
             .is_some()
     })
-}
-
-/// The account mismatch that refuses resuming `agent` in a room under `logins`.
-pub fn login_mismatch(agent: &AgentState, logins: &RoomLogins) -> Option<LoginMismatch> {
-    LoginMismatch::between(
-        &agent.kind,
-        &agent.agent_id,
-        agent.login.as_ref(),
-        logins.get(&agent.kind),
-    )
 }
 
 /// A resumed agent must have a conversation the provider can still reopen.

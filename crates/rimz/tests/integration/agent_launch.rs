@@ -1352,6 +1352,42 @@ fn user_shell_subagent_entrypoints_do_not_create_room_state() {
 
 #[cfg(unix)]
 #[test]
+fn explain_uses_the_room_account_before_a_launch_batch_exists() {
+    let env = Env::new();
+    assert!(init_launch_repo(&env.project_root));
+    let home = env.home_root.join("claude-work");
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[agents]\nisolation = \"host\"\n[accounts.claude.work]\nhome = {:?}\n",
+            home.display().to_string()
+        ),
+    )
+    .unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .switch_room_login(
+            &workspace,
+            &rimz::ids::AgentKind::new_unchecked("claude"),
+            &"work".parse().unwrap(),
+        )
+        .unwrap();
+    let output = env
+        .rimz()
+        .args(["agents", "explain", "claude", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["account"], "claude@work");
+}
+
+#[test]
 fn explain_prints_the_plan_without_side_effects() {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));
