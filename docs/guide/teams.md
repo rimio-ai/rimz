@@ -222,9 +222,9 @@ rimz teams resume forge#feat-rate-limits # reopen the one in that worktree
 rimz teams forge -w feat-rate-limits --fresh
 ```
 
-`resume` keeps each member's conversation, identity, working directory, and channel, and rereads its launch settings from the current profile, so an edit to a role takes effect on the way back in. It refuses while a matching member is still live.
+`resume` keeps each member's conversation, identity, working directory, and channel. It rereads the current profile and replays the saved model, effort, and agent base over it. It refuses while a matching member is still live.
 
-Name the worktree whenever the team has run in more than one: unscoped, each role matches its own newest session rather than one cohort. A prompt cannot ride along with a resume either, so send it afterward with `rimz message`. To move a closed team out of the sandbox without losing its conversations, add `--isolation host`; the replacement is recorded and holds for later relaunches.
+Name the worktree whenever the team has run in more than one. A prompt can ride along: `rimz teams resume forge 'Continue from the board'` queues your message to the leader after reopening. Model and effort overrides become the saved settings for later relaunches; an in-session `/model` switch is not carried, so restate it with `--model` on resume to keep it. To move a closed team out of the sandbox without losing its conversations, add `--isolation host`; the replacement is recorded and holds for later relaunches.
 
 `fresh` starts new sessions in the same checkout when you want the work but not the conversations. The branch, the uncommitted changes, and the memory files all stay, and the new members are told which scratch files are already there so they can read the old run before acting.
 

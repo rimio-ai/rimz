@@ -171,32 +171,41 @@ pub fn try_append(record: &AssistRecord) -> std::io::Result<()> {
 
 pub fn record_tier_fallbacks(identities: &[crate::store::writer::AgentLaunchIdentity]) {
     for identity in identities {
-        let Some(stamp) = identity
-            .launch
-            .tier
-            .as_ref()
-            .filter(|stamp| !stamp.skipped.is_empty())
-        else {
-            continue;
-        };
-        append(&AssistRecord {
-            at: Timestamp::now(),
-            assist: Assist::TierFallback {
-                kind: identity.kind.clone(),
-                agent_id: identity.agent_id.clone(),
-                label: Some(identity.name.clone()),
-                // Tier stamps originate only in named, materialized profile cells.
-                profile: identity
-                    .launch
-                    .profile
-                    .clone()
-                    .expect("routed launch profile"),
-                tier: stamp.tier,
-                model: stamp.model.clone(),
-                skipped: stamp.skipped.clone(),
-            },
-        });
+        record_tier_fallback(
+            &identity.kind,
+            &identity.agent_id,
+            Some(&identity.name),
+            &identity.launch,
+        );
     }
+}
+
+pub fn record_tier_fallback(
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    label: Option<&str>,
+    launch: &crate::agents::LaunchParams,
+) {
+    let Some(stamp) = launch
+        .tier
+        .as_ref()
+        .filter(|stamp| !stamp.skipped.is_empty())
+    else {
+        return;
+    };
+    append(&AssistRecord {
+        at: Timestamp::now(),
+        assist: Assist::TierFallback {
+            kind: kind.clone(),
+            agent_id: agent_id.clone(),
+            label: label.map(str::to_owned),
+            // Tier stamps originate only in named, materialized profile cells.
+            profile: launch.profile.clone().expect("routed launch profile"),
+            tier: stamp.tier,
+            model: stamp.model.clone(),
+            skipped: stamp.skipped.clone(),
+        },
+    });
 }
 
 pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<AssistRecord> {

@@ -696,6 +696,9 @@ mod parse {
             vec!["--model", "opus"],
             vec!["--effort", "high"],
             vec!["--isolation", "host"],
+            vec!["--agent", "claude"],
+            vec!["--tier", "senior"],
+            vec!["ship"],
         ] {
             for prefix in [vec!["rimz", "claude"], vec!["rimz", "launch", "claude"]] {
                 for resume in ["--resume", "--continue"] {
@@ -709,25 +712,11 @@ mod parse {
                     };
                     assert!(launch.cohort.resume);
                     validate_resume_inputs(launch, ResumeEntrance::Flag).unwrap();
+                    validate_resume_inputs(launch, ResumeEntrance::Reconcile).unwrap();
                 }
             }
         }
         for (input, override_args, message) in [
-            (
-                "--tier",
-                vec!["--tier", "senior"],
-                "`--tier` does not apply to resumed sessions; launch fresh instead",
-            ),
-            (
-                "PROMPT",
-                vec!["ship"],
-                "a resumed session takes no prompt; send it after it opens with `rimz message`",
-            ),
-            (
-                "--agent",
-                vec!["--agent", "claude"],
-                "`--agent` changes which session resume matches; resume the spec as launched",
-            ),
             (
                 "--system-prompt-file",
                 vec!["--system-prompt-file", "base.md"],

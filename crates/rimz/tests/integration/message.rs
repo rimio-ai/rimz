@@ -1118,6 +1118,96 @@ fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
 }
 
 #[test]
+fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    for signal in [LifecycleSignal::Registered, LifecycleSignal::Ended] {
+        append_lifecycle(
+            &env,
+            "claude",
+            "test",
+            "resume-session",
+            signal,
+            |observation| {
+                observation.agent_name = Some("resume-leader".into());
+            },
+        );
+    }
+    let workspace = env.resolve_workspace(&env.project_root);
+    let shim = crate::common::write_env_dump_shim(&env, "claude");
+    run_success(
+        traced_rimz(&env, "resume-launch.log")
+            .current_dir(&env.project_root)
+            .env("PATH", crate::common::path_with_front(&shim))
+            .env("ZELLIJ_PANE_ID", "1")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            )
+            .args([
+                "--mux",
+                "zellij",
+                "agents",
+                "claude",
+                "--resume",
+                "--new-tab",
+                "say hi",
+            ]),
+        "resume with prompt",
+    );
+    let wake: Option<jiff::Timestamp> = serde_json::from_slice(
+        &std::fs::read(wake_stamp_path(&env)).expect("resume must arm the message sweep"),
+    )
+    .unwrap();
+    assert!(wake.is_some_and(|time| time <= jiff::Timestamp::now()));
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace = env.project_root.join("resume-send.log");
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "sweep before registration",
+    );
+    assert!(
+        trace_lines(&trace).is_empty(),
+        "must not send before registration"
+    );
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "resume-session",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "resume-session",
+                std::process::id(),
+                None,
+            ));
+        },
+    );
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "sweep after registration, without Stop",
+    );
+    assert_text_then_enter(&trace, &user_message("say hi"));
+    let messages = env.store().list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].status, MessageStatus::Sent);
+    assert_eq!(messages[0].sender, MessageSender::Human);
+}
+
+#[test]
 fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let env = Env::new();
     env.install_agent_hooks("claude");

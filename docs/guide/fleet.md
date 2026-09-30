@@ -230,7 +230,7 @@ rimz agents stop @reviewer      # close the idle reviewer's pane
 rimz agents stop @claude --all  # close every Claude in scope
 ```
 
-`stop` closes the agent's pane, which ends the CLI process with it, and stops any supervised children that agent launched. Sessions stay on disk in the provider's own format, so a stopped agent is one `--resume` away. To keep the conversation but change how the next run works, [`rimz agents <spec> --resume`](../reference/cli/agents.md#resume-a-cohort) accepts permission, model, and effort overrides for that run.
+`stop` closes the agent's pane, which ends the CLI process with it, and stops any supervised children that agent launched. Sessions stay on disk in the provider's own format, so a stopped agent is one `--resume` away. To keep the conversation but change how it runs, [`rimz agents <spec> --resume`](../reference/cli/agents.md#resume-a-cohort) accepts overrides that become its saved launch settings. A prompt can ride along: `rimz agents claude --resume --model sonnet 'Continue the review'` reopens the conversation and queues your instruction for the agent. Later resumes keep that model. An in-session `/model` switch is not carried; restate it with `--model` on resume to keep it.
 
 Agent-initiated launches, forks, resumes, and restarts leave your focus alone, so another agent's handoff does not interrupt your typing. An in-place launch becomes a split instead. Shell commands keep their usual focus behavior; `--bg` also leaves already-live agents where they are. See the [focus rule and Zellij version caveat](../reference/cli/agents.md#channel-worktree-and-placement).
 

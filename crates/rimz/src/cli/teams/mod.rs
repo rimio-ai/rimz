@@ -124,6 +124,27 @@ struct ResumeArgs {
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
     name: String,
+    /// Queue a user message to the team's leader after reopening.
+    #[arg(value_name = "PROMPT", allow_hyphen_values = true, value_parser = agents_cmd::parse_cohort_prompt)]
+    prompt: Option<String>,
+    /// Save this model for subsequent resumes.
+    #[arg(long, value_name = "MODEL", conflicts_with = "tier")]
+    model: Option<String>,
+    /// Save this reasoning effort for subsequent resumes.
+    #[arg(long, value_name = "LEVEL")]
+    effort: Option<String>,
+    /// Replace the saved launch record with a same-provider profile or kind base.
+    #[arg(long, value_name = "PROFILE|KIND")]
+    agent: Option<String>,
+    /// Pick this tier's same-provider entry and save the launch record.
+    #[arg(long, value_name = "TIER")]
+    tier: Option<rimz::config::tiers::ModelTier>,
+    /// Save permission mode that asks before tool use where supported.
+    #[arg(long, conflicts_with = "yolo")]
+    ask: bool,
+    /// Save permission mode that skips provider permission prompts where supported.
+    #[arg(long)]
+    yolo: bool,
     /// Scope resume to one worktree.
     #[arg(
         long,
@@ -146,6 +167,7 @@ impl ResumeArgs {
     fn into_agents_args(self) -> agents_cmd::AgentsArgs {
         agents_cmd::AgentsArgs::from_launch(agents_cmd::AgentLaunchArgs {
             spec: Some(self.name),
+            prompt: self.prompt,
             cohort: agents_cmd::CohortLaunchArgs {
                 worktree: self.worktree,
                 resume: true,
@@ -154,6 +176,12 @@ impl ResumeArgs {
             },
             overrides: agents_cmd::LaunchOverrideArgs {
                 isolation: self.isolation,
+                model: self.model,
+                effort: self.effort,
+                agent: self.agent,
+                tier: self.tier,
+                ask: self.ask,
+                yolo: self.yolo,
                 ..Default::default()
             },
             ..Default::default()
@@ -748,13 +776,42 @@ mod tests {
             assert!(launch.resume);
             assert_eq!(isolation, Some(rimz::config::Isolation::Host));
         }
-        let resume = parse_teams(&["rimz", "resume", "forge", "--isolation", "host"]);
+        let resume = parse_teams(&[
+            "rimz",
+            "resume",
+            "forge",
+            "ship",
+            "--isolation",
+            "host",
+            "--agent",
+            "reviewer",
+            "--model",
+            "opus[1m]",
+            "--effort",
+            "high",
+            "--ask",
+        ]);
         let Some(TeamsSubcmd::Resume(args)) = resume.command else {
             panic!("resume verb");
         };
         let args = args.into_agents_args();
         assert_eq!(args.launch.spec.as_deref(), Some("forge"));
         assert!(args.launch.cohort.resume);
+        assert_eq!(args.launch.prompt.as_deref(), Some("ship"));
+        assert_eq!(args.launch.overrides.agent.as_deref(), Some("reviewer"));
+        assert_eq!(args.launch.overrides.model.as_deref(), Some("opus[1m]"));
+        assert_eq!(args.launch.overrides.effort.as_deref(), Some("high"));
+        assert!(args.launch.overrides.ask);
+        let resume = parse_teams(&["rimz", "resume", "forge", "--tier", "senior", "--yolo"]);
+        let Some(TeamsSubcmd::Resume(tier_args)) = resume.command else {
+            panic!("resume verb")
+        };
+        let tier_args = tier_args.into_agents_args();
+        assert_eq!(
+            tier_args.launch.overrides.tier,
+            Some(rimz::config::tiers::ModelTier::Senior)
+        );
+        assert!(tier_args.launch.overrides.yolo);
         assert_eq!(
             args.launch.overrides.isolation,
             Some(rimz::config::Isolation::Host)

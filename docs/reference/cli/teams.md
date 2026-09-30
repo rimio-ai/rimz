@@ -221,7 +221,7 @@ A checkout holding another team (a live member, or team history with a board sta
 | `--bg` | Keep focus where it is, as agent callers always do. See the [focus rule](./agents.md#channel-worktree-and-placement). |
 | `--new-tab` | Open the launch in a new tab or tmux window. |
 
-`--resume` accepts `--isolation host|sandbox`, replacing each member's recorded isolation while keeping its conversation. It refuses `PROMPT`: send it with `rimz message` after the session opens, or choose fresh at the named-worktree prompt. `--from-pr`, `--channel`, `--description`, and `--budget` still conflict with resume. `--fresh` conflicts with `--resume` and `--from-pr`. Launch flags without a team name are refused with `team launch options require a team name`.
+`--resume` accepts `--isolation host|sandbox`, replacing each member's recorded isolation while keeping its conversation, and queues `PROMPT` to the leader after reopening. For model, effort, agent-base, tier, or permission overrides, use the `resume` verb below. `--from-pr`, `--channel`, `--description`, and `--budget` still conflict with resume. `--fresh` conflicts with `--resume` and `--from-pr`. Launch flags without a team name are refused with `team launch options require a team name`.
 
 A launch that opens new panes prints a receipt:
 
@@ -261,9 +261,9 @@ rimz teams resume forge#feat-rate-limits
 rimz teams resume forge -w --bg
 ```
 
-`resume` reopens the newest closed cohort of the team, with the identity, directory, and lane recorded in the store and each role's launch settings from its current profile. `team#worktree` or `-w NAME` limits the match to that worktree. Bare `-w`, or no flag while you stand in a linked worktree, scopes to the current worktree; from the root checkout the newest match anywhere in the room wins. A matched member that is still live refuses the command. Matching rules are on [`rimz agents` → Resume a cohort](./agents.md#resume-a-cohort).
+`resume` reopens the newest closed cohort of the team, with the identity, directory, and lane recorded in the store and each role's saved launch record over its current profile. `team#worktree` or `-w NAME` limits the match to that worktree. Bare `-w`, or no flag while you stand in a linked worktree, scopes to the current worktree; from the root checkout the newest match anywhere in the room wins. A matched member that is still live refuses the command. Matching rules are on [`rimz agents` → Resume a cohort](./agents.md#resume-a-cohort).
 
-`--isolation host|sandbox` replaces each resumed member's recorded isolation; for example, `rimz teams resume forge --isolation host`. Omitting it preserves each member's recorded override; a member with none recorded takes its profile's `isolation` default, then machine policy. The replacement survives restart, rebirth, and child launches. For one-shot permission, model, or effort changes, use [`rimz agents forge --resume`](./agents.md#resume-a-cohort).
+`--model MODEL`, `--effort LEVEL`, `--agent PROFILE|KIND`, `--tier TIER`, `--ask` or `--yolo`, and `--isolation host|sandbox` become the saved launch settings, with the same provider and tier restrictions as [`rimz agents forge --resume`](./agents.md#resume-a-cohort). A positional `PROMPT` is queued to the team's leader as a user message after reopening. Omitting isolation preserves each member's recorded override; a member with none recorded takes its profile's `isolation` default, then machine policy. The replacement survives restart, rebirth, and child launches.
 
 `--bg` and agent callers keep focus where it is under the [focus rule](./agents.md#channel-worktree-and-placement). `resume` prints one line per member, `resumed <kind>:<name> (<session id>)` or `started fresh <member>` for a member with nothing to resume, followed by `Check:`, `Reach:`, and `Wait:` command hints for the cohort.
 
