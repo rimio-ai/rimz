@@ -266,9 +266,9 @@ Titles are best-effort display. The sidebar producer returns a pane-named tab to
 
 ### Cohort relaunch reconciliation
 
-Relaunching a team into a worktree that already held one is where a naive launch would silently duplicate work. Reconciliation runs whenever the command names a team, or an inline layout with at least two agent cells, *and* supplies an explicit `-w NAME`, unless the launch uses `--from-pr`. It runs after placement and the live-room preflight and before worktree resolution ([`reconcile.rs`](../../../crates/rimz/src/cli/agents_cmd/reconcile.rs)).
+Relaunching a team into a worktree that already held one is where a naive launch would silently duplicate work. Reconciliation runs whenever the command names a team, or an inline layout with at least two agent cells, and supplies an explicit `-w NAME` or reuses a holder through `--from-pr`. It runs after placement and the live-room preflight ([`reconcile.rs`](../../../crates/rimz/src/cli/agents_cmd/reconcile.rs)). For `-w`, it precedes worktree resolution; for `--from-pr`, it follows the holder lookup but precedes tip choice and settlement, including before a resume ([PR checkout ordering](./worktrees.md#from-a-pull-request)).
 
-It derives the named worktree path without creating it, reads the audit rollup for matching root members in that path, and picks one of four outcomes.
+The caller supplies the named worktree path without creating it, or the PR branch holder's actual path. Reconciliation reads the audit rollup for matching root members in that path and picks one of four outcomes.
 
 | History in that worktree | Outcome |
 | --- | --- |
