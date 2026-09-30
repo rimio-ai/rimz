@@ -278,6 +278,10 @@ Titles are best-effort display. The sidebar producer returns a pane-named tab to
 
 ### Cohort relaunch reconciliation
 
+#### One team per checkout
+
+A fresh team launch refuses a checkout held by a different team: a present member holds it, or, with no present members, a board stage other than `Done` holds it. `resume::inspect_team_hold` takes the holder's identity from root launch occupants in the audit store rows at the normalized checkout path and reads the stage through `scratch::board_stage`; no team rows, a missing stage, or a `Done` board with nobody present means no hold. In `launch_layout` this check follows the `--from-pr` holder lookup and precedes reconciliation and named-worktree creation, including for in-place, `--cwd`, and channel launches. Same-team reconciliation stays unchanged; explicit resume, rebirth, and channel resume are not gated. The audit read is unlocked, so concurrent launches can both pass.
+
 Relaunching a team into a worktree that already held one is where a naive launch would silently duplicate work. Reconciliation runs whenever the command names a team, or an inline layout with at least two agent cells, and supplies an explicit `-w NAME` or reuses a holder through `--from-pr`. It runs after placement and the live-room preflight ([`reconcile.rs`](../../../crates/rimz/src/cli/agents_cmd/reconcile.rs)). For `-w`, it precedes worktree resolution; for `--from-pr`, it follows the holder lookup but precedes tip choice and settlement, including before a resume ([PR checkout ordering](./worktrees.md#from-a-pull-request)).
 
 The caller supplies the named worktree path without creating it, or the PR branch holder's actual path. Reconciliation reads the audit rollup for matching root members in that path and picks one of four outcomes.

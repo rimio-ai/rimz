@@ -127,6 +127,30 @@ fn agent_reconcile_live_cohort_keeps_focus() {
 }
 
 #[test]
+fn different_team_live_hold_refuses_launch() {
+    assert_launch_focus(&["teams", "solo", "-w", "review"], true, "hold-live");
+}
+
+#[test]
+fn different_team_board_hold_refuses_launch() {
+    assert_launch_focus(&["teams", "solo", "-w", "review"], true, "hold-board");
+}
+
+#[test]
+fn different_team_done_board_allows_launch() {
+    assert_launch_focus(&["teams", "solo", "-w", "review"], true, "hold-done");
+}
+
+#[test]
+fn held_team_can_resume_before_done() {
+    assert_launch_focus(
+        &["teams", "resume", "duo", "-w", "review"],
+        true,
+        "hold-resume",
+    );
+}
+
+#[test]
 fn from_pr_live_cohort_preserves_behind_and_equal_tips() {
     for behind in [true, false] {
         assert_from_pr_launch(Some(LifecycleSignal::Registered), behind, false);
@@ -337,20 +361,49 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         "layout: lead,worker\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}\n  - {role: worker, agent: worker}",
         "Complete the work.",
     );
+    let hold = action.starts_with("hold-");
+    if hold {
+        crate::common::write_definition(
+            &env,
+            "teams",
+            "solo",
+            "layout: lead\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
+            "Complete the work.",
+        );
+    }
     let shim = write_env_dump_shim(&env, "claude");
     let workspace = env.resolve_workspace(&env.project_root);
-    if matches!(args[1], "restart" | "resume") || action == "cohort" {
-        let worktree = if action == "cohort" {
+    if matches!(args[1], "restart" | "resume") || action == "cohort" || hold {
+        let worktree = if action == "cohort" || hold {
             assert!(init_launch_repo(&env.project_root));
             let path =
                 rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
                     .unwrap();
-            std::fs::create_dir_all(&path).unwrap();
+            if matches!(action, "hold-done" | "hold-resume") {
+                env.rimz()
+                    .args(["worktree", "new", "review"])
+                    .assert()
+                    .success();
+            } else if !hold {
+                std::fs::create_dir_all(&path).unwrap();
+            }
+            if matches!(action, "hold-board" | "hold-done" | "hold-resume") {
+                std::fs::create_dir_all(&path).unwrap();
+                std::fs::write(
+                    path.join("blackboard.md"),
+                    if action == "hold-done" {
+                        "Stage: Done\n"
+                    } else {
+                        "Stage: Build (@lead)\n"
+                    },
+                )
+                .unwrap();
+            }
             path
         } else {
             env.project_root.clone()
         };
-        let observation = AgentLifecycleObservation {
+        let mut observation = AgentLifecycleObservation {
             agent_id: Some("provider-session".into()),
             pane_id: Some(rimz::ids::PaneId::from_parts(
                 rimz::ids::MuxName::Zellij,
@@ -365,7 +418,8 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             worktree_path: Some(worktree.display().to_string()),
             launch: LaunchParams {
                 channel: Some("review".to_owned()),
-                team: (action == "cohort").then(|| "duo".to_owned()),
+                team: (action == "cohort" || hold).then(|| "duo".to_owned()),
+                role: hold.then(|| "lead".to_owned()),
                 ..Default::default()
             },
             ..AgentLifecycleObservation::new(
@@ -373,6 +427,9 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                 LifecycleSignal::Registered,
             )
         };
+        if hold && action != "hold-live" {
+            observation.runtime_owner = None;
+        }
         env.store()
             .append_event(&EventEnvelope::agent_lifecycle(
                 workspace.workspace_id.clone(),
@@ -382,7 +439,23 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                 &observation,
             ))
             .unwrap();
+        if hold && action != "hold-live" {
+            env.store()
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    "claude",
+                    "test",
+                    &AgentLifecycleObservation::new(
+                        Some("provider-session".into()),
+                        LifecycleSignal::Ended,
+                    ),
+                ))
+                .unwrap();
+        }
     }
+    let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
+    let events_before = std::fs::read(env.state_path_for(&env.project_root).events_log).unwrap();
     let log = env.home_root.join("mux.log");
     let mut command = env.rimz();
     command.args(["--mux", "zellij"]).args(args)
@@ -402,6 +475,41 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             .env("RIMZ_AGENT_ID", "launch-session");
     }
     let output = command.bounded_output().unwrap();
+    if matches!(action, "hold-live" | "hold-board") {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        assert!(stderr.contains("already holds team `duo`"), "{stderr}");
+        assert!(
+            stderr.contains("rimz teams resume duo -w review"),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(if action == "hold-live" {
+                "a member is live"
+            } else {
+                "its board is at `Build`"
+            }),
+            "{stderr}"
+        );
+        assert_eq!(
+            serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+            before
+        );
+        assert_eq!(
+            std::fs::read(env.state_path_for(&env.project_root).events_log).unwrap(),
+            events_before
+        );
+        assert!(!std::fs::read_to_string(&log).unwrap().contains("new-tab"));
+        if action == "hold-live" {
+            assert!(
+                !rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
+                    .unwrap()
+                    .exists()
+            );
+        }
+        return;
+    }
+    let action = if hold { "new-tab" } else { action };
     assert!(
         output.status.success(),
         "{}",

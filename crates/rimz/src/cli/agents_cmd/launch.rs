@@ -295,6 +295,50 @@ pub(super) fn launch_layout(
     } else {
         None
     };
+    if let Some(team) = team_name.as_deref() {
+        let target = if let Some(path) = cwd.as_deref() {
+            Some((None, path))
+        } else if let Some((name, path)) = cohort_target.as_ref() {
+            Some((Some(name.as_str()), path.as_path()))
+        } else {
+            match checkout.as_ref() {
+                Some(Ok(launch)) => Some((launch.worktree_name.as_deref(), launch.cwd.as_path())),
+                Some(Err(rimz::worktree::WorktreeErr::PrBranchDiverged {
+                    holder: Some(path),
+                    ..
+                })) => Some((None, path.as_path())),
+                Some(Err(_)) => None,
+                // A generated worktree has no prior occupants.
+                None if args.launch.cohort.worktree.is_some() => None,
+                None => Some((None, workspace.worktree_root.as_path())),
+            }
+        };
+        if let Some((name, path)) = target
+            && let Some(hold) = rimz::harness::resume::inspect_team_hold(&projection.agents, path)
+            && hold.team != team
+        {
+            let reason = match hold.reason {
+                rimz::harness::resume::TeamHoldReason::LiveMember => "a member is live".to_owned(),
+                rimz::harness::resume::TeamHoldReason::BoardStage(stage) => {
+                    format!("its board is at `{stage}`")
+                }
+            };
+            let (place, resume) = match name {
+                Some(name) => (
+                    format!("worktree `{name}`"),
+                    format!("`rimz teams resume {} -w {name}`", hold.team),
+                ),
+                None => (
+                    format!("checkout `{}`", path.display()),
+                    format!("`rimz teams resume {}` from that checkout", hold.team),
+                ),
+            };
+            bail!(
+                "{place} already holds team `{}` ({reason}); one team per checkout: resume it with {resume}, or launch into another worktree",
+                hold.team
+            );
+        }
+    }
     if let Some((name, path)) = cohort_target {
         let spec_display = args.launch.spec.as_deref().unwrap_or("<spec>");
         match reconcile::reconcile_cohort_launch(

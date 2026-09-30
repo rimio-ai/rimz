@@ -2327,6 +2327,50 @@ fn match_cohort<'a>(
     }
 }
 
+/// Why a checkout cannot take a new team.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TeamHold {
+    pub team: String,
+    pub reason: TeamHoldReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TeamHoldReason {
+    /// A member of the holding team is present.
+    LiveMember,
+    /// Nobody is present, but the checkout's board is not Done.
+    BoardStage(String),
+}
+
+/// Inspect the team holding a checkout before a fresh launch.
+pub fn inspect_team_hold(agents: &[AgentState], checkout: &Path) -> Option<TeamHold> {
+    let target = crate::utils::path::normalize_path_lexical(checkout);
+    let members = crate::address::launch_occupants(agents.iter().filter(|agent| {
+        cohort_admits(agent, crate::store::runtime::agent_liveness)
+            && agent.team.is_some()
+            && agent.worktree_path.as_deref().is_some_and(|path| {
+                crate::utils::path::normalize_path_lexical(Path::new(path)) == target
+            })
+    }));
+    if let Some(member) = members
+        .iter()
+        .filter(|agent| cohort_member_is_present(agent))
+        .max_by_key(|agent| agent.last_activity)
+    {
+        return Some(TeamHold {
+            team: member.team.clone()?,
+            reason: TeamHoldReason::LiveMember,
+        });
+    }
+    let member = members.iter().max_by_key(|agent| agent.last_activity)?;
+    let team = member.team.clone()?;
+    let stage = super::scratch::board_stage(checkout)?;
+    super::fleet::team_stage_pending(Some(&stage.name)).then_some(TeamHold {
+        team,
+        reason: TeamHoldReason::BoardStage(stage.name),
+    })
+}
+
 /// Inspect prior worktree members before a fresh cohort launch.
 pub fn inspect_cohort_relaunch(
     agents: &[AgentState],

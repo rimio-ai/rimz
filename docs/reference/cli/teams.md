@@ -204,6 +204,8 @@ rimz teams peer --channel triage
 rimz teams launch forge -w feat-rate-limits
 ```
 
+A checkout holding another team (a live member, or team history with a board stage other than `Done`) [refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-checkout).
+
 `rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. The team's tab selects the leader's pane internally; whether the client enters it follows the [agent launch focus rule](./agents.md#channel-worktree-and-placement). Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree) (a live cohort is focused unless an agent caller or `--bg` preserves focus; a closed one prompts to resume, start fresh, or remove). A name that is not a defined team is refused with the list of configured teams, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
 
 | Flag | Effect |
