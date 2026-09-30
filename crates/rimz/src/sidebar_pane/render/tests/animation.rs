@@ -873,8 +873,14 @@ fn render_stalled_agent_reads_as_static_attention() {
         Some("main"),
         Some("waiting on tools"),
     );
-    claude.last_activity =
-        fixed_now() - Duration::from_secs(u64::from(crate::agents::DEFAULT_STALL_AFTER_SECS) + 60);
+    claude.last_activity = fixed_now()
+        - Duration::from_secs(
+            u64::from(
+                crate::config::AttentionConfig::default()
+                    .stalled_after_secs
+                    .get(),
+            ) + 60,
+        );
     let snapshot = snapshot_with(vec![claude]);
     let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 16);
     let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 40, 16);

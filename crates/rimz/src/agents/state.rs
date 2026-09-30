@@ -281,15 +281,6 @@ impl PendingWaitTrigger {
 /// default inactive window below which a card sinks beneath live work.
 pub const ATTENTION_AGE_CEILING_SECS: i64 = 3_600;
 
-/// Default `[agents.attention] inactive_after_secs`: a row with no activity for
-/// this long sinks into the inactive partition, beneath every live row.
-pub const DEFAULT_INACTIVE_AFTER_SECS: u32 = ATTENTION_AGE_CEILING_SECS as u32;
-
-/// Default `[agents.attention] archive_after_secs`: a row with no activity for
-/// this long stops competing with hot or warm work and parks in the archive
-/// partition.
-pub const DEFAULT_ARCHIVE_AFTER_SECS: u32 = 24 * 60 * 60;
-
 /// Agent status as the sidebar reads it. The first five are the lifecycle
 /// rollup the agent owns and RimZ observes; `Paused` and `Sleeping` are
 /// RimZ-derived projections, never emitted by a hook. They live in the one
@@ -425,22 +416,6 @@ impl ContextSeverity {
         }
     }
 }
-
-/// Default window before a `running` agent with no activity is treated as
-/// stalled. The per-machine `[agents.attention] stalled_after_secs` setting
-/// overrides this for the live sidebar projection.
-pub const DEFAULT_STALL_AFTER_SECS: u32 = 30 * 60;
-
-/// Consecutive identical tool calls before the sidebar annotates a card.
-pub const DEFAULT_TOOL_REPEAT_WARN_AFTER: u32 = 3;
-
-/// Consecutive identical tool calls before the sidebar routes attention.
-pub const DEFAULT_TOOL_REPEAT_ATTENTION_AFTER: u32 = 20;
-
-/// Default silence window credited to a working span before estimated active
-/// time pauses. The next progress signal resumes accrual without counting the
-/// intervening idle gap.
-pub const DEFAULT_ACTIVE_GRACE_SECS: u32 = 3 * 60;
 
 /// Whether a `running` agent has gone silent past `stalled_after_secs`. Only
 /// `running` can stall: every other status is terminal, idle, or already an

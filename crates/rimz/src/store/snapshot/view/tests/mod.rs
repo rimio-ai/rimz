@@ -41,7 +41,11 @@ use crate::store::subagent_context::SubagentContextRecord;
 use crate::workspace::RootClass;
 
 fn default_stall_secs() -> i64 {
-    i64::from(crate::agents::DEFAULT_STALL_AFTER_SECS)
+    i64::from(
+        crate::config::AttentionConfig::default()
+            .stalled_after_secs
+            .get(),
+    )
 }
 
 fn paneless_codex(id: &str, worktree: &str, rank: i64) -> AgentState {

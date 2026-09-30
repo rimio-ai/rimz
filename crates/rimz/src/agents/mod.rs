@@ -131,9 +131,7 @@ pub(crate) use registry::{resumed_session_id_for_root, resumed_session_id_from_c
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, AskDelivery, BudgetPark,
-    BudgetScope, BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, DEFAULT_ACTIVE_GRACE_SECS,
-    DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS, DEFAULT_STALL_AFTER_SECS,
-    DEFAULT_TOOL_REPEAT_ATTENTION_AFTER, DEFAULT_TOOL_REPEAT_WARN_AFTER, OpenAsk, PendingWait,
+    BudgetScope, BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, OpenAsk, PendingWait,
     PendingWaitTrigger, QueuedAsk, TurnCompletion, is_stalled, is_tool_looping, is_turn_dead,
     settled_outcome, single_line_description,
 };
