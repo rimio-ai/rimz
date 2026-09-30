@@ -1245,7 +1245,16 @@ mod launch_options {
                 request.timeout,
                 Some(std::time::Duration::from_secs(seconds))
             );
+            assert!(!request.force_new_tab);
         }
+        // A long-lived check worker opts out of the loop zone into its own tab.
+        let (request, _) = into_loop_check_request(
+            parse_agents(&["rimz", "claude", "check", "--new-tab"]),
+            "nightly",
+            &config,
+        )
+        .unwrap();
+        assert!(request.loop_zone && request.force_new_tab);
         for (argv, expected) in [
             (vec!["rimz", "claude"], "with a prompt"),
             (vec!["rimz", "claude", "check", "--bg"], "remove `--bg`"),
