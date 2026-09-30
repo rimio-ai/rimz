@@ -520,6 +520,83 @@ fn spending_walk_skips_entirely_within_ttl() {
 }
 
 #[test]
+fn one_shot_serves_stale_publication_without_cursor_cache() {
+    use rimz::agents::spending::{unix_secs_now, utc_date};
+
+    let env = Env::new();
+    let config_dir = env.project_root.join("claude-config");
+    let proj_dir = config_dir.join("projects").join("p");
+    std::fs::create_dir_all(&proj_dir).expect("mkdir projects");
+    let secs = unix_secs_now() - 3_600;
+    let tod = secs % 86_400;
+    let iso = format!(
+        "{}T{:02}:{:02}:{:02}.000Z",
+        utc_date(secs),
+        tod / 3_600,
+        (tod % 3_600) / 60,
+        tod % 60
+    );
+    let transcript = |id: usize| {
+        format!(
+            r#"{{"timestamp":"{iso}","costUSD":0.25,"requestId":"req-{id}","message":{{"id":"msg-{id}","usage":{{"input_tokens":1200,"output_tokens":80}}}}}}"#
+        ) + "\n"
+    };
+    std::fs::write(proj_dir.join("chat.jsonl"), transcript(1)).expect("transcript");
+    let panes_path = env.project_root.join("panes.json");
+    std::fs::write(&panes_path, b"[]").expect("panes fixture");
+    let snapshot = || -> serde_json::Value {
+        let output = env
+            .rimz()
+            .args([
+                "sidebar",
+                "snapshot",
+                "--json",
+                "--workspace-id",
+                env.workspace_id.as_str(),
+                "--session-name",
+                "rimz-spend-stale",
+            ])
+            .env("RIMZ_TEST_PANE_LIST", &panes_path)
+            .env("CLAUDE_CONFIG_DIR", &config_dir)
+            .output()
+            .expect("snapshot");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("snapshot json")
+    };
+    let cold = snapshot();
+    assert!(cold["value_tally"].is_object());
+    let runtime = env.runtime_paths();
+    let cache_path = runtime.shared_provider_spending_path();
+    let mut published: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cache_path).expect("publication"))
+            .expect("publication json");
+    published["refreshed_at_ms"] = ((unix_secs_now() - 3_600) * 1_000).into();
+    let backdated = serde_json::to_vec(&published).expect("backdated publication");
+    std::fs::write(&cache_path, &backdated).expect("backdate publication");
+    if runtime.lanes_dir.exists() {
+        std::fs::remove_dir_all(&runtime.lanes_dir).expect("remove runtime sidecars");
+    }
+    let cursor_path = runtime.shared_spending_cursor_path();
+    std::fs::remove_file(&cursor_path).expect("remove cursor cache");
+    std::fs::write(proj_dir.join("second.jsonl"), transcript(2)).expect("second transcript");
+
+    let warm = snapshot();
+    assert_eq!(
+        warm["value_tally"], cold["value_tally"],
+        "serve published tally without rewalking"
+    );
+    assert_eq!(std::fs::read(cache_path).expect("publication"), backdated);
+    assert!(
+        !cursor_path.exists(),
+        "served publication must not recreate cursor cache"
+    );
+}
+
+#[test]
 fn spending_discovery_retires_a_large_historical_tree_from_warm_passes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("history");

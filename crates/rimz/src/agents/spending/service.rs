@@ -319,9 +319,9 @@ pub enum SpendingServiceClientError {
 
 type Result<T> = std::result::Result<T, SpendingServiceClientError>;
 
-/// Whether this caller has a process lifetime long enough to own the warm
-/// walker. One-shot CLI producers connect to an existing owner and otherwise
-/// use one bounded direct walker without taking the lifetime lock.
+/// Whether this caller can own the warm walker. Without an owner, one-shot
+/// callers serve any current-version publication regardless of age, walking
+/// only when none exists and never taking the lifetime lock.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SpendingServiceStartup {
     HostEligible,
@@ -329,8 +329,9 @@ pub enum SpendingServiceStartup {
 }
 
 /// Connect to the current owner. Host-eligible callers elect an in-process
-/// service on absence and retry failover once; one-shot callers use a bounded
-/// direct walker without taking the lifetime lock when no owner answers.
+/// service on absence and retry failover once; without an owner, one-shot
+/// callers serve any current-version publication regardless of age and walk
+/// only when none exists.
 pub fn request(
     runtime: &RuntimePaths,
     request: SpendingServiceRequest,
@@ -375,6 +376,9 @@ fn direct_fallback(
     runtime: &RuntimePaths,
     request: &SpendingServiceRequest,
 ) -> Result<SpendingCaches> {
+    if let Some(caches) = super::engine::current_publication(runtime, request) {
+        return Ok(caches);
+    }
     runtime
         .ensure_shared_dirs()
         .map_err(|error| std::io::Error::other(error.to_string()))?;
