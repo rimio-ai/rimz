@@ -4,11 +4,13 @@ use anyhow::{Context, Result};
 use jiff::Timestamp;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::cache_keepalive::{CacheKeepaliveRequest, prompt};
-use rimz::message::deliver;
-use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+use rimz::message::synthetic::{self, SyntheticMessage};
+use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
 use rimz::store::writer::DeliveryFailureDisposition;
 
 use super::Ctx;
+
+const CLOSED_GATE: &str = "cache keepalive delivery gate closed";
 
 pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
     let config = rimz::config::MachineConfig::load_lenient();
@@ -20,36 +22,28 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
     let Some(agent) = request.target(&snapshot, &config.harness, now) else {
         return Ok(());
     };
-    let message = MessageRecord::new(
-        request.workspace_id.clone(),
+    let message = SyntheticMessage {
         agent,
-        prompt(agent, now),
-        DeliveryGate::Done,
-    )
-    .with_channel(agent.channel())
-    .with_sender(MessageSender::Harness {
-        notice: HarnessNotice::CacheKeepalive,
-    })
-    .with_pane_id(request.pane_id);
-    let outcome = deliver::deliver_now(&ctx.workspace, &ctx.store, &message);
+        text: prompt(agent, now),
+        sender: MessageSender::Harness {
+            notice: HarnessNotice::CacheKeepalive,
+        },
+        gate: DeliveryGate::Done,
+        pane_id: Some(request.pane_id),
+    }
+    .record(&ctx.workspace);
+    let outcome = synthetic::deliver_now(
+        &ctx.workspace,
+        &ctx.store,
+        &message,
+        DeliveryFailureDisposition::Terminal,
+        CLOSED_GATE,
+    );
     let delivered = matches!(outcome, Ok(true));
     let error = match &outcome {
         Ok(true) => None,
-        Ok(false) => Some("cache keepalive delivery gate closed".to_owned()),
+        Ok(false) => Some(CLOSED_GATE.to_owned()),
         Err(err) => Some(err.to_string()),
-    };
-    let finalized = if let Some(error) = &error {
-        ctx.store
-            .record_message_delivery_failures(
-                std::slice::from_ref(&message.message_id),
-                None,
-                DeliveryFailureDisposition::Terminal,
-                error,
-                &ctx.workspace.session_name,
-            )
-            .map(|_| ())
-    } else {
-        Ok(())
     };
     rimz::harness::assist_log::append(&AssistRecord {
         at: Timestamp::now(),
@@ -64,7 +58,6 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
             error,
         },
     });
-    finalized.context("finalizing missed cache keepalive")?;
     outcome.context("delivering cache keepalive")?;
     Ok(())
 }

@@ -10,6 +10,8 @@ use rimz::agents::BudgetWindow;
 use rimz::harness::budget::{
     BudgetLedger, BudgetSpec, DayBaseline, read_ledger, total_cost_usd, write_ledger,
 };
+use rimz::message::synthetic::SyntheticMessage;
+use rimz::store::message::{DeliveryGate, MessageSender};
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
@@ -105,7 +107,18 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             .auto_continue_text
             .clone();
         if !text.trim().is_empty() {
-            rimz::message::deliver::queue_synthetic(workspace, store, agent, text)
+            store
+                .queue_message(
+                    &SyntheticMessage {
+                        agent,
+                        text,
+                        sender: MessageSender::System,
+                        gate: DeliveryGate::Done,
+                        pane_id: None,
+                    }
+                    .record(workspace),
+                    &workspace.session_name,
+                )
                 .context("queueing budget continue prompt")?;
         }
     }

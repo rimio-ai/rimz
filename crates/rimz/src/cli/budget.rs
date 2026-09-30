@@ -12,6 +12,8 @@ use rimz::agents::{BudgetWindow, LoginCatalog, RoomLoginSet};
 use rimz::config::{DayCap, MachineConfig};
 use rimz::harness::budget::{BudgetSpec, DailyBudgetScope, read_scope_state, scope_interrupted};
 use rimz::ids::{AgentKind, LoginKey};
+use rimz::message::synthetic::SyntheticMessage;
+use rimz::store::message::{DeliveryGate, MessageSender};
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
@@ -94,13 +96,19 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             && !args.no_continue
             && !continue_text.is_empty()
         {
-            rimz::message::deliver::queue_synthetic(
-                workspace,
-                store,
-                agent,
-                continue_text.to_owned(),
-            )
-            .context("queueing budget continue prompt")?;
+            store
+                .queue_message(
+                    &SyntheticMessage {
+                        agent,
+                        text: continue_text.to_owned(),
+                        sender: MessageSender::System,
+                        gate: DeliveryGate::Done,
+                        pane_id: None,
+                    }
+                    .record(workspace),
+                    &workspace.session_name,
+                )
+                .context("queueing budget continue prompt")?;
         }
     }
 

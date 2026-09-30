@@ -15,8 +15,9 @@ use rimz::harness::fleet::FleetRuns;
 use rimz::harness::run;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
+use rimz::message::synthetic::SyntheticMessage;
 use rimz::sandbox::TmpView;
-use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
 use rimz::store::run::{EarlierAnswer, RunRecord, RunStatus, RunStoreErr};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{RuntimeScope, Store};
@@ -180,17 +181,14 @@ fn report_fleet_with_kind(
         },
     };
     let pane_id = parent.pane.as_ref().map(|pane| &pane.pane_id);
-    let mut message = MessageRecord::new(
-        workspace.workspace_id.clone(),
-        parent,
-        compose_digest(&digest_rows, subagents),
-        DeliveryGate::Done,
-    )
-    .with_channel(parent.channel())
-    .with_sender(sender);
-    if let Some(pane_id) = pane_id {
-        message = message.with_pane_id(pane_id.clone());
+    let message = SyntheticMessage {
+        agent: parent,
+        text: compose_digest(&digest_rows, subagents),
+        sender,
+        gate: DeliveryGate::Done,
+        pane_id: pane_id.cloned(),
     }
+    .record(workspace);
     let message_id = message.message_id.clone();
     let answers = rows
         .iter()

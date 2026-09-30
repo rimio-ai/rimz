@@ -6,10 +6,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use rimz::harness::schedule::runner::{CheckEcho, CheckOutcome, run_check};
-use rimz::message::deliver;
-use rimz::store::message::DeliveryGate;
+use rimz::message::synthetic::{self, SyntheticMessage};
+use rimz::store::message::{DeliveryGate, MessageSender};
 use rimz::store::run::RunRecord;
 use rimz::store::snapshot::find_agent;
+use rimz::store::writer::DeliveryFailureDisposition;
 
 use super::pane;
 
@@ -40,13 +41,20 @@ pub(super) fn deliver_reprompt(
         .context("verify re-prompt run has no bound agent session")?;
     let agent = find_agent(&snapshot.agents, &record.kind, agent_id)
         .context("verify re-prompt target agent is no longer in the rollup")?;
-    let (_, delivered) = deliver::nudge_now(
-        workspace,
-        store,
+    let message = SyntheticMessage {
         agent,
         text,
-        DeliveryGate::Any,
-        &pane.pane_id,
+        sender: MessageSender::System,
+        gate: DeliveryGate::Any,
+        pane_id: Some(pane.pane_id),
+    }
+    .record(workspace);
+    let delivered = synthetic::deliver_now(
+        workspace,
+        store,
+        &message,
+        DeliveryFailureDisposition::Retry,
+        "verify re-prompt delivery gate closed",
     )
     .context("delivering verify re-prompt")?;
     if !delivered {

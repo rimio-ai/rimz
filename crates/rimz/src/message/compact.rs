@@ -5,13 +5,12 @@ use jiff::Timestamp;
 use crate::Store;
 use crate::agents::AgentState;
 use crate::ids::{MessageId, PaneId};
-use crate::store::message::{
-    DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
-};
+use crate::store::message::{DeliveryGate, MessageBody, MessageSender, MessageStatus};
 use crate::store::writer::DeliveryFailureDisposition;
 use crate::workspace::ResolvedWorkspace;
 
 use super::deliver;
+use super::synthetic::{self, SyntheticMessage};
 
 type Result<T> = std::result::Result<T, CompactErr>;
 
@@ -84,30 +83,25 @@ pub fn send_compact(
     request: CompactRequest<'_>,
 ) -> Result<CompactOutcome> {
     refuse_repeat(store, request.agent, Timestamp::now())?;
-    let mut message = MessageRecord::new(
-        workspace.workspace_id.clone(),
-        request.agent,
-        request.command,
-        DeliveryGate::Done,
-    )
-    .with_channel(request.agent.channel())
-    .with_sender(request.sender)
+    let mut message = SyntheticMessage {
+        agent: request.agent,
+        text: request.command,
+        sender: request.sender,
+        gate: DeliveryGate::Done,
+        pane_id: Some(request.pane_id),
+    }
+    .record(workspace)
     .with_automated(request.automated)
-    .with_body(MessageBody::Command)
-    .with_pane_id(request.pane_id);
+    .with_body(MessageBody::Command);
     message.message_id = request.message_id;
     message.compacted_context_tokens = request.agent.occupied_context_tokens();
-    if deliver::deliver_now(workspace, store, &message)? {
-        return Ok(CompactOutcome::Sent);
-    }
-    let retry = store.record_message_delivery_failures(
-        std::slice::from_ref(&message.message_id),
-        None,
+    if synthetic::deliver_now(
+        workspace,
+        store,
+        &message,
         DeliveryFailureDisposition::Retry,
         "compaction delivery gate closed",
-        &workspace.session_name,
-    )?;
-    if retry.head_sent {
+    )? {
         return Ok(CompactOutcome::Sent);
     }
     if store
@@ -146,6 +140,7 @@ mod tests {
     use super::*;
     use crate::agents::AgentStatus;
     use crate::ids::WorkspaceId;
+    use crate::store::message::MessageRecord;
     use crate::{RuntimePaths, StatePaths};
 
     #[test]

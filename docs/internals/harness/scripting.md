@@ -156,7 +156,7 @@ turn completes
        ├─ attempt == max ─► verify_failed; record becomes `verify_failed` (exit 123)
        └─ red, attempts left
             ├─ reopen_for_verify: `completed` → `running`, evidence stored
-            ├─ deliver the verify_reprompt through message::deliver::nudge_now
+            ├─ deliver the verify_reprompt through message::synthetic::deliver_now
             │    into the same pane and the same agent session
             └─ wait on the same bound socket for the next root TurnEnded
 ```
