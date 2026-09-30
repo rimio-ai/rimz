@@ -392,7 +392,6 @@ pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
 }
 
 pub(crate) fn grant_with_roots(project_root: &Path, config_root: &Path) -> Result<TrustReport> {
-    remove_folder_trust_dismissal(project_root, config_root)?;
     let workspace_id = WorkspaceId::from_project_root(project_root);
     let config_path = project_root.join(CONFIG_REL);
     let record_path = trust_record_path(config_root, &workspace_id);

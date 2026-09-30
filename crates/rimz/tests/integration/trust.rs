@@ -62,6 +62,33 @@ fn resume_exec(env: &Env, kind: &str, session_id: &str) -> Vec<String> {
 }
 
 #[test]
+fn trust_grant_clears_folder_decline_with_or_without_project_config() {
+    for configured in [false, true] {
+        let env = Env::new();
+        if configured {
+            env.write_config(&env.project_root, CLAUDE_HOOK_CONFIG);
+        }
+        let dismissal = env
+            .rimz_home()
+            .join("trust")
+            .join(rimz::WorkspaceId::from_project_root(&env.project_root).as_str())
+            .join("folder-trust-prompt.toml");
+        std::fs::create_dir_all(dismissal.parent().unwrap()).unwrap();
+        std::fs::write(
+            &dismissal,
+            "dismissed_kinds = ['codex']\ndismissed_at = '2026-01-01T00:00:00Z'\n",
+        )
+        .unwrap();
+        env.rimz().args(["trust", "status"]).assert().success();
+        assert!(dismissal.exists());
+        env.rimz().args(["trust", "revoke"]).assert().success();
+        assert!(dismissal.exists());
+        env.rimz().args(["trust", "grant"]).assert().success();
+        assert!(!dismissal.exists());
+    }
+}
+
+#[test]
 fn trust_status_grant_revoke_lifecycle() {
     let env = Env::new();
     env.write_config(&env.project_root, CLAUDE_HOOK_CONFIG);

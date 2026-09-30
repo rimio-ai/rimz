@@ -223,6 +223,14 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         String::from_utf8_lossy(&output.stderr)
     );
     let trace = std::fs::read_to_string(log).unwrap();
+    if matches!(args[1], "claude" | "duo") && action != "cohort" {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.matches("claude has no trust decision").count(),
+            1,
+            "{stderr}"
+        );
+    }
     if matches!(action, "live" | "cohort") {
         let receipt = if action == "live" {
             String::from_utf8_lossy(&output.stdout)

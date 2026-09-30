@@ -46,7 +46,7 @@ fn empty_project_reports_no_config() {
 }
 
 #[test]
-fn folder_trust_grant_clears_dismissal_even_without_project_config() {
+fn folder_trust_project_grant_preserves_dismissal_without_project_config() {
     let project = tempdir().unwrap();
     let home = tempdir().unwrap();
     let path = project_record_path(
@@ -60,11 +60,11 @@ fn folder_trust_grant_clears_dismissal_even_without_project_config() {
     )
     .unwrap();
     grant_with_roots(project.path(), home.path()).unwrap();
-    assert!(!path.exists());
+    assert!(path.exists());
 }
 
 #[test]
-fn folder_trust_dismissals_accumulate_kinds_and_grant_clears_them() {
+fn folder_trust_dismissals_accumulate_kinds_and_survive_project_regrant() {
     let project = project_with("[[hooks]]\nevent = 'PreToolUse'\ncommand = 'rimz hooks claude'\n");
     let home = tempdir().unwrap();
     assert!(read_folder_trust_dismissal(project.path(), home.path()).is_empty());
@@ -84,6 +84,11 @@ fn folder_trust_dismissals_accumulate_kinds_and_grant_clears_them() {
         ["claude", "codex"]
     );
     grant_with_roots(project.path(), home.path()).unwrap();
+    assert_eq!(
+        read_folder_trust_dismissal(project.path(), home.path()),
+        ["claude", "codex"]
+    );
+    remove_folder_trust_dismissal(project.path(), home.path()).unwrap();
     assert!(read_folder_trust_dismissal(project.path(), home.path()).is_empty());
 }
 

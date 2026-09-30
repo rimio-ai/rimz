@@ -4,6 +4,7 @@ use super::*;
 use crate::cli::ctx::Ctx;
 use crate::cli::{machine_config, render, report_unknown_config_keys};
 use rimz::harness::ancestry::{self, LaunchFocus};
+use std::collections::HashSet;
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
@@ -175,6 +176,7 @@ pub(super) fn launch_layout(
         leader.ok()
     };
     let prompt_agent_index = prompt.and(receipt_leader_index);
+    let mut checked_folder_trust = HashSet::new();
     if !args.launch.cohort.resume {
         for (index, cell) in layout.agent_cells().enumerate() {
             preflight_cell(
@@ -187,6 +189,7 @@ pub(super) fn launch_layout(
                     machine_config.agents.isolation,
                 ),
                 prompt.filter(|_| Some(index) == prompt_agent_index),
+                &mut checked_folder_trust,
             )?;
         }
     }
@@ -221,6 +224,7 @@ pub(super) fn launch_layout(
             worktree_filter.as_deref(),
             ancestry.as_ref(),
             focus,
+            checked_folder_trust,
         );
     }
     let channel_launch = args.launch.cohort.channel.is_some();
@@ -278,6 +282,7 @@ pub(super) fn launch_layout(
                     Some(&path),
                     ancestry.as_ref(),
                     focus,
+                    checked_folder_trust,
                 );
             }
             reconcile::Reconciled::Continue => {}
@@ -551,6 +556,7 @@ fn preflight_cell(
     cell: &rimz::harness::spec::AgentCell,
     isolation: rimz::config::Isolation,
     prompt: Option<&str>,
+    checked_folder_trust: &mut HashSet<rimz::ids::LoginKey>,
 ) -> Result<()> {
     let adapter = rimz::agents::find_definition(cell.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", cell.kind))?;
@@ -576,6 +582,7 @@ fn preflight_cell(
     )?;
     let logins = rimz::agents::RoomLoginSet::for_runtime(runtime);
     if let Some(login) = logins.login(cell.kind.as_str())
+        && checked_folder_trust.insert(login.key())
         && let Some(rimz::agents::FolderTrust::Undecided(gap)) = adapter.folder_trust(
             &workspace.worktree_root,
             Some(workspace.launch_repo_root()),
@@ -607,6 +614,7 @@ fn launch_resume_layout(
     worktree_filter: Option<&Path>,
     ancestry: Option<&rimz::harness::ancestry::LaunchAncestry>,
     focus: LaunchFocus,
+    mut checked_folder_trust: HashSet<rimz::ids::LoginKey>,
 ) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -656,6 +664,7 @@ fn launch_resume_layout(
                 machine_config.agents.isolation,
             ),
             None,
+            &mut checked_folder_trust,
         )?;
     }
     let cwd = plan

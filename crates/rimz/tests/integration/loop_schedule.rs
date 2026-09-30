@@ -2432,6 +2432,13 @@ fn trusted_project_task_edits_repin_trust() {
     let env = Env::new();
     write_project_config(&env, "[tasks.first]\ncheck = \"true\"\nevery = \"15m\"\n");
     grant_project_trust(&env);
+    let dismissal = env
+        .rimz_home()
+        .join("trust")
+        .join(rimz::WorkspaceId::from_project_root(&env.project_root).as_str())
+        .join("folder-trust-prompt.toml");
+    let declined = "dismissed_kinds = ['codex']\ndismissed_at = '2026-01-01T00:00:00Z'\n";
+    std::fs::write(&dismissal, declined).unwrap();
 
     let added = loop_ok(
         &env,
@@ -2466,6 +2473,10 @@ fn trusted_project_task_edits_repin_trust() {
     assert!(removed.contains("trust: kept"), "{removed}");
     assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
     loop_ok(&env, &["loop", "run", "first"]);
+    assert_eq!(
+        std::fs::read_to_string(dismissal).ok().as_deref(),
+        Some(declined)
+    );
 }
 
 #[test]

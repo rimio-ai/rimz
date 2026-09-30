@@ -8,6 +8,63 @@ use super::{
 use rimz::ids::MuxName;
 use rimz::trust::{BirthPromptOffer, SurfaceSummary};
 
+fn folder_trust_row(kind: &'static str, grantable: bool) -> rimz::agents::FolderTrustRow {
+    rimz::agents::FolderTrustRow {
+        kind,
+        login: rimz::ids::LoginName::default_login(),
+        trust: rimz::agents::FolderTrust::Undecided(rimz::agents::FolderTrustGap {
+            path: "/config".into(),
+            key: "/repo".into(),
+            grant: if grantable {
+                Ok(rimz::agents::FolderTrustPreview {
+                    original: None,
+                    candidate: String::new(),
+                })
+            } else {
+                Err("repair config".into())
+            },
+        }),
+    }
+}
+
+#[test]
+fn folder_trust_offer_filters_decided_and_dismissed_kinds() {
+    let mut decided = folder_trust_row("decided", true);
+    decided.trust = rimz::agents::FolderTrust::Decided;
+    let rows = [
+        decided,
+        folder_trust_row("dismissed", true),
+        folder_trust_row("new", true),
+    ];
+    let (shown, _) = super::folder_trust_offer(&rows, &["dismissed".into()]);
+    assert_eq!(
+        shown.iter().map(|row| row.kind).collect::<Vec<_>>(),
+        ["new"]
+    );
+}
+
+#[test]
+fn folder_trust_offer_decline_remembers_every_shown_kind() {
+    let rows = [
+        folder_trust_row("grantable", true),
+        folder_trust_row("broken", false),
+    ];
+    let (_, decline) = super::folder_trust_offer(&rows, &[]);
+    assert_eq!(decline, ["grantable", "broken"]);
+    assert!(super::folder_trust_offer(&rows, &decline).0.is_empty());
+}
+
+#[test]
+fn folder_trust_offer_new_kind_reopens_only_its_offer() {
+    let rows = [folder_trust_row("old", true), folder_trust_row("new", true)];
+    let (shown, decline) = super::folder_trust_offer(&rows, &["old".into()]);
+    assert_eq!(
+        shown.iter().map(|row| row.kind).collect::<Vec<_>>(),
+        ["new"]
+    );
+    assert_eq!(decline, ["new"]);
+}
+
 #[test]
 fn zellij_birth_preflights_the_state_dir_name_only_when_the_room_is_dead() {
     assert_eq!(
