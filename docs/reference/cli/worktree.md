@@ -51,6 +51,8 @@ Seed only paths Git already ignores. A seed Git neither tracks nor ignores lands
 
 `--base` picks the commit the branch starts from. Without it, `new` uses the `[agents.worktree] base` setting, which defaults to `head`.
 
+When a fresh tree's local base branch tracks an upstream and is behind it, creation succeeds with a stderr warning: `warning: base branch main is 4 commits behind origin/main as last fetched; fast-forward main first, or pass --base origin/main` (with the actual branch, upstream, and count; `1 commit` for one). The count uses local upstream refs as last fetched; creation does not fetch. Reused trees, PR checkouts, detached HEADs, bases without an upstream, and failed checks produce no warning.
+
 | `--base` | Branch starts from |
 | --- | --- |
 | `head` | Your local `HEAD` in the main checkout. |

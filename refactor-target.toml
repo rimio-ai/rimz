@@ -580,7 +580,8 @@ path = "crates/rimz/src/worktree"
 # Unmanaged-launch validation and lifecycle ownership also serve the binary CLI.
 # Attribution probes the selected checkout's branch through the shared resolver.
 # PR branch choices and divergence facts cross the domain/CLI boundary.
-surface-budget = 59
+# Stale-base observations let the CLI warn without domain output.
+surface-budget = 60
 
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
@@ -3551,6 +3552,11 @@ reason = "Returned by pub orphan_sweep::resolve (orphan_sweep.rs:85-97); atlas c
 kind = "item"
 key = "harness::orphan_sweep::OrphanSweepErr"
 reason = "Error type of pub orphan_sweep::resolve (orphan_sweep.rs:85-97); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "worktree::StaleBase"
+reason = "Creation and launch results carry the stale-base observation for CLI warnings."
 
 [[verdict]]
 kind = "item"

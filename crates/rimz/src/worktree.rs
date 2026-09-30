@@ -191,8 +191,32 @@ pub struct WorktreeMarker {
     pub created_at: jiff::Timestamp,
 }
 
+/// The base branch sat behind its upstream when the tree was cut, as of the last fetch.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct StaleBase {
+    pub branch: String,
+    pub upstream: String,
+    pub behind: u64,
+}
+
+impl std::fmt::Display for StaleBase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let commits = if self.behind == 1 {
+            "commit"
+        } else {
+            "commits"
+        };
+        write!(
+            f,
+            "base branch {} is {} {commits} behind {} as last fetched",
+            self.branch, self.behind, self.upstream
+        )
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CreatedWorktree {
+    pub stale_base: Option<StaleBase>,
     pub marker: WorktreeMarker,
     pub reused: bool,
     /// Files copied into the worktree from the project's `.worktreeinclude`.
@@ -216,6 +240,7 @@ pub struct PushDestination {
 /// Checkout selected for an agent launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchCheckout {
+    pub stale_base: Option<StaleBase>,
     /// Present only after a fresh managed creation, including its hook, succeeded.
     pub created: Option<WorktreeMarker>,
     pub cwd: PathBuf,
@@ -622,7 +647,10 @@ pub fn create(
     let checkout_base_ref = base.as_refspec().to_owned();
     let base_ref = resolve_base_commit(repo_root, &checkout_base_ref)?;
     let base_branch = resolve_base_branch(repo_root, &base);
-    add_worktree(
+    let stale_base = base_branch
+        .as_deref()
+        .and_then(|branch| stale_base(repo_root, branch));
+    let mut created = add_worktree(
         repo_root,
         name,
         path,
@@ -634,7 +662,9 @@ pub fn create(
         },
         Checkout::NewBranch(&checkout_base_ref),
         &config.hooks,
-    )
+    )?;
+    created.stale_base = stale_base;
+    Ok(created)
 }
 
 /// Resolve the cwd and optional RimZ-owned checkout for an agent launch.
@@ -651,6 +681,7 @@ pub fn resolve_launch_checkout(
 ) -> Result<LaunchCheckout> {
     if let Some(cwd) = cwd {
         return Ok(LaunchCheckout {
+            stale_base: None,
             reused: false,
             created: None,
             cwd: cwd.to_path_buf(),
@@ -673,6 +704,7 @@ pub fn resolve_launch_checkout(
         let review_only_reason = created.review_only_reason;
         let marker = created.marker;
         return Ok(LaunchCheckout {
+            stale_base: None,
             reused: created.reused,
             created: created_marker,
             branch: current_branch(&marker.worktree_path),
@@ -687,6 +719,7 @@ pub fn resolve_launch_checkout(
 
     let Some(raw_name) = worktree else {
         return Ok(LaunchCheckout {
+            stale_base: None,
             reused: false,
             created: None,
             branch: current_branch(&workspace.worktree_root),
@@ -713,6 +746,7 @@ pub fn resolve_launch_checkout(
     let created_marker = (!created.reused).then(|| created.marker.clone());
     let marker = created.marker;
     Ok(LaunchCheckout {
+        stale_base: created.stale_base,
         reused: created.reused,
         created: created_marker,
         branch: current_branch(&marker.worktree_path),
@@ -764,6 +798,7 @@ pub fn resolve_unmanaged_launch_checkout(
         });
     }
     Ok(LaunchCheckout {
+        stale_base: None,
         reused: false,
         created: None,
         branch: current_branch(&path),
@@ -1358,6 +1393,7 @@ fn resolve_fresh_worktree(
                 path: path.clone(),
             })?;
             return Ok(WorktreeCreateTarget::Reuse(Box::new(CreatedWorktree {
+                stale_base: None,
                 reused: true,
                 marker,
                 included: 0,
@@ -1476,6 +1512,7 @@ fn finish_worktree(
         });
     }
     Ok(CreatedWorktree {
+        stale_base: None,
         reused: false,
         marker,
         included,
@@ -1492,6 +1529,36 @@ fn write_marker(path: &Path, marker: &WorktreeMarker) -> Result<()> {
 fn resolve_base_commit(repo_root: &Path, base_ref: &str) -> Result<String> {
     let commitish = format!("{base_ref}^{{commit}}");
     git_stdout(repo_root, ["rev-parse", "--verify", commitish.as_str()])
+}
+
+fn stale_base(repo_root: &Path, branch: &str) -> Option<StaleBase> {
+    let upstream = git_stdout(
+        repo_root,
+        [
+            "rev-parse",
+            "--abbrev-ref",
+            "--verify",
+            &format!("{branch}@{{upstream}}"),
+        ],
+    )
+    .ok()?;
+    let behind = git_stdout(
+        repo_root,
+        [
+            "rev-list",
+            "--count",
+            &format!("{branch}..{upstream}"),
+            "--",
+        ],
+    )
+    .ok()?
+    .parse::<u64>()
+    .ok()?;
+    (behind > 0).then(|| StaleBase {
+        branch: branch.to_owned(),
+        upstream,
+        behind,
+    })
 }
 
 fn resolve_base_branch(repo_root: &Path, base: &WorktreeBase) -> Option<String> {

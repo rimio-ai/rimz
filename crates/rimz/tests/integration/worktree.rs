@@ -64,6 +64,35 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
 }
 
 #[test]
+fn stale_base_warning_is_stderr_only_and_uses_last_fetched_upstream() {
+    let env = Env::new();
+    let repo = &env.project_root;
+    init_repo(repo);
+    let origin = env.home_root.join("origin.git");
+    git(repo, &["clone", "--bare", ".", origin.to_str().unwrap()]);
+    git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    for _ in 0..2 {
+        git(repo, &["commit", "--allow-empty", "-m", "upstream"]);
+    }
+    git(repo, &["push", "-u", "origin", "main"]);
+    env.rimz()
+        .args(["worktree", "new", "current"])
+        .assert()
+        .success()
+        .stderr(contains("behind").not());
+    git(repo, &["reset", "--hard", "HEAD~2"]);
+    env.rimz().args(["worktree", "new", "stale"]).assert().success()
+        .stderr(contains("warning: base branch main is 2 commits behind origin/main as last fetched; fast-forward main first, or pass --base origin/main"))
+        .stdout(contains("behind").not());
+    git(repo, &["reset", "--hard", "origin/main~1"]);
+    env.rimz()
+        .args(["worktree", "new", "one-behind"])
+        .assert()
+        .success()
+        .stderr(contains("1 commit behind origin/main"));
+}
+
+#[test]
 fn unreadable_machine_config_refuses_worktree_creation() {
     let env = Env::new();
     init_repo(&env.project_root);
