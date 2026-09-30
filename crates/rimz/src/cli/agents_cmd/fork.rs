@@ -206,6 +206,8 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 same_pane: "running the agent fork in the current pane",
             },
         },
+        // A fork carries its source's tier stamp; the fallback was recorded at that launch.
+        || {},
     )?;
     if !in_place {
         report_fork(&seed, &source_name, &launch.name);
