@@ -17,6 +17,10 @@ use super::fleet::FleetRuns;
 /// afterwards, where the digest by then is. Reading the queue first would
 /// widen that window by this reader's own projection and runs-directory time.
 ///
+/// The team reporter queues before stamping the run: an open run is owed
+/// (unless its board already reads Done), and a settled run's report is in
+/// the later queue read. That read must therefore count `TeamReport` too.
+///
 /// The wait terms keep `TurnWaitView`'s order, catalog → queue → rollup: a
 /// wake publishes its message record before it consumes its catalog row, and a
 /// provider's turn start lands before the delivery ack settles that record, so
@@ -32,13 +36,32 @@ pub fn owed_wake(
     agent_id: &AgentSessionId,
 ) -> Result<Option<OwedWake>, StoreErr> {
     let projection = store.runtime_projection(RuntimeScope::Audit)?;
-    if let Some(launcher) = find_agent(&projection.agents, kind, agent_id)
-        && super::fleet::has_members(&projection.agents, launcher)
-    {
-        let runs = super::run::list(store.paths())?;
-        let fleet = FleetRuns::of(&projection.agents, &runs, launcher);
-        if fleet.any_running() || !fleet.unreported().is_empty() {
-            return Ok(Some(OwedWake::Subagents));
+    if let Some(launcher) = find_agent(&projection.agents, kind, agent_id) {
+        let has_members = super::fleet::has_members(&projection.agents, launcher);
+        let launched_team = projection
+            .agents
+            .iter()
+            .any(|agent| agent.is_team_seat() && agent.launcher_is(launcher));
+        if has_members || launched_team {
+            let runs = super::run::list(store.paths())?;
+            if has_members {
+                let fleet = FleetRuns::of(&projection.agents, &runs, launcher);
+                if fleet.any_running() || !fleet.unreported().is_empty() {
+                    return Ok(Some(OwedWake::Subagents));
+                }
+            }
+            if launched_team
+                && super::fleet::open_team_runs(&projection.agents, &runs, launcher)
+                    .iter()
+                    .any(|run| {
+                        let stage = super::scratch::board_stage(&run.worktree_path);
+                        super::fleet::team_stage_pending(
+                            stage.as_ref().map(|stage| stage.name.as_str()),
+                        )
+                    })
+            {
+                return Ok(Some(OwedWake::Team));
+            }
         }
     }
     let view = TurnWaitView::load(store)?;
@@ -59,6 +82,7 @@ pub enum OwedWake {
     Wait,
     WakeInFlight,
     Subagents,
+    Team,
 }
 
 impl OwedWake {
@@ -67,6 +91,7 @@ impl OwedWake {
             Self::Wait => "wait",
             Self::WakeInFlight => "wake in flight",
             Self::Subagents => "subagents",
+            Self::Team => "team",
         }
     }
 }
@@ -121,11 +146,64 @@ mod tests {
     }
 
     #[test]
+    fn owed_team_is_scoped_to_its_launcher_and_skips_done_boards() {
+        for (own, status, done, expected) in [
+            (true, RunStatus::Running, false, Some(OwedWake::Team)),
+            (true, RunStatus::Completed, false, None),
+            (false, RunStatus::Running, false, None),
+            (true, RunStatus::Running, true, None),
+        ] {
+            let (dir, store) = fixture();
+            register(&store, "parent", None);
+            let kind = AgentKind::new_unchecked("codex");
+            let mut observation =
+                AgentLifecycleObservation::new(Some("leader".into()), LifecycleSignal::Registered);
+            observation.agent_name = Some("leader".into());
+            observation.launch.team = Some("forge".into());
+            observation.launch.launched_by = Some(Box::new(crate::agents::LaunchedBy {
+                kind: kind.clone(),
+                agent_id: if own { "parent" } else { "someone-else" }.into(),
+            }));
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "owed-test",
+                    agent_kind: kind.clone(),
+                    event_name: "test",
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+            let mut record = RunRecord::new(
+                store.paths().workspace_id.clone(),
+                kind.clone(),
+                PermissionMode::Auto,
+                "work".into(),
+                dir.path().into(),
+            );
+            record.status = status;
+            record.team = Some(crate::store::run::TeamRun {
+                launch_id: "leader".into(),
+                instance: "forge#external".into(),
+            });
+            super::super::run::create(store.paths(), &record).unwrap();
+            if done {
+                std::fs::write(dir.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+            }
+            assert_eq!(OwedWake::Team.as_str(), "team");
+            assert_eq!(
+                owed_wake(&store, &kind, &"parent".into()).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn owed_messages_hold_only_their_card_until_terminal() {
         for notice in [
             HarnessNotice::Wait,
             HarnessNotice::Signal,
             HarnessNotice::SubagentReport,
+            HarnessNotice::TeamReport,
             HarnessNotice::Stage,
             HarnessNotice::Deadline,
         ] {
