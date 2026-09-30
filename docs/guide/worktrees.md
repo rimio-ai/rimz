@@ -50,7 +50,9 @@ Already made the tree with `git worktree add`? If it is in the configured worktr
 
 ### Start from a pull request
 
-`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree. Reach for it to address review comments or chase a failing check: the agent works the PR's own branch, and on a forge RimZ can ask, its fixes push straight back to the PR.
+`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in its worktree, named `pr-<N>` when creating one by default. Reach for it to address review comments or chase a failing check: the agent works the PR's own branch, and on a forge RimZ can ask, its fixes push straight back to the PR.
+
+If you started the same-repository PR's branch in a `-w` tree, `--from-pr` returns to that marked tree and records the PR number for later resume; when the tips differ, the [PR checkout rules](../reference/cli/worktree.md#check-out-a-pull-request) determine whether RimZ asks you to choose or fast-forwards an unattended launch.
 
 ```sh
 rimz agents claude --from-pr 42               # review PR 42 in its own tree
@@ -109,8 +111,8 @@ The lifecycle runs in this order:
 1. RimZ creates and marks the tree, then finishes the copies and links from the seed files.
 2. It runs `created` as `sh -c <command>` with the new tree as its working directory, and waits before opening any launch panes. The command gets no stdin; stdout and stderr are captured, not streamed. A ten-minute timeout kills the hook's process group. A background process must detach stdout and stderr (for example, `command >/dev/null 2>&1 &`); otherwise the hook counts as running until those streams close, and reaching the timeout fails creation and rolls it back.
 3. A successful hook lets creation continue. `rimz worktree new` adds `  hook   : worktree.created ran` to its report; launches print nothing extra. Successful hook output is discarded.
-4. A nonzero exit, failure to start, or timeout fails creation and attempts to remove the tree and its branch. The error includes bounded tails of stdout and stderr and the config key to fix. If removal also fails, the error says `rollback failed: <error>` instead of `tree removed`; remove the leftover tree before retrying, since a named launch reuses it without rerunning the hook. Interrupting RimZ with SIGINT or SIGTERM while `created` runs can also leave a marked tree; remove it before retrying for the same reason.
-5. Whenever RimZ successfully removes a tree, it runs `removed` from the repository root, after the directory is gone and before deleting the branch. That includes rollback after a failed `created`, explicit removal, sweep, garbage collection, and automatic cleanup. It uses the same shell, capture, and timeout rules. Failure only logs a warning and removal continues; detached cleanup may have no visible output. A dry-run sweep fires nothing.
+4. A nonzero exit, failure to start, or timeout fails creation and attempts to remove the tree and its branch; a local branch that existed before the tree, such as an adopted pull request branch, is kept. The error includes bounded tails of stdout and stderr and the config key to fix. If removal also fails, the error says `rollback failed: <error>` instead of `tree removed`; remove the leftover tree before retrying, since a named launch reuses it without rerunning the hook. Interrupting RimZ with SIGINT or SIGTERM while `created` runs can also leave a marked tree; remove it before retrying for the same reason.
+5. Whenever RimZ successfully removes a tree, it runs `removed` from the repository root, after the directory is gone and before deleting any branch. That includes rollback after a failed `created`, explicit removal, sweep, garbage collection, and automatic cleanup. It uses the same shell, capture, and timeout rules. Failure only logs a warning and removal continues; detached cleanup may have no visible output. A dry-run sweep fires nothing.
 
 A successful setup command adds the hook line:
 

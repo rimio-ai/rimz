@@ -23,7 +23,7 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 | `repo_root`, `worktree_path` | The repository the tree was created from and where the tree lives. |
 | `created_at` | Creation time. It bounds the lane's [attribution lifetime](../agents/attribution.md#selecting-records). |
 
-Creation writes the marker once, and reusing a tree keeps the marker it finds, so `created_at` is the birth of the tree's current incarnation: a tree removed and recreated under the same name gets a fresh one.
+Creation writes the marker. Reusing a same-repository PR head's tree may fill a missing `from_pr` through the same atomic writer, preserving every other field, including `version` and `created_at`. Thus `created_at` is the birth of the tree's current incarnation: a tree removed and recreated under the same name gets a fresh one. The filled PR number makes the tree discoverable by PR resume and the sidebar's PR matching.
 
 `base_branch` and `from_pr` are `#[serde(default)]` options, so markers written before those fields existed still deserialize and their trees still clean up; two tests in [`worktree/tests.rs`](../../../crates/rimz/src/worktree/tests.rs) pin that. A new marker field needs the same treatment.
 
@@ -39,7 +39,7 @@ Creation writes the marker once, and reusing a tree keeps the marker it finds, s
 | [`worktree/exclude.rs`](../../../crates/rimz/src/worktree/exclude.rs) | `info/exclude` registration for linked directories and team scratch patterns. |
 | [`cli/worktree.rs`](../../../crates/rimz/src/cli/worktree.rs) | The `rimz worktree` commands and the hidden `cleanup` helper. |
 | [`cli/worktree_protection.rs`](../../../crates/rimz/src/cli/worktree_protection.rs) | Gathering pane and agent facts for each removal caller. |
-| [`cli/mod.rs`](../../../crates/rimz/src/cli/mod.rs) | `resolve_launch_checkout` (the unmarked-checkout confirmation) and `confirm_cross_repo_worktree`. |
+| [`cli/mod.rs`](../../../crates/rimz/src/cli/mod.rs) | `resolve_launch_checkout` (unmarked-checkout confirmation and PR retry), `resolve_pr_branch_choice`, and `confirm_cross_repo_worktree`. |
 | [`cli/gc.rs`](../../../crates/rimz/src/cli/gc.rs) | The worktree area of the aggregate `rimz gc` report. |
 | [`cli/agents_cmd/exec.rs`](../../../crates/rimz/src/cli/agents_cmd/exec.rs) | The exec wrapper that enters a tree and triggers cleanup when the agent exits. |
 | [`cli/agents_cmd/reconcile.rs`](../../../crates/rimz/src/cli/agents_cmd/reconcile.rs) | Cohort relaunch into a tree that already exists. |
@@ -48,22 +48,22 @@ The domain module runs Git through `crate::proc::git_command` with `LC_ALL=C` an
 
 ## Creating a worktree
 
-`create` and `create_from_pr` walk the same six steps.
+Fresh trees from `create` and `create_from_pr` walk the same six steps; PR holder reuse skips creation as described [below](#from-a-pull-request).
 
 1. **Resolve the name.** A requested name is validated per `/`-separated segment (ASCII alphanumerics, `_`, `-`). A `/` names the branch directly while the directory and channel take the dashed spelling: `feat/login` gives branch `feat/login` in directory `feat-login`. `--branch` overrides the derived branch without changing the directory. An omitted name becomes an adjective-noun pair derived from a UUIDv7; each retry mixes the attempt number into that seed and adds it as a suffix, for up to 64 attempts until the directory is unused. A PR tree's omitted name is `pr-<N>`.
 2. **Resolve the base.** [`WorktreeConfig`](../../../crates/rimz/src/config/worktree.rs) carries the per-machine `dir` template (default `../{repo}-worktrees`, where `{repo}` is the repository basename and a relative template resolves from the repository root) and `base`. `head` (the default) branches from `HEAD`, `fresh` from `origin/HEAD`, and any other value is a literal ref. The base resolves to a commit for `base_ref`; `base_branch` records the current branch for `head`, the `origin/HEAD` target for `fresh`, and the branch a literal ref names. A PR tree ignores `base` and records the trunk ([from a pull request](#from-a-pull-request)).
-3. **Add the tree.** `git worktree add` runs in one of three shapes: `-b <branch> <path> <base>` for a new branch, `--track -b <branch> <path> origin/<branch>` for a same-repository PR head, and `add <path> <branch>` for an existing local branch already fast-forwarded to the PR head.
+3. **Add the tree.** `git worktree add` runs in one of three shapes: `-b <branch> <path> <base>` for a new branch, `--track -b <branch> <path> origin/<branch>` for a same-repository PR head, and `add <path> <branch>` for an existing local branch after any required tip choice.
 4. **Write the marker.** A temp-file-plus-rename into the Git admin directory. Ownership begins here, so a failure at this step leaves an ordinary unmanaged Git worktree.
 5. **Seed the tree.** `.worktreeinclude` copies, then `.worktreelink` symlinks, both best-effort ([seeding](#seeding-worktreeinclude-and-worktreelink)).
-6. **Run the created hook.** `finish_worktree` waits for the configured command after seeding. Failure rolls back through `remove_marked_worktree(force = true)` and returns `WorktreeErr::CreatedHook` ([lifecycle hooks](#lifecycle-hooks)).
+6. **Run the created hook.** `finish_worktree` waits for the configured command after seeding. Failure rolls back through `remove_marked_worktree(force = true)`, or through its tree-only half `remove_checkout` when the tree checked out an existing local branch, which keeps that branch; either way it returns `WorktreeErr::CreatedHook` ([lifecycle hooks](#lifecycle-hooks)).
 
-A launch that names an existing marked tree reuses it; `rimz worktree new` refuses with `Exists`. A reused tree is never re-seeded, and `CreatedWorktree` reports zero included and linked counts so the CLI prints no seeding lines. `rimz worktree new` also refuses a name a named channel already holds (`channel::ensure_worktree_name_available`) and, after creation, archives any messages left in that channel with the reason `channel recreated`.
+A launch that names an existing marked tree reuses it; ordinary `rimz worktree new` refuses with `Exists`, but `new --from-pr` can reuse a same-repository branch holder. `CreatedWorktree.reused` distinguishes reuse from creation. A reused tree is never re-seeded and reports zero included and linked counts. The `new` CLI prints `reused NAME` with only path and branch lines, and skips channel archival. `rimz worktree new` also refuses a name a named channel already holds (`channel::ensure_worktree_name_available`) and, after fresh creation, archives any messages left in that channel with the reason `channel recreated`.
 
 ### Lifecycle hooks
 
 [`WorktreeHooks`](../../../crates/rimz/src/config/worktree.rs) carries the optional commands from machine config. Validation refuses blank commands both on config load and at lifecycle entrypoints, since launch config loading is lenient. Project config neither overrides the machine hooks nor includes them in its executable-surface hash. Seed manifests remain non-executing. The [guide](../../guide/worktrees.md#prepare-the-tree-with-a-hook) owns the command and environment contract.
 
-There are exactly two fire sites: `finish_worktree` calls `hooks::run_hook` with `WorktreeHookEvent::Created` after marker, includes, and links; `remove_marked_worktree` calls it with `Removed` after successful Git removal and before branch deletion. Reuse never enters `finish_worktree`. Rollback uses the same removal funnel, so it also fires `removed` to undo partial setup. Skips, refused removals, and dry-run sweeps never reach the removal fire site.
+There are exactly two fire sites: `finish_worktree` calls `hooks::run_hook` with `WorktreeHookEvent::Created` after marker, includes, and links; `remove_marked_worktree` calls it with `Removed` after successful Git removal and before branch deletion. Reuse never enters `finish_worktree`. Rollback uses the same removal funnel, so it also fires `removed` to undo partial setup; a tree that adopted an existing local branch stops there and keeps the branch. Skips, refused removals, and dry-run sweeps never reach the removal fire site.
 
 On the fork PR strategy, `worktree/pr.rs::fork_checkout` calls `add_pr_worktree` before writing the branch's remote and merge configuration. The `created` hook therefore runs before that upstream/push configuration exists.
 
@@ -75,7 +75,7 @@ On the fork PR strategy, `worktree/pr.rs::fork_checkout` calls `add_pr_worktree`
 
 ### Who triggers creation
 
-- `cli/worktree.rs::new_worktree` calls `create` or `create_from_pr` directly, without reuse or a launch.
+- `crates/rimz/src/cli/worktree.rs::new_worktree` calls `create` or `create_from_pr` directly, without a launch; the PR path can reuse a branch holder and retry after a tip choice.
 - `cli/agents_cmd/launch.rs::launch_layout` routes agent layouts and teams through `cli::resolve_launch_checkout`, then the domain resolver. Cohort reconciliation can remove a landed tree before this path recreates it.
 - `cli/supervised/run.rs` uses the same resolver for `-p` runs, including scheduled loop launches. Hook failure precedes agent launch-batch and run-record creation, so no pane or launch row is created. The loop caller routes that error through `cli/loop_cmd/run.rs::record_task_error` to `TaskFire::finish_error`, which records `LoopRunResult::Errored` with the error text.
 
@@ -87,11 +87,11 @@ A launch creates its tree under the repository the command starts in, and `rimz 
 
 The two roots can differ, and the launch asks before creating anything across them. `confirm_cross_repo_worktree` prints both paths and warns that the room will not list, remove, or garbage-collect a tree created under the other repository. A terminal gets a default-no confirmation; non-terminal stdin refuses with a `--root <current-git-root>` hint. Cohort relaunch reconciliation resolves its tree path from the same launch root.
 
-A launch that names an existing checkout without a marker can still enter it, without adopting it. The domain returns `Unmarked`, and the CLI's `resolve_launch_checkout` hands the name to `resolve_unmanaged_launch_checkout`, which accepts only a linked worktree of the launch repository: same Git common directory, the checkout's own top level, and not the main checkout itself. The user then confirms entry at a terminal (default no); non-terminal stdin refuses. An accepted checkout gets its cwd and channel with no marker and no seeding, so removal and cleanup never touch it. Path checks canonicalize for Git identity but keep the configured path spelling in launch records, reconciliation, and resume filtering. `--from-pr` launches never take this path, because reusing a PR tree requires the marker's `from_pr`.
+A launch that names an existing checkout without a marker can still enter it, without adopting it. The domain returns `Unmarked`, and the CLI's `resolve_launch_checkout` hands the name to `resolve_unmanaged_launch_checkout`, which accepts only a linked worktree of the launch repository: same Git common directory, the checkout's own top level, and not the main checkout itself. The user then confirms entry at a terminal (default no); non-terminal stdin refuses. An accepted checkout gets its cwd and channel with no marker and no seeding, so removal and cleanup never touch it. Path checks canonicalize for Git identity but keep the configured path spelling in launch records, reconciliation, and resume filtering. `--from-pr` launches never take this unmanaged-entry path: a branch holder needs a marker, though its `from_pr` may be absent and filled on reuse.
 
 ### From a pull request
 
-`--from-pr <number|url>` produces the same marked tree from a pull-request head. A URL must name the same host and repository as `origin` before any network call, and reusing a named PR tree requires its marker's `from_pr` to equal the requested number.
+`--from-pr <number|url>` creates or reuses a marked tree for a pull request. `crates/rimz/src/worktree/pr.rs::create_from_pr` validates the URL's host and repository against `origin` before any network call. A named launch whose marker already records the requested PR returns without fetching; a marker recording another PR refuses with `PrWorktreeMismatch`. Otherwise review-only exits precede the forge head lookup, which selects same-repository or fork handling.
 
 Head resolution picks one of four strategies:
 
@@ -106,7 +106,13 @@ Review-only and fork checkouts fetch the forge's PR ref (`Forge::pr_refspec`) in
 
 The forge module owns the head query: `ForgeCli::pr_head_args` builds the `gh pr view` or `tea api` call and `decode_pr_head` parses it. The same-repository decision uses the CLI's cross-repository verdict when it has one and otherwise compares the head repository with the `origin` slug, case-insensitively.
 
-A same-repository head adopts an existing local branch only when that branch is not checked out elsewhere and its tip equals or is an ancestor of the remote head, in which case it fast-forwards and gains the upstream. An ahead or diverged branch refuses with the reason.
+After fetching the same-repository head branch, `crates/rimz/src/worktree/pr.rs::same_repo_checkout` finds its holder through Git's worktree list, including trees outside the configured directory. The main checkout and an unmarked holder refuse with `PrBranchConflict`; a marker recording another PR refuses with `PrWorktreeMismatch`. An explicit worktree name different from the holder's marker name refuses with a hint to omit `-w` or name the holder. A matching tip needs no choice: RimZ reuses the marked holder, adopts an unheld local branch into a fresh tree, or creates a tracking branch when none exists.
+
+For differing tips, `crates/rimz/src/worktree/pr.rs::classify_divergence` counts local-only and remote-only commits and distinguishes `Behind` (local is an ancestor), `Rebased` (no local-only non-merge patches remain after `git log --cherry-pick --right-only --no-merges remote...local`), and `Diverged` (local patches remain, with conflicts determined by `git merge-tree --write-tree`). An ahead-only branch is `Diverged`, not a fast-forward candidate. With no choice, the domain returns `PrBranchDiverged` before moving the local ref or setting upstream.
+
+`crates/rimz/src/cli/mod.rs::resolve_pr_branch_choice` owns the warning and choice for both launch and `worktree new`. Terminal defaults are remote for `Behind` and `Rebased`, local for `Diverged`; EOF aborts. Non-terminal stdin advances only `Behind`, with a warning, and otherwise returns the domain error's alignment commands. The CLI retries the domain call with `PrBranchChoice`, repeating the head query and fetch. `Remote` uses `reset --keep origin/<branch>` in a holder, refusing changes that would be overwritten with a commit-or-stash hint, or `branch -f <branch> origin/<branch>` without one; the prior tip remains in the reflog. `Local` leaves the tip untouched. Both set upstream to `origin/<branch>` before reuse or creation. Prompt details and refusal wording belong to the [CLI reference](../../reference/cli/worktree.md#check-out-a-pull-request).
+
+Reuse fills only a missing `from_pr` through `write_marker`, then skips seeding and hooks. Fork and review-only strategies still require a fresh tree. Team cohort reconciliation remains skipped for `--from-pr`, so launching the same team again can create another live cohort even when the tree is reused.
 
 Network calls are bounded: `PR_HEAD_COMMAND_TIMEOUT` (10 seconds) for the forge CLI query and `PR_FETCH_TIMEOUT` (120 seconds) for a fetch, which runs with `GIT_TERMINAL_PROMPT=0` so a credential prompt fails instead of hanging a launch.
 
@@ -227,7 +233,7 @@ Cohort relaunch assesses against an empty protection set, because it has already
 
 Removal is `git worktree remove`, the optional [`removed` hook](#lifecycle-hooks), then branch deletion, all run from the repository root. `remove_marked_worktree` first moves the process out of the checkout when its cwd is inside it.
 
-Branch deletion re-runs the landed proof instead of trusting Git's merge check. It tries `git branch -d`; a branch already gone counts as deleted; a "not merged" refusal escalates to `-D` only when `content_landed` passes against the marker's comparison ref, and otherwise returns `BranchDeletion::KeptUnmerged` so the CLI can say the branch survived. A forced removal skips the proof and deletes with `-D` directly, so an unlanded branch goes with it and no `KeptUnmerged` notice appears. Three paths force: `worktree remove --force`, the `remove` answer to the wrapper's dirty prompt, and rollback after a failed `created` hook.
+Branch deletion re-runs the landed proof instead of trusting Git's merge check. It tries `git branch -d`; a branch already gone counts as deleted; a "not merged" refusal escalates to `-D` only when `content_landed` passes against the marker's comparison ref, and otherwise returns `BranchDeletion::KeptUnmerged` so the CLI can say the branch survived. A forced removal skips the proof and deletes with `-D` directly, so an unlanded branch goes with it and no `KeptUnmerged` notice appears. Three paths force: `worktree remove --force`, the `remove` answer to the wrapper's dirty prompt, and rollback after a failed `created` hook on a tree that created its branch (one that adopted an existing local branch keeps it).
 
 After Git removal succeeds, `retire_removal` runs two durable effects: it ends the store sessions bound to that path or branch, and archives the worktree channel's messages. Both run even when the first fails, and both results return in a `#[must_use]` `RemovalRetirement`, because the Git removal is already irreversible and one failure must not hide the other. `worktree remove` and cohort reconciliation fail the command on either error; wrapper cleanup logs both at debug level; `sweep` and `gc` warn on session retirement and report archival failures per tree.
 
