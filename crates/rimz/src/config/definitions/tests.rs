@@ -2,6 +2,50 @@ use super::*;
 use crate::config::{CommandsConfig, SkillName};
 
 #[test]
+fn skill_inventory_is_per_family_and_expires_with_the_load() {
+    let root = tempfile::tempdir().unwrap();
+    let library = root.path().join("skills");
+    std::fs::create_dir_all(library.join("first")).unwrap();
+    std::fs::write(library.join("first/SKILL.md"), "# First").unwrap();
+    let env = BTreeMap::new();
+    let check = SkillCheck::Check {
+        env: &env,
+        library: &library,
+        machine_isolation: super::super::Isolation::Sandbox,
+    };
+    let catalog = SkillCatalog::new(check);
+    assert!(
+        catalog
+            .enumerate("claude")
+            .unwrap()
+            .unwrap()
+            .contains_key("first")
+    );
+    std::fs::rename(library.join("first"), library.join("second")).unwrap();
+    assert!(
+        catalog
+            .enumerate("claude")
+            .unwrap()
+            .unwrap()
+            .contains_key("first")
+    );
+    assert!(
+        catalog
+            .enumerate("codex")
+            .unwrap()
+            .unwrap()
+            .contains_key("second")
+    );
+    assert!(
+        SkillCatalog::new(check)
+            .enumerate("claude")
+            .unwrap()
+            .unwrap()
+            .contains_key("second")
+    );
+}
+
+#[test]
 fn unknown_model_cannot_invent_a_family_from_a_tier_only_parent() {
     let root = fixture();
     definition(

@@ -966,6 +966,7 @@ fn explain_prints_the_plan_without_side_effects() {
         .get_output()
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("explain JSON");
+    assert_eq!(report["tier"], "principal");
     assert!(report.get("reentry").is_none());
     let artifact = std::path::Path::new(report["prompt"]["artifact"].as_str().unwrap());
     assert_eq!(artifact.parent(), Some(runtime.prompt_dir().as_path()));
@@ -1080,6 +1081,23 @@ fn explain_prints_the_plan_without_side_effects() {
     "#
     );
 
+    let human = env
+        .rimz()
+        .args(["agents", "explain", "worker", "--tier", "senior"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(
+        human
+            .lines()
+            .any(|line| line.trim_start().starts_with("tier:")
+                && line.contains("senior")
+                && line.contains("opus"))
+    );
+
     let prompt = env
         .rimz()
         .args(["agents", "explain", "worker", "--prompt"])
@@ -1109,6 +1127,7 @@ fn explain_prints_the_plan_without_side_effects() {
         serde_json::json!(["--model opus", "--yolo", "-- --foo"])
     );
     assert_eq!(overridden["model"], "opus");
+    assert_eq!(overridden["tier"], "senior");
     assert_eq!(overridden["mode"], "yolo");
     let argv = overridden["provider_argv"].as_array().unwrap();
     assert!(
@@ -1137,7 +1156,7 @@ fn explain_prints_the_plan_without_side_effects() {
         (
             "worker",
             " codex ",
-            "codex",
+            "claude",
             serde_json::json!(["worker", "claude", "codex"]),
         ),
         (
@@ -1177,6 +1196,12 @@ fn explain_prints_the_plan_without_side_effects() {
         let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(report["kind"], kind);
         assert_eq!(report["profile"]["chain"], chain);
+        if agent_override == "fast" {
+            assert!(
+                report.get("tier").is_none(),
+                "a profile rebase does not route"
+            );
+        }
     }
     let settings_body = r#"{"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}}"#;
     let settings = env.home_root.join("settings.json");

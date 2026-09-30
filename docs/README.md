@@ -32,7 +32,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 
 ## Customization
 
-- [Configuration](./guide/configuration.md): every setting and the file that owns it, choosing and binding model tiers, agent profiles and teams, loop tasks, and project trust.
+- [Configuration](./guide/configuration.md): every setting and the file that owns it, choosing model tiers and ordering their models, agent profiles and teams, loop tasks, and project trust.
 - [Provider accounts](./guide/accounts.md): run a room's Claude or Codex agents under a second account, with its own limits, budget, and sessions.
 - [Theming](./guide/theme.md): the palette, color depth, color slots, glyph sets, status-head animations, the sidebar's sizing and meter stops, and provider branding.
 - [Pets](./guide/pets.md): the animated companion on the dashboard: what it acts out, the built-in and petdex catalogs, your own sprite sheets, the pixel and cell-art render tiers, and what it fetches.

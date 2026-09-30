@@ -11,19 +11,14 @@
 # claude = false                       # auto-launch `claude remote-control` in the managed daemon tab
 # codex = false                        # ensure the per-user Codex remote-control daemon when installed
 
-# Model tiers. A written row replaces the whole default row; omitted families
-# are empty. Unwritten rows keep their defaults. See the configuration guide.
-# [tiers.principal]
-# claude = { model = "fable", effort = "high" }
-# [tiers.senior]
-# claude = { model = "opus", effort = "xhigh" }
-# codex = { model = "astra", effort = "xhigh" }
-# [tiers.junior]
-# claude = { model = "sonnet", effort = "xhigh" }
-# codex = { model = "sol", effort = "xhigh" }
-# [tiers.intern]
-# claude = { model = "haiku", effort = "xhigh" }
-# codex = { model = "luna", effort = "xhigh" }
+# Model lists are ordered by preference; written lists replace defaults.
+# Routing skips unavailable models at launch; off keeps the load-time choice.
+# [tiers]
+# routing = "fallback"
+# principal = ["fable"]
+# senior = ["opus", "astra"]
+# junior = ["sol", "sonnet"]
+# intern = ["luna", "haiku"]
 
 # Pin a model alias on fresh launches instead of following its family.
 ## [models.codex]

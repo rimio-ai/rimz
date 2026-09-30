@@ -129,6 +129,7 @@ These flags apply to every agent cell in the launch, and each adapter renders th
 | Flag | Effect |
 | --- | --- |
 | `--model <MODEL>` | Model for every agent cell, replacing the profile's. Droid refuses it; the per-agent flags are in [agent support](../agent-support.md#model-and-effort). |
+| `--tier <TIER>` | Select `intern`, `junior`, `senior`, or `principal` for the launched Markdown profile. Conflicts with `--model`. |
 | `--effort <LEVEL>` | Reasoning effort, passed to the provider's effort flag without validation, so levels are whatever the provider accepts. Kinds with no effort flag refuse the launch; the per-agent flags are in [agent support](../agent-support.md#model-and-effort). |
 | `--budget <AMOUNT[/day]>` | Dollar cap per agent: a bare amount caps the session, `/day` resets at the local day boundary. Inspect or change it later with [`rimz agents budget`](./budget.md#cap-one-agent). |
 | `--system-prompt-file <PATH>` | Replace each agent's base system prompt with the file. |
@@ -142,7 +143,9 @@ These flags apply to every agent cell in the launch, and each adapter renders th
 
 The profile fields these flags override are described in the [configuration guide](../../guide/configuration.md#profiles).
 
-`--model` also accepts a [model tier](../../guide/configuration.md#model-tiers). Each cell prefers the `--agent` replacement's provider when given, otherwise its definition chain's preferred family, otherwise its current provider. Resolution tries that family, then the other family at the same tier, then higher tiers, never lower. A tier that would move the cell to the other provider is refused and names the fix, `--agent <kind> --model <tier>`, so a provider switch, with the argument rules `--agent` documents below, is always one you asked for. Other providers refuse tiers. The selected cell's default effort replaces the profile's effort unless `--effort` is given. CLI effort remains an absolute provider value; relative shifts belong to Markdown definitions.
+`--model` takes a concrete model; a tier name is refused with the fix `--tier <tier>`. `--tier` and `--model <listed-model>` use the [ordered tier lists](../../guide/configuration.md#model-tiers), preferring the exact model or the `--agent <kind>` family before the remaining entries, then higher tiers, never lower. With only `--tier`, the definition's family preference stays. A family preference does not pin the provider. A team override routes each Markdown role separately. Project TOML roles take `--model` exactly; a team containing one refuses `--tier`, naming the role. Project TOML profiles cannot use `--tier`. The definition's absolute effort is retained unless `--effort` overrides it; otherwise the chosen model's default applies.
+
+For a routed profile that can render the requested kind, `--agent <kind>` selects that family's complete definition, including its tool arguments. Otherwise `--agent` uses the re-base behavior below.
 
 `--agent` swaps the engine and keeps the job. The replacement profile or kind supplies the provider, and supplies model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer prompt on the `opus` profile's model and effort. When the replacement leaves model or effort unset, a same-provider re-base keeps the cell's values, while a provider change drops the cell's model and keeps its effort. Permission mode, isolation default, budget, `auto-compact`, skills, and prompt files carry over from the original profile, and the replacement fills only what the original left unset. Raw profile `args` carry over on a same-provider re-base; on a provider change they come from the replacement instead, so a named Codex definition can supply its model and generated tool flags when selected as the replacement. Command-line flags still win, and typed fields the new adapter cannot express fail before any pane opens. `--agent` applies to this launch only: `--resume` refuses it, and a later `restart` refuses when the profile resolves back to a different provider.
 
@@ -351,7 +354,7 @@ rimz agents profiles --json --path
 
 JSON includes `source` (`profile` or `command`) and, only with `--path`, the absolute `path`.
 
-Tiered profiles show the tier beside the concrete model, with `fallback` when resolution used another family or a higher tier. JSON adds `tier` and `tier_fallback` only for tiered profiles; `model` and `effort` stay concrete. Validation rows use the same tier fields and fallback marker.
+Tiered profiles show `model (tier)`, or `model (tier, fallback)` when resolution used a higher tier. Changing families within a tier is not a load-time fallback. JSON adds `tier` and `tier_fallback` only for tiered profiles; `model` and `effort` stay concrete. Validation rows use the same tier fields and fallback marker. `agents validate` warns once per routed definition and excluded family, naming the listed model and why that family cannot run it; warnings do not fail validation.
 
 ### Explain a launch
 
@@ -359,7 +362,7 @@ Tiered profiles show the tier beside the concrete model, with `fallback` when re
 
 ```sh
 rimz agents explain coder --model gpt-6-astra --effort high
-rimz agents explain coder --model senior
+rimz agents explain coder --tier senior
 rimz agents explain forge.coder --json
 rimz agents explain @coder
 rimz agents explain coder --prompt > prompt.md
@@ -374,7 +377,7 @@ With a profile target, `explain` accepts the launch overrides `--ask`, `--yolo`,
 
 The default report shows:
 
-- a model-tier override's concrete provider, model, and effort alongside the requested tier;
+- a routed profile's tier and chosen model, including a `--tier` override;
 - the profile chain, including a replacement from `--agent` (`writer ← claude` becomes `writer ← codex`, or `writer ← fast ← codex` when the replacement is profile `fast`);
 - the action, working directory, and effective settings;
 - the provider argv and the wrapped argv;

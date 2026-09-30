@@ -8,8 +8,10 @@ mod traits;
 #[cfg(test)]
 mod tests;
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSource, TeamsConfig};
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
@@ -24,6 +26,44 @@ pub enum SkillCheck<'a> {
         library: &'a Path,
         machine_isolation: super::Isolation,
     },
+}
+
+type SkillInventory = Rc<BTreeMap<String, crate::agents::skills::SkillDir>>;
+
+struct SkillCatalog<'a> {
+    check: SkillCheck<'a>,
+    inventories: RefCell<BTreeMap<String, Result<SkillInventory, String>>>,
+}
+
+impl<'a> SkillCatalog<'a> {
+    fn new(check: SkillCheck<'a>) -> Self {
+        Self {
+            check,
+            inventories: RefCell::default(),
+        }
+    }
+
+    fn enumerate(&self, kind: &str) -> Result<Option<SkillInventory>, String> {
+        let SkillCheck::Check { env, library, .. } = self.check else {
+            return Ok(None);
+        };
+        self.inventories
+            .borrow_mut()
+            .entry(kind.to_owned())
+            .or_insert_with(|| {
+                crate::agents::skills::enumerate(
+                    crate::agents::find_definition(kind)
+                        .and_then(|definition| definition.skills_home(env))
+                        .as_deref(),
+                    Some(library),
+                    |_| true,
+                )
+                .map(Rc::new)
+                .map_err(|error| error.to_string())
+            })
+            .clone()
+            .map(Some)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -172,6 +212,8 @@ pub fn load(
     commands: &CommandsConfig,
     tiers: &super::tiers::TierConfig,
 ) -> LoadedDefinitions {
+    let catalog = SkillCatalog::new(skills);
+    let skills = &catalog;
     let mut loaded = LoadedDefinitions::default();
     let mut agents = Namespace::default();
     let mut subagents = Namespace::default();

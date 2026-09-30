@@ -58,7 +58,7 @@ The left column is the word to use. A synonym for one of these is a bug, and a t
 | Term | Means |
 | --- | --- |
 | account | A provider login. |
-| model tier | A capability level bound to a model and default effort per family in machine config. |
+| model tier | A capability level with an ordered list of models in machine config. |
 | park | An agent or run held rather than progressing: a crossed cap, a provider rate limit, spend limit, or overload, or a wake that never arrived. The sidebar's `⏸` covers the limit cases only. A message parks when it is held for the recipient's next turn boundary, the opposite of `--steer`. Sleeping is a separate state: an agent resting with a wait armed. |
 | reporting hooks | What `rimz hooks install` writes into an agent's own config. |
 | the run | What `rimz agents -p` or a scheduled task starts. |
