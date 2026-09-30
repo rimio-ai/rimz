@@ -4,10 +4,10 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `0d803fd02`, after pass 30b: 4605 scoped commits (pace window 1152), 24 admission intents, 234 holds; no parse failures, ledger problems, pending restamps, stale or ambiguous verdict keys, or open families (14 suppressed by verdict).
-- **Seam queue:** empty. A seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
+- **Survey:** base `8169df102`, before round 31: 4631 scoped commits (pace window 1158), 24 admission intents, 236 holds; no parse failures, ledger problems, pending restamps, or stale or ambiguous verdict keys. One open shape family, the queued seam below (15 suppressed by verdict).
+- **Seam queue:** `queued`: the synthetic-message delivery workflow (compose a `MessageRecord` with sender, channel and pane, `deliver_now`, record delivery failures), spelled in `cli/agents_cmd` (`cache_keepalive`, `subagent_report::report_fleet_with_kind`, `team_report::report_done`) and twice in `cli/remote/web`, and once in its owner as `message::compact::send_compact`. Rehome it out of the `cli` edge into one `message` interface. A seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Reopened:** `agents/state` and `agents/(root)` (scoped churn past its row's count; `(root)` rows count their root file's commits since the history-path fix).
-- **Never reviewed:** `config/tiers`. Binary modules and test-only rows carry no hold.
+- **Never reviewed:** none. Binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
 - **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 48, `cli/agents_cmd/mod.rs` 24, `cli/transcript` 18, `cli/agents_cmd/exec.rs` 13, `cli/room` 12); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
@@ -110,6 +110,8 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `config/sidebar` | holds; landed pass-24a | `2a9ec66e5` | 30 | section record. |
 | `config/skills` | holds; landed pass-24a | `2a9ec66e5` | 30 | skill-list validator at crate reach for sandbox and agents. |
 | `config/theme` | holds | `2a9ec66e5` | 30 | `MachineConfig` field type; predicates are live serde predicates. |
+| `config/tiers` | holds | `8169df102` | 30 | tier table and resolver; `family_tiers` narrowing deferred. |
+| `config/tool_rules` | holds | `8169df102` | 30 | one validated rule newtype; `ToolRuleErr` stays `pub` as `FromStr::Err`. |
 | `config/web` | holds | `2a9ec66e5` | 30 | `WebPrefs` left the façade. |
 | `config/worktree` | holds; landed pass-24a | `2a9ec66e5` | 30 | base parse errors left the façade. |
 | `daemon_view` | holds; landed pass-15c | `944c8120e` | 30 | loop-panel acquisition is one operation; both cycles held by intent. |
@@ -297,6 +299,7 @@ Refactor candidates a pass judged real but could not land, each with its concret
 - `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
 - `agents/adapters/codex`: `cap_turn_error_label` and `TURN_ERROR_LABEL_MAX` copy Claude's `statusline` pair word for word; a shared helper beside `TurnErrorClass::classify_label` in `agents/context` lands with a pass owning codex or `agents/context`.
 - `config/definitions`: one load context for the seven-argument `Resolver::new` and the `SeatLoader` repack, plus one safe-name predicate (about −20 SLOC). Ready for a pass owning `config/definitions`.
+- `config::tiers::TierConfig::family_tiers`: `harness::plan` is its only reader, so it narrows to `pub(crate)`; the other `narrow to` rows sit in a public signature or field (caveat 13). Ready for a pass owning `config/tiers`.
 - `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
