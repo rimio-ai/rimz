@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# The crate builds several helper binaries; `cargo run -p rimz` means the CLI.
+default-run = "rimz"
 description = "The control room for your coding agents: a realtime tmux/Zellij dashboard for fleets of Claude Code, Codex, and Pi agents."
 homepage = "https://github.com/rimio-ai/rimz"
 readme = "../../README.md"
