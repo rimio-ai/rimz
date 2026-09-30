@@ -301,6 +301,8 @@ Every disk write falls into one of four classes, and one line sorts them: **dura
 
 Every fsync call funnels through [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs), and no module hand-rolls its own temp-file dance. The `cargo xtask invariants` check `ensure_store_durability` rejects a `sync_all` or `sync_data` method call anywhere else; it matches those two std methods only, so a raw `libc` or `nix` fsync would pass the grep and has to be caught in review.
 
+A rename over a path replaces a symlink there with a regular file; resolve the link first to write through it.
+
 ### Wakeups
 
 After a commit, the writer calls `wake_store_delta` in [`wakeup/mod.rs`](../../crates/rimz/src/wakeup/mod.rs), the shared leaf wire below this module. It walks the runtime heartbeat directory and sends a typed `store_delta` datagram to each sidebar whose heartbeat is no older than `SIDEBAR_HEARTBEAT_TTL` (5 seconds), re-statting each heartbeat just before the send to close the window where a renderer exits between read and write.

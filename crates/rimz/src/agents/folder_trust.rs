@@ -51,7 +51,7 @@ pub enum FolderTrustErr {
 
 /// Publish an approved preview only if its original bytes are still current.
 pub fn grant_folder_trust(gap: &FolderTrustGap) -> Result<(), FolderTrustErr> {
-    use crate::disk::atomic::{AtomicErr, write_bytes_atomically};
+    use crate::disk::atomic::AtomicErr;
     let preview = gap
         .grant
         .as_ref()
@@ -82,7 +82,7 @@ pub fn grant_folder_trust(gap: &FolderTrustGap) -> Result<(), FolderTrustErr> {
             source,
         })?;
     }
-    write_bytes_atomically(&gap.path, preview.candidate.as_bytes())?;
+    super::provider_file::write_bytes(&gap.path, preview.candidate.as_bytes())?;
     Ok(())
 }
 

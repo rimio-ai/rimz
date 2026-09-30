@@ -167,7 +167,7 @@ pub fn refresh(out: Option<&Path>) -> Result<RefreshReport> {
         Some(out) => {
             let mut bytes = serde_json::to_vec(&snapshot).map_err(SourceErr::Serialize)?;
             bytes.push(b'\n');
-            crate::disk::atomic::write_bytes_atomically(out, &bytes)?;
+            crate::agents::provider_file::write_bytes(out, &bytes)?;
         }
         None => check_coverage(&snapshot, &report)?,
     }

@@ -56,6 +56,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_snapshot_projection_stays_quiet(root, &files)?;
     ensure_diag_writes_stay_in_diag(root, &files)?;
     ensure_provider_homes_resolve_from_login_env(root, &files)?;
+    ensure_provider_files_follow_symlinks(root, &files)?;
     ensure_sidebar_enrich_folds_before_live_panes(root)?;
     ensure_card_admission_predicate(root)?;
     ensure_config_template_sections(root)?;
@@ -1568,6 +1569,18 @@ fn ensure_diag_writes_stay_in_diag(root: &Path, files: &[PathBuf]) -> Result<()>
         )?;
     }
     Ok(())
+}
+
+/// A rename over a symlink replaces it with a regular file, so a named
+/// account's linked settings would silently become a private copy.
+fn ensure_provider_files_follow_symlinks(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let agents = root.join("crates/rimz/src/agents");
+    ensure_no_match(
+        files,
+        "write_bytes_atomically",
+        |path| !path.starts_with(&agents) || path == agents.join("provider_file.rs"),
+        "provider files are written through `agents::provider_file`, which follows symlinks",
+    )
 }
 
 /// A provider home is an account: host-side code resolves it from the login

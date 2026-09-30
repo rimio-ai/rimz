@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::disk::atomic;
 
-use super::{AgentErr, Result};
+use super::{AgentErr, Result, provider_file};
 
 pub(super) fn read_json_object(agent: &'static str, path: &Path) -> Result<Map<String, Value>> {
     match std::fs::read_to_string(path) {
@@ -54,7 +54,7 @@ pub(super) fn write_json(
     path: &Path,
     root: &Map<String, Value>,
 ) -> Result<()> {
-    atomic::write_bytes_atomically(path, render_json(agent, root)?.as_bytes())?;
+    provider_file::write_bytes(path, render_json(agent, root)?.as_bytes())?;
     Ok(())
 }
 
@@ -115,7 +115,7 @@ pub(super) fn commit_pair(
         second,
         first_original,
         second_original,
-        atomic::write_bytes_atomically,
+        provider_file::write_bytes,
     )
 }
 
@@ -214,7 +214,7 @@ mod transaction_tests {
                         source: std::io::Error::other("injected second-write failure"),
                     });
                 }
-                atomic::write_bytes_atomically(path, bytes)
+                provider_file::write_bytes(path, bytes)
             },
         )
         .unwrap_err();
@@ -254,7 +254,7 @@ mod transaction_tests {
                         source: std::io::Error::other("injected uninstall failure"),
                     });
                 }
-                atomic::write_bytes_atomically(path, bytes)
+                provider_file::write_bytes(path, bytes)
             },
         )
         .unwrap_err();
