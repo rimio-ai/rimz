@@ -260,6 +260,7 @@ fn team_cli_models_route_each_markdown_role() {
         crate::harness::plan::finalize_launch_layout(
             &mut layout,
             crate::harness::plan::LaunchFinalizeOptions {
+                agent_base: None,
                 permission_mode: None,
                 isolation: None,
                 preset: &crate::agents::LaunchPreset {
@@ -331,6 +332,7 @@ fn team_cli_models_route_each_markdown_role() {
     crate::harness::plan::finalize_launch_layout(
         &mut layout,
         crate::harness::plan::LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: None,
             isolation: None,
             preset: &crate::agents::LaunchPreset {

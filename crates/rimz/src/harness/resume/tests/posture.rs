@@ -4,6 +4,182 @@
 use super::*;
 
 #[test]
+fn recorded_posture_replays_verbatim_model_without_observed_switch() {
+    let mut profiles = profiles("planner", routed_profile(Some("medium")));
+    profiles
+        .0
+        .get_mut("planner")
+        .unwrap()
+        .definition_renders
+        .as_mut()
+        .unwrap()
+        .renders
+        .insert("claude".into(), profile("claude"));
+    let record = crate::agents::LaunchRecord {
+        model: Some("opus[1m]".into()),
+        effort: Some("high".into()),
+        agent: None,
+    };
+    let stamp = tier_stamp("opus");
+    for profile in [Some("planner"), None] {
+        let posture = resolve_posture(
+            PostureRequest {
+                record: Some(&record),
+                profile,
+                kind: &AgentKind::new_unchecked("claude"),
+                stamped_mode: None,
+                stamped_tier: Some(&stamp),
+            },
+            &profiles,
+        );
+        assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+        assert_eq!(posture.launch.model, record.model);
+        assert_eq!(posture.launch.effort, record.effort);
+        assert!(posture.launch.tier.is_none());
+    }
+}
+
+#[test]
+fn recorded_model_override_keeps_the_stamped_family_render() {
+    let profiles = profiles("planner", routed_profile(None));
+    let record = crate::agents::LaunchRecord {
+        model: Some("gpt-6-sol".into()),
+        effort: Some("high".into()),
+        agent: None,
+    };
+    let stamp = tier_stamp("astra");
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("planner"),
+            kind: &AgentKind::new_unchecked("codex"),
+            stamped_mode: None,
+            stamped_tier: Some(&stamp),
+        },
+        &profiles,
+    );
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    assert!(posture.launch.args.iter().any(|arg| arg == "--search"));
+    assert_eq!(posture.launch.model, record.model);
+    assert!(posture.launch.tier.is_none());
+}
+
+#[test]
+fn recorded_provider_survives_a_cleared_tier() {
+    let profiles = profiles("planner", routed_profile(None));
+    let record = crate::agents::LaunchRecord {
+        model: Some("gpt-6-sol".into()),
+        ..Default::default()
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("planner"),
+            kind: &AgentKind::new_unchecked("codex"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &profiles,
+    );
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    assert!(posture.launch.args.iter().any(|arg| arg == "--search"));
+    assert_eq!(posture.launch.model, record.model);
+}
+
+#[test]
+fn recorded_mode_beats_the_profile_default() {
+    let mut planner = profile("claude");
+    planner.mode = Some(PermissionMode::Yolo);
+    let profiles = profiles("planner", planner);
+    let record = crate::agents::LaunchRecord::default();
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("planner"),
+            kind: &AgentKind::new_unchecked("claude"),
+            stamped_mode: Some(PermissionMode::Ask),
+            stamped_tier: None,
+        },
+        &profiles,
+    );
+    assert_eq!(posture.launch.mode, Some(PermissionMode::Ask));
+    assert!(
+        !posture
+            .launch
+            .args
+            .contains(&"--dangerously-skip-permissions".into())
+    );
+}
+
+#[test]
+fn absent_record_effort_preserves_raw_profile_args() {
+    let mut planner = profile("claude");
+    planner.args = Some("--effort high".into());
+    let profiles = profiles("planner", planner);
+    let record = crate::agents::LaunchRecord {
+        model: Some("opus".into()),
+        ..Default::default()
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("planner"),
+            kind: &AgentKind::new_unchecked("claude"),
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &profiles,
+    );
+    assert!(
+        posture
+            .launch
+            .args
+            .windows(2)
+            .any(|args| args == ["--effort", "high"])
+    );
+}
+
+#[test]
+fn recorded_base_replays_and_missing_base_degrades() {
+    let mut profiles = profiles("planner", profile("claude"));
+    let mut reviewer = profile("claude");
+    reviewer.model = Some("sonnet".into());
+    reviewer.effort = Some("high".into());
+    reviewer.args = Some("--verbose".into());
+    profiles.0.insert("reviewer".into(), reviewer);
+    let record = crate::agents::LaunchRecord {
+        model: Some("opus[1m]".into()),
+        effort: Some("medium".into()),
+        agent: Some("reviewer".into()),
+    };
+    let resolve = |profiles: &ProfilesConfig| {
+        resolve_posture(
+            PostureRequest {
+                record: Some(&record),
+                profile: Some("planner"),
+                kind: &AgentKind::new_unchecked("claude"),
+                stamped_mode: None,
+                stamped_tier: None,
+            },
+            profiles,
+        )
+    };
+    let posture = resolve(&profiles);
+    assert!(posture.degraded.is_none());
+    assert!(posture.launch.args.iter().any(|arg| arg == "--verbose"));
+    assert_eq!(posture.launch.model, record.model);
+    assert_eq!(posture.launch.effort, record.effort);
+    profiles.0.remove("reviewer");
+    assert!(
+        resolve(&profiles)
+            .degraded
+            .unwrap()
+            .to_string()
+            .contains("reviewer")
+    );
+}
+
+#[test]
 fn resume_preserves_a_stamped_model_after_a_tier_rebind() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("definitions");
@@ -41,6 +217,7 @@ fn resume_preserves_a_stamped_model_after_a_tier_rebind() {
     let stamp = tier_stamp(model);
     let posture = resolve_posture(
         PostureRequest {
+            record: None,
             profile: Some("planner"),
             kind: &AgentKind::new_unchecked("claude"),
             stamped_mode: None,
@@ -89,6 +266,7 @@ fn stamped_alias_resume_replays_the_recorded_session_model() {
     let stamp = tier_stamp("astra");
     let posture = resolve_posture(
         PostureRequest {
+            record: None,
             profile: Some("planner"),
             kind: &AgentKind::new_unchecked("codex"),
             stamped_mode: None,
@@ -117,7 +295,10 @@ fn stamped_alias_resume_replays_the_recorded_session_model() {
         &machine,
         &runtime,
         &crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked("codex")),
-        Some("gpt-6.1-astra"),
+        Some(&AgentState {
+            model: Some("gpt-6.1-astra".into()),
+            ..agent("codex", "a1", "/repo", 1)
+        }),
         None,
         &Default::default(),
     )
@@ -128,7 +309,7 @@ fn stamped_alias_resume_replays_the_recorded_session_model() {
         request.identity.params.model.as_deref(),
         Some("gpt-6.1-astra")
     );
-    assert_eq!(request.identity.params.tier, Some(stamp));
+    assert!(request.identity.params.tier.is_none());
     assert!(
         request
             .action
@@ -137,13 +318,17 @@ fn stamped_alias_resume_replays_the_recorded_session_model() {
             .any(|args| args == ["--model", "gpt-6.1-astra"])
     );
     request.identity.params.model = Some("sol".into());
+    request.identity.params.tier = Some(stamp);
     let machine = toml::from_str("[models.codex]\nsol = 'gpt-6-sol'").unwrap();
     crate::harness::launch_plan::resolve_model(
         &mut request,
         &machine,
         &runtime,
         &crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked("codex")),
-        Some("gpt-6.1-astra"),
+        Some(&AgentState {
+            model: Some("gpt-6.1-astra".into()),
+            ..agent("codex", "a1", "/repo", 1)
+        }),
         None,
         &Default::default(),
     )

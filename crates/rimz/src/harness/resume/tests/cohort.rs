@@ -4,6 +4,655 @@
 use super::*;
 
 #[test]
+fn recorded_team_restore_keeps_role_layers() {
+    let (mut teams, profiles, commands) = team_configs();
+    let binding = &mut teams.0.get_mut("forge").unwrap().roles[0];
+    binding.args = Some("--verbose".into());
+    binding.system_prompt_file = Some(crate::config::PromptSource::Text {
+        origin: "/role.md".into(),
+        text: "Role".into(),
+    });
+    binding
+        .append_system_prompt_files
+        .push(crate::config::PromptSource::Text {
+            origin: "/append.md".into(),
+            text: "Append".into(),
+        });
+    let expected = binding.clone();
+    for recorded in [false, true] {
+        let mut planner = team_agent("claude", "planner", "planner", "/repo/forge", 1);
+        planner.profile = Some("claude-plan".into());
+        planner.record = recorded.then(|| {
+            Box::new(crate::agents::LaunchRecord {
+                model: Some("opus".into()),
+                effort: Some("high".into()),
+                agent: None,
+            })
+        });
+        let tabs = plan_team_restore_tabs(
+            &[planner],
+            &NO_LOGINS,
+            &teams,
+            &profiles,
+            &commands,
+            Some(Path::new("/repo")),
+            &WORKSPACE,
+            |_| true,
+            |_| true,
+            false,
+        );
+        assert_eq!(tabs.len(), 1);
+        let cell = tabs[0].layout.agent_cells().next().unwrap();
+        assert!(cell.args.contains(&"--verbose".into()), "{:?}", cell.args);
+        assert_eq!(cell.system_prompt_file, expected.system_prompt_file);
+        assert_eq!(
+            cell.append_system_prompt_files,
+            expected.append_system_prompt_files
+        );
+        if recorded {
+            assert_eq!(cell.launch.model.as_deref(), Some("opus"));
+            assert_eq!(cell.launch.effort.as_deref(), Some("high"));
+        }
+    }
+}
+
+#[test]
+fn recorded_cross_provider_cohorts_match_without_a_tier() {
+    for base in [Some("codex"), None] {
+        let mut agent = agent("codex", "a1", "/repo", 1);
+        agent.profile = Some("planner".into());
+        agent.record = Some(Box::new(crate::agents::LaunchRecord {
+            model: Some("gpt-6-sol".into()),
+            agent: base.map(str::to_owned),
+            ..Default::default()
+        }));
+        agent.team = Some("forge".into());
+        agent.launch_group = Some("group".into());
+        let cell = profile_cell("claude", "planner");
+        let pool = [&agent];
+        assert!(
+            match_single_cohort(&pool, &cell)[0].is_some(),
+            "base {base:?}"
+        );
+        assert!(match_team_cohort(&pool, std::slice::from_ref(&cell), "forge")[0].is_some());
+        assert!(match_inline_cohort(&pool, &[cell])[0].is_some());
+    }
+}
+
+#[test]
+fn replacement_base_keeps_saved_mode() {
+    check_replacement_base(None);
+}
+
+#[test]
+fn replacement_base_rescues_a_deleted_base() {
+    check_replacement_base(Some("deleted"));
+}
+
+fn check_replacement_base(saved_base: Option<&str>) {
+    let mut profiles = profiles("planner", profile("claude"));
+    profiles.0.insert("reviewer".into(), profile("claude"));
+    let mut agent = agent("claude", "a1", "/repo", 1);
+    agent.profile = Some("planner".into());
+    agent.mode = Some(PermissionMode::Yolo);
+    agent.record = Some(Box::new(crate::agents::LaunchRecord {
+        agent: saved_base.map(str::to_owned),
+        ..Default::default()
+    }));
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+    ));
+    restore_routed_cells(
+        &mut layout,
+        &[CohortSeed::Resume(Box::new(agent))],
+        &profiles,
+        &ResumeOverrides {
+            agent: Some("reviewer"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(cell.launch.mode, Some(PermissionMode::Yolo));
+    assert!(cell.args.contains(&"--dangerously-skip-permissions".into()));
+}
+
+#[test]
+fn legacy_cohort_resume_preserves_the_resolved_team_prompts() {
+    use crate::harness::team_prompt::{Consensus, TeamPrompt};
+
+    let mut worker = profile("claude");
+    worker.system_prompt_file = Some(crate::config::PromptSource::Text {
+        origin: "/definitions/worker.md".into(),
+        text: "Worker".into(),
+    });
+    let profiles = profiles("worker", worker);
+    for (fresh, recorded_profile, recorded) in [
+        (false, false, false),
+        (false, false, true),
+        (false, true, false),
+        (true, false, false),
+    ] {
+        let mut cell = crate::harness::spec::profile_cell("worker", &profiles).unwrap();
+        cell.team_prompt = Some(TeamPrompt {
+            consensus: Consensus::BuiltIn,
+            files: vec![crate::config::PromptSource::Text {
+                origin: "/definitions/team.md".into(),
+                text: "Team instructions".into(),
+            }],
+        });
+        let base = cell.system_prompt_file.clone();
+        let team_prompt = cell.team_prompt.clone();
+        let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(cell));
+        let mut agent = agent("claude", "a1", "/repo", 1);
+        agent.profile = recorded_profile.then(|| "worker".into());
+        agent.record = recorded.then(|| Box::new(crate::agents::LaunchRecord::default()));
+        let seeds = [if fresh {
+            CohortSeed::Fresh
+        } else {
+            CohortSeed::Resume(Box::new(agent))
+        }];
+        let result = restore_routed_cells(&mut layout, &seeds, &profiles, &Default::default());
+        result.unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.system_prompt_file, base);
+        assert_eq!(cell.team_prompt, team_prompt);
+        assert!(cell.launch.record.is_some());
+    }
+}
+
+#[test]
+fn cohort_alias_replay_uses_the_durable_record_not_the_finalized_cell() {
+    check_cohort_alias_replay(None);
+}
+
+#[test]
+fn legacy_model_override_bypasses_observed_alias_replay() {
+    check_cohort_alias_replay(Some("sol"));
+}
+
+#[test]
+fn legacy_tier_override_bypasses_observed_alias_replay() {
+    check_cohort_alias_replay(Some("tier"));
+}
+
+fn check_cohort_alias_replay(override_model: Option<&str>) {
+    let mut profile = profile("codex");
+    profile.model = Some("sol".into());
+    profile.definition_renders = routed_profile(None).definition_renders;
+    let profiles = profiles("planner", profile);
+    let root = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
+    let store = crate::Store::open(
+        crate::StatePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap(),
+        runtime.clone(),
+    )
+    .unwrap();
+    let machine = toml::from_str("[models.codex]\nsol = 'gpt-6-sol'").unwrap();
+    let tiers = crate::config::tiers::TierConfig::default();
+    for record in [None, Some("sol")] {
+        let (expected_model, expected_record) = if record.is_none() && override_model.is_none() {
+            ("observed-model", "observed-model")
+        } else {
+            ("gpt-6-sol", "sol")
+        };
+        let mut agent = agent("codex", "a1", "/repo", 1);
+        agent.profile = Some("planner".into());
+        agent.model = Some("observed-model".into());
+        agent.record = record.map(|model| {
+            Box::new(crate::agents::LaunchRecord {
+                model: Some(model.into()),
+                ..Default::default()
+            })
+        });
+        let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+            crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+        ));
+        let seeds = vec![CohortSeed::Resume(Box::new(agent.clone()))];
+        restore_routed_cells(
+            &mut layout,
+            &seeds,
+            &profiles,
+            &ResumeOverrides {
+                preset: crate::agents::LaunchPreset {
+                    model: override_model
+                        .filter(|value| *value != "tier")
+                        .map(str::to_owned),
+                    ..Default::default()
+                },
+                tier: (override_model == Some("tier"))
+                    .then_some((crate::config::tiers::ModelTier::Junior, &tiers)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let panes = compile_layout_panes(
+            &layout,
+            LayoutPaneParams {
+                runtime: &runtime,
+                cwd: root.path(),
+                cleanup_worktree: false,
+                in_place: false,
+                resume_seeds: Some(&seeds),
+                launch_identities: &[],
+                fallback_channel: None,
+            },
+        )
+        .unwrap();
+        let mut request = decode_exec_request(&panes.columns[0].panes[0].argv);
+        crate::harness::launch_plan::resolve_model(
+            &mut request,
+            &machine,
+            &runtime,
+            &crate::agents::ProviderLogin::default_for(agent.kind.clone()),
+            Some(&agent),
+            None,
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            request.identity.params.model.as_deref(),
+            Some(expected_model)
+        );
+        assert!(
+            request
+                .action
+                .extra_args()
+                .windows(2)
+                .any(|args| args == ["--model", expected_model])
+        );
+        assert_eq!(
+            request
+                .identity
+                .params
+                .record
+                .as_ref()
+                .unwrap()
+                .model
+                .as_deref(),
+            Some(expected_record)
+        );
+        store
+            .attach_agent_pane(
+                &agent.kind,
+                &agent.agent_id,
+                None,
+                "resume-test",
+                &pane_id("terminal_a1"),
+                crate::pane::RuntimeOwner::new(
+                    crate::pane::RuntimeOwnerKind::Agent,
+                    "a1",
+                    42,
+                    None,
+                ),
+                None,
+                None,
+                Some(&request.identity.params),
+            )
+            .unwrap();
+        let events = store.read_events().unwrap();
+        let crate::store::event::EventKind::AgentAttach(attach) = events.last().unwrap().kind()
+        else {
+            panic!("resume attach");
+        };
+        assert_eq!(
+            attach.record.unwrap().model.as_deref(),
+            Some(expected_record)
+        );
+    }
+}
+
+#[test]
+fn untiered_resume_rebuilds_the_record_and_saves_overrides() {
+    let mut profiles = profiles("planner", profile("claude"));
+    profiles.0.insert("coder".into(), profile("codex"));
+    let mut agent = agent("claude", "a1", "/repo", 1);
+    agent.profile = Some("planner".into());
+    agent.record = Some(Box::new(crate::agents::LaunchRecord {
+        model: Some("opus[1m]".into()),
+        effort: Some("high".into()),
+        agent: None,
+    }));
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+    ));
+    let mut seeds = vec![CohortSeed::Resume(Box::new(agent))];
+    restore_routed_cells(&mut layout, &seeds, &profiles, &Default::default()).unwrap();
+    assert_eq!(
+        layout.agent_cells().next().unwrap().launch.model.as_deref(),
+        Some("opus[1m]")
+    );
+    let overrides = ResumeOverrides {
+        preset: crate::agents::LaunchPreset {
+            model: Some("sonnet".into()),
+            effort: Some("low".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    restore_routed_cells(&mut layout, &seeds, &profiles, &overrides).unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    let record = cell.launch.record.as_ref().unwrap();
+    assert_eq!(record.model.as_deref(), Some("sonnet"));
+    assert_eq!(record.effort.as_deref(), Some("low"));
+    assert!(cell.launch.tier.is_none());
+    let mut coder = super::agent("codex", "a2", "/repo", 1);
+    coder.profile = Some("coder".into());
+    seeds.push(CohortSeed::Resume(Box::new(coder)));
+    seeds.push(CohortSeed::Fresh);
+    for name in ["coder", "planner"] {
+        layout.columns[0]
+            .rows
+            .push(crate::harness::spec::Cell::Agent(
+                crate::harness::spec::profile_cell(name, &profiles).unwrap(),
+            ));
+    }
+    restore_routed_cells(&mut layout, &seeds, &profiles, &overrides).unwrap();
+    for cell in layout.agent_cells() {
+        let record = cell.launch.record.as_ref().unwrap();
+        assert_eq!(record.model.as_deref(), Some("sonnet"));
+        assert_eq!(record.effort.as_deref(), Some("low"));
+    }
+}
+
+#[test]
+fn resume_overrides_keep_provider_args_and_record_in_sync() {
+    use crate::config::tiers::ModelTier;
+    let mut profiles = profiles("planner", routed_profile(None));
+    let mut reviewer = profile("claude");
+    reviewer.model = Some("sonnet".into());
+    reviewer.effort = Some("low".into());
+    reviewer.args = Some("--strict-mcp-config".into());
+    profiles.0.insert("reviewer".into(), reviewer);
+    let tiers = crate::config::tiers::TierConfig::default();
+    let root = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
+    for base in [None, Some("reviewer")] {
+        for tier in [None, Some((ModelTier::Principal, &tiers))] {
+            for (model, effort) in [
+                (None, None),
+                (Some("sonnet[1m]"), None),
+                (None, Some("medium")),
+                (Some("sonnet[1m]"), Some("medium")),
+            ] {
+                let mut agent = agent("claude", "a1", "/repo", 1);
+                agent.profile = Some("planner".into());
+                agent.record = Some(Box::new(crate::agents::LaunchRecord {
+                    model: Some("opus[1m]".into()),
+                    effort: Some("xhigh".into()),
+                    agent: Some("reviewer".into()),
+                }));
+                let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+                    crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+                ));
+                let seeds = [CohortSeed::Resume(Box::new(agent))];
+                restore_routed_cells(
+                    &mut layout,
+                    &seeds,
+                    &profiles,
+                    &ResumeOverrides {
+                        agent: base,
+                        tier,
+                        preset: crate::agents::LaunchPreset {
+                            model: model.map(str::to_owned),
+                            effort: effort.map(str::to_owned),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let cell = layout.agent_cells().next().unwrap();
+                let record = cell.launch.record.as_ref().unwrap();
+                let panes = compile_layout_panes(
+                    &layout,
+                    LayoutPaneParams {
+                        runtime: &runtime,
+                        cwd: root.path(),
+                        cleanup_worktree: false,
+                        in_place: false,
+                        resume_seeds: Some(&seeds),
+                        launch_identities: &[],
+                        fallback_channel: None,
+                    },
+                )
+                .unwrap();
+                let request = decode_exec_request(&panes.columns[0].panes[0].argv);
+                for (flag, expected) in [("--model", &record.model), ("--effort", &record.effort)] {
+                    let values = request
+                        .action
+                        .extra_args()
+                        .windows(2)
+                        .filter(|pair| pair[0] == flag)
+                        .map(|pair| pair[1].as_str())
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        values,
+                        vec![expected.as_deref().unwrap()],
+                        "{base:?} {tier:?} {model:?} {effort:?}: {flag}"
+                    );
+                }
+                assert_eq!(record.model, request.identity.params.model);
+                assert_eq!(record.effort, request.identity.params.effort);
+                assert_eq!(
+                    record.model.as_deref(),
+                    model.or(Some(if tier.is_some() {
+                        "fable"
+                    } else if base.is_some() {
+                        "sonnet"
+                    } else {
+                        "opus[1m]"
+                    }))
+                );
+                assert_eq!(record.agent.as_deref(), Some("reviewer"));
+                assert!(cell.args.iter().any(|arg| arg == "--strict-mcp-config"));
+                if let Some(stamp) = &cell.launch.tier {
+                    assert_eq!(record.model.as_deref(), Some(stamp.model.as_str()));
+                }
+                assert_eq!(
+                    cell.launch.tier.is_some(),
+                    tier.is_some() && model.is_none()
+                );
+                let reopened = resolve_posture(
+                    PostureRequest {
+                        profile: Some("planner"),
+                        kind: &cell.kind,
+                        stamped_mode: cell.launch.mode,
+                        stamped_tier: cell.launch.tier.as_deref(),
+                        record: Some(record),
+                    },
+                    &profiles,
+                );
+                assert!(reopened.degraded.is_none());
+                assert_eq!(reopened.launch.record.as_ref().unwrap().agent, record.agent);
+                assert!(
+                    reopened
+                        .launch
+                        .args
+                        .iter()
+                        .any(|arg| arg == "--strict-mcp-config")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn resume_agent_override_requires_same_kind_and_records_base() {
+    let mut profiles = profiles("planner", profile("claude"));
+    let mut reviewer = profile("claude");
+    reviewer.model = Some("sonnet".into());
+    profiles.0.insert("reviewer".into(), reviewer);
+    profiles.0.insert("coder".into(), profile("codex"));
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+    ));
+    let mut agent = agent("claude", "a1", "/repo", 1);
+    agent.profile = Some("planner".into());
+    let mut seeds = vec![CohortSeed::Resume(Box::new(agent))];
+    restore_routed_cells(
+        &mut layout,
+        &seeds,
+        &profiles,
+        &ResumeOverrides {
+            agent: Some("reviewer"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(cell.launch.profile.as_deref(), Some("planner"));
+    assert_eq!(
+        cell.launch.record.as_ref().unwrap().agent.as_deref(),
+        Some("reviewer")
+    );
+    assert_eq!(cell.launch.model.as_deref(), Some("sonnet"));
+    let err = restore_routed_cells(
+        &mut layout,
+        &seeds,
+        &profiles,
+        &ResumeOverrides {
+            agent: Some("coder"),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(!err.contains("no longer resolves"), "{err}");
+    assert!(
+        err.contains("claude") && err.contains("codex") && err.contains("fresh"),
+        "{err}"
+    );
+    let mut coder = super::agent("codex", "a2", "/repo", 1);
+    coder.profile = Some("coder".into());
+    seeds.push(CohortSeed::Resume(Box::new(coder)));
+    layout.columns[0]
+        .rows
+        .push(crate::harness::spec::Cell::Agent(
+            crate::harness::spec::profile_cell("coder", &profiles).unwrap(),
+        ));
+    let err = restore_routed_cells(
+        &mut layout,
+        &seeds,
+        &profiles,
+        &ResumeOverrides {
+            agent: Some("reviewer"),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("claude") && err.contains("codex") && err.contains("fresh"),
+        "{err}"
+    );
+}
+
+#[test]
+fn resume_tier_is_same_kind_and_never_climbs() {
+    use crate::config::tiers::ModelTier;
+    let mut profiles = profiles("planner", routed_profile(None));
+    let mut coder_profile = routed_profile(None);
+    coder_profile.agent = "codex".into();
+    coder_profile.model = Some("astra".into());
+    profiles.0.insert("coder".into(), coder_profile);
+    let tiers: crate::config::tiers::TierConfig =
+        toml::from_str("principal = ['gpt-6-sol']").unwrap();
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+    ));
+    let mut agent = agent("claude", "a1", "/repo", 1);
+    agent.profile = Some("planner".into());
+    let mut seeds = vec![CohortSeed::Resume(Box::new(agent))];
+    restore_routed_cells(
+        &mut layout,
+        &seeds,
+        &profiles,
+        &ResumeOverrides {
+            tier: Some((ModelTier::Junior, &tiers)),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(cell.launch.tier.as_ref().unwrap().tier, ModelTier::Junior);
+    assert_eq!(
+        cell.launch.record.as_ref().unwrap().model.as_deref(),
+        Some("sonnet")
+    );
+    let err = restore_routed_cells(
+        &mut layout,
+        &seeds,
+        &profiles,
+        &ResumeOverrides {
+            tier: Some((ModelTier::Principal, &tiers)),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(!err.contains("no longer resolves"), "{err}");
+    assert!(
+        err.contains("principal")
+            && err.contains("claude")
+            && err.contains("junior")
+            && err.contains("senior"),
+        "{err}"
+    );
+    let mut coder = super::agent("codex", "a2", "/repo", 1);
+    coder.profile = Some("coder".into());
+    seeds.insert(0, CohortSeed::Resume(Box::new(coder)));
+    layout.columns[0].rows.insert(
+        0,
+        crate::harness::spec::Cell::Agent(
+            crate::harness::spec::profile_cell("coder", &profiles).unwrap(),
+        ),
+    );
+    let err = restore_routed_cells(
+        &mut layout,
+        &seeds,
+        &profiles,
+        &ResumeOverrides {
+            tier: Some((ModelTier::Principal, &tiers)),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("principal") && err.contains("claude"), "{err}");
+}
+
+#[test]
+fn unavailable_resume_tier_keeps_the_requested_row() {
+    use crate::config::tiers::ModelTier;
+    let profiles = profiles("planner", routed_profile(None));
+    let tiers = crate::config::tiers::TierConfig::default();
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+    ));
+    let mut agent = agent("claude", "a1", "/repo", 1);
+    agent.profile = Some("planner".into());
+    restore_routed_cells(
+        &mut layout,
+        &[CohortSeed::Resume(Box::new(agent))],
+        &profiles,
+        &ResumeOverrides {
+            tier: Some((ModelTier::Junior, &tiers)),
+            unavailable: Some(&|_, _| Some(crate::agents::TierSkipReason::LoggedOut)),
+            ..Default::default()
+        },
+    )
+    .expect("availability is best-effort, as in the fresh-launch tier walk");
+    let cell = layout.agent_cells().next().unwrap();
+    let stamp = cell.launch.tier.as_ref().unwrap();
+    assert_eq!(stamp.tier, ModelTier::Junior);
+    assert_eq!(stamp.model, "sonnet");
+    assert!(stamp.skipped.is_empty());
+}
+
+#[test]
 fn team_hold_table() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().to_str().unwrap();
@@ -269,7 +918,10 @@ fn stamped_cohort_resume_reapplies_explicit_model_and_effort() {
         &mut layout,
         &[CohortSeed::Resume(Box::new(agent))],
         &profiles,
-        &preset,
+        &ResumeOverrides {
+            preset,
+            ..Default::default()
+        },
     )
     .unwrap();
     let cell = layout.agent_cells().next().unwrap();

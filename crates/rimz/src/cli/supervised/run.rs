@@ -117,6 +117,11 @@ pub(super) fn prepare_supervised_launch_layout(
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            agent_base: if routed {
+                None
+            } else {
+                request.agent.as_deref()
+            },
             permission_mode: Some(request.permission_mode.map_or(
                 PermissionModeChoice::Default(PermissionMode::Auto),
                 PermissionModeChoice::Explicit,

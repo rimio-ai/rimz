@@ -142,7 +142,9 @@ upward-dependencies = ["address"]
 # Launch rejection and version-floor capability inputs, version types, and the shared floor check (+7).
 # Pass 31b: narrow internal helpers and aliases; move attention defaults to config (-33).
 # Session login resolution, its facade export, and live-login sets share stamped account identity with consumers (+5).
-surface-budget = 930
+# LaunchRecord preserves verbatim launch posture across store and relaunch boundaries.
+# LaunchRecord::replay_or_new shares record fallback construction across relaunch paths.
+surface-budget = 932
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -379,7 +381,9 @@ path = "crates/rimz/src/harness"
 # Condition admission and timing presentation share stage validation, state refinement and labels (+3).
 # Live condition scopes cross the harness/sidebar seam to keep pane-free CI probes alive (+1).
 # The account-mismatch refusal is shared by restart, fork, and subagent resume with lane and cohort resume (+1).
-surface-budget = 622
+# Tier-fallback recording is shared by fresh and resumed seats (+1).
+# ResumeOverrides shares saved-posture overrides with cohort CLI callers (+1).
+surface-budget = 624
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -837,7 +841,8 @@ allowed-dependencies = [
 # Tier selection is a config overlay before spec resolution; finalization no longer carries tier context (-1).
 # One fork-free usage snapshot supplies all fresh-launch tier walks.
 # Stamped cohort resume reapplies explicit presets through the shared cell finalizer.
-surface-budget = 38
+# Record replay shares the finalizer's preset argv application (+1).
+surface-budget = 39
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"
@@ -866,7 +871,8 @@ allowed-dependencies = [
 # TeamTabLaunch carries fresh-seat batches to CLI placement for fallback recording or failure.
 # Checkout and channel holds share board-stage parsing and the fleet's Done predicate.
 # Restart, fork, and subagent resume share the account-mismatch refusal with lane and cohort resume.
-surface-budget = 56
+# ResumeOverrides shares saved-posture overrides with cohort CLI callers.
+surface-budget = 57
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"

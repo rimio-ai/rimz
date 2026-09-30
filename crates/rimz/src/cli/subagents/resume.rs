@@ -52,6 +52,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     launch.block_set_failure()?;
     let posture = rimz::harness::resume::resolve_posture(
         PostureRequest {
+            record: child.record.as_deref(),
             profile: child.profile.as_deref(),
             kind: &child.kind,
             stamped_mode: child.mode,

@@ -2164,6 +2164,18 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             identity: ExecIdentity::default(),
         };
         resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
+        resume.identity.params.record = Some(Box::new(rimz::agents::LaunchRecord {
+            model: Some("gpt-6-sol".into()),
+            effort: Some("high".into()),
+            agent: Some("reviewer".into()),
+        }));
+        resume.identity.params.tier = Some(Box::new(rimz::agents::TierStamp {
+            tier: rimz::config::tiers::ModelTier::Junior,
+            model: "gpt-6-sol".into(),
+            used_tier: None,
+            skipped: Vec::new(),
+        }));
+        resume.identity.params.mode = Some(rimz::agents::PermissionMode::Yolo);
         resume.close_pane_on_exit = wrapped && !subagent;
         if subagent {
             let mut run = rimz::store::run::RunRecord::new(
@@ -2231,6 +2243,14 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             })
             .collect::<Vec<_>>();
         assert_eq!(attaches.len(), if wrapped { 2 } else { 1 });
+        for attach in &attaches {
+            assert_eq!(
+                attach.record.as_ref(),
+                resume.identity.params.record.as_deref()
+            );
+            assert_eq!(attach.tier.as_ref(), resume.identity.params.tier.as_deref());
+            assert_eq!(attach.mode, resume.identity.params.mode);
+        }
         let attach = &attaches[0];
         assert_eq!(attach.agent_id, session_id);
         assert_eq!(attach.isolation, Some(rimz::config::Isolation::Host));

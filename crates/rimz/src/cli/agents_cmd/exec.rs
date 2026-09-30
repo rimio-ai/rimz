@@ -96,7 +96,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &machine_config.accounts,
     )
     .inspect_err(|_| fail())?;
-    let recorded_model = match &request.action {
+    let recorded_session = match &request.action {
         rimz::harness::launch::ExecAction::Launch { .. } => None,
         rimz::harness::launch::ExecAction::Resume { session_id, .. }
         | rimz::harness::launch::ExecAction::Fork { session_id, .. } => invocation
@@ -109,7 +109,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                     &request.kind,
                     &AgentSessionId::from(session_id.as_str()),
                 )
-                .and_then(|agent| agent.model.clone())
+                .cloned()
             }),
     };
     let (warnings, movement) = rimz::harness::launch_plan::resolve_model(
@@ -117,7 +117,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &machine_config,
         &runtime,
         &login,
-        recorded_model.as_deref(),
+        recorded_session.as_ref(),
         None,
         &ambient_env,
     )
@@ -242,7 +242,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 rimz::pane::RuntimeOwnerKind::Agent,
                 target.1.as_str(),
             ),
-            request.identity.params.isolation,
+            &request.identity.params,
         );
     }
     let warning_target = attach_target
@@ -319,7 +319,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 target.1.as_str(),
                 child.id(),
             ),
-            request.identity.params.isolation,
+            &request.identity.params,
         );
     }
     // A root resume may fork to a new session id; only a subagent's parent addresses the resumed id.
@@ -1210,6 +1210,7 @@ fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
             ),
             None,
             invocation.effective_isolation,
+            None,
         )?;
         Ok(())
     });
@@ -1229,8 +1230,9 @@ fn record_own_resume_pane(
     target: &(AgentKind, AgentSessionId),
     launch_id: Option<AgentSessionId>,
     runtime_owner: rimz::pane::RuntimeOwner,
-    isolation: Option<rimz::config::Isolation>,
+    params: &rimz::agents::LaunchParams,
 ) {
+    let isolation = params.isolation;
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
     };
@@ -1245,6 +1247,7 @@ fn record_own_resume_pane(
             runtime_owner,
             isolation,
             invocation.effective_isolation,
+            Some(params),
         )?;
         Ok(())
     }) {

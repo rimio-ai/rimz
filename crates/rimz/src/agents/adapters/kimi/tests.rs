@@ -416,6 +416,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             "explore",
         ),
         launch: LaunchParams {
+            record: None,
             tier: None,
             parent_agent_id: None,
             parent_agent_kind: None,

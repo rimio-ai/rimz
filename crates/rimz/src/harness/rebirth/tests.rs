@@ -702,6 +702,7 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
             ),
             Some(Isolation::Sandbox),
             Some(Isolation::Sandbox),
+            None,
         )
         .unwrap();
     let projection = store

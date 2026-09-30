@@ -44,6 +44,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
     child.worktree_path = Some("/tmp/project".to_owned());
     let mut posture = rimz::harness::resume::resolve_posture(
         PostureRequest {
+            record: None,
             profile: None,
             kind: &child.kind,
             stamped_mode: None,
@@ -107,6 +108,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 exit_on_run_completion: !keep,
                 subagent: true,
                 identity: ExecIdentity {
+                    resume_model_override: false,
                     name: Some("otter".to_owned()),
                     name_explicit: true,
                     launch_id: Some("launch_child".to_owned()),

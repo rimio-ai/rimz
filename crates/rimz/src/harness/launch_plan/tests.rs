@@ -50,6 +50,61 @@ fn action_with_args(action: &str, args: Vec<String>) -> ExecAction {
     }
 }
 
+fn recorded_session(model: &str) -> crate::agents::AgentState {
+    let mut agent = crate::testkit::agent_state("codex", "session", jiff::Timestamp::now());
+    agent.model = Some(model.into());
+    agent
+}
+
+#[test]
+fn recorded_alias_resume_ignores_observed_session_model() {
+    check_alias_resume(false);
+}
+
+#[test]
+fn explicit_alias_resume_ignores_legacy_observed_model() {
+    check_alias_resume(true);
+}
+
+fn check_alias_resume(explicit: bool) {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(root.path()),
+        root.path(),
+    )
+    .unwrap();
+    let machine = toml::from_str("[models.codex]\nsol = 'gpt-6-sol'").unwrap();
+    let mut req = request(
+        "codex",
+        action_with_args("resume", vec!["--model=sol".into()]),
+    );
+    req.identity.params.model = Some("sol".into());
+    req.identity.params.record = Some(Box::new(crate::agents::LaunchRecord {
+        model: Some("sol".into()),
+        ..Default::default()
+    }));
+    req.identity.resume_model_override = explicit;
+    let session = crate::agents::AgentState {
+        record: req.identity.params.record.clone().filter(|_| !explicit),
+        ..recorded_session("observed-switch")
+    };
+    resolve_model(
+        &mut req,
+        &machine,
+        &runtime,
+        &ProviderLogin::default_for(AgentKind::new_unchecked("codex")),
+        Some(&session),
+        None,
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(req.identity.params.model.as_deref(), Some("gpt-6-sol"));
+    assert_eq!(
+        req.identity.params.record.unwrap().model.as_deref(),
+        Some("sol")
+    );
+}
+
 #[test]
 fn model_alias_resolution_at_the_process_boundary() {
     use crate::agents::capabilities::{ModelCatalogEntry, ModelCatalogErr, ModelCatalogSource};
@@ -98,7 +153,7 @@ fn model_alias_resolution_at_the_process_boundary() {
             &machine,
             &runtime,
             &login,
-            recorded,
+            recorded.map(recorded_session).as_ref(),
             Some(&mut catalog),
             &ambient,
         )

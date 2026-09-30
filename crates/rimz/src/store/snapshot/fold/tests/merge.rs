@@ -171,6 +171,9 @@ fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
         "session",
         &kind,
         AgentAttachPayload {
+            record: None,
+            tier: None,
+            mode: None,
             effective_isolation: None,
             agent_id: carried.agent_id.clone(),
             isolation: None,

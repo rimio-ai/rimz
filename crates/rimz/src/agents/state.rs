@@ -674,6 +674,8 @@ pub struct AgentState {
     pub login: Option<LoginName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Box<super::TierStamp>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<Box<super::LaunchRecord>>,
     /// The permission posture selected for this launch, carried forward so an
     /// explicit restart can reproduce it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -987,6 +989,7 @@ impl AgentState {
             profile: None,
             login: None,
             tier: None,
+            record: None,
             mode: None,
             isolation: None,
             effective_isolation: None,

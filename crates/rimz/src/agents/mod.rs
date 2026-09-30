@@ -114,7 +114,7 @@ pub use login::{
 pub use managed_source::ManagedIntegration;
 pub use observation::{
     AgentLifecycleObservation, AgentUsageSummary, AnsweredQuestion, AskQueueEdit, LaunchParams,
-    LaunchedBy, QueuedQuestion, SessionOrigin, SpawnedSubagent, SubagentCorrelation,
+    LaunchRecord, LaunchedBy, QueuedQuestion, SessionOrigin, SpawnedSubagent, SubagentCorrelation,
     SubagentCorrelationInput, SubagentSpawnInput, TierSkip, TierSkipReason, TierStamp,
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};

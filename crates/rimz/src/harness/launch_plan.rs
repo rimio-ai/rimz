@@ -98,7 +98,7 @@ pub fn resolve_model(
     machine: &crate::config::MachineConfig,
     runtime: &RuntimePaths,
     login: &ProviderLogin,
-    recorded_model: Option<&str>,
+    recorded_session: Option<&crate::agents::AgentState>,
     source: Option<&mut dyn crate::agents::capabilities::ModelCatalogSource>,
     ambient_env: &BTreeMap<String, String>,
 ) -> Result<
@@ -111,6 +111,12 @@ pub fn resolve_model(
     use crate::agents::{LaunchPreset, PresetField, capabilities::ModelAliasRequest};
     let mut warnings = Vec::new();
     let mut movement = None;
+    let recorded_model = recorded_session.and_then(|agent| agent.model.as_deref());
+    request.identity.params.record = Some(crate::agents::LaunchRecord::replay_or_new(
+        request.identity.params.record.as_deref(),
+        request.identity.params.model.as_deref(),
+        request.identity.params.effort.as_deref(),
+    ));
     let Some(alias) = request.identity.params.model.as_deref() else {
         return Ok((warnings, movement));
     };
@@ -122,6 +128,8 @@ pub fn resolve_model(
         return Ok((warnings, movement));
     }
     let replay = if matches!(request.action, launch::ExecAction::Launch { .. })
+        || request.identity.resume_model_override
+        || recorded_session.is_some_and(|agent| agent.record.is_some())
         || request
             .identity
             .params
@@ -173,6 +181,20 @@ pub fn resolve_model(
         matcher.remove_occurrences(request.action.extra_args_mut());
     }
     request.action.extra_args_mut().extend(args);
+    if replay.is_some() {
+        if let Some(record) = request.identity.params.record.as_mut() {
+            record.model = Some(id.clone());
+        }
+        if request
+            .identity
+            .params
+            .tier
+            .as_ref()
+            .is_some_and(|stamp| stamp.model != id)
+        {
+            request.identity.params.tier = None;
+        }
+    }
     request.identity.params.model = Some(id);
     Ok((warnings, movement))
 }

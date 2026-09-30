@@ -128,6 +128,7 @@ pub enum PermissionModeChoice {
 
 #[derive(Clone, Copy, Debug)]
 pub struct LaunchFinalizeOptions<'a> {
+    pub agent_base: Option<&'a str>,
     pub permission_mode: Option<PermissionModeChoice>,
     pub isolation: Option<crate::config::Isolation>,
     pub preset: &'a crate::agents::LaunchPreset,
@@ -172,6 +173,7 @@ pub struct CohortResumePlan {
 /// Durable identity projected by resume planning for argv compilation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ResumeLaunchIdentity {
+    pub record: Option<Box<crate::agents::LaunchRecord>>,
     pub kind: crate::ids::AgentKind,
     pub login: Option<crate::ids::LoginName>,
     pub session_id: AgentSessionId,
@@ -193,6 +195,7 @@ pub(super) struct ResumeLaunchIdentity {
 impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
     fn from(agent: &crate::agents::AgentState) -> Self {
         Self {
+            record: agent.record.clone(),
             kind: agent.kind.clone(),
             login: agent.login.clone(),
             session_id: agent.agent_id.clone(),
@@ -216,6 +219,9 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
 /// Finalized cell values applied by a resume launch.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumeLaunchPosture {
+    pub resume_model_override: bool,
+    pub tier: Option<Box<crate::agents::TierStamp>>,
+    pub record: Option<Box<crate::agents::LaunchRecord>>,
     pub isolation_default: Option<crate::config::Isolation>,
     pub isolation: Option<crate::config::Isolation>,
     pub args: Vec<String>,
@@ -254,6 +260,9 @@ impl ResumeLaunchPosture {
 impl From<&AgentCell> for ResumeLaunchPosture {
     fn from(cell: &AgentCell) -> Self {
         Self {
+            resume_model_override: cell.resume_model_override,
+            tier: cell.launch.tier.clone(),
+            record: cell.launch.record.clone(),
             isolation: cell.launch.isolation,
             args: cell.args.clone(),
             system_prompt_file: cell.system_prompt_file.clone(),
@@ -782,12 +791,6 @@ pub(super) fn finalize_agent_cell(
         {
             overridden.push(crate::agents::PresetField::SystemPromptFile);
         }
-        cell.args.extend(
-            adapter
-                .spec()
-                .render_preset(options.preset)
-                .map_err(unsupported_preset_error)?,
-        );
         if let Some(model) = options
             .preset
             .model
@@ -807,6 +810,7 @@ pub(super) fn finalize_agent_cell(
             cell.launch.effort = Some(effort.clone());
             overridden.push(crate::agents::PresetField::Effort);
         }
+        apply_preset_args(&mut cell.args, adapter, options.preset, &overridden)?;
     }
     validate_finalized_cell(cell, adapter)?;
     cell.args.extend(options.passthrough.iter().cloned());
@@ -830,6 +834,39 @@ pub(super) fn finalize_agent_cell(
             cell.launch.model = Some(default);
         }
     }
+    cell.launch.record = Some(Box::new(crate::agents::LaunchRecord {
+        model: cell.launch.model.clone(),
+        effort: cell.launch.effort.clone(),
+        agent: options.agent_base.map(str::to_owned).or_else(|| {
+            cell.launch
+                .record
+                .as_ref()
+                .and_then(|record| record.agent.clone())
+        }),
+    }));
+    Ok(())
+}
+
+pub(super) fn apply_preset_args(
+    args: &mut Vec<String>,
+    adapter: &crate::agents::AgentDefinition,
+    preset: &crate::agents::LaunchPreset,
+    replaced: &[crate::agents::PresetField],
+) -> std::result::Result<(), LaunchFinalizeError> {
+    let rendered = adapter
+        .spec()
+        .render_preset(preset)
+        .map_err(unsupported_preset_error)?;
+    for field in replaced {
+        if matches!(
+            field,
+            crate::agents::PresetField::Model | crate::agents::PresetField::Effort
+        ) && let Some(matcher) = adapter.spec().launch.preset_arg_matcher(*field)
+        {
+            matcher.remove_occurrences(args);
+        }
+    }
+    args.extend(rendered);
     Ok(())
 }
 
@@ -1152,7 +1189,8 @@ pub(super) fn resume_command(
         model: posture.model.clone(),
         effort: posture.effort.clone(),
         budget: posture.budget.clone(),
-        tier: identity.tier.clone(),
+        tier: posture.tier.clone(),
+        record: posture.record.clone(),
         ..Default::default()
     };
     let result = crate::harness::launch::exec_argv(
@@ -1161,6 +1199,7 @@ pub(super) fn resume_command(
         &crate::harness::launch::ExecRequest {
             close_pane_on_exit: true,
             identity: crate::harness::launch::ExecIdentity {
+                resume_model_override: posture.resume_model_override,
                 name: identity.name.clone(),
                 name_explicit: identity.name_explicit,
                 launch_id: Some(
@@ -1296,6 +1335,7 @@ fn fresh_agent_argv(
     let mut request = crate::harness::launch::ExecRequest::fresh(
         cell,
         crate::harness::launch::ExecIdentity {
+            resume_model_override: false,
             name: Some(launch.name.clone()),
             name_explicit: launch.name_explicit,
             launch_id: Some(launch.agent_id.to_string()),

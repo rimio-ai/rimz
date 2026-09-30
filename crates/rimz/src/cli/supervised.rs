@@ -225,6 +225,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
             exit_on_run_completion,
             subagent: args.subagent,
             identity: rimz::harness::launch::ExecIdentity {
+                resume_model_override: false,
                 name: args.agent_name.map(ToOwned::to_owned),
                 name_explicit: args.agent_name_explicit,
                 launch_id: args.launch_id.map(ToString::to_string),

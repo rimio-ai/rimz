@@ -380,6 +380,9 @@ fn launch_event_uses_flat_compact_wire_shape() {
 fn attach_event_uses_typed_compact_wire_shape() {
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%4");
     let payload = AgentAttachPayload {
+        record: None,
+        tier: None,
+        mode: None,
         effective_isolation: None,
         agent_id: AgentSessionId::from("sess-1"),
         isolation: Some(crate::config::Isolation::Sandbox),
@@ -425,6 +428,9 @@ fn attach_event_uses_typed_compact_wire_shape() {
     assert_eq!(decoded, payload);
 
     let absent = AgentAttachPayload {
+        record: None,
+        tier: None,
+        mode: None,
         isolation: None,
         ..payload
     };
