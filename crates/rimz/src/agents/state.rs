@@ -646,7 +646,7 @@ impl<'a> AgentCardRef<'a> {
 }
 
 /// Append one concrete prompt without duplicating a repeated observation.
-pub(crate) fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
+fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
     if prompt.is_empty() || recent_prompts.last().is_some_and(|prior| prior == prompt) {
         return;
     }
@@ -938,6 +938,15 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
+    /// Record a prompt and own the set-once rule for the first usable prompt.
+    pub fn observe_prompt(&mut self, prompt: &str) {
+        self.prompt = Some(prompt.to_owned());
+        if self.first_prompt.is_none() && usable_description(prompt) {
+            self.first_prompt = Some(prompt.to_owned());
+        }
+        append_recent_prompt(&mut self.recent_prompts, prompt);
+    }
+
     /// Request-start estimate shared by cache-aligned timers.
     pub fn last_request_at(&self) -> Option<Timestamp> {
         let end = self.turn_ended_at?;

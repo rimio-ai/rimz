@@ -2,6 +2,48 @@ use super::*;
 use crate::agents::TurnSettle;
 
 #[test]
+fn observe_prompt_sets_first_prompt_once_skips_control_text_and_caps_recent() {
+    let mut agent = test_agent(AgentStatus::Running, 1_000);
+    let initial = agent.clone();
+    for prompt in [
+        "",
+        "<system-reminder>control</system-reminder>",
+        "<task-notification>control</task-notification>",
+    ] {
+        agent.observe_prompt(prompt);
+        assert_eq!(agent.prompt.as_deref(), Some(prompt));
+        assert_eq!(agent.first_prompt, None);
+        if !prompt.is_empty() {
+            assert_eq!(
+                agent.recent_prompts.last().map(String::as_str),
+                Some(prompt)
+            );
+        }
+    }
+    assert_eq!(agent.recent_prompts.len(), 2);
+    agent.observe_prompt("first usable prompt");
+    agent.observe_prompt("first usable prompt");
+    assert_eq!(agent.recent_prompts.len(), 3);
+    agent.observe_prompt("");
+    assert_eq!(agent.prompt.as_deref(), Some(""));
+    assert_eq!(agent.first_prompt.as_deref(), Some("first usable prompt"));
+    assert_eq!(agent.recent_prompts.len(), 3);
+    for n in 0..20 {
+        agent.observe_prompt(&format!("prompt {n}"));
+    }
+    assert_eq!(agent.prompt.as_deref(), Some("prompt 19"));
+    assert_eq!(agent.first_prompt.as_deref(), Some("first usable prompt"));
+    assert_eq!(
+        agent.recent_prompts,
+        (4..20).map(|n| format!("prompt {n}")).collect::<Vec<_>>()
+    );
+    agent.prompt = initial.prompt.clone();
+    agent.first_prompt = initial.first_prompt.clone();
+    agent.recent_prompts = initial.recent_prompts.clone();
+    assert_eq!(agent, initial);
+}
+
+#[test]
 fn actionable_asks_put_the_blocking_prompt_before_queued_questions() {
     let mut agent = test_agent(AgentStatus::Waiting, 1_000);
     agent.waiting_since = Some(agent.last_activity);

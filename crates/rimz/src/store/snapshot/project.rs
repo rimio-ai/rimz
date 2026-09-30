@@ -9,7 +9,6 @@ use tracing::debug;
 
 use crate::agents::lifecycle::{self, Transition};
 use crate::agents::petname::valid_agent_name;
-use crate::agents::state::{append_recent_prompt, usable_description};
 use crate::agents::{AgentLifecycleObservation, LaunchParams, SessionOrigin};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
@@ -820,7 +819,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     let runtime_owner = runtime_projection(input.observation, input.prior, input.agent_id);
     let provider_subagent =
         parent_agent_id.is_some() && input.prior.is_none_or(|prior| prior.launch_depth.is_none());
-    let prompt = prompt_projection(
+    let task = task_projection(
         input.observation,
         input.prior,
         provider_subagent,
@@ -838,10 +837,10 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         state.worktree_branches.insert(branch.clone());
         state.worktree_branch = Some(branch);
     }
-    state.task = prompt.task;
-    state.first_prompt = prompt.first_prompt;
-    state.prompt = prompt.prompt;
-    state.recent_prompts = prompt.recent_prompts;
+    state.task = task;
+    if let Some(prompt) = input.observation.prompt.as_deref() {
+        state.observe_prompt(prompt);
+    }
     if let Some(description) = &input.observation.description {
         state.description = Some(description.clone());
     }
@@ -953,24 +952,8 @@ fn assemble_launch_state(
     if let Some(runtime_owner) = &payload.runtime_owner {
         state.runtime_owner = Some(runtime_owner.clone());
     }
-    let prompt = payload
-        .prompt
-        .clone()
-        .or_else(|| prior.and_then(|state| state.prompt.clone()));
-    if state.first_prompt.is_none()
-        && let Some(first_prompt) = payload
-            .prompt
-            .as_deref()
-            .filter(|prompt| usable_description(prompt))
-    {
-        state.first_prompt = Some(first_prompt.to_owned());
-    }
-    if let Some(prompt) = payload
-        .prompt
-        .as_deref()
-        .filter(|prompt| !prompt.is_empty())
-    {
-        append_recent_prompt(&mut state.recent_prompts, prompt);
+    if let Some(prompt) = payload.prompt.as_deref() {
+        state.observe_prompt(prompt);
     }
     let (status, phase) = match payload.state {
         AgentLaunchState::Failed => (AgentStatus::Failed, lifecycle::TurnPhase::Idle),
@@ -985,8 +968,7 @@ fn assemble_launch_state(
     state.name = Some(card_identity.name);
     state.name_explicit = card_identity.name_explicit;
     state.kind_ordinal = Some(card_identity.kind_ordinal);
-    state.task = prompt.clone();
-    state.prompt = prompt;
+    state.task = state.prompt.clone();
     if let Some(description) = &payload.description {
         state.description = Some(description.clone());
     }
@@ -1212,42 +1194,16 @@ fn runtime_projection(
     }
 }
 
-struct PromptProjection {
-    task: Option<String>,
-    first_prompt: Option<String>,
-    prompt: Option<String>,
-    recent_prompts: Vec<String>,
-}
-
-fn prompt_projection(
+fn task_projection(
     observation: &AgentLifecycleObservation,
     prior: Option<&AgentState>,
     is_subagent: bool,
     event_task: Option<String>,
-) -> PromptProjection {
-    let task = if is_subagent {
+) -> Option<String> {
+    if is_subagent {
         event_task.or_else(|| prior.and_then(|p| p.task.clone()))
     } else {
         non_empty_string(observation.task.as_deref())
-    };
-    let event_prompt = observation.prompt.as_deref().map(ToOwned::to_owned);
-    let first_prompt = prior
-        .and_then(|state| state.first_prompt.clone())
-        .or_else(|| {
-            event_prompt
-                .as_deref()
-                .filter(|prompt| usable_description(prompt))
-                .map(ToOwned::to_owned)
-        });
-    let mut recent_prompts = prior.map(|p| p.recent_prompts.clone()).unwrap_or_default();
-    if let Some(prompt) = event_prompt.as_deref().filter(|prompt| !prompt.is_empty()) {
-        append_recent_prompt(&mut recent_prompts, prompt);
-    }
-    PromptProjection {
-        task,
-        first_prompt,
-        prompt: event_prompt.or_else(|| prior.and_then(|p| p.prompt.clone())),
-        recent_prompts,
     }
 }
 
