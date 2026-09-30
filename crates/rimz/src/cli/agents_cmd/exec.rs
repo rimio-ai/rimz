@@ -8,6 +8,11 @@ const PARK_STRAND_POLL: Duration = Duration::from_secs(5);
 const PARENT_RECEIPT_POLL: Duration = Duration::from_secs(1);
 
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
+    let mut launch_warnings = Vec::new();
+    let mut warn = |warning: String| {
+        let _ = writeln!(crate::cli::render::err(), "rimz: {warning}");
+        launch_warnings.push(warning);
+    };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
     let envelope = rimz::harness::launch::decode_exec_envelope(
@@ -32,7 +37,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &rimz::disk::paths::rimz_home(),
     );
     if let Err(err) = &effective {
-        let _ = writeln!(crate::cli::render::err(), "rimz: {err}");
+        warn(err.to_string());
     }
     if let Some(detail) =
         exec_definition_failure(envelope.request(), &machine_config, effective.as_ref().ok())
@@ -116,7 +121,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     )
     .inspect_err(|_| fail())?;
     for warning in warnings {
-        let _ = writeln!(crate::cli::render::err(), "rimz: {warning}");
+        warn(warning);
     }
     if let Some(movement) = movement {
         let _ = writeln!(
@@ -139,10 +144,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 },
             })
         {
-            let _ = writeln!(
-                crate::cli::render::err(),
-                "rimz: could not record model alias move: {error}"
-            );
+            warn(format!("could not record model alias move: {error}"));
         }
     }
     let mut launch_identity = provisional_identity.clone();
@@ -167,7 +169,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     })
     .inspect_err(|_| fail())?;
     for warning in &plan.warnings {
-        let _ = writeln!(crate::cli::render::err(), "rimz: {warning}");
+        warn(warning.to_string());
     }
     if let Some(links) = &plan.skill_links {
         for line in links.to_string().lines() {
@@ -176,14 +178,14 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     }
     if let Some(sandbox) = &plan.sandbox {
         for skipped in &sandbox.skipped {
-            let _ = writeln!(crate::cli::render::err(), "rimz: {skipped}");
+            warn(skipped.to_string());
         }
     }
     let skill_links = rimz::harness::launch_plan::apply(&plan).inspect_err(|_| fail())?;
     if let Some((links, outcome)) = plan.skill_links.as_ref().zip(skill_links)
         && let Some(report) = links.shadowed_report(&outcome.shadowed)
     {
-        let _ = writeln!(crate::cli::render::err(), "rimz: {report}");
+        warn(report);
     }
     let entered_worktree = request
         .worktree_path
@@ -230,6 +232,32 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             ),
             request.identity.params.isolation,
         );
+    }
+    let warning_target = attach_target
+        .as_ref()
+        .map(|(kind, id)| (kind, id))
+        .or_else(|| {
+            launch_identity
+                .as_ref()
+                .map(|identity| (&identity.kind, &identity.agent_id))
+        });
+    if let Some((kind, agent_id)) = warning_target
+        && let Err(error) = invocation.store().and_then(|store| {
+            Ok(store.record_launch_warnings(
+                kind,
+                agent_id,
+                request
+                    .identity
+                    .launch_id
+                    .as_deref()
+                    .map(AgentSessionId::from)
+                    .as_ref(),
+                &workspace.session_name,
+                launch_warnings,
+            )?)
+        })
+    {
+        tracing::debug!(%error, "could not record agent launch warnings");
     }
     let (program, rest) = process.argv.split_first().ok_or_else(|| {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
