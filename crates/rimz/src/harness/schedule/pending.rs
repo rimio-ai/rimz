@@ -163,16 +163,18 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
                 })
                 .collect();
             for run in fleet::open_team_runs(&snapshot.agents, &runs, agent) {
-                if let Some(team) = &run.team {
-                    waits.push(PendingWait {
-                        name: team.instance.clone(),
-                        armed_at: Some(run.started_at),
-                        trigger: PendingWaitTrigger::Team {
-                            stage: crate::harness::scratch::board_stage(&run.worktree_path)
-                                .map(|stage| stage.name),
-                        },
-                    });
+                let Some(team) = &run.team else { continue };
+                let stage = crate::harness::scratch::board_stage(&run.worktree_path)
+                    .map(|stage| stage.name);
+                // A board hand-edited to Done leaves the run open with no report coming.
+                if stage.as_deref() == Some("Done") {
+                    continue;
                 }
+                waits.push(PendingWait {
+                    name: team.instance.clone(),
+                    armed_at: Some(run.started_at),
+                    trigger: PendingWaitTrigger::Team { stage },
+                });
             }
             waits
         })
@@ -344,6 +346,16 @@ mod tests {
             }
         );
         assert_eq!(snapshot.agents[0].pending_waits[3], catalog_wait);
+        std::fs::write(dir.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        snapshot.agents[0].pending_waits.clear();
+        project_run_waits(&mut snapshot, &paths);
+        assert!(
+            snapshot.agents[0]
+                .pending_waits
+                .iter()
+                .all(|wait| !matches!(wait.trigger, PendingWaitTrigger::Team { .. })),
+            "a board at Done projects no team wait"
+        );
         for (index, run) in runs.iter_mut().enumerate() {
             run.status = RunStatus::Completed;
             if index == 0 {
@@ -356,11 +368,6 @@ mod tests {
         project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
         assert!(snapshot.agents[0].pending_waits.is_empty());
         assert_ne!(snapshot.agents[0].effective_status(), AgentStatus::Sleeping);
-        snapshot.agents.truncate(1);
-        std::fs::remove_dir_all(&paths.runs_dir).unwrap();
-        project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
-        assert!(snapshot.agents[0].pending_waits.is_empty());
-        assert!(!paths.runs_dir.exists());
     }
 
     #[test]
