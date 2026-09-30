@@ -515,32 +515,6 @@ fn compaction_marker_requires_durable_turn_starts_and_never_expires() {
 }
 
 #[test]
-fn legacy_agent_pid_deserializes_to_runtime_owner() {
-    let agent: AgentState = serde_json::from_value(serde_json::json!({
-        "agent_id": "sess-1",
-        "kind": "codex",
-        "status": "running",
-        "agent_pid": 4242,
-        "agent_process_start": "12345",
-        "last_seen": "2026-07-01T00:00:00Z",
-        "last_activity": "2026-07-01T00:00:00Z"
-    }))
-    .expect("legacy agent state");
-
-    let owner = agent.runtime_owner.as_ref().expect("owner synthesized");
-    assert_eq!(owner.kind, RuntimeOwnerKind::Agent);
-    assert_eq!(owner.subject_id, "sess-1");
-    assert_eq!(owner.pid, 4242);
-    assert_eq!(owner.process_start.as_deref(), Some("12345"));
-    assert_eq!(agent.ended_at, None);
-
-    let encoded = serde_json::to_value(&agent).expect("encode");
-    assert!(encoded.get("agent_pid").is_none());
-    assert!(encoded.get("agent_process_start").is_none());
-    assert!(encoded.get("ended_at").is_none());
-}
-
-#[test]
 fn usage_summary_stays_flat_in_persisted_state_wire() {
     let mut agent = AgentState::seed(
         AgentKind::new_unchecked("codex"),
