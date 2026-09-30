@@ -126,7 +126,7 @@ rimz config set remote_control.claude true    # keep `claude remote-control` up 
 rimz config set remote_control.codex true     # keep Codex's remote-control daemon up
 ```
 
-With a toggle on, the ask reaches your phone as a push from the provider's own app, your answer lands in the same session on the machine running the room, and the turn continues in its pane as if you had typed it there. Leave the room on a server, go to dinner, and a 9 p.m. question is one tap instead of a fleet stalled until morning.
+For sessions reachable through the provider's remote control, the ask reaches your phone as a push from its app, your answer lands in the same session on the machine running the room, and the turn continues as if you had typed it there. RimZ-launched Codex agents run embedded (`--no-daemon`) and do not appear in the app; the Codex toggle keeps the daemon up for sessions started from the phone or outside RimZ.
 
 RimZ stays out of the path: each toggle starts the provider's own command with the room and nothing more. Exactly what runs:
 
@@ -139,7 +139,7 @@ Claude asks `Enable Remote Control? (y/n)` the first time its host runs on a mac
 
 The RimZ toggle covers the machine-level Claude host, and Claude's own `remoteControlAtStartup: true`, in `~/.claude/settings.json`, additionally makes every session you type into a pane reachable from the app. RimZ lights the `⇅ rc` flag for either one, reading Claude's own record of the process serving each project root, so a host whose server stopped reads as down rather than riding on a pane that outlived it.
 
-Codex's own updater owns daemon upgrades, and one of its passes can disconnect live Codex sessions once. `rimz doctor` warns while that is outstanding, and [troubleshooting](./troubleshooting.md#codex-sessions-drop-with-a-websocket-reset-about-hourly) covers choosing the timing yourself.
+Codex's own updater owns daemon upgrades, and one of its passes can disconnect daemon-hosted Codex sessions once, but not RimZ's embedded panes. `rimz doctor` warns while that is outstanding, and [troubleshooting](./troubleshooting.md#codex-sessions-drop-with-a-websocket-reset-about-hourly) covers choosing the timing yourself.
 
 Undo is the same toggle set back to `false`: it closes the RimZ-managed Claude host panes in every running room, or stops the Codex daemon. One known gap: a session you spawn from the phone runs headless in its worktree with no local pane, and the sidebar does not render these remote agents.
 

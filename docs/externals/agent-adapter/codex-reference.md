@@ -4,7 +4,7 @@ This page mirrors the upstream surfaces of OpenAI's Codex CLI that RimZ binds to
 
 ## Baseline and sources
 
-Except for the [async-question observations](#async-questions-observed-on-01580), this page describes Codex CLI **0.154.0** (tag `rust-v0.154.0`, commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`, released 2026-09-09), read on 2026-09-13, when it was the GitHub latest release and the npm `@openai/codex` `latest` dist-tag. A source reference written as `path:line` is relative to `codex-rs/` at that tag. Generated app-server shapes come from `codex app-server generate-json-schema` run on the 0.154.0 binary, and live rollout samples come from the same build. A fact that exists only on `main` is marked unreleased with its pull request.
+Except for the [async-question observations](#async-questions-observed-on-01580) and the newer [`--no-daemon` note](#execution), this page describes Codex CLI **0.154.0** (tag `rust-v0.154.0`, commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`, released 2026-09-09), read on 2026-09-13, when it was the GitHub latest release and the npm `@openai/codex` `latest` dist-tag. A source reference written as `path:line` is relative to `codex-rs/` at that tag. Generated app-server shapes come from `codex app-server generate-json-schema` run on the 0.154.0 binary, and live rollout samples come from the same build. A fact that exists only on `main` is marked unreleased with its pull request.
 
 | Surface | Source |
 | --- | --- |
@@ -67,7 +67,7 @@ Managed hooks come from `requirements.toml` `[hooks]` (`managed_dir`, `windows_m
 
 Codex starts all matching handlers for one event concurrently (`hooks/src/engine/dispatcher.rs:125`), with the session cwd as working directory. `build_command` (`command_runner.rs:390` to `:426`) clears the child environment, replays the environment snapshot `Hooks::new` captured from the Codex process (`hooks/src/registry.rs:79`), applies the source's environment overlay, and then scrubs non-inheritable credential variables. Only plugin hooks have an overlay (`PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`); a handler has no `env` field.
 
-A plain TUI launch runs its session inside the shared per-user app-server daemon ([App-server daemon](#app-server-daemon)), so a hook child's parent process is the daemon, and the environment snapshot is the daemon's.
+A plain TUI launch runs its session inside the shared per-user app-server daemon ([App-server daemon](#app-server-daemon)), so a hook child's parent process is the daemon, and the environment snapshot is the daemon's. Newer than this page's baseline: `--no-daemon` (0.156.0, [PR #46088](https://github.com/openai/codex/pull/46088), [`codex-rs/tui/src/cli.rs`](https://github.com/openai/codex/blob/rust-v0.156.0/codex-rs/tui/src/cli.rs)) keeps the session embedded and cannot combine with `--remote`: `ERROR: --no-daemon cannot be used with --remote.` (observed on 0.159.2, 2026-09-30).
 
 ### Trust state
 

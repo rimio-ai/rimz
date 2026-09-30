@@ -164,7 +164,7 @@ Under `agents.isolation = "sandbox"` (Linux), RimZ binds each agent's config hom
 
 ## Launch flags
 
-RimZ launches each agent with the provider's own flags. A typed profile field or `rimz agents` flag that an agent cannot express fails the launch before any pane opens, with an error that the agent "does not support profile field" and names the field. Raw profile `args` pass any other provider flag through unchanged.
+RimZ launches each agent with the provider's own flags. A typed profile field or `rimz agents` flag that an agent cannot express fails the launch before any pane opens, with an error that the agent "does not support profile field" and names the field. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. The one exception is Codex `--remote X` or `--remote=X`, from either source, which is refused because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.156.0 or newer for that flag on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper; an unreadable version passes without a verdict.
 
 ### Permission modes
 

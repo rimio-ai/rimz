@@ -448,7 +448,7 @@ claude = false
 codex = false
 ```
 
-These two switches opt the machine into the host each provider's official mobile app talks to: with a host up, an agent's ask pushes to your phone and you answer it in that app ([remote → answer asks from your phone](./remote.md#answer-asks-from-your-phone)). Both default to false, and the host runs in the `rimzd` daemon view.
+These two switches opt the machine into the host each provider's official mobile app talks to: with a host up, a remotely reachable agent's ask pushes to your phone and you answer it in that app ([remote → answer asks from your phone](./remote.md#answer-asks-from-your-phone)). Both default to false. Claude's host runs in the `rimzd` daemon view; Codex's toggle keeps its daemon up for sessions started from the phone or outside RimZ. Codex agents RimZ launches run embedded (`--no-daemon`) and do not appear in the app.
 
 Set either one with `rimz config set`, not by editing the file, because `set` also applies the change to the rooms already running. `rimz config set remote_control.claude true` adds `claude remote-control` to every running room's `rimzd` view at once when `claude` is on `PATH`, and `false` closes those host panes; a whole view you closed on purpose stays closed until the next room start. `rimz config set remote_control.codex true` starts the Codex daemon at once and `false` stops it. Either way the running sidebars wake so the provider dashboard's flag follows the file.
 

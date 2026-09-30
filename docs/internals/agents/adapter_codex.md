@@ -85,8 +85,10 @@ Host skill lists render `-c skills.config` entries with `enabled=false` for unli
 
 | Intent | Codex argv |
 | --- | --- |
-| Resume a session | `codex resume <id>` |
-| Fork a session | `codex fork <id>` |
+| Every launch, resume and fork | `--no-daemon`, so the session runs embedded in the pane; requires Codex ≥ 0.156.0, checked before opening the pane where the launch PATH is known, otherwise in the exec wrapper; unreadable versions pass |
+| Resume a session | `codex resume <id> --no-daemon` |
+| Fork a session | `codex fork <id> --no-daemon` |
+| Remote app-server | `--remote X` and `--remote=X` are refused at compile time; remove the flag because managed panes run embedded |
 | Permission `ask`, `plan` | no flags |
 | Permission `auto` | `--ask-for-approval never --sandbox workspace-write` |
 | Permission `yolo` | `--dangerously-bypass-approvals-and-sandbox` |
@@ -131,7 +133,7 @@ The preview edits TOML through `toml_edit`, preserving existing comments and ord
 
 Codex registers its session lazily. A plain launch fires no hook; the first prompt fires `SessionStart` and `UserPromptSubmit` together. Until then the pane is an instance with no session, and the sidebar shows its [idle placeholder row](./instances.md#before-a-session-binds). A `codex resume <id>` launch already knows its id, so the exec wrapper attaches the card before Codex registers ([binding](./instances.md#binding-a-session)).
 
-Codex hooks are daemon-routed: they fire from the shared per-user app-server with the session cwd as working directory, the daemon's pid as `RIMZ_AGENT_PID`, and the daemon's environment. `rimz hooks feed` classifies that owner as a daemon, ignores the ambient workspace and pane pins, and recovers the room from the in-pane `codex` process at the same cwd ([adapter.md](./adapter.md#hooks-resolve-the-room-they-live-in)). The session stays unstamped until pane recovery binds it and re-owns liveness to the in-pane CLI; an unbound daemon-owned session ages out through the ghost TTL, with `thread/loaded/list` as the faster keep or drop signal ([session death](./instances.md#session-death)). Hooks from app-servers RimZ spawns itself carry `RIMZ_CODEX_INTERNAL_APP_SERVER` and are dropped, so enrichment never feeds back into hooks.
+RimZ-managed Codex panes run embedded through `--no-daemon`. Their hooks come from the in-pane process and stamp the pane like a standalone agent (observed on 0.159.2). A user-run `codex` or a phone-started background session may instead route hooks through the shared per-user app-server, with the session cwd as working directory, the daemon's pid as `RIMZ_AGENT_PID`, and the daemon's environment. `rimz hooks feed` classifies that owner as a daemon, ignores the ambient workspace and pane pins, and recovers the room from the in-pane `codex` process at the same cwd ([adapter.md](./adapter.md#hooks-resolve-the-room-they-live-in)). Such a session stays unstamped until pane recovery binds it and re-owns liveness to the in-pane CLI; an unbound daemon-owned session ages out through the ghost TTL, with `thread/loaded/list` as the faster keep or drop signal ([session death](./instances.md#session-death)). Hooks from app-servers RimZ spawns itself carry `RIMZ_CODEX_INTERNAL_APP_SERVER` and are dropped, so enrichment never feeds back into hooks.
 
 Several roots can share one Codex pane, and the rollout header tells them apart. [`session_origin`](../../../crates/rimz/src/agents/adapters/codex/transcript.rs) reads each root's `session_meta` on identity events:
 
@@ -270,6 +272,8 @@ Codex `/review` runs in review mode and ends on a clean `task_complete` without 
 Codex writes `turn_aborted` when Esc aborts a turn and when `/clear` interrupts one. RimZ accepts any `reason`, because the abort resting at the tail is what matters. The local refresh stamps `settle` as `Interrupted`, and the projection shows the row as `idle`. This marker is the fallback for Codex versions without the [`Interrupt` hook](#turn-endings). A steer that replaces the turn writes new live records after the abort, so it never settles.
 
 ## Remote control
+
+RimZ-launched panes run embedded and never join the daemon or appear in the mobile app. The remote-control toggle serves sessions started from the phone or outside RimZ; the Codex `⇅ rc` badge reports that daemon's liveness, not remote access to managed panes.
 
 [`app_server/daemon.rs`](../../../crates/rimz/src/agents/adapters/codex/app_server/daemon.rs) manages the per-user daemon that `codex remote-control start` runs. Room birth and runtime toggles call it through `readiness`, `ensure`, and `reconcile`; the provider-neutral remote-control module coordinates the result with the room and sidebar. Provider commands run from the durable `CODEX_HOME`.
 

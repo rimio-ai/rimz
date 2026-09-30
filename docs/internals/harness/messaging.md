@@ -146,7 +146,7 @@ The caller resolver decides whether an invocation is agent-authored before dispa
 
 The agent sender's optional `agent_id` uses the same identity as `LaunchedBy.agent_id`: the caller's launch id, or its session id for a legacy row without a launch id. Legacy environment callers resolve their unambiguous pane before stamping it. Old message records without this field still decode and omit it on rewrite; names do not supply a missing identity. The field does not change the rendered message header.
 
-Daemon-routed adapters, such as Codex 0.137 and later, stay unattributed on the ancestry path: their tool commands run below the shared app-server, whose `RuntimeOwner` cannot say which agent invoked the command.
+Daemon-routed sessions, such as a user-run `codex` or a phone-started background session, stay unattributed on the ancestry path: their tool commands run below the shared app-server, whose `RuntimeOwner` cannot say which agent invoked the command. RimZ-managed Codex launches instead run embedded through `--no-daemon`, with pane-owned hooks ([Codex registration](../agents/adapter_codex.md#session-registration-and-launch-quirks)).
 
 ### Four modes on one timing axis
 

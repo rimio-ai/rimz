@@ -71,6 +71,8 @@ Nothing needs configuring for RimZ. Every room applies the options agents need o
 
 RimZ drives the stock agent CLIs and neither bundles nor replaces them. Install the ones you use from their own docs, and RimZ picks them up: `rimz doctor` names the agents it found on this machine and the ones it did not. Built-in adapters cover thirteen agents, Claude Code and Codex first among them; [agent support](../reference/agent-support.md) is the per-agent list of what a card shows and where the gaps are.
 
+Codex needs version 0.156.0 or newer. RimZ passes `--no-daemon` on every launch, resume and fork to keep each session in its pane, and refuses a known older version with an upgrade message.
+
 ## Verify the install
 
 ```sh

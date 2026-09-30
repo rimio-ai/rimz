@@ -294,7 +294,7 @@ rimz remote connect dev          # the room rebuilds, every agent where you left
 rimz remote connect dev --web    # the same room in your browser at 127.0.0.1
 ```
 
-**Answer from your phone.** A fleet that runs while you are out still stops to ask: a permission prompt, a plan approval, a question only you can decide. Claude Code and Codex ship remote control, the bridge behind their official mobile apps, and two toggles keep that bridge up with every room. The ask reaches your phone as a push from the provider's own app, your answer lands in the same session on the machine running the room, and the turn moves on as if you had typed it there. RimZ stays out of the path: each toggle starts the provider's own command with the room and nothing more.
+**Answer from your phone.** A fleet that runs while you are out still stops to ask: a permission prompt, a plan approval, a question only you can decide. Claude Code and Codex ship remote control, the bridge behind their official mobile apps, and two toggles keep that bridge up with every room. For remotely reachable sessions, the ask reaches your phone as a push from the provider's own app, your answer lands in the same session on the machine running the room, and the turn moves on as if you had typed it there. The Codex toggle keeps its daemon up for sessions started from the phone or outside RimZ; Codex agents RimZ launches run embedded (`--no-daemon`) and do not appear in the app. RimZ stays out of the path: each toggle starts the provider's own command with the room and nothing more.
 
 ```sh
 rimz config set remote_control.claude true    # keep `claude remote-control` up with the room
