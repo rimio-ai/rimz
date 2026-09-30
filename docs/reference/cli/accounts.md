@@ -1,11 +1,11 @@
 # Accounts CLI
 
-`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home, so credentials, settings, and transcripts stay apart. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
+`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials, sessions, and transcripts stay apart; `add` links settings to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
 The commands work inside or outside a room. `add`, `use`, and `remove` write the machine `config.toml`, and `add` also writes into the account home; no command touches a running room. A room picks its accounts when it is born ([Accounts at start](./getting-started.md#accounts)), and changes them only through `rimz reset` ([Reset a wedged room](./maintenance.md#reset-a-wedged-room)). Run `start --account` from inside the room's own multiplexer session and it refuses without reading the value, naming `rimz reset --account` as the way to change them. From outside, a room that already recorded a selection accepts a request matching it and refuses any other. The reset that moves a room rebuilds it with no agents in it. The workflow is in the [accounts guide](../../guide/accounts.md).
 
 ```sh
-rimz accounts add claude work                        # declare, create the home, install hooks
+rimz accounts add claude work                        # declare, share settings, install hooks
 rimz accounts add codex personal --home ~/codex-me   # place the home yourself
 rimz accounts use codex personal                     # machine selection for new rooms
 rimz accounts list                                   # every account and whether a room can use it
@@ -47,11 +47,20 @@ rimz accounts add <KIND> <NAME> [--home <PATH>]
 
 1. Writes `[accounts.<KIND>.<NAME>]` to the machine `config.toml`, with `home` only when `--home` is given.
 2. Creates the home directory.
-3. Installs RimZ hooks into that home's provider config (`settings.json` for Claude, `config.toml` for Codex), the same install `rimz hooks install` runs against the provider's own home.
-4. Prints where the account lives, the command that logs the provider in once under that home, the `rimz start` flag that uses it, and the `rimz accounts use` command that selects it for new rooms.
+3. Links the entries below to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR` or `CODEX_HOME`. Reports linked entries, existing links, and any moves to `.orig`.
+4. Installs RimZ hooks through the named home's config link (`settings.json` for Claude, `config.toml` for Codex), updating the shared file in the provider's own home too.
+5. Prints where the account lives, the command that logs the provider in once under that home, the `rimz start` flag that uses it, and the `rimz accounts use` command that selects it for new rooms.
+
+| Provider | Shared files | Shared directories |
+| --- | --- | --- |
+| Codex | `config.toml`, `AGENTS.md` | none |
+| Claude | `settings.json`, `settings.local.json`, `CLAUDE.md` | `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` |
+
+Missing directory targets are created; missing file targets remain dangling links until written. Existing entries other than links to the intended target move to `<name>.orig`, never get deleted, and are reported as `moved aside <slot> → <orig>`. Codex carries missing `[hooks.state]` keys into the shared config before moving its old `config.toml`; existing target keys win. Other settings are not merged.
 
 ```console
 $ rimz accounts add claude work
+linked settings to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skills, plugins, agents, commands, output-styles
 ✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
@@ -59,19 +68,21 @@ claude account `work` lives at ~/.rimz/accounts/claude/work
   new rooms     rimz accounts use claude work
 ```
 
-RimZ writes no credentials and copies no settings or skills into the home. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`, and a new Codex account also needs its hooks trusted inside Codex (see `hooks untrusted` under [`list`](#list)).
+RimZ writes no credentials. Credentials, sessions, and transcripts remain per account; the entries above are shared by links, not copied. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`; trust hooks with `/hooks` once per account path (see `hooks untrusted` under [`list`](#list)).
 
-Rerunning `add` for an account that already exists leaves the config entry alone, creates the home if it is missing, and refreshes the hooks, so a setup that stopped part way completes. `--home` on a rerun must name the same directory.
+Rerunning `add` leaves the config entry alone, creates the home if missing, migrates settings to links, and refreshes hooks. Correct links remain unchanged and print `settings already shared with <default-home>`. This also repairs a settings link replaced by a provider save, moving the replacement to `.orig`. `--home` on a rerun must name the same directory.
 
-`add` refuses these cases and changes nothing:
+`add` refuses these cases. The `.orig` check runs before any settings entry changes, but after first-declaration config writing and home creation; that declaration remains for a rerun. The other checks, including resolved-home and exported-home checks, precede those writes.
 
 | Case | Error |
 | --- | --- |
+| A move-aside entry already has `<slot>.orig` | `` cannot move <slot> aside: <orig> exists; remove or rename <orig>, then rerun `rimz accounts add` `` |
+| The home resolves through links to the provider's own home | `` `--home` names the provider's own home, which is the `default` account (<home>); choose another home `` |
 | `NAME` is `default` | `` `default` is <kind>'s own home and needs no declaring; choose another name `` |
 | `NAME` breaks the name rules | `` invalid account name `<name>`; expected 1-32 characters of ... `` |
 | `--home` differs from the existing account's home | `` <kind> account `<name>` already lives at `<home>`; rerun without --home, or remove the account first `` |
 | The home breaks a [home rule](#kinds-names-and-homes) | `` `accounts.<kind>.<name>.home` is `<home>`, ... `` with the rule it breaks |
-| A new account's home is what the shell exports as `CLAUDE_CONFIG_DIR` or `CODEX_HOME` | `` `CODEX_HOME` is exported as `<home>`, the home of codex account `<name>`, so the `default` account launches into it too; unset `CODEX_HOME` and run `rimz accounts use codex <name>` to start new rooms on it `` |
+| The shell exports `CLAUDE_CONFIG_DIR` or `CODEX_HOME` pointing at any declared named account of that kind (also checked on reruns) | `` `CODEX_HOME` is exported as `<home>`, the home of codex account `<exported-name>`; unset `CODEX_HOME` so `default` resolves to codex's own home, e.g. `env -u CODEX_HOME rimz accounts add codex <name>` `` |
 
 ## `use`
 
@@ -130,7 +141,7 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
 | `problem` | The problem line with its fix. Present only when the account has a problem. |
 
-`NEW ROOMS` marks the machine selection. A dangling machine selection adds a problem row with the commands to declare or clear it. `rimz doctor` reports the exported-home conflict from the `add` table above as the problem on that account's row, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` also marks named machine selections in its ACCOUNTS section, alongside the ones the current room uses; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
+`NEW ROOMS` marks the machine selection. A dangling machine selection adds a problem row with the commands to declare or clear it. `rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use`, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` also marks named machine selections in its ACCOUNTS section, alongside the ones the current room uses; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
 
 ## `remove`
 

@@ -335,7 +335,7 @@ What each group does, with the depth one link away:
 Two more settings change what a room launches under:
 
 ```sh
-rimz accounts add claude work                 # declare a second Claude or Codex account and install its hooks
+rimz accounts add claude work                 # declare an account, share provider settings, install hooks
 rimz start --account claude=work              # a room whose Claude agents all run under `work`
 rimz config set agents.isolation sandbox      # Linux: a bubblewrap mount view for every agent pane
 ```
