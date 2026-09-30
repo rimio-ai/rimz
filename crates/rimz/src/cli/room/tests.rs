@@ -36,9 +36,9 @@ fn folder_trust_offer_filters_decided_and_dismissed_kinds() {
         folder_trust_row("dismissed", true),
         folder_trust_row("new", true),
     ];
-    let (shown, _) = super::folder_trust_offer(&rows, &["dismissed".into()]);
+    let offer = super::folder_trust_offer(&rows, &["dismissed".into()]);
     assert_eq!(
-        shown.iter().map(|row| row.kind).collect::<Vec<_>>(),
+        offer.rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
         ["new"]
     );
 }
@@ -49,20 +49,41 @@ fn folder_trust_offer_decline_remembers_every_shown_kind() {
         folder_trust_row("grantable", true),
         folder_trust_row("broken", false),
     ];
-    let (_, decline) = super::folder_trust_offer(&rows, &[]);
-    assert_eq!(decline, ["grantable", "broken"]);
-    assert!(super::folder_trust_offer(&rows, &decline).0.is_empty());
+    let offer = super::folder_trust_offer(&rows, &[]);
+    assert!(offer.asks);
+    assert_eq!(offer.decline, ["grantable", "broken"]);
+    assert!(
+        super::folder_trust_offer(&rows, &offer.decline)
+            .rows
+            .is_empty()
+    );
+}
+
+#[test]
+fn folder_trust_offer_without_grantable_rows_asks_nothing_and_remembers_them() {
+    let rows = [
+        folder_trust_row("home", false),
+        folder_trust_row("broken", false),
+    ];
+    let offer = super::folder_trust_offer(&rows, &[]);
+    assert!(!offer.asks);
+    assert_eq!(offer.decline, ["home", "broken"]);
+    assert!(
+        super::folder_trust_offer(&rows, &offer.decline)
+            .rows
+            .is_empty()
+    );
 }
 
 #[test]
 fn folder_trust_offer_new_kind_reopens_only_its_offer() {
     let rows = [folder_trust_row("old", true), folder_trust_row("new", true)];
-    let (shown, decline) = super::folder_trust_offer(&rows, &["old".into()]);
+    let offer = super::folder_trust_offer(&rows, &["old".into()]);
     assert_eq!(
-        shown.iter().map(|row| row.kind).collect::<Vec<_>>(),
+        offer.rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
         ["new"]
     );
-    assert_eq!(decline, ["new"]);
+    assert_eq!(offer.decline, ["new"]);
 }
 
 #[test]

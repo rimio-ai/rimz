@@ -776,10 +776,21 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
     }
 }
 
+/// The attended start's folder-trust offer: the rows it shows, and the kinds it
+/// remembers as declined.
+struct FolderTrustOffer<'a> {
+    rows: Vec<&'a rimz::agents::FolderTrustRow>,
+    decline: Vec<String>,
+    /// Whether any shown row can be granted, so the start asks the question.
+    /// With none, the start prints the fixes and records `decline` at once, so
+    /// the same fixes print once until the gap set changes.
+    asks: bool,
+}
+
 fn folder_trust_offer<'a>(
     rows: &'a [rimz::agents::FolderTrustRow],
     dismissed: &[String],
-) -> (Vec<&'a rimz::agents::FolderTrustRow>, Vec<String>) {
+) -> FolderTrustOffer<'a> {
     let rows: Vec<_> = rows
         .iter()
         .filter(|row| {
@@ -788,7 +799,14 @@ fn folder_trust_offer<'a>(
         })
         .collect();
     let decline = rows.iter().map(|row| row.kind.to_owned()).collect();
-    (rows, decline)
+    let asks = rows.iter().any(
+        |row| matches!(&row.trust, rimz::agents::FolderTrust::Undecided(gap) if gap.grant.is_ok()),
+    );
+    FolderTrustOffer {
+        rows,
+        decline,
+        asks,
+    }
 }
 
 fn prompt_folder_trust(
@@ -802,7 +820,11 @@ fn prompt_folder_trust(
         &workspace.worktree_root,
         Some(workspace.launch_repo_root()),
     );
-    let (rows, declined_kinds) = folder_trust_offer(&rows, &dismissed);
+    let FolderTrustOffer {
+        rows,
+        decline: declined_kinds,
+        asks,
+    } = folder_trust_offer(&rows, &dismissed);
     if rows.is_empty() {
         return Ok(());
     }
@@ -821,7 +843,8 @@ fn prompt_folder_trust(
         return Ok(());
     }
     let kinds = crate::cli::folder_trust::preview(&rows)?;
-    if kinds.is_empty() {
+    if !asks {
+        rimz::trust::dismiss_folder_trust_prompt(&workspace.project_root, &declined_kinds)?;
         return Ok(());
     }
     if crate::cli::confirm_with_default(
