@@ -294,7 +294,7 @@ pub(crate) fn validate_reply_wait(
 pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<String> {
     match outcome {
         DispatchOutcome::Sent { label, message_id } => {
-            Some(format!("delivered to {label} ({message_id})"))
+            Some(format!("sent to {label} ({message_id})"))
         }
         DispatchOutcome::Queued {
             label,
@@ -681,7 +681,7 @@ mod tests {
                 message_id: message_id.clone(),
             })
             .as_deref(),
-            Some("delivered to @coder (msg_0123456789abcdef)")
+            Some("sent to @coder (msg_0123456789abcdef)")
         );
         assert_eq!(
             render_dispatch_outcome(&outcome(Some(ParkReason::Status(
