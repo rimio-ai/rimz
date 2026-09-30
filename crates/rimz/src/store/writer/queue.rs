@@ -1159,6 +1159,7 @@ impl Store {
         kind: &AgentKind,
         agent_id: &AgentSessionId,
         agent_name: Option<&str>,
+        enqueued_through: Option<Timestamp>,
         reason: &str,
         session_name: &str,
     ) -> Result<usize> {
@@ -1166,7 +1167,9 @@ impl Store {
         let archived = self.commit_queue(|queue| {
             let archived =
                 queue.finalize_matching(MessageStatus::Archived, session_name, reason, |message| {
-                    message.status.is_open() && message.same_card(card)
+                    message.status.is_open()
+                        && message.same_card(card)
+                        && enqueued_through.is_none_or(|end| message.enqueued_at <= end)
                 });
             Ok(archived)
         })?;
@@ -1179,12 +1182,15 @@ impl Store {
         kind: &AgentKind,
         agent_id: &AgentSessionId,
         agent_name: Option<&str>,
+        enqueued_through: Option<Timestamp>,
         session_name: &str,
     ) -> Result<usize> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
         let archived = self.commit_queue(|queue| {
             let archived = queue.apply_all(session_name, Timestamp::now(), |message| {
-                if message.status != MessageStatus::Queued {
+                if message.status != MessageStatus::Queued
+                    || enqueued_through.is_some_and(|end| message.enqueued_at > end)
+                {
                     return MessageUpdate::Keep;
                 }
                 let Some(condition) = message.when.iter().find(|condition| {

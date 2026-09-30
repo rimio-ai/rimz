@@ -216,20 +216,21 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 3 | Every `when` condition stamped | `WaitingOnWhen` | The watched agent completing its dwell in the raw status |
 | 4 | Oldest deliverable record for this card and lane | `BehindFifo` | The blocking record settling |
 | 5 | The receiver card exists in the snapshot | `ReceiverGone` | The agent reappearing, or GC archiving the record |
-| 6 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
-| 7 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
-| 8 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation, normally `Registered`, or one delivery window elapsing; lazy-registering providers skip this check |
-| 9 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting or the overload marker clearing |
-| 10 | No open blocking prompt reserving input | `AskWaiting` | Answering the ask, or `--force` |
-| 11 | A live pane can receive a paste | `NoPane` | A pane appearing; affinity is cleared so any bound pane will do |
+| 6 | The receiver has not ended | `ReceiverEnded` | The sweep archives open records for the card and unmet `when` conditions watching it |
+| 7 | Not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
+| 8 | The gate is open for the effective status | `GateClosed` | The agent reaching `Idle`, `Success`, or `Sleeping`, plus `Failed` under `--on any` |
+| 9 | The resumed provider has started | `ProviderStarting` | Its next lifecycle observation, normally `Registered`, or one delivery window elapsing; lazy-registering providers skip this check |
+| 10 | A `Resume` gate's park is recoverable | `ResumeUnrecovered` | The budget window resetting or the overload marker clearing |
+| 11 | No open blocking prompt reserving input | `AskWaiting` | Answering the ask, or `--force` |
+| 12 | A live pane can receive a paste | `NoPane` | A pane appearing; affinity is cleared so any bound pane will do |
 
-All eleven pass and the verdict is `Ready`.
+All twelve pass and the verdict is `Ready`. Ended launched children remain in runtime snapshots while their parent is visible. For ended receivers omitted by that projection, the sweep and `message show` consult the audit row rather than treating its absence as an unknown receiver.
 
-A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks, so `NoPane` is the one verdict that can outlive every other gate.
+A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks. Without an end stamp, `NoPane` can outlive every other gate; a durable end instead lets the sweep archive its open records.
 
-The compaction window at check 6 closes every gate, `Resume` included. A receiver with a `compacting_since` marker less than 90 seconds old takes nothing. The window expires so a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation uses the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
+The compaction window at check 7 closes every gate, `Resume` included. A receiver with a `compacting_since` marker less than 90 seconds old takes nothing. The window expires so a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation uses the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
 
-`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 8 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked while an agent is paused, so a rate-limited agent does not receive a pile of user text the moment it waits. Both open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait; `Resume` does not open for `Sleeping`.
+`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 10 re-verifies at delivery time that the park is still resumable. `Done` and `Any` records stay parked while an agent is paused, so a rate-limited agent does not receive a pile of user text the moment it waits. Both open for `Sleeping`, so a resting agent with an armed one-shot wait can receive a message without consuming that wait; `Resume` does not open for `Sleeping`.
 
 Scheduled, condition-blocked, and `Resume`-gated records are left out of the FIFO scan, so they never block a later record that could deliver now. Resume nudges also live in their own lane, so a wakeup never queues behind user text that cannot deliver until after it.
 
@@ -506,7 +507,7 @@ Condition evaluation inside a sweep is one transaction. It evaluates every unmet
 
 The sweep backs off because the elder ticks often. When it cannot deliver a ready head (gate closed, ask waiting, compacting, no pane), it sets `retry_after` one delivery window ahead, so the elder retries at most once per window. `retry_after` is only a wake hint: it does not affect `is_ready`, FIFO position, claim leases, or hook-driven delivery.
 
-A `NoPane` back-off also records the blocker in `last_error`, in the same queue commit and in the words `rimz message show` prints. Every other verdict moves `retry_after` alone: they name a receiver that is present and busy, which the record's own state already shows, while an unbindable receiver otherwise leaves a queue that can defer forever with nothing written down. The record stays `Queued` with its pane pin and its `attempts` untouched, and the next claim clears the error.
+A `NoPane` back-off also records the blocker in `last_error`, in the same queue commit and in the words `rimz message show` prints. An ended receiver is terminal instead: the sweep archives open records for the card, plus records with unmet `when` conditions watching it, only when their `enqueued_at` is at or before the observed `ended_at`. The writers apply this cutoff under the workspace lock so a concurrent resume's newer messages survive a stale sweep snapshot; the end-hook reactor keeps its unbounded archive. The receiver reason is `receiver ended; rimz message @<handle> resumes it` for a launched child, or `receiver ended` otherwise. Other refused heads, including a starting provider, move `retry_after` alone. The deferred record stays `Queued` with its pane pin and its `attempts` untouched, and the next claim clears the error.
 
 The sentence does not outlive the blocker. A defer on any other verdict clears a `last_error` that a `NoPane` back-off wrote, so a pane that returns while the receiver is busy leaves the gate as the only thing `rimz message show` reports. It clears its own sentence and nothing else: a real send failure recorded by a requeue stays, which is why the recognizer sits beside the formatter in `message::deliver` and the store applies it without reading the words.
 

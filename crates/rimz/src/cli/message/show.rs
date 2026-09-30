@@ -102,11 +102,17 @@ fn open_delivery(
         return Ok(None);
     };
     let snapshot = ctx.fold_agent_context(ctx.resolution_snapshot()?);
-    let check = deliver::explain(record, live_messages, &snapshot, now);
+    let mut check = deliver::explain(record, live_messages, &snapshot, now);
     let agents = rimz::address::addressable_agents(&snapshot);
     let target = message_target(message, &agents);
     let verdict = check.verdict();
-    let audit_receiver = if verdict == deliver::DeliveryVerdict::ReceiverGone {
+    let audit_receiver = if verdict == deliver::DeliveryVerdict::ReceiverEnded {
+        snapshot
+            .agents
+            .iter()
+            .find(|agent| record.same_agent_card(agent))
+            .cloned()
+    } else if verdict == deliver::DeliveryVerdict::ReceiverGone {
         ctx.store
             .runtime_projection(rimz::RuntimeScope::Audit)
             .ok()
@@ -119,8 +125,15 @@ fn open_delivery(
     } else {
         None
     };
+    if audit_receiver
+        .as_ref()
+        .is_some_and(|receiver| receiver.ended_at.is_some())
+    {
+        check.agent.present = true;
+        check.agent.ended = true;
+    }
     Ok(Some(MessageDeliveryJson {
-        verdict: render_verdict(&verdict, &target, audit_receiver.as_ref(), now),
+        verdict: render_verdict(&check.verdict(), &target, audit_receiver.as_ref(), now),
         check,
     }))
 }
@@ -404,8 +417,10 @@ pub(super) fn render_delivery_check(
     kv.push(
         "agent",
         condition_cell(
-            check.agent.present,
-            if check.agent.present {
+            check.agent.present && !check.agent.ended,
+            if check.agent.ended {
+                "receiver ended".to_owned()
+            } else if check.agent.present {
                 "ok".to_owned()
             } else {
                 "receiver gone".to_owned()
@@ -639,6 +654,13 @@ pub(super) fn render_verdict(
                 )
             },
         ),
+        deliver::DeliveryVerdict::ReceiverEnded => {
+            let mut sentence = format!("stuck: receiver {target} has ended");
+            if audit_receiver.is_some_and(AgentState::is_launched_child) {
+                sentence.push_str(&format!("; rimz message {target} resumes it"));
+            }
+            sentence
+        }
         deliver::DeliveryVerdict::Compacting => {
             format!("waiting: {target} is compacting its context")
         }
@@ -694,6 +716,7 @@ pub(super) fn delivery_action_hint(
             "force now: rimz message steer {message_id} --force"
         )),
         deliver::DeliveryVerdict::NoPane { .. } | deliver::DeliveryVerdict::Ready => None,
+        deliver::DeliveryVerdict::ReceiverEnded => None,
     }
 }
 
@@ -703,6 +726,25 @@ mod tests {
 
     use rimz::agents::AgentStatus;
     use rimz::ids::{MessageId, MuxName, PaneId};
+
+    #[test]
+    fn ended_verdict_offers_only_a_launched_child_the_parent_message_retry() {
+        let verdict = deliver::DeliveryVerdict::ReceiverEnded;
+        let id = MessageId::parse("msg_0000000000000001").unwrap();
+        let mut receiver = rimz::testkit::agent_state("claude", "child", Timestamp::UNIX_EPOCH);
+        receiver.ended_at = Some(Timestamp::UNIX_EPOCH);
+        assert_eq!(
+            render_verdict(&verdict, "@otter", Some(&receiver), Timestamp::UNIX_EPOCH),
+            "stuck: receiver @otter has ended"
+        );
+        receiver.parent_agent_id = Some("parent".into());
+        receiver.launch_depth = Some(1);
+        assert_eq!(
+            render_verdict(&verdict, "@otter", Some(&receiver), Timestamp::UNIX_EPOCH),
+            "stuck: receiver @otter has ended; rimz message @otter resumes it"
+        );
+        assert_eq!(delivery_action_hint(&verdict, &id), None);
+    }
 
     #[test]
     fn resuming_verdict_names_registration_and_steer() {
@@ -733,7 +775,10 @@ mod tests {
                 head: true,
                 blocker: None,
             },
-            agent: deliver::AgentCheck { present: true },
+            agent: deliver::AgentCheck {
+                present: true,
+                ended: false,
+            },
             gate: deliver::GateCheck {
                 provider_start_pending: false,
                 gate: DeliveryGate::Done,
