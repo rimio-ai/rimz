@@ -109,7 +109,7 @@ A wait on a timer is a guess about when something will happen. A signal is the t
 
 | Signal | Fires when | Payload carries |
 | --- | --- | --- |
-| `ci.passed`, `ci.failed` | the checks on a commit a worktree branch added settle on success or failure, with or without a pull request | `path`, `branch`, `repo`, plus `head` and `checks_url` when the commit is known, and `number` and `url` when a pull request exists |
+| `ci.passed`, `ci.failed` | the checks on a commit on a watched checkout settle on success or failure, with or without a pull request | `path`, `branch`, `repo`, plus `head` and `checks_url` when the commit is known, and `number` and `url` when a pull request exists |
 | `pr.merged`, `pr.closed` | the pull request on one of the room's watched checkouts leaves the open state | `path`, `branch`, `repo`, `state`, plus `number`, `url`, `head`, and `checks_url` when known |
 | `pr.opened` | a successful probe finds a new open PR after monitoring has already observed the branch successfully | the PR payload above with `state: "open"` |
 | `trunk.moved` | the same trunk ref moves to a different commit | `trunk`, `from`, `to`, `repo` |
