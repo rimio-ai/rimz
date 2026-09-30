@@ -22,10 +22,12 @@ fn team_hold_table() {
     };
     let live_hold = Some(TeamHold {
         team: "forge".into(),
+        checkout: root.path().into(),
         reason: TeamHoldReason::LiveMember,
     });
     let board_hold = Some(TeamHold {
         team: "forge".into(),
+        checkout: root.path().into(),
         reason: TeamHoldReason::BoardStage("Plan".into()),
     });
     let cases = [
@@ -55,13 +57,18 @@ fn team_hold_table() {
                 ..present.clone()
             }],
             None,
-            live_hold,
+            Some(TeamHold {
+                team: "forge".into(),
+                checkout: root.path().join("child/.."),
+                reason: TeamHoldReason::LiveMember,
+            }),
         ),
         (
             vec![present, other],
             None,
             Some(TeamHold {
                 team: "other".into(),
+                checkout: root.path().into(),
                 reason: TeamHoldReason::LiveMember,
             }),
         ),
@@ -70,6 +77,7 @@ fn team_hold_table() {
             Some("Stage: Plan"),
             Some(TeamHold {
                 team: "other".into(),
+                checkout: root.path().into(),
                 reason: TeamHoldReason::BoardStage("Plan".into()),
             }),
         ),
@@ -86,6 +94,86 @@ fn team_hold_table() {
             expected,
             "case {index}"
         );
+    }
+}
+
+#[test]
+fn channel_hold_table() {
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("X");
+    std::fs::create_dir(&checkout).unwrap();
+    let present = AgentState {
+        channel: Some("X".into()),
+        ..team_agent("claude", "present", "lead", checkout.to_str().unwrap(), 10)
+    };
+    let ended = AgentState {
+        ended_at: Some(Timestamp::now()),
+        ..present.clone()
+    };
+    let live_hold = TeamHold {
+        team: "forge".into(),
+        checkout: checkout.clone(),
+        reason: TeamHoldReason::LiveMember,
+    };
+    let other = AgentState {
+        channel: Some("X".into()),
+        team: Some("other".into()),
+        ..team_agent("claude", "other", "lead", checkout.to_str().unwrap(), 0)
+    };
+    let cases = [
+        (vec![present.clone()], None, Some(live_hold.clone())),
+        (
+            vec![ended.clone()],
+            Some("Stage: Build"),
+            Some(TeamHold {
+                reason: TeamHoldReason::BoardStage("Build".into()),
+                ..live_hold.clone()
+            }),
+        ),
+        (vec![ended.clone()], Some("Stage: Done"), None),
+        (vec![ended], None, None),
+        (
+            vec![AgentState {
+                channel: None,
+                ..present.clone()
+            }],
+            None,
+            Some(live_hold.clone()),
+        ),
+        (
+            vec![AgentState {
+                channel: Some("Y".into()),
+                ..present.clone()
+            }],
+            None,
+            None,
+        ),
+        (
+            vec![AgentState {
+                worktree_path: None,
+                ..present.clone()
+            }],
+            None,
+            None,
+        ),
+        (
+            vec![present, other],
+            None,
+            Some(TeamHold {
+                team: "other".into(),
+                ..live_hold
+            }),
+        ),
+        (vec![], Some("Stage: Build"), None),
+    ];
+    for (index, (agents, board, expected)) in cases.into_iter().enumerate() {
+        let board_path = checkout.join("blackboard.md");
+        if let Some(board) = board {
+            std::fs::write(&board_path, board).unwrap();
+        } else if board_path.exists() {
+            std::fs::remove_file(&board_path).unwrap();
+        }
+        assert_eq!(inspect_channel_hold(&agents, "X"), expected, "case {index}");
     }
 }
 

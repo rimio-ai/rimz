@@ -2327,10 +2327,12 @@ fn match_cohort<'a>(
     }
 }
 
-/// Why a checkout cannot take a new team.
+/// The team holding a checkout or channel before a fresh launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamHold {
     pub team: String,
+    /// The holder's recorded checkout, where its board lives.
+    pub checkout: PathBuf,
     pub reason: TeamHoldReason,
 }
 
@@ -2345,12 +2347,30 @@ pub enum TeamHoldReason {
 /// Inspect the team holding a checkout before a fresh launch.
 pub fn inspect_team_hold(agents: &[AgentState], checkout: &Path) -> Option<TeamHold> {
     let target = crate::utils::path::normalize_path_lexical(checkout);
+    inspect_hold(agents, Some(checkout), |agent| {
+        agent.worktree_path.as_deref().is_some_and(|path| {
+            crate::utils::path::normalize_path_lexical(Path::new(path)) == target
+        })
+    })
+}
+
+/// Inspect the team holding a channel before a fresh launch.
+pub fn inspect_channel_hold(agents: &[AgentState], channel: &str) -> Option<TeamHold> {
+    inspect_hold(agents, None, |agent| {
+        agent.channel().as_deref() == Some(channel)
+    })
+}
+
+fn inspect_hold(
+    agents: &[AgentState],
+    board_checkout: Option<&Path>,
+    matches: impl Fn(&AgentState) -> bool,
+) -> Option<TeamHold> {
     let members = crate::address::launch_occupants(agents.iter().filter(|agent| {
         cohort_admits(agent, crate::store::runtime::agent_liveness)
             && agent.team.is_some()
-            && agent.worktree_path.as_deref().is_some_and(|path| {
-                crate::utils::path::normalize_path_lexical(Path::new(path)) == target
-            })
+            && agent.worktree_path.is_some()
+            && matches(agent)
     }));
     if let Some(member) = members
         .iter()
@@ -2359,14 +2379,17 @@ pub fn inspect_team_hold(agents: &[AgentState], checkout: &Path) -> Option<TeamH
     {
         return Some(TeamHold {
             team: member.team.clone()?,
+            checkout: member.worktree_path.as_ref()?.into(),
             reason: TeamHoldReason::LiveMember,
         });
     }
     let member = members.iter().max_by_key(|agent| agent.last_activity)?;
     let team = member.team.clone()?;
-    let stage = super::scratch::board_stage(checkout)?;
+    let checkout = PathBuf::from(member.worktree_path.as_ref()?);
+    let stage = super::scratch::board_stage(board_checkout.unwrap_or(&checkout))?;
     super::fleet::team_stage_pending(Some(&stage.name)).then_some(TeamHold {
         team,
+        checkout,
         reason: TeamHoldReason::BoardStage(stage.name),
     })
 }
