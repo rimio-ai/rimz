@@ -207,8 +207,10 @@ pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWor
                     })
                     .or_insert(candidate);
             }
-            // A dir without a record isn't a usable workspace; `rimz gc`
-            // reaps it. A record that won't parse is a real anomaly — surface it.
+            // A dir without a record isn't a usable workspace: an unroomed
+            // project's loop dir stays unrecorded on purpose, and `rimz gc`
+            // reaps one only while it holds no history. A record that won't
+            // parse is a real anomaly — surface it.
             Err(WorkspaceRecordErr::Io { source, .. })
                 if source.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
