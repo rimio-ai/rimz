@@ -679,6 +679,9 @@ struct SnapshotContext {
 }
 
 fn snapshot(globals: &GlobalFlags, command: SnapshotCommand) -> Result<()> {
+    if let Some(snapshot) = room_less_snapshot(&command)? {
+        return emit_snapshot(&snapshot, command.json);
+    }
     let context = resolve_snapshot_context(globals, &command)?;
     if try_emit_consumer_snapshot(&context, !command.no_produce, command.json)? {
         return Ok(());
@@ -752,18 +755,25 @@ fn click(globals: &GlobalFlags, pane_id: PaneId, column: u16, row: u16) -> Resul
 }
 
 fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
-    let context = resolve_snapshot_context(
-        globals,
-        &SnapshotCommand {
-            workspace_id: command.workspace_id,
-            mux: command.mux,
-            session_name: command.session_name,
-            exclude_pane_id: None,
-            min_pane_cache_ms: None,
-            json: false,
-            no_produce: false,
-        },
-    )?;
+    let snapshot_command = SnapshotCommand {
+        workspace_id: command.workspace_id,
+        mux: command.mux,
+        session_name: command.session_name,
+        exclude_pane_id: None,
+        min_pane_cache_ms: None,
+        json: false,
+        no_produce: false,
+    };
+    if let Some(snapshot) = room_less_snapshot(&snapshot_command)? {
+        return render_frame(
+            &snapshot,
+            None,
+            command.width,
+            command.height,
+            command.expand,
+        );
+    }
+    let context = resolve_snapshot_context(globals, &snapshot_command)?;
     let snapshot = if !pane_fixture_active()
         && let Some(session) = context.session_name.as_deref()
         && published_frame_exists(&context.runtime, session)
@@ -780,12 +790,28 @@ fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
     let live_size = context
         .session_name
         .as_deref()
-        .and_then(|session| rimz::sidebar::live_sidebar_size(&context.runtime, session));
+        .and_then(|session| rimz::sidebar::live_sidebar_size(&context.runtime, session))
+        .map(|size| (size.cols, size.rows));
+    render_frame(
+        &snapshot,
+        live_size,
+        command.width,
+        command.height,
+        command.expand,
+    )
+}
+
+fn render_frame(
+    snapshot: &SidebarSnapshot,
+    live_size: Option<(u16, u16)>,
+    width: Option<u16>,
+    height: Option<u16>,
+    expand: bool,
+) -> Result<()> {
     let sidebar_width = rimz::mux::SidebarWidth::from_config(&snapshot.theme);
     let terminal_size = rimz::mux::detect_terminal_size();
-    let width = command
-        .width
-        .or(live_size.map(|size| size.cols))
+    let width = width
+        .or(live_size.map(|(cols, _)| cols))
         .unwrap_or_else(|| {
             terminal_size.map_or_else(
                 || sidebar_width.max_cols.get(),
@@ -794,18 +820,34 @@ fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
                 },
             )
         });
-    let height = command
-        .height
-        .or(live_size.map(|size| size.rows))
+    let height = height
+        .or(live_size.map(|(_, rows)| rows))
         .unwrap_or_else(|| terminal_size.map_or(24, |(_, rows)| rows));
 
     let mut out = render::out();
-    let write = if command.expand {
-        rimz::sidebar_pane::render::render_expanded_line_ansi(&mut out, &snapshot, width)
+    let write = if expand {
+        rimz::sidebar_pane::render::render_expanded_line_ansi(&mut out, snapshot, width)
     } else {
-        rimz::sidebar_pane::render::render_fixed_line_ansi(&mut out, &snapshot, width, height)
+        rimz::sidebar_pane::render::render_fixed_line_ansi(&mut out, snapshot, width, height)
     };
     render::finish(write.and_then(|()| out.flush()))
+}
+
+/// A `--workspace-id` with no state root and no `--session-name` names no room
+/// on this machine: its snapshot is the empty rollup, read without running the
+/// producer, so it neither scaffolds the id's runtime tree nor walks spending.
+fn room_less_snapshot(command: &SnapshotCommand) -> Result<Option<SidebarSnapshot>> {
+    let (Some(raw), None) = (command.workspace_id.as_deref(), &command.session_name) else {
+        return Ok(None);
+    };
+    let state =
+        StatePaths::for_workspace(raw.parse::<WorkspaceId>()?).context("preparing state paths")?;
+    if state.root.is_dir() {
+        return Ok(None);
+    }
+    let snapshot = rimz::sidebar::consumer::rollup_snapshot(&state, &mut RollupCursor::new())
+        .context("reading the empty rollup")?;
+    Ok(Some(snapshot))
 }
 
 fn resolve_snapshot_context(
