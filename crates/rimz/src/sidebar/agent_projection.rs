@@ -74,7 +74,7 @@ impl LocalSessionInputs {
         let accounts = &crate::config::MachineConfig::load_lenient().accounts;
         let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, accounts);
         self.discover_with(|kind, workspaces| {
-            let Some(login) = logins.login(kind.as_str()) else {
+            let Some(login) = logins.default_login(kind.as_str()) else {
                 return Vec::new();
             };
             crate::agents::find_definition(kind.as_str())

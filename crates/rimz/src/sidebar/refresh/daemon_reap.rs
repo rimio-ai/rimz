@@ -75,7 +75,7 @@ pub(super) fn refresh_codex_daemon_reap_cache(
     {
         return;
     }
-    let Some(login) = logins.login("codex") else {
+    let Some(login) = logins.default_login("codex") else {
         return;
     };
     let login_env = logins.env(&login);

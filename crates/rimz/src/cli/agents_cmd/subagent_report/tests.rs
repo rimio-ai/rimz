@@ -660,6 +660,7 @@ fn backstop_settles_dead_and_stranded_peer_turns_before_reporting() {
         store
             .begin_agent_launch_batch(
                 &[rimz::store::writer::AgentLaunchRequest {
+                    login: rimz::store::writer::LaunchLogin::RoomDefault,
                     kind: AgentKind::new_unchecked("codex"),
                     agent_id: "peer".into(),
                     name: rimz::store::writer::AgentLaunchName::Mint,

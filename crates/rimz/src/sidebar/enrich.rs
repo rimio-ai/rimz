@@ -618,7 +618,10 @@ fn enrich_core(
             let pane_present = crate::daemon_view::claude_host_present(&frame.to_pane_refs());
             // Probe only behind a live pane on an enabled host: a disabled or
             // paneless host has nothing the record could contradict.
-            let liveness = match (snapshot.project_root.as_deref(), logins.login("claude")) {
+            let liveness = match (
+                snapshot.project_root.as_deref(),
+                logins.default_login("claude"),
+            ) {
                 (Some(root), Some(login)) if claude_rc_enabled && pane_present => {
                     crate::agents::runtime_control::host_liveness(
                         "claude",
@@ -952,7 +955,10 @@ fn label_provider_logins(
     logins: &crate::agents::RoomLoginSet,
 ) {
     for panel in panels {
-        if let Some(key) = logins.key(&panel.kind).filter(|key| !key.name.is_default()) {
+        if let Some(key) = logins
+            .default_key(&panel.kind)
+            .filter(|key| !key.name.is_default())
+        {
             panel.product_name.push_str(&format!(" · {}", key.name));
         }
     }
@@ -986,7 +992,7 @@ pub(super) fn fold_machine_config_with(
         let config_toggle = config.remote_control.enabled_for(definition.kind);
         // A kind whose room account cannot be resolved reads no provider setting.
         let pane_auto = definition.capabilities.remote_control.pane_sessions
-            && logins.login(definition.kind).is_some_and(|login| {
+            && logins.default_login(definition.kind).is_some_and(|login| {
                 adapter
                     .remote_control_status(accounts.get(definition.kind), &logins.env(&login))
                     .pane_auto

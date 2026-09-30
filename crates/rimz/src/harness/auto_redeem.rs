@@ -445,7 +445,7 @@ pub(crate) fn redeem_credits(
     config: &ResumeConfig,
     now: Timestamp,
 ) {
-    let Some(login) = logins.login(CODEX_KIND) else {
+    let Some(login) = logins.default_login(CODEX_KIND) else {
         return;
     };
     let key = login.key();
@@ -495,7 +495,8 @@ pub(crate) fn project_redeem_forecasts(
         if panel.kind != CODEX_KIND {
             continue;
         }
-        let (Some(credits), Some(key)) = (panel.reset_credits.as_ref(), logins.key(CODEX_KIND))
+        let (Some(credits), Some(key)) =
+            (panel.reset_credits.as_ref(), logins.default_key(CODEX_KIND))
         else {
             continue;
         };
@@ -527,7 +528,10 @@ pub fn execute_auto_redeem(
         return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));
     }
     let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
-    let Some(login) = logins.login(CODEX_KIND).filter(|login| login.key() == *key) else {
+    let Some(login) = logins
+        .default_login(CODEX_KIND)
+        .filter(|login| login.key() == *key)
+    else {
         cancel_attempt_reservation(runtime, key, &request_id.to_string());
         tracing::debug!(
             kind = key.kind.as_str(),

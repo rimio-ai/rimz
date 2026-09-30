@@ -241,7 +241,8 @@ impl ProviderCapacity {
             .entries
             .into_iter()
             .filter(|(key, entry)| {
-                entry.scope.is_kind_wide() && logins.key(key.kind.as_str()).as_ref() == Some(key)
+                entry.scope.is_kind_wide()
+                    && logins.default_key(key.kind.as_str()).as_ref() == Some(key)
             })
             .map(|(key, entry)| {
                 (

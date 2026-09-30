@@ -563,29 +563,26 @@ pub fn ambient_env() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Resolve the env of a session's stamped account; an unstamped session runs
-/// under the ambient provider home.
+/// Resolve a session's stamped account; an unstamped session uses the provider's own home.
+pub fn session_login(
+    kind: &AgentKind,
+    login: Option<&LoginName>,
+    accounts: &AccountsConfig,
+) -> Result<ProviderLogin, RoomLoginErr> {
+    let Some(name) = login.filter(|name| !name.is_default()) else {
+        return Ok(ProviderLogin::default_for(kind.clone()));
+    };
+    Ok(LoginCatalog::from_config(accounts)?.select(kind, name)?)
+}
+
+/// Resolve the environment of a session's stamped account.
 pub fn session_login_env(
     kind: &AgentKind,
     login: Option<&LoginName>,
 ) -> Result<BTreeMap<String, String>, RoomLoginErr> {
     let ambient = ambient_env();
-    let Some(name) = login else {
-        return Ok(ambient);
-    };
     let accounts = &crate::config::MachineConfig::load_lenient().accounts;
-    session_login_env_from(kind, name, accounts, &ambient)
-}
-
-fn session_login_env_from(
-    kind: &AgentKind,
-    name: &LoginName,
-    accounts: &AccountsConfig,
-    ambient: &BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>, RoomLoginErr> {
-    Ok(LoginCatalog::from_config(accounts)?
-        .select(kind, name)?
-        .env(ambient))
+    Ok(session_login(kind, login, accounts)?.env(&ambient))
 }
 
 /// Resolving the login a room launches a kind under.
@@ -619,9 +616,60 @@ pub struct RoomLoginSet {
     /// `None` when the machine's account config does not load.
     catalog: Option<LoginCatalog>,
     ambient: BTreeMap<String, String>,
+    live_logins: BTreeSet<LoginKey>,
 }
 
 impl RoomLoginSet {
+    /// Include live pane-backed agents' stamps alongside the room defaults.
+    pub fn with_agents(mut self, agents: &[super::AgentState]) -> Self {
+        self.live_logins = agents
+            .iter()
+            .filter(|agent| agent.ended_at.is_none() && !agent.is_provider_subagent())
+            .map(super::AgentState::login_key)
+            .collect();
+        self
+    }
+
+    /// Resolvable defaults and live stamps for one kind, without duplicates.
+    pub fn in_use(&self, kind: &str) -> Vec<ProviderLogin> {
+        let mut logins = BTreeMap::new();
+        if let Some(login) = self.default_login(kind) {
+            logins.insert(login.key(), login);
+        }
+        for key in self
+            .live_logins
+            .iter()
+            .filter(|key| key.kind.as_str() == kind)
+        {
+            let login = if key.name.is_default() {
+                Some(ProviderLogin::default_for(key.kind.clone()))
+            } else {
+                self.catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.select(&key.kind, &key.name).ok())
+            };
+            if let Some(login) = login {
+                logins.insert(key.clone(), login);
+            }
+        }
+        logins.into_values().collect()
+    }
+
+    /// The resolvable logins this room currently uses across all kinds.
+    pub fn keys_in_use(&self) -> BTreeSet<LoginKey> {
+        super::known_kinds()
+            .map(AgentKind::new_unchecked)
+            .chain(self.live_logins.iter().map(|key| key.kind.clone()))
+            .chain(
+                self.selection
+                    .iter()
+                    .flat_map(|selection| selection.keys().cloned()),
+            )
+            .flat_map(|kind| self.in_use(kind.as_str()))
+            .map(|login| login.key())
+            .collect()
+    }
+
     pub fn new(
         selection: Option<RoomLogins>,
         catalog: Option<LoginCatalog>,
@@ -631,6 +679,7 @@ impl RoomLoginSet {
             selection,
             catalog,
             ambient,
+            live_logins: BTreeSet::new(),
         }
     }
 
@@ -660,7 +709,7 @@ impl RoomLoginSet {
         Self::new(Some(RoomLogins::new()), None, ambient_env())
     }
 
-    pub fn login(&self, kind: &str) -> Option<ProviderLogin> {
+    pub fn default_login(&self, kind: &str) -> Option<ProviderLogin> {
         let kind = AgentKind::new_unchecked(kind);
         match self.selection.as_ref()?.get(&kind) {
             Some(name) if !name.is_default() => self.catalog.as_ref()?.select(&kind, name).ok(),
@@ -668,8 +717,8 @@ impl RoomLoginSet {
         }
     }
 
-    pub fn key(&self, kind: &str) -> Option<LoginKey> {
-        self.login(kind).map(|login| login.key())
+    pub fn default_key(&self, kind: &str) -> Option<LoginKey> {
+        self.default_login(kind).map(|login| login.key())
     }
 
     /// The environment `login`'s provider state is read under.

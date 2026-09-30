@@ -265,6 +265,7 @@ fn launch_allocation_reserves_ended_name_until_retention_prunes_it() {
     );
 
     let request = AgentLaunchRequest {
+        login: rimz::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("codex"),
         agent_id: AgentSessionId::from("launch_codex"),
         name: AgentLaunchName::Soft("ghost-pet".to_owned()),

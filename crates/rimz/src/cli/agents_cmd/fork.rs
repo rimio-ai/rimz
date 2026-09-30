@@ -125,6 +125,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let backend = room.backend();
 
     let request = AgentLaunchRequest {
+        login: rimz::store::writer::LaunchLogin::RoomDefault,
         kind: seed.kind.clone(),
         agent_id: mint_launch_id(),
         name: args

@@ -558,7 +558,7 @@ fn apply_credits_cache_with(
         let ceiling = accounts.usage_limit(&panel.kind);
         if panel.metered {
             let displayable_entry = logins
-                .key(&panel.kind)
+                .default_key(&panel.kind)
                 .and_then(|key| cache.logins.get(&key))
                 .filter(|entry| entry.scope == panel.account_scope)
                 .filter(|entry| entry_is_displayable(entry, now_ms));

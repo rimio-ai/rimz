@@ -365,11 +365,11 @@ fn project_rate_limits(
         ..cached.clone()
     };
     next.entries
-        .retain(|key, _| logins.key(key.kind.as_str()).as_ref() != Some(key));
+        .retain(|key, _| logins.default_key(key.kind.as_str()).as_ref() != Some(key));
     let mut refresh_logins = BTreeSet::new();
 
     for panel in &mut snapshot.providers {
-        let login_key = logins.key(&panel.kind);
+        let login_key = logins.default_key(&panel.kind);
         if !panel.metered {
             panel.windows.clear();
             continue;

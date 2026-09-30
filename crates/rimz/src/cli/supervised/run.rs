@@ -969,7 +969,7 @@ pub(in crate::cli) fn run_supervised(
             .workspace_record,
         &prepared.machine_config.accounts,
     )
-    .key(prepared.kind.as_str());
+    .default_key(prepared.kind.as_str());
     let provider_budget_gate = || {
         rimz::agents::provider_budget_gate(
             prepared.store.runtime_paths(),

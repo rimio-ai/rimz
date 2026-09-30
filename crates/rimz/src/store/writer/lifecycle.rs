@@ -123,7 +123,7 @@ impl Store {
                     .map(|agent| agent.status);
                 let transition =
                     lifecycle_transition(&agents, &intent.agent_kind, intent.observation);
-                // A row this ingress creates carries the room's account, as a launch batch stamps it.
+                // Only hook-first roots take the room default; launched rows and children keep their account.
                 let creates_row = |agent_id: &AgentSessionId| {
                     find_agent(&agents, &intent.agent_kind, agent_id).is_none()
                 };
@@ -152,7 +152,12 @@ impl Store {
                 let primary_event_id = if append_primary {
                     let mut observation = event::observation_for_event(intent.observation);
                     if prior_status.is_none() {
-                        observation.launch.login.clone_from(&login);
+                        observation.launch.login = ingress_login(
+                            &agents,
+                            &intent.agent_kind,
+                            &observation,
+                            login.as_ref(),
+                        );
                     }
                     Some(stage(
                         &self.inner.paths.workspace_id,
@@ -375,7 +380,8 @@ fn append_adoption(
     }
     observation.signal = signal;
     if child_state.is_none() {
-        observation.launch.login = login.cloned();
+        observation.launch.login = find_agent(agents, &intent.agent_kind, parent_id)
+            .map_or_else(|| login.cloned(), |parent| parent.login.clone());
     }
     let (parent_id, parent_kind) = root_parent(agents, &intent.agent_kind, parent_id);
     observation.parent_agent_id = Some(parent_id);
@@ -408,6 +414,46 @@ fn append_adoption(
         Some(transition),
         staged,
     );
+}
+
+fn ingress_login(
+    agents: &[AgentState],
+    kind: &AgentKind,
+    observation: &AgentLifecycleObservation,
+    default: Option<&LoginName>,
+) -> Option<LoginName> {
+    if let Some(parent_id) = observation.parent_agent_id.as_ref() {
+        let parent_kind = observation
+            .launch
+            .parent_agent_kind
+            .as_ref()
+            .unwrap_or(kind);
+        if let Some(parent) = find_agent(agents, parent_kind.as_str(), parent_id)
+            .filter(|parent| parent.kind == *kind)
+        {
+            return parent.login.clone();
+        }
+        return default.cloned();
+    }
+    let adopts_launch = agents.iter().any(|agent| {
+        agent.kind == *kind
+            && agent.agent_id.is_provisional()
+            && (observation
+                .agent_name
+                .as_ref()
+                .is_some_and(|name| agent.name.as_ref() == Some(name))
+                || observation.pane_id.as_ref().is_some_and(|pane| {
+                    agent
+                        .pane
+                        .as_ref()
+                        .is_some_and(|bound| &bound.pane_id == pane)
+                }))
+    });
+    if adopts_launch {
+        None
+    } else {
+        default.cloned()
+    }
 }
 
 fn append_reconciliation(

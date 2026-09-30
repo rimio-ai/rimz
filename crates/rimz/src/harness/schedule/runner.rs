@@ -189,7 +189,8 @@ impl FireScope {
         scope_state: StatePaths,
         resolved: Option<ResolvedSingleAgentLaunch>,
     ) -> Self {
-        let login_key = crate::agents::RoomLoginSet::for_runtime(&scope_runtime).key(kind.as_str());
+        let login_key =
+            crate::agents::RoomLoginSet::for_runtime(&scope_runtime).default_key(kind.as_str());
         Self {
             login_key,
             kind,
@@ -971,7 +972,7 @@ fn preflight_kind(kind: &str, runtime: &RuntimePaths) -> Result<()> {
     let adapter =
         find_definition(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
-    let login = logins.login(kind).with_context(|| {
+    let login = logins.default_login(kind).with_context(|| {
         format!("cannot resolve the room's {kind} account; run `rimz accounts list`")
     })?;
     match preflight_hooks(

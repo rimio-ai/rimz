@@ -535,6 +535,147 @@ fn observed_child_adoption_is_guarded_flattened_and_ordered() {
 }
 
 #[test]
+fn ingress_keeps_the_launch_and_parent_stamp_after_the_room_switches() {
+    use crate::store::writer::{
+        AgentLaunchName, AgentLaunchRequest, AgentLaunchScope, LaunchLogin,
+    };
+    for by_name in [true, false] {
+        let (dir, store) = test_store();
+        let workspace = crate::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+        let kind = AgentKind::new_unchecked("claude");
+        let work: LoginName = "work".parse().unwrap();
+        let batch = store
+            .begin_agent_launch_batch(
+                &[AgentLaunchRequest {
+                    kind: kind.clone(),
+                    login: LaunchLogin::Pinned(work.clone()),
+                    agent_id: "launch_parent".into(),
+                    name: AgentLaunchName::Explicit("parent".into()),
+                    launch: Default::default(),
+                    run_id: None,
+                    prompt: None,
+                }],
+                AgentLaunchScope {
+                    session_name: "rimz-test".into(),
+                    cwd: dir.path().to_owned(),
+                    branch: None,
+                    description: None,
+                },
+            )
+            .unwrap();
+        let pane = PaneId::from_parts(MuxName::Tmux, "%7");
+        store
+            .bind_agent_launch(
+                batch.single_identity().unwrap(),
+                "rimz-test",
+                dir.path(),
+                &pane,
+            )
+            .unwrap();
+        store
+            .switch_room_login(&workspace, &kind, &"personal".parse().unwrap())
+            .unwrap();
+        let mut parent = AgentLifecycleObservation::new(
+            Some("parent-session".into()),
+            LifecycleSignal::Registered,
+        );
+        if by_name {
+            parent.agent_name = Some("parent".into());
+        } else {
+            parent.pane_id = Some(pane);
+        }
+        let append = |observation: &AgentLifecycleObservation| {
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: kind.clone(),
+                    event_name: "SessionStart",
+                    observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        };
+        append(&parent);
+        let agents = store.snapshot_cached().unwrap().agents;
+        assert_eq!(
+            find_agent(&agents, &kind, &"parent-session".into())
+                .unwrap()
+                .login,
+            Some(work.clone())
+        );
+        let mut child = AgentLifecycleObservation::new(
+            Some("native-child".into()),
+            LifecycleSignal::SubagentStarted,
+        );
+        child.parent_agent_id = Some("parent-session".into());
+        append(&child);
+        let agents = store.snapshot_cached().unwrap().agents;
+        assert_eq!(
+            find_agent(&agents, &kind, &"native-child".into())
+                .unwrap()
+                .login,
+            Some(work)
+        );
+    }
+}
+
+#[test]
+fn cross_kind_native_child_uses_its_own_room_default() {
+    let mut parent = AgentState::stub("claude", "parent", AgentStatus::Running);
+    parent.login = Some("work".parse().unwrap());
+    let mut child = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child")),
+        LifecycleSignal::SubagentStarted,
+    );
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.launch.parent_agent_kind = Some(parent.kind.clone());
+    let default = "personal".parse().unwrap();
+    assert_eq!(
+        ingress_login(
+            &[parent],
+            &AgentKind::new_unchecked("codex"),
+            &child,
+            Some(&default)
+        ),
+        Some(default)
+    );
+}
+
+#[test]
+fn adoption_inherits_immediate_parent_before_flattening_cross_kind_lineage() {
+    let root = AgentState::stub("codex", "root", AgentStatus::Running);
+    let mut parent = AgentState::stub("claude", "parent", AgentStatus::Running);
+    parent.login = Some("work".parse().unwrap());
+    parent.parent_agent_id = Some(root.agent_id.clone());
+    parent.parent_agent_kind = Some(root.kind.clone());
+    let child =
+        AgentLifecycleObservation::new(Some("child".into()), LifecycleSignal::SubagentStarted);
+    let intent = AgentLifecycleIntent {
+        session_name: "room",
+        agent_kind: parent.kind.clone(),
+        event_name: "SubagentStart",
+        observation: &child,
+        spawned_subagents: &[],
+    };
+    let mut staged = Vec::new();
+    append_adoption(
+        &WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        &intent,
+        &[root, parent.clone()],
+        &parent.agent_id,
+        child.clone(),
+        LifecycleSignal::SubagentStarted,
+        None,
+        Some(&"personal".parse().unwrap()),
+        &mut staged,
+    );
+    let EventKind::AgentLifecycle(payload) = staged[0].envelope.kind() else {
+        panic!("lifecycle")
+    };
+    assert_eq!(payload.observation.launch.login, parent.login);
+}
+
+#[test]
 fn ingress_stamps_the_rooms_account_only_on_rows_it_creates() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace =

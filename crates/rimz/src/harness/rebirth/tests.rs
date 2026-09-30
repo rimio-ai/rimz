@@ -649,6 +649,7 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
     let batch = store
         .begin_agent_launch_batch(
             &[AgentLaunchRequest {
+                login: crate::store::writer::LaunchLogin::RoomDefault,
                 kind: kind.clone(),
                 agent_id: session.clone(),
                 name: AgentLaunchName::Mint,

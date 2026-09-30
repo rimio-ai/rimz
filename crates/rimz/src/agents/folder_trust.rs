@@ -111,7 +111,7 @@ fn rows_with_locator(
         .filter_map(|adapter| {
             locate(adapter.spec())?;
             let kind = adapter.spec().kind;
-            let login = logins.login(kind)?;
+            let login = logins.default_login(kind)?;
             let trust = adapter.folder_trust(cwd, Some(repo_root), &logins.env(&login))?;
             Some(FolderTrustRow {
                 kind,
