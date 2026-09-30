@@ -208,6 +208,14 @@ pub struct AgentAttachPayload {
     pub runtime_owner: RuntimeOwner,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentLaunchWarningsPayload {
+    pub agent_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<AgentSessionId>,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionDeathCause {
@@ -438,6 +446,7 @@ pub enum EventKind<'a> {
     AgentLifecycle(Box<AgentLifecyclePayload>),
     Signal(SignalEventPayload),
     AgentAttach(AgentAttachPayload),
+    AgentLaunchWarnings(AgentLaunchWarningsPayload),
     AgentLaunch(AgentLaunchPayload),
     Message {
         method: MessageEventMethod,
@@ -460,6 +469,7 @@ impl PartialEq for EventKind<'_> {
             (Self::AgentLifecycle(left), Self::AgentLifecycle(right)) => left == right,
             (Self::Signal(left), Self::Signal(right)) => left == right,
             (Self::AgentAttach(left), Self::AgentAttach(right)) => left == right,
+            (Self::AgentLaunchWarnings(left), Self::AgentLaunchWarnings(right)) => left == right,
             (Self::AgentLaunch(left), Self::AgentLaunch(right)) => left == right,
             (
                 Self::Message {
@@ -623,6 +633,24 @@ impl EventEnvelope {
         )
     }
 
+    pub fn agent_launch_warnings(
+        workspace_id: WorkspaceId,
+        session_name: impl Into<String>,
+        kind: &AgentKind,
+        payload: AgentLaunchWarningsPayload,
+    ) -> Self {
+        let params = serde_json::to_value(&payload)
+            .expect("AgentLaunchWarningsPayload contains only JSON-serializable fields");
+        Self::new(
+            workspace_id,
+            session_name,
+            kind.as_str(),
+            "agent",
+            "agent.launch_warnings",
+            params,
+        )
+    }
+
     pub fn kind(&self) -> EventKind<'_> {
         match self.method.as_str() {
             AGENT_LIFECYCLE_METHOD => {
@@ -649,6 +677,12 @@ impl EventEnvelope {
                 }),
             "agent.attached" => serde_json::from_str(self.params.get())
                 .map(EventKind::AgentAttach)
+                .unwrap_or(EventKind::Other {
+                    method: self.method.as_str(),
+                    params: &self.params,
+                }),
+            "agent.launch_warnings" => serde_json::from_str(self.params.get())
+                .map(EventKind::AgentLaunchWarnings)
                 .unwrap_or(EventKind::Other {
                     method: self.method.as_str(),
                     params: &self.params,

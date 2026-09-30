@@ -635,6 +635,8 @@ pub struct AgentState {
     /// to the launched process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_id: Option<AgentSessionId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_warnings: Vec<String>,
     pub kind: AgentKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -904,6 +906,8 @@ struct AgentStateWire {
     agent_id: AgentSessionId,
     #[serde(default)]
     launch_id: Option<AgentSessionId>,
+    #[serde(default)]
+    launch_warnings: Vec<String>,
     kind: AgentKind,
     name: Option<String>,
     #[serde(default)]
@@ -1024,6 +1028,7 @@ impl From<AgentStateWire> for AgentState {
         Self {
             agent_id: wire.agent_id,
             launch_id: wire.launch_id,
+            launch_warnings: wire.launch_warnings,
             kind: wire.kind,
             name: wire.name,
             name_explicit: wire.name_explicit,
@@ -1142,6 +1147,7 @@ impl AgentState {
         Self {
             agent_id,
             launch_id: None,
+            launch_warnings: Vec::new(),
             kind,
             name: None,
             name_explicit: false,

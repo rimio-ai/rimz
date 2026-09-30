@@ -14,8 +14,8 @@ use crate::disk::{lock, paths::StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, EventId, RunId, WorkspaceId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
-    AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope, SIGNAL_METHOD,
-    SignalEventPayload,
+    AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, AgentLaunchWarningsPayload,
+    EventEnvelope, SIGNAL_METHOD, SignalEventPayload,
 };
 use crate::workspace::{ResolvedWorkspace, record};
 
@@ -474,6 +474,31 @@ impl Store {
                     pane_id: pane_id.clone(),
                     pane_pid: Some(std::process::id()),
                     runtime_owner,
+                },
+            ))
+        })
+    }
+
+    /// Record the warnings the exec wrapper printed for one launch; an empty
+    /// list clears the previous launch's warnings on the row.
+    #[must_use = "durability barrier; check the result"]
+    pub fn record_launch_warnings(
+        &self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        launch_id: Option<&AgentSessionId>,
+        session_name: &str,
+        warnings: Vec<String>,
+    ) -> Result<()> {
+        self.commit(|txn| {
+            txn.append(&EventEnvelope::agent_launch_warnings(
+                self.inner.paths.workspace_id.clone(),
+                session_name,
+                kind,
+                AgentLaunchWarningsPayload {
+                    agent_id: agent_id.clone(),
+                    launch_id: launch_id.cloned(),
+                    warnings,
                 },
             ))
         })

@@ -512,7 +512,8 @@ path = "crates/rimz/src/store"
 # Durable FollowUpTurn/EarlierAnswer metadata and RunRecord::owes_report share per-answer claims with CLI consumers.
 # RunRecord::answer_claims is the shared ordered claim view for report selection and settlement.
 # AnswerClaim names that borrowed view and carries the earlier answer without another lookup.
-surface-budget = 339
+# Exec-wrapper warnings add their durable payload, event constructor, and writer boundary.
+surface-budget = 342
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1912,6 +1913,21 @@ reason = "Constructed by the CLI binary's transcript tests and the integration c
 kind = "item"
 key = "store::event::AgentAttachPayload"
 reason = "Field of the pub EventKind::AgentAttach variant and parameter of pub agent_attached; narrowing is a private-interface lint (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::event::AgentLaunchWarningsPayload"
+reason = "Field of the pub EventKind::AgentLaunchWarnings variant and parameter of pub agent_launch_warnings; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "store::event::agent_launch_warnings"
+reason = "Typed constructor for the durable exec-wrapper warning event, paired with the public EventKind payload."
+
+[[verdict]]
+kind = "item"
+key = "store::writer::record_launch_warnings"
+reason = "The CLI exec wrapper is a separate binary crate and records launch warnings through this durable store boundary."
 
 [[verdict]]
 kind = "item"

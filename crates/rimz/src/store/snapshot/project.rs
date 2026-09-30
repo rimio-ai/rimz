@@ -206,13 +206,14 @@ pub(super) fn reduce_agent_states_seeded(
     reduce_agent_states_seeded_with_identity(seed, AgentIdentityState::default(), &events).0
 }
 
-/// The agent key for every event kind that can create a reducer row. Keep this
-/// closed match aligned with the row-creating dispatch arms immediately below.
+/// The agent key for every event kind that needs its carried row hydrated
+/// before reduction, whether the event creates the row or only updates it.
 pub(super) fn agent_event_key(event: &FoldEvent<'_>) -> Option<(AgentKind, AgentSessionId)> {
     let agent_id = match &event.kind {
         EventKind::AgentLifecycle(payload) => payload.observation.agent_id.clone()?,
         EventKind::AgentLaunch(payload) => payload.agent_id.clone(),
         EventKind::AgentAttach(payload) => payload.agent_id.clone(),
+        EventKind::AgentLaunchWarnings(payload) => payload.agent_id.clone(),
         _ => return None,
     };
     Some((
@@ -255,6 +256,23 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             EventKind::AgentAttach(payload) => {
                 let kind = AgentKind::new_unchecked(envelope.source.clone());
                 state.reduce_agent_attach(envelope, &kind, payload);
+            }
+            EventKind::AgentLaunchWarnings(payload) => {
+                let key = (
+                    AgentKind::new_unchecked(envelope.source.clone()),
+                    payload.agent_id.clone(),
+                );
+                let Some(agent) = state.map.get_mut(&key) else {
+                    debug!(
+                        target: "rimz::agent::binding",
+                        kind = %key.0,
+                        agent_id = %key.1,
+                        "agent.launch_warnings event for unknown session ignored",
+                    );
+                    continue;
+                };
+                agent.launch_warnings.clone_from(&payload.warnings);
+                state.launch_identity.replace(&key, agent);
             }
             EventKind::AgentLifecycle(payload) => {
                 state.reduce_lifecycle_event(envelope, payload);
@@ -653,6 +671,7 @@ fn carried_base(
     let mut state = AgentState::seed(kind.clone(), agent_id.clone(), AgentStatus::Idle, event_ts);
     if let Some(prior) = prior {
         state.launch_id = prior.launch_id.clone();
+        state.launch_warnings.clone_from(&prior.launch_warnings);
         state.mode = prior.mode;
         state.isolation = prior.isolation;
         state.effective_isolation = prior.effective_isolation;
@@ -889,6 +908,9 @@ fn inherit_launch_identity(
     };
 
     successor.launch_id.clone_from(&predecessor.launch_id);
+    successor
+        .launch_warnings
+        .clone_from(&predecessor.launch_warnings);
     successor.profile.clone_from(&predecessor.profile);
     successor.login.clone_from(&predecessor.login);
     successor.mode = predecessor.mode;
