@@ -4463,6 +4463,16 @@ reason = "Four decisions on one terminal status: reply prints a turn-failure lin
 
 [[verdict]]
 kind = "guard"
+key = "$0.status==RunStatus::Completed"
+reason = "Three decisions on one terminal status: agents wait prints its header without a status suffix, the supervised verify loop retries only while the run stays Completed, harness::schedule::pending labels a settled wait done. A shared predicate would rename equality and hide none; the done label duplicating the two cli status_label tables is an open deferral (pass 31a)."
+
+[[verdict]]
+kind = "shape"
+key = "Ctx::for_workspace+Timestamp::now+mux+record+rimz::harness::assist_log::append+synthetic::deliver_now"
+reason = "Synthetic-message composition, boundary attempts and recorded misses now belong to message::synthetic; cache_keepalive and auto_continue keep target resolution and assist records in cli. The two remote::web members manage SSH web tunnels, not messages: this callee-set family is not a shared workflow. Fleet and team report queue/settle/cancel choreography stays in cli to avoid new upward dependencies from message (pass 31a)."
+
+[[verdict]]
+kind = "guard"
 key = "$0.wait_for_required.is_empty()"
 reason = "One admission outcome read three ways: lsp::admission releases the queue ticket, cli/lsp_admission skips the wait report, cli/lsp bails with no matching root-markers before polling; each site owns what an empty wait list means (pass 28a, after pass 26a's review of lsp)."
 
