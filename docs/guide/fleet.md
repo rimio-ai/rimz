@@ -141,6 +141,8 @@ Placement
 
 The report ends with the agent's recent transcript, cut from the block above. Add `--capture` to append the pane's visible text, or `--json` for the structured record a script can read.
 
+If the provider's screen hid a launch warning, find it under `launch_warnings` in the Agent section. A clean relaunch clears those warnings.
+
 **Read along without leaving your pane.** `rimz agents logs` tails an agent's transcript. Your own prompts appear as `user → @coder`, the agent's replies under its handle, so you watch a long run from the pane you are already in:
 
 ```console

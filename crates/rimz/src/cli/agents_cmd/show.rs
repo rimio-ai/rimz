@@ -320,6 +320,15 @@ fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io
     if let Some(registered_at) = agent.timeline.registered_at {
         kv.push("registered_at", render::cell(registered_at.to_string()));
     }
+    if !agent.launch_warnings.is_empty() {
+        kv.push_lines(
+            "launch_warnings",
+            agent
+                .launch_warnings
+                .iter()
+                .map(|warning| vec![render::cell(warning.as_str()).fg(render::palette::warn())]),
+        );
+    }
     kv.render(w)?;
     writeln!(w)
 }
@@ -872,7 +881,8 @@ mod tests {
 
     #[test]
     fn show_json_wraps_the_projected_agent() {
-        let state = rimz::testkit::agent_state("codex", "show", jiff::Timestamp::UNIX_EPOCH);
+        let mut state = rimz::testkit::agent_state("codex", "show", jiff::Timestamp::UNIX_EPOCH);
+        state.launch_warnings = vec!["tool rules unsupported".into()];
         let peers = [&state];
         let report = ShowReport {
             tmp_dir: None,
@@ -902,7 +912,49 @@ mod tests {
             recent_transcript: None,
         };
 
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["agent"]["launch_warnings"],
+            serde_json::json!(["tool rules unsupported"])
+        );
         insta::assert_json_snapshot!("show_agent_report", report);
+    }
+
+    #[test]
+    fn agent_section_shows_launch_warnings_only_when_present() {
+        let mut state = rimz::testkit::agent_state("codex", "show", jiff::Timestamp::UNIX_EPOCH);
+        for warnings in [
+            vec!["tool rules unsupported".into(), "skill shadowed".into()],
+            vec![],
+        ] {
+            state.launch_warnings = warnings;
+            let entry = build_entry(
+                &state,
+                None,
+                None,
+                &[&state],
+                None,
+                jiff::Timestamp::UNIX_EPOCH,
+                ReportOverrides::default(),
+            );
+            let mut output = Vec::new();
+            render_agent_section(&mut output, &entry).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(
+                output.contains("launch_warnings"),
+                !state.launch_warnings.is_empty()
+            );
+            if !state.launch_warnings.is_empty() {
+                let first = output
+                    .lines()
+                    .position(|line| line.contains("tool rules unsupported"))
+                    .unwrap();
+                let second = output
+                    .lines()
+                    .position(|line| line.contains("skill shadowed"))
+                    .unwrap();
+                assert_eq!(second, first + 1, "{output}");
+            }
+        }
     }
 
     #[test]

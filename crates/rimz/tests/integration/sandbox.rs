@@ -1479,6 +1479,126 @@ fn sandbox_skills_under_host_use_provider_switches() {
 }
 
 #[test]
+fn launch_warnings_reach_agents_show_and_clean_relaunch_clears_them() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let shell = write_fake_login_shell(&env, "warning-shell", &[]);
+    let shim = write_env_dump_shim(&env, "amp");
+    let probe = env.home_root.join("warning-provider-env");
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&rimz::store::event::EventEnvelope::new(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "amp",
+            "agent",
+            "agent.launched",
+            serde_json::json!({"agent_id": "launch-warning", "launch_id": "launch-warning",
+            "agent_name": "warning-agent", "agent_name_explicit": true, "state": "starting"}),
+        ))
+        .unwrap();
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("amp"), Vec::new());
+    request.identity.launch_id = Some("launch-warning".into());
+    request.identity.name = Some("warning-agent".into());
+    request.identity.params.isolation = Some(Isolation::Host);
+    for skills in [Some(Vec::new()), None] {
+        request.skills = skills;
+        let output = env
+            .rimz()
+            .args(exec_args(&env, &request))
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&shim))
+            .env("RIMZ_TEST_AGENT_ENV_DUMP", &probe)
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        let warnings: Vec<_> = stderr
+            .lines()
+            .filter_map(|line| line.strip_prefix("rimz: "))
+            .collect();
+        if request.skills.is_some() {
+            assert!(
+                warnings
+                    .iter()
+                    .any(|text| text.contains("no per-launch skill switch")),
+                "{stderr}"
+            );
+        } else {
+            assert!(warnings.is_empty(), "{stderr}");
+        }
+        let shown = env
+            .rimz()
+            .args(["agents", "show", "@warning-agent", "--json"])
+            .bounded_output()
+            .unwrap();
+        assert!(
+            shown.status.success(),
+            "{}",
+            String::from_utf8_lossy(&shown.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+        assert_eq!(
+            report["agent"]["launch_warnings"],
+            serde_json::json!(warnings)
+        );
+    }
+}
+
+#[test]
+fn unseen_resume_launch_warnings_reach_agents_show() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let shell = write_fake_login_shell(&env, "warning-shell", &[]);
+    let shim = write_env_dump_shim(&env, "amp");
+    let probe = env.home_root.join("warning-provider-env");
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("amp"), Vec::new());
+    request.action = rimz::harness::launch::ExecAction::Resume {
+        session_id: "unseen-warning-session".into(),
+        extra_args: Vec::new(),
+    };
+    request.identity.launch_id = Some("resume-warning-launch".into());
+    request.identity.params.isolation = Some(Isolation::Host);
+    request.skills = Some(Vec::new());
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &probe)
+        .env("TMUX_PANE", "%4")
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let warnings: Vec<_> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("rimz: "))
+        .collect();
+    assert!(
+        warnings
+            .iter()
+            .any(|text| text.contains("no per-launch skill switch")),
+        "{stderr}"
+    );
+    let shown = env
+        .rimz()
+        .args(["agents", "show", "unseen-warning-session", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        shown.status.success(),
+        "{}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(
+        report["agent"]["launch_warnings"],
+        serde_json::json!(warnings)
+    );
+}
+
+#[test]
 fn host_skill_links_reconcile_only_owned_entries() {
     use rimz::agents::skill_links::{self, Desired, SkillLinkAction};
     use std::os::unix::fs::symlink;

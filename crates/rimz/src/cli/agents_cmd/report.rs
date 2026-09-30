@@ -35,6 +35,7 @@ pub(super) struct AgentReportEntry {
     pub role: Option<String>,
     pub team: Option<String>,
     pub mode: Option<PermissionMode>,
+    pub launch_warnings: Vec<String>,
     pub me: bool,
     pub status: AgentStatus,
     pub pending_waits: Vec<rimz::agents::state::PendingWait>,
@@ -317,6 +318,7 @@ pub(super) fn build_entry(
         role: agent.role.clone(),
         team: agent.team.clone(),
         mode: agent.mode,
+        launch_warnings: agent.launch_warnings.clone(),
         me: me == Some(&agent.agent_id),
         status,
         pending_waits: agent.pending_waits.clone(),
@@ -726,6 +728,7 @@ mod tests {
     fn full_entry_has_a_stable_projection() {
         let now = Timestamp::from_second(2_000).unwrap();
         let mut state = agent("full");
+        state.launch_warnings = vec!["tool rules unsupported".into(), "skill shadowed".into()];
         state.name_explicit = true;
         state.profile = Some("builder".to_owned());
         state.role = Some("coder".to_owned());
@@ -828,6 +831,10 @@ mod tests {
             serde_json::to_value(&entry).unwrap()["sub_agents"][0]["tokens"],
             serde_json::json!({"window": 1_200})
         );
+        assert_eq!(
+            serde_json::to_value(&entry).unwrap()["launch_warnings"],
+            serde_json::json!(state.launch_warnings)
+        );
         insta::assert_json_snapshot!("full_agent_report", entry);
     }
 
@@ -845,6 +852,10 @@ mod tests {
             ReportOverrides::default(),
         );
 
+        assert_eq!(
+            serde_json::to_value(&entry).unwrap()["launch_warnings"],
+            serde_json::json!([])
+        );
         insta::assert_json_snapshot!("sparse_agent_report", entry);
     }
 
