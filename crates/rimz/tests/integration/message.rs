@@ -143,7 +143,7 @@ fn interrupt_idle_skips_escape() {
             .args(["message", "--interrupt", "@claude", "new direction"]),
         "interrupt idle",
     );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("delivered to"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("sent to"));
     assert!(!trace_lines(&trace).iter().any(|line| is_escape_key(line)));
     assert_text_then_enter(&trace, &user_message("new direction"));
     assert_eq!(
@@ -2938,8 +2938,8 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
             .args(["message", "@claude", "--", "go"]),
         "send at open gate",
     );
-    assert_single_sigil_delivered(&sent.stdout);
-    let sent_id = delivered_id_from_stdout(&sent.stdout);
+    assert_single_sigil_sent(&sent.stdout);
+    let sent_id = sent_id_from_stdout(&sent.stdout);
     assert!(env.store().list_pending_messages().unwrap().is_empty());
     assert_text_then_enter(&trace_log, &user_message("go"));
     let fresh = message_by_id(&env, &MessageId::parse(&sent_id).expect("message id"));
@@ -3572,7 +3572,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
             .args(["message", "@claude", "--", "recover me"]),
         "send-now message",
     );
-    let message_id = delivered_id_from_stdout(&out.stdout);
+    let message_id = sent_id_from_stdout(&out.stdout);
     assert_text_then_enter(&first_trace, &user_message("recover me"));
     let first_last_sent_at =
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id"))
@@ -3662,7 +3662,7 @@ fn sweep_holds_unconfirmed_prompt_while_compaction_bracket_is_open() {
             .args(["message", "@claude", "--", "hold me"]),
         "send-now message",
     );
-    let message_id = MessageId::parse(&delivered_id_from_stdout(&out.stdout)).expect("message id");
+    let message_id = MessageId::parse(&sent_id_from_stdout(&out.stdout)).expect("message id");
     assert_text_then_enter(&first_trace, &user_message("hold me"));
 
     let workspace = env.resolve_workspace(&env.project_root);
@@ -3925,7 +3925,7 @@ fn late_ack_after_reconcile_window_still_settles_without_resend() {
             .args(["message", "@claude", "--", "arrived once"]),
         "send prompt",
     );
-    let message_id = MessageId::parse(&delivered_id_from_stdout(&sent.stdout)).expect("message id");
+    let message_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
     assert_text_then_enter(&sent_trace, &user_message("arrived once"));
     let last_sent_at = message_by_id(&env, &message_id)
         .last_sent_at
@@ -4016,7 +4016,7 @@ fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
             .args(["message", "@claude", "--", "arrived once"]),
         "send prompt",
     );
-    let message_id = MessageId::parse(&delivered_id_from_stdout(&sent.stdout)).expect("message id");
+    let message_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
     let first_live = env.store().list_messages().expect("messages");
     let first_record = first_live
         .iter()
@@ -4161,7 +4161,7 @@ fn send_now_submit_failure_leaves_sent_record() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let message_id = MessageId::parse(&delivered_id_from_stdout(&out.stdout)).expect("message id");
+    let message_id = MessageId::parse(&sent_id_from_stdout(&out.stdout)).expect("message id");
     assert!(
         trace_lines(&trace_log)
             .iter()
@@ -6626,15 +6626,15 @@ fn assert_second_precision_created(shown: &str) {
     assert!(!absolute.contains('.'), "{line}");
 }
 
-fn delivered_id_from_stdout(stdout: &[u8]) -> String {
+fn sent_id_from_stdout(stdout: &[u8]) -> String {
     let text = String::from_utf8_lossy(stdout);
     let trimmed = text.trim();
     trimmed
-        .strip_prefix("delivered to ")
+        .strip_prefix("sent to ")
         .and_then(|rest| rest.rsplit_once('('))
         .and_then(|(_, id)| id.strip_suffix(')'))
         .map(str::to_owned)
-        .unwrap_or_else(|| panic!("expected `delivered to @target (msg_...)`, got `{trimmed}`"))
+        .unwrap_or_else(|| panic!("expected `sent to @target (msg_...)`, got `{trimmed}`"))
 }
 
 fn fixed_message_id(value: u64) -> MessageId {
@@ -6647,15 +6647,6 @@ fn assert_single_sigil_sent(stdout: &[u8]) {
     assert!(
         trimmed.starts_with("sent to @") && !trimmed.starts_with("sent to @@"),
         "send confirmation should carry one sigil: {trimmed}"
-    );
-}
-
-fn assert_single_sigil_delivered(stdout: &[u8]) {
-    let text = String::from_utf8_lossy(stdout);
-    let trimmed = text.trim();
-    assert!(
-        trimmed.starts_with("delivered to @") && !trimmed.starts_with("delivered to @@"),
-        "delivery confirmation should carry one sigil: {trimmed}"
     );
 }
 

@@ -69,9 +69,7 @@ The send prints one line per target:
 
 | Output | Meaning |
 | --- | --- |
-| `delivered to @coder (msg_…)` | Park mode found the agent free and typed the text. |
-| `sent to @coder (msg_…)` | `--steer` typed the text. |
-| `delivered to @coder (msg_…)` | `--interrupt` typed the text, then pressed Escape if the agent was mid-turn. |
+| `sent to @coder (msg_…)` | The text reached the pane: park mode found the agent free, `--steer` wrote into the live turn, or `--interrupt` wrote it and pressed Escape if the agent was mid-turn. The record is `sent` until the agent acknowledges it and it becomes [`delivered`](#message-statuses). |
 | `queued for @coder (msg_…): delivery deferred; send now: rimz message interrupt msg_…` | Interrupt could not deliver, for example because the pane was absent. |
 | `queued for @coder (msg_…) — @coder is running; send now: rimz message steer msg_…` | Parked because of the agent's status. |
 | `queued for @coder (msg_…) — @coder is waiting on input in its pane; answer it or force: rimz message steer msg_… --force` | Parked behind an open prompt. |

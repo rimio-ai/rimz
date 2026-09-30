@@ -195,7 +195,7 @@ The park-or-live decision (`dispatch_decision`) takes the first rule that applie
 
 The hook preflight in step 6 exists because turn-end hooks are what release parked text: a parked record for a kind without installed, trusted hooks would never deliver, so dispatch refuses it. The preflight runs once per login key (kind plus login account) inside the per-target loop, so in a fan-out a later target's preflight failure returns an error after earlier targets were already queued or sent.
 
-Receipts follow the decision. A live write prints `delivered to @handle (msg_...)`. A park with a reason adds the status and `rimz message steer msg_...`, plus `--force` for a native-input wait. A park without a reason prints `queued for @handle (msg_...)`. On the rollup-only path the receipt does not prove the pane is still live; `message show` runs the full check.
+Receipts follow the decision. A live write prints `sent to @handle (msg_...)`: the record is `Sent`, and only the receiver's acknowledgment makes it `Delivered`. A park with a reason adds the status and `rimz message steer msg_...`, plus `--force` for a native-input wait. A park without a reason prints `queued for @handle (msg_...)`. On the rollup-only path the receipt does not prove the pane is still live; `message show` runs the full check.
 
 Fan-out delivers each target in turn, paced one message interval apart, and prefixes each delivery with the addressed handle (`@all,`) so receivers read it as a group message, even when caller exclusion leaves one peer. A member whose attempt is skipped does not stop the rest, and the summary names sent and skipped agents with their message ids.
 
