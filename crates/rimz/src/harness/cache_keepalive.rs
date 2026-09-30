@@ -10,7 +10,7 @@ use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
 use crate::config::HarnessConfig;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
-use crate::utils::time::format_duration_compact;
+use crate::utils::time::format_duration_coarse;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheKeepaliveRequest {
@@ -43,24 +43,59 @@ impl CacheKeepaliveRequest {
 }
 
 pub fn prompt(agent: &AgentState, now: Timestamp) -> String {
-    let mut text = "Prompt cache keepalive. Pending waits:".to_owned();
+    let mut text = "Cache keepalive, no action needed. Waiting on:".to_owned();
     for wait in &agent.pending_waits {
         let trigger = &wait.trigger;
-        let detail = match trigger {
-            PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Check { .. } => {
-                trigger.detail().unwrap_or_default()
+        let elapsed = wait
+            .armed_at
+            .map(|at| format_duration_coarse(now.duration_since(at).as_secs()));
+        let mut facts = Vec::new();
+        match trigger {
+            PendingWaitTrigger::Team { .. } => {
+                facts.extend(elapsed);
+                facts.push(trigger.headline(now));
             }
-            _ => trigger.headline(now),
-        };
-        text.push_str(&format!(
-            "\n- {}: {} {detail}",
-            wait.name,
-            trigger.kind_word()
-        ));
-        if let Some(armed_at) = wait.armed_at {
-            let elapsed = Duration::from_secs(now.duration_since(armed_at).as_secs().max(0) as u64);
-            text.push_str(&format!(", {} elapsed", format_duration_compact(elapsed)));
+            PendingWaitTrigger::Subagent {
+                deadline_at,
+                settled,
+                ..
+            } => {
+                facts.extend(elapsed);
+                facts.push(trigger.headline(now));
+                if let (Some(deadline), None) = (deadline_at, settled) {
+                    facts.push(if *deadline <= now {
+                        "deadline passed".to_owned()
+                    } else {
+                        format!(
+                            "deadline in {}",
+                            format_duration_coarse(deadline.duration_since(now).as_secs())
+                        )
+                    });
+                }
+            }
+            PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Check { .. } => {
+                facts.push(trigger.detail().unwrap_or_default());
+                facts.extend(elapsed);
+            }
+            PendingWaitTrigger::Timer { due, .. } => {
+                facts.push(if *due <= now {
+                    "timer due".to_owned()
+                } else {
+                    format!(
+                        "timer in {}",
+                        format_duration_coarse(due.duration_since(now).as_secs())
+                    )
+                });
+                facts.extend(elapsed);
+            }
+            PendingWaitTrigger::Pid { .. }
+            | PendingWaitTrigger::File { .. }
+            | PendingWaitTrigger::Signal { .. } => {
+                facts.push(format!("{} {}", trigger.kind_word(), trigger.headline(now)));
+                facts.extend(elapsed);
+            }
         }
+        text.push_str(&format!("\n- {}: {}", wait.name, facts.join(", ")));
     }
     text
 }
@@ -243,6 +278,22 @@ mod tests {
             delay: Some("2h".into()),
         };
         assert!(should_keepalive(&changed, &config, ts(3540)));
+        for trigger in [
+            PendingWaitTrigger::Subagent {
+                active_at: ts(3540),
+                deadline_at: None,
+                settled: None,
+            },
+            PendingWaitTrigger::Team {
+                stage: Some("Review".into()),
+            },
+        ] {
+            changed = agent.clone();
+            changed.pending_waits[0].trigger = trigger;
+            assert!(should_keepalive(&changed, &config, ts(3540)));
+            changed.pending_waits.clear();
+            assert!(!should_keepalive(&changed, &config, ts(3540)));
+        }
         let mut disabled = config;
         disabled.cache_keepalive = false;
         assert!(!should_keepalive(&agent, &disabled, ts(3540)));
@@ -251,6 +302,31 @@ mod tests {
     #[test]
     fn keepalive_prompt_is_neutral_and_includes_each_wait() {
         let mut agent = sleeping();
+        agent.pending_waits.insert(
+            0,
+            PendingWait {
+                name: "forge#feat-x".into(),
+                trigger: serde_json::from_value(
+                    serde_json::json!({"kind": "team", "stage": "Review"}),
+                )
+                .unwrap(),
+                armed_at: Some(ts(-7340)),
+            },
+        );
+        for (name, settled) in [("bright-owl", Some("done")), ("calm-fox", None)] {
+            agent.pending_waits.insert(
+                0,
+                PendingWait {
+                    name: name.into(),
+                    trigger: serde_json::from_value(serde_json::json!({
+                        "kind": "subagent", "active_at": ts(3280),
+                        "deadline_at": ts(4600), "settled": settled,
+                    }))
+                    .unwrap(),
+                    armed_at: Some(ts(960)),
+                },
+            );
+        }
         agent.pending_waits.push(PendingWait {
             name: "ci".into(),
             trigger: PendingWaitTrigger::Signal {
@@ -258,9 +334,17 @@ mod tests {
             },
             armed_at: None,
         });
+        agent.pending_waits.push(PendingWait {
+            name: "nap".into(),
+            trigger: PendingWaitTrigger::Timer {
+                due: ts(4240),
+                delay: None,
+            },
+            armed_at: Some(ts(3180)),
+        });
         assert_eq!(
-            prompt(&agent, ts(3480)),
-            "Prompt cache keepalive. Pending waits:\n- gate: command cargo xtask gate, 58m elapsed\n- ci: signal pr.checks"
+            prompt(&agent, ts(3485)),
+            "Cache keepalive, no action needed. Waiting on:\n- calm-fox: 42m, active 3m ago, deadline in 18m\n- bright-owl: 42m, done, reporting\n- forge#feat-x: 3h, stage Review\n- gate: cargo xtask gate, 58m\n- ci: signal pr.checks\n- nap: timer in 12m, 5m"
         );
     }
 
