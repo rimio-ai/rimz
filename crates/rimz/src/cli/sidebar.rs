@@ -847,10 +847,7 @@ fn room_less_snapshot(command: &SnapshotCommand) -> Result<Option<SidebarSnapsho
     }
     let mut snapshot = rimz::sidebar::consumer::rollup_snapshot(&state, &mut RollupCursor::new())
         .context("reading the empty rollup")?;
-    let machine_config = rimz::config::MachineConfig::load_lenient();
-    snapshot.sidebar = machine_config.sidebar.clone();
-    snapshot.theme = machine_config.theme.clone();
-    snapshot.attention = machine_config.agents.attention;
+    snapshot.apply_machine_config(&rimz::config::MachineConfig::load_lenient());
     Ok(Some(snapshot))
 }
 

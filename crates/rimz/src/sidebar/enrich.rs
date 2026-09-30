@@ -507,9 +507,7 @@ fn enrich_core(
         .unwrap_or_else(crate::config::MachineConfig::load_lenient);
     // Attention timing is needed during pane projection, before the full config
     // fold builds provider panels and stamps context severity.
-    snapshot.sidebar = machine_config.sidebar.clone();
-    snapshot.theme = machine_config.theme.clone();
-    snapshot.attention = machine_config.agents.attention;
+    snapshot.apply_machine_config(&machine_config);
     fold_link_stats(&mut snapshot, runtime, crate::utils::time::unix_now_ms());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
@@ -971,8 +969,7 @@ pub(super) fn fold_machine_config_with(
     remote_control_health: RemoteControlServerHealth,
     logins: &crate::agents::RoomLoginSet,
 ) -> SidebarSnapshot {
-    snapshot.sidebar = config.sidebar.clone();
-    snapshot.theme = config.theme.clone();
+    snapshot.apply_machine_config(config);
 
     // Stamp each agent row's context-severity verdict now that the
     // `[theme.display.context_meter]` bands are known — classified once here, on both the

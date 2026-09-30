@@ -514,7 +514,8 @@ path = "crates/rimz/src/store"
 # RunRecord::answer_claims is the shared ordered claim view for report selection and settlement.
 # AnswerClaim names that borrowed view and carries the earlier answer without another lookup.
 # Exec-wrapper warnings add their durable payload, event constructor, and writer boundary.
-surface-budget = 342
+# SidebarSnapshot::apply_machine_config stamps the per-machine config for the fold spine and the room-less CLI read.
+surface-budget = 343
 
 [[module]]
 path = "crates/rimz/src/theme"
