@@ -13,9 +13,9 @@ use sha2::{Digest, Sha256};
 use crate::RuntimePaths;
 use crate::agents::{
     AgentState, AgentTurnError, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx,
-    RefreshSpawn, RefreshTrigger, RoomLoginSet,
+    RefreshSpawn, RefreshTrigger,
 };
-use crate::ids::PaneId;
+use crate::ids::{LoginKey, LoginName, PaneId};
 use crate::sidebar::timing::SESSION_REFRESH_INTERVAL;
 use crate::store::gc::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 
@@ -30,16 +30,12 @@ type SessionRefreshResult<T> = std::result::Result<T, crate::disk::atomic::Atomi
 /// producer. Inline transcript reads run first with their adapter stat gate;
 /// detached helpers run on a coarse per-session cadence for richer realtime
 /// channels.
-pub(super) fn refresh_live_sessions(
-    snapshot: &SidebarSnapshot,
-    runtime: &RuntimePaths,
-    logins: &RoomLoginSet,
-) {
+pub(super) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     for refresh in live_session_refreshes(snapshot) {
         if let Err(err) = refresh_session_transcript_context_core(
             Some(snapshot),
             runtime,
-            logins,
+            refresh.login.as_ref(),
             &refresh.kind,
             &refresh.session_id,
             refresh.model_hint.as_deref(),
@@ -69,6 +65,7 @@ pub fn refresh_session_transcript_context_from_watch(
     kind: &str,
     session_id: &str,
     model_hint: Option<&str>,
+    login: Option<&LoginName>,
 ) {
     refresh_session_transcript_context_with_snapshot(
         None,
@@ -76,6 +73,7 @@ pub fn refresh_session_transcript_context_from_watch(
         kind,
         session_id,
         model_hint,
+        login,
         RefreshTrigger::Watch,
     );
 }
@@ -101,7 +99,7 @@ pub fn force_refresh_session_context(
     let transcript_refreshed = refresh_session_transcript_context_core(
         Some(snapshot),
         runtime,
-        &RoomLoginSet::for_runtime(runtime),
+        agent.login.as_ref(),
         kind,
         session_id,
         model_hint,
@@ -139,17 +137,11 @@ fn refresh_session_transcript_context_with_snapshot(
     kind: &str,
     session_id: &str,
     model_hint: Option<&str>,
+    login: Option<&LoginName>,
     trigger: RefreshTrigger<'_>,
 ) {
     if let Err(err) = refresh_session_transcript_context_core(
-        snapshot,
-        runtime,
-        &RoomLoginSet::for_runtime(runtime),
-        kind,
-        session_id,
-        model_hint,
-        false,
-        trigger,
+        snapshot, runtime, login, kind, session_id, model_hint, false, trigger,
     ) {
         warn_session_transcript_merge(kind, session_id, &err);
     }
@@ -162,7 +154,7 @@ fn refresh_session_transcript_context_with_snapshot(
 fn refresh_session_transcript_context_core(
     snapshot: Option<&SidebarSnapshot>,
     runtime: &RuntimePaths,
-    logins: &RoomLoginSet,
+    login: Option<&LoginName>,
     kind: &str,
     session_id: &str,
     model_hint: Option<&str>,
@@ -174,11 +166,12 @@ fn refresh_session_transcript_context_core(
     };
     let prior = crate::store::agent_context::read_one(runtime, kind, session_id);
     let shared_pricing_cache_path = runtime.shared_pricing_cache_path();
-    // A room account that no longer resolves has no home to read.
-    let Some(login) = logins.default_login(kind) else {
+    let kind_id = crate::ids::AgentKind::new_unchecked(kind);
+    // A removed session account has no home to read; never fall back to the room default.
+    let Ok(login_env) = crate::agents::session_login_env(&kind_id, login) else {
         return Ok(false);
     };
-    let login_env = logins.env(&login);
+    let login_key = LoginKey::new(kind_id, login.cloned().unwrap_or_default());
     let ctx = LocalContextRefreshCtx {
         login_env: &login_env,
         agent_id: session_id,
@@ -208,11 +201,19 @@ fn refresh_session_transcript_context_core(
             kind,
             session_id,
             prior.as_ref(),
+            &login_key,
         );
     };
     let mut refresh = refresh;
     if let Some(snapshot) = snapshot {
-        confirm_codex_turn_death_from_snapshot(snapshot, runtime, kind, session_id, &mut refresh);
+        confirm_codex_turn_death_from_snapshot(
+            snapshot,
+            runtime,
+            kind,
+            session_id,
+            &login_key,
+            &mut refresh,
+        );
     }
     crate::store::agent_context::merge_local_context(
         runtime,
@@ -244,6 +245,7 @@ fn confirm_codex_turn_death_from_snapshot(
     runtime: &RuntimePaths,
     kind: &str,
     session_id: &str,
+    login: &LoginKey,
     refresh: &mut LocalContextRefresh,
 ) {
     let crate::agents::FieldPatch::Set(error) = &mut refresh.context.turn_error else {
@@ -255,7 +257,7 @@ fn confirm_codex_turn_death_from_snapshot(
         return;
     }
     let pane = session_pane_from_snapshot(snapshot, kind, session_id);
-    confirm_codex_turn_death_from_pane(runtime, pane, error);
+    confirm_codex_turn_death_from_pane(runtime, login, pane, error);
 }
 
 fn session_pane_from_snapshot<'a>(
@@ -278,6 +280,7 @@ fn session_pane_from_snapshot<'a>(
 
 pub fn confirm_codex_turn_death_from_pane(
     runtime: &RuntimePaths,
+    login: &LoginKey,
     pane: Option<&PaneId>,
     error: &mut AgentTurnError,
 ) {
@@ -294,10 +297,7 @@ pub fn confirm_codex_turn_death_from_pane(
     }
     if crate::agents::session::turn_death_needs_pane_confirmation("codex", error) {
         let now = Timestamp::now();
-        let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
-        let capacity = logins
-            .default_key("codex")
-            .and_then(|key| crate::agents::ProviderCapacity::read(runtime, &key));
+        let capacity = crate::agents::ProviderCapacity::read(runtime, login);
         crate::agents::session::infer_turn_death_from_spent_window(
             "codex",
             error,
@@ -313,6 +313,7 @@ fn retry_unconfirmed_codex_turn_death(
     kind: &str,
     session_id: &str,
     prior: Option<&crate::agents::context::record::AgentContextRecord>,
+    login: &LoginKey,
 ) -> SessionRefreshResult<bool> {
     let Some(error) = prior.and_then(|record| record.context.turn_error.as_ref()) else {
         return Ok(false);
@@ -322,7 +323,7 @@ fn retry_unconfirmed_codex_turn_death(
     }
     let mut marker = error.clone();
     let pane = snapshot.and_then(|snapshot| session_pane_from_snapshot(snapshot, kind, session_id));
-    confirm_codex_turn_death_from_pane(runtime, pane, &mut marker);
+    confirm_codex_turn_death_from_pane(runtime, login, pane, &mut marker);
     if marker == *error {
         return Ok(false);
     }
@@ -344,6 +345,7 @@ fn codex_turn_death_retry_due(kind: &str, error: &AgentTurnError, now: Timestamp
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LiveSessionRefresh {
+    pub login: Option<LoginName>,
     pub kind: String,
     pub session_id: String,
     pub model_hint: Option<String>,
@@ -357,6 +359,7 @@ fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSessionRefresh>
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| crate::agents::find_definition(agent.kind.as_str()).is_some())
         .map(|agent| LiveSessionRefresh {
+            login: agent.login.clone(),
             kind: agent.kind.as_str().to_owned(),
             session_id: agent.agent_id.to_string(),
             model_hint: session_model_hint(agent).map(str::to_owned),

@@ -293,7 +293,7 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
         .unwrap_err();
     assert_eq!(
         refused.to_string(),
-        "this room uses claude account `work`, not `personal`; accounts are fixed until reset, so run `rimz reset --account claude=personal`"
+        "this room uses claude account `work`, not `personal`; switch it with `rimz accounts use --room claude personal`"
     );
 
     let unknown = RoomLogins::from([(kind("claude"), name("travel"))]);

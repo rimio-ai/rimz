@@ -202,6 +202,12 @@ fn rebirth_resumes_a_session_under_its_stamped_account() {
             .map(rimz::ids::LoginName::as_str),
         Some("personal")
     );
+    let dir = tempfile::tempdir().unwrap();
+    rimz::harness::launch_plan::testkit::assert_claude_stamped_home(
+        &request,
+        dir.path(),
+        Some("personal"),
+    );
 }
 
 #[test]

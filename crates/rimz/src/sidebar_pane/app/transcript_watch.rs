@@ -44,6 +44,7 @@ const DEBOUNCE: Duration = Duration::from_millis(300);
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct WatchTarget {
     kind: String,
+    login: Option<crate::ids::LoginName>,
     session_id: String,
     model_hint: Option<String>,
 }
@@ -76,6 +77,9 @@ fn watch_while_elected(
     runtime: &RuntimePaths,
     election: &ProducerElectionTracker,
 ) -> notify::Result<()> {
+    let state = crate::StatePaths::for_workspace(runtime.workspace_id.clone())
+        .map_err(|error| notify::Error::generic(&error.to_string()))?;
+    let mut cursor = crate::sidebar::consumer::RollupCursor::new();
     let (event_tx, event_rx) = mpsc::channel::<PathBuf>();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res {
@@ -96,7 +100,7 @@ fn watch_while_elected(
             if !is_producer(election) {
                 return Ok(());
             }
-            reconcile_roster(runtime, &mut watcher, &mut roster);
+            reconcile_roster(runtime, &state, &mut cursor, &mut watcher, &mut roster);
             rescan_at = now + ROSTER_RESCAN;
         }
         let wake = flush_at.map_or(rescan_at, |flush| flush.min(rescan_at));
@@ -123,6 +127,7 @@ fn watch_while_elected(
                     &target.kind,
                     &target.session_id,
                     target.model_hint.as_deref(),
+                    target.login.as_ref(),
                 );
             }
             pending.clear();
@@ -136,10 +141,16 @@ fn watch_while_elected(
 /// tick backstop covers the gap.
 fn reconcile_roster(
     runtime: &RuntimePaths,
+    state: &crate::StatePaths,
+    cursor: &mut crate::sidebar::consumer::RollupCursor,
     watcher: &mut notify::RecommendedWatcher,
     roster: &mut BTreeMap<PathBuf, BTreeSet<WatchTarget>>,
 ) {
-    let live = transcript_targets(&crate::store::agent_context::read_all(runtime));
+    let Ok((_, agents, _)) = cursor.fold(state) else {
+        return;
+    };
+    let agents: Vec<_> = agents.iter().cloned().collect();
+    let live = transcript_targets(&crate::store::agent_context::read_all(runtime), &agents);
     roster.retain(|path, _| {
         if live.contains_key(path) {
             return true;
@@ -170,16 +181,23 @@ fn reconcile_roster(
 /// The local-source paths worth watching: every sidecar for an adapter that
 /// declares transcript-tail context and names its source. Pure over the
 /// records so the roster policy is testable without a watcher or a runtime dir.
-fn transcript_targets(records: &[AgentContextRecord]) -> BTreeMap<PathBuf, BTreeSet<WatchTarget>> {
+fn transcript_targets(
+    records: &[AgentContextRecord],
+    agents: &[crate::agents::AgentState],
+) -> BTreeMap<PathBuf, BTreeSet<WatchTarget>> {
     let mut targets = BTreeMap::<PathBuf, BTreeSet<WatchTarget>>::new();
     for record in records.iter().filter(|record| {
         crate::agents::spec_by_kind(record.kind.as_str())
             .is_some_and(|definition| definition.capabilities.transcript_tail_context)
     }) {
+        let agent = agents
+            .iter()
+            .find(|agent| agent.kind == record.kind && agent.agent_id == record.agent_id);
         let Some(path) = record.transcript_path.as_deref().map(PathBuf::from) else {
             continue;
         };
         let target = WatchTarget {
+            login: agent.and_then(|agent| agent.login.clone()),
             kind: record.kind.as_str().to_owned(),
             session_id: record.agent_id.as_str().to_owned(),
             model_hint: record.context.model_id.clone(),
@@ -222,6 +240,7 @@ mod tests {
 
     fn target(kind: &str, session_id: &str) -> WatchTarget {
         WatchTarget {
+            login: None,
             kind: kind.to_owned(),
             session_id: session_id.to_owned(),
             model_hint: None,
@@ -302,7 +321,20 @@ mod tests {
         let mut claude = AgentContextRecord::new("claude", "sess-c", context("claude"));
         claude.transcript_path = Some("/t/c.jsonl".to_owned());
 
-        let targets = transcript_targets(&[with_path, pathless, copilot, droid, claude]);
+        let records = [with_path, pathless, copilot, droid, claude];
+        let mut agents: Vec<_> = records
+            .iter()
+            .map(|record| {
+                crate::testkit::agent_state(
+                    record.kind.as_str(),
+                    record.agent_id.as_str(),
+                    jiff::Timestamp::UNIX_EPOCH,
+                )
+            })
+            .collect();
+        agents[0].login = Some("work".parse().unwrap());
+        agents.retain(|agent| agent.kind != "droid");
+        let targets = transcript_targets(&records, &agents);
         assert_eq!(
             targets,
             BTreeMap::from([
@@ -310,6 +342,7 @@ mod tests {
                     PathBuf::from("/t/a.jsonl"),
                     BTreeSet::from([WatchTarget {
                         kind: "codex".to_owned(),
+                        login: Some("work".parse().unwrap()),
                         session_id: "sess-a".to_owned(),
                         model_hint: Some("gpt-5.5-codex".to_owned()),
                     }])
@@ -318,6 +351,7 @@ mod tests {
                     PathBuf::from("/t/d.settings.json"),
                     BTreeSet::from([WatchTarget {
                         kind: "droid".to_owned(),
+                        login: None,
                         session_id: "sess-d".to_owned(),
                         model_hint: None,
                     }])
@@ -326,6 +360,7 @@ mod tests {
                     PathBuf::from("/t/g.jsonl"),
                     BTreeSet::from([WatchTarget {
                         kind: "copilot".to_owned(),
+                        login: None,
                         session_id: "sess-g".to_owned(),
                         model_hint: None,
                     }])

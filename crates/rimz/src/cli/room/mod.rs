@@ -216,7 +216,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     if should_report_already_inside(args.attach.mode(), inside_selected_mux(mux)) {
         if !args.account.is_empty() {
             bail!(
-                "--account applies when a room is born, and this room is already running; run `rimz reset --account <KIND=NAME>` to change its accounts"
+                "--account applies when a room is born, and this room is already running; run `rimz accounts use --room <KIND> <NAME>` to change its default for future launches"
             );
         }
         report_already_inside(mux, &workspace)?;

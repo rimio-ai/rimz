@@ -851,8 +851,7 @@ impl fmt::Display for LoginKey {
     }
 }
 
-/// A room's frozen account selection: the login each provider kind launches
-/// under. A kind absent from the map launches under `default`.
+/// A room's defaults for future launches. A kind absent from the map defaults to `default`; existing sessions keep their own stamps.
 pub type RoomLogins = std::collections::BTreeMap<AgentKind, LoginName>;
 
 /// Agent-supplied session identifier — the `agent_id` half of the rollup key

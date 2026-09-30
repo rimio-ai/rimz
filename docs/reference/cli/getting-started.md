@@ -96,14 +96,14 @@ After a reboot the first line reads `rimz: machine rebooted since this room was 
 
 ### Accounts
 
-`--account <KIND=NAME>` (for example `--account claude=work`) launches that provider's agents under a named account declared with [`rimz accounts`](./accounts.md); `default` names the provider's own home. A frozen room keeps its recorded selection; for each provider in a new room, the flag wins over the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`. The selection is fixed when the room is born. `start` refuses, before building the room, in these cases:
+`--account <KIND=NAME>` (for example `--account claude=work`) selects that provider's launch default from accounts declared with [`rimz accounts`](./accounts.md); `default` names the provider's own home. An existing room keeps its recorded selection; for each provider in a new room, the flag wins over the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`. Move a running room's future launches with `rimz accounts use --room`, without changing existing agents' accounts. `start` refuses, before building the room, in these cases:
 
 | Case | Fix it names |
 | --- | --- |
-| `--account` differs from the room's recorded accounts | `rimz reset --account <KIND=NAME>` |
-| Any `--account`, when you run `start` from inside the room's own multiplexer session | `rimz reset --account <KIND=NAME>` |
+| `--account` differs from the room's recorded accounts | `rimz accounts use --room <KIND> <NAME>` inside the room |
+| Any `--account`, when you run `start` from inside the room's own multiplexer session | `rimz accounts use --room <KIND> <NAME>` |
 | The project sets `[accounts]` but is untrusted or its trust is stale | Review with `rimz trust`, then `rimz trust grant` |
-| The machine `config.toml` is unreadable, for a new room or a room frozen on a named account | Correct the file; `rimz config get` shows the strict error. A room frozen on `default` accounts still starts. |
+| The machine `config.toml` is unreadable, for a new room or a room selecting a named account | Correct the file; `rimz config get` shows the strict error. A room selecting only `default` accounts still starts. |
 | A deciding `[accounts.use]` entry names an undeclared account | `rimz accounts add <kind> <name>`, or clear it with `rimz accounts use <kind> default` |
 | A deciding `[accounts.use]` entry names an account for a provider without named accounts | `rimz accounts use <kind> default` |
 | The account is not declared | `rimz accounts add <kind> <name>` |

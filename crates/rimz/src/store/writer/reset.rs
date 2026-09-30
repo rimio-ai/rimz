@@ -115,7 +115,7 @@ impl Store {
     }
 
     /// Soft-reset records for a recovery that rebuilds the same room, keeping
-    /// its frozen provider accounts in the same transaction.
+    /// its provider launch defaults in the same transaction.
     #[must_use = "durability barrier; check the result"]
     pub fn reset_records_keeping_logins(&self) -> Result<ResetRecordsOutcome> {
         self.reset_records_with(false, false, event_log::rotate)

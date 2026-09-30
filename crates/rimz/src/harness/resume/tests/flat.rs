@@ -554,4 +554,21 @@ fn resumes_each_session_under_its_stamp_after_the_room_switches() {
         logins,
         BTreeSet::from(["personal".to_owned(), "work".to_owned()])
     );
+    let dir = tempfile::tempdir().unwrap();
+    for tab in &plan.tabs {
+        let request = decode_exec_request(&first_argv(tab));
+        let crate::harness::launch::ExecAction::Resume { session_id, .. } = &request.action else {
+            panic!("resume action")
+        };
+        let expected = if session_id == "a1" {
+            "personal"
+        } else {
+            "work"
+        };
+        crate::harness::launch_plan::testkit::assert_claude_stamped_home(
+            &request,
+            dir.path(),
+            Some(expected),
+        );
+    }
 }

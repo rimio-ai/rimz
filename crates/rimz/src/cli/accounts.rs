@@ -24,8 +24,11 @@ pub struct AccountsArgs {
 
 #[derive(Debug, Subcommand)]
 enum AccountsSubcmd {
-    /// Select the account new rooms use; `default` clears the machine selection.
+    /// Select the account for new rooms, or future launches here with --room.
     Use {
+        /// Change this room's default for future launches.
+        #[arg(long)]
+        room: bool,
         /// Provider kind: claude or codex.
         kind: String,
         /// Declared account name, or `default` for the provider's own home.
@@ -59,12 +62,18 @@ enum AccountsSubcmd {
     },
 }
 
-pub fn run(args: AccountsArgs, _globals: &GlobalFlags) -> Result<()> {
+pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         AccountsSubcmd::Add { kind, name, home } => add(&account_kind(&kind)?, name, home),
         AccountsSubcmd::List { json } => list(json),
         AccountsSubcmd::Remove { kind, name } => remove(&account_kind(&kind)?, &name),
-        AccountsSubcmd::Use { kind, name } => use_account(&kind, &name),
+        AccountsSubcmd::Use { kind, name, room } => {
+            if room {
+                use_room_account(globals, &account_kind(&kind)?, &name)
+            } else {
+                use_account(&kind, &name)
+            }
+        }
     }
 }
 
@@ -179,13 +188,64 @@ fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
         .join(" ");
     render::finish(writeln!(
         out,
-        "{kind} account `{name}` lives at {}\n  log in once   {home_override} {kind}\n  use it        rimz start --account {kind}={name}\n  new rooms     rimz accounts use {kind} {name}",
+        "{kind} account `{name}` lives at {}\n  log in once   {home_override} {kind}\n  use at birth  rimz start --account {kind}={name}\n  this room     rimz accounts use --room {kind} {name}\n  new rooms     rimz accounts use {kind} {name}",
         render::home_relative(&home.display().to_string())
     ))
 }
 
 fn lexical_home(login: &ProviderLogin) -> Option<PathBuf> {
     login.home().map(normalize_path_lexical)
+}
+
+fn use_room_account(globals: &GlobalFlags, kind: &AgentKind, name: &LoginName) -> Result<()> {
+    let pin = std::env::var(rimz::workspace::ENV_WORKSPACE_ID)
+        .ok()
+        .zip(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT))
+        .and_then(|(id, root)| rimz::workspace::verify_pin(&id, &PathBuf::from(root)));
+    let root = pin.context(
+        "--room needs a running room; run it inside one, or drop --room to set the machine default",
+    )?;
+    if let Some(override_root) = &globals.root
+        && override_root.canonicalize()? != root
+    {
+        bail!(
+            "--room switches the current room at `{}`; --root `{}` names another room; drop --root or run the command inside that room",
+            root.display(),
+            override_root.display()
+        );
+    }
+    let ctx = super::ctx::Ctx::open(globals)?;
+    let machine = MachineConfig::load()?;
+    let login = LoginCatalog::from_config(&machine.accounts)?.select(kind, name)?;
+    login.preflight(&rimz::agents::ambient_env())?;
+    let snapshot = ctx.cached_snapshot()?;
+    let prior = ctx.store.switch_room_login(&ctx.workspace, kind, name)?;
+    let mut out = render::out();
+    if prior == *name {
+        return render::finish(writeln!(
+            out,
+            "this room already launches {kind} on `{name}`"
+        ));
+    }
+    let count = snapshot
+        .agents
+        .iter()
+        .filter(|agent| {
+            agent.kind == *kind
+                && agent.ended_at.is_none()
+                && !agent.is_provider_subagent()
+                && agent.login_key().name == prior
+        })
+        .count();
+    let remaining = if count == 0 {
+        format!("no running {kind} agent is on `{prior}`")
+    } else {
+        format!("{count} running {kind} agent(s) keep `{prior}` until they end")
+    };
+    render::finish(writeln!(
+        out,
+        "this room now launches {kind} on account `{name}`; {remaining}"
+    ))
 }
 
 fn use_account(raw_kind: &str, name: &LoginName) -> Result<()> {
@@ -206,12 +266,12 @@ fn use_account(raw_kind: &str, name: &LoginName) -> Result<()> {
     if name.is_default() {
         render::finish(writeln!(
             out,
-            "new rooms now use {kind}'s own home (`default`); running rooms keep their account until `rimz reset`"
+            "new rooms now use {kind}'s own home (`default`); a running room keeps its account until `rimz accounts use --room {kind} {name}` runs inside it"
         ))?;
     } else {
         render::finish(writeln!(
             out,
-            "new rooms now use {kind} account `{name}`; running rooms keep their account until `rimz reset`"
+            "new rooms now use {kind} account `{name}`; a running room keeps its account until `rimz accounts use --room {kind} {name}` runs inside it"
         ))?;
     }
     if let Some(Err(error)) = login.map(|login| login.preflight(&rimz::agents::ambient_env())) {
@@ -354,7 +414,7 @@ fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
     ))
 }
 
-/// Live rooms whose frozen selection still names this account. Their provider dashboards stop refreshing once the catalog can no longer select it.
+/// Live rooms whose default for new launches still names this account; not an inventory of session stamps.
 fn live_rooms_selecting(kind: &AgentKind, name: &LoginName) -> Vec<String> {
     let inventory = match rimz::room::session::room_inventory() {
         Ok(inventory) => inventory,
@@ -383,16 +443,16 @@ fn live_rooms_selecting(kind: &AgentKind, name: &LoginName) -> Vec<String> {
 /// What `remove` prints, given the account, its displayed home, and the live rooms still selecting it.
 fn removed_notice(kind: &AgentKind, name: &LoginName, home: &str, live: &[String]) -> String {
     let mut notice = format!(
-        "removed {kind} account `{name}`; its home {home} and the provider files in it stay on disk, and a room still using it refuses to start until `rimz reset`"
+        "removed {kind} account `{name}`; its home {home} and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use --room {kind} default` for future launches"
     );
     if !live.is_empty() {
-        let (room, verb, possessive, dashboard, target) = if live.len() == 1 {
-            ("room", "is", "its", "dashboard stops", "that room")
+        let (room, verb) = if live.len() == 1 {
+            ("room", "selects")
         } else {
-            ("rooms", "are", "their", "dashboards stop", "those rooms")
+            ("rooms", "select")
         };
         notice.push_str(&format!(
-            "\nwarning: {room} {} {verb} running on it; {possessive} {kind} {dashboard} refreshing until you add the account back or `rimz reset` {target}",
+            "\nwarning: {room} {} {verb} it as the default for new {kind} launches; add the account back or run `rimz accounts use --room {kind} default` inside each room",
             live.join(", ")
         ));
     }
@@ -448,20 +508,20 @@ mod tests {
                 "~/.rimz/accounts/claude/work",
                 &[]
             ),
-            "removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk, and a room still using it refuses to start until `rimz reset`"
+            "removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use --room claude default` for future launches"
         );
     }
 
     #[test]
-    fn removed_notice_warns_live_rooms_about_dashboard_and_recovery() {
+    fn removed_notice_warns_about_live_room_defaults() {
         for (live, warning) in [
             (
                 vec!["rimz-one".to_owned()],
-                "warning: room rimz-one is running on it; its claude dashboard stops refreshing until you add the account back or `rimz reset` that room",
+                "warning: room rimz-one selects it as the default for new claude launches; add the account back or run `rimz accounts use --room claude default` inside each room",
             ),
             (
                 vec!["rimz-one".to_owned(), "rimz-two".to_owned()],
-                "warning: rooms rimz-one, rimz-two are running on it; their claude dashboards stop refreshing until you add the account back or `rimz reset` those rooms",
+                "warning: rooms rimz-one, rimz-two select it as the default for new claude launches; add the account back or run `rimz accounts use --room claude default` inside each room",
             ),
         ] {
             let notice = removed_notice(

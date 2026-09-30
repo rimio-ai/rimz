@@ -713,7 +713,7 @@ fn write_workspace_record(
 }
 
 /// A re-record keeps the room state only the owner flows set: the room-owning
-/// binary and the frozen account selection. Everything else is rebuilt from
+/// binary and the account launch defaults. Everything else is rebuilt from
 /// the resolved workspace.
 fn workspace_record_preserving_room_state(
     prior: Option<&record::WorkspaceRecord>,

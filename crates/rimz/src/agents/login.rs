@@ -376,11 +376,11 @@ impl LoginCatalog {
         }
     }
 
-    /// The selection a room is born with. A frozen selection stands, and a
+    /// The selection a room is born with. A recorded selection stands, and a
     /// requested account that disagrees with it is refused; otherwise the
     /// requested accounts win over the project's, then the machine's, then `default`.
     /// Every kind that can carry an account gets an explicit entry, so the
-    /// frozen record reads the same whichever layer chose it.
+    /// recorded selection reads the same whichever layer chose it.
     pub fn birth_selection(
         &self,
         frozen: Option<&RoomLogins>,
@@ -465,7 +465,7 @@ pub enum BirthLoginErr {
         path: PathBuf,
     },
     #[error(
-        "this room uses {kind} account `{current}`, not `{requested}`; accounts are fixed until reset, so run `rimz reset --account {kind}={requested}`"
+        "this room uses {kind} account `{current}`, not `{requested}`; switch it with `rimz accounts use --room {kind} {requested}`"
     )]
     Frozen {
         kind: AgentKind,

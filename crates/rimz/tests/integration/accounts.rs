@@ -31,6 +31,82 @@ fn failed(output: &Output) -> String {
 }
 
 #[test]
+fn room_account_switch_changes_only_the_room_default() {
+    let env = Env::new();
+    succeeded(&accounts(&env, &["add", "claude", "work"]));
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let config = env.rimz_home().join("config.toml");
+    let before = std::fs::read(&config).unwrap();
+    let switch = || {
+        env.rimz()
+            .envs(rimz::workspace::pin_env(
+                &workspace.workspace_id,
+                &workspace.project_root,
+            ))
+            .args(["accounts", "use", "--room", "claude", "work"])
+            .output()
+            .unwrap()
+    };
+    let output = succeeded(&switch());
+    assert!(output.contains("this room now launches claude on account `work`; no running claude agent is on `default`"), "{output}");
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+    let record = rimz::workspace::record::read(&store.paths().workspace_record).unwrap();
+    assert_eq!(
+        record
+            .logins
+            .unwrap()
+            .get(&rimz::ids::AgentKind::new_unchecked("claude"))
+            .unwrap()
+            .as_str(),
+        "work"
+    );
+    assert_eq!(
+        succeeded(&switch()).trim(),
+        "this room already launches claude on `work`"
+    );
+}
+
+#[test]
+fn room_account_switch_refuses_a_missing_home() {
+    let env = Env::new();
+    let home = env.home_root.join("missing-home");
+    succeeded(&accounts(
+        &env,
+        &["add", "claude", "work", "--home", home.to_str().unwrap()],
+    ));
+    std::fs::remove_dir_all(home).unwrap();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let output = env
+        .rimz()
+        .envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &workspace.project_root,
+        ))
+        .args(["accounts", "use", "--room", "claude", "work"])
+        .output()
+        .unwrap();
+    assert!(failed(&output).contains("rimz accounts add claude work"));
+    assert!(
+        rimz::workspace::record::read(&env.store().paths().workspace_record)
+            .unwrap()
+            .logins
+            .is_none()
+    );
+}
+
+#[test]
+fn room_account_switch_refuses_outside_a_room() {
+    let env = Env::new();
+    let output = accounts(&env, &["use", "--room", "claude", "default"]);
+    assert!(failed(&output).contains(
+        "--room needs a running room; run it inside one, or drop --room to set the machine default"
+    ));
+}
+
+#[test]
 fn accounts_add_rejects_default_home_alias_without_declaring_it() {
     let env = Env::new();
     let native = env.home_root.join(".claude");
@@ -207,7 +283,7 @@ fn machine_account_switch_and_removal_preserve_declared_accounts() {
     succeeded(&accounts(&env, &["add", "claude", "work"]));
     let used = succeeded(&accounts(&env, &["use", "claude", "work"]));
     assert!(
-        used.contains("new rooms") && used.contains("rimz reset"),
+        used.contains("new rooms") && used.contains("rimz accounts use --room claude work"),
         "{used}"
     );
     let listed: Value =

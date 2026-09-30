@@ -26,11 +26,13 @@ fn live_session_refreshes_target_live_root_sessions() {
         live_session_refreshes(&active_with_windows),
         vec![
             LiveSessionRefresh {
+                login: None,
                 kind: "codex".to_owned(),
                 session_id: "sess-active".to_owned(),
                 model_hint: Some("gpt-5.5-codex".to_owned()),
             },
             LiveSessionRefresh {
+                login: None,
                 kind: "claude".to_owned(),
                 session_id: "claude-active".to_owned(),
                 model_hint: Some("opus".to_owned()),
@@ -56,6 +58,7 @@ fn live_session_refreshes_target_live_root_sessions() {
     assert_eq!(
         live_session_refreshes(&active_no_model),
         vec![LiveSessionRefresh {
+            login: None,
             kind: "codex".to_owned(),
             session_id: "sess-active".to_owned(),
             model_hint: None,
@@ -145,13 +148,27 @@ fn codex_turn_death_without_pane_infers_spent_window() {
         label: Some("turn ended with no final message".to_owned()),
     };
 
-    confirm_codex_turn_death_from_pane(&runtime, None, &mut error);
+    let original = error.clone();
+    confirm_codex_turn_death_from_pane(
+        &runtime,
+        &"codex@default".parse().unwrap(),
+        None,
+        &mut error,
+    );
 
     assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
     assert_eq!(
         error.label.as_deref(),
         Some("usage limit inferred (rate-limit window spent)")
     );
+    let mut other_account = original.clone();
+    confirm_codex_turn_death_from_pane(
+        &runtime,
+        &"codex@work".parse().unwrap(),
+        None,
+        &mut other_account,
+    );
+    assert_eq!(other_account, original);
 }
 
 #[test]
@@ -211,8 +228,15 @@ fn codex_turn_death_retry_merges_refined_marker() {
     let prior = crate::store::agent_context::read_one(&runtime, "codex", "sess-1");
 
     assert!(
-        retry_unconfirmed_codex_turn_death(None, &runtime, "codex", "sess-1", prior.as_ref(),)
-            .unwrap()
+        retry_unconfirmed_codex_turn_death(
+            None,
+            &runtime,
+            "codex",
+            "sess-1",
+            prior.as_ref(),
+            &"codex@default".parse().unwrap(),
+        )
+        .unwrap()
     );
 
     let refined = crate::store::agent_context::read_one(&runtime, "codex", "sess-1")
@@ -274,6 +298,7 @@ fn unsupported_tick_adapter_writes_no_sidecar() {
         "claude",
         "sess-1",
         Some("opus"),
+        None,
         RefreshTrigger::Tick,
     );
 
@@ -310,6 +335,7 @@ fn transcript_backstop_is_stat_gated() {
         "codex",
         "sess-1",
         Some("gpt-5"),
+        None,
         RefreshTrigger::Tick,
     );
     let first = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
@@ -337,6 +363,7 @@ fn transcript_backstop_is_stat_gated() {
         "codex",
         "sess-1",
         Some("gpt-5"),
+        None,
         RefreshTrigger::Tick,
     );
     let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
@@ -359,6 +386,7 @@ fn transcript_backstop_is_stat_gated() {
         "codex",
         "sess-1",
         Some("gpt-5"),
+        None,
         RefreshTrigger::Tick,
     );
     let third = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
@@ -404,6 +432,7 @@ fn forced_refresh_bypasses_stat_gate() {
         "codex",
         "sess-1",
         Some("gpt-5"),
+        None,
         RefreshTrigger::Tick,
     );
     let first = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
@@ -415,6 +444,7 @@ fn forced_refresh_bypasses_stat_gate() {
         "codex",
         "sess-1",
         Some("gpt-5"),
+        None,
         RefreshTrigger::Tick,
     );
     let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
@@ -470,6 +500,7 @@ fn forced_refresh_reruns_turn_death_ladder() {
         "codex",
         "sess-1",
         Some("gpt-5"),
+        None,
         RefreshTrigger::Tick,
     );
     let stat_gated = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();

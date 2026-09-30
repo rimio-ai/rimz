@@ -617,5 +617,12 @@ mod tests {
         };
         let result = relaunch_action(&agent, Path::new("/repo"));
         assert!(result.is_ok(), "{result:?}");
+        let request = relaunch_request(&agent, &ResumePosture::default(), result.unwrap().0, None);
+        let dir = tempfile::tempdir().unwrap();
+        rimz::harness::launch_plan::testkit::assert_claude_stamped_home(
+            &request,
+            dir.path(),
+            Some("personal"),
+        );
     }
 }

@@ -4,8 +4,8 @@
 //! after the project root has moved or disappeared. The store event log
 //! remains the correctness source; this record is an index for
 //! operator workflows such as `rimz gc` — and, in [`WorkspaceRecord::logins`],
-//! the room's own launch-account truth, which the exec wrapper reads on every
-//! launch without opening the store.
+//! the room's defaults for future launches. Each allocated identity carries
+//! the account stamp its exec wrapper resolves instead.
 
 use std::fs;
 use std::io;
@@ -67,10 +67,10 @@ pub struct WorkspaceRecord {
     /// for long-lived room processes; legacy records omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rimz_build: Option<String>,
-    /// The provider account each kind launches under, frozen at room birth.
+    /// The default provider account for new launches of each kind.
     /// `None` is an unselected room — a record written before the field
-    /// existed, or one cleared by `rimz reset`; `Some` is frozen until the
-    /// next reset. Generic re-records preserve it.
+    /// existed, or one cleared by `rimz reset`. Birth records it and
+    /// `rimz accounts use --room` moves it per kind. Generic re-records preserve it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logins: Option<RoomLogins>,
     pub updated_at: Timestamp,
@@ -112,7 +112,7 @@ pub(super) fn write_path(path: &Path, record: &WorkspaceRecord) -> Result<()> {
 }
 
 /// The record, or `None` where the room has never written one. A record that
-/// exists but cannot be parsed is an error: the room's frozen account
+/// exists but cannot be parsed is an error: the room's launch-account
 /// selection lives here, and silently treating a corrupt file as absent would
 /// reset it.
 pub fn read_optional(path: &Path) -> Result<Option<WorkspaceRecord>> {
