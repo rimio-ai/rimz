@@ -568,6 +568,7 @@ fn hash_covers_every_documented_surface_field() {
             "{role}signals = [{{ signal = \"ci.failed\", match = {{ branch = \"feature\" }} }}]"
         ),
         format!("{role}signals = [{{ signal = \"ci.failed\", match = {{ branch = \"main\" }} }}]"),
+        format!("{role}signals = [{{ signal = \"ci.failed\", match = {{ branch = \"*\" }} }}]"),
         format!("{role}signals = [{{ signal = \"ci.failed\", match = {{ path = \"feature\" }} }}]"),
         format!("{role}signals = [{{ signal = \"ci.failed\", prompt = \"Repair CI\" }}]"),
         format!("{role}signals = [{{ signal = \"ci.failed\", prompt = \"Inspect CI\" }}]"),

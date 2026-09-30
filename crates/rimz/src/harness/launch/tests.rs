@@ -1383,6 +1383,15 @@ fn exec_identity_env_maps_identity_fields() {
     );
     assert!(!exec_identity_env(&invocation).contains_key("RIMZ_AGENT_MODE"));
 
+    let launch_env = exec_identity_env(&invocation);
+    invocation.action = ExecAction::Resume {
+        session_id: "resumed-session".to_owned(),
+        extra_args: Vec::new(),
+    };
+    let resume_env = exec_identity_env(&invocation);
+    for key in [ENV_TEAM, ENV_AGENT_ROLE] {
+        assert_eq!(resume_env.get(key), launch_env.get(key));
+    }
     invocation.identity.launch_id = None;
     assert_eq!(
         exec_identity_env(&invocation)
