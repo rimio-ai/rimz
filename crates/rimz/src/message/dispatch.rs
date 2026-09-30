@@ -121,6 +121,7 @@ pub enum DispatchOutcome {
 pub enum ParkReason {
     Status(AgentStatus),
     WaitingOnPrompt,
+    ProviderStarting,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -874,6 +875,11 @@ fn dispatch_decision(
                 reason: Some(reason),
             };
         }
+        if super::provider_start_pending(agent, now) {
+            return DispatchDecision::Parked {
+                reason: Some(ParkReason::ProviderStarting),
+            };
+        }
     }
     if target.pane.is_none() {
         return DispatchDecision::Parked { reason: None };
@@ -1029,6 +1035,75 @@ mod tests {
     use crate::agents::AgentStatus;
     use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
     use crate::pane::PaneRef;
+
+    #[test]
+    fn resumed_provider_parks_until_registration_or_the_window() {
+        let mut receiver = resident("session", "terminal_1");
+        receiver.status = AgentStatus::Idle;
+        receiver.resumed_at = Some(now());
+        let pane = owner_pane("session", None);
+        let mut mode = PreparedMode {
+            kind: DeliveryKind::Boundary,
+            draft: MessageDraft {
+                body: MessageBody::Prompt,
+                enter: true,
+                gate: DeliveryGate::Done,
+                sender: MessageSender::Human,
+                automated: false,
+                force: false,
+                auto_compact: None,
+                not_before: None,
+                after: Vec::new(),
+                when: Vec::new(),
+            },
+        };
+        let snapshot = snapshot_with_panes(vec![receiver.clone()], vec![pane.clone()]);
+        let target = ResolvedTarget {
+            pane: Some(pane),
+            agent: Some(receiver),
+        };
+        assert_eq!(
+            dispatch_decision(&snapshot, &[], &target, &mode, now()),
+            DispatchDecision::Parked {
+                reason: Some(ParkReason::ProviderStarting)
+            }
+        );
+        assert_eq!(
+            dispatch_decision(
+                &snapshot,
+                &[],
+                &target,
+                &mode,
+                now() + MessageBody::Prompt.delivery_window()
+            ),
+            DispatchDecision::Live
+        );
+        for kind in [DeliveryKind::Steer, DeliveryKind::Interrupt] {
+            mode.kind = kind;
+            assert_eq!(
+                dispatch_decision(&snapshot, &[], &target, &mode, now()),
+                DispatchDecision::Live
+            );
+        }
+        mode.kind = DeliveryKind::Boundary;
+        let mut registered = snapshot.clone();
+        registered.agents[0].resumed_at = None;
+        assert_eq!(
+            dispatch_decision(&registered, &[], &target, &mode, now()),
+            DispatchDecision::Live
+        );
+        let mut lazy = snapshot;
+        lazy.agents[0].kind = AgentKind::new_unchecked("codex");
+        lazy.agent_panes[0].kind = lazy.agents[0].kind.clone();
+        let target = ResolvedTarget {
+            pane: Some(lazy.agent_panes[0].clone()),
+            agent: Some(lazy.agents[0].clone()),
+        };
+        assert_eq!(
+            dispatch_decision(&lazy, &[], &target, &mode, now()),
+            DispatchDecision::Live
+        );
+    }
 
     #[test]
     fn queue_preflight_checks_the_target_account_home() {

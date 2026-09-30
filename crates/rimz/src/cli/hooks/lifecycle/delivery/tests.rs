@@ -1,5 +1,51 @@
 use super::*;
 
+#[test]
+fn registered_checkpoint_spawns_delivery_for_the_queued_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = workspace();
+    let paths = rimz::disk::paths::StatePaths::under(workspace_id(), dir.path()).unwrap();
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id(), dir.path()).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let state = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let message = rimz::store::message::MessageRecord::new(
+        workspace_id(),
+        &state,
+        "follow up".into(),
+        rimz::store::message::DeliveryGate::Done,
+    );
+    store
+        .queue_message(&message, &workspace.session_name)
+        .unwrap();
+    let receipt = store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: state.kind.clone(),
+            event_name: "SessionStart",
+            observation: &AgentLifecycleObservation::new(
+                Some(state.agent_id.clone()),
+                LifecycleSignal::Registered,
+            ),
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let mut spawns = Vec::new();
+    spawn_queue_delivery_with(&workspace, &store, &receipt.events[0], |spawn| {
+        spawns.push(spawn.args.clone())
+    });
+    assert_eq!(
+        spawns,
+        vec![vec![
+            "--root".to_owned(),
+            workspace.project_root.display().to_string(),
+            "message".to_owned(),
+            "deliver".to_owned(),
+            "--message-id".to_owned(),
+            message.message_id.to_string()
+        ]]
+    );
+}
+
 fn record_user_input_for_lifecycle(
     workspace: &ResolvedWorkspace,
     agent: &AgentDefinition,

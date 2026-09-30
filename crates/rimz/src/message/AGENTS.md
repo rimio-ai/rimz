@@ -17,6 +17,7 @@ Topic detail lives in [messaging.md](../../../../docs/internals/harness/messagin
 - **Delivery reads store state.** Gates evaluate the rollup and the message queue; a subagent digest additionally reads the run rows linked to it. Focused-pane state and captured composer contents never decide a delivery.
 - **Joined digests are checked before and after claim.** Both durable run scans suppress delivery when a digest has linked rows and all are joined, even if producer cleanup already removed the live message. Digests claim alone so no batch member skips the guard; an unanswered guard never sends. A join after the final check can still race with external pane I/O; [messaging.md](../../../../docs/internals/harness/messaging.md#the-subagent-digest-join-guard) owns the guard and recovery mechanics.
 - **`retry_after` is a wake hint.** It schedules the elder's next look and never affects `is_ready`, FIFO position, claim leases, or hook-driven delivery.
+- **Resumed providers start before boundary delivery.** A non-lazy provider's resumed row parks boundary deliveries until its next lifecycle observation (normally provider registration) or one delivery window elapses; steer and interrupt bypass this wait.
 
 ## Boundaries
 

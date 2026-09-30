@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn resumed_stamp_clears_on_the_next_lifecycle_and_survives_cache_roundtrip() {
+    let resumed = raw_lifecycle_at(
+        "claude",
+        1,
+        json!({
+            "agent_id": "session-a", "event_name": "rimz.agent-resumed",
+            "signal": {"signal": "registered"}
+        }),
+    );
+    let states = reduce_agent_states(std::slice::from_ref(&resumed));
+    assert_eq!(states[0].resumed_at, Some(resumed.timestamp));
+    let cached: AgentState =
+        serde_json::from_value(serde_json::to_value(&states[0]).unwrap()).unwrap();
+    assert_eq!(cached.resumed_at, Some(resumed.timestamp));
+    for signal in ["registered", "ended", "turn_started"] {
+        let next = raw_lifecycle_at(
+            "claude",
+            2,
+            json!({
+                "agent_id": "session-a", "event_name": "provider-hook",
+                "signal": {"signal": signal}
+            }),
+        );
+        let states = reduce_agent_states_seeded(
+            BTreeMap::from([(
+                (cached.kind.clone(), cached.agent_id.clone()),
+                cached.clone(),
+            )]),
+            &[next],
+        );
+        assert_eq!(states.values().next().unwrap().resumed_at, None, "{signal}");
+    }
+}
+
+#[test]
 fn turn_ids_carry_supersede_and_clear_through_the_fold() {
     let mut events = Vec::new();
     for (signal, expected) in [

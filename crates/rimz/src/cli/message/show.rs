@@ -516,7 +516,9 @@ fn fifo_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
 }
 
 fn gate_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
-    let detail = if check.gate.resume_recovered == Some(false) {
+    let detail = if check.gate.open && check.gate.provider_start_pending {
+        "waiting for provider registration".to_owned()
+    } else if check.gate.resume_recovered == Some(false) {
         "waiting for provider recovery".to_owned()
     } else if check.gate.open {
         match check.gate.status {
@@ -657,6 +659,9 @@ pub(super) fn render_verdict(
         deliver::DeliveryVerdict::ResumeUnrecovered => {
             format!("waiting: {target} is paused; resume gate opens after provider recovery")
         }
+        deliver::DeliveryVerdict::ProviderStarting => {
+            format!("waiting: {target} is resuming; delivers when its provider registers")
+        }
         deliver::DeliveryVerdict::AskWaiting => {
             format!("waiting: {target} is waiting on input in its pane")
         }
@@ -681,6 +686,7 @@ pub(super) fn delivery_action_hint(
         | deliver::DeliveryVerdict::ReceiverGone
         | deliver::DeliveryVerdict::Compacting
         | deliver::DeliveryVerdict::GateClosed { .. }
+        | deliver::DeliveryVerdict::ProviderStarting
         | deliver::DeliveryVerdict::ResumeUnrecovered => {
             Some(format!("force now: rimz message steer {message_id}"))
         }
@@ -699,6 +705,20 @@ mod tests {
     use rimz::ids::{MessageId, MuxName, PaneId};
 
     #[test]
+    fn resuming_verdict_names_registration_and_steer() {
+        let verdict = deliver::DeliveryVerdict::ProviderStarting;
+        let id = MessageId::parse("msg_0000000000000001").unwrap();
+        assert_eq!(
+            render_verdict(&verdict, "@otter", None, Timestamp::UNIX_EPOCH),
+            "waiting: @otter is resuming; delivers when its provider registers"
+        );
+        assert_eq!(
+            delivery_action_hint(&verdict, &id),
+            Some(format!("force now: rimz message steer {id}"))
+        );
+    }
+
+    #[test]
     fn delivery_checks_report_recent_attempt_and_after_blocker() {
         let message_id = MessageId::parse("msg_0000000000000001").unwrap();
         let mut check = deliver::DeliveryCheck {
@@ -715,6 +735,7 @@ mod tests {
             },
             agent: deliver::AgentCheck { present: true },
             gate: deliver::GateCheck {
+                provider_start_pending: false,
                 gate: DeliveryGate::Done,
                 status: Some(AgentStatus::Idle),
                 compacting: false,

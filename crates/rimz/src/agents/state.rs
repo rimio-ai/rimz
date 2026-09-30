@@ -714,6 +714,9 @@ pub struct AgentState {
     /// explicit resume can recover the provider session within retention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<Timestamp>,
+    /// Wrapper resume stamp, cleared by the next lifecycle observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_at: Option<Timestamp>,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always
@@ -993,6 +996,7 @@ impl AgentState {
             launch_ordinal: None,
             channel: None,
             ended_at: None,
+            resumed_at: None,
             status,
             phase: match status {
                 AgentStatus::Running => TurnPhase::Reasoning,

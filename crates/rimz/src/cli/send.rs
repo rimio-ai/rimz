@@ -309,6 +309,9 @@ pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<Strin
                 "queued for {label} ({message_id}) — {label} is waiting on input in its pane; answer it or force: rimz message steer {message_id} --force"
             ),
             None => format!("queued for {label} ({message_id})"),
+            Some(ParkReason::ProviderStarting) => format!(
+                "queued for {label} ({message_id}) — {label} is resuming; delivers when its provider registers; send now: rimz message steer {message_id}"
+            ),
         }),
         DispatchOutcome::CompactionPending { label, message_id } => Some(format!(
             "compacting {label}; queued {message_id} (delivers when compaction completes)"
@@ -701,6 +704,12 @@ mod tests {
         assert_eq!(
             render_dispatch_outcome(&outcome(None)).as_deref(),
             Some("queued for @coder (msg_0123456789abcdef)")
+        );
+        assert_eq!(
+            render_dispatch_outcome(&outcome(Some(ParkReason::ProviderStarting))).as_deref(),
+            Some(
+                "queued for @coder (msg_0123456789abcdef) — @coder is resuming; delivers when its provider registers; send now: rimz message steer msg_0123456789abcdef"
+            )
         );
     }
 

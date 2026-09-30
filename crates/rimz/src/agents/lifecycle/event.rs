@@ -134,7 +134,8 @@ impl SignalSet {
 }
 
 /// Signals that release the head of a queued `--after` delivery.
-pub const DELIVERY_CHECKPOINT: SignalSet = SignalSet::TURN_ENDED
+pub const DELIVERY_CHECKPOINT: SignalSet = SignalSet::REGISTERED
+    .union(SignalSet::TURN_ENDED)
     .union(SignalSet::TURN_INTERRUPTED)
     .union(SignalSet::COMPACTION_ENDED);
 
@@ -207,6 +208,7 @@ mod tests {
             turn_id: None,
         };
         assert!(DELIVERY_CHECKPOINT.contains(&turn_end));
+        assert!(DELIVERY_CHECKPOINT.contains(&LifecycleSignal::Registered));
         assert!(DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnInterrupted { turn_id: None }));
         assert!(
             DELIVERY_CHECKPOINT.contains(&LifecycleSignal::CompactionEnded {
