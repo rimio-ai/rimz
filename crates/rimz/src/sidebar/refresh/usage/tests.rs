@@ -2,10 +2,9 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 
-use crate::agents::account::read_rate_limits_cache;
+use crate::agents::account::{AccountsCache, ProviderRecord, read_rate_limits_cache};
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow};
 use crate::ids::WorkspaceId;
-use crate::sidebar::refresh::accounts::{AccountsCache, ProviderRecord};
 use crate::sidebar::refresh::credits::{CreditsCache, ProviderCreditsEntry};
 use crate::sidebar::test_support::{provider_panel, snapshot_with_panels};
 

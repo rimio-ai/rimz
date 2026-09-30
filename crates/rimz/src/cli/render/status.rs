@@ -5,7 +5,7 @@
 
 use rimz::agents::AgentStatus;
 use rimz::agents::TurnPhase;
-use rimz::sidebar::refresh::ProviderStatus;
+use rimz::agents::account::ProviderStatus;
 use rimz::store::message::MessageStatus;
 use rimz::store::run::RunStatus;
 use rimz::trust::TrustState;

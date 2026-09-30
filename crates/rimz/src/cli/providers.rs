@@ -14,15 +14,14 @@ use super::GlobalFlags;
 use super::render::{self, KeyVals, cell};
 use super::spinner::Spinner;
 use rimz::RuntimePaths;
+use rimz::agents::account::{AccountsCache, ProviderRecord, ProviderStatus};
 use rimz::agents::spending::{ProviderSpendingCache, read_provider_spending_cache};
 use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally};
 use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet, ambient_env};
 use rimz::config::MachineConfig;
 use rimz::ids::{AgentKind, LoginKey, RoomLogins};
 use rimz::sidebar::enrich::provider_panels_from_caches;
-use rimz::sidebar::refresh::{
-    AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts, refresh_provider_usage,
-};
+use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
 use rimz::store::snapshot::{DailyBudgetView, SidebarProviderPanel};
 
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);

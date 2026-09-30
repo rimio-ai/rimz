@@ -117,11 +117,11 @@ mod tests {
 
     use super::*;
     use crate::RuntimePaths;
+    use crate::agents::account::AccountsCache;
     use crate::agents::{AgentState, AgentStatus};
     use crate::disk::atomic;
     use crate::ids::WorkspaceId;
     use crate::sidebar::enrich::{FoldOpts, enrich};
-    use crate::sidebar::refresh::AccountsCache;
     use crate::sidebar::test_support::{activity_row, worktree_group};
 
     fn cached_opts() -> FoldOpts<'static> {

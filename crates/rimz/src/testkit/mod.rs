@@ -179,13 +179,13 @@ pub fn changed_droid_session_fixture(
 }
 
 pub mod fleet {
+    use crate::agents::account::{AccountsCache, ProviderRecord};
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::agents::{AgentLifecycleObservation, LaunchParams};
     use crate::disk::paths::StatePaths;
     use crate::ids::{AgentSessionId, MuxName, PaneId, ViewKind, WorkspaceId};
     use crate::pane::PaneRef;
     use crate::sidebar::produce::ProduceOptions;
-    use crate::sidebar::refresh::{AccountsCache, ProviderRecord};
     use crate::store::event::EventEnvelope;
     use crate::store::event_log;
     use crate::{RuntimePaths, agents, sidebar};

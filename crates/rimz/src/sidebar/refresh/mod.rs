@@ -34,7 +34,7 @@ mod trace;
 mod trunk;
 pub mod usage;
 
-pub use accounts::{AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts};
+pub use accounts::query_provider_accounts;
 pub(super) use daemon_reap::read_codex_daemon_reap;
 pub use live_spend::apply_live_day_spend;
 pub use sessions::{

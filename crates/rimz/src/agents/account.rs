@@ -29,7 +29,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use super::RoomLoginSet;
+use super::{AgentAccount, RoomLoginSet};
 use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
 use crate::RuntimePaths;
 use crate::ids::{AgentKind, LoginKey};
@@ -41,6 +41,47 @@ pub(super) const INFORMATIONAL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(test)]
 mod tests;
+
+/// The producer's published account probe state, keyed by login so one
+/// transient failure retries without expiring every account's successful read.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AccountsCache {
+    pub logins: BTreeMap<LoginKey, ProviderRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderRecord {
+    pub probed_at_ms: u64,
+    /// A failed probe retries on `ACCOUNTS_RETRY_TTL`; a confident result rides
+    /// `ACCOUNTS_TTL`.
+    pub ok: bool,
+    /// Probed account facts; `None` is an authoritative logged-out result.
+    pub account: Option<AgentAccount>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderStatus {
+    LoggedIn,
+    LoggedOut,
+    Unavailable,
+}
+
+impl ProviderStatus {
+    pub fn from_record(record: Option<&ProviderRecord>) -> Self {
+        match record {
+            Some(record) if record.ok && record.account.is_some() => Self::LoggedIn,
+            Some(record) if record.ok => Self::LoggedOut,
+            Some(_) | None => Self::Unavailable,
+        }
+    }
+}
+
+/// Read the producer's published account cache, or an empty cache on a cold,
+/// corrupt, or old-schema file. Read-only and fork-free.
+pub(crate) fn read_accounts_cache(path: &Path) -> AccountsCache {
+    crate::disk::atomic::read_json_cache(path)
+}
 
 /// Exact identity of one provider account whose authoritative usage may drive
 /// launch-time controls.

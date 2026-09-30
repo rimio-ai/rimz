@@ -225,7 +225,7 @@ impl<'a> RoomHarness<'a> {
         writer.flush().expect("flush sidebar keys");
     }
 
-    pub fn publish_accounts(&self, accounts: &rimz::sidebar::refresh::AccountsCache) {
+    pub fn publish_accounts(&self, accounts: &rimz::agents::account::AccountsCache) {
         self.env.publish_accounts(accounts);
     }
 

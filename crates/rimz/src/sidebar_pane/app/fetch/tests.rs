@@ -211,12 +211,12 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
             ..Default::default()
         },
     );
-    let accounts = crate::sidebar::refresh::AccountsCache {
+    let accounts = crate::agents::account::AccountsCache {
         logins: crate::agents::known_kinds()
             .map(|kind| {
                 (
                     crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind)),
-                    crate::sidebar::refresh::ProviderRecord {
+                    crate::agents::account::ProviderRecord {
                         probed_at_ms: now_ms,
                         ok: true,
                         account: None,
