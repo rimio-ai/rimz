@@ -238,10 +238,56 @@ fn turn_completion_requires_a_rested_turn_without_armed_waits() {
 }
 
 #[test]
+fn team_wait_wire_sleeps_until_the_named_instance_reaches_done() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    for (stage, headline) in [(Some("Review"), "stage Review"), (None, "stage unknown")] {
+        let trigger: PendingWaitTrigger = serde_json::from_value(serde_json::json!({
+            "kind": "team", "stage": stage,
+        }))
+        .expect("team wait is part of the agent wire");
+        assert_eq!(trigger.kind_word(), "team");
+        assert_eq!(trigger.headline(now), headline);
+        assert_eq!(trigger.detail(), None);
+        let wait = PendingWait {
+            name: "forge#feat-x".into(),
+            trigger,
+            armed_at: Some(now),
+        };
+        assert_eq!(wait.label(now), "wakes when forge#feat-x reaches Done");
+        let mut agent = test_agent(AgentStatus::Success, 1_000);
+        agent.pending_waits.push(wait.clone());
+        let decoded: AgentState =
+            serde_json::from_value(serde_json::to_value(agent).unwrap()).unwrap();
+        assert_eq!(decoded.pending_waits, vec![wait]);
+        assert_eq!(decoded.effective_status(), AgentStatus::Sleeping);
+    }
+}
+
+#[test]
 fn pending_wait_labels_and_wire_preserve_trigger_details() {
     let now = Timestamp::from_second(1_000).unwrap();
     let due = Timestamp::from_second(1_720).unwrap();
     for (trigger, kind, headline, detail, label) in [
+        (
+            serde_json::from_value(serde_json::json!({
+                "kind": "subagent", "active_at": now,
+            }))
+            .expect("subagent wait is part of the agent wire"),
+            "subagent",
+            "active 0s ago",
+            None,
+            "wakes when calm-fox reports",
+        ),
+        (
+            serde_json::from_value(serde_json::json!({
+                "kind": "subagent", "active_at": now, "settled": "done",
+            }))
+            .expect("settled subagent wait is part of the agent wire"),
+            "subagent",
+            "done, reporting",
+            None,
+            "wakes when calm-fox reports",
+        ),
         (
             PendingWaitTrigger::Timer { due, delay: None },
             "timer",
@@ -373,7 +419,7 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
             );
         }
         let wait = PendingWait {
-            name: "wait".into(),
+            name: "calm-fox".into(),
             trigger,
             armed_at: Some(now),
         };

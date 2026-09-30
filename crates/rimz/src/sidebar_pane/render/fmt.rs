@@ -17,17 +17,7 @@ pub(super) fn age_secs(at: Timestamp, now: Timestamp) -> i64 {
 /// core of [`age_short`], so the styling caller can format from a seconds value
 /// it already has.
 pub(super) fn age_label(seconds: i64) -> String {
-    if seconds <= 0 {
-        "0s".to_owned()
-    } else if seconds < 60 {
-        format!("{seconds}s")
-    } else if seconds < 60 * 60 {
-        format!("{}m", seconds / 60)
-    } else if seconds < 60 * 60 * 24 {
-        format!("{}h", seconds / 3600)
-    } else {
-        format!("{}d", seconds / 86_400)
-    }
+    crate::utils::time::format_duration_coarse(seconds)
 }
 
 pub(super) fn age_short(at: Timestamp, now: Timestamp) -> String {

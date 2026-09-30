@@ -100,7 +100,9 @@ pub fn pending_waits_by_session(
                 | PendingWaitTrigger::Command { .. }
                 | PendingWaitTrigger::Check { .. }
                 | PendingWaitTrigger::File { .. } => (1, None),
-                PendingWaitTrigger::Signal { .. } => (2, None),
+                PendingWaitTrigger::Signal { .. }
+                | PendingWaitTrigger::Subagent { .. }
+                | PendingWaitTrigger::Team { .. } => (2, None),
             };
             (kind, due, wait.name.clone())
         });

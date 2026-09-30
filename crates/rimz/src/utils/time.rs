@@ -12,6 +12,20 @@ pub fn unix_now_ms() -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
+/// A nonnegative duration floored to its largest unit: seconds, minutes, hours, or days.
+pub(crate) fn format_duration_coarse(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3_600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h", seconds / 3_600)
+    } else {
+        format!("{}d", seconds / 86_400)
+    }
+}
+
 /// A duration suffix RimZ accepts at a particular input boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DurationUnit {

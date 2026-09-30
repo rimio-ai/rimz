@@ -767,7 +767,8 @@ path = "crates/rimz/src/utils/time.rs"
 allowed-dependencies = []
 # One compact duration formatter serves config serialization and CLI reports.
 # Crate-visible compact duration serde adapters serve durable run records.
-surface-budget = 16
+# Coarse durations serve pending-wait activity and prompt-cache notices.
+surface-budget = 17
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"
