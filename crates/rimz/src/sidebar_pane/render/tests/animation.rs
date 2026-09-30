@@ -214,6 +214,20 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     agent.background_shells.clear();
     for (trigger, moves) in [
         (
+            crate::agents::PendingWaitTrigger::Subagent {
+                active_at: snapshot.now,
+                deadline_at: None,
+                settled: None,
+            },
+            false,
+        ),
+        (
+            crate::agents::PendingWaitTrigger::Team {
+                stage: Some("Review".into()),
+            },
+            false,
+        ),
+        (
             crate::agents::PendingWaitTrigger::Command {
                 command: "cargo test".to_owned(),
             },
