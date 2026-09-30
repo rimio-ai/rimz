@@ -371,6 +371,10 @@ A sleeping card names its first pending wait in the description:
 | command or check | `wakes after <command>` |
 | file | `wakes when app.log changes`, or ``wakes when app.log matches `<pattern>` `` |
 | signal | `wakes on pr.merged` |
+| subagent | `wakes when @calm-fox reports` |
+| team | `wakes when forge#feat-x reaches Done` |
+
+Subagent waits draw no separate entry and do not count in `⧖`: the child's row under `⧉` already represents them. A team wait counts in `⧖` and draws a static `team · stage Review` entry with its elapsed age, or `stage unknown` when its board is unavailable.
 
 `☾` replaces only an idle or done status. Working, waiting, failed, paused, and waiting on subagents all take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 

@@ -121,7 +121,7 @@ An `auto_gc` event carries `scope` (`room` or `machine`); records written before
 
 The `assists.rollup` object holds `model_aliases` (catalog-derived model moves), `redeems` and `resets` (credit redemptions, and those that reset the budget), `resumes` and `recovered_secs` (delivered auto-continues, and the parked time they recovered), `compacts`, `keepalives` (delivered prompt-cache pings), `restores` and `restored_sessions` (room restores, and the agents they brought back), and `sweeps` and `reclaimed_bytes` (completed automatic gc sweeps, and the bytes they freed). Each event carries an `assist` type (`model_alias`, `auto_continue`, `auto_compact`, `idle_compact`, `cache_keepalive`, `flip_compact`, `auto_redeem`, `auto_resume`, or `auto_gc`), its `at` time in UTC, and the fields of that type. Model moves carry `kind`, `login`, `alias`, `from`, and `to`. What each assist is lives in [the assist log](../../internals/harness/loops.md#the-assist-log).
 
-The `Keepalive: N` category counts delivered pings. Each `cache_keepalive` event carries `kind`, `agent_id`, optional `label`, `idle_secs`, `waits`, `message_id`, `delivered`, and optional `error`. Failed attempts remain in the timeline without increasing the count.
+The `Keepalive: N` category counts delivered pings. Each `cache_keepalive` event carries `kind`, `agent_id`, optional `label`, `idle_secs`, `waits`, `message_id`, `delivered`, and optional `error`. `waits` counts all pending waits, including subagent and team waits. Failed attempts remain in the timeline without increasing the count.
 
 ## The assist timeline
 
