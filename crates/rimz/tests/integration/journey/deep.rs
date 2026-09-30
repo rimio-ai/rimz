@@ -2228,7 +2228,7 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
 }
 
 #[test]
-fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() {
+fn named_account_room_launches_into_its_home_and_resumes_under_its_stamp() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping named account journey");
         return;
@@ -2356,7 +2356,10 @@ fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() 
         !restamp.status.success(),
         "a live room keeps its account: {stderr}"
     );
-    assert!(stderr.contains("rimz reset --account"), "{stderr}");
+    assert!(
+        stderr.contains("rimz accounts use --room claude default"),
+        "{stderr}"
+    );
 
     let reset = env
         .rimz()
@@ -2390,31 +2393,19 @@ fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() 
         String::from_utf8_lossy(&reborn.stderr)
     );
     assert!(reborn.status.success(), "rebirth failed: {output}");
-    let mismatch = "session account is `work`, room account is `default`; use a room started with `rimz start --account claude=work`, or run `rimz reset --account claude=work` here";
-    assert!(
-        output.contains(mismatch),
-        "rebirth warns and skips: {output}"
-    );
+    let expected = format!("{0}\n{0}\n", work_home.display());
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let homes = loop {
+        let homes = std::fs::read_to_string(&launched_homes).expect("launched homes trace");
+        if homes == expected || Instant::now() >= deadline {
+            break homes;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
     assert_eq!(
-        std::fs::read_to_string(&launched_homes).expect("launched homes trace"),
-        format!("{}\n", work_home.display()),
-        "no work session is resumed under the default account"
+        homes, expected,
+        "rebirth in a default room resumes the work session under its stamped home: {output}"
     );
-
-    let resumed = env
-        .rimz()
-        .env("PATH", &agent_path)
-        .env("TMUX", tmux_env(&socket))
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .args(["--mux", "tmux", "agents", "resume", "#project"])
-        .bounded_output_within(Duration::from_secs(45))
-        .expect("resume the work lane");
-    let stderr = String::from_utf8_lossy(&resumed.stderr);
-    assert!(
-        !resumed.status.success(),
-        "explicit resume refuses: {stderr}"
-    );
-    assert!(stderr.contains(mismatch), "{stderr}");
 }
 
 fn wait_for_named_agent(
