@@ -374,7 +374,8 @@ path = "crates/rimz/src/harness"
 # Ended team-run selection is shared by the read-only producer and CLI settlement.
 # TeamTabLaunch carries restored seats to CLI placement before fallback assists are recorded.
 # Fresh launches share checkout and channel holds, including the holder's checkout.
-surface-budget = 600
+# Condition parsing, ordered readings, CI sources, hold state and evidence cross the scheduler/CLI seam (+17).
+surface-budget = 617
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -990,7 +991,8 @@ allowed-dependencies = [
     "workspace",
 ]
 # Check-launch conversion shares ownership lookup and supervised-run shaping.
-surface-budget = 39
+# The hidden runner accepts typed condition evidence alongside signal evidence.
+surface-budget = 40
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

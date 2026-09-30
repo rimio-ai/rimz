@@ -244,6 +244,8 @@ struct RunArgs {
     name: String,
     #[arg(long, hide = true)]
     signal_json: Option<String>,
+    #[arg(long, hide = true, conflicts_with = "signal_json")]
+    condition_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -343,9 +345,14 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Watch(args) => watch::watch(args, globals),
         LoopSubcmd::Show(args) => render::show(args, globals),
         LoopSubcmd::Logs(args) => render::logs(args, globals),
-        LoopSubcmd::Fire(args) => {
-            run_tasks::run_one(&args.name, LoopRunMode::Manual, args.keep, None, globals)
-        }
+        LoopSubcmd::Fire(args) => run_tasks::run_one(
+            &args.name,
+            LoopRunMode::Manual,
+            args.keep,
+            None,
+            None,
+            globals,
+        ),
         LoopSubcmd::Run(args) => {
             let signal = args
                 .signal_json
@@ -353,7 +360,20 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
                 .map(serde_json::from_str)
                 .transpose()
                 .context("decoding loop trigger signal")?;
-            run_tasks::run_one(&args.name, LoopRunMode::Scheduled, false, signal, globals)
+            let condition = args
+                .condition_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .context("decoding loop condition evidence")?;
+            run_tasks::run_one(
+                &args.name,
+                LoopRunMode::Scheduled,
+                false,
+                signal,
+                condition,
+                globals,
+            )
         }
         LoopSubcmd::Tick => timer::tick(),
         LoopSubcmd::Timer(args) => timer::run(args.command),

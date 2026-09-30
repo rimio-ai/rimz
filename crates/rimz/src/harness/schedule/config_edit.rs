@@ -234,6 +234,8 @@ mod tests {
             every: Some("1h".to_owned()),
             cron: Some("0 * * * *".to_owned()),
             signal: Some("ci.failed".to_owned()),
+            when: Some(vec!["team.stage=Done".to_owned(), "ci=passed".to_owned()]),
+            hold: Some("30m".to_owned()),
             matches: Some(std::collections::BTreeMap::from([(
                 "branch".to_owned(),
                 "feature".to_owned(),
@@ -258,6 +260,8 @@ mod tests {
         assert!(machine_text.contains("[tasks.full.wait]"));
         assert!(machine_text.contains("[tasks.full.match]"));
         assert!(machine_text.contains("branch = \"feature\""));
+        assert!(machine_text.contains("when = [\"team.stage=Done\", \"ci=passed\"]"));
+        assert!(machine_text.contains("for = \"30m\""));
         assert_eq!(
             toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(machine))
                 .expect("machine round trip"),

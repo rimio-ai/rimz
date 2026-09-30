@@ -37,6 +37,7 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
     let meta = task.entry().wait_meta.as_ref();
     let armed_at = meta.map(|meta| meta.armed_at);
     let trigger = match &parsed.trigger {
+        Trigger::Condition { .. } => return None,
         Trigger::Schedule(schedule) => {
             // A deadline shortens row lifetime, but does not make a recurring
             // clock's next occurrence derivable from its original arm time.

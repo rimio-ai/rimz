@@ -4,6 +4,59 @@ use jiff::civil::date;
 
 use jiff::civil::Weekday::{Friday, Monday, Wednesday};
 
+#[test]
+fn condition_rows_validate_describe_and_have_standing_lifetimes() {
+    let mut entry = TaskEntry {
+        when: Some(vec!["team.stage=Done".to_owned(), "ci=passed".to_owned()]),
+        hold: Some("30m".to_owned()),
+        ..spawn_entry()
+    };
+    assert_eq!(
+        parse_trigger("ship", &entry).unwrap().describe(),
+        "when team.stage=Done && ci=passed, for 30m"
+    );
+    assert!(!ephemeral_lifetime(&entry));
+    entry.once = Some(true);
+    assert!(parse_trigger("ship", &entry).unwrap().once);
+    assert!(ephemeral_lifetime(&entry));
+    for field in ["at", "every", "cron", "signal", "watch", "deadline"] {
+        let mut conflict = entry.clone();
+        match field {
+            "at" => conflict.at = Some("07:00".to_owned()),
+            "every" => conflict.every = Some("5m".to_owned()),
+            "cron" => conflict.cron = Some("0 * * * *".to_owned()),
+            "signal" => conflict.signal = Some("ci.passed".to_owned()),
+            "watch" => conflict.watch = Some(WatchSpec::Command("true".to_owned())),
+            "deadline" => conflict.deadline = Some(Timestamp::UNIX_EPOCH),
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                parse_trigger("ship", &conflict),
+                Err(ScheduleErr::TriggerConflict { .. })
+            ),
+            "{field}"
+        );
+    }
+    for hold in ["0s", "0m", "1w", "-1s", "abc"] {
+        entry.hold = Some(hold.to_owned());
+        assert!(
+            parse_trigger("ship", &entry)
+                .unwrap_err()
+                .to_string()
+                .contains("for")
+        );
+    }
+    entry.when = None;
+    entry.once = None;
+    assert!(
+        parse_trigger("ship", &entry)
+            .unwrap_err()
+            .to_string()
+            .contains("without `when`")
+    );
+}
+
 pub(super) fn zdt(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> Zoned {
     date(year, month, day)
         .at(hour, minute, second, 0)

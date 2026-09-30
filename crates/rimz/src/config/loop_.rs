@@ -119,6 +119,10 @@ pub struct TaskEntry {
     pub cron: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when: Option<Vec<String>>,
+    #[serde(rename = "for", skip_serializing_if = "Option::is_none")]
+    pub hold: Option<String>,
     #[serde(rename = "match", skip_serializing_if = "Option::is_none")]
     pub matches: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

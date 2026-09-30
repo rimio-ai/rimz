@@ -515,6 +515,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "orphan_sweep.rs",
         "run_timeout.rs",
         "schedule/fire.rs",
+        "schedule/when.rs",
         "schedule/pending.rs",
     ]
     .map(|name| harness_root.join(name));

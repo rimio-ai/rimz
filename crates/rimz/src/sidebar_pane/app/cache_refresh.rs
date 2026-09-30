@@ -87,11 +87,13 @@ fn refresh_loop(
 }
 
 fn fire_elder_timers(runtime: &RuntimePaths, now: &jiff::Zoned) {
+    let ci_source = crate::harness::schedule::when::CiSource::read(runtime);
     crate::harness::schedule::fire::fire_due_tasks(
         runtime,
         None,
         now,
         crate::harness::schedule::fire::LoopRunHost::Detached,
+        Some(&ci_source),
     );
     crate::message::fire::wake_due_messages(runtime, now);
 }

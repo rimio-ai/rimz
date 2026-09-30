@@ -877,6 +877,60 @@ fn wait_prompt_is_optional_but_spawn_prompt_is_required() {
 }
 
 #[test]
+fn condition_evidence_reaches_prompt_and_terminal_record() {
+    let entry = TaskEntry {
+        agent: Some("claude".to_owned()),
+        when: Some(vec!["team.stage=Done".to_owned()]),
+        prompt: Some("Inspect {{branch}}".to_owned()),
+        ..TaskEntry::default()
+    };
+    let catalog = TaskCatalog::load(None).unwrap();
+    let evidence = super::super::when::ConditionEvidence {
+        when: "team.stage=Done".to_owned(),
+        hold: Some("30m".to_owned()),
+        held_ms: 1_800_000,
+        readings: std::collections::BTreeMap::from([(
+            "team.stage".to_owned(),
+            Some("Done".to_owned()),
+        )]),
+    };
+    let mut fire = TaskFire::new(
+        "ship",
+        LoadedTask::new("ship", entry, catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap()
+    .with_condition(Some(evidence.clone()));
+    assert_eq!(
+        fire.resolve_effect_prompt(None).unwrap(),
+        "waited on team.stage=Done\nheld 30m [ship]\n{\"team.stage\":\"Done\"}\n\nInspect {{branch}}"
+    );
+    let record = fire.terminal_record(LoopRunResult::Completed);
+    assert_eq!(
+        serde_json::to_value(&record).unwrap()["condition"],
+        serde_json::to_value(&evidence).unwrap()
+    );
+    fire.condition.as_mut().unwrap().hold = None;
+    assert!(
+        fire.resolve_effect_prompt(None)
+            .unwrap()
+            .contains("\nfired [ship]\n")
+    );
+    fire.condition = None;
+    assert_eq!(
+        fire.resolve_effect_prompt(None).unwrap(),
+        "waited on team.stage=Done\nfired by hand [ship]\n\nInspect {{branch}}"
+    );
+}
+
+#[test]
 fn vanished_task_root_keeps_its_persisted_workspace_identity() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("vanished");

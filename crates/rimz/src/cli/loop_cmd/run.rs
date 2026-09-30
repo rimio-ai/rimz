@@ -33,6 +33,7 @@ pub(super) fn run_one(
     mode: LoopRunMode,
     keep: bool,
     signal: Option<rimz::harness::schedule::signal::Signal>,
+    condition: Option<rimz::harness::schedule::when::ConditionEvidence>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let catalog = task_catalog(globals)?;
@@ -90,7 +91,8 @@ pub(super) fn run_one(
         signal,
         check_echo,
         started,
-    )?;
+    )?
+    .with_condition(condition);
     let plan = fire.prepare(&mut |root| {
         if mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly) {
             return Ok(());
