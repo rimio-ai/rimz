@@ -185,12 +185,11 @@ impl LaneRestorePlan {
     }
 
     /// Materialize team entries strictly, then return every planned tab.
-    pub fn materialize(self, store: &Store, session_name: &str) -> anyhow::Result<Vec<ResumeTab>> {
+    pub fn materialize(self, store: &Store, session_name: &str) -> anyhow::Result<ResumePlan> {
         Ok(self
             .recovery
             .materialize(session_name, RecoveryMaterializer::Strict(store))?
-            .resume
-            .tabs)
+            .resume)
     }
 }
 
@@ -472,12 +471,26 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
     posture
 }
 
+/// Durable launch records begun for the fresh seats of one restored team tab,
+/// awaiting that tab's open: the caller records their tier fallbacks once the
+/// tab is open and fails the batch when it is not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TeamTabLaunch {
+    /// Index into `ResumePlan.tabs` of the tab this batch rides in (labels
+    /// collide within one plan, so position is the key).
+    pub tab: usize,
+    pub batch: crate::store::writer::AgentLaunchBatch,
+}
+
 /// What a reborn session should re-seed, and what it deliberately left out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePlan {
     /// The tabs to seed, ordered by their freshest pane activity (the lead is
     /// the focus target). Panes inside each tab are freshest-first.
     pub tabs: Vec<ResumeTab>,
+    /// One entry per team tab in `tabs` whose restore began a launch batch
+    /// (a tab with only resumed seats has none); never for `channel_tabs`.
+    pub team_launches: Vec<TeamTabLaunch>,
     /// Empty named channels restored as one shell pane each, seeded after
     /// `tabs`; they carry no agent, so recovery counts leave them out.
     pub channel_tabs: Vec<ResumeTab>,
@@ -559,6 +572,7 @@ impl DetailedResumePlan {
     fn lower(self) -> ResumePlan {
         ResumePlan {
             tabs: self.tabs.into_iter().map(|planned| planned.tab).collect(),
+            team_launches: Vec::new(),
             channel_tabs: Vec::new(),
             resumed: self.resumed,
             skipped: self.skipped,
@@ -723,6 +737,7 @@ impl RecoveryPlan {
         let mut complete_resumed = self.base_resumed.clone();
         let mut resume = ResumePlan {
             tabs: Vec::with_capacity(self.entries.len()),
+            team_launches: Vec::new(),
             channel_tabs: Vec::new(),
             resumed: self.base_resumed,
             skipped: self.skipped,
@@ -737,8 +752,14 @@ impl RecoveryPlan {
                         continue;
                     };
                     match materialize_team_restore_tab(store, session_name, &self.teams, &planned) {
-                        Ok(tab) => {
+                        Ok((tab, batch)) => {
                             complete_resumed.extend(RecoveryEntry::Team(planned).resumed_keys());
+                            if let Some(batch) = batch {
+                                resume.team_launches.push(TeamTabLaunch {
+                                    tab: resume.tabs.len(),
+                                    batch,
+                                });
+                            }
                             resume.tabs.push(tab);
                         }
                         Err(err) => match materializer {
@@ -1544,7 +1565,7 @@ fn materialize_team_restore_tab(
     session_name: &str,
     teams: &TeamsConfig,
     planned: &PlannedTeamTab,
-) -> anyhow::Result<ResumeTab> {
+) -> anyhow::Result<(ResumeTab, Option<crate::store::writer::AgentLaunchBatch>)> {
     use anyhow::Context;
 
     let team = teams.0.get(&planned.team);
@@ -1606,14 +1627,21 @@ fn materialize_team_restore_tab(
             fallback_channel: planned.channel.as_deref(),
         },
     )
-    .context("building team restore layout")?;
-    crate::harness::assist_log::record_tier_fallbacks(identities);
-    Ok(ResumeTab {
-        label: planned.label.clone(),
-        cwd: planned.cwd.clone(),
-        env: planned.env.clone(),
-        layout,
-    })
+    .context("building team restore layout")
+    .inspect_err(|_| {
+        if let Some(batch) = &batch {
+            let _ = store.fail_agent_launch_batch(batch);
+        }
+    })?;
+    Ok((
+        ResumeTab {
+            label: planned.label.clone(),
+            cwd: planned.cwd.clone(),
+            env: planned.env.clone(),
+            layout,
+        },
+        batch,
+    ))
 }
 
 /// Plan restorable named-team tabs from prior full agent sessions.

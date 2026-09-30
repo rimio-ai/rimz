@@ -720,6 +720,9 @@ fn birth_managed_room(
         }),
         context.session_name(),
     )?;
+    for launch in &outcome.resume.team_launches {
+        rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
+    }
     report_resume(&outcome.resume);
     Ok(())
 }

@@ -547,8 +547,22 @@ fn tier_cohort_resume_records_only_fresh_seat_assists() {
 }
 
 #[cfg(unix)]
+#[test]
+fn tier_lane_resume_records_assist_after_tab_opens() {
+    assert_tier_launch("fallback", "lane");
+}
+
+#[cfg(unix)]
+#[test]
+fn tier_lane_resume_failed_tab_closes_launch_without_assist() {
+    assert_tier_launch("fallback", "lane-fails");
+}
+
+#[cfg(unix)]
 fn assert_tier_launch(routing: &str, surface: &str) {
     let interactive = surface != "subagent";
+    let lane = matches!(surface, "lane" | "lane-fails");
+    let resume = surface == "resume" || lane;
     let env = Env::new();
     for kind in ["claude", "codex"] {
         env.install_agent_hooks(kind);
@@ -652,8 +666,9 @@ fn assert_tier_launch(routing: &str, surface: &str) {
                 launch_id: Some("parent-launch".into()),
                 agent_name: "parent".into(),
                 agent_name_explicit: true,
-                launch: if surface == "resume" {
+                launch: if resume {
                     LaunchParams {
+                        channel: lane.then(|| "restore".into()),
                         profile: Some("duo.coder".into()),
                         team: Some("duo".into()),
                         role: Some("coder".into()),
@@ -682,7 +697,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             },
         ))
         .unwrap();
-    if surface == "resume" {
+    if resume {
         let transcript = env.project_root.join("closed.jsonl");
         std::fs::write(&transcript, "{}\n").unwrap();
         let mut observation =
@@ -710,6 +725,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         .args(match surface {
             "same-pane" => vec!["--mux", "zellij", "agents", "preview"],
             "resume" => vec!["--mux", "zellij", "agents", "duo", "--resume"],
+            "lane" | "lane-fails" => vec!["--mux", "zellij", "agents", "resume", "#restore"],
             _ => vec!["--mux", "zellij", "subagents", "worker", "work"],
         })
         .envs(rimz::workspace::pin_env(
@@ -733,6 +749,15 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         command.env_remove(rimz::harness::launch::ENV_AGENT_KIND);
         command.env_remove(rimz::harness::launch::ENV_AGENT_ID);
     }
+    if lane {
+        command.env(
+            "RIMZ_TEST_ZELLIJ_ASSIST_LOG",
+            env.rimz_home().join("logs/assists.log.jsonl"),
+        );
+    }
+    if surface == "lane-fails" {
+        command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
+    }
     let launched = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|scope| {
         if !interactive {
@@ -741,7 +766,8 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         let output = command.bounded_output();
         launched.store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(
-            surface == "same-pane" || output.as_ref().unwrap().status.success(),
+            surface == "same-pane"
+                || output.as_ref().unwrap().status.success() == (surface != "lane-fails"),
             "{}",
             String::from_utf8_lossy(&output.as_ref().unwrap().stderr)
         );
@@ -756,7 +782,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
                 if payload.state == AgentLaunchState::Starting
                     && payload.launch.profile.as_deref()
                         == Some(match surface {
-                            "resume" => "duo.writer",
+                            "resume" | "lane" | "lane-fails" => "duo.writer",
                             "same-pane" => "preview",
                             _ => "worker",
                         }) =>
@@ -785,7 +811,20 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             )
         })
         .collect();
-    assert_eq!(fallbacks.len(), usize::from(routing == "fallback"));
+    assert_eq!(
+        fallbacks.len(),
+        usize::from(routing == "fallback" && surface != "lane-fails")
+    );
+    if lane {
+        let trace = std::fs::read_to_string(&trace).unwrap();
+        assert!(trace.contains("action\tnew-tab"), "{trace}");
+        assert!(trace.contains("assists-before-new-tab\t0"), "{trace}");
+    }
+    if surface == "lane-fails" {
+        assert!(events.iter().any(|event| matches!(event.kind(),
+            rimz::store::event::EventKind::AgentLaunch(payload)
+                if payload.agent_id == launches[0].1.agent_id && payload.state == AgentLaunchState::Failed)));
+    }
 }
 
 #[cfg(unix)]

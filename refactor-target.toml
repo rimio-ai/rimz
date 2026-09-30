@@ -368,7 +368,8 @@ path = "crates/rimz/src/harness"
 # Signal matching, scope presentation and definition validation share the wildcard predicate.
 # Launch availability, per-scope cap evidence, and committed tier-fallback assists.
 # Ended team-run selection is shared by the read-only producer and CLI settlement.
-surface-budget = 595
+# TeamTabLaunch carries restored seats to CLI placement before fallback assists are recorded.
+surface-budget = 596
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -828,7 +829,6 @@ allowed-dependencies = [
     "config",
     "disk::paths",
     "harness::ancestry",
-    "harness::assist_log",
     "harness::plan",
     "harness::spec",
     "address",
@@ -843,8 +843,8 @@ allowed-dependencies = [
 # Rebirth admission reads distinct checkout roots before materializing tabs.
 # Resume tabs carry the pane identity pin from `workspace::pane_pin_env`.
 # Cohort preflight shares stamped-family reconstruction with unattended restore.
-# Team restore records fallback assists only for newly allocated seats.
-surface-budget = 50
+# TeamTabLaunch carries fresh-seat batches to CLI placement for fallback recording or failure.
+surface-budget = 51
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"

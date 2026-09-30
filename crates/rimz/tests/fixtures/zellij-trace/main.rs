@@ -63,6 +63,18 @@ fn main() {
     writeln!(file, "{line}").expect("write trace line");
 
     let cli = &args[1..];
+    if has_pair(cli, "action", "new-tab") {
+        if let Some(path) = env::var_os("RIMZ_TEST_ZELLIJ_ASSIST_LOG") {
+            let count = std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .count();
+            writeln!(file, "assists-before-new-tab\t{count}").expect("record assist count at open");
+        }
+        if env::var_os("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB").is_some() {
+            std::process::exit(1);
+        }
+    }
     match classify_invocation(cli) {
         Invocation::Version => write_stdout(&format!(
             "zellij {}",
