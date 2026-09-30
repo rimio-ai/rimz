@@ -191,7 +191,7 @@ Launching a named team, or an inline spec of two or more cells, into a named wor
 | closed, RimZ-owned worktree that is clean and merged | Prompts `(remove/fresh/cancel)`, default `cancel`. `remove` deletes the worktree and its branch, then launches. |
 | closed, worktree RimZ did not create | Asks to enter the worktree, as above; add `--resume` to resume the cohort. |
 
-The same table applies to `--from-pr` when it reuses the tree holding the PR head branch. If its tips differ, the PR tip choice comes after the reconciliation prompt and before launching or resuming. A live cohort exits without moving the tip. Choosing `remove` resolves a fresh PR checkout instead.
+The same table applies to `--from-pr` when it reuses the tree holding the PR head branch. If its tips differ, the PR tip choice comes after the reconciliation prompt and before launching or resuming. A live cohort exits without moving the tip. Choosing `remove` resolves a fresh PR checkout instead. `--resume` and `--fresh` are rejected alongside `--from-pr`; to answer in advance, run the printed `-w <holder>` command instead.
 
 Enter takes the default, and an unrecognized answer or end of input prints `canceled; nothing launched`. Without a terminal on stdin, RimZ prints the resume-or-remove command and the `--fresh` command instead of prompting. A single-agent spec launches fresh without reconciling.
 
