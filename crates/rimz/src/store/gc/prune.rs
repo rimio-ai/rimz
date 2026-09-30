@@ -14,7 +14,7 @@ pub enum PruneReason {
     /// `workspace.json` records a project root that no longer exists on disk.
     ProjectRootGone,
     /// No usable `workspace.json` and no durable history — an abandoned
-    /// `rimz start` scaffold (empty `snapshots`/`runs`/`locks`).
+    /// `rimz start` scaffold.
     AbandonedScaffold,
     /// The room was written under an incompatible layout.
     IncompatibleLayout,
@@ -133,6 +133,10 @@ fn classify_workspace(path: &Path) -> Verdict {
 
 /// Whether a workspace dir holds durable history worth preserving.
 fn workspace_has_history(path: &Path) -> bool {
+    // `owned/runs` is not history here: a run record exists only after its
+    // launch recorded the workspace, so a dir holding one classifies as
+    // recorded. Guarded by
+    // `loop_schedule::loop_stop_cancels_a_spawn_run_in_an_unroomed_project`.
     let history = crate::StatePaths::history_paths(path);
     history.events_log.exists()
         || history.latest_snapshot.exists()

@@ -3991,6 +3991,200 @@ fn manual_fire_forwards_interrupt_to_the_check_group() {
 
 #[cfg(unix)]
 #[test]
+fn loop_stop_cancels_a_spawn_run_in_an_unroomed_project() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_loop_codex(&env);
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        Vec::new(),
+    );
+    let pane_fixture = env.project_root.join("panes.json");
+    std::fs::write(&pane_fixture, "[]").unwrap();
+    let command = || {
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&agent_bin))
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env(
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("spawn.log"))
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env("ZELLIJ_PANE_ID", "1")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            );
+        command
+    };
+    loop_ok(
+        &env,
+        &[
+            "loop", "add", "spawn", "--agent", "codex", "--prompt", "fix it", "--every", "15m",
+        ],
+    );
+    let paths = env.state_path_for(&env.project_root);
+    assert!(!paths.workspace_record.exists());
+    let mut runner = command()
+        .args(["loop", "run", "spawn"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn loop runner");
+    let lock_path = loop_run_lock_path(&env, "spawn");
+    let info = wait_for_held_loop_lock(&mut runner, &lock_path);
+    assert_eq!(info.pid, runner.id());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let run = loop {
+        let records = rimz::harness::run::list(&paths).expect("list runs");
+        if let Some(record) = records.first() {
+            if record.status == RunStatus::Running {
+                break record.clone();
+            }
+            // The trace mux opens no provider process, so supply its startup hook.
+            if record.status == RunStatus::Pending {
+                let mut hook = env.hook_command("codex");
+                hook.env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str())
+                    .env(
+                        rimz::harness::launch::ENV_AGENT_NAME,
+                        record.agent_name.as_ref().unwrap().as_str(),
+                    );
+                let output = env
+                    .spawn_payload(
+                        hook,
+                        &json!({
+                            "hook_event_name": "SessionStart",
+                            "session_id": "loop-spawn-session",
+                            "cwd": env.project_root,
+                        })
+                        .to_string(),
+                    )
+                    .wait_with_output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+        if let Some(status) = runner.try_wait().expect("poll loop runner") {
+            let output = runner.wait_with_output().unwrap();
+            panic!(
+                "loop runner exited {status}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for Running run"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(run.loop_task.as_deref(), Some("spawn"));
+    assert!(paths.workspace_record.is_file());
+    assert!(
+        rimz::StatePaths::history_paths(&paths.root)
+            .events_log
+            .is_file()
+    );
+
+    let stopped = command().args(["loop", "stop", "spawn"]).output().unwrap();
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert_eq!(
+        rimz::harness::run::load(&paths, &run.run_id)
+            .unwrap()
+            .status,
+        RunStatus::Canceled
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while runner.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "stopped runner did not exit");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let released = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    released.try_lock().expect("loop lock released");
+    for entry in std::fs::read_dir(env.rimz_home().join("ws")).unwrap() {
+        let name = entry.unwrap().file_name();
+        let name = name.to_string_lossy();
+        assert!(
+            !name
+                .strip_prefix("ws-")
+                .is_some_and(|suffix| suffix.len() == 24
+                    && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())),
+            "fallback workspace directory: {name}"
+        );
+    }
+
+    loop_ok(&env, &["gc", "--all"]);
+    assert!(paths.root.is_dir());
+    assert!(
+        paths
+            .runs_dir
+            .join(format!("{}.json", run.run_id))
+            .is_file()
+    );
+    assert_eq!(
+        rimz::harness::run::load(&paths, &run.run_id)
+            .unwrap()
+            .status,
+        RunStatus::Canceled
+    );
+}
+
+#[cfg(unix)]
+fn trust_loop_codex(env: &Env) {
+    let config = env.agent_config_path("codex");
+    let mut text = std::fs::read_to_string(&config).expect("read codex config");
+    for token in [
+        "session_start",
+        "user_prompt_submit",
+        "subagent_start",
+        "subagent_stop",
+        "stop",
+        "permission_request",
+        "pre_tool_use",
+        "post_tool_use",
+        "pre_compact",
+        "post_compact",
+    ] {
+        text.push_str(&format!(
+            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
+            config.display()
+        ));
+    }
+    let mut table: toml::Table = text.parse().expect("parse codex config");
+    table.insert(
+        "projects".to_owned(),
+        toml::Value::Table(toml::Table::from_iter([(
+            env.project_root.display().to_string(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "trust_level".to_owned(),
+                toml::Value::String("trusted".to_owned()),
+            )])),
+        )])),
+    );
+    std::fs::write(config, toml::to_string(&table).unwrap()).expect("write codex trust");
+}
+
+#[cfg(unix)]
+#[test]
 fn loop_stop_terminates_holder_and_records_cancellation() {
     let env = Env::new();
     loop_ok(
