@@ -3,6 +3,70 @@ use std::path::{Path, PathBuf};
 
 use super::Env;
 
+#[cfg(unix)]
+pub(crate) fn write_gh_pr_head_shim(env: &Env, payload: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = env.home_root.join("forge-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir forge bin");
+    let shim = dir.join("gh");
+    std::fs::write(&shim, format!("#!/bin/sh\nprintf '%s\\n' '{payload}'\n"))
+        .expect("write gh shim");
+    let mut perms = std::fs::metadata(&shim)
+        .expect("gh shim metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&shim, perms).expect("chmod gh shim");
+    dir
+}
+
+#[cfg(unix)]
+pub(crate) fn write_tea_pr_head_shim(env: &Env, payload: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = env.home_root.join("forge-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir forge bin");
+    let shim = dir.join("tea");
+    std::fs::write(
+        &shim,
+        format!(
+            r#"#!/bin/sh
+if [ "$#" -ne 4 ] || [ "$1" != "api" ] || [ "$2" != "repos/org/repo/pulls/1" ] || [ "$3" != "--repo" ] || [ "$4" != "org/repo" ]; then
+    printf 'tea shim: unexpected argv: <%s>\n' "$@" >&2
+    exit 2
+fi
+printf '%s\n' '{payload}'
+"#
+        ),
+    )
+    .expect("write tea shim");
+    let mut perms = std::fs::metadata(&shim)
+        .expect("tea shim metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&shim, perms).expect("chmod tea shim");
+    dir
+}
+
+#[cfg(unix)]
+pub(crate) fn gh_same_repo_head() -> &'static str {
+    r#"{"headRefName":"feature","headRepository":{"name":"repo"},"headRepositoryOwner":{"login":"org"},"isCrossRepository":false}"#
+}
+
+#[cfg(unix)]
+pub(crate) fn gh_fork_head() -> &'static str {
+    r#"{"headRefName":"feature","headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"alice"},"isCrossRepository":true}"#
+}
+
+#[cfg(unix)]
+pub(crate) fn tea_same_repo_head() -> &'static str {
+    r#"{"head":{"label":"feature","ref":"refs/pull/1/head","repo":{"full_name":"org/repo","owner":{"login":"org"}}},"base":{"label":"main","ref":"main","repo":{"full_name":"org/repo"}}}"#
+}
+
+#[cfg(unix)]
+pub(crate) fn tea_fork_head() -> &'static str {
+    r#"{"head":{"label":"feature","ref":"refs/pull/1/head","repo":{"full_name":"alice/fork","owner":{"login":"alice"}}},"base":{"label":"main","ref":"main","repo":{"full_name":"org/repo"}}}"#
+}
 pub fn cargo_bin(name: &str, cargo_env_path: &str) -> PathBuf {
     archive_extracted_bin(name).unwrap_or_else(|| PathBuf::from(cargo_env_path))
 }

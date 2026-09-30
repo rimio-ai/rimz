@@ -27,6 +27,17 @@ use serde_json::Value;
 use crate::common::Env;
 #[cfg(unix)]
 use crate::common::exec_args;
+use crate::common::git::{
+    commit_file, configure_origin_rewrite, git, git_missing, git_stdout, git_succeeds, init_repo,
+    publish_pr_ref, publish_pr_ref_without_branch,
+};
+#[cfg(unix)]
+use crate::common::git::{configure_gitea_origin_rewrite, configure_github_origin_rewrite};
+#[cfg(unix)]
+use crate::common::{
+    gh_fork_head, gh_same_repo_head, path_with_front, tea_fork_head, tea_same_repo_head,
+    write_gh_pr_head_shim, write_tea_pr_head_shim,
+};
 
 #[cfg(unix)]
 fn worktree_exec_request(worktree: &Path) -> ExecRequest {
@@ -2882,17 +2893,6 @@ fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
     );
 }
 
-fn git_missing() -> bool {
-    Command::new("git").arg("--version").output().is_err()
-}
-
-fn init_repo(path: &Path) {
-    git(path, &["init", "-b", "main"]);
-    git(path, &["config", "user.email", "rimz@example.com"]);
-    git(path, &["config", "user.name", "RimZ Test"]);
-    commit_file(path, "README.md", "fixture\n", "initial");
-}
-
 fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageId {
     let session_id = AgentSessionId::from(format!("sess-{channel}"));
     let mut observation =
@@ -2946,156 +2946,6 @@ fn block_message_history(env: &Env) {
     std::fs::write(history, b"blocked").expect("replace message history directory with file");
 }
 
-fn publish_pr_ref(env: &Env, remote_ref: &str) -> (String, String) {
-    publish_pr_ref_inner(env, remote_ref, true)
-}
-
-fn publish_pr_ref_without_branch(env: &Env, remote_ref: &str) -> (String, String) {
-    publish_pr_ref_inner(env, remote_ref, false)
-}
-
-fn publish_pr_ref_inner(env: &Env, remote_ref: &str, publish_branch: bool) -> (String, String) {
-    init_repo(&env.project_root);
-    let remote = env.home_root.join("origin.git");
-    let remote_arg = remote.to_str().expect("utf8 remote path");
-    git(&env.project_root, &["init", "--bare", remote_arg]);
-    git(&env.project_root, &["remote", "add", "origin", remote_arg]);
-    git(&env.project_root, &["push", "-u", "origin", "main"]);
-    let trunk = git_stdout(&env.project_root, &["rev-parse", "main"]);
-
-    git(&env.project_root, &["checkout", "-b", "feature"]);
-    commit_file(&env.project_root, "feature.txt", "feature\n", "feature");
-    let pr_head = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
-    let refspec = format!("{pr_head}:{remote_ref}");
-    git(&env.project_root, &["push", "origin", refspec.as_str()]);
-    if publish_branch {
-        git(&env.project_root, &["push", "origin", "feature"]);
-    }
-    git(&env.project_root, &["checkout", "main"]);
-    git(&env.project_root, &["branch", "-D", "feature"]);
-
-    (pr_head, trunk)
-}
-
-#[cfg(unix)]
-fn configure_github_origin_rewrite(env: &Env) {
-    configure_origin_rewrite(env, "https://github.com/org/repo.git");
-    let remote = env.home_root.join("origin.git");
-    let remote = remote.to_str().expect("utf8 remote path");
-    let key = format!("url.{remote}.insteadOf");
-    git(
-        &env.project_root,
-        &[
-            "config",
-            "--add",
-            key.as_str(),
-            "https://github.com/alice/fork.git",
-        ],
-    );
-}
-
-#[cfg(unix)]
-fn configure_gitea_origin_rewrite(env: &Env) {
-    configure_origin_rewrite(env, "https://gitea.example.test/org/repo.git");
-    let remote = env.home_root.join("origin.git");
-    let remote = remote.to_str().expect("utf8 remote path");
-    let key = format!("url.{remote}.insteadOf");
-    git(
-        &env.project_root,
-        &[
-            "config",
-            "--add",
-            key.as_str(),
-            "https://gitea.example.test/alice/fork.git",
-        ],
-    );
-}
-
-fn configure_origin_rewrite(env: &Env, origin_url: &str) {
-    let remote = env.home_root.join("origin.git");
-    let remote = remote.to_str().expect("utf8 remote path");
-    git(
-        &env.project_root,
-        &["remote", "set-url", "origin", origin_url],
-    );
-    let key = format!("url.{remote}.insteadOf");
-    git(
-        &env.project_root,
-        &["config", "--add", key.as_str(), origin_url],
-    );
-}
-
-#[cfg(unix)]
-fn write_gh_pr_head_shim(env: &Env, payload: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = env.home_root.join("forge-bin");
-    std::fs::create_dir_all(&dir).expect("mkdir forge bin");
-    let shim = dir.join("gh");
-    std::fs::write(&shim, format!("#!/bin/sh\nprintf '%s\\n' '{payload}'\n"))
-        .expect("write gh shim");
-    let mut perms = std::fs::metadata(&shim)
-        .expect("gh shim metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&shim, perms).expect("chmod gh shim");
-    dir
-}
-
-#[cfg(unix)]
-fn write_tea_pr_head_shim(env: &Env, payload: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = env.home_root.join("forge-bin");
-    std::fs::create_dir_all(&dir).expect("mkdir forge bin");
-    let shim = dir.join("tea");
-    std::fs::write(
-        &shim,
-        format!(
-            r#"#!/bin/sh
-if [ "$#" -ne 4 ] || [ "$1" != "api" ] || [ "$2" != "repos/org/repo/pulls/1" ] || [ "$3" != "--repo" ] || [ "$4" != "org/repo" ]; then
-    printf 'tea shim: unexpected argv: <%s>\n' "$@" >&2
-    exit 2
-fi
-printf '%s\n' '{payload}'
-"#
-        ),
-    )
-    .expect("write tea shim");
-    let mut perms = std::fs::metadata(&shim)
-        .expect("tea shim metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&shim, perms).expect("chmod tea shim");
-    dir
-}
-
-#[cfg(unix)]
-fn gh_same_repo_head() -> &'static str {
-    r#"{"headRefName":"feature","headRepository":{"name":"repo"},"headRepositoryOwner":{"login":"org"},"isCrossRepository":false}"#
-}
-
-#[cfg(unix)]
-fn gh_fork_head() -> &'static str {
-    r#"{"headRefName":"feature","headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"alice"},"isCrossRepository":true}"#
-}
-
-#[cfg(unix)]
-fn tea_same_repo_head() -> &'static str {
-    r#"{"head":{"label":"feature","ref":"refs/pull/1/head","repo":{"full_name":"org/repo","owner":{"login":"org"}}},"base":{"label":"main","ref":"main","repo":{"full_name":"org/repo"}}}"#
-}
-
-#[cfg(unix)]
-fn tea_fork_head() -> &'static str {
-    r#"{"head":{"label":"feature","ref":"refs/pull/1/head","repo":{"full_name":"alice/fork","owner":{"login":"alice"}}},"base":{"label":"main","ref":"main","repo":{"full_name":"org/repo"}}}"#
-}
-
-fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {
-    std::fs::write(repo.join(name), contents).expect("write committed file");
-    git(repo, &["add", name]);
-    git(repo, &["commit", "-m", message]);
-}
-
 fn commit_two_files(
     repo: &Path,
     message: &str,
@@ -3108,46 +2958,6 @@ fn commit_two_files(
     std::fs::write(repo.join(second_name), second_contents).expect("write second committed file");
     git(repo, &["add", first_name, second_name]);
     git(repo, &["commit", "-m", message]);
-}
-
-fn git(cwd: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("spawn git");
-    assert!(
-        output.status.success(),
-        "git {} failed\nstdout:\n{}\nstderr:\n{}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
-
-fn git_succeeds(cwd: &Path, args: &[&str]) -> bool {
-    Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("spawn git")
-        .status
-        .success()
-}
-
-fn git_stdout(cwd: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("spawn git");
-    assert!(
-        output.status.success(),
-        "git {} failed: {}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 #[cfg(unix)]
@@ -3301,14 +3111,6 @@ fn write_codex_spawn_marker_shim(env: &Env) -> std::path::PathBuf {
     perms.set_mode(0o755);
     std::fs::set_permissions(&shim, perms).expect("chmod codex marker shim");
     dir
-}
-
-#[cfg(unix)]
-fn path_with_front(dir: &Path) -> std::ffi::OsString {
-    let original = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![dir.to_path_buf()];
-    paths.extend(std::env::split_paths(&original));
-    std::env::join_paths(paths).expect("join PATH")
 }
 
 #[cfg(unix)]

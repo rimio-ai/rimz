@@ -15,11 +15,17 @@
 mod codex;
 mod command;
 mod env;
+pub(crate) mod git;
 mod harness;
 mod payloads;
 #[cfg(unix)]
 pub(crate) mod room;
 mod shim;
+#[cfg(unix)]
+pub(crate) use shim::{
+    gh_fork_head, gh_same_repo_head, tea_fork_head, tea_same_repo_head, write_gh_pr_head_shim,
+    write_tea_pr_head_shim,
+};
 #[cfg(unix)]
 pub(crate) mod ssh_trace;
 pub(crate) mod wait;
