@@ -219,14 +219,15 @@ pub struct SidebarSnapshot {
     pub root_class: RootClass,
     /// Per-machine sidebar behavior preferences. Like `project_root`, this is
     /// machine state the pure reducer can't read, so the reducer leaves it
-    /// default and the `rimz sidebar snapshot` CLI fills it from `MachineConfig`.
+    /// default and [`Self::apply_machine_config`] fills it.
     #[serde(default)]
     pub sidebar: crate::config::SidebarConfig,
     /// Per-machine appearance preferences: palette, glyphs, providers, and
-    /// animations. Filled beside [`Self::sidebar`] from `MachineConfig`.
+    /// animations. Filled beside [`Self::sidebar`] by [`Self::apply_machine_config`].
     #[serde(default)]
     pub theme: crate::config::ThemeConfig,
-    /// Per-machine attention timing preferences.
+    /// Per-machine attention timing preferences, filled beside
+    /// [`Self::sidebar`] by [`Self::apply_machine_config`].
     #[serde(default)]
     pub attention: crate::config::AttentionConfig,
     /// Per-provider dashboard blocks pinned to the bottom of the sidebar — the
@@ -461,6 +462,15 @@ impl SidebarSnapshot {
     pub fn with_root_class(mut self, root_class: RootClass) -> Self {
         self.root_class = root_class;
         self
+    }
+
+    /// Stamp the per-machine `sidebar`, `theme`, and `attention` settings from
+    /// `config`: the one place machine config reaches a snapshot, so every
+    /// path that builds one carries all three or none.
+    pub fn apply_machine_config(&mut self, config: &crate::config::MachineConfig) {
+        self.sidebar = config.sidebar.clone();
+        self.theme = config.theme.clone();
+        self.attention = config.agents.attention;
     }
 
     /// Re-sort the already-built worktree groups after a renderer-local

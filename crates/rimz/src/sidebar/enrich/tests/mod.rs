@@ -109,6 +109,25 @@ fn fold_producing(
 }
 
 #[test]
+fn fold_stamps_the_machine_config_onto_the_rendered_snapshot() {
+    let (_dir, runtime, snapshot) = runtime();
+    let mut config = crate::config::MachineConfig::default();
+    config.sidebar.trunk = Some("develop".into());
+    config.theme.display.provider_list = vec!["codex".into()];
+    config.agents.attention.stalled_after_secs = std::num::NonZeroU32::new(2700).unwrap();
+    let opts = FoldOpts {
+        config: Some(std::sync::Arc::new(config.clone())),
+        ..producing_opts()
+    };
+
+    let folded = fold(snapshot, None, &runtime, opts);
+
+    assert_eq!(folded.sidebar, config.sidebar);
+    assert_eq!(folded.theme, config.theme);
+    assert_eq!(folded.attention, config.agents.attention);
+}
+
+#[test]
 fn claude_host_serving_needs_a_pane_the_provider_still_stands_behind() {
     use crate::agents::runtime_control::RuntimeControlLiveness::{Down, Unknown, Up};
     use crate::sidebar::enrich::claude_host_serving;

@@ -278,9 +278,14 @@ fn snapshot_for_a_room_less_id_carries_the_machine_config() {
     std::fs::create_dir_all(env.rimz_home()).expect("rimz home");
     std::fs::write(
         env.rimz_home().join("config.toml"),
-        "[sidebar]\ntrunk = \"develop\"\n",
+        "[sidebar]\ntrunk = \"develop\"\n[agents.attention]\nstalled_after_secs = 2700\n",
     )
     .expect("write machine config");
+    std::fs::write(
+        env.rimz_home().join("theme.toml"),
+        "[theme.display]\nprovider_list = [\"codex\"]\n",
+    )
+    .expect("write theme config");
 
     let output = env
         .rimz()
@@ -302,6 +307,11 @@ fn snapshot_for_a_room_less_id_carries_the_machine_config() {
     let snapshot: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("snapshot json");
     assert_eq!(snapshot["sidebar"]["trunk"], "develop");
+    assert_eq!(
+        snapshot["theme"]["display"]["provider_list"],
+        serde_json::json!(["codex"])
+    );
+    assert_eq!(snapshot["attention"]["stalled_after_secs"], 2700);
     assert_no_dir_named_for_room_less_id(&env);
 }
 

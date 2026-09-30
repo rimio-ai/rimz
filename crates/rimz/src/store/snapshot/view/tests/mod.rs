@@ -82,6 +82,21 @@ fn row_handle_prefers_role_then_explicit_name_then_profile() {
 }
 
 #[test]
+fn apply_machine_config_stamps_sidebar_theme_and_attention() {
+    let mut config = crate::config::MachineConfig::default();
+    config.sidebar.trunk = Some("develop".into());
+    config.theme.display.provider_list = vec!["codex".into()];
+    config.agents.attention.stalled_after_secs = std::num::NonZeroU32::new(2700).unwrap();
+
+    let mut snapshot = room(Vec::new());
+    snapshot.apply_machine_config(&config);
+
+    assert_eq!(snapshot.sidebar, config.sidebar);
+    assert_eq!(snapshot.theme, config.theme);
+    assert_eq!(snapshot.attention, config.agents.attention);
+}
+
+#[test]
 fn row_preserves_unknown_context_percentage() {
     let cursor = agent("cursor", "sess-1", AgentStatus::Running, 0);
     let row = row_from_agent(&cursor, epoch());
