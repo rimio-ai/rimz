@@ -859,7 +859,15 @@ fn remove_refuses_an_occupied_worktree_until_forced() {
         Occupancy::ProvenLive,
     );
 
-    let refused = remove(&repo, &config, "demo", false, &occupied).expect_err("in-use refusal");
+    let refused = remove(
+        &repo,
+        &config,
+        "demo",
+        &created.marker.worktree_path,
+        false,
+        &occupied,
+    )
+    .expect_err("in-use refusal");
 
     assert!(
         matches!(&refused, WorktreeErr::InUse { name } if name == "demo"),
@@ -870,7 +878,15 @@ fn remove_refuses_an_occupied_worktree_until_forced() {
         "refusal keeps the tree"
     );
 
-    remove(&repo, &config, "demo", true, &occupied).expect("forced removal");
+    remove(
+        &repo,
+        &config,
+        "demo",
+        &created.marker.worktree_path,
+        true,
+        &occupied,
+    )
+    .expect("forced removal");
     assert!(!created.marker.worktree_path.exists());
 }
 
@@ -881,7 +897,15 @@ fn remove_accepts_a_clean_worktree_no_one_occupies() {
     let config = test_worktree_config(dir.path());
     let created = create(&repo, &config, Some("demo"), None, None, false).expect("create");
 
-    remove(&repo, &config, "demo", false, &ProtectionSet::default()).expect("remove");
+    remove(
+        &repo,
+        &config,
+        "demo",
+        &created.marker.worktree_path,
+        false,
+        &ProtectionSet::default(),
+    )
+    .expect("remove");
 
     assert!(!created.marker.worktree_path.exists());
 }
@@ -1020,7 +1044,15 @@ fn removed_hook_uses_repo_cwd_and_failure_is_best_effort() {
         "test ! -e \"$RIMZ_WORKTREE_PATH\" && printf '%s\\n' \"$PWD\" \"$RIMZ_HOOK_EVENT\" \"$RIMZ_WORKTREE_NAME\" \"$RIMZ_WORKTREE_PATH\" \"$RIMZ_WORKTREE_BRANCH\" \"$RIMZ_WORKTREE_REPO_ROOT\" > removed; exit 7",
     );
     let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
-    remove(&repo, &config, "demo", true, &ProtectionSet::default()).unwrap();
+    remove(
+        &repo,
+        &config,
+        "demo",
+        &created.marker.worktree_path,
+        true,
+        &ProtectionSet::default(),
+    )
+    .unwrap();
     assert_eq!(
         std::fs::read_to_string(repo.join("removed")).unwrap(),
         format!(

@@ -72,6 +72,7 @@ pub(super) fn reconcile_cohort_launch(
                     machine_config,
                     store,
                     name,
+                    path,
                     &subject,
                     &protections,
                     &fresh_command,
@@ -125,11 +126,13 @@ fn resume_or_done(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn recreate_or_done(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
     store: &rimz::Store,
     name: &str,
+    path: &Path,
     subject: &str,
     protections: &rimz::worktree::ProtectionSet,
     fresh_command: &str,
@@ -156,6 +159,7 @@ fn recreate_or_done(
         workspace.launch_repo_root(),
         &machine_config.agents.worktree,
         name,
+        path,
         false,
         protections,
     ) {

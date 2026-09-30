@@ -398,6 +398,7 @@ fn remove_worktree(
         &workspace.project_root,
         config,
         &name,
+        &path,
         force,
         &guard.protections,
     ) {

@@ -126,6 +126,179 @@ fn agent_reconcile_live_cohort_keeps_focus() {
     assert_launch_focus(&["teams", "duo", "-w", "review"], true, "cohort");
 }
 
+#[test]
+fn from_pr_live_cohort_preserves_behind_and_equal_tips() {
+    for behind in [true, false] {
+        assert_from_pr_launch(Some(LifecycleSignal::Registered), behind);
+    }
+}
+
+#[test]
+fn from_pr_launch_fast_forwards_and_reports_reuse() {
+    assert_from_pr_launch(None, true);
+}
+
+#[test]
+fn from_pr_closed_cohort_prints_commands_without_moving_tip() {
+    assert_from_pr_launch(Some(LifecycleSignal::Ended), true);
+}
+
+fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool) {
+    use crate::common::git::{configure_github_origin_rewrite, git_stdout, publish_pr_ref};
+
+    let env = Env::new();
+    let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
+    configure_github_origin_rewrite(&env);
+    let tip = if behind { &trunk } else { &pr_head };
+    env.rimz()
+        .args(["worktree", "new", "feature", "--base", tip])
+        .assert()
+        .success();
+    let holder = env.home_root.join("project-worktrees/feature");
+    crate::common::wait::register_calling_agent(&env);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "duo",
+        "layout: lead,worker\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}\n  - {role: worker, agent: worker}",
+        "Complete the work.",
+    );
+    let shim = write_env_dump_shim(&env, "claude");
+    crate::common::write_path_shim(
+        &shim,
+        "gh",
+        &format!("printf '%s\\n' '{}'\n", crate::common::gh_same_repo_head()),
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    if let Some(signal) = cohort.as_ref() {
+        let observation = AgentLifecycleObservation {
+            pane_id: Some(rimz::ids::PaneId::from_parts(
+                rimz::ids::MuxName::Zellij,
+                "terminal_3",
+            )),
+            runtime_owner: Some(rimz::pane::RuntimeOwner::new(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                "provider-session",
+                std::process::id(),
+                None,
+            )),
+            worktree_path: Some(holder.display().to_string()),
+            launch: LaunchParams {
+                team: Some("duo".to_owned()),
+                ..Default::default()
+            },
+            ..AgentLifecycleObservation::new(
+                Some("provider-session".into()),
+                LifecycleSignal::Registered,
+            )
+        };
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "test",
+                &observation,
+            ))
+            .unwrap();
+        if matches!(signal, LifecycleSignal::Ended) {
+            env.store()
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    &workspace.session_name,
+                    "claude",
+                    "rimz.agent-ended",
+                    &AgentLifecycleObservation::new(
+                        Some("provider-session".into()),
+                        LifecycleSignal::Ended,
+                    ),
+                ))
+                .unwrap();
+        }
+    }
+    let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
+    let log = env.home_root.join("mux.log");
+    let args = if cohort.is_some() {
+        ["teams", "duo", "--from-pr", "1"]
+    } else {
+        ["agents", "worker", "--from-pr", "1"]
+    };
+    let output = env.rimz().args(["--mux", "zellij"]).args(args)
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("PATH", path_with_front(&shim))
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "launch-session")
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", env.home_root.join("agent-env"))
+        .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.1")
+        .env("RIMZ_ZELLIJ_BIN", crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")))
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env("RIMZ_TEST_ZELLIJ_LIST_CLIENTS", "1 terminal_3 claude\n")
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"title":"claude"}]"#)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
+        .bounded_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let trace = std::fs::read_to_string(log).unwrap();
+    if let Some(signal) = cohort {
+        if matches!(signal, LifecycleSignal::Ended) {
+            assert!(stderr.contains("rimz worktree remove feature"), "{stderr}");
+            assert!(
+                stderr.contains("rimz teams duo -w feature --fresh"),
+                "{stderr}"
+            );
+        } else {
+            assert!(
+                stderr.contains("team `duo` is already running in worktree `feature`"),
+                "{stderr}"
+            );
+        }
+        assert!(!stderr.contains("fast-forwarding"), "{stderr}");
+        assert!(!stderr.contains("reusing worktree"), "{stderr}");
+        assert_eq!(git_stdout(&holder, &["rev-parse", "HEAD"]), *tip);
+        assert!(!trace.contains("new-tab"), "{trace}");
+        assert_eq!(
+            serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+            before
+        );
+    } else {
+        assert!(
+            stderr.contains("fast-forwarding `feature` to the PR head"),
+            "{stderr}"
+        );
+        let marker = rimz::worktree::read_marker_for_worktree(&holder)
+            .unwrap()
+            .unwrap();
+        assert!(
+            stderr.contains(&format!(
+                "reusing worktree `feature` at {} (PR #1 head branch `feature`)",
+                marker.worktree_path.display()
+            )),
+            "{stderr}"
+        );
+        assert_eq!(git_stdout(&holder, &["rev-parse", "HEAD"]), pr_head);
+        assert_eq!(marker.from_pr, Some(1));
+        assert!(
+            trace
+                .lines()
+                .any(|line| line.split('\t').any(|arg| arg == "new-tab")
+                    && line.split('\t').any(|arg| arg == "--no-focus")),
+            "{trace}"
+        );
+    }
+}
+
 fn assert_launch_focus(args: &[&str], agent: bool, action: &str) {
     assert_launch_focus_version(args, agent, action, "0.45.1");
 }
