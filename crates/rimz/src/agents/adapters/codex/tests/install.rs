@@ -436,6 +436,63 @@ fn untrusted_hooks_report_by_trust_state() {
 }
 
 #[test]
+fn adopting_config_carries_only_trust_and_preserves_target_keys_and_links() {
+    let temp = tempfile::tempdir().unwrap();
+    let named = temp.path().join("named");
+    let native = temp.path().join("native");
+    std::fs::create_dir(&named).unwrap();
+    std::fs::create_dir(&native).unwrap();
+    let existing = named.join("config.toml");
+    let target = native.join("config.toml");
+    let shared = temp.path().join("shared.toml");
+    let original = "model = 'private'\n[hooks.state.named]\ntrusted_hash = 'named'\n[hooks.state.duplicate]\ntrusted_hash = 'old'\n";
+    std::fs::write(&existing, original).unwrap();
+    std::fs::write(&shared, "model = 'shared'\n[hooks.state.native]\ntrusted_hash = 'native'\n[hooks.state.duplicate]\ntrusted_hash = 'current'\n").unwrap();
+    std::os::unix::fs::symlink(&shared, &target).unwrap();
+    let report = crate::agents::account_links::share_settings(
+        crate::agents::definition_by_kind("codex").unwrap(),
+        &named,
+        &native,
+    )
+    .unwrap();
+    assert_eq!(report.notes.len(), 1);
+    assert_eq!(
+        report.notes[0],
+        format!(
+            "carried 1 hook trust entry from {} into {}",
+            existing.display(),
+            target.display()
+        )
+    );
+    let table: toml::Value = toml::from_str(&std::fs::read_to_string(&shared).unwrap()).unwrap();
+    assert_eq!(table["model"].as_str(), Some("shared"));
+    assert_eq!(
+        table["hooks"]["state"]["named"]["trusted_hash"].as_str(),
+        Some("named")
+    );
+    assert_eq!(
+        table["hooks"]["state"]["native"]["trusted_hash"].as_str(),
+        Some("native")
+    );
+    assert_eq!(
+        table["hooks"]["state"]["duplicate"]["trusted_hash"].as_str(),
+        Some("current")
+    );
+    assert_eq!(
+        std::fs::read_to_string(named.join("config.toml.orig")).unwrap(),
+        original
+    );
+    assert_eq!(std::fs::read_link(&existing).unwrap(), target);
+    assert_eq!(std::fs::read_link(&target).unwrap(), shared);
+    install_into(&existing).unwrap();
+    assert!(hooks_installed_at(&target));
+    uninstall_from(&existing).unwrap();
+    assert!(!hooks_installed_at(&target));
+    assert_eq!(std::fs::read_link(&existing).unwrap(), target);
+    assert_eq!(std::fs::read_link(&target).unwrap(), shared);
+}
+
+#[test]
 fn interrupt_trust_is_advisory_for_preflight() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

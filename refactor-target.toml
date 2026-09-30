@@ -137,7 +137,9 @@ upward-dependencies = ["address"]
 # Folder trust shares decisions, previews, guarded writes and room-login rows (+8).
 # Account-cache types, status projection, and reader moved from sidebar for launch consumers.
 # Launch tier stamps and positive exhaustion evidence cross into launch/store consumers.
-surface-budget = 942
+# Named-account settings sharing exposes entry kinds, adoption capabilities, and the link report/error workflow (+8).
+# Account declaration and settings sharing reuse the same canonical-home refusal (+1).
+surface-budget = 951
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

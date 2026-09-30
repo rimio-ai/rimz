@@ -7,6 +7,7 @@
 //! built-ins with validated process plugins.
 
 pub mod account;
+pub mod account_links;
 mod adapters;
 pub mod attribution;
 mod background_shell;
