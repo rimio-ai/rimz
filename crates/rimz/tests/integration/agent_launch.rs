@@ -2311,6 +2311,17 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
 #[cfg(unix)]
 #[test]
 fn resume_exec_waits_for_turn_started_before_self_cleanup() {
+    resume_exec_cleanup_case(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn resume_exec_archives_queued_messages_after_provider_exit() {
+    resume_exec_cleanup_case(true);
+}
+
+#[cfg(unix)]
+fn resume_exec_cleanup_case(queue_before_exit: bool) {
     use notify::Watcher as _;
     use std::time::{Duration, Instant};
 
@@ -2324,8 +2335,21 @@ fn resume_exec_waits_for_turn_started_before_self_cleanup() {
     let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
     let session_id = AgentSessionId::from("sess-resumed");
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "codex",
+            "SessionStart",
+            &AgentLifecycleObservation::new(Some("parent".into()), LifecycleSignal::Registered),
+        ))
+        .unwrap();
     let observe = |name, signal| {
-        let observation = AgentLifecycleObservation::new(Some(session_id.clone()), signal);
+        let mut observation = AgentLifecycleObservation::new(Some(session_id.clone()), signal);
+        observation.agent_name = Some("otter".into());
+        observation.launch.parent_agent_id = Some("parent".into());
+        observation.launch.parent_agent_kind = Some(kind.clone());
+        observation.launch.launch_depth = Some(1);
         store
             .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
                 session_name: &workspace.session_name,
@@ -2451,6 +2475,33 @@ fn resume_exec_waits_for_turn_started_before_self_cleanup() {
     let reopened = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
     assert_eq!(reopened.status, rimz::store::run::RunStatus::Running);
     assert_eq!(reopened.follow_ups, run.follow_ups + 1);
+    let child = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|agent| agent.agent_id == session_id)
+        .unwrap();
+    let queued = rimz::store::message::MessageRecord::new(
+        env.workspace_id.clone(),
+        &child,
+        "follow up after this turn".into(),
+        rimz::store::message::DeliveryGate::Done,
+    );
+    let later = rimz::store::message::MessageRecord::new(
+        env.workspace_id.clone(),
+        &child,
+        "later follow up".into(),
+        rimz::store::message::DeliveryGate::Done,
+    )
+    .with_not_before(Some(jiff::Timestamp::now() + Duration::from_secs(3600)));
+    if queue_before_exit {
+        for record in [&queued, &later] {
+            store
+                .queue_message(record, &workspace.session_name)
+                .unwrap();
+        }
+    }
     let ended = observe(
         "TurnEnded",
         LifecycleSignal::TurnEnded {
@@ -2476,6 +2527,13 @@ fn resume_exec_waits_for_turn_started_before_self_cleanup() {
         "test parent received answer",
     )
     .unwrap();
+    if queue_before_exit {
+        let provider_pid = rimz::harness::run::load(store.paths(), &run.run_id)
+            .unwrap()
+            .provider_pid
+            .unwrap();
+        assert!(rimz::child_process::signal_process_term(provider_pid, None));
+    }
     while wrapper.try_wait().unwrap().is_none() {
         assert!(
             Instant::now() < deadline,
@@ -2510,6 +2568,35 @@ fn resume_exec_waits_for_turn_started_before_self_cleanup() {
         ],
         "self-cleanup must wait for the resumed child's TurnStarted"
     );
+    if !queue_before_exit {
+        return;
+    }
+    let panes = env.write_pane_fixture(&[]);
+    env.rimz()
+        .args(["message", "sweep"])
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .assert()
+        .success();
+    let history = store.list_message_history().unwrap();
+    for record in [&queued, &later] {
+        let archived = history
+            .iter()
+            .find(|row| row.message_id == record.message_id)
+            .expect("ended receiver message archived");
+        assert_eq!(
+            archived.status,
+            rimz::store::message::MessageStatus::Archived
+        );
+        assert_eq!(
+            archived.last_error.as_deref(),
+            Some("receiver ended; rimz message @otter resumes it")
+        );
+    }
+    env.rimz()
+        .args(["message", "show", queued.message_id.as_str()])
+        .assert()
+        .success()
+        .stdout(contains("receiver ended; rimz message @otter resumes it"));
 }
 
 #[cfg(unix)]

@@ -941,6 +941,65 @@ fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
 }
 
 #[test]
+fn sweep_archives_an_ended_receiver_hidden_from_the_runtime_snapshot() {
+    let env = Env::new();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "root",
+        LifecycleSignal::Registered,
+        |_| {},
+    );
+    let store = env.store();
+    let receiver = store.snapshot_cached().unwrap().agents.remove(0);
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        &receiver,
+        "follow up".into(),
+        DeliveryGate::Done,
+    );
+    store.queue_message(&message, "rimz-test").unwrap();
+    append_lifecycle(
+        &env,
+        "claude",
+        "rimz.agent-ended",
+        "root",
+        LifecycleSignal::Ended,
+        |_| {},
+    );
+    assert!(store.snapshot_cached().unwrap().agents.is_empty());
+    let panes = env.write_pane_fixture(&[]);
+    let shown = run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &panes).args([
+            "message",
+            "show",
+            message.message_id.as_str(),
+        ]),
+        "show ended receiver",
+    );
+    assert!(
+        String::from_utf8_lossy(&shown.stdout).contains("has ended"),
+        "{}",
+        String::from_utf8_lossy(&shown.stdout)
+    );
+    run_success(
+        env.rimz()
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args(["message", "sweep"]),
+        "archive ended receiver",
+    );
+    let archived = store
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.message_id == message.message_id)
+        .expect("ended root archived");
+    assert_eq!(archived.status, MessageStatus::Archived);
+    assert_eq!(archived.last_error.as_deref(), Some("receiver ended"));
+}
+
+#[test]
 fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -1631,6 +1690,249 @@ fn parent_message_to_ended_child_reports_missing_conversation() {
         }
         assert!(env.store().list_pending_messages().unwrap().is_empty());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn parent_message_to_resumed_child_waits_for_installed_registration() {
+    use crate::common::{exec_args, path_with_front, write_env_dump_shim};
+    use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
+
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let transcript = env.project_root.join("child.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "parent",
+        LifecycleSignal::Registered,
+        |o| {
+            o.agent_name = Some("parent".into());
+            o.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_1"));
+        },
+    );
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                agent_id: "child".into(),
+                launch_id: Some("launch_child".into()),
+                agent_name: "otter".into(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    parent_agent_id: Some("parent".into()),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                    launch_depth: Some(1),
+                    isolation: Some(rimz::config::Isolation::Host),
+                    ..LaunchParams::default()
+                },
+                state: AgentLaunchState::Starting,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionEnd",
+        "child",
+        LifecycleSignal::Ended,
+        |o| {
+            o.agent_name = Some("otter".into());
+            o.launch.parent_agent_id = Some("parent".into());
+            o.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            o.launch.launch_depth = Some(1);
+            o.launch.isolation = Some(rimz::config::Isolation::Host);
+            o.transcript_path = Some(transcript.display().to_string());
+        },
+    );
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "finished task".into(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("child".into());
+    run.agent_name = Some("otter".into());
+    run.subagent = true;
+    run.status = rimz::store::run::RunStatus::Completed;
+    run.joined_at = Some(jiff::Timestamp::now());
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let shim = write_env_dump_shim(&env, "claude");
+    // Keep the fixture provider alive without producing its registration hook.
+    std::fs::write(shim.join("claude"), "#!/bin/sh\nexec sleep 300\n").unwrap();
+    std::os::unix::fs::symlink(zellij_trace_shim(), shim.join("zellij")).unwrap();
+    let mut parent_pane = agent_pane(&env, "claude");
+    parent_pane.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let panes = env.write_pane_fixture(&[parent_pane, agent_pane(&env, "claude")]);
+    let trace = env.project_root.join("resume-trace.log");
+    let mut sender = traced_rimz(&env, &trace)
+        .args(["--mux", "zellij", "message", "@otter", "follow up"])
+        .env("PATH", path_with_front(&shim))
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "parent")
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let log = std::fs::read_to_string(&trace).unwrap_or_default();
+        if log.contains("\tnew-tab\t") || log.contains("\tnew-pane\t") {
+            break;
+        }
+        assert!(
+            sender.try_wait().unwrap().is_none(),
+            "sender exited before opening: {:?}",
+            sender.wait_with_output().unwrap()
+        );
+        assert!(
+            Instant::now() < deadline,
+            "resume did not open a pane: {log}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The trace mux records opens rather than executing them; start the same exec wrapper in the requested child pane.
+    let mut request = ExecRequest {
+        isolation_default: None,
+        kind: AgentKind::new_unchecked("claude"),
+        action: ExecAction::Resume {
+            session_id: "child".into(),
+            extra_args: Vec::new(),
+        },
+        system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
+        team_prompt: None,
+        skills: None,
+        allowed_tools: None,
+        provider_account: ProviderAccountState::Unbound,
+        run_id: Some(run.run_id.clone()),
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: true,
+        subagent: true,
+        identity: ExecIdentity::default(),
+    };
+    request.identity.name = Some("otter".into());
+    request.identity.launch_id = Some("launch_child".into());
+    request.identity.params.isolation = Some(rimz::config::Isolation::Host);
+    let mut wrapper = traced_rimz(&env, &trace)
+        .args(exec_args(&env, &request))
+        .args(["--mux", "zellij"])
+        .env("SHELL", "/definitely/not/a/shell")
+        .env("PATH", path_with_front(&shim))
+        .env("ZELLIJ_PANE_ID", "3")
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let output = sender.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = store.list_messages().unwrap();
+    let message = records
+        .iter()
+        .find(|record| record.text == "follow up")
+        .unwrap();
+    assert_eq!(message.status, MessageStatus::Queued);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("is resuming"));
+    let shown = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args(["message", "show", message.message_id.as_str()]),
+        "show resumed queue",
+    );
+    assert!(
+        String::from_utf8_lossy(&shown.stdout)
+            .contains("is resuming; delivers when its provider registers")
+    );
+    let zellij = zellij_trace_shim();
+    let provider_pid = rimz::harness::run::load(store.paths(), &run.run_id)
+        .unwrap()
+        .provider_pid
+        .unwrap()
+        .to_string();
+    let hook_env = [
+        ("ZELLIJ_PANE_ID", "3"),
+        ("RIMZ_AGENT_PID", provider_pid.as_str()),
+        ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+        ("RIMZ_TEST_PANE_LIST", panes.to_str().unwrap()),
+        ("RIMZ_ZELLIJ_BIN", zellij.to_str().unwrap()),
+        ("RIMZ_TEST_ZELLIJ_LOG", trace.to_str().unwrap()),
+    ];
+    let registered = env.run_installed_hook_in_pane("claude", &json!({"hook_event_name":"SessionStart", "session_id":"child", "source":"resume", "cwd":env.project_root}).to_string(), &hook_env);
+    assert!(registered.status.success());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let record = store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .find(|record| record.message_id == message.message_id)
+            .unwrap();
+        if record.status == MessageStatus::Sent
+            && trace_lines(&trace).iter().any(|line| is_enter_key(line))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "detached registration delivery did not send: {record:?}; show={:?}; hook={registered:?}; agents={:?}",
+            traced_rimz(&env, &trace)
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .args(["message", "show", message.message_id.as_str()])
+                .output()
+                .unwrap(),
+            store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .unwrap()
+                .agents,
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let submitted = format!(
+        "Type: AGENT_MESSAGE\nFrom: {}\nContent:\n{}",
+        message.sender.render(),
+        message.text
+    );
+    assert_text_then_enter(&trace, &submitted);
+    let started = env.run_installed_hook_in_pane(
+        "claude",
+        &json!({"hook_event_name":"UserPromptSubmit", "session_id":"child", "prompt":submitted})
+            .to_string(),
+        &hook_env,
+    );
+    assert!(started.status.success());
+    assert!(
+        store
+            .list_message_history()
+            .unwrap()
+            .iter()
+            .any(|record| record.message_id == message.message_id
+                && record.status == MessageStatus::Delivered)
+    );
+    wrapper.kill().unwrap();
+    wrapper.wait().unwrap();
 }
 
 #[test]
