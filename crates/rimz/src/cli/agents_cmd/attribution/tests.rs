@@ -244,9 +244,9 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     **Agents**
 
-    **forge team**
+    **`forge` team**
 
-    - **plan|ner** — Claude fable&#96;2@high
+    - **`plan|ner`** — Claude ``fable`2@high``
       - effort: 1h05m active · $1.60
       - subagents: 4 × explorer, 1 × other · $0.90
       - activity: 2 asks · 7 tool calls · 1 compaction
@@ -255,7 +255,7 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     **Other agents**
 
-    - **@codex** — Codex `gpt-5.5@high`
+    - **`@codex`** — Codex `gpt-5.5@high`
       - effort: 1h05m active · $1.60
       - subagents: 4 × explorer, 1 × other · $0.90
       - activity: 2 asks · 7 tool calls · 1 compaction
@@ -283,19 +283,38 @@ fn markdown_single_team_keeps_the_group_name_in_the_summary_only() {
     let output = String::from_utf8(output).expect("utf8");
 
     assert!(output.contains("<code>forge</code> team"));
-    assert!(!output.contains("**forge team**"));
+    assert!(!output.contains("**`forge` team**"));
 }
 
 #[test]
-fn markdown_escapes_emphasis_and_link_punctuation() {
+fn markdown_preserves_identity_punctuation_and_escapes_plain_labels() {
     let mut report = report();
     report.groups[0].members[0].role = Some(r"plan*ner_[x]\tail".to_owned());
+    report.groups[0].members[0].subagents[0].task = Some(r"plan*ner_[x]\tail".to_owned());
     let mut output = Vec::new();
 
     render_markdown(&mut output, &report).expect("render markdown");
     let output = String::from_utf8(output).expect("utf8");
 
-    assert!(output.contains(r"- **plan\*ner\_\[x\]\\tail**"));
+    assert!(output.contains(r"- **`plan*ner_[x]\tail`**"));
+    assert!(output.contains(r"subagents: 4 × plan\*ner\_\[x\]\\tail"));
+}
+
+#[test]
+fn markdown_names_never_render_as_mentionable_text() {
+    let mut report = report();
+    report.groups[0].team.as_mut().expect("team fixture").name = "@ops".to_owned();
+    report.groups[0].members[0].role = Some("@lead".to_owned());
+    report.models[0].model = Some("fable`2@high".to_owned());
+    let mut output = Vec::new();
+    render_markdown(&mut output, &report).expect("render markdown");
+    let output = String::from_utf8(output).expect("utf8");
+
+    for event in pulldown_cmark::Parser::new(&output) {
+        if let pulldown_cmark::Event::Text(text) = event {
+            assert!(!text.contains('@'), "mentionable text: {text}");
+        }
+    }
 }
 
 #[test]
@@ -313,7 +332,23 @@ fn markdown_model_code_span_keeps_punctuation_verbatim() {
     assert_eq!(markdown_code(&model_label(&spanned)), "`a[1]@high`");
 
     spanned.model = Some("fable`2".to_owned());
-    assert_eq!(markdown_code(&model_label(&spanned)), "fable&#96;2@high");
+    assert_eq!(markdown_code(&model_label(&spanned)), "``fable`2@high``");
+    for (label, expected) in [
+        ("`x`", "`` `x` ``"),
+        ("`x", "`` `x ``"),
+        ("x`", "`` x` ``"),
+        ("fable``2@high", "```fable``2@high```"),
+        ("a\nb\rc", "`a b c`"),
+        (" x ", "`  x  `"),
+        ("  ", "`  `"),
+    ] {
+        let rendered = markdown_code(label);
+        assert_eq!(rendered, expected);
+        let events = pulldown_cmark::Parser::new(&rendered).collect::<Vec<_>>();
+        assert!(events.contains(&pulldown_cmark::Event::Code(
+            label.replace(['\r', '\n'], " ").into()
+        )));
+    }
 }
 
 #[test]

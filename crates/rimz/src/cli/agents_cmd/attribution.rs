@@ -253,7 +253,11 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
             writeln!(w)?;
         }
         if show_captions {
-            writeln!(w, "**{}**", markdown_escape(&group_name(group)))?;
+            if let Some(team) = &group.team {
+                writeln!(w, "**{} team**", markdown_code(&team.name))?;
+            } else {
+                writeln!(w, "**Other agents**")?;
+            }
             writeln!(w)?;
         }
         for member in &group.members {
@@ -261,7 +265,7 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
             writeln!(
                 w,
                 "- **{}** — {} {}",
-                markdown_escape(role),
+                markdown_code(role),
                 markdown_escape(&member.provider),
                 markdown_code(&model_label(member)),
             )?;
@@ -357,13 +361,18 @@ fn identity_label(member: &AttributionMember) -> String {
     }
 }
 
-/// A code span renders its contents verbatim, so the span branch only flattens
-/// newlines; the backtick fallback is plain Markdown text and takes the full escape.
+/// Keep labels literal inside code spans, including embedded backticks and boundary spaces.
 fn markdown_code(label: &str) -> String {
-    if label.contains('`') {
-        markdown_escape(label)
+    let label = label.replace(['\r', '\n'], " ");
+    let longest_run = label.split(|ch| ch != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest_run + 1);
+    let needs_padding = label.starts_with('`')
+        || label.ends_with('`')
+        || (label.starts_with(' ') && label.ends_with(' ') && !label.chars().all(|ch| ch == ' '));
+    if needs_padding {
+        format!("{fence} {label} {fence}")
     } else {
-        format!("`{}`", label.replace(['\r', '\n'], " "))
+        format!("{fence}{label}{fence}")
     }
 }
 
