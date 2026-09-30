@@ -17,6 +17,64 @@ use std::time::Duration;
 
 use super::workspace_cache_from_shared_entries;
 
+fn published_workspace_fixture() -> (tempfile::TempDir, RuntimePaths) {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime paths");
+    runtime.ensure_dirs().unwrap();
+    assert!(write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &ProviderSpendingCache::default(),
+    ));
+    (dir, runtime)
+}
+
+fn publish_workspace(runtime: &RuntimePaths, scope_hash: &str, usd: f64) {
+    let mut cache = crate::agents::spending::WorkspaceSpendingCache {
+        scope_hash: scope_hash.to_owned(),
+        ..Default::default()
+    };
+    cache.tally.year.usd = usd;
+    write_workspace_spending_cache(&runtime.workspace_spending_path(scope_hash), &cache);
+}
+
+#[test]
+fn current_publication_serves_sole_mismatched_sidecar() {
+    let (dir, runtime) = published_workspace_fixture();
+    publish_workspace(&runtime, &"a".repeat(64), 12.5);
+    let request = service_request(&runtime, Some(dir.path()), &HeadlineSpec::default());
+
+    let served = super::current_publication(&runtime, &request).unwrap();
+
+    assert_eq!(served.workspace.tally.year.usd, 12.5);
+}
+
+#[test]
+fn current_publication_defaults_for_two_mismatched_sidecars() {
+    let (dir, runtime) = published_workspace_fixture();
+    publish_workspace(&runtime, &"a".repeat(64), 12.5);
+    publish_workspace(&runtime, &"b".repeat(64), 25.0);
+    let request = service_request(&runtime, Some(dir.path()), &HeadlineSpec::default());
+
+    let served = super::current_publication(&runtime, &request).unwrap();
+
+    assert_eq!(served.workspace, Default::default());
+}
+
+#[test]
+fn current_publication_prefers_exact_sidecar() {
+    let (dir, runtime) = published_workspace_fixture();
+    let scope = SpendScope::for_workspace(Some(dir.path()), &[], None);
+    publish_workspace(&runtime, &"a".repeat(64), 12.5);
+    publish_workspace(&runtime, &scope.hash(), 25.0);
+    let request = service_request(&runtime, Some(dir.path()), &HeadlineSpec::default());
+
+    let served = super::current_publication(&runtime, &request).unwrap();
+
+    assert_eq!(served.workspace.tally.year.usd, 25.0);
+    assert_eq!(served.workspace.scope_hash, scope.hash());
+}
+
 #[test]
 fn prune_keeps_only_the_current_scope_publication() {
     let dir = tempfile::tempdir().expect("tempdir");
