@@ -372,8 +372,8 @@ path = "crates/rimz/src/harness"
 # Launch availability, per-scope cap evidence, and committed tier-fallback assists.
 # Ended team-run selection is shared by the read-only producer and CLI settlement.
 # TeamTabLaunch carries restored seats to CLI placement before fallback assists are recorded.
-# Fresh launches share the checkout's team-hold result and reason.
-surface-budget = 598
+# Fresh launches share checkout and channel holds, including the holder's checkout.
+surface-budget = 600
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -850,8 +850,8 @@ allowed-dependencies = [
 # Resume tabs carry the pane identity pin from `workspace::pane_pin_env`.
 # Cohort preflight shares stamped-family reconstruction with unattended restore.
 # TeamTabLaunch carries fresh-seat batches to CLI placement for fallback recording or failure.
-# Checkout holds share board-stage parsing and the fleet's Done predicate.
-surface-budget = 54
+# Checkout and channel holds share board-stage parsing and the fleet's Done predicate.
+surface-budget = 55
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
