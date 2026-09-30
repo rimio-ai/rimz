@@ -75,6 +75,7 @@ fn archive_ended(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
         &event.kind,
         &event.agent_id,
         event.agent_name.as_deref(),
+        None,
         &ctx.workspace.session_name,
     ) {
         warn!(
@@ -88,6 +89,7 @@ fn archive_ended(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
         &event.kind,
         &event.agent_id,
         event.agent_name.as_deref(),
+        None,
         "receiver ended",
         &ctx.workspace.session_name,
     ) {

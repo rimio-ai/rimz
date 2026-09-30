@@ -232,6 +232,7 @@ fn archive_selects_only_matching_open_messages() {
                     &target.kind,
                     &target.agent_id,
                     target.agent_name.as_deref(),
+                    None,
                     "receiver ended",
                     "session",
                 )
@@ -278,8 +279,37 @@ fn archive_selects_only_matching_open_messages() {
 }
 
 #[test]
+fn archive_messages_for_card_preserves_records_newer_than_the_observed_end() {
+    let q = Queue::new();
+    let ended_at = Timestamp::UNIX_EPOCH + Duration::from_secs(60);
+    let before = q.queue_with(1, |record| {
+        record.enqueued_at = ended_at - Duration::from_nanos(1);
+    });
+    q.queue_with(2, |record| record.enqueued_at = ended_at);
+    let after = q.queue_with(3, |record| {
+        record.enqueued_at = ended_at + Duration::from_nanos(1);
+    });
+
+    assert_eq!(
+        q.archive_messages_for_card(
+            &before.kind,
+            &before.agent_id,
+            before.agent_name.as_deref(),
+            Some(ended_at),
+            "receiver ended",
+            "session",
+        )
+        .unwrap(),
+        2
+    );
+    assert_eq!(q.live(), vec![after]);
+    assert_eq!(q.count("message.archived"), 2);
+}
+
+#[test]
 fn archive_messages_watching_card_expires_only_unmet_conditions() {
     let q = Queue::new();
+    let ended_at = Timestamp::UNIX_EPOCH + Duration::from_secs(60);
     let watched = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
     let condition = WhenCondition {
         kind: watched.kind.clone(),
@@ -290,11 +320,14 @@ fn archive_messages_watching_card_expires_only_unmet_conditions() {
         dwell_secs: 7_200,
         met_at: None,
     };
-    let unmet = q.record(1).with_when(vec![condition.clone()]);
+    let mut unmet = q.record(1).with_when(vec![condition.clone()]);
+    unmet.enqueued_at = ended_at;
+    let mut newer = q.record(3).with_when(vec![condition.clone()]);
+    newer.enqueued_at = ended_at + Duration::from_nanos(1);
     let mut met_condition = condition;
     met_condition.met_at = Some(Timestamp::now());
     let met = q.record(2).with_when(vec![met_condition]);
-    for record in [&unmet, &met] {
+    for record in [&unmet, &met, &newer] {
         q.queue_message(record, "session").unwrap();
     }
 
@@ -303,14 +336,16 @@ fn archive_messages_watching_card_expires_only_unmet_conditions() {
             &watched.kind,
             &watched.agent_id,
             Some("planner"),
+            Some(ended_at),
             "session",
         )
         .unwrap();
 
     assert_eq!(archived, 1);
     let pending = q.live();
-    assert_eq!(pending.len(), 1);
+    assert_eq!(pending.len(), 2);
     assert_eq!(pending[0].message_id, met.message_id);
+    assert_eq!(pending[1], newer);
     let archived = q
         .history()
         .into_iter()
@@ -320,6 +355,18 @@ fn archive_messages_watching_card_expires_only_unmet_conditions() {
         archived.last_error.as_deref(),
         Some("watched agent @planner ended before 'running 2h' was met")
     );
+    assert_eq!(
+        q.archive_messages_watching_card(
+            &watched.kind,
+            &watched.agent_id,
+            Some("planner"),
+            None,
+            "session",
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(q.live(), vec![met]);
 }
 
 #[test]

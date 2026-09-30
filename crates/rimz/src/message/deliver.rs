@@ -134,6 +134,7 @@ pub enum DeliveryVerdict {
         blocker: Option<MessageId>,
     },
     ReceiverGone,
+    ReceiverEnded,
     Compacting,
     GateClosed {
         gate: DeliveryGate,
@@ -472,15 +473,60 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
             continue;
         };
         if heads_seen.insert(head.message_id.to_string()) {
+            let snapshot = snapshot.expect("queued delivery requires a resolution snapshot");
             let report = attempt_delivery(
                 workspace,
                 store,
                 &head.message_id,
                 DeliveryPolicy::Boundary,
                 &pending,
-                snapshot.expect("queued delivery requires a resolution snapshot"),
+                snapshot,
             )?;
             if let DeliveryReport::Stopped(verdict) = report {
+                let ended_receiver = match &verdict {
+                    Some(DeliveryVerdict::ReceiverEnded) => snapshot
+                        .agents
+                        .iter()
+                        .find(|agent| head.same_agent_card(agent))
+                        .cloned(),
+                    Some(DeliveryVerdict::ReceiverGone) => store
+                        .runtime_projection(crate::RuntimeScope::Audit)?
+                        .agents
+                        .into_iter()
+                        .find(|agent| head.same_agent_card(agent))
+                        .filter(|agent| agent.ended_at.is_some()),
+                    _ => None,
+                };
+                if let Some(receiver) = ended_receiver {
+                    let reason = if receiver.is_launched_child() {
+                        let target = head.address.clone().unwrap_or_else(|| {
+                            crate::address::agent_handle(
+                                &receiver,
+                                &crate::address::addressable_agents(snapshot),
+                                true,
+                            )
+                        });
+                        format!("receiver ended; rimz message {target} resumes it")
+                    } else {
+                        "receiver ended".to_owned()
+                    };
+                    store.archive_messages_watching_card(
+                        &receiver.kind,
+                        &receiver.agent_id,
+                        receiver.name.as_deref(),
+                        receiver.ended_at,
+                        &workspace.session_name,
+                    )?;
+                    store.archive_messages_for_card(
+                        &receiver.kind,
+                        &receiver.agent_id,
+                        receiver.name.as_deref(),
+                        receiver.ended_at,
+                        &reason,
+                        &workspace.session_name,
+                    )?;
+                    continue;
+                }
                 let recorded = match verdict {
                     Some(DeliveryVerdict::NoPane { pinned_pane_id }) => {
                         Some(no_pane_blocker(pinned_pane_id.as_ref()))
@@ -616,6 +662,9 @@ impl DeliveryCheck {
         if !self.agent.present {
             return DeliveryVerdict::ReceiverGone;
         }
+        if self.agent.ended {
+            return DeliveryVerdict::ReceiverEnded;
+        }
         if self.gate.compacting {
             return DeliveryVerdict::Compacting;
         }
@@ -690,6 +739,7 @@ pub struct FifoCheck {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AgentCheck {
     pub present: bool,
+    pub ended: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -843,6 +893,7 @@ fn evaluate_delivery<'a>(
         fifo,
         agent: AgentCheck {
             present: agent.is_some(),
+            ended: agent.is_some_and(|agent| agent.ended_at.is_some()),
         },
         gate: GateCheck {
             provider_start_pending: agent
@@ -979,7 +1030,7 @@ fn delivery_candidate<'a>(
     let evaluation = evaluate_delivery(&message, pending, snapshot, now);
     let check = &evaluation.check;
     if matches!(policy, DeliveryPolicy::Boundary)
-        && (!message.is_deliverable(now) || !check.fifo.head || !check.gate_ready())
+        && (!message.is_deliverable(now) || !check.passes())
     {
         return Candidacy::Refused(check.verdict());
     }
@@ -1036,6 +1087,32 @@ pub(super) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ended_receiver_refuses_before_compaction_and_gate_checks() {
+        let now = Timestamp::from_second(10_000).unwrap();
+        let mut receiver = agent("session", AgentStatus::Idle);
+        receiver.ended_at = Some(now);
+        let candidate = message(&receiver, 1, "follow up");
+        let live = snapshot(receiver, true, now);
+        let mut check = explain(&candidate, std::slice::from_ref(&candidate), &live, now);
+        assert_eq!(check.verdict(), DeliveryVerdict::ReceiverEnded);
+        check.gate.compacting = true;
+        check.gate.open = false;
+        assert_eq!(check.verdict(), DeliveryVerdict::ReceiverEnded);
+        check.agent.present = false;
+        assert_eq!(check.verdict(), DeliveryVerdict::ReceiverGone);
+        assert!(matches!(
+            delivery_candidate(
+                std::slice::from_ref(&candidate),
+                &live,
+                &candidate.message_id,
+                DeliveryPolicy::Boundary,
+                now
+            ),
+            Candidacy::Refused(DeliveryVerdict::ReceiverEnded)
+        ));
+    }
 
     #[test]
     fn resumed_provider_refuses_delivery_before_resume_recovery() {
@@ -1374,7 +1451,10 @@ mod tests {
                 head: true,
                 blocker: None,
             },
-            agent: AgentCheck { present: true },
+            agent: AgentCheck {
+                present: true,
+                ended: false,
+            },
             gate: GateCheck {
                 provider_start_pending: false,
                 gate: DeliveryGate::Done,
