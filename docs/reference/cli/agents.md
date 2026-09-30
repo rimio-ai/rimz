@@ -595,7 +595,7 @@ forge team · 3 agents · 59m active · $42.73 · 10 messages (1 from you)
 [...]
 ```
 
-`--md` emits the panel's figures and wording as a collapsed `<details>` block: a totals summary that links RimZ to its repository, member bullets under `**Agents**`, and model bullets under `**Models**` as `` - `{model id}` — {cost} · {token split} `` (with `unknown` outside the code span). It omits the `branch` and `since` labels, and an empty scope emits nothing.
+`--md` emits the panel's figures and wording as a collapsed `<details>` block: a totals summary that links RimZ to its repository, member bullets under `**Agents**` as `` - **`{role or @handle}`** — {provider} `{model}@{effort}` ``, and model bullets under `**Models**` as `` - `{model id}` — {cost} · {token split} `` (with `unknown` outside the code span). Multiple groups have captions as `` **`{team}` team** `` or `**Other agents**`. Identities, team names, and model ids sit in code spans so those names never mention a GitHub user in a pasted footnote. It omits the `branch` and `since` labels, and an empty scope emits nothing.
 
 The `--json` document has the keys `schema` (`7`), `generated_at`, `rimz_version`, `scope`, `groups`, `models`, and `totals`. A missing active-time or cost figure is `null`, never zero or wall-clock time. Lists arrive in rendered order.
 

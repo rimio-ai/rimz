@@ -496,7 +496,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     ));
     assert!(markdown.contains(" active ·"));
     assert!(markdown.contains(" messages (1 from you)</summary>"));
-    assert!(markdown.contains("- **planner** — Codex `gpt-5.5@high`"));
+    assert!(markdown.contains("- **`planner`** — Codex `gpt-5.5@high`"));
     assert!(markdown.contains("  - activity: 1 ask"));
     assert!(markdown.contains("  - messages: 1 from you · 1 to teammates"));
     assert!(markdown.contains("  - tokens: "));
