@@ -512,10 +512,12 @@ mod tests {
             "log outran the stamp → a just-appended event is unreflected; re-project"
         );
 
-        // Republishing catches the stamp up; the guard serves again.
+        // Republishing catches the stamp up; the guard serves again. The
+        // republish can alias the warm parse (see `read_fresh_latest_cold`),
+        // so a cold reader checks what is on disk.
         rebuild(&paths).unwrap();
         assert!(
-            read_fresh_latest(&paths).is_some(),
+            read_fresh_latest_cold(&paths).is_some(),
             "republish reflects the appended event → served again"
         );
     }
@@ -538,21 +540,12 @@ mod tests {
         legacy["snapshot_version"] = serde_json::json!(0);
         atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
 
-        // Read on a fresh thread. The parse cache is thread-local and keyed on
-        // `(path, mtime, len)`; rewriting the version keeps the byte length
-        // identical, so on a coarse-mtime filesystem the republish lands in the
-        // same mtime tick and the warm cache would serve the prior (current-
-        // version) parse. A production version change is always a cold-cache
-        // event — a new binary rebuilds from scratch — so a cold reader is the
-        // faithful check that the on-disk mismatch is rejected.
-        let rejected = std::thread::scope(|scope| {
-            scope
-                .spawn(|| read_fresh_latest(&paths).is_none())
-                .join()
-                .unwrap()
-        });
+        // Rewriting the version keeps the byte length identical. A production
+        // version change is always a cold-cache event — a new binary rebuilds
+        // from scratch — so a cold reader is the faithful check that the
+        // on-disk mismatch is rejected.
         assert!(
-            rejected,
+            read_fresh_latest_cold(&paths).is_none(),
             "old latest.json with a mismatched version is not fresh"
         );
         let rebuilt = build_from(&paths).unwrap();
@@ -560,6 +553,15 @@ mod tests {
             rebuilt.snapshot_version == SNAPSHOT_VERSION,
             "fallback rebuild stamps the current snapshot version"
         );
+    }
+
+    /// [`read_fresh_latest`] on a fresh thread, past this thread's parse
+    /// cache. The cache is keyed on `(path, mtime, len)`, so a republish at
+    /// equal byte length inside one coarse mtime tick serves the prior parse —
+    /// the aliasing `disk::parse_cache` accepts by design. A test asserting on
+    /// the republished file reads it cold.
+    fn read_fresh_latest_cold(paths: &StatePaths) -> Option<SidebarSnapshot> {
+        std::thread::scope(|scope| scope.spawn(|| read_fresh_latest(paths)).join().unwrap())
     }
 
     fn lifecycle(workspace: &WorkspaceId, agent_id: &str, agent_pid: Option<u32>) -> EventEnvelope {
