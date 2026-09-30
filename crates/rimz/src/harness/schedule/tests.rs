@@ -5,6 +5,32 @@ use jiff::civil::date;
 use jiff::civil::Weekday::{Friday, Monday, Wednesday};
 
 #[test]
+fn true_condition_without_hold_is_due() {
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    let entry = TaskEntry {
+        when: Some(vec!["ci=passed".to_owned()]),
+        ..spawn_entry()
+    };
+    let timing = TaskTiming::evaluate(
+        &parse_trigger("ready", &entry),
+        catalog::TaskSource::Config,
+        Some(seconds_before(now.timestamp(), 1)),
+        None,
+        &now,
+    )
+    .with_condition(
+        &when::Verdict {
+            ok: true,
+            readings: Default::default(),
+        },
+        None,
+        now.timestamp(),
+    );
+    assert!(matches!(timing.state(), TaskTimingState::Due(_)));
+    assert_eq!(timing.state().condition_label().as_deref(), Some("due"));
+}
+
+#[test]
 fn condition_rows_validate_describe_and_have_standing_lifetimes() {
     let mut entry = TaskEntry {
         when: Some(vec!["team.stage=Done".to_owned(), "ci=passed".to_owned()]),

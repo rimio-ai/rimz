@@ -37,7 +37,10 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
     let meta = task.entry().wait_meta.as_ref();
     let armed_at = meta.map(|meta| meta.armed_at);
     let trigger = match &parsed.trigger {
-        Trigger::Condition { .. } => return None,
+        Trigger::Condition { expr, hold } => PendingWaitTrigger::Condition {
+            when: expr.to_string(),
+            hold: hold.map(super::arm::duration_label),
+        },
         Trigger::Schedule(schedule) => {
             // A deadline shortens row lifetime, but does not make a recurring
             // clock's next occurrence derivable from its original arm time.
@@ -102,6 +105,7 @@ pub fn pending_waits_by_session(
                 | PendingWaitTrigger::Check { .. }
                 | PendingWaitTrigger::File { .. } => (1, None),
                 PendingWaitTrigger::Signal { .. }
+                | PendingWaitTrigger::Condition { .. }
                 | PendingWaitTrigger::Subagent { .. }
                 | PendingWaitTrigger::Team { .. } => (2, None),
             };

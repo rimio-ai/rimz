@@ -180,6 +180,11 @@ fn next_cell(timing: &schedule::TaskTiming, now: Timestamp) -> ui::Cell {
         }
         schedule::TaskTimingState::Listening { .. } => ui::cell("listening"),
         schedule::TaskTimingState::Watching { .. } => ui::cell("watching"),
+        state @ (schedule::TaskTimingState::Waiting { .. }
+        | schedule::TaskTimingState::Holding { .. }
+        | schedule::TaskTimingState::Fired) => {
+            ui::cell(state.condition_label().unwrap_or_default())
+        }
         schedule::TaskTimingState::Invalid
         | schedule::TaskTimingState::Unarmed
         | schedule::TaskTimingState::NoOccurrence => ui::cell("-").dash(),
@@ -535,6 +540,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
 
     let mut out = ui::out();
     write_show_headline(&mut out, &args.name, &timing, now)?;
+    condition::write_show(&mut out, task.entry(), &timing)?;
     if let Some((verdict, style)) = verdict_line(&records, now) {
         writeln!(out, "  {}", ui::paint(style, &verdict))?;
     }
@@ -677,6 +683,11 @@ fn write_show_headline(
         }
         schedule::TaskTimingState::Listening { .. } => write!(out, " · listening")?,
         schedule::TaskTimingState::Watching { .. } => write!(out, " · watching")?,
+        state @ (schedule::TaskTimingState::Waiting { .. }
+        | schedule::TaskTimingState::Holding { .. }
+        | schedule::TaskTimingState::Fired) => {
+            write!(out, " · {}", state.condition_label().unwrap_or_default())?
+        }
         schedule::TaskTimingState::Invalid
         | schedule::TaskTimingState::Unarmed
         | schedule::TaskTimingState::NoOccurrence => {}

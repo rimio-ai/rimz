@@ -152,6 +152,19 @@ Your own families observe and skip like the built-in ones, so it pays to name th
 
 The emitting process fires the subscribers itself, so this works with no daemon and no open room. Nothing is queued or replayed either: a signal reaches the subscriptions armed at that instant, which is why an agent arms its wait before starting the work that will emit it.
 
+## Wait for Done and green
+
+A CI event can arrive before your team finishes review. Subscribing only to that event misses the later moment when both are ready. A condition reads their current state in either order and can require it to stay true before opening a PR.
+
+From the team's worktree, with its room open:
+
+```sh
+rimz loop add open-pr --when 'team.stage=Done && ci=passed' --for 30m --once --agent claude --prompt 'Open the pull request for this worktree.'
+rimz loop show open-pr
+```
+
+The receipt names the checkout being observed. The sidebar checks its board and CI each tick: `waiting` becomes `holding`, and either reading turning false restarts the 30 minutes. Once ready, RimZ opens a fresh supervised agent pane with the prompt and removes the one-shot task. CI comes from the room's sidebar, so leave that room open. Cancel before it fires with `rimz loop remove open-pr`; [conditions](../reference/cli/loop.md#conditions) lists the expression rules and unknown readings.
+
 ## Guard a turn with a check
 
 Most recurring automation should stay a plain script. A cron job that runs the test suite, syncs a mirror, or checks a certificate's expiry is deterministic, instant, and free; spending an agent turn to re-check a world that has not changed is burning tokens on `true`. What a script cannot do is recover. When the command that was supposed to pass fails at 2 a.m., the script's whole error path is "page a human."

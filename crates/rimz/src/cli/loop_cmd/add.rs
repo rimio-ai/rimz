@@ -40,6 +40,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let action_kind = validate_add_args(&args)?;
     let workspace = resolve_add_workspace(&args)?;
     let project_root = workspace.project_root.clone();
+    condition::validate(&args.when, &project_root)?;
     let action = resolve_add_action(&args, &workspace, action_kind)?;
     let action = match action {
         AddTaskAction::Deliver {
@@ -103,6 +104,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
                 "no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one"
             )?;
         }
+        condition::write_no_room_hint(&mut out, parsed)?;
     }
     Ok(())
 }
@@ -115,7 +117,29 @@ fn add_delivery(
     matches: BTreeMap<String, String>,
 ) -> Result<()> {
     let timing = resolve_add_timing(args)?;
-    let trigger = if let Some(selector) = selector {
+    let trigger = if !args.when.is_empty() {
+        let parsed = schedule::parse_trigger(
+            &args.name,
+            &TaskEntry {
+                when: Some(args.when.clone()),
+                hold: args.hold.clone(),
+                once: args.once.then_some(true),
+                ..TaskEntry::default()
+            },
+        )?;
+        let schedule::Trigger::Condition { expr, hold } = parsed.trigger else {
+            unreachable!("the entry contains only condition fields")
+        };
+        DeliveryTrigger::Condition {
+            expr,
+            hold,
+            lifetime: if args.once {
+                SubscriptionLifetime::Once
+            } else {
+                SubscriptionLifetime::Standing
+            },
+        }
+    } else if let Some(selector) = selector {
         DeliveryTrigger::Signal {
             selector,
             matches,
@@ -204,6 +228,10 @@ fn add_delivery(
         "live while a room for {} is open",
         entry.root.display()
     )?;
+    if entry.when.is_some() && !render::room_open(&entry.root) {
+        writeln!(out, "no room is open there; start one with `rimz start`")?;
+        condition::write_no_room_hint(&mut out, task.trigger().as_ref().map_err(Clone::clone)?)?;
+    }
     Ok(())
 }
 
@@ -211,6 +239,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     schedule::validate_name(&args.name)?;
     let project_error = args.project.then(|| {
         [
+            (!args.when.is_empty(), "--project tasks cannot use --when yet; add it without --project"),
             (
                 args.wait.is_some(),
                 "--project tasks cannot use --wait; project config cannot pin a machine-local session",
@@ -253,8 +282,8 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     if !args.matches.is_empty() && args.signal.is_none() {
         bail!("--match requires --signal");
     }
-    if args.once && args.signal.is_none() {
-        bail!("--once requires --signal");
+    if args.once && args.signal.is_none() && args.when.is_empty() {
+        bail!("--once requires --signal or --when");
     }
     if args.wait.is_some()
         && args
@@ -410,6 +439,8 @@ fn build_task_entry(
         every: args.every.clone(),
         cron: args.cron.clone(),
         signal: args.signal.clone(),
+        when: (!args.when.is_empty()).then(|| args.when.clone()),
+        hold: args.hold.clone(),
         matches: (!matches.is_empty()).then_some(matches),
         once: args.once.then_some(true),
         deadline: timing.deadline,
@@ -739,7 +770,12 @@ fn write_add_feedback(
         }
     }
     let suffix = if parsed.once { "; then removed" } else { "" };
-    writeln!(out, "trigger: fires {}{suffix}", parsed.describe())?;
+    if matches!(parsed.trigger, schedule::Trigger::Condition { .. }) {
+        writeln!(out, "trigger: {}{suffix}", parsed.describe())?;
+        condition::write_receipt(out, entry, parsed)?;
+    } else {
+        writeln!(out, "trigger: fires {}{suffix}", parsed.describe())?;
+    }
     if entry.surplus.is_some() || entry.surplus_after.is_some() {
         let kind = action_kind.unwrap_or("provider");
         let threshold = entry

@@ -50,6 +50,7 @@ use super::GlobalFlags;
 use super::render as ui;
 
 mod add;
+mod condition;
 mod render;
 mod run_report;
 #[path = "run.rs"]
@@ -190,11 +191,17 @@ struct AddArgs {
         conflicts_with_all = ["at", "every", "cron", "in_after"]
     )]
     signal: Option<String>,
+    /// Fire while a state expression holds; repeated clauses are ANDed.
+    #[arg(long, value_name = "EXPR", conflicts_with_all = ["at", "every", "cron", "in_after", "signal", "until"])]
+    when: Vec<String>,
+    /// Require the whole condition to hold continuously for this duration.
+    #[arg(long = "for", value_name = "DUR", requires = "when")]
+    hold: Option<String>,
     /// Require a top-level signal payload field to equal this value.
     #[arg(long = "match", value_name = "KEY=VALUE", requires = "signal")]
     matches: Vec<String>,
-    /// Remove a signal task after its first fire.
-    #[arg(long, requires = "signal")]
+    /// Remove a signal or condition task after its first fire.
+    #[arg(long)]
     once: bool,
     /// Project root whose room hosts the task; resolved to an absolute root.
     #[arg(long, default_value = ".")]
@@ -425,7 +432,9 @@ fn observe_task_timing(
     now_zoned: &jiff::Zoned,
 ) -> schedule::TaskTiming {
     let last_fire = stamps.get(name).copied();
-    schedule::TaskTiming::evaluate(task.trigger(), task.source(), last_fire, arming, now_zoned)
+    let timing =
+        schedule::TaskTiming::evaluate(task.trigger(), task.source(), last_fire, arming, now_zoned);
+    condition::observe(name, task.entry(), timing, now_zoned.timestamp())
 }
 
 fn task_next_fire_text(

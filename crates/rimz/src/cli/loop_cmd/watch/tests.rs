@@ -24,6 +24,7 @@ fn dashboard_row(name: &str, state: RowState, failed: bool) -> WatchRow {
             RowState::Blocked => "blocked · trust".to_owned(),
             RowState::Listening => "listening".to_owned(),
             RowState::Watching => "watching".to_owned(),
+            RowState::Condition => "waiting · ci: pending".to_owned(),
             RowState::Upcoming(next) => ui::until_label(next, now),
             RowState::NeverRun => "—".to_owned(),
         },

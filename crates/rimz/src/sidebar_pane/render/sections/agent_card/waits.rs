@@ -31,8 +31,12 @@ pub(super) fn wait_entry_lines(
     waits: &[PendingWait],
     shells: &[BackgroundShell],
 ) -> Vec<Line<'static>> {
-    let (signals, others): (Vec<_>, Vec<_>) = visible_waits(waits)
-        .partition(|wait| matches!(wait.trigger, PendingWaitTrigger::Signal { .. }));
+    let (signals, others): (Vec<_>, Vec<_>) = visible_waits(waits).partition(|wait| {
+        matches!(
+            wait.trigger,
+            PendingWaitTrigger::Signal { .. } | PendingWaitTrigger::Condition { .. }
+        )
+    });
     let mut lines = Vec::new();
     for entry in others
         .into_iter()
@@ -49,9 +53,9 @@ fn wait_entry(ctx: &RowCtx<'_>, wait: &PendingWait) -> Entry {
     let theme = ctx.theme;
     let lead = match wait.trigger {
         PendingWaitTrigger::Timer { .. } => theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
-        PendingWaitTrigger::Signal { .. } | PendingWaitTrigger::Team { .. } => {
-            theme.glyph(GlyphRole::CardWaitSignal).to_owned()
-        }
+        PendingWaitTrigger::Signal { .. }
+        | PendingWaitTrigger::Team { .. }
+        | PendingWaitTrigger::Condition { .. } => theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
         _ => role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
     };
     entry(

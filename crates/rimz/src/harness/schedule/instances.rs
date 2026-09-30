@@ -112,7 +112,7 @@ pub(super) fn insert_delivery(
     let mut tasks = load_strict_from(&paths.root)?.0;
     let arming = super::arming::load();
     let now = Timestamp::now();
-    if entry.signal.is_some()
+    if (entry.signal.is_some() || entry.when.is_some())
         && let Some((name, _)) = tasks.iter().find(|(name, current)| {
             let key = super::arming::TaskKey::for_task(
                 name,
@@ -141,6 +141,9 @@ pub(super) fn insert_delivery(
                     .flatten()
                     .eq(entry.matches.iter().flatten())
                 && current.resolved_root() == entry.resolved_root()
+                && current.when == entry.when
+                && current.hold == entry.hold
+                && (entry.when.is_none() || current.run_dir() == entry.run_dir())
         })
     {
         return Ok((name.clone(), true));

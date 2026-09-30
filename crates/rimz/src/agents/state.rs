@@ -182,6 +182,10 @@ pub enum PendingWaitTrigger {
     Signal {
         selector: String,
     },
+    Condition {
+        when: String,
+        hold: Option<String>,
+    },
 }
 
 impl PendingWait {
@@ -201,6 +205,7 @@ impl PendingWait {
             }
             PendingWaitTrigger::File { .. } => format!("wakes when {headline}"),
             PendingWaitTrigger::Signal { .. } => format!("wakes on {headline}"),
+            PendingWaitTrigger::Condition { .. } => format!("wakes when {headline}"),
         }
     }
 }
@@ -216,6 +221,7 @@ impl PendingWaitTrigger {
             Self::Check { .. } => "check",
             Self::File { .. } => "file",
             Self::Signal { .. } => "signal",
+            Self::Condition { .. } => "when",
         }
     }
 
@@ -263,6 +269,10 @@ impl PendingWaitTrigger {
                 crate::proc::command::program_label(command)
             }
             Self::Signal { selector, .. } => selector.clone(),
+            Self::Condition { when, hold } => match hold {
+                Some(hold) => format!("{when}, for {hold}"),
+                None => when.clone(),
+            },
         }
     }
 

@@ -1435,6 +1435,7 @@ rimz loop add
     --effort <EFFORT>  [action=set takes=1..=1]
     --every <EVERY>  [action=set takes=1..=1]
     -h, --help  [action=help takes=0..=0]
+    --for <DUR>  [action=set takes=1..=1]
     --in <DUR>  [action=set takes=1..=1]
     --match <KEY=VALUE>  [action=append takes=1..=1]
     --max-attempts <N>  [action=set takes=1..=1]
@@ -1456,6 +1457,7 @@ rimz loop add
     --until <DUR>  [action=set takes=1..=1]
     --verify <CMD>  [action=set takes=1..=1]
     --wait <ADDRESS>  [action=set takes=0..=1]
+    --when <EXPR>  [action=append takes=1..=1]
     --worktree <WORKTREE>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
