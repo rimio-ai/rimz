@@ -38,6 +38,34 @@ pub(super) fn open_team_runs<'a>(
         .collect()
 }
 
+fn team_cohort_gone(agents: &[AgentState], instance: &str) -> bool {
+    crate::address::team_cohorts(agents)
+        .into_iter()
+        .find(|cohort| format!("{}#{}", cohort.team, cohort.channel) == instance)
+        .is_none_or(|cohort| {
+            cohort.members.iter().all(|member| {
+                crate::store::runtime::agent_liveness(member)
+                    == crate::store::runtime::AgentLiveness::Dead
+            })
+        })
+}
+
+/// Open runs belonging to this launcher whose whole cohort has ended.
+pub fn ended_team_runs<'a>(
+    agents: &[AgentState],
+    runs: &'a [RunRecord],
+    launcher: &AgentState,
+) -> Vec<&'a RunRecord> {
+    open_team_runs(agents, runs, launcher)
+        .into_iter()
+        .filter(|run| {
+            run.team
+                .as_ref()
+                .is_some_and(|team| team_cohort_gone(agents, &team.instance))
+        })
+        .collect()
+}
+
 impl<'a> FleetRuns<'a> {
     pub fn of(agents: &'a [AgentState], runs: &'a [RunRecord], launcher: &AgentState) -> Self {
         let mut seen = HashSet::new();
@@ -154,6 +182,7 @@ mod tests {
         let parent = AgentState::stub("codex", "parent", AgentStatus::Idle);
         let mut leader = AgentState::stub("codex", "leader", AgentStatus::Idle);
         leader.team = Some("forge".into());
+        leader.channel = Some("feat-x".into());
         leader.launch_id = Some("leader-launch".into());
         leader.launched_by = Some(crate::agents::LaunchedBy {
             kind: parent.kind.clone(),
@@ -175,11 +204,34 @@ mod tests {
         let open = open_team_runs(&agents, &runs, &parent);
         assert_eq!(open.len(), 1, "an open team run belongs to its launcher");
         assert_eq!(open[0].team.as_ref().unwrap().instance, "forge#feat-x");
+        assert!(!team_cohort_gone(&agents, "forge#feat-x"));
+        assert!(ended_team_runs(&agents, &runs, &parent).is_empty());
+        agents[1].ended_at = Some(Timestamp::now());
+        assert!(team_cohort_gone(&agents, "forge#feat-x"));
+        assert_eq!(ended_team_runs(&agents, &runs, &parent).len(), 1);
+        agents[1].ended_at = None;
+        agents[1].runtime_owner = Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            "dead",
+            u32::MAX,
+            None,
+        ));
+        assert!(team_cohort_gone(&agents, "forge#feat-x"));
+        let mut member = agents[1].clone();
+        member.agent_id = "member".into();
+        member.launch_id = Some("member-launch".into());
+        member.runtime_owner = None;
+        agents.push(member);
+        assert!(!team_cohort_gone(&agents, "forge#feat-x"));
+        agents.pop();
+        assert!(team_cohort_gone(&[], "forge#feat-x"));
         runs[0].status = crate::store::run::RunStatus::Completed;
         assert!(open_team_runs(&agents, &runs, &parent).is_empty());
+        assert!(ended_team_runs(&agents, &runs, &parent).is_empty());
         runs[0].status = crate::store::run::RunStatus::Running;
         agents[1].launched_by.as_mut().unwrap().agent_id = "someone-else".into();
         assert!(open_team_runs(&agents, &runs, &parent).is_empty());
+        assert!(ended_team_runs(&agents, &runs, &parent).is_empty());
         agents[1].launched_by = None;
         assert!(open_team_runs(&agents, &runs, &parent).is_empty());
     }

@@ -1536,13 +1536,13 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
     );
 
     let report = crate::ids::MessageId::new();
-    let settled = complete_team_run(&paths, &first.run_id, Some(&report))
+    let settled = settle_team_run(&paths, &first.run_id, Some(&report), None)
         .unwrap()
         .expect("first Done settles the run");
     assert_eq!(settled.status, RunStatus::Completed);
     assert_eq!(settled.report_message_id.as_ref(), Some(&report));
     assert!(
-        complete_team_run(&paths, &first.run_id, Some(&report))
+        settle_team_run(&paths, &first.run_id, Some(&report), None)
             .unwrap()
             .is_none()
     );

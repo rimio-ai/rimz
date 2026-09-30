@@ -367,7 +367,8 @@ path = "crates/rimz/src/harness"
 # Worktree producers share best-effort in-process signal append and fire.
 # Signal matching, scope presentation and definition validation share the wildcard predicate.
 # Launch availability, per-scope cap evidence, and committed tier-fallback assists.
-surface-budget = 594
+# Ended team-run selection is shared by the read-only producer and CLI settlement.
+surface-budget = 595
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

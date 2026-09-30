@@ -1457,6 +1457,124 @@ fn absent_owner_is_rewoken_when_its_root_session_registers() {
 }
 
 #[test]
+fn agent_launched_team_death_reports_once_and_respects_a_racing_done() {
+    use rimz::harness::run;
+    use rimz::store::run::RunStatus;
+
+    for done in [false, true] {
+        let fixture = Fixture::new();
+        fixture.seed_launched("boss", None, None);
+        fixture.seed_launched("coder", Some("coder"), Some("boss"));
+        fixture.seed_launched("reviewer", Some("reviewer"), Some("boss"));
+        std::fs::write(fixture.board(), BOARD).unwrap();
+        let store = fixture.env.store();
+        let leader = store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|agent| agent.name.as_deref() == Some("coder"))
+            .unwrap();
+        let record = run::create_peer_prompt(
+            store.paths(),
+            &leader,
+            rimz::agents::registry::definition_by_kind("claude").unwrap(),
+            "Ship the feature.",
+            &fixture.env.project_root,
+        )
+        .unwrap()
+        .unwrap();
+        run::record_assistant_message(
+            store.paths(),
+            &record.run_id,
+            "claude",
+            &leader.agent_id,
+            "Last answer.".into(),
+        )
+        .unwrap();
+        fixture.hook("coder", "SessionEnd", None);
+        fixture.hook("reviewer", "SessionEnd", None);
+        if done {
+            std::fs::write(fixture.board(), "# Work\nStage: Done\n").unwrap();
+        }
+        let settle = || {
+            success(fixture.command().args(["agents", "subagent-digest", "--request",
+                &json!({"workspace_id": fixture.env.workspace_id, "parent_agent_id": "launch_boss"}).to_string()])
+                .output().unwrap());
+        };
+        settle();
+        let settled = run::load(store.paths(), &record.run_id).unwrap();
+        assert_eq!(
+            settled.status,
+            if done {
+                RunStatus::Completed
+            } else {
+                RunStatus::Failed
+            }
+        );
+        assert_eq!(
+            settled.failure_tail.as_deref(),
+            if done {
+                None
+            } else {
+                Some("cohort ended before Done")
+            }
+        );
+        let id = settled.report_message_id.unwrap();
+        let reports = || {
+            store
+                .list_messages()
+                .unwrap()
+                .into_iter()
+                .filter(|message| {
+                    message.sender
+                        == MessageSender::Harness {
+                            notice: HarnessNotice::TeamReport,
+                        }
+                })
+                .collect::<Vec<_>>()
+        };
+        let messages = reports();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message_id, id);
+        assert_eq!(messages[0].agent_id.as_str(), "boss");
+        assert_eq!(messages[0].gate, DeliveryGate::Done);
+        let header = if done {
+            "reached Done"
+        } else {
+            "ended before Done at stage Build"
+        };
+        assert!(
+            messages[0].text.starts_with(&format!(
+                "Team forge#feature-team {header}; its leader reports:\n"
+            )),
+            "{}",
+            messages[0].text
+        );
+        if !done {
+            assert!(messages[0].text.contains("failed in "));
+            assert!(messages[0].text.contains("cohort ended before Done"));
+        }
+        let response = store
+            .paths()
+            .subagents_dir
+            .join(format!("coder.{}.output", record.run_id));
+        assert_eq!(
+            std::fs::read_to_string(&response).unwrap(),
+            "Last answer.\n"
+        );
+        assert!(messages[0].text.contains(&response.display().to_string()));
+        settle();
+        assert_eq!(reports().len(), 1);
+        assert!(
+            run::open_team_run_for(store.paths(), "forge#feature-team")
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
     let fixture = Fixture::new();
     fixture.seed_launched("boss", None, None);

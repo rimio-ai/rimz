@@ -6,7 +6,7 @@ mod team;
 pub use peer::{
     create_peer_prompt, fail_peer_run, open_peer_run, peer_can_report, record_run_delivery,
 };
-pub use team::{complete_team_run, open_team_run, open_team_run_for, reopen_team_run};
+pub use team::{open_team_run, open_team_run_for, reopen_team_run, settle_team_run};
 
 use std::path::PathBuf;
 use std::sync::Arc;

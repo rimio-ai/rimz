@@ -190,6 +190,7 @@ fn digest_parents_from(
                     })
                 });
             (peer_needs_settlement
+                || !super::fleet::ended_team_runs(agents, runs, parent).is_empty()
                 || (!fleet.is_empty() && !fleet.any_running() && !fleet.unreported().is_empty()))
             .then(|| parent.agent_id.clone())
         })
@@ -554,6 +555,38 @@ mod tests {
             digest_parents_from(&agents, &runs, |_, _| false),
             vec![launcher.agent_id]
         );
+    }
+
+    #[test]
+    fn dead_team_cohort_needs_its_live_launchers_backstop() {
+        let at = Timestamp::from_second(1_000).unwrap();
+        let launcher = crate::testkit::agent_state("codex", "launcher", at);
+        let mut leader = crate::testkit::agent_state("codex", "leader", at);
+        leader.team = Some("forge".into());
+        leader.launch_id = Some("leader-launch".into());
+        leader.launched_by = Some(crate::agents::LaunchedBy {
+            kind: launcher.kind.clone(),
+            agent_id: launcher.agent_id.clone(),
+        });
+        let mut record = run("leader", at);
+        record.status = crate::store::run::RunStatus::Running;
+        record.team = Some(crate::store::run::TeamRun {
+            launch_id: "leader-launch".into(),
+            instance: format!(
+                "forge#{}",
+                leader.channel().unwrap_or_else(|| "external".into())
+            ),
+        });
+        let mut agents = [launcher.clone(), leader];
+        let runs = [record];
+        assert!(digest_parents_from(&agents, &runs, |_, _| false).is_empty());
+        agents[1].ended_at = Some(at);
+        assert_eq!(
+            digest_parents_from(&agents, &runs, |_, _| false),
+            vec![launcher.agent_id]
+        );
+        agents[0].ended_at = Some(at);
+        assert!(digest_parents_from(&agents, &runs, |_, _| false).is_empty());
     }
 
     #[test]
