@@ -509,6 +509,45 @@ fn team_skill_clear_and_custom_model_keep_the_original_kind() {
 }
 
 #[test]
+fn team_signal_wildcards_preserve_branch_scope_but_reject_self_wakes() {
+    for (signal, key, valid) in [
+        ("ci.failed", "branch", true),
+        ("agent.ended", "handle", false),
+        ("agent.ended", "session", false),
+    ] {
+        let root = team_fixture();
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!(
+                "{TEAM_ROLES}\n    signals:\n      - signal: {signal}\n        match: {{{key}: \"*\"}}"
+            ),
+            "Pipeline.",
+        );
+        if valid {
+            let loaded = clean(root.path());
+            assert_eq!(
+                loaded.teams.0["probe"].roles[1].signals[0].matches[key],
+                "*"
+            );
+        } else {
+            let loaded = load(
+                root.path(),
+                SkillCheck::Skip,
+                &CommandsConfig::default(),
+                &crate::config::tiers::TierConfig::default(),
+            );
+            assert!(
+                loaded
+                    .errors
+                    .iter()
+                    .any(|error| error.message.contains("handle or session"))
+            );
+        }
+    }
+}
+
+#[test]
 fn team_signal_bindings_preserve_matches_and_trim_prompts() {
     let root = team_fixture();
     team_definition(

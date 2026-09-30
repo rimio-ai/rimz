@@ -308,11 +308,19 @@ fn team_signal_validation_checks_role_selectors_and_matches() {
         }) if matches!(*source, ScheduleErr::ObsoleteCiSignal { .. })
     ));
     declared.roles[1].signals[1].matches.clear();
+    declared.roles[1].signals[1].signal = "agent.idle".to_owned();
+    declared.roles[1].signals[1].matches = BTreeMap::from([("handle".to_owned(), " ".to_owned())]);
+    assert!(matches!(
+        validate(&declared),
+        Err(LayoutErr::InvalidTeamSignal { source, .. })
+            if matches!(*source, ScheduleErr::BlankMatch { .. })
+    ));
     for signal in ["agent.*", "agent.idle"] {
         declared.roles[1].signals[1].signal = signal.to_owned();
         for matches in [
             BTreeMap::new(),
-            BTreeMap::from([("handle".to_owned(), " ".to_owned())]),
+            BTreeMap::from([("handle".to_owned(), "*".to_owned())]),
+            BTreeMap::from([("session".to_owned(), "*".to_owned())]),
         ] {
             declared.roles[1].signals[1].matches = matches;
             assert!(matches!(
