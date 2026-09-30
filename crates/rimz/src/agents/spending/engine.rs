@@ -54,6 +54,30 @@ pub(super) fn serve_request(
     compute_fleet_spending(walker, runtime, &context, progress)
 }
 
+/// The one-shot answer with no owner: the current-version provider
+/// publication at any age, as `rimz stats` serves it, with the request's
+/// matching workspace sidecar or an empty tally. `None` means nothing usable
+/// was ever published and the caller must walk.
+pub(super) fn current_publication(
+    runtime: &RuntimePaths,
+    request: &crate::agents::spending::service::SpendingServiceRequest,
+) -> Option<SpendingCaches> {
+    let provider = current_provider_spending_cache(runtime);
+    if !provider.is_current_version() {
+        return None;
+    }
+    let scope = SpendScope::for_workspace(
+        request.project_root.as_deref(),
+        &request.worktree_roots,
+        request.worktree_home.as_deref(),
+    );
+    let scope_hash = (!scope.is_empty()).then(|| scope.hash());
+    Some(SpendingCaches {
+        provider,
+        workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
+    })
+}
+
 pub(super) fn serve_direct(
     runtime: &RuntimePaths,
     request: &crate::agents::spending::service::SpendingServiceRequest,
