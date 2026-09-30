@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.bstr]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "1.12.3 -> 1.13.1"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete package delta. BString gains #[repr(transparent)] over its single Vec<u8> field; the new unsafe casts in BString::from_vec_ref and from_vec_mut are sound under that layout, as BString accepts any Vec<u8>. New ByteVec::to_bstring, as_bstring and as_bstring_mut wrap them. Other changes are an unused import removal, doc wording and a new AI_POLICY.md. Build remains disabled; no new I/O or dependency. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.clap]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
@@ -49,6 +55,18 @@ criteria = "safe-to-deploy"
 delta = "0.2.35 -> 0.2.37"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Compared the complete extracted packages. Production source is byte-identical; changes are package versions, VCS metadata and packaged lockfile selections. Manifest dependency requirements are unchanged; build remains disabled. Inspected procedural-macro entry points and existing caller-selected TZif file reads. This update adds no compile-time capability or generated-code change. Packaged lockfile changes are not dependency audits. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.regex]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "1.12.4 -> 1.13.1"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the production delta: new regex! macros for the string and byte APIs that store a Regex built from a string literal in a static regex_automata::util::lazy::Lazy (exposed through a doc(hidden) __private module) and panic on an invalid literal pattern at first use, plus docs. The regex-automata minimum rises to 0.4.16, reviewed separately. Remaining changes are CHANGELOG, README, test data and tests. No unsafe code, build script or I/O is added. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.regex-automata]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.14 -> 0.4.18"
+notes = "AI source review by an Opus 5.5 subagent, spot-checked by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the full delta. No unsafe code is added or removed; no build script, proc-macro, dependency or I/O change. DFA and lazy-DFA forward search no longer let a prefilter skip ahead while a match is pending; dense DFA from_bytes now rejects start states that are match states, as sparse already did; new conservative HIR checks (meta/prefix.rs, meta/reverse_suffix.rs) gate the reverse suffix and inner strategies, with guarded indexing and loops whose cursor strictly decreases; Cache pool capacity becomes configurable, defaulting to available_parallelism, with stacks still indexed by caller % stacks.len() and capacity clamped to at least 1, which the existing pool unsafe block does not depend on. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.rustix]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
@@ -60,6 +78,42 @@ who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-run"
 delta = "0.9.0 -> 0.10.0"
 notes = "AI source review compared all ten files from freshly extracted published archives, whose SHA-256 values match the workspace lockfile checksums. Changed files are Cargo.toml, Cargo.toml.orig, Cargo.lock, .cargo_vcs_info.json and src/generated/scip.rs. Manifests and lockfile change only the package version; protobuf remains exactly 3.7.2. Generated code adds Language::Odin = 111, conversions, membership and reflection-index shifts. Independently decoded the embedded descriptor: only the Odin schema addition and corresponding source-location metadata change. Existing descriptor initialization and explicit file-writing helper are unchanged. No new build script, procedural macro, filesystem, network, subprocess or unsafe operation appears. This is a delta review from the safe-to-run exempted baseline, not a full baseline or dependency audit."
+
+[[audits.sentry]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.2 -> 0.49.3"
+notes = "AI source review by an Opus 5.5 subagent, spot-checked by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the full delta. A configurable transport channel capacity is threaded from ClientOptions through the curl, reqwest and ureq transports into TransportThreadOptions, replacing the fixed sync_channel(30); 0 is clamped to 1 and the default stays 30. A new optional, non-default minidump feature re-exports sentry-minidump on Linux, macOS and Windows; this workspace does not enable it and sentry-minidump was not reviewed. The optional rustls minimum rises to 0.23.45, already the locked version. Other changes are sibling version bumps and lint attributes. No unsafe code, build script logic, or new file, network, process or environment access. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.sentry-backtrace]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.2 -> 0.49.3"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta: version bump, sentry-core 0.49.3 requirement, and the missing_docs lint moved from src/lib.rs into manifest lint tables with a new clippy lint. No code change. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.sentry-core]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.2 -> 0.49.3"
+notes = "AI source review by an Opus 5.5 subagent, spot-checked by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the full delta. A new transport_channel_capacity option (Option<NonZeroUsize>, 0 clamped to 1) passes through TransportOptions and build_envelope_sender. Transaction and span sampling move from a bool to a new TracingState and FinishAction enum in performance/sampling.rs, pure logic with no I/O; disabled tracing no longer buffers spans, and propagation headers keep an incoming sampled decision. The existing MAX_SPANS cap still applies. is_sampled is deprecated. The optional rand requirement moves from 0.9 to 0.10 with no source change; the workspace builds against the locked rand 0.10. No unsafe code or new powerful imports. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.sentry-panic]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.2 -> 0.49.3"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta: version bump, sentry-backtrace and sentry-core 0.49.3 requirements, and the missing_docs lint moved into manifest lint tables with a new clippy lint. #![deny(unsafe_code)] remains. No code change. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.sentry-tracing]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.2 -> 0.49.3"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta: version bump, sentry sibling 0.49.3 requirements, removal of the shared test target, lint tables in the manifest, #[expect(clippy::impl_trait_in_params)] on breadcrumb_from_event, event_from_event and log_from_event, a README link version, and test lint attributes. No behaviour change. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.sentry-types]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.49.2 -> 0.49.3"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta: version bump, the rand requirement raised from 0.9.3 to 0.10.2 with no source change (the workspace builds against the locked rand 0.10), the missing_docs lint moved into manifest lint tables, and test lint attributes. No other code change. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.serde]]
 who = "GPT 6 Astra <noreply@openai.com>"
@@ -90,6 +144,24 @@ who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "3.0.4 -> 3.0.6"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas, surrounding full/reduced-feature parser paths, group parsing and the interpolated-lifetime regression test. Expression parsing recognizes interpolated lifetime labels using forked lookahead without consuming the original stream. LitStr tokenization errors retain the literal span. No new unsafe code, external interaction or production dependency requirement. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.thiserror]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "2.0.20 -> 2.0.21"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta: version, rust-version 1.77, exact thiserror-impl 2.0.21 requirement and html_root_url in src/lib.rs; the rest is CI configuration, a turbofish regression test, io::Error::other in tests and UI test expectations. build.rs is unchanged. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.thiserror-impl]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "2.0.20 -> 2.0.21"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta. In the proc macro, parse_token_expr in src/attr.rs now counts turbofish angle-bracket depth (opened after ::, closed by > not following -), so a closing > inside a turbofish no longer marks the start of a new expression; new helpers follows_path_sep and follows_hyphen inspect only preceding tokens. The generated Display code changes only for format arguments with turbofish syntax. No unsafe code, I/O or dependency change; rust-version rises to 1.77. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.tiktoken-rs]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "0.12.0 -> 0.12.1"
+notes = "AI source review by Opus 5.5. Archive SHA-256 values match the old and new workspace lockfile checksums. Reviewed the complete delta. lazy_static is replaced by std::sync::LazyLock for the tokenizer singletons and the model map; get_tokenizer matches any gpt-5 prefix to o200k_base; get_context_size returns 1,050,000 for gpt-6 names; _byte_pair_merge_large replaces a let-chain with nested ifs of the same meaning. Dependencies move to bstr 1.13.1, regex 1.13.1 and fancy-regex 0.19, each reviewed or decided separately, and lazy_static is dropped. README wording changes. No unsafe code, build script or I/O is added. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.toml]]
 who = "GPT 6 Astra <noreply@openai.com>"
