@@ -294,6 +294,8 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
     );
     let published = ProviderSpendingCache::from_walk(&rollups, 1);
     assert_eq!(published.day_by_login, rollups.login_day);
+    assert_eq!(published.spending.by_login[&named_login].week.usd, 12.0);
+    assert_eq!(published.spending.by_login[&named_login].week.sessions, 2);
     assert_eq!(rollups.workspace.day.usd, 2.0);
     assert_eq!(rollups.workspace.day.tokens, 15);
     assert!((rollups.workspace.tally.headline.usd - 3.0).abs() < 1e-9);

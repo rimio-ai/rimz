@@ -177,6 +177,8 @@ impl SpendTally {
 pub struct Spending {
     pub total: SpendTally,
     pub by_provider: BTreeMap<String, SpendTally>,
+    #[serde(default)]
+    pub by_login: BTreeMap<LoginKey, SpendTally>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -230,6 +232,15 @@ pub(crate) fn aggregate_counted_rollups(
         let provider = counted.kind();
         let entry = counted.entry();
         accum(&mut spending.total, entry, now_secs, cutoffs.total);
+        accum(
+            spending
+                .by_login
+                .entry(counted.login().clone())
+                .or_default(),
+            entry,
+            now_secs,
+            cutoffs.total,
+        );
         accum(
             spending.by_provider.entry(provider.to_owned()).or_default(),
             entry,
@@ -424,8 +435,10 @@ fn add_spending_sessions(
         files.len(),
         foldhash::fast::RandomState::default(),
     );
+    let mut login_threads = FastHashMap::<(LoginKey, SessionKey<'_>), u64>::default();
     for SpendingFile {
         adapter,
+        login,
         path: file,
         ..
     } in files
@@ -435,6 +448,10 @@ fn add_spending_sessions(
             continue;
         };
         for entry in &cached_file.entries {
+            login_threads
+                .entry((login.clone(), session_key(adapter, file, entry)))
+                .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
+                .or_insert(entry.ts_secs);
             threads
                 .entry(session_key(adapter, file, entry))
                 .and_modify(|(_, ts)| *ts = (*ts).max(entry.ts_secs))
@@ -449,6 +466,14 @@ fn add_spending_sessions(
                 .entry((*provider).to_owned())
                 .or_default(),
             *youngest,
+            now_secs,
+            headline_cutoff,
+        );
+    }
+    for ((login, _), youngest) in login_threads {
+        bump_sessions(
+            spending.by_login.entry(login).or_default(),
+            youngest,
             now_secs,
             headline_cutoff,
         );

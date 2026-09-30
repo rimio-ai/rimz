@@ -8,7 +8,7 @@ use crate::store::snapshot::{SidebarSnapshot, triage_key};
 
 use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, HitTarget, ManualScroll, UiState, active_dashboard_tab,
-    dashboard_tabbed, dashboard_tabs, selected_agent_kind,
+    dashboard_tabbed, dashboard_tabs, selected_agent_login,
 };
 use crate::sidebar_pane::view::VisibleRoster;
 
@@ -276,13 +276,13 @@ fn cycle_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, step: isize
 /// selection-derived kind it began from — the clear condition — and a later
 /// pick only moves the tab, so a browse through the tabs keeps one anchor and
 /// a genuine selection change still ends it (the [`Browse`] discipline).
-fn pick_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, kind: String) {
+fn pick_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, login: crate::ids::LoginKey) {
     let derived_at_start = match ui.dashboard_tab.take() {
         Some(tab) => tab.derived_at_start,
-        None => selected_agent_kind(snapshot, ui),
+        None => selected_agent_login(snapshot, ui),
     };
     ui.dashboard_tab = Some(DashboardTab {
-        kind,
+        login,
         derived_at_start,
     });
 }
@@ -622,16 +622,16 @@ fn reconcile_browse_and_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) 
 }
 
 fn reconcile_dashboard(ui: &mut UiState, snapshot: &SidebarSnapshot) {
-    let derived_kind = selected_agent_kind(snapshot, ui);
+    let derived_kind = selected_agent_login(snapshot, ui);
     let tabs = dashboard_tabs(snapshot);
     if let Some(kind) = &derived_kind
         && tabs.iter().any(|tab| tab == kind)
     {
-        ui.last_agent_kind = Some(kind.clone());
+        ui.last_agent_login = Some(kind.clone());
     }
     if let Some(tab) = &ui.dashboard_tab {
         let derived_moved = derived_kind.is_some() && derived_kind != tab.derived_at_start;
-        let tab_gone = !tabs.iter().any(|kind| kind == &tab.kind);
+        let tab_gone = !tabs.iter().any(|kind| kind == &tab.login);
         if derived_moved || tab_gone {
             ui.dashboard_tab = None;
         }

@@ -216,7 +216,9 @@ impl Stats {
             spending,
             ..
         } = cache;
-        let Spending { total, by_provider } = spending;
+        let Spending {
+            total, by_provider, ..
+        } = spending;
         Stats {
             by_day: days,
             by_model: models,

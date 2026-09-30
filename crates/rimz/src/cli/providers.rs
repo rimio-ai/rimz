@@ -97,7 +97,7 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
                 .get(&login.key())?
                 .account
                 .clone()
-                .map(|account| (login.kind().to_string(), account))
+                .map(|account| (login.key(), account))
         })
         .collect();
     let native_panels = provider_panels_from_caches(
@@ -131,7 +131,7 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
             .logins
             .get(&login.key())
             .and_then(|record| record.account.clone())
-            .map(|account| (login.kind().to_string(), account))
+            .map(|account| (login.key(), account))
             .into_iter()
             .collect();
         let login_panels = provider_panels_from_caches(

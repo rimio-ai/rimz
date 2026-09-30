@@ -30,7 +30,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult};
 /// v11: provider session headlines share the machine-global activity burst.
 /// v12 publishes per-tool counts in windows and model/agent breakdowns.
 /// v13: per-account local-day windows for account daily caps.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 13;
+// v14: per-login headline and trailing-window tallies for dashboard panels.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 14;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here

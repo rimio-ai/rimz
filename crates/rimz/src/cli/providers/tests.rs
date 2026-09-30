@@ -23,6 +23,7 @@ fn account(plan: &str, metered: bool) -> AgentAccount {
 
 fn panel(kind: &str) -> SidebarProviderPanel {
     SidebarProviderPanel {
+        account: Default::default(),
         kind: kind.to_owned(),
         account_scope: ProviderAccountScope::KindWide,
         account_key: None,

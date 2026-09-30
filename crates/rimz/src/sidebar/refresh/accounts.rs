@@ -63,7 +63,7 @@ pub(super) fn produce_accounts(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     logins: &RoomLoginSet,
-) -> BTreeMap<String, AgentAccount> {
+) -> BTreeMap<LoginKey, AgentAccount> {
     let selected = provider_logins(snapshot, logins);
     produce_accounts_with(
         snapshot,
@@ -83,7 +83,7 @@ fn produce_accounts_with(
         &BTreeSet<LoginKey>,
         &AccountsCache,
     ) -> AccountsCache,
-) -> BTreeMap<String, AgentAccount> {
+) -> BTreeMap<LoginKey, AgentAccount> {
     let context_versions = context_versions(snapshot);
     let cache = query_provider_accounts_with(
         snapshot,
@@ -201,7 +201,7 @@ pub(in crate::sidebar) fn cached_accounts_for_snapshot(
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
     logins: &RoomLoginSet,
-) -> BTreeMap<String, AgentAccount> {
+) -> BTreeMap<LoginKey, AgentAccount> {
     let cache = read_accounts_cache(&runtime.shared_accounts_path());
     accounts_with_context_versions(&cache, &context_versions(snapshot), logins)
 }
@@ -245,7 +245,7 @@ fn due_provider_logins(
             }
             age_ms > ACCOUNTS_RETRY_TTL.as_millis() as u64
                 && active_version_kinds.contains(kind)
-                && !context_versions.contains_key(kind)
+                && !context_versions.contains_key(key)
                 && account_version(record.account.as_ref()).is_none()
         })
         .collect()
@@ -254,7 +254,7 @@ fn due_provider_logins(
 fn provider_logins(snapshot: &SidebarSnapshot, logins: &RoomLoginSet) -> Vec<ProviderLogin> {
     provider_kinds(snapshot)
         .iter()
-        .filter_map(|kind| logins.default_login(kind))
+        .flat_map(|kind| logins.in_use(kind))
         .collect()
 }
 
@@ -474,35 +474,38 @@ fn account_version(account: Option<&AgentAccount>) -> Option<String> {
 
 fn accounts_with_context_versions(
     cache: &AccountsCache,
-    context_versions: &BTreeMap<String, String>,
+    context_versions: &BTreeMap<LoginKey, String>,
     logins: &RoomLoginSet,
-) -> BTreeMap<String, AgentAccount> {
+) -> BTreeMap<LoginKey, AgentAccount> {
+    let in_use = logins.keys_in_use();
     let accounts = cache
         .logins
         .iter()
-        .filter(|(key, _)| logins.default_key(key.kind.as_str()).as_ref() == Some(*key))
+        .filter(|(key, _)| in_use.contains(*key))
         .filter_map(|(key, record)| {
             record
                 .account
                 .as_ref()
-                .map(|account| (key.kind.to_string(), account.clone()))
+                .map(|account| (key.clone(), account.clone()))
         })
         .collect();
-    merge_context_versions(accounts, context_versions)
+    let mut accounts = merge_context_versions(accounts, context_versions);
+    accounts.retain(|key, _| in_use.contains(key));
+    accounts
 }
 
 fn merge_context_versions(
-    mut accounts: BTreeMap<String, AgentAccount>,
-    context_versions: &BTreeMap<String, String>,
-) -> BTreeMap<String, AgentAccount> {
+    mut accounts: BTreeMap<LoginKey, AgentAccount>,
+    context_versions: &BTreeMap<LoginKey, String>,
+) -> BTreeMap<LoginKey, AgentAccount> {
     for (kind, version) in context_versions {
         accounts.entry(kind.clone()).or_default().version = Some(version.clone());
     }
     accounts
 }
 
-fn context_versions(snapshot: &SidebarSnapshot) -> BTreeMap<String, String> {
-    let mut versions = BTreeMap::<String, (jiff::Timestamp, String)>::new();
+fn context_versions(snapshot: &SidebarSnapshot) -> BTreeMap<LoginKey, String> {
+    let mut versions = BTreeMap::<LoginKey, (jiff::Timestamp, String)>::new();
     for agent in &snapshot.agents {
         if agent.is_provider_subagent() {
             continue;
@@ -518,7 +521,7 @@ fn context_versions(snapshot: &SidebarSnapshot) -> BTreeMap<String, String> {
             continue;
         };
         let entry = versions
-            .entry(agent.kind.to_string())
+            .entry(agent.login_key())
             .or_insert((context.observed_at, version.clone()));
         if context.observed_at > entry.0 {
             *entry = (context.observed_at, version.clone());

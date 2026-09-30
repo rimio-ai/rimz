@@ -9,7 +9,7 @@ use crate::sidebar_pane::view::BodyFilter;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) enum HitTarget {
     Row(usize),
-    ProviderTab(String),
+    ProviderTab(crate::ids::LoginKey),
     BodyFilter(BodyFilter),
     ToggleGroup(String),
     /// A delegation header click; `open` is the state the click sets.
@@ -325,13 +325,17 @@ mod tests {
                 0..4,
                 HitTarget::BodyFilter(BodyFilter::Status(AgentStatus::Failed)),
             ),
-            HitRegion::line(0, 0..4, HitTarget::ProviderTab("codex".to_owned())),
+            HitRegion::line(
+                0,
+                0..4,
+                HitTarget::ProviderTab("codex@default".parse().unwrap()),
+            ),
         ];
         let interactions = FrameInteractions::from_parts(vec![Some(9)], regions);
 
         assert_eq!(
             interactions.target_at(0, 0),
-            Some(HitTarget::ProviderTab("codex".to_owned()))
+            Some(HitTarget::ProviderTab("codex@default".parse().unwrap()))
         );
         assert_eq!(
             FrameInteractions::from_parts(
@@ -371,7 +375,7 @@ mod tests {
             vec![HitRegion::line(
                 0,
                 2..5,
-                HitTarget::ProviderTab("top".to_owned()),
+                HitTarget::ProviderTab("top@default".parse().unwrap()),
             )],
         );
         let body = RenderedBlock::from_parts(
@@ -387,7 +391,7 @@ mod tests {
 
         assert_eq!(
             top.interactions.target_at(2, 0),
-            Some(HitTarget::ProviderTab("top".to_owned()))
+            Some(HitTarget::ProviderTab("top@default".parse().unwrap()))
         );
         assert_eq!(
             top.interactions.target_at(0, 1),

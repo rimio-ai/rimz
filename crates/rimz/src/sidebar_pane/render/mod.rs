@@ -390,13 +390,24 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
 /// first tab. Reads the same filtered universe `selected_index` is an ordinal
 /// of, so the dashboard's follow-the-selection stays honest under a make-up
 /// filter.
-pub(in crate::sidebar_pane) fn selected_agent_kind(
+pub(in crate::sidebar_pane) fn selected_agent_login(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
-) -> Option<String> {
+) -> Option<crate::ids::LoginKey> {
     selected_row(snapshot, ui)
         .filter(|row| row.is_agent())
-        .map(|row| row.name.clone())
+        .map(|row| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.kind.as_str() == row.name && agent.agent_id.as_str() == row.id)
+                .map(crate::agents::AgentState::login_key)
+                .unwrap_or_else(|| {
+                    crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                        &row.name,
+                    ))
+                })
+        })
 }
 
 pub(in crate::sidebar_pane) fn selected_pet_action(
@@ -460,42 +471,47 @@ pub(in crate::sidebar_pane) fn unread_pet_row_ids(
 
 /// The provider kind whose block the dashboard shows: the manual tab pick while
 /// its panel is still on the dashboard, else the live selection-derived kind
-/// ([`selected_agent_kind`]) when a panel exists for it, else the last agent
+/// ([`selected_agent_login`]) when a panel exists for it, else the last agent
 /// kind the dashboard followed while its panel is still present, else the
 /// first panel. `None` only when the dashboard is empty.
 pub(in crate::sidebar_pane) fn active_dashboard_tab(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
-) -> Option<String> {
+) -> Option<crate::ids::LoginKey> {
     let panels = &snapshot.providers;
     if let Some(tab) = &ui.dashboard_tab
-        && dashboard_has_tab(snapshot, &tab.kind)
+        && dashboard_has_tab(snapshot, &tab.login)
     {
-        return Some(tab.kind.clone());
+        return Some(tab.login.clone());
     }
-    if let Some(kind) = selected_agent_kind(snapshot, ui)
+    if let Some(kind) = selected_agent_login(snapshot, ui)
         && dashboard_has_tab(snapshot, &kind)
     {
         return Some(kind);
     }
-    if let Some(kind) = &ui.last_agent_kind
+    if let Some(kind) = &ui.last_agent_login
         && dashboard_has_tab(snapshot, kind)
     {
         return Some(kind.clone());
     }
-    panels.first().map(|panel| panel.kind.clone())
+    panels.first().map(|panel| panel.login_key())
 }
 
-pub(in crate::sidebar_pane) fn dashboard_tabs(snapshot: &SidebarSnapshot) -> Vec<String> {
+pub(in crate::sidebar_pane) fn dashboard_tabs(
+    snapshot: &SidebarSnapshot,
+) -> Vec<crate::ids::LoginKey> {
     snapshot
         .providers
         .iter()
-        .map(|panel| panel.kind.clone())
+        .map(|panel| panel.login_key())
         .collect::<Vec<_>>()
 }
 
-fn dashboard_has_tab(snapshot: &SidebarSnapshot, kind: &str) -> bool {
-    snapshot.providers.iter().any(|panel| panel.kind == kind)
+fn dashboard_has_tab(snapshot: &SidebarSnapshot, login: &crate::ids::LoginKey) -> bool {
+    snapshot
+        .providers
+        .iter()
+        .any(|panel| panel.login_key() == *login)
 }
 
 /// Whether the dashboard paints a tab rail. Pets keep the dashboard tabbed so

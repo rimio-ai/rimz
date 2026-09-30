@@ -446,7 +446,7 @@ impl DashboardMode {
 pub(in crate::sidebar_pane::render) struct DashboardContext<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,
     pub(in crate::sidebar_pane::render) providers: &'a [SidebarProviderPanel],
-    pub(in crate::sidebar_pane::render) active_provider: Option<&'a str>,
+    pub(in crate::sidebar_pane::render) active_provider: Option<&'a crate::ids::LoginKey>,
     pub(in crate::sidebar_pane::render) mode: DashboardMode,
     pub(in crate::sidebar_pane::render) fleet_tally: Option<&'a SpendTally>,
     pub(in crate::sidebar_pane::render) pet: Option<&'a PetView>,
@@ -483,14 +483,20 @@ pub(in crate::sidebar_pane::render) fn dashboard_block(
         return output;
     }
 
+    let first_login = first.login_key();
     let active_kind = context
         .active_provider
-        .filter(|kind| context.providers.iter().any(|panel| panel.kind == **kind))
-        .unwrap_or(first.kind.as_str());
+        .filter(|key| {
+            context
+                .providers
+                .iter()
+                .any(|panel| panel.login_key() == **key)
+        })
+        .unwrap_or(&first_login);
     let active = context
         .providers
         .iter()
-        .find(|panel| panel.kind == active_kind)
+        .find(|panel| panel.login_key() == *active_kind)
         .unwrap_or(first);
     output.append(provider_tab_rail(
         context.theme,
@@ -653,7 +659,7 @@ fn zip_provider_pet_lines(
 fn provider_tab_rail(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
-    active_kind: &str,
+    active_kind: &crate::ids::LoginKey,
     width: usize,
 ) -> RenderedBlock {
     let rail = theme.body();
@@ -674,7 +680,7 @@ fn provider_tab_rail(
             continue;
         }
         let gap = if rendered > 0 { RAIL_STUB } else { 0 };
-        let active = panel.kind == active_kind;
+        let active = panel.login_key() == *active_kind;
         let label = panel.product_name.as_str();
         let cells = label.chars().count() + 4;
         if gap > 0 {
@@ -684,7 +690,7 @@ fn provider_tab_rail(
         append_provider_tab_spans(&mut spans, theme, panel, label, active);
         hits.push((
             col as u16..(col + cells).min(width) as u16,
-            HitTarget::ProviderTab(panel.kind.clone()),
+            HitTarget::ProviderTab(panel.login_key()),
         ));
         col += cells;
         rendered += 1;
@@ -699,12 +705,14 @@ fn provider_tab_rail(
 
 fn selected_provider_tabs(
     providers: &[SidebarProviderPanel],
-    active_kind: &str,
+    active_kind: &crate::ids::LoginKey,
     width: usize,
     stub: usize,
 ) -> Vec<bool> {
     let tab_cells = |panel: &SidebarProviderPanel| panel.product_name.chars().count() + 4;
-    let active_index = providers.iter().position(|panel| panel.kind == active_kind);
+    let active_index = providers
+        .iter()
+        .position(|panel| panel.login_key() == *active_kind);
     let mut selected = vec![false; providers.len()];
     let mut used = stub;
     if let Some(index) = active_index

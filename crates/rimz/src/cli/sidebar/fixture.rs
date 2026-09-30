@@ -2241,6 +2241,7 @@ fn provider_panel(
             (provider_title_case(kind), 244, None)
         };
     SidebarProviderPanel {
+        account: Default::default(),
         kind: kind.to_owned(),
         account_scope: Default::default(),
         account_key: None,

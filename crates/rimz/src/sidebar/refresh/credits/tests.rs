@@ -194,6 +194,7 @@ fn unsupported_completion_uses_claim_identity_and_preserves_same_account_display
 
 fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
     SidebarProviderPanel {
+        account: Default::default(),
         kind: kind.to_owned(),
         account_scope: Default::default(),
         account_key: None,
@@ -278,10 +279,19 @@ fn credits_projection_selects_the_room_login_and_never_falls_back() {
         runtime.workspace_id.clone(),
         vec![panel("claude", true)],
     );
+    snapshot.providers[0].account = "work".parse().unwrap();
+    snapshot.providers.push(panel("claude", true));
+    let work = work.with_agents(&[crate::sidebar::test_support::root_agent(
+        "claude", "native", None,
+    )]);
     apply_credits_cache(&mut snapshot, &runtime, &accounts, &work);
     assert_eq!(
         snapshot.providers[0].extra_credits,
         Some(ExtraCredits::known(Some(19.0), None, None))
+    );
+    assert_eq!(
+        snapshot.providers[1].extra_credits,
+        Some(ExtraCredits::known(Some(7.0), None, None))
     );
     let unresolved = RoomLoginSet::new(None, None, BTreeMap::new());
     apply_credits_cache(&mut snapshot, &runtime, &accounts, &unresolved);

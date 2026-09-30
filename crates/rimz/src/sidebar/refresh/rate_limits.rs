@@ -364,12 +364,16 @@ fn project_rate_limits(
         refreshed_at_ms: unix_now_ms(),
         ..cached.clone()
     };
-    next.entries
-        .retain(|key, _| logins.default_key(key.kind.as_str()).as_ref() != Some(key));
+    let in_use = logins.keys_in_use();
+    next.entries.retain(|key, _| !in_use.contains(key));
     let mut refresh_logins = BTreeSet::new();
 
     for panel in &mut snapshot.providers {
-        let login_key = logins.default_key(&panel.kind);
+        let login_key = logins
+            .in_use(&panel.kind)
+            .into_iter()
+            .map(|login| login.key())
+            .find(|key| *key == panel.login_key());
         if !panel.metered {
             panel.windows.clear();
             continue;

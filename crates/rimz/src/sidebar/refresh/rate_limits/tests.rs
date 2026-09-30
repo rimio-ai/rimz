@@ -297,6 +297,7 @@ fn room_publications_preserve_other_logins_and_project_only_their_own_windows() 
         other_workspace.clone(),
         vec![provider_panel("claude", vec![rl_window(70, None)])],
     );
+    work_panel.providers[0].account = work_key.name.clone();
     refresh_rate_limits(&mut work_panel, &other_runtime, &work);
     let cached = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
@@ -307,6 +308,24 @@ fn room_publications_preserve_other_logins_and_project_only_their_own_windows() 
         cached.entries[&work_key].limits.windows[0].used_percentage,
         Some(70)
     );
+    let mixed = work
+        .clone()
+        .with_agents(&[crate::sidebar::test_support::root_agent(
+            "claude", "native", None,
+        )]);
+    let mut both = snapshot_with_panels(
+        workspace.clone(),
+        vec![
+            default_panel.providers[0].clone(),
+            work_panel.providers[0].clone(),
+        ],
+    );
+    for panel in &mut both.providers {
+        panel.windows.clear();
+    }
+    apply_cached_rate_limits(&mut both, &runtime, &mixed);
+    assert_eq!(both.providers[0].windows[0].used_percentage, Some(20));
+    assert_eq!(both.providers[1].windows[0].used_percentage, Some(70));
     let unresolved = RoomLoginSet::new(None, None, BTreeMap::new());
     let mut unresolved_panel = snapshot_with_panels(
         workspace.clone(),
@@ -330,6 +349,7 @@ fn room_publications_preserve_other_logins_and_project_only_their_own_windows() 
             vec![provider_panel("claude", Vec::new())],
         );
         refresh_rate_limits(&mut default_panel, &runtime, &native);
+        work_panel.providers[0].account = work_key.name.clone();
         refresh_rate_limits(&mut work_panel, &other_runtime, &work);
         assert_eq!(
             default_panel.providers[0].windows[0].used_percentage,

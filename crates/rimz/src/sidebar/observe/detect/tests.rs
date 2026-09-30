@@ -196,7 +196,7 @@ fn assert_lacks_kind(drafts: &[AnomalyDraft], key: &'static str, case: &str) {
 
 fn codex_mana_key() -> AggregateKey {
     AggregateKey::ProviderMana {
-        kind: "codex".to_owned(),
+        login: "codex@default".parse().unwrap(),
         scope_id: None,
         duration_mins: Some(300),
     }
@@ -1009,7 +1009,7 @@ fn aggregate_reset_reports_spend_drops_only() {
         ResetCase {
             name: "provider spend reset",
             key: AggregateKey::ProviderSpend {
-                kind: "claude".to_owned(),
+                login: "claude@default".parse().unwrap(),
             },
             from: "500",
             pulled: Some("500"),
@@ -1130,7 +1130,7 @@ fn aggregate_reset_reports_spend_drops_only() {
     recovery.observe(with_aggregate(
         sig(0, Vec::new()),
         AggregateKey::ProviderSpend {
-            kind: "claude".to_owned(),
+            login: "claude@default".parse().unwrap(),
         },
         Some("0"),
         Some("0"),
@@ -1138,7 +1138,7 @@ fn aggregate_reset_reports_spend_drops_only() {
     recovery.observe(with_aggregate(
         sig(11_000, Vec::new()),
         AggregateKey::ProviderSpend {
-            kind: "claude".to_owned(),
+            login: "claude@default".parse().unwrap(),
         },
         Some("0"),
         Some("0"),
@@ -1146,7 +1146,7 @@ fn aggregate_reset_reports_spend_drops_only() {
     let drafts = recovery.observe(with_aggregate(
         sig(12_000, Vec::new()),
         AggregateKey::ProviderSpend {
-            kind: "claude".to_owned(),
+            login: "claude@default".parse().unwrap(),
         },
         Some("500"),
         Some("500"),

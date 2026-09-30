@@ -34,15 +34,32 @@ fn provider_labels_include_only_non_default_logins() {
         Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
         BTreeMap::new(),
     );
-    let mut panels = vec![crate::sidebar::test_support::provider_panel(
-        "claude",
-        Vec::new(),
-    )];
-    panels[0].product_name = "Claude".to_owned();
-    label_provider_logins(&mut panels, &crate::agents::RoomLoginSet::native());
-    assert_eq!(panels[0].product_name, "Claude");
-    label_provider_logins(&mut panels, &work);
-    assert_eq!(panels[0].product_name, "Claude · work");
+    let (_, _, snapshot) = runtime();
+    for (login, logins, expected) in [
+        (
+            crate::ids::LoginKey::default_for(key.kind.clone()),
+            crate::agents::RoomLoginSet::native(),
+            "Claude",
+        ),
+        (key, work, "Claude · work"),
+    ] {
+        let accounts = BTreeMap::from([(
+            login,
+            crate::agents::AgentAccount {
+                metered: Some(true),
+                ..Default::default()
+            },
+        )]);
+        let projected = fold_machine_config_with(
+            snapshot.clone(),
+            &Default::default(),
+            accounts,
+            &BTreeMap::new(),
+            Default::default(),
+            &logins,
+        );
+        assert_eq!(projected.providers[0].product_name, expected);
+    }
 }
 
 fn runtime() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {

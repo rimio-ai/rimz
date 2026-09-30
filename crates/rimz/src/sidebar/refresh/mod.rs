@@ -86,7 +86,7 @@ fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
 #[derive(Clone, Debug)]
 pub struct RefreshedLanes {
     pub spending: SpendingCaches,
-    pub accounts: BTreeMap<String, AgentAccount>,
+    pub accounts: BTreeMap<crate::ids::LoginKey, AgentAccount>,
     pub pr_states: BTreeMap<String, PrLink>,
     pub branch_ci: BTreeMap<String, crate::store::snapshot::WorktreeCi>,
 }
@@ -217,7 +217,8 @@ pub(super) fn refresh_heavy_lanes(
     state: &mut ProducerRefreshState,
 ) -> RefreshedLanes {
     let logins =
-        crate::agents::RoomLoginSet::resolve(&state_paths.workspace_record, &config.accounts);
+        crate::agents::RoomLoginSet::resolve(&state_paths.workspace_record, &config.accounts)
+            .with_agents(&base.agents);
     let store = Store::open_existing(state_paths.clone(), runtime.clone());
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,
@@ -241,7 +242,7 @@ pub(super) fn refresh_heavy_lanes(
         base.clone(),
         config,
         accounts.clone(),
-        &spending.provider.spending.by_provider,
+        &spending.provider.spending.by_login,
         // This scoped fold is not returned as the final snapshot.
         RemoteControlServerHealth::default(),
         &logins,

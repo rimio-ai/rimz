@@ -108,15 +108,16 @@ fn rows_with_locator(
     locate: impl Fn(&super::AgentSpec) -> Option<PathBuf>,
 ) -> Vec<FolderTrustRow> {
     super::all_definitions()
-        .filter_map(|adapter| {
-            locate(adapter.spec())?;
+        .filter(|adapter| locate(adapter.spec()).is_some())
+        .flat_map(|adapter| {
             let kind = adapter.spec().kind;
-            let login = logins.default_login(kind)?;
-            let trust = adapter.folder_trust(cwd, Some(repo_root), &logins.env(&login))?;
-            Some(FolderTrustRow {
-                kind,
-                login: login.name().clone(),
-                trust,
+            logins.in_use(kind).into_iter().filter_map(move |login| {
+                let trust = adapter.folder_trust(cwd, Some(repo_root), &logins.env(&login))?;
+                Some(FolderTrustRow {
+                    kind,
+                    login: login.name().clone(),
+                    trust,
+                })
             })
         })
         .collect()

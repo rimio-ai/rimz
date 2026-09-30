@@ -7,6 +7,7 @@ use crate::agents::AgentState;
 use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally};
 use crate::config::ProviderTabsMode;
+use crate::ids::LoginKey;
 use crate::theme::{
     BrandColor, provider_title_case, resolve_provider_brand, resolve_provider_identity,
 };
@@ -14,12 +15,9 @@ use crate::theme::{
 use super::{RemoteControlBadge, SidebarProviderPanel, SidebarSnapshot};
 
 impl SidebarSnapshot {
-    /// Fold the agent rollup into per-provider dashboard blocks — one per agent
-    /// kind, plus one for any provider with no active session this run whose
-    /// probed account has something to show: a metered login, a non-empty
-    /// identity, or recorded spend (an account-only block, so the dashboard
-    /// shows substantive accounts and budgets between turns).
-    /// Sums each kind's spend, tokens, and edited lines; takes the plan and version
+    /// Fold live root logins, in-use defaults, and substantive account probes into per-login dashboard blocks.
+    /// An account-only block needs a metered login, a non-empty identity, or recorded spend, so the dashboard shows substantive accounts and budgets between turns.
+    /// Sums each login's spend, tokens, and edited lines; takes the plan and version
     /// from the freshest session, and rate-limit windows from sessions speaking
     /// for one birth account. `probed_accounts` carries out-of-band
     /// login facts the context cannot (Claude's `auth status`, Codex's
@@ -41,33 +39,54 @@ impl SidebarSnapshot {
     /// empty.
     pub(crate) fn with_provider_aggregates(
         mut self,
-        probed_accounts: &BTreeMap<String, AgentAccount>,
+        probed_accounts: &BTreeMap<LoginKey, AgentAccount>,
         remote_control: &BTreeMap<String, RemoteControlBadge>,
-        provider_spending: &BTreeMap<String, SpendTally>,
+        provider_spending: &BTreeMap<LoginKey, SpendTally>,
+        in_use: &BTreeSet<LoginKey>,
     ) -> Self {
-        let kinds = provider_kinds(&self.agents, probed_accounts, provider_spending);
+        let mut keys = in_use.clone();
+        keys.extend(
+            self.agents
+                .iter()
+                .filter(|agent| !agent.is_provider_subagent() && agent.ended_at.is_none())
+                .map(AgentState::login_key),
+        );
+        keys.extend(
+            probed_accounts
+                .iter()
+                .filter(|(key, account)| {
+                    account_creates_provider_panel(account, provider_spending.get(*key))
+                })
+                .map(|(key, _)| key.clone()),
+        );
         let mut panels = Vec::new();
-        for kind in kinds {
+        for key in keys {
+            let kind = key.kind.to_string();
+            let sessions: Vec<&AgentState> = self
+                .agents
+                .iter()
+                .filter(|agent| !agent.is_provider_subagent() && agent.login_key() == key)
+                .collect();
             let active_sessions = u32::try_from(
                 self.agent_panes
                     .iter()
-                    .filter(|pane| pane.kind.as_str() == kind && pane.agent_id.is_some())
+                    .filter(|pane| {
+                        pane.kind.as_str() == kind
+                            && sessions
+                                .iter()
+                                .any(|agent| pane.agent_id.as_ref() == Some(&agent.agent_id))
+                    })
                     .map(|pane| pane.pane_id.raw())
                     .collect::<BTreeSet<_>>()
                     .len(),
             )
             .unwrap_or(u32::MAX);
-            let sessions: Vec<&AgentState> = self
-                .agents
-                .iter()
-                .filter(|agent| !agent.is_provider_subagent() && agent.kind == kind)
-                .collect();
             // Nothing to show without a session or a substantive logged-in
             // account. Recorded spend qualifies a probed account but never
             // creates the provider section for a logged-out provider by itself.
             if sessions.is_empty()
-                && !probed_accounts.get(&kind).is_some_and(|account| {
-                    account_creates_provider_panel(account, provider_spending.get(&kind))
+                && !probed_accounts.get(&key).is_some_and(|account| {
+                    account_creates_provider_panel(account, provider_spending.get(&key))
                 })
             {
                 continue;
@@ -86,12 +105,12 @@ impl SidebarSnapshot {
                 .and_then(|context| context.agent_version.clone())
                 .or_else(|| {
                     probed_accounts
-                        .get(&kind)
+                        .get(&key)
                         .and_then(|account| account.version.clone())
                 });
             let account = freshest
                 .and_then(|context| context.account.clone())
-                .or_else(|| probed_accounts.get(&kind).cloned());
+                .or_else(|| probed_accounts.get(&key).cloned());
 
             // The budget windows are account-scoped too, but the *freshest*
             // session is not the truest reading: parallel sessions report the same
@@ -163,7 +182,7 @@ impl SidebarSnapshot {
                         .collect()
                 })
                 .unwrap_or_default();
-            let tally = provider_spending.get(&kind);
+            let tally = provider_spending.get(&key);
             let spending = tally.cloned();
             let rank = ProviderRank {
                 live: !sessions.is_empty(),
@@ -171,19 +190,24 @@ impl SidebarSnapshot {
                 month_sessions: tally.map_or(0, |tally| tally.month.sessions),
                 year_sessions: tally.map_or(0, |tally| tally.year.sessions),
                 logged_in: probed_accounts
-                    .get(&kind)
+                    .get(&key)
                     .is_some_and(|account| account_creates_provider_panel(account, tally)),
                 credentials_updated_at_ms: probed_accounts
-                    .get(&kind)
+                    .get(&key)
                     .and_then(|account| account.credentials_updated_at_ms),
             };
 
             panels.push((
                 SidebarProviderPanel {
                     kind,
+                    account: key.name.clone(),
                     account_scope,
                     account_key,
-                    product_name: identity.product_name,
+                    product_name: if key.name.is_default() {
+                        identity.product_name
+                    } else {
+                        format!("{} · {}", identity.product_name, key.name)
+                    },
                     art: identity.art,
                     art_tints: identity.art_tints,
                     color,
@@ -243,27 +267,6 @@ impl ProviderRank {
     }
 }
 
-fn provider_kinds(
-    agents: &[AgentState],
-    probed_accounts: &BTreeMap<String, AgentAccount>,
-    provider_spending: &BTreeMap<String, SpendTally>,
-) -> Vec<String> {
-    let mut kinds: Vec<String> = Vec::new();
-    for agent in agents {
-        if !agent.is_provider_subagent() && !kinds.iter().any(|known| agent.kind == **known) {
-            kinds.push(agent.kind.to_string());
-        }
-    }
-    for (kind, account) in probed_accounts {
-        if account_creates_provider_panel(account, provider_spending.get(kind))
-            && !kinds.iter().any(|known| known == kind)
-        {
-            kinds.push(kind.clone());
-        }
-    }
-    kinds
-}
-
 fn account_creates_provider_panel(account: &AgentAccount, tally: Option<&SpendTally>) -> bool {
     account.metered == Some(true)
         || account
@@ -299,9 +302,9 @@ fn resolve_provider_panels(
         .iter()
         .filter_map(|kind| (kind != "all").then_some(kind.as_str()))
         .collect();
-    let by_kind: BTreeMap<String, (SidebarProviderPanel, ProviderRank)> = panels
+    let by_login: BTreeMap<LoginKey, (SidebarProviderPanel, ProviderRank)> = panels
         .into_iter()
-        .map(|entry| (entry.0.kind.clone(), entry))
+        .map(|entry| (entry.0.login_key(), entry))
         .collect();
     let mut resolved = Vec::new();
     let mut emitted_named = BTreeSet::new();
@@ -312,7 +315,7 @@ fn resolve_provider_panels(
                 // `all` expands the not-yet-named providers in the same usage
                 // order as the default dashboard, so `["all"]` matches an empty
                 // list.
-                let mut remaining: Vec<(SidebarProviderPanel, ProviderRank)> = by_kind
+                let mut remaining: Vec<(SidebarProviderPanel, ProviderRank)> = by_login
                     .values()
                     .filter(|(panel, _)| !explicitly_named.contains(panel.kind.as_str()))
                     .cloned()
@@ -326,10 +329,14 @@ fn resolve_provider_panels(
             }
             continue;
         }
-        if emitted_named.insert(kind.as_str())
-            && let Some((panel, _)) = by_kind.get(kind)
-        {
-            resolved.push(panel.clone());
+        if emitted_named.insert(kind.as_str()) {
+            let mut named: Vec<_> = by_login
+                .values()
+                .filter(|(panel, _)| &panel.kind == kind)
+                .map(|(panel, _)| panel.clone())
+                .collect();
+            named.sort_by(display_order);
+            resolved.extend(named);
         }
     }
     resolved
@@ -344,6 +351,8 @@ fn display_order(left: &SidebarProviderPanel, right: &SidebarProviderPanel) -> O
     display_rank(&left.kind)
         .cmp(&display_rank(&right.kind))
         .then_with(|| left.kind.cmp(&right.kind))
+        .then_with(|| right.account.is_default().cmp(&left.account.is_default()))
+        .then_with(|| left.account.cmp(&right.account))
 }
 
 /// A kind's position in the registry's display order; unregistered kinds sort

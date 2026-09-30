@@ -70,6 +70,7 @@ pub(super) fn prepare_supervised_launch_layout(
     machine_config: &rimz::config::MachineConfig,
     scope: rimz::config::effective::ProfileScope,
     isolation: Option<rimz::config::Isolation>,
+    ancestry: Option<&rimz::harness::ancestry::LaunchAncestry>,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let mut effective = rimz::config::effective::load(machine_config, &workspace.project_root)?;
     let state = rimz::StatePaths::for_project_root(&workspace.project_root)?;
@@ -79,6 +80,7 @@ pub(super) fn prepare_supervised_launch_layout(
         &state,
         machine_config,
         jiff::Timestamp::now(),
+        ancestry,
     );
     let routed = effective.route(
         &machine_config.tiers,
@@ -519,6 +521,7 @@ fn prepare_supervised(
         &machine_config,
         scope,
         isolation,
+        ancestry.as_ref(),
     )?;
     let team_name = resolved.team_name;
     let mut layout = resolved.layout;

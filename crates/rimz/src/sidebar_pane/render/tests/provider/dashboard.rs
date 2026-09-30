@@ -3,6 +3,29 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 #[test]
+fn render_provider_dashboard_two_logins() {
+    let theme = Theme::fixed(false);
+    let native = provider_panel("claude", "Claude", 173, true, false, Some((20, 10)));
+    let mut work = provider_panel("claude", "Claude · work", 173, true, false, Some((100, 70)));
+    work.account = "work".parse().unwrap();
+    let panels = [native, work];
+    let rendered = Dashboard::stacked(&theme, &panels).text();
+    assert!(rendered.contains("Claude · work"), "{rendered}");
+    assert_snapshot("provider_dashboard_two_logins", rendered);
+    let block = Dashboard::tabbed(&theme, &panels).width(80).block();
+    let keys: Vec<_> = block
+        .interactions
+        .regions()
+        .iter()
+        .filter_map(|hit| match &hit.target {
+            HitTarget::ProviderTab(login) => Some(login.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(keys, ["claude@default", "claude@work"]);
+}
+
+#[test]
 fn dashboard_mode_is_selected_once_from_display_and_pet_settings() {
     let mut snapshot = snapshot_with(Vec::new());
     snapshot.providers = two_provider_panels();
@@ -265,8 +288,8 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     let snapshot = tabbed_provider_snapshot();
     let ui = UiState {
         dashboard_tab: Some(DashboardTab {
-            kind: "codex".to_owned(),
-            derived_at_start: Some("claude".to_owned()),
+            login: "codex@default".parse().unwrap(),
+            derived_at_start: Some("claude@default".parse().unwrap()),
         }),
         ..Default::default()
     };

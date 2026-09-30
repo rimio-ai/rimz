@@ -15,6 +15,7 @@ fn every_provider_paints_its_own_session_window() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &Default::default(),
     );
 
     let panel = |kind: &str| {
@@ -37,7 +38,12 @@ fn every_provider_paints_its_own_session_window() {
 
 fn claude_panel(agents: Vec<AgentState>) -> SidebarProviderPanel {
     room(agents)
-        .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new())
+        .with_provider_aggregates(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Default::default(),
+        )
         .providers
         .into_iter()
         .find(|panel| panel.kind == "claude")

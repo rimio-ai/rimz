@@ -439,6 +439,7 @@ fn tier_override_changes_the_supervised_launch_runtime() {
         &machine,
         rimz::config::effective::ProfileScope::Agents,
         None,
+        None,
     )
     .unwrap();
     let cell = resolved.layout.agent_cells().next().unwrap();
@@ -462,6 +463,7 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         &workspace,
         &rimz::config::MachineConfig::default(),
         rimz::config::effective::ProfileScope::Agents,
+        None,
         None,
     )
     .expect("prepare supervised launch")
@@ -609,6 +611,7 @@ fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
         &workspace,
         &rimz::config::MachineConfig::default(),
         rimz::config::effective::ProfileScope::Subagents,
+        None,
         None,
     )
     .expect_err("spec-like prompt");

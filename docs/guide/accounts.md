@@ -87,7 +87,7 @@ RimZ sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME` on each provider process from that
 
 ## What the account changes
 
-The sidebar's provider dashboard reads the room's account: the plan, the 5-hour and 7-day limit bars, and the credits all come from that home. A named account labels its block, as in `Claude · work`, so two rooms on different Claude accounts show different bars side by side. `rimz providers` prints the same picture as text, one block per account ([reading the numbers](./insight.md#per-account-the-provider-dashboard)).
+The sidebar's provider dashboard shows a block per account in use: the plan, the 5-hour and 7-day limit bars, and the credits all come from that account's home. A named account labels its block, as in `Claude · work`. After a switch, one room can show both the new account and the old account while its agents finish. The old block drops when its last agent ends. `rimz providers` prints the same picture as text, one block per account ([reading the numbers](./insight.md#per-account-the-provider-dashboard)).
 
 A daily cap in the per-machine config's `[accounts.budget]` table applies to each account of that provider separately:
 

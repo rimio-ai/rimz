@@ -108,7 +108,7 @@ impl PulledFrameSig {
         for panel in &snapshot.providers {
             aggregates.insert(
                 AggregateKey::ProviderSpend {
-                    kind: panel.kind.clone(),
+                    login: panel.login_key(),
                 }
                 .identity(),
                 spend_cents(panel.spending.as_ref()),
@@ -116,7 +116,7 @@ impl PulledFrameSig {
             for window in &panel.windows {
                 aggregates.insert(
                     AggregateKey::ProviderMana {
-                        kind: panel.kind.clone(),
+                        login: panel.login_key(),
                         scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
                         duration_mins: window.duration_mins,
                     }
@@ -293,7 +293,7 @@ fn extract_aggregates(
     ];
     for panel in &current.providers {
         let spend_key = AggregateKey::ProviderSpend {
-            kind: panel.kind.clone(),
+            login: panel.login_key(),
         };
         aggregates.push(AggregateSig {
             key: spend_key.clone(),
@@ -306,7 +306,7 @@ fn extract_aggregates(
         });
         for window in &panel.windows {
             let key = AggregateKey::ProviderMana {
-                kind: panel.kind.clone(),
+                login: panel.login_key(),
                 scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
                 duration_mins: window.duration_mins,
             };

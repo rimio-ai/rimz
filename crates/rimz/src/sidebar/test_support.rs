@@ -61,6 +61,7 @@ pub(crate) fn provider_panel(
     windows: Vec<RateLimitWindow>,
 ) -> crate::store::snapshot::SidebarProviderPanel {
     crate::store::snapshot::SidebarProviderPanel {
+        account: Default::default(),
         kind: kind.to_owned(),
         account_scope: Default::default(),
         account_key: None,

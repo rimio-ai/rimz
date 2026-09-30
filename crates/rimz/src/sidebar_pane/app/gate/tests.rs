@@ -40,6 +40,7 @@ fn provider(
     used_percentage: u8,
 ) -> crate::store::snapshot::SidebarProviderPanel {
     crate::store::snapshot::SidebarProviderPanel {
+        account: Default::default(),
         kind: kind.to_owned(),
         account_scope: Default::default(),
         account_key: None,
@@ -403,7 +404,7 @@ fn accept_carries_collapsed_spend_without_touching_roster() {
     assert_eq!(gate.spend_carry.fleet, Some(gate_now()));
     assert_eq!(gate.spend_carry.workspace, Some(gate_now()));
     assert_eq!(
-        gate.spend_carry.providers[&crate::ids::AgentKind::new_unchecked("codex")],
+        gate.spend_carry.providers[&"codex@default".parse::<crate::ids::LoginKey>().unwrap()],
         gate_now()
     );
 }
@@ -532,7 +533,10 @@ fn spend_carry_expires_each_family_without_coupling_mana_zero() {
         spend_carry: SpendCarryEpisodes {
             fleet: Some(old),
             workspace: Some(fresh),
-            providers: BTreeMap::from([(crate::ids::AgentKind::new_unchecked("codex"), old)]),
+            providers: BTreeMap::from([(
+                "codex@default".parse::<crate::ids::LoginKey>().unwrap(),
+                old,
+            )]),
         },
         ..GateState::default()
     };
@@ -567,7 +571,7 @@ fn spend_carry_escape_hatch_commits_sustained_zero() {
             fleet: Some(Timestamp::from_second(base).unwrap()),
             workspace: Some(Timestamp::from_second(base).unwrap()),
             providers: BTreeMap::from([(
-                crate::ids::AgentKind::new_unchecked("codex"),
+                "codex@default".parse::<crate::ids::LoginKey>().unwrap(),
                 Timestamp::from_second(base).unwrap(),
             )]),
         },

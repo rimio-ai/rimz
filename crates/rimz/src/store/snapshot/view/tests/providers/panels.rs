@@ -14,14 +14,24 @@ fn live_provider_outranks_heavier_history_and_cap_keeps_usage_leaders() {
     // The cap only trims the stacked dashboard; pin `never` so it bites here.
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.theme.display.max_provider_blocks = 3;
-    let snapshot = snapshot.with_provider_aggregates(&accounts, &BTreeMap::new(), &by_provider);
+    let snapshot = snapshot.with_provider_aggregates(
+        &accounts,
+        &BTreeMap::new(),
+        &by_provider,
+        &Default::default(),
+    );
 
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
 
     let mut snapshot = room(vec![claude]);
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.theme.display.max_provider_blocks = 2;
-    let snapshot = snapshot.with_provider_aggregates(&accounts, &BTreeMap::new(), &by_provider);
+    let snapshot = snapshot.with_provider_aggregates(
+        &accounts,
+        &BTreeMap::new(),
+        &by_provider,
+        &Default::default(),
+    );
 
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex"]);
 }
@@ -34,8 +44,12 @@ fn session_windows_rank_lexicographically() {
         ("codex", 0, 100, 100),
         ("pi", 0, 0, 1_000),
     ]);
-    let snapshot =
-        room(Vec::new()).with_provider_aggregates(&accounts, &BTreeMap::new(), &spending);
+    let snapshot = room(Vec::new()).with_provider_aggregates(
+        &accounts,
+        &BTreeMap::new(),
+        &spending,
+        &Default::default(),
+    );
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
 }
 
@@ -47,8 +61,12 @@ fn login_and_credential_recency_break_unused_live_ties() {
         agent("pi", "p1", AgentStatus::Idle, 30),
     ];
     let accounts = provider_accounts([("codex", 10), ("pi", 20)]);
-    let snapshot =
-        room(agents).with_provider_aggregates(&accounts, &BTreeMap::new(), &BTreeMap::new());
+    let snapshot = room(agents).with_provider_aggregates(
+        &accounts,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
     assert_eq!(provider_kinds(&snapshot), vec!["pi", "codex", "claude"]);
 }
 
@@ -59,7 +77,12 @@ fn full_usage_tie_falls_back_to_registry_order() {
         agent("codex", "x1", AgentStatus::Idle, 20),
         agent("claude", "c1", AgentStatus::Idle, 30),
     ])
-    .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+    .with_provider_aggregates(
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
 }
 
@@ -79,8 +102,12 @@ fn tabbed_dashboard_shows_every_provider_past_the_cap() {
     let mut snapshot = room(agents);
     // Default `auto` tabs at five providers; a tight cap must not trim them.
     snapshot.theme.display.max_provider_blocks = 2;
-    let snapshot =
-        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+    let snapshot = snapshot.with_provider_aggregates(
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
 
     // Painted in the registry's display order, not alphabetically.
     assert_eq!(
@@ -92,8 +119,12 @@ fn tabbed_dashboard_shows_every_provider_past_the_cap() {
 #[test]
 fn provider_brand_color_carries_rgb_and_indexed_fallback() {
     let panel_for = |mut snapshot: SidebarSnapshot| {
-        snapshot =
-            snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+        snapshot = snapshot.with_provider_aggregates(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Default::default(),
+        );
         snapshot
             .providers
             .into_iter()
@@ -106,7 +137,12 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
     assert_eq!(panel.color_rgb, Some((0xd9, 0x77, 0x57)));
 
     let grok = room(vec![agent("grok", "g1", AgentStatus::Idle, 10)])
-        .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new())
+        .with_provider_aggregates(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Default::default(),
+        )
         .providers
         .into_iter()
         .next()
@@ -171,7 +207,12 @@ fn provider_panels_carry_descriptor_window_placeholders() {
         agent("claude", "c1", AgentStatus::Idle, 10),
         agent("unregistered", "u1", AgentStatus::Idle, 20),
     ])
-    .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+    .with_provider_aggregates(
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
 
     let claude = snapshot
         .providers
@@ -191,8 +232,12 @@ fn provider_panels_carry_descriptor_window_placeholders() {
 #[test]
 fn copilot_catalog_tints_survive_color_overrides_but_not_art_overrides() {
     let panel_for = |mut snapshot: SidebarSnapshot| {
-        snapshot =
-            snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+        snapshot = snapshot.with_provider_aggregates(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Default::default(),
+        );
         snapshot
             .providers
             .into_iter()
@@ -273,8 +318,12 @@ fn provider_list_filters_and_orders_dashboard_panels() {
         snapshot.theme.display.provider_list =
             provider_list.into_iter().map(str::to_owned).collect();
 
-        let snapshot =
-            snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+        let snapshot = snapshot.with_provider_aggregates(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Default::default(),
+        );
 
         assert_eq!(provider_kinds(&snapshot), expected, "{label}");
     }
@@ -290,16 +339,21 @@ fn provider_list_all_expands_remaining_in_usage_order() {
     let spending = provider_sessions([("claude", 0, 0, 0), ("codex", 1, 1, 1), ("pi", 2, 2, 2)]);
     let mut snapshot = room(agents);
     snapshot.theme.display.provider_list = vec!["claude".to_owned(), "all".to_owned()];
-    let snapshot = snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &spending);
+    let snapshot = snapshot.with_provider_aggregates(
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &spending,
+        &Default::default(),
+    );
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "pi", "codex"]);
 }
 
 #[test]
 fn recorded_spend_attaches_only_after_provider_discovery() {
     let snapshot = room(Vec::new());
-    let mut by_provider: BTreeMap<String, SpendTally> = BTreeMap::new();
+    let mut by_provider: BTreeMap<crate::ids::LoginKey, SpendTally> = BTreeMap::new();
     by_provider.insert(
-        "claude".to_owned(),
+        provider_key("claude"),
         SpendTally {
             headline: SpendWindow {
                 usd: 2.0,
@@ -315,10 +369,12 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
         },
     );
 
-    let spend_only =
-        snapshot
-            .clone()
-            .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
+    let spend_only = snapshot.clone().with_provider_aggregates(
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &by_provider,
+        &Default::default(),
+    );
     assert!(
         spend_only.providers.is_empty(),
         "historical spend alone does not create the provider section"
@@ -326,7 +382,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
 
     let mut probed = BTreeMap::new();
     probed.insert(
-        "claude".to_owned(),
+        provider_key("claude"),
         AgentAccount {
             scope: Default::default(),
             plan: Some("max".to_owned()),
@@ -337,7 +393,12 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
             credentials_updated_at_ms: None,
         },
     );
-    let snapshot = snapshot.with_provider_aggregates(&probed, &BTreeMap::new(), &by_provider);
+    let snapshot = snapshot.with_provider_aggregates(
+        &probed,
+        &BTreeMap::new(),
+        &by_provider,
+        &Default::default(),
+    );
 
     let claude = snapshot
         .providers
@@ -349,10 +410,11 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
 
 #[test]
 fn idle_provider_presence_requires_account_substance() {
-    let panel_count = |account: AgentAccount, spending: BTreeMap<String, SpendTally>| {
-        let accounts = BTreeMap::from([("kimi".to_owned(), account)]);
+    let panel_count = |account: AgentAccount,
+                       spending: BTreeMap<crate::ids::LoginKey, SpendTally>| {
+        let accounts = BTreeMap::from([(provider_key("kimi"), account)]);
         room(Vec::new())
-            .with_provider_aggregates(&accounts, &BTreeMap::new(), &spending)
+            .with_provider_aggregates(&accounts, &BTreeMap::new(), &spending, &Default::default())
             .providers
             .len()
     };
@@ -391,11 +453,12 @@ fn idle_provider_presence_requires_account_substance() {
         1
     );
 
-    let accounts = BTreeMap::from([("kimi".to_owned(), credentials_only)]);
+    let accounts = BTreeMap::from([(provider_key("kimi"), credentials_only)]);
     let live = room(vec![agent("kimi", "k1", AgentStatus::Idle, 10)]).with_provider_aggregates(
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &Default::default(),
     );
     assert_eq!(provider_kinds(&live), vec!["kimi"]);
 }
@@ -408,9 +471,13 @@ fn antigravity_account_stays_metered_before_and_after_quota_arrives() {
         metered: Some(true),
         ..Default::default()
     };
-    let mut accounts = BTreeMap::from([("antigravity".to_owned(), account.clone())]);
-    let initial =
-        room(Vec::new()).with_provider_aggregates(&accounts, &BTreeMap::new(), &BTreeMap::new());
+    let mut accounts = BTreeMap::from([(provider_key("antigravity"), account.clone())]);
+    let initial = room(Vec::new()).with_provider_aggregates(
+        &accounts,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
     let panel = initial.providers.first().expect("account-only panel");
     assert_eq!(panel.kind, "antigravity");
     assert!(panel.metered);
@@ -434,9 +501,13 @@ fn antigravity_account_stays_metered_before_and_after_quota_arrives() {
         },
     ]);
     account.plan = None;
-    accounts.insert("antigravity".to_owned(), account);
-    let with_quota =
-        room(vec![agent]).with_provider_aggregates(&accounts, &BTreeMap::new(), &BTreeMap::new());
+    accounts.insert(provider_key("antigravity"), account);
+    let with_quota = room(vec![agent]).with_provider_aggregates(
+        &accounts,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
     let panel = with_quota.providers.first().expect("live panel");
     assert!(panel.metered);
     assert_eq!(
@@ -462,7 +533,12 @@ fn provider_active_sessions_count_bound_identity_panes_not_durable_rows() {
     newer.registered_at = Some(ago(60));
     let snapshot = room(vec![older, newer])
         .with_live_panes(vec![live], None)
-        .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+        .with_provider_aggregates(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Default::default(),
+        );
     let panel = snapshot
         .providers
         .iter()
@@ -472,7 +548,7 @@ fn provider_active_sessions_count_bound_identity_panes_not_durable_rows() {
     assert!(panel.spending.is_none());
 
     let accounts = BTreeMap::from([(
-        "antigravity".to_owned(),
+        provider_key("antigravity"),
         AgentAccount {
             metered: Some(true),
             ..Default::default()
@@ -482,7 +558,12 @@ fn provider_active_sessions_count_bound_identity_panes_not_durable_rows() {
     identityless.wired_kinds = vec!["antigravity".to_owned()];
     let identityless = identityless
         .with_live_panes(vec![pane("%2", "agy", "/repo/main")], None)
-        .with_provider_aggregates(&accounts, &BTreeMap::new(), &BTreeMap::new());
+        .with_provider_aggregates(
+            &accounts,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Default::default(),
+        );
     assert_eq!(identityless.providers[0].active_sessions, 0);
 }
 
@@ -501,6 +582,7 @@ fn launched_child_counts_as_a_live_provider_session() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &Default::default(),
     );
 
     let codex = snapshot
@@ -517,7 +599,7 @@ fn active_session_count_does_not_replace_real_provider_history() {
         .worktree("/repo/main")
         .in_pane("%1");
     let spending = BTreeMap::from([(
-        "claude".to_owned(),
+        provider_key("claude"),
         SpendTally {
             headline: SpendWindow {
                 sessions: 12,
@@ -530,7 +612,12 @@ fn active_session_count_does_not_replace_real_provider_history() {
     )]);
     let snapshot = room(vec![session])
         .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None)
-        .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &spending);
+        .with_provider_aggregates(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &spending,
+            &Default::default(),
+        );
     let panel = &snapshot.providers[0];
     assert_eq!(panel.active_sessions, 1);
     assert_eq!(panel.spending.as_ref().unwrap().headline.sessions, 12);
@@ -540,12 +627,12 @@ fn active_session_count_does_not_replace_real_provider_history() {
 
 fn provider_sessions(
     entries: impl IntoIterator<Item = (&'static str, u32, u32, u32)>,
-) -> BTreeMap<String, SpendTally> {
+) -> BTreeMap<crate::ids::LoginKey, SpendTally> {
     entries
         .into_iter()
         .map(|(kind, week, month, year)| {
             (
-                kind.to_owned(),
+                provider_key(kind),
                 SpendTally {
                     week: SpendWindow {
                         sessions: week,
@@ -568,12 +655,12 @@ fn provider_sessions(
 
 fn provider_accounts(
     entries: impl IntoIterator<Item = (&'static str, u64)>,
-) -> BTreeMap<String, AgentAccount> {
+) -> BTreeMap<crate::ids::LoginKey, AgentAccount> {
     entries
         .into_iter()
         .map(|(kind, credentials_updated_at_ms)| {
             (
-                kind.to_owned(),
+                provider_key(kind),
                 AgentAccount {
                     plan: Some("pro".to_owned()),
                     metered: Some(true),
@@ -583,4 +670,30 @@ fn provider_accounts(
             )
         })
         .collect()
+}
+#[test]
+fn two_live_logins_have_separate_panels_and_old_login_drops_on_end() {
+    let native = agent("claude", "native", AgentStatus::Idle, 10);
+    let mut work = agent("claude", "work", AgentStatus::Idle, 10);
+    work.login = Some("work".parse().unwrap());
+    let mut snapshot = room(vec![work.clone(), native.clone()]);
+    snapshot.theme.display.provider_list = vec!["claude".to_owned()];
+    let snapshot = snapshot.with_provider_aggregates(
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
+    assert_eq!(snapshot.providers.len(), 2);
+    assert_eq!(snapshot.providers[0].product_name, "Claude");
+    assert_eq!(snapshot.providers[1].product_name, "Claude · work");
+    work.ended_at = Some(epoch());
+    let snapshot = room(vec![native, work]).with_provider_aggregates(
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
+    assert_eq!(snapshot.providers.len(), 1);
+    assert_eq!(snapshot.providers[0].product_name, "Claude");
 }
