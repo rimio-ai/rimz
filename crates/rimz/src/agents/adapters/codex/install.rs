@@ -250,6 +250,49 @@ pub(super) fn read_existing_table(path: &Path) -> Result<toml::Table> {
     }
 }
 
+pub(super) fn adopt_config(existing: &Path, target: &Path) -> Result<Option<String>> {
+    let original = read_existing_table(existing)?;
+    let Some(state) = original
+        .get(HOOKS_TABLE)
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(toml::Value::as_table)
+        .filter(|state| !state.is_empty())
+    else {
+        return Ok(None);
+    };
+    let mut root = read_existing_table(target)?;
+    let invalid = || AgentErr::Install {
+        agent: "codex",
+        reason: format!("hooks.state in {} must be a table", target.display()),
+    };
+    let target_state = root
+        .entry(HOOKS_TABLE)
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(invalid)?
+        .entry("state")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(invalid)?;
+    let mut carried = 0;
+    for (key, value) in state {
+        if !target_state.contains_key(key) {
+            target_state.insert(key.clone(), value.clone());
+            carried += 1;
+        }
+    }
+    if carried == 0 {
+        return Ok(None);
+    }
+    write_table(target, &root)?;
+    let entries = if carried == 1 { "entry" } else { "entries" };
+    Ok(Some(format!(
+        "carried {carried} hook trust {entries} from {} into {}",
+        existing.display(),
+        target.display()
+    )))
+}
+
 fn write_table(path: &Path, table: &toml::Table) -> Result<()> {
     let text = render_table(table)?;
     provider_file::write_bytes(path, text.as_bytes())?;

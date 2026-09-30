@@ -186,7 +186,12 @@ impl ProviderLogin {
             return Ok(());
         }
         let default = Self::default_for(self.kind.clone()).home_dir(ambient);
-        if default.map(|path| normalize_path_lexical(&path)) != Some(normalize_path_lexical(home)) {
+        let same_home =
+            default.is_some_and(|path| match (path.canonicalize(), home.canonicalize()) {
+                (Ok(default), Ok(named)) => default == named,
+                _ => normalize_path_lexical(&path) == normalize_path_lexical(home),
+            });
+        if !same_home {
             return Ok(());
         }
         Err(LoginConfigErr::ExportedHome {

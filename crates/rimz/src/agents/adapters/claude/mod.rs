@@ -741,6 +741,47 @@ impl crate::agents::capabilities::CoreCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
+    fn shared_home_entries(&self) -> &'static [crate::agents::capabilities::SharedHomeEntry] {
+        use crate::agents::capabilities::{
+            SharedHomeEntry,
+            SharedHomeKind::{Dir, File},
+        };
+        &[
+            SharedHomeEntry {
+                name: "settings.json",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "settings.local.json",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "CLAUDE.md",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "skills",
+                kind: Dir,
+            },
+            SharedHomeEntry {
+                name: "plugins",
+                kind: Dir,
+            },
+            SharedHomeEntry {
+                name: "agents",
+                kind: Dir,
+            },
+            SharedHomeEntry {
+                name: "commands",
+                kind: Dir,
+            },
+            SharedHomeEntry {
+                name: "output-styles",
+                kind: Dir,
+            },
+        ]
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["CLAUDE_CONFIG_DIR"]
     }

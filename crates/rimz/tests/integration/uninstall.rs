@@ -370,6 +370,9 @@ fn uninstall_removes_managed_hooks() {
     assert!(work_home.join(".credentials.json").is_file());
     let unhooked = fs::read_to_string(&work_settings).expect("work settings kept");
     assert!(!unhooked.contains("rimz"), "{unhooked}");
+    assert!(work_settings.is_symlink());
+    let target = fs::read_link(work_settings).unwrap();
+    assert_eq!(fs::read_to_string(target).unwrap(), unhooked);
 }
 
 #[test]

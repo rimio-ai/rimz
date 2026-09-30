@@ -116,6 +116,16 @@ pub trait HookCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait InstallationCapability: CoreCapability {
+    /// Carry provider-owned state before moving a private settings file aside.
+    fn adopt_shared_file(
+        &self,
+        _name: &str,
+        _existing: &Path,
+        _target: &Path,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// Whether folder-trust onboarding also blocks headless launches.
     fn headless_requires_folder_trust(&self) -> bool {
         false
@@ -248,8 +258,26 @@ pub enum ManualSkill {
     OpenAiPolicy,
 }
 
+/// Directory targets are created before linking; file targets may remain absent.
+#[derive(Clone, Copy, Debug)]
+pub enum SharedHomeKind {
+    File,
+    Dir,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SharedHomeEntry {
+    pub name: &'static str,
+    pub kind: SharedHomeKind,
+}
+
 #[doc(hidden)]
 pub trait LaunchCapability: CoreCapability {
+    /// Settings and user content shared with the provider's own home, never account data.
+    fn shared_home_entries(&self) -> &'static [SharedHomeEntry] {
+        &[]
+    }
+
     fn is_model_alias(&self, name: &str) -> bool {
         self.spec()
             .launch

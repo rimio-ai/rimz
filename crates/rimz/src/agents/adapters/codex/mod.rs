@@ -834,6 +834,18 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
+    fn adopt_shared_file(
+        &self,
+        name: &str,
+        existing: &Path,
+        target: &Path,
+    ) -> Result<Option<String>> {
+        if name != "config.toml" {
+            return Ok(None);
+        }
+        install::adopt_config(existing, target)
+    }
+
     fn headless_requires_folder_trust(&self) -> bool {
         true
     }
@@ -865,6 +877,20 @@ impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
+    fn shared_home_entries(&self) -> &'static [crate::agents::capabilities::SharedHomeEntry] {
+        use crate::agents::capabilities::{SharedHomeEntry, SharedHomeKind::File};
+        &[
+            SharedHomeEntry {
+                name: "config.toml",
+                kind: File,
+            },
+            SharedHomeEntry {
+                name: "AGENTS.md",
+                kind: File,
+            },
+        ]
+    }
+
     fn resolve_model_alias(
         &self,
         request: crate::agents::capabilities::ModelAliasRequest<'_>,

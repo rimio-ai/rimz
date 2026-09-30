@@ -98,16 +98,22 @@ fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
         .map(std::path::absolute)
         .transpose()
         .context("resolving --home")?;
+    let ambient = rimz::agents::ambient_env();
     let machine = MachineConfig::load()?;
-    let existing = LoginCatalog::from_config(&machine.accounts)?
-        .select(kind, &name)
-        .ok();
-    let login = match (existing, home) {
+    let catalog = LoginCatalog::from_config(&machine.accounts)?;
+    let existing = catalog.select(kind, &name).ok();
+    let declaring = existing.is_none();
+    let login = match (existing, home.as_ref()) {
         (Some(existing), None) => existing,
         (existing, home) => {
             let mut accounts = machine.accounts.clone();
             if let Some(declared) = accounts.named_mut(kind) {
-                declared.insert(name.clone(), NamedAccount { home: home.clone() });
+                declared.insert(
+                    name.clone(),
+                    NamedAccount {
+                        home: home.cloned(),
+                    },
+                );
             }
             let login = LoginCatalog::from_config(&accounts)?.select(kind, &name)?;
             match existing {
@@ -119,25 +125,48 @@ fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
                         .display()
                 ),
                 Some(existing) => existing,
-                None => {
-                    login.check_exported_home(&rimz::agents::ambient_env())?;
-                    ConfigEditor::machine().upsert_named_account(kind, &name, home.as_deref())?;
-                    login
-                }
+                None => login,
             }
         }
     };
+    for account in std::iter::once(&login).chain(
+        catalog
+            .all()
+            .filter(|account| account.kind() == kind && account.name() != &name),
+    ) {
+        if let Err(error) = account.check_exported_home(&ambient) {
+            if let rimz::agents::LoginConfigErr::ExportedHome {
+                env_key,
+                home,
+                name: exported_name,
+                ..
+            } = error
+            {
+                bail!(
+                    "`{env_key}` is exported as `{}`, the home of {kind} account `{exported_name}`; unset `{env_key}` so `default` resolves to {kind}'s own home, e.g. `env -u {env_key} rimz accounts add {kind} {name}`",
+                    home.display()
+                );
+            }
+            return Err(error.into());
+        }
+    }
+    let default_home = ProviderLogin::default_for(kind.clone())
+        .home_dir(&ambient)
+        .with_context(|| format!("cannot resolve {kind}'s own home; set HOME"))?;
     // Sound: `select` answers a non-default name only with a declared home.
-    let home = login.home().expect("a named account has a home");
+    let named_home = login.home().expect("a named account has a home");
+    rimz::agents::account_links::check_distinct_homes(named_home, &default_home)?;
+    if declaring {
+        ConfigEditor::machine().upsert_named_account(kind, &name, home.as_deref())?;
+    }
+    let home = named_home;
     std::fs::create_dir_all(home)
         .with_context(|| format!("creating {kind} account home {}", home.display()))?;
     let definition = rimz::agents::definition_by_kind(kind.as_str())?;
+    let shared = rimz::agents::account_links::share_settings(definition, home, &default_home)?;
     let mut out = render::out();
-    crate::cli::hooks::install_hooks_into(
-        definition,
-        &login.env(&rimz::agents::ambient_env()),
-        &mut out,
-    )?;
+    writeln!(out, "{shared}")?;
+    crate::cli::hooks::install_hooks_into(definition, &login.env(&ambient), &mut out)?;
     let home_override = login
         .env(&BTreeMap::new())
         .into_iter()
