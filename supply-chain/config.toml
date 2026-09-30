@@ -428,10 +428,6 @@ criteria = "safe-to-run"
 version = "0.11.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.fancy-regex]]
-version = "0.17.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.fast-srgb8]]
 version = "1.0.0"
 criteria = "safe-to-deploy"

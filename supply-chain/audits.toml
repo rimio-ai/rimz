@@ -223,6 +223,12 @@ user-id = 1139 # Manish Goregaokar (Manishearth)
 start = "2024-06-20"
 end = "2027-06-13"
 
+[[trusted.fancy-regex]]
+criteria = "safe-to-deploy"
+user-id = 308963 # Keith Hall (keith-hall)
+start = "2025-08-01"
+end = "2027-09-30"
+
 [[trusted.flate2]]
 criteria = "safe-to-deploy"
 user-id = 55123 # rust-lang-owner
