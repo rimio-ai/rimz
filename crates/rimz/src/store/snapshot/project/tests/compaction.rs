@@ -158,6 +158,9 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
         "session",
         &AgentKind::new_unchecked("codex"),
         AgentAttachPayload {
+            record: None,
+            tier: None,
+            mode: None,
             effective_isolation: None,
             agent_id: AgentSessionId::from("predecessor"),
             launch_id: Some(AgentSessionId::from("launch_coder")),

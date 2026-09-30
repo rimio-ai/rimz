@@ -94,6 +94,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         agent_id: AgentSessionId::from("launch_follow_up"),
         name: AgentLaunchName::Explicit("writer".to_owned()),
         launch: LaunchParams {
+            record: None,
             parent_agent_id: Some(AgentSessionId::from("parent-session")),
             parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
             launch_depth: Some(2),
@@ -256,6 +257,7 @@ fn attach_agent_pane_records_process_owned_placement() {
             owner.clone(),
             Some(crate::config::Isolation::Sandbox),
             Some(crate::config::Isolation::Sandbox),
+            None,
         )
         .expect("attach resumed agent");
 

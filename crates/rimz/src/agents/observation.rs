@@ -42,6 +42,28 @@ pub struct LaunchedBy {
     pub agent_id: AgentSessionId,
 }
 
+/// Launch settings preserved verbatim, independent of provider observations.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchRecord {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub agent: Option<String>,
+}
+
+impl LaunchRecord {
+    pub fn replay_or_new(
+        record: Option<&Self>,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Box<Self> {
+        Box::new(record.cloned().unwrap_or_else(|| Self {
+            model: model.map(str::to_owned),
+            effort: effort.map(str::to_owned),
+            agent: None,
+        }))
+    }
+}
+
 /// The model selected by the launch walk, independent of later hook observations.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TierStamp {
@@ -90,6 +112,8 @@ impl std::fmt::Display for TierSkipReason {
 /// Launcher-selected parameters shared by launch and lifecycle event payloads.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<Box<LaunchRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Box<TierStamp>>,
     /// Parent launch id for a pane-backed `rimz subagents` child.

@@ -11,6 +11,21 @@ use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
 
 #[test]
+fn finalized_launch_stamps_verbatim_record() {
+    let mut layout = LayoutSpec::single(preset_cell("claude", &[], Some("opus[1m]"), Some("high")));
+    finalize(&mut layout, &Default::default(), &[]).unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(
+        cell.launch.record.as_deref(),
+        Some(&crate::agents::LaunchRecord {
+            model: Some("opus[1m]".into()),
+            effort: Some("high".into()),
+            agent: None,
+        })
+    );
+}
+
+#[test]
 fn launch_availability_matches_aliases_to_model_sub_caps() {
     let root = tempfile::tempdir().unwrap();
     let id = crate::WorkspaceId::from_project_root(root.path());
@@ -166,6 +181,7 @@ fn child_isolation_cap_respects_parent_and_request_source() {
 #[test]
 fn cell_posture_projection_covers_every_agent_cell_field() {
     let mut cell = AgentCell {
+        resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "o3".to_owned()],
@@ -184,6 +200,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         },
     };
     let AgentCell {
+        resume_model_override,
         isolation_default,
         kind: _,
         auto_compact: _,
@@ -199,6 +216,9 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
     assert_eq!(
         ResumeLaunchPosture::from(&cell),
         ResumeLaunchPosture {
+            resume_model_override,
+            record: None,
+            tier: None,
             isolation_default,
             isolation: launch.isolation,
             args,
@@ -245,6 +265,7 @@ fn role_binding(role: &str) -> RoleBinding {
 
 fn agent_cell_with_role(role: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
+        resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
@@ -325,6 +346,7 @@ fn exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
 
 fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
+        resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         auto_compact: None,
@@ -351,6 +373,7 @@ fn finalize<'a>(
     finalize_launch_layout(
         layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: None,
             isolation: None,
             preset,
@@ -889,6 +912,7 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: None,
             isolation: None,
             preset: &crate::agents::LaunchPreset {
@@ -924,6 +948,7 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
     let err = finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: None,
             isolation: None,
             preset: &crate::agents::LaunchPreset::default(),
@@ -1167,6 +1192,7 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
             isolation: None,
             preset: &preset,
@@ -1224,6 +1250,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Yolo)),
             isolation: Some(crate::config::Isolation::Sandbox),
             preset: &preset,
@@ -1252,6 +1279,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
             isolation: None,
             preset: &preset,
@@ -1279,6 +1307,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     let err = finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
             isolation: None,
             preset: &preset,
@@ -1320,6 +1349,7 @@ fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
             finalize_launch_layout(
                 &mut resolved.layout,
                 LaunchFinalizeOptions {
+                    agent_base: None,
                     permission_mode: Some(PermissionModeChoice::Explicit(chosen)),
                     isolation: None,
                     preset: &crate::agents::LaunchPreset::default(),
@@ -1364,6 +1394,7 @@ fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Ask)),
             isolation: None,
             preset: &crate::agents::LaunchPreset::default(),
@@ -1387,6 +1418,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
         .permission_args(PermissionMode::Auto);
     let cell = |args, mode| {
         Cell::Agent(AgentCell {
+            resume_model_override: false,
             isolation_default: None,
             kind: AgentKind::new_unchecked("codex"),
             auto_compact: None,
@@ -1413,6 +1445,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Yolo)),
             isolation: None,
             preset: &crate::agents::LaunchPreset {
@@ -1481,6 +1514,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
 #[test]
 fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
     let explicit = Cell::Agent(AgentCell {
+        resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         auto_compact: None,
@@ -1500,17 +1534,18 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         .rows
         .extend([explicit, Cell::agent(AgentKind::new_unchecked("claude"))]);
     finalize(&mut layout, &Default::default(), &[]).expect("finalize launch");
-    assert_eq!(
-        layout.columns[0].rows[0],
-        Cell::agent(AgentKind::new_unchecked("codex"))
-    );
+    let recorded_bare = |kind| {
+        let mut cell = Cell::agent(AgentKind::new_unchecked(kind));
+        if let Cell::Agent(cell) = &mut cell {
+            cell.launch.record = Some(Box::default());
+        }
+        cell
+    };
+    assert_eq!(layout.columns[0].rows[0], recorded_bare("codex"));
     assert!(matches!(&layout.columns[0].rows[1],
         Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
             if model == "gpt-6-astra" && args == &["--model", "gpt-6-astra"]));
-    assert_eq!(
-        layout.columns[0].rows[2],
-        Cell::agent(AgentKind::new_unchecked("claude"))
-    );
+    assert_eq!(layout.columns[0].rows[2], recorded_bare("claude"));
 }
 
 #[test]
@@ -1759,6 +1794,7 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: None,
             isolation: None,
             preset: &preset,
@@ -1786,6 +1822,7 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     let err = finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: None,
             isolation: None,
             preset: &preset,
@@ -1832,6 +1869,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
+            agent_base: None,
             permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
             isolation: None,
             preset: &Default::default(),
@@ -1860,6 +1898,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
 #[test]
 fn launch_request_names_and_metadata() {
     let layout = LayoutSpec::single(Cell::Agent(AgentCell {
+        resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         auto_compact: None,
@@ -2164,6 +2203,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
         finalize_launch_layout(
             &mut layout,
             LaunchFinalizeOptions {
+                agent_base: None,
                 permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
                 isolation: flag,
                 preset: &preset,
@@ -2362,6 +2402,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     )
     .expect("runtime");
     let cell = Cell::Agent(AgentCell {
+        resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
@@ -2467,6 +2508,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     )
     .expect("runtime");
     let cell = Cell::Agent(AgentCell {
+        resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,

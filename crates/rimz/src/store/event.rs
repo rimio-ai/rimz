@@ -50,7 +50,7 @@ macro_rules! lifetime_fields {
     };
 }
 
-lifetime_fields!(transcript_path; account_key; role, team, channel, profile, login, tier);
+lifetime_fields!(transcript_path; account_key; role, team, channel, profile, login, tier, record);
 
 pub(crate) const MAX_SIGNAL_NAME_BYTES: usize = 64;
 
@@ -209,6 +209,12 @@ pub struct AgentLaunchPayload {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentAttachPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<crate::agents::LaunchRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<crate::agents::TierStamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<crate::agents::PermissionMode>,
     pub agent_id: AgentSessionId,
     /// The recorded launch override, not the profile default.
     #[serde(default, skip_serializing_if = "Option::is_none")]

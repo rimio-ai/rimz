@@ -104,6 +104,12 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     seed.launch.model.clone_from(&posture.launch.model);
     seed.launch.effort.clone_from(&posture.launch.effort);
     seed.launch.budget.clone_from(&posture.launch.budget);
+    seed.launch.tier.clone_from(&posture.launch.tier);
+    seed.launch.record = Some(rimz::agents::LaunchRecord::replay_or_new(
+        posture.launch.record.as_deref(),
+        posture.launch.model.as_deref(),
+        posture.launch.effort.as_deref(),
+    ));
     let mut preflight = posture.launch.exec_request(
         seed.kind.clone(),
         rimz::harness::launch::ExecAction::Fork {
@@ -155,6 +161,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         &rimz::harness::launch::ExecRequest {
             close_pane_on_exit: placement != Placement::SamePane,
             identity: rimz::harness::launch::ExecIdentity {
+                resume_model_override: false,
                 name: Some(launch.name.clone()),
                 name_explicit: launch.name_explicit,
                 launch_id: Some(launch.agent_id.to_string()),
@@ -228,6 +235,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
 fn fork_posture(seed: &ForkSeed, profiles: &rimz::config::ProfilesConfig) -> Result<ResumePosture> {
     let posture = rimz::harness::resume::resolve_posture(
         rimz::harness::resume::PostureRequest {
+            record: seed.launch.record.as_deref(),
             profile: seed.launch.profile.as_deref(),
             kind: &seed.kind,
             stamped_mode: seed.launch.mode,
@@ -322,6 +330,7 @@ fn validate_fork_source(
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
             login: agent.login.clone(),
+            record: agent.record.clone(),
             tier: agent.tier.clone(),
             mode: agent.mode,
             isolation: agent.isolation,

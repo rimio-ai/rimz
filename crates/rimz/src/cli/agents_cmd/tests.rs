@@ -1021,6 +1021,7 @@ mod parse {
             exit_on_run_completion: true,
             subagent: true,
             identity: ExecIdentity {
+                resume_model_override: false,
                 name: Some("swift-otter".to_owned()),
                 name_explicit: true,
                 launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
@@ -1671,6 +1672,7 @@ mod launch_options {
         let warnings = rimz::harness::plan::finalize_launch_layout(
             &mut warning_layout,
             LaunchFinalizeOptions {
+                agent_base: None,
                 permission_mode: None,
                 isolation: None,
                 preset: &LaunchPreset::default(),

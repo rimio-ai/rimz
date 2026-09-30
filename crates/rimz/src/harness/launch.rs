@@ -303,6 +303,9 @@ pub enum AgentProcessStageErr {
 /// attribution.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecIdentity {
+    /// An explicit resume selection bypasses legacy observed-model replay.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resume_model_override: bool,
     pub name: Option<String>,
     /// Provenance for `name`: true only for a user-chosen `--name`, false for
     /// minted and soft names. Carried in the hidden request, not an env var.

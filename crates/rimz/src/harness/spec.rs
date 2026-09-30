@@ -93,6 +93,7 @@ pub struct Column {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentCell {
+    pub resume_model_override: bool,
     pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
     pub args: Vec<String>,
@@ -123,6 +124,7 @@ impl Cell {
     #[cfg(test)]
     pub(super) fn agent(kind: AgentKind) -> Self {
         Self::Agent(AgentCell {
+            resume_model_override: false,
             kind,
             args: Vec::new(),
             auto_compact: None,
@@ -1118,7 +1120,7 @@ pub fn resolve_profile_rebased(
     Ok(rebase_onto(resolve_profile(name, profiles)?, base.as_ref()))
 }
 
-fn resolve_agent_override(
+pub(super) fn resolve_agent_override(
     agent_override: Option<&str>,
     profiles: &ProfilesConfig,
 ) -> Result<Option<ResolvedProfile>> {
@@ -1389,6 +1391,7 @@ fn parse_cell(
             raw,
             profiles,
             base_override,
+            None,
         )?));
     }
     if raw == "term" {
@@ -1431,16 +1434,20 @@ fn path_command_cell(raw: &str) -> Option<Cell> {
 /// through this, and relaunch replays a stored profile name through it to
 /// recover the same posture.
 pub(super) fn profile_cell(name: &str, profiles: &ProfilesConfig) -> Result<AgentCell> {
-    profile_cell_with_base_override(name, profiles, None)
+    profile_cell_with_base_override(name, profiles, None, None)
 }
 
-fn profile_cell_with_base_override(
+pub(super) fn profile_cell_with_base_override(
     name: &str,
     profiles: &ProfilesConfig,
     base_override: Option<&ResolvedProfile>,
+    role: Option<&RoleBinding>,
 ) -> Result<AgentCell> {
     let resolved = resolve_profile(name, profiles)?;
-    let resolved = rebase_onto(resolved, base_override);
+    let mut resolved = rebase_onto(resolved, base_override);
+    if let Some(role) = role {
+        resolved.apply_role(role);
+    }
     cell_from_profile(name, &resolved)
 }
 
@@ -1462,6 +1469,7 @@ fn agent_cell_from(
     mode: Option<PermissionMode>,
 ) -> AgentCell {
     AgentCell {
+        resume_model_override: false,
         kind: resolved.kind.clone(),
         isolation_default: resolved.isolation_default,
         args,

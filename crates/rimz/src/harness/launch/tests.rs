@@ -1202,6 +1202,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         exit_on_run_completion: true,
         subagent: true,
         identity: ExecIdentity {
+            resume_model_override: false,
             name: Some("swift-otter".to_owned()),
             name_explicit: true,
             launch_id: Some("launch_123".to_owned()),

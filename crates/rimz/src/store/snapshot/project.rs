@@ -340,6 +340,13 @@ impl ReducerState {
         if let Some(isolation) = payload.effective_isolation {
             state.effective_isolation = Some(isolation);
         }
+        if payload.record.is_some() {
+            state.record = payload.record.clone().map(Box::new);
+            state.tier = payload.tier.clone().map(Box::new);
+            if let Some(mode) = payload.mode {
+                state.mode = Some(mode);
+            }
+        }
         state.pane = Some(PaneRef {
             pane_pid: payload.pane_pid,
             ..PaneRef::from_id(payload.pane_id.clone())
@@ -707,6 +714,9 @@ fn carried_base(
 }
 
 fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
+    if let Some(record) = &launch.record {
+        state.record = Some(record.clone());
+    }
     if let Some(parent_agent_id) = &launch.parent_agent_id {
         state.parent_agent_id = Some(parent_agent_id.clone());
     }
@@ -918,6 +928,7 @@ fn inherit_launch_identity(
     successor.profile.clone_from(&predecessor.profile);
     successor.login.clone_from(&predecessor.login);
     successor.tier.clone_from(&predecessor.tier);
+    successor.record.clone_from(&predecessor.record);
     successor.mode = predecessor.mode;
     successor.isolation = predecessor.isolation;
     successor.effective_isolation = predecessor.effective_isolation;

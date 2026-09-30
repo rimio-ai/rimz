@@ -231,6 +231,9 @@ fn attach_event(
         "session",
         &AgentKind::new_unchecked(kind),
         AgentAttachPayload {
+            record: None,
+            tier: None,
+            mode: None,
             effective_isolation: None,
             agent_id: AgentSessionId::from(agent_id),
             isolation: None,
@@ -1104,6 +1107,8 @@ fn tier_stamp_survives_observed_model_and_hot_events() {
     let stamp = json!({"tier": "senior", "model": "gpt-6-astra", "skipped": [{"model": "opus", "reason": "exhausted", "until": "2033-05-18T04:33:20Z"}]});
     let mut payload = serde_json::to_value(launch_payload("launch_a", "lucid-atlas")).unwrap();
     payload["tier"] = stamp.clone();
+    let record = json!({"model": "gpt-6-astra", "effort": "high", "agent": null});
+    payload["record"] = record.clone();
     let launch = launch_event("codex", serde_json::from_value(payload).unwrap());
     let mut events = vec![launch];
     for (offset, signal) in [(1, "registered"), (2, "turn_started")] {
@@ -1119,8 +1124,74 @@ fn tier_stamp_survives_observed_model_and_hot_events() {
         assert_eq!(agents[0].model.as_deref(), Some("observed-model"));
         let wire = serde_json::to_value(&agents[0]).unwrap();
         assert_eq!(wire["tier"], stamp);
+        assert_eq!(wire["record"], record);
         let decoded: crate::agents::AgentState = serde_json::from_value(wire).unwrap();
         assert_eq!(serde_json::to_value(decoded).unwrap()["tier"], stamp);
+    }
+}
+
+#[test]
+fn launch_record_is_verbatim_and_optional() {
+    let mut payload = serde_json::to_value(launch_payload("launch_a", "lucid-atlas")).unwrap();
+    let legacy = launch_event("claude", serde_json::from_value(payload.clone()).unwrap());
+    assert!(serde_json::to_value(&reduce_agent_states(&[legacy])[0]).unwrap()["record"].is_null());
+    let record = json!({"model": "opus[1m]", "effort": "high", "agent": "reviewer"});
+    payload["record"] = record.clone();
+    payload["model"] = json!("opus[1m]");
+    let launch = launch_event("claude", serde_json::from_value(payload).unwrap());
+    let agents = reduce_agent_states(&[launch]);
+    assert_eq!(agents[0].model.as_deref(), Some("opus"));
+    assert_eq!(serde_json::to_value(&agents[0]).unwrap()["record"], record);
+}
+
+#[test]
+fn resume_attach_replaces_launch_record_and_can_clear_tier() {
+    let mut payload = serde_json::to_value(launch_payload("launch_a", "lucid-atlas")).unwrap();
+    payload["record"] = json!({"model": "opus", "effort": null, "agent": null});
+    payload["tier"] = json!({"tier": "senior", "model": "opus"});
+    payload["mode"] = json!("ask");
+    let launch = launch_event("claude", serde_json::from_value(payload).unwrap());
+    let mut attach = attach_event(
+        "claude",
+        "launch_a",
+        Some("launch_a"),
+        "tmux:%1",
+        Some(42),
+        42,
+    );
+    let mut params = attach.params_value();
+    let record = json!({"model": "sonnet", "effort": "high", "agent": "reviewer"});
+    params["record"] = record.clone();
+    params["mode"] = json!("yolo");
+    attach.params = serde_json::value::to_raw_value(&params).unwrap();
+    let mut legacy = attach_event(
+        "claude",
+        "launch_a",
+        Some("launch_a"),
+        "tmux:%2",
+        Some(43),
+        43,
+    );
+    let mut legacy_params = legacy.params_value();
+    legacy_params["tier"] = json!({"tier": "senior", "model": "opus"});
+    legacy_params["mode"] = json!("ask");
+    legacy.params = serde_json::value::to_raw_value(&legacy_params).unwrap();
+    for tier in [
+        serde_json::Value::Null,
+        json!({"tier": "junior", "model": "sonnet"}),
+    ] {
+        params["tier"] = tier.clone();
+        attach.params = serde_json::value::to_raw_value(&params).unwrap();
+        for events in [
+            vec![launch.clone(), attach.clone()],
+            vec![launch.clone(), attach.clone(), legacy.clone()],
+        ] {
+            let agents = reduce_agent_states(&events);
+            let wire = serde_json::to_value(&agents[0]).unwrap();
+            assert_eq!(wire["record"], record);
+            assert_eq!(wire["tier"], tier);
+            assert_eq!(wire["mode"], "yolo");
+        }
     }
 }
 
@@ -1489,6 +1560,9 @@ fn resumed_fork_events(provider_pane: &str) -> Vec<EventEnvelope> {
             "session",
             &AgentKind::new_unchecked("codex"),
             AgentAttachPayload {
+                record: None,
+                tier: None,
+                mode: None,
                 effective_isolation: None,
                 agent_id: AgentSessionId::from("primary"),
                 isolation: None,
@@ -1760,6 +1834,9 @@ fn launch_identity_retry_inspects_only_same_instance_candidates() {
         "session",
         &AgentKind::new_unchecked("codex"),
         AgentAttachPayload {
+            record: None,
+            tier: None,
+            mode: None,
             effective_isolation: None,
             agent_id: AgentSessionId::from("conversation-a"),
             isolation: None,

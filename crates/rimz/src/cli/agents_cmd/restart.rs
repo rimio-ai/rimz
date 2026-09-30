@@ -251,13 +251,14 @@ pub(in crate::cli) fn relaunch_request(
         Some(identity.name.as_str())
     });
     let restart_params = rimz::agents::LaunchParams {
+        record: posture.launch.record.clone(),
         parent_agent_id: agent.parent_agent_id.clone(),
         parent_agent_kind: agent.parent_agent_kind.clone(),
         launch_depth: agent.launch_depth,
         launched_by: agent.launched_by.clone().map(Box::new),
         profile: agent.profile.clone(),
         login: agent.login.clone(),
-        tier: agent.tier.clone(),
+        tier: posture.launch.tier.clone(),
         role: agent.role.clone(),
         team: agent.team.clone(),
         launch_group: agent.launch_group.clone(),
@@ -273,6 +274,7 @@ pub(in crate::cli) fn relaunch_request(
     ExecRequest {
         close_pane_on_exit: true,
         identity: rimz::harness::launch::ExecIdentity {
+            resume_model_override: false,
             name: identity_name.map(ToOwned::to_owned),
             name_explicit: fresh_identity
                 .map_or(agent.name_explicit, |identity| identity.name_explicit),
@@ -306,6 +308,7 @@ fn restart_posture(
     }
     let posture = rimz::harness::resume::resolve_posture(
         rimz::harness::resume::PostureRequest {
+            record: agent.record.as_deref(),
             profile: agent.profile.as_deref(),
             kind: &agent.kind,
             stamped_mode: agent.mode,
@@ -334,6 +337,7 @@ fn restart_posture(
 /// the agent's durable identity.
 fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
     Cell::Agent(AgentCell {
+        resume_model_override: false,
         kind: agent.kind.clone(),
         args: posture.launch.args.clone(),
         auto_compact: None,
@@ -345,7 +349,12 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         isolation_default: posture.launch.isolation_default,
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
-            tier: agent.tier.clone(),
+            tier: posture.launch.tier.clone(),
+            record: Some(rimz::agents::LaunchRecord::replay_or_new(
+                posture.launch.record.as_deref(),
+                posture.launch.model.as_deref(),
+                posture.launch.effort.as_deref(),
+            )),
             role: agent.role.clone(),
             mode: posture.launch.mode,
             isolation: agent.isolation,
@@ -569,6 +578,7 @@ mod tests {
                 exit_on_run_completion: false,
                 subagent: false,
                 identity: rimz::harness::launch::ExecIdentity {
+                    resume_model_override: false,
                     name: Some("otter".to_owned()),
                     name_explicit: agent.name_explicit,
                     launch_id: None,

@@ -308,6 +308,7 @@ fn posture_for(
     let kind = AgentKind::new_unchecked(kind);
     resolve_posture(
         PostureRequest {
+            record: None,
             profile,
             kind: &kind,
             stamped_mode,

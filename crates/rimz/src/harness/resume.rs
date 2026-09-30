@@ -303,9 +303,11 @@ pub struct ResumePosture {
     pub degraded: Option<PostureDegrade>,
 }
 
-/// Why a stored profile no longer produces the posture it once did.
+/// Why a stored profile or requested override cannot produce a resume posture.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PostureDegrade {
+    #[error("resume override refused: {reason}")]
+    OverrideRejected { reason: String },
     #[error("profile `{profile}` no longer resolves ({reason})")]
     Unresolved { profile: String, reason: String },
     #[error("profile `{profile}` now resolves to {now}, but this session is {was}")]
@@ -353,6 +355,7 @@ impl ResumePosture {
 /// The durable facts a resumed session offers when looking up its posture.
 #[derive(Clone, Copy, Debug)]
 pub struct PostureRequest<'a> {
+    pub record: Option<&'a crate::agents::LaunchRecord>,
     pub profile: Option<&'a str>,
     pub kind: &'a AgentKind,
     /// The permission mode recorded on the original launch event.
@@ -373,27 +376,47 @@ pub struct PostureRequest<'a> {
 // scope on launch events before subagent-only profiles can resume in posture
 // outside the parent-message resume doorway, which passes the scope itself.
 pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -> ResumePosture {
-    let Some(name) = request.profile else {
+    resolve_posture_with_role(request, profiles, None)
+}
+
+fn resolve_posture_with_role(
+    request: PostureRequest<'_>,
+    profiles: &ProfilesConfig,
+    role: Option<&crate::config::RoleBinding>,
+) -> ResumePosture {
+    if request.profile.is_none() && request.record.is_none() {
         return ResumePosture::bare(request.stamped_mode, request.kind);
-    };
+    }
+    let name = request.profile.unwrap_or(request.kind.as_str());
     let mut profiles = std::borrow::Cow::Borrowed(profiles);
-    if let Some(stamp) = request.stamped_tier
+    if (request.stamped_tier.is_some() || request.record.is_some())
+        && request
+            .record
+            .and_then(|record| record.agent.as_ref())
+            .is_none()
         && let Some(profile) = profiles.0.get(name)
     {
         let rendered = profile.definition_renders.as_ref().and_then(|renders| {
             renders.renders.get(request.kind.as_str()).map(|profile| {
                 let mut profile = profile.clone();
-                profile.model = Some(stamp.model.clone());
-                profile.effort = renders.effort.clone().or_else(|| {
-                    crate::agents::definition_defaults(request.kind.as_str(), Some(&stamp.model))
+                if let Some(stamp) = request.stamped_tier {
+                    profile.model = Some(stamp.model.clone());
+                    profile.effort = renders.effort.clone().or_else(|| {
+                        crate::agents::definition_defaults(
+                            request.kind.as_str(),
+                            Some(&stamp.model),
+                        )
                         .effort
                         .map(str::to_owned)
-                });
-                profile.tier_stamp = Some(Box::new(stamp.clone()));
+                    });
+                    profile.tier_stamp = Some(Box::new(stamp.clone()));
+                }
                 profile
             })
         });
-        let Some(rendered) = rendered else {
+        if let Some(rendered) = rendered {
+            profiles.to_mut().0.insert(name.to_owned(), rendered);
+        } else if request.stamped_tier.is_some() {
             let now = crate::harness::spec::profile_cell(name, &profiles)
                 .map(|cell| cell.kind)
                 .unwrap_or_else(|_| request.kind.clone());
@@ -406,17 +429,26 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
                     now,
                 },
             );
-        };
-        profiles.to_mut().0.insert(name.to_owned(), rendered);
+        }
     }
-    let cell = match crate::harness::spec::profile_cell(name, &profiles) {
+    let base_name = request.record.and_then(|record| record.agent.as_deref());
+    let resolved =
+        crate::harness::spec::resolve_agent_override(base_name, &profiles).and_then(|base| {
+            crate::harness::spec::profile_cell_with_base_override(
+                name,
+                &profiles,
+                base.as_ref(),
+                role,
+            )
+        });
+    let mut cell = match resolved {
         Ok(cell) => cell,
         Err(err) => {
             return ResumePosture::degrade(
                 request.stamped_mode,
                 request.kind,
                 PostureDegrade::Unresolved {
-                    profile: name.to_owned(),
+                    profile: base_name.unwrap_or(name).to_owned(),
                     reason: err.to_string(),
                 },
             );
@@ -432,6 +464,46 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
                 now: cell.kind,
             },
         );
+    }
+    cell.launch.tier = request.stamped_tier.cloned().map(Box::new);
+    if let Some(record) = request.record {
+        cell.launch.model.clone_from(&record.model);
+        cell.launch.effort.clone_from(&record.effort);
+        cell.launch.record = Some(Box::new(record.clone()));
+        if cell
+            .launch
+            .tier
+            .as_ref()
+            .is_some_and(|stamp| record.model.as_deref() != Some(stamp.model.as_str()))
+        {
+            cell.launch.tier = None;
+        }
+        if let Some(adapter) = find_definition(request.kind.as_str()) {
+            let preset = crate::agents::LaunchPreset {
+                model: record.model.clone(),
+                effort: record.effort.clone(),
+                ..Default::default()
+            };
+            let mut replaced = Vec::new();
+            if record.model.is_some() {
+                replaced.push(crate::agents::PresetField::Model);
+            }
+            if record.effort.is_some() {
+                replaced.push(crate::agents::PresetField::Effort);
+            }
+            if let Err(err) =
+                crate::harness::plan::apply_preset_args(&mut cell.args, adapter, &preset, &replaced)
+            {
+                return ResumePosture::degrade(
+                    request.stamped_mode,
+                    request.kind,
+                    PostureDegrade::Unresolved {
+                        profile: name.to_owned(),
+                        reason: err.to_string(),
+                    },
+                );
+            }
+        }
     }
     if let Err(err) =
         crate::harness::plan::validate_finalized_cell(&cell, find_definition(cell.kind.as_str()))
@@ -455,12 +527,15 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
         launch: ResumeLaunchPosture::from(&cell),
         degraded: None,
     };
-    // A profile that declares no mode leaves the granted posture to the launch
-    // event, so replay the stamped mode's permission argv instead.
-    if posture.launch.mode.is_none()
+    // Recorded launches replay the last grant; legacy rows retain profile precedence.
+    if (request.record.is_some() || posture.launch.mode.is_none())
         && let Some(mode) = request.stamped_mode
         && let Some(adapter) = find_definition(request.kind.as_str())
     {
+        adapter
+            .spec()
+            .launch
+            .strip_permission_args(&mut posture.launch.args);
         posture
             .launch
             .args
@@ -863,6 +938,7 @@ impl ResumeCandidate {
         }
         Some(Self {
             identity: ResumeLaunchIdentity {
+                record: None,
                 kind: observation.kind.clone(),
                 login: logins
                     .get(&observation.kind)
@@ -1733,8 +1809,16 @@ fn plan_team_restore_tabs(
             cohort
         };
         // Failed stamped renders fall through to flat recovery, which reports the degradation and keeps the stored provider.
-        if restore_routed_cells(&mut layout, &cohort.seeds, profiles, &Default::default()).is_err()
-        {
+        if let Err(reason) = restore_routed_cells(
+            &mut layout,
+            &cohort.seeds,
+            profiles,
+            &ResumeOverrides {
+                team: teams.0.get(&team),
+                ..Default::default()
+            },
+        ) {
+            tracing::warn!(%reason, "team restore is falling back to individual sessions");
             continue;
         }
         let channel = project_root
@@ -1969,6 +2053,7 @@ fn plan_resume_candidates_detailed(
         // resume argv.
         let posture = resolve_posture(
             PostureRequest {
+                record: candidate.identity.record.as_deref(),
                 profile: candidate.identity.profile.as_deref(),
                 kind: &candidate.identity.kind,
                 stamped_mode: candidate.stamped_mode,
@@ -2197,35 +2282,190 @@ pub fn plan_cohort_resume(
     })
 }
 
-/// Rebuild stamped cohort members before preflight and pane compilation. Unstamped members retain the finalized layout's existing resume behavior.
+/// Overrides applied after durable posture replay, before stamping the next launch record.
+#[derive(Default)]
+pub struct ResumeOverrides<'a> {
+    pub team: Option<&'a crate::config::Team>,
+    pub permission_mode: Option<PermissionMode>,
+    pub preset: crate::agents::LaunchPreset,
+    pub agent: Option<&'a str>,
+    /// Select only this row and the session's provider; never climb to a higher tier.
+    pub tier: Option<(
+        crate::config::tiers::ModelTier,
+        &'a crate::config::tiers::TierConfig,
+    )>,
+    pub unavailable: Option<&'a ResumeAvailability<'a>>,
+}
+
+type ResumeAvailability<'a> = dyn Fn(&str, &str) -> Option<crate::agents::TierSkipReason> + 'a;
+
+/// Rebuild cohort members before preflight and pane compilation.
 pub fn restore_routed_cells(
     layout: &mut LayoutSpec,
     seeds: &[CohortSeed],
     profiles: &ProfilesConfig,
-    preset: &crate::agents::LaunchPreset,
+    overrides: &ResumeOverrides<'_>,
 ) -> Result<(), PostureDegrade> {
+    let preset = &overrides.preset;
     for (cell, seed) in layout.agent_cells_mut().zip(seeds) {
-        let CohortSeed::Resume(agent) = seed else {
-            continue;
+        let (kind, profile) = match seed {
+            CohortSeed::Resume(agent) => (agent.kind.clone(), agent.profile.clone()),
+            CohortSeed::Fresh => (cell.kind.clone(), cell.launch.profile.clone()),
         };
-        if agent.tier.is_none() {
-            continue;
-        }
-        let posture = resolve_posture(
-            PostureRequest {
-                profile: agent.profile.as_deref(),
-                kind: &agent.kind,
-                stamped_mode: agent.mode,
-                stamped_tier: agent.tier.as_deref(),
-            },
-            profiles,
-        );
+        let error = |reason: String| PostureDegrade::OverrideRejected { reason };
+        let role = overrides.team.and_then(|team| {
+            team.roles
+                .iter()
+                .find(|role| cell.launch.role.as_deref() == Some(role.role.as_str()))
+        });
+        // Legacy unstamped members retain the resolved layout, including role prompt layers.
+        let posture = if overrides.agent.is_some() {
+            let mode = match seed {
+                CohortSeed::Resume(agent) => agent.mode,
+                CohortSeed::Fresh => cell.launch.mode,
+            };
+            ResumePosture::bare(mode, &kind)
+        } else if let CohortSeed::Resume(agent) = seed
+            && (agent.record.is_some() || agent.tier.is_some())
+        {
+            resolve_posture_with_role(
+                PostureRequest {
+                    record: agent.record.as_deref(),
+                    profile: agent.profile.as_deref().or(cell.launch.profile.as_deref()),
+                    kind: &agent.kind,
+                    stamped_mode: agent.mode,
+                    stamped_tier: agent.tier.as_deref(),
+                },
+                profiles,
+                role,
+            )
+        } else {
+            ResumePosture {
+                launch: ResumeLaunchPosture::from(&*cell),
+                degraded: None,
+            }
+        };
         if let Some(reason) = posture.degraded {
             return Err(reason);
         }
         let mut posture = posture.launch;
-        if let Some(mode) = cell.launch.mode
-            && let Some(adapter) = find_definition(agent.kind.as_str())
+        if let Some(base_name) = overrides.agent {
+            let base = crate::harness::spec::resolve_agent_override(Some(base_name), profiles)
+                .map_err(|err| error(err.to_string()))?;
+            let rebased = crate::harness::spec::profile_cell_with_base_override(
+                profile.as_deref().unwrap_or(kind.as_str()),
+                profiles,
+                base.as_ref(),
+                role,
+            )
+            .map_err(|err| error(err.to_string()))?;
+            if rebased.kind != kind {
+                return Err(error(format!(
+                    "this session is {kind}, but --agent {base_name} is {}; resume with a same-kind profile or launch fresh",
+                    rebased.kind
+                )));
+            }
+            let mode = base
+                .as_ref()
+                .and_then(|base| base.launch.mode)
+                .or(posture.mode)
+                .or(rebased.launch.mode);
+            posture = ResumeLaunchPosture::from(&rebased);
+            posture.mode = mode;
+            posture.record = Some(Box::new(crate::agents::LaunchRecord {
+                model: posture.model.clone(),
+                effort: posture.effort.clone(),
+                agent: Some(base_name.to_owned()),
+            }));
+        }
+        if let Some((tier, tiers)) = overrides.tier {
+            let definition = profile
+                .as_deref()
+                .and_then(|name| profiles.0.get(name))
+                .and_then(|profile| profile.definition_renders.as_ref())
+                .ok_or_else(|| {
+                    error("--tier on resume requires a Markdown agent definition".into())
+                })?;
+            let mut skipped = Vec::new();
+            let mut first = None;
+            let model = tiers
+                .entries(tier)
+                .filter(|(row, family, _)| *row == tier && *family == kind.as_str())
+                .find_map(|(_, family, model)| {
+                    first.get_or_insert_with(|| model.to_owned());
+                    if tiers.routing == crate::config::tiers::Routing::Fallback
+                        && let Some(reason) = overrides
+                            .unavailable
+                            .and_then(|unavailable| unavailable(family, model))
+                    {
+                        skipped.push(crate::agents::TierSkip {
+                            model: model.to_owned(),
+                            reason,
+                        });
+                        return None;
+                    }
+                    Some(model.to_owned())
+                })
+                .or_else(|| {
+                    // Match the fresh walk's best-effort availability, without climbing.
+                    skipped.clear();
+                    first
+                })
+                .ok_or_else(|| {
+                    let working = tiers
+                        .entries(crate::config::tiers::ModelTier::Intern)
+                        .filter_map(|(tier, family, _)| (family == kind.as_str()).then_some(tier))
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .map(|tier| tier.to_string())
+                        .collect::<Vec<_>>();
+                    error(format!(
+                        "tier {tier} has no entry for {kind}; tiers carrying {kind}: {}",
+                        if working.is_empty() {
+                            "none".into()
+                        } else {
+                            working.join(", ")
+                        }
+                    ))
+                })?;
+            posture.effort = definition.effort.clone().or_else(|| {
+                crate::agents::definition_defaults(kind.as_str(), Some(&model))
+                    .effort
+                    .map(str::to_owned)
+            });
+            posture.model = Some(model.clone());
+            posture.tier = Some(Box::new(crate::agents::TierStamp {
+                tier,
+                model,
+                used_tier: None,
+                skipped,
+            }));
+            if let Some(adapter) = find_definition(kind.as_str()) {
+                crate::harness::plan::apply_preset_args(
+                    &mut posture.args,
+                    adapter,
+                    &crate::agents::LaunchPreset {
+                        model: posture.model.clone(),
+                        effort: posture.effort.clone(),
+                        ..Default::default()
+                    },
+                    &[
+                        crate::agents::PresetField::Model,
+                        crate::agents::PresetField::Effort,
+                    ],
+                )
+                .map_err(|err| error(err.to_string()))?;
+            }
+        }
+        let replay_mode = overrides.agent.is_some()
+            || matches!(seed, CohortSeed::Resume(agent) if agent.record.is_some());
+        let mode = overrides.permission_mode.or(if replay_mode {
+            posture.mode
+        } else {
+            cell.launch.mode.or(posture.mode)
+        });
+        if let Some(mode) = mode
+            && let Some(adapter) = find_definition(kind.as_str())
         {
             adapter
                 .spec()
@@ -2236,9 +2476,13 @@ pub fn restore_routed_cells(
                 .extend(adapter.spec().launch.permission_args(mode));
             posture.mode = Some(mode);
         }
-        cell.kind.clone_from(&agent.kind);
+        cell.kind = kind;
+        cell.resume_model_override =
+            preset.model.is_some() || overrides.tier.is_some() || overrides.agent.is_some();
         cell.args = posture.args;
-        cell.auto_compact = None;
+        if matches!(seed, CohortSeed::Resume(_)) {
+            cell.auto_compact = None;
+        }
         cell.system_prompt_file = posture.system_prompt_file;
         cell.append_system_prompt_files = posture.append_system_prompt_files;
         cell.skills = posture.skills;
@@ -2247,28 +2491,28 @@ pub fn restore_routed_cells(
         cell.launch.model = posture.model;
         cell.launch.effort = posture.effort;
         cell.launch.mode = posture.mode;
-        cell.launch.tier.clone_from(&agent.tier);
-        if !preset.is_empty() {
-            if preset.model.is_some() {
-                cell.launch.tier = None;
-            }
-            crate::harness::plan::finalize_agent_cell(
-                cell,
-                crate::harness::plan::LaunchFinalizeOptions {
-                    permission_mode: None,
-                    isolation: None,
-                    preset,
-                    passthrough: &[],
-                    budget: None,
-                    max_turns: None,
-                },
-                &mut Vec::new(),
-            )
-            .map_err(|error| PostureDegrade::Unresolved {
-                profile: agent.profile.clone().unwrap_or_default(),
-                reason: error.to_string(),
-            })?;
+        cell.launch.tier = posture.tier;
+        cell.launch.record = posture.record;
+        if preset.model.is_some() {
+            cell.launch.tier = None;
         }
+        crate::harness::plan::finalize_agent_cell(
+            cell,
+            crate::harness::plan::LaunchFinalizeOptions {
+                agent_base: None,
+                permission_mode: None,
+                isolation: None,
+                preset,
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+            },
+            &mut Vec::new(),
+        )
+        .map_err(|error| PostureDegrade::Unresolved {
+            profile: profile.clone().unwrap_or_else(|| cell.kind.to_string()),
+            reason: error.to_string(),
+        })?;
     }
     Ok(())
 }
@@ -2491,7 +2735,7 @@ fn match_team_cohort<'a>(
             available
                 .clone()
                 .find(|agent| {
-                    agent.tier.is_some()
+                    (agent.tier.is_some() || agent.record.is_some())
                         && cell
                             .profile
                             .as_deref()
@@ -2520,7 +2764,7 @@ fn match_single_cohort<'a>(
     cell: &CohortCell,
 ) -> Vec<Option<&'a AgentState>> {
     vec![candidates.iter().copied().find(|agent| {
-        (agent.kind == cell.kind || (agent.tier.is_some() && cell.profile.is_some()))
+        cohort_kind_matches(agent, cell)
             && cell
                 .profile
                 .as_deref()
@@ -2615,7 +2859,7 @@ fn map_inline_group_to_cells<'a>(
             .enumerate()
             .find(|(index, cell)| {
                 assignments.is_open(*index)
-                    && cell.kind == agent.kind
+                    && cohort_kind_matches(agent, cell)
                     && cell.role.as_deref() == Some(role)
             })
             .map(|(index, _)| index)
@@ -2632,7 +2876,7 @@ fn map_inline_group_to_cells<'a>(
         let Some(index) = cells
             .iter()
             .enumerate()
-            .find(|(index, cell)| assignments.is_open(*index) && cell.kind == agent.kind)
+            .find(|(index, cell)| assignments.is_open(*index) && cohort_kind_matches(agent, cell))
             .map(|(index, _)| index)
         else {
             continue;
@@ -2641,6 +2885,15 @@ fn map_inline_group_to_cells<'a>(
     }
 
     assignments.matches
+}
+
+fn cohort_kind_matches(agent: &AgentState, cell: &CohortCell) -> bool {
+    agent.kind == cell.kind
+        || ((agent.tier.is_some() || agent.record.is_some())
+            && cell
+                .profile
+                .as_deref()
+                .is_some_and(|profile| agent.profile.as_deref() == Some(profile)))
 }
 
 struct CohortAssignments<'a> {

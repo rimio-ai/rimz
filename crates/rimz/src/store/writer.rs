@@ -490,6 +490,7 @@ impl Store {
         runtime_owner: RuntimeOwner,
         isolation: Option<crate::config::Isolation>,
         effective_isolation: Option<crate::config::Isolation>,
+        launch: Option<&LaunchParams>,
     ) -> Result<()> {
         self.commit(|txn| {
             txn.append(&EventEnvelope::agent_attached(
@@ -497,6 +498,9 @@ impl Store {
                 session_name,
                 kind,
                 AgentAttachPayload {
+                    record: launch.and_then(|launch| launch.record.as_deref().cloned()),
+                    tier: launch.and_then(|launch| launch.tier.as_deref().cloned()),
+                    mode: launch.and_then(|launch| launch.mode),
                     agent_id: agent_id.clone(),
                     isolation,
                     effective_isolation,

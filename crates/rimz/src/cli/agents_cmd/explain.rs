@@ -74,6 +74,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             };
         let posture = rimz::harness::resume::resolve_posture(
             rimz::harness::resume::PostureRequest {
+                record: agent.record.as_deref(),
                 profile: agent.profile.as_deref(),
                 kind: &agent.kind,
                 stamped_mode: agent.mode,
@@ -184,6 +185,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         let request = ExecRequest::fresh(
             cell,
             ExecIdentity {
+                resume_model_override: false,
                 name: None,
                 name_explicit: false,
                 launch_id: None,

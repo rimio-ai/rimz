@@ -828,7 +828,15 @@ fn launch_resume_layout(
         &mut layout,
         &plan.seeds,
         profiles,
-        &launch_override_preset(&args.launch.overrides)?,
+        &rimz::harness::resume::ResumeOverrides {
+            team: team_name.as_deref().and_then(|name| teams.0.get(name)),
+            permission_mode: interactive_permission_mode_from_flags(
+                args.launch.overrides.ask,
+                args.launch.overrides.yolo,
+            )?,
+            preset: launch_override_preset(&args.launch.overrides)?,
+            ..Default::default()
+        },
     )?;
     let mut preflighted_logins = Vec::new();
     for (cell, seed) in layout.agent_cells().zip(&plan.seeds) {

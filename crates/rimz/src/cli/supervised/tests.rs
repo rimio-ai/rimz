@@ -344,6 +344,7 @@ fn resumed_registration_satisfies_the_bind_wait() {
             ),
             None,
             None,
+            None,
         )
         .unwrap();
     let bound = || {
