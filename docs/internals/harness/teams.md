@@ -26,6 +26,8 @@ An agent-launched team reports its leader to the launcher once per `Done`, with 
 
 The flip settles it. After `team_stage::flip` returns, `rimz teams flip` calls `cli/agents_cmd/team_report.rs::on_flip`. A flip into `Done` from any other stage publishes the leader's message to `<leader>.<run_id>.output`, queues the report to the launcher's current row with gate `Done`, then marks the run completed with the report's message id; queueing first means a crash between the two re-reports at the next `Done` rather than losing this one. The board lock serializes flips, so only one flip sees the transition into `Done`. A flip out of `Done` opens a fresh team run carrying the previous run's task and leader, so the next `Done` reports again. Nothing reports when the cohort is stopped or dies before `Done`, or when a hand-edited board reaches `Done` without a flip; an ended launcher settles the run with no report. Team seats open no per-turn peer runs, so launcher messages to them report nothing.
 
+An open team run also projects a `Team` pending wait on its launcher: a resting launcher sleeps and receives [prompt-cache keepalive](./loops.md#prompt-cache-keepalive) pings until `Done` settles the run.
+
 Each report ends with `Memory: <absolute board path>`. The flip receipt supplies the canonical board path; the report maps it through the launcher's `TmpView::agent_path`, just like the response path.
 
 ## Recording an entry
