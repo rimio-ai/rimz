@@ -198,7 +198,12 @@ fn phase4_fleet_groups_and_tallies() {
     );
     room.agent_hook("codex", &permission_request("m1", "DO_NOT_RENDER_ME"));
 
-    let screen = room.wait_for(|s| s.contains("feature-migration"), SETTLE);
+    // The permission request is the last hook, so wait for its marker too:
+    // the worktree groups can render a frame before the waiting state lands.
+    let screen = room.wait_for(
+        |s| s.contains("feature-migration") && s.contains("? coder") && s.contains("? 1"),
+        SETTLE,
+    );
     assert!(
         screen.contains("main"),
         "the main worktree group renders:\n{screen}"
