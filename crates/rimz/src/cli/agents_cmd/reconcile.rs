@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 
 pub(super) enum Reconciled {
     Continue,
+    Removed,
     Done,
     Resume(PathBuf),
 }
@@ -15,19 +16,19 @@ pub(super) fn reconcile_cohort_launch(
     backend: &dyn rimz::mux::MuxBackend,
     store: &rimz::Store,
     name: &str,
+    path: &Path,
     spec_display: &str,
     team: Option<&str>,
     cells: &[rimz::harness::plan::CohortCell],
     fresh: bool,
     focus: LaunchFocus,
 ) -> Result<Reconciled> {
-    let path = cohort_worktree_path(workspace, &machine_config.agents.worktree, name)?;
     if !path.exists() {
         return Ok(Reconciled::Continue);
     }
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let subject = cohort_subject(spec_display, team);
-    match rimz::harness::resume::inspect_cohort_relaunch(&projection.agents, &path, cells, team) {
+    match rimz::harness::resume::inspect_cohort_relaunch(&projection.agents, path, cells, team) {
         rimz::harness::resume::CohortRelaunchState::Absent => Ok(Reconciled::Continue),
         rimz::harness::resume::CohortRelaunchState::Present { focus_pane } => {
             if focus.takes_focus()
@@ -53,19 +54,19 @@ pub(super) fn reconcile_cohort_launch(
             Ok(Reconciled::Done)
         }
         rimz::harness::resume::CohortRelaunchState::Closed => {
-            let Some(marker) = rimz::worktree::read_marker_for_worktree(&path)? else {
+            let Some(marker) = rimz::worktree::read_marker_for_worktree(path)? else {
                 return Ok(Reconciled::Continue);
             };
             if fresh {
                 return launch_fresh(name, &subject);
             }
             let (resume_command, fresh_command) = relaunch_commands(name, spec_display, team);
-            let status = rimz::worktree::status(&path, &marker)?;
+            let status = rimz::worktree::status(path, &marker)?;
             // Cohort liveness was already decided above, so Git state alone
             // separates "recreate it" from "resume into it". A concurrent
             // cleanup may still remove the checkout after this decision.
             let protections = rimz::worktree::ProtectionSet::default();
-            if protections.assess(&path, status) == rimz::worktree::RemovalAssessment::Removable {
+            if protections.assess(path, status) == rimz::worktree::RemovalAssessment::Removable {
                 recreate_or_done(
                     workspace,
                     machine_config,
@@ -76,13 +77,13 @@ pub(super) fn reconcile_cohort_launch(
                     &fresh_command,
                 )
             } else {
-                resume_or_done(name, &subject, &path, &resume_command, &fresh_command)
+                resume_or_done(name, &subject, path, &resume_command, &fresh_command)
             }
         }
     }
 }
 
-fn cohort_worktree_path(
+pub(super) fn cohort_worktree_path(
     workspace: &rimz::ResolvedWorkspace,
     config: &rimz::config::WorktreeConfig,
     name: &str,
@@ -163,7 +164,7 @@ fn recreate_or_done(
                 std::io::stderr().lock(),
                 "worktree `{name}` was already removed; recreating {subject}"
             )?;
-            return Ok(Reconciled::Continue);
+            return Ok(Reconciled::Removed);
         }
         result => result?,
     };
@@ -181,7 +182,7 @@ fn recreate_or_done(
         .context("archiving messages for recreated worktree channel");
     session_retirement?;
     message_archival?;
-    Ok(Reconciled::Continue)
+    Ok(Reconciled::Removed)
 }
 
 fn launch_fresh(name: &str, subject: &str) -> Result<Reconciled> {

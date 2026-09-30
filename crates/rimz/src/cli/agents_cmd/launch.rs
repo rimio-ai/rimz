@@ -254,12 +254,15 @@ pub(super) fn launch_layout(
         && (team_name.is_some() || cells.len() >= 2)
     {
         let spec_display = args.launch.spec.as_deref().unwrap_or("<spec>");
+        let path =
+            reconcile::cohort_worktree_path(workspace, &machine_config.agents.worktree, name)?;
         match reconcile::reconcile_cohort_launch(
             workspace,
             &machine_config,
             backend,
             store,
             name,
+            &path,
             spec_display,
             team_name.as_deref(),
             &cells,
@@ -285,7 +288,7 @@ pub(super) fn launch_layout(
                     checked_folder_trust,
                 );
             }
-            reconcile::Reconciled::Continue => {}
+            reconcile::Reconciled::Continue | reconcile::Reconciled::Removed => {}
         }
     }
 
