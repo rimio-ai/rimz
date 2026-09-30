@@ -272,7 +272,12 @@ fn agent_row(agent: &AgentReportEntry, now: jiff::Timestamp) -> Vec<render::Cell
     vec![
         render::cell(agent.handle.as_str()).fg(render::palette::identity(agent.kind.as_str())),
         render::cell(agent.profile.as_deref().unwrap_or("-")).dash(),
-        render::cell(agent.kind.as_str()),
+        render::cell(
+            agent
+                .login
+                .as_ref()
+                .map_or_else(|| agent.kind.to_string(), ToString::to_string),
+        ),
         render::cell(agent.status.as_str()).fg(status_style(agent)),
         model,
         context_cell(agent.context.fill_pct),

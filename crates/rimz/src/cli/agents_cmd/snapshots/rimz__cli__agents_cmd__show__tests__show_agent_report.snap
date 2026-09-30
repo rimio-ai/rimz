@@ -6,6 +6,7 @@ expression: report
   "agent": {
     "id": "show",
     "kind": "codex",
+    "login": "codex@work",
     "handle": "@codex",
     "name": null,
     "name_explicit": false,
