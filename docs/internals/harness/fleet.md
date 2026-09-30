@@ -276,11 +276,11 @@ Tab titles follow the address vocabulary. A named-channel or worktree launch nam
 
 Titles are best-effort display. The sidebar producer returns a pane-named tab to the shell's name once no agent remains; tmux also restores inherited automatic naming and clears the pane-name pins. Scoped and user-chosen names that do not match the panes are kept ([multiplexers.md → tab names](../multiplexers.md#tab-names)). Mux tab names are mutable and live outside the store, so they never form an address.
 
+### One team per checkout
+
+A fresh team launch refuses a checkout held by a different team: a present member holds it, or, with no present members, a board stage other than `Done` holds it. `resume::inspect_team_hold` takes the holder's identity from root launch occupants in the audit store rows at the normalized checkout path and reads the stage through `scratch::board_stage`; no team rows, a missing stage, or a `Done` board with nobody present means no hold. In `launch_layout` this check follows the `--from-pr` holder lookup and precedes reconciliation and named-worktree creation, including for in-place, `--cwd`, and channel launches. Same-team reconciliation stays unchanged; explicit resume, rebirth, and channel resume are not gated. The audit read is unlocked, so concurrent launches can both pass. A board-stage refusal names the release too: a stale run is abandoned by setting the checkout's `blackboard.md` to `Stage: Done`.
+
 ### Cohort relaunch reconciliation
-
-#### One team per checkout
-
-A fresh team launch refuses a checkout held by a different team: a present member holds it, or, with no present members, a board stage other than `Done` holds it. `resume::inspect_team_hold` takes the holder's identity from root launch occupants in the audit store rows at the normalized checkout path and reads the stage through `scratch::board_stage`; no team rows, a missing stage, or a `Done` board with nobody present means no hold. In `launch_layout` this check follows the `--from-pr` holder lookup and precedes reconciliation and named-worktree creation, including for in-place, `--cwd`, and channel launches. Same-team reconciliation stays unchanged; explicit resume, rebirth, and channel resume are not gated. The audit read is unlocked, so concurrent launches can both pass.
 
 Relaunching a team into a worktree that already held one is where a naive launch would silently duplicate work. Reconciliation runs whenever the command names a team, or an inline layout with at least two agent cells, and supplies an explicit `-w NAME` or reuses a holder through `--from-pr`. It runs after placement and the live-room preflight ([`reconcile.rs`](../../../crates/rimz/src/cli/agents_cmd/reconcile.rs)). For `-w`, it precedes worktree resolution; for `--from-pr`, it follows the holder lookup but precedes tip choice and settlement, including before a resume ([PR checkout ordering](./worktrees.md#from-a-pull-request)).
 

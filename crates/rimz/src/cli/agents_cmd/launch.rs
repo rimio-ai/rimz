@@ -317,11 +317,17 @@ pub(super) fn launch_layout(
             && let Some(hold) = rimz::harness::resume::inspect_team_hold(&projection.agents, path)
             && hold.team != team
         {
-            let reason = match hold.reason {
-                rimz::harness::resume::TeamHoldReason::LiveMember => "a member is live".to_owned(),
-                rimz::harness::resume::TeamHoldReason::BoardStage(stage) => {
-                    format!("its board is at `{stage}`")
+            let (reason, release) = match hold.reason {
+                rimz::harness::resume::TeamHoldReason::LiveMember => {
+                    ("a member is live".to_owned(), String::new())
                 }
+                rimz::harness::resume::TeamHoldReason::BoardStage(stage) => (
+                    format!("its board is at `{stage}`"),
+                    format!(
+                        ", or mark `{}` `Stage: Done` to release it",
+                        path.join(rimz::harness::board::BOARD_FILE).display()
+                    ),
+                ),
             };
             let (place, resume) = match name {
                 Some(name) => (
@@ -334,7 +340,7 @@ pub(super) fn launch_layout(
                 ),
             };
             bail!(
-                "{place} already holds team `{}` ({reason}); one team per checkout: resume it with {resume}, or launch into another worktree",
+                "{place} already holds team `{}` ({reason}); one team per checkout: resume it with {resume}, or launch into another worktree{release}",
                 hold.team
             );
         }

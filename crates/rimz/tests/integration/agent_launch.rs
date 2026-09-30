@@ -132,6 +132,11 @@ fn different_team_live_hold_refuses_launch() {
 }
 
 #[test]
+fn different_team_live_hold_refuses_in_place_launch() {
+    assert_launch_focus(&["teams", "solo"], true, "hold-root");
+}
+
+#[test]
 fn different_team_board_hold_refuses_launch() {
     assert_launch_focus(&["teams", "solo", "-w", "review"], true, "hold-board");
 }
@@ -374,7 +379,9 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     let shim = write_env_dump_shim(&env, "claude");
     let workspace = env.resolve_workspace(&env.project_root);
     if matches!(args[1], "restart" | "resume") || action == "cohort" || hold {
-        let worktree = if action == "cohort" || hold {
+        let worktree = if action == "hold-root" {
+            env.project_root.clone()
+        } else if action == "cohort" || hold {
             assert!(init_launch_repo(&env.project_root));
             let path =
                 rimz::worktree::worktree_path(&env.project_root, &Default::default(), "review")
@@ -427,7 +434,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                 LifecycleSignal::Registered,
             )
         };
-        if hold && action != "hold-live" {
+        if hold && !matches!(action, "hold-live" | "hold-root") {
             observation.runtime_owner = None;
         }
         env.store()
@@ -439,7 +446,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                 &observation,
             ))
             .unwrap();
-        if hold && action != "hold-live" {
+        if hold && !matches!(action, "hold-live" | "hold-root") {
             env.store()
                 .append_event(&EventEnvelope::agent_lifecycle(
                     workspace.workspace_id.clone(),
@@ -475,16 +482,24 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             .env("RIMZ_AGENT_ID", "launch-session");
     }
     let output = command.bounded_output().unwrap();
-    if matches!(action, "hold-live" | "hold-board") {
+    if matches!(action, "hold-live" | "hold-board" | "hold-root") {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success(), "{stderr}");
         assert!(stderr.contains("already holds team `duo`"), "{stderr}");
+        if action == "hold-root" {
+            assert!(stderr.contains("checkout `"), "{stderr}");
+            assert!(stderr.contains("from that checkout"), "{stderr}");
+        } else {
+            assert!(
+                stderr.contains("rimz teams resume duo -w review"),
+                "{stderr}"
+            );
+        }
+        if action == "hold-board" {
+            assert!(stderr.contains("`Stage: Done` to release it"), "{stderr}");
+        }
         assert!(
-            stderr.contains("rimz teams resume duo -w review"),
-            "{stderr}"
-        );
-        assert!(
-            stderr.contains(if action == "hold-live" {
+            stderr.contains(if action != "hold-board" {
                 "a member is live"
             } else {
                 "its board is at `Build`"
