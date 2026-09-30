@@ -147,7 +147,7 @@ pub(super) fn resume_lane(
                 })?;
             }
             for label in live_labels {
-                writeln!(std::io::stdout().lock(), "skipped live @{label}")?;
+                writeln!(std::io::stdout().lock(), "skipped live {label}")?;
             }
             writeln!(
                 std::io::stdout().lock(),
