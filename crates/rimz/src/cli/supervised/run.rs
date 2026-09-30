@@ -72,6 +72,14 @@ pub(super) fn prepare_supervised_launch_layout(
     isolation: Option<rimz::config::Isolation>,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let mut effective = rimz::config::effective::load(machine_config, &workspace.project_root)?;
+    let state = rimz::StatePaths::for_project_root(&workspace.project_root)?;
+    let runtime = rimz::RuntimePaths::for_state(&state)?;
+    let availability = rimz::harness::plan::LaunchAvailability::read(
+        &runtime,
+        &state,
+        machine_config,
+        jiff::Timestamp::now(),
+    );
     let routed = effective.route(
         &machine_config.tiers,
         scope,
@@ -79,7 +87,7 @@ pub(super) fn prepare_supervised_launch_layout(
         request.tier,
         request.model.as_deref(),
         request.agent.as_deref(),
-        |_, _| None::<()>,
+        |kind, model| availability.unavailable(kind, model),
     )?;
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
@@ -100,11 +108,7 @@ pub(super) fn prepare_supervised_launch_layout(
         &effective.teams,
     )?;
     let preset = rimz::agents::LaunchPreset {
-        model: if routed {
-            None
-        } else {
-            rimz::harness::plan::normalized_preset_value(request.model.as_deref())
-        },
+        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
         effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
         auto_compact: None,
         system_prompt_file: request.system_prompt_file.clone(),
@@ -781,6 +785,7 @@ fn execute_attempt(
     };
     rimz::harness::run::create(prepared.store.paths(), &record).context("recording run")?;
     open_attempt_pane(prepared, room, request, &run_id, &launch_batch, &pane)?;
+    rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
     if request.background {
         return Ok(AttemptOutcome::Background {
             response_path: prepared.caller_tmp.as_ref().map(|view| {

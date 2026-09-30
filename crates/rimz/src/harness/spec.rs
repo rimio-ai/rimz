@@ -209,6 +209,7 @@ impl ResolvedProfile {
         self.launch.mode = self.launch.mode.or(layer.mode);
         if self.launch.model.is_none() {
             self.launch.model.clone_from(&layer.model);
+            self.launch.tier.clone_from(&layer.tier_stamp);
         }
         if self.launch.effort.is_none() {
             self.launch.effort.clone_from(&layer.effort);
@@ -234,6 +235,9 @@ impl ResolvedProfile {
     }
 
     fn apply_role(&mut self, binding: &RoleBinding) {
+        if binding.model.is_some() {
+            self.launch.tier = None;
+        }
         if let Some(mode) = binding.mode {
             self.launch.mode = Some(mode);
         }
@@ -1933,6 +1937,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
         return original;
     };
     let same_kind = original.kind == base.kind;
+    original.launch.tier = None;
 
     // The base supplies the engine (kind, model, effort); the original keeps the role.
     original.kind.clone_from(&base.kind);

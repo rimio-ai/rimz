@@ -17,6 +17,7 @@ pub(super) struct AssistStats {
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(super) struct AssistRollup {
     pub(super) model_aliases: usize,
+    pub(super) tier_fallbacks: usize,
     pub(super) redeems: usize,
     pub(super) resets: usize,
     pub(super) resumes: usize,
@@ -39,6 +40,17 @@ pub(super) enum AssistEvent {
         alias: String,
         from: String,
         to: String,
+    },
+    TierFallback {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        profile: String,
+        tier: rimz::config::tiers::ModelTier,
+        model: String,
+        skipped: Vec<rimz::agents::TierSkip>,
     },
     #[serde(rename = "auto_redeem")]
     Redeem {
@@ -174,6 +186,7 @@ impl AssistStats {
         for event in &events {
             match event {
                 AssistEvent::ModelAlias { .. } => rollup.model_aliases += 1,
+                AssistEvent::TierFallback { .. } => rollup.tier_fallbacks += 1,
                 AssistEvent::Redeem { outcome, .. } => {
                     rollup.redeems += 1;
                     rollup.resets += usize::from(outcome.as_deref() == Some("reset"));
@@ -241,6 +254,24 @@ impl AssistEvent {
                 alias,
                 from,
                 to,
+            },
+            Assist::TierFallback {
+                kind,
+                agent_id,
+                label,
+                profile,
+                tier,
+                model,
+                skipped,
+            } => Self::TierFallback {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                profile,
+                tier,
+                model,
+                skipped,
             },
             Assist::AutoRedeem {
                 kind,
@@ -418,7 +449,8 @@ impl AssistEvent {
             | Self::CacheKeepalive { at, .. }
             | Self::FlipCompact { at, .. }
             | Self::Resume { at, .. }
-            | Self::Gc { at, .. } => *at,
+            | Self::Gc { at, .. }
+            | Self::TierFallback { at, .. } => *at,
         }
     }
 }
@@ -492,6 +524,9 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     if rollup.model_aliases > 0 {
         rows.push(("Model aliases:", rollup.model_aliases.to_string()));
     }
+    if rollup.tier_fallbacks > 0 {
+        rows.push(("Tier fallback:", rollup.tier_fallbacks.to_string()));
+    }
     if rollup.resumes > 0 {
         let mut value = rollup.resumes.to_string();
         if rollup.recovered_secs > 0 {
@@ -546,6 +581,18 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             to,
             ..
         } => format!("{time} {kind} alias {alias} now resolves to {to} (was {from})"),
+        AssistEvent::TierFallback {
+            profile,
+            model,
+            skipped,
+            ..
+        } => {
+            let first = skipped
+                .first()
+                .map(|skip| format!("{} → {model} ({})", skip.model, skip.reason))
+                .unwrap_or_else(|| model.clone());
+            format!("{time} {profile}: {first}")
+        }
         AssistEvent::Redeem {
             kind,
             reason,
@@ -750,6 +797,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         .map_or_else(|| benefit_line(event, zone), |(_, rest)| rest.to_owned());
     match event {
         AssistEvent::ModelAlias { login, .. } => format!("{at} {benefit} · login {login}"),
+        AssistEvent::TierFallback { agent_id, .. } => format!("{at} {benefit} · agent {agent_id}"),
         AssistEvent::Redeem {
             request_id,
             credits,

@@ -534,6 +534,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             crate::config::Profile {
                 definition_renders: None,
                 model_tier: None,
+                tier_stamp: None,
                 agent: agent.to_owned(),
                 isolation: None,
                 model_reminder: Some(model_reminder),
@@ -558,6 +559,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             crate::config::Profile {
                 definition_renders: None,
                 model_tier: None,
+                tier_stamp: None,
                 agent: "claude".to_owned(),
                 isolation: None,
                 model_reminder: Some(model_reminder),

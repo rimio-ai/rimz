@@ -33,6 +33,16 @@ pub enum Assist {
         from: String,
         to: String,
     },
+    TierFallback {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        profile: String,
+        tier: crate::config::tiers::ModelTier,
+        model: String,
+        skipped: Vec<crate::agents::TierSkip>,
+    },
     AutoRedeem {
         kind: String,
         reason: RedeemReason,
@@ -157,6 +167,36 @@ pub fn append(record: &AssistRecord) {
 
 pub fn try_append(record: &AssistRecord) -> std::io::Result<()> {
     crate::disk::rotating::append_rotating_jsonl(&log_path(&logs_dir()), MAX_BYTES, record)
+}
+
+pub fn record_tier_fallbacks(identities: &[crate::store::writer::AgentLaunchIdentity]) {
+    for identity in identities {
+        let Some(stamp) = identity
+            .launch
+            .tier
+            .as_ref()
+            .filter(|stamp| !stamp.skipped.is_empty())
+        else {
+            continue;
+        };
+        append(&AssistRecord {
+            at: Timestamp::now(),
+            assist: Assist::TierFallback {
+                kind: identity.kind.clone(),
+                agent_id: identity.agent_id.clone(),
+                label: Some(identity.name.clone()),
+                // Tier stamps originate only in named, materialized profile cells.
+                profile: identity
+                    .launch
+                    .profile
+                    .clone()
+                    .expect("routed launch profile"),
+                tier: stamp.tier,
+                model: stamp.model.clone(),
+                skipped: stamp.skipped.clone(),
+            },
+        });
+    }
 }
 
 pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<AssistRecord> {
@@ -294,6 +334,15 @@ mod tests {
 
     #[test]
     fn variants_round_trip_through_the_wire_shape() {
+        let fallback = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "tier_fallback",
+            "kind": "codex", "agent_id": "session-1", "profile": "worker",
+            "tier": "senior", "model": "gpt-6-astra",
+            "skipped": [{"model": "opus", "reason": "daily_cap", "spend_usd": 10, "cap_usd": 5}]
+        });
+        let decoded = serde_json::from_value::<AssistRecord>(fallback.clone());
+        assert!(decoded.is_ok(), "tier fallback is an assist: {decoded:?}");
+        assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), fallback);
         for record in [
             AssistRecord {
                 at: ts(20),

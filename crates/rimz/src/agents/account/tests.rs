@@ -1,5 +1,32 @@
 use super::*;
 
+#[test]
+fn launch_exhaustion_requires_positive_matching_evidence() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    for (reading, reset, duration, expected) in [
+        (None, 3600, Some(300), false),
+        (Some(99), 3600, Some(300), false),
+        (Some(100), -1, Some(300), false),
+        (Some(100), 3600, None, false),
+        (Some(100), 3600, Some(300), true),
+    ] {
+        let capacity = ProviderCapacity::from_windows(vec![window(now, reading, reset, duration)]);
+        assert_eq!(
+            capacity.subscription_exhausted_for_model(now, Some("opus")),
+            expected
+        );
+    }
+    assert!(!ProviderCapacity::default().subscription_exhausted_for_model(now, Some("opus")));
+    let mut model = window(now, Some(100), 3600, Some(300));
+    model.scope = Some(crate::agents::RateLimitWindowScope {
+        id: "model:opus".into(),
+        label: "Opus".into(),
+    });
+    let capacity = ProviderCapacity::from_windows(vec![model]);
+    assert!(capacity.subscription_exhausted_for_model(now, Some("claude-opus-4-6")));
+    assert!(!capacity.subscription_exhausted_for_model(now, Some("gpt-6-astra")));
+}
+
 fn login_key(kind: &str) -> LoginKey {
     LoginKey::default_for(AgentKind::new_unchecked(kind))
 }

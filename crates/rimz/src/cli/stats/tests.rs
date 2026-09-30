@@ -1472,6 +1472,29 @@ fn all_time_daily_average_uses_year_days_without_changing_recent_activity() {
 }
 
 #[test]
+fn tier_fallback_has_its_own_assist_category_and_forensic_line() {
+    let record = serde_json::from_value(serde_json::json!({
+        "at": "2026-06-02T12:00:00Z", "assist": "tier_fallback",
+        "kind": "codex", "agent_id": "session-1", "profile": "worker",
+        "tier": "senior", "model": "gpt-6-astra",
+        "skipped": [{"model": "opus", "reason": "logged_out"}]
+    }));
+    assert!(record.is_ok(), "tier fallback must decode: {record:?}");
+    let stats = assists::AssistStats::from_records("all", vec![record.unwrap()]);
+    assert_eq!(
+        serde_json::to_value(&stats.rollup).unwrap()["tier_fallbacks"],
+        1
+    );
+    let rows = assists::category_rows(&stats.rollup).join("\n");
+    assert!(rows.contains("Tier fallback:"), "{rows}");
+    let line = assists::benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+    assert!(
+        line.contains("worker: opus → gpt-6-astra (logged out)"),
+        "{line}"
+    );
+}
+
+#[test]
 fn model_display_names() {
     use rimz::agents::model_display::display_model;
 
@@ -1626,6 +1649,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         stats.rollup,
         AssistRollup {
             model_aliases: 0,
+            tier_fallbacks: 0,
             redeems: 1,
             resets: 1,
             resumes: 1,

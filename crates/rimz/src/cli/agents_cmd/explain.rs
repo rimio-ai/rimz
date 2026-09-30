@@ -107,6 +107,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             None,
             channel.as_deref(),
             false,
+            Some((&runtime, &state)),
         )?;
         warnings.extend(finalized.warnings.iter().map(ToString::to_string));
         effective.profiles = finalized.profiles;
@@ -274,6 +275,8 @@ struct ExplainReport<'a> {
     model: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tier: Option<rimz::config::tiers::ModelTier>,
+    #[serde(skip_serializing_if = "<[rimz::agents::TierSkip]>::is_empty")]
+    tier_skipped: &'a [rimz::agents::TierSkip],
     effort: Option<&'a str>,
     budget: Option<&'a str>,
     skills: SkillsReport<'a>,
@@ -530,6 +533,10 @@ impl<'a> ExplainReport<'a> {
                 })
             },
             effort: params.effort.as_deref(),
+            tier_skipped: params
+                .tier
+                .as_ref()
+                .map_or(&[], |stamp| stamp.skipped.as_slice()),
             budget: params.budget.as_deref(),
             skills: SkillsReport {
                 callable: request.skills.as_deref(),
@@ -707,6 +714,12 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
                 report.model.unwrap_or("provider default")
             )),
         );
+        for skipped in report.tier_skipped {
+            plan.push(
+                "skipped",
+                render::cell(format!("{}: {}", skipped.model, skipped.reason)),
+            );
+        }
     }
     plan.push("budget", render::cell(report.budget.unwrap_or("no cap")));
     plan.push(

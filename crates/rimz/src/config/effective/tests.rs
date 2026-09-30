@@ -25,6 +25,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         ("principal", "tier: principal"),
         ("exact", "agent: claude\nmodel: claude-future"),
         ("other", "tier: principal"),
+        ("codex-worker", "agent: codex\ntier: junior"),
     ] {
         std::fs::write(
             root.path().join(format!("agents/{name}.md")),
@@ -47,11 +48,26 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
         .route(
             &machine.tiers,
             ProfileScope::Agents,
+            Some("codex-worker"),
+            Some(super::super::tiers::ModelTier::Senior),
+            None,
+            None,
+            |_, _| None,
+        )
+        .unwrap();
+    assert_eq!(
+        launch.profiles.0["codex-worker"].model.as_deref(),
+        Some("astra")
+    );
+    launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
             Some("worker"),
             None,
             None,
             Some("codex"),
-            |_, _| None::<()>,
+            |_, _| None,
         )
         .unwrap();
     let selected = &launch.profiles.0["worker"];
@@ -70,6 +86,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
     let wire = serde_json::to_value(selected).unwrap();
     assert!(wire.get("model_tier").is_none());
     assert!(wire.get("renders").is_none());
+    assert!(wire.get("tier_stamp").is_none());
     assert_eq!(
         launch.profiles.0["other"].model,
         machine.agents.profiles.0["other"].model
@@ -84,7 +101,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
                     Some(super::super::tiers::ModelTier::Intern),
                     None,
                     Some("codex"),
-                    |_, _| None::<()>
+                    |_, _| None
                 )
                 .unwrap()
         );
@@ -103,7 +120,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
             Some(super::super::tiers::ModelTier::Senior),
             None,
             Some("codex"),
-            |_, _| None::<()>,
+            |_, _| None,
         )
         .unwrap();
     assert_eq!(launch.profiles.0["exact"].model.as_deref(), Some("astra"));
@@ -119,7 +136,7 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
             Some(super::super::tiers::ModelTier::Senior),
             None,
             None,
-            |_, _| None::<()>,
+            |_, _| None,
         )
         .unwrap_err();
     assert!(
@@ -127,6 +144,209 @@ fn definition_routing_overlay_keeps_load_choice_and_provider_fields() {
             .to_string()
             .contains("model tiers resolve in Markdown definitions")
     );
+    for reason in [
+        crate::agents::TierSkipReason::LoggedOut,
+        crate::agents::TierSkipReason::Exhausted { until: None },
+        crate::agents::TierSkipReason::DailyCap {
+            spend_usd: 10.into(),
+            cap_usd: 5.into(),
+        },
+    ] {
+        let mut launch = load_with_roots(&machine, project.path(), root.path()).unwrap();
+        launch
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some("worker"),
+                None,
+                None,
+                None,
+                |kind, _| (kind == "claude").then(|| reason.clone()),
+            )
+            .unwrap();
+        let cell = crate::harness::spec::resolve_profile("worker", &launch.profiles).unwrap();
+        let wire = serde_json::to_value(&cell.launch).unwrap();
+        assert_eq!(cell.kind.as_str(), "codex");
+        assert_eq!(wire["tier"]["model"], "astra");
+        assert_eq!(wire["tier"]["skipped"][0]["model"], "opus");
+        assert_eq!(
+            wire["tier"]["skipped"][0]["reason"],
+            serde_json::to_value(reason).unwrap()["reason"]
+        );
+    }
+    for routing in [
+        super::super::tiers::Routing::Fallback,
+        super::super::tiers::Routing::Off,
+    ] {
+        let mut table = machine.tiers.clone();
+        table.routing = routing;
+        let mut launch = load_with_roots(&machine, project.path(), root.path()).unwrap();
+        launch.profiles.0.insert(
+            "project".into(),
+            toml::from_str("agent = 'claude'\nmodel = 'opus'").unwrap(),
+        );
+        launch
+            .route(
+                &table,
+                ProfileScope::Agents,
+                Some("worker"),
+                None,
+                None,
+                None,
+                |_, _| Some(crate::agents::TierSkipReason::LoggedOut),
+            )
+            .unwrap();
+        let resolved = crate::harness::spec::resolve_profile("worker", &launch.profiles).unwrap();
+        let wire = serde_json::to_value(&resolved.launch).unwrap();
+        assert_eq!(wire["tier"]["model"], "opus");
+        assert!(wire["tier"].get("skipped").is_none());
+        let project = crate::harness::spec::resolve_profile("project", &launch.profiles).unwrap();
+        assert_eq!(project.launch.model.as_deref(), Some("opus"));
+        assert!(project.launch.tier.is_none());
+    }
+}
+
+#[test]
+fn team_cli_models_route_each_markdown_role() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for (name, fields) in [
+        ("claude", ""),
+        ("codex", ""),
+        ("writer", "agent: claude\ntier: junior\ntools: [Bash]"),
+        ("coder", "agent: codex\ntier: junior\ntools: [Bash]"),
+    ] {
+        std::fs::write(
+            root.path().join(format!("agents/{name}.md")),
+            format!("---\ndescription: Role\n{fields}\n---\nWork."),
+        )
+        .unwrap();
+    }
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &machine.tiers,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    machine.agents.teams = toml::from_str("[forge]\nroles = [{role = 'writer', profile = 'writer'}, {role = 'coder', profile = 'coder'}]").unwrap();
+    for (tier, model, spent) in [
+        (None, Some("opus"), true),
+        (Some(super::super::tiers::ModelTier::Senior), None, false),
+    ] {
+        let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+        launch
+            .route(
+                &machine.tiers,
+                ProfileScope::Agents,
+                Some("forge"),
+                tier,
+                model,
+                None,
+                |kind, _| {
+                    (spent && kind == "claude").then_some(crate::agents::TierSkipReason::LoggedOut)
+                },
+            )
+            .unwrap();
+        let mut layout = crate::harness::spec::resolve_team(
+            "forge",
+            &launch.teams,
+            &launch.profiles,
+            &machine.agents.commands,
+        )
+        .unwrap();
+        crate::harness::plan::finalize_launch_layout(
+            &mut layout,
+            crate::harness::plan::LaunchFinalizeOptions {
+                permission_mode: None,
+                isolation: None,
+                preset: &crate::agents::LaunchPreset {
+                    model: model.map(str::to_owned),
+                    ..Default::default()
+                },
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+            },
+        )
+        .unwrap();
+        let cells: Vec<_> = layout.agent_cells().collect();
+        for (index, cell) in cells.iter().enumerate() {
+            let codex = spent || index == 1;
+            assert_eq!(cell.kind.as_str(), if codex { "codex" } else { "claude" });
+            assert_eq!(
+                cell.launch.model.as_deref(),
+                Some(if codex { "astra" } else { "opus" })
+            );
+            assert_eq!(
+                cell.launch.tier.as_ref().unwrap().tier,
+                super::super::tiers::ModelTier::Senior
+            );
+        }
+    }
+    machine
+        .agents
+        .profiles
+        .0
+        .insert("coder".into(), toml::from_str("agent = 'codex'").unwrap());
+    let mut launch = load_with_roots(&machine, root.path(), root.path()).unwrap();
+    let error = launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("forge"),
+            Some(super::super::tiers::ModelTier::Senior),
+            None,
+            None,
+            |_, _| None,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("coder"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("--tier needs Markdown definitions"),
+        "{error}"
+    );
+    launch
+        .route(
+            &machine.tiers,
+            ProfileScope::Agents,
+            Some("forge"),
+            None,
+            Some("opus"),
+            None,
+            |kind, _| (kind == "claude").then_some(crate::agents::TierSkipReason::LoggedOut),
+        )
+        .unwrap();
+    let mut layout = crate::harness::spec::resolve_team(
+        "forge",
+        &launch.teams,
+        &launch.profiles,
+        &machine.agents.commands,
+    )
+    .unwrap();
+    crate::harness::plan::finalize_launch_layout(
+        &mut layout,
+        crate::harness::plan::LaunchFinalizeOptions {
+            permission_mode: None,
+            isolation: None,
+            preset: &crate::agents::LaunchPreset {
+                model: Some("opus".into()),
+                ..Default::default()
+            },
+            passthrough: &[],
+            budget: None,
+            max_turns: None,
+        },
+    )
+    .unwrap();
+    let cells: Vec<_> = layout.agent_cells().collect();
+    assert_eq!(cells[0].launch.model.as_deref(), Some("astra"));
+    assert_eq!(cells[1].launch.model.as_deref(), Some("opus"));
+    assert!(cells[1].launch.tier.is_none());
 }
 
 #[test]
@@ -283,6 +503,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         allowed_tools: None,
         definition_renders: None,
         model_tier: None,
+        tier_stamp: None,
         agent: agent.to_owned(),
         isolation: None,
         description: None,

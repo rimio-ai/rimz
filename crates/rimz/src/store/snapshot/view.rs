@@ -68,7 +68,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 27;
+pub const SNAPSHOT_VERSION: u32 = 28;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(

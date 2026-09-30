@@ -6,7 +6,7 @@ use crate::common::{
 };
 use crate::common::{Env, zellij_trace_shim};
 #[cfg(unix)]
-use crate::common::{trust_codex_preflight_hooks, trust_codex_project};
+use crate::common::{trust_codex_hooks, trust_codex_preflight_hooks, trust_codex_project};
 use jiff::Timestamp;
 use rimz::agents::PermissionMode;
 use rimz::agents::{
@@ -524,6 +524,268 @@ fn kiro_supervised_run_requires_hooks_before_recording_or_launching() {
             .is_empty(),
         "refused run must fail before creating state"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn tier_subagent_routes_spent_provider_and_records_one_assist() {
+    for routing in ["fallback", "off"] {
+        assert_tier_launch(routing, "subagent");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn tier_same_pane_records_assist_before_exec() {
+    assert_tier_launch("fallback", "same-pane");
+}
+
+#[cfg(unix)]
+#[test]
+fn tier_cohort_resume_records_only_fresh_seat_assists() {
+    assert_tier_launch("fallback", "resume");
+}
+
+#[cfg(unix)]
+fn assert_tier_launch(routing: &str, surface: &str) {
+    let interactive = surface != "subagent";
+    let env = Env::new();
+    for kind in ["claude", "codex"] {
+        env.install_agent_hooks(kind);
+        std::fs::create_dir_all(env.rimz_home().join("agents")).unwrap();
+        std::fs::write(
+            env.rimz_home().join(format!("agents/{kind}.md")),
+            "---\ndescription: Base\n---\nBase.",
+        )
+        .unwrap();
+    }
+    std::fs::create_dir_all(env.rimz_home().join("subagents")).unwrap();
+    std::fs::write(
+        env.rimz_home().join("subagents/worker.md"),
+        "---\ndescription: Worker\ntier: senior\ntools: [Bash]\n---\nWork.",
+    )
+    .unwrap();
+    std::fs::copy(
+        env.rimz_home().join("subagents/worker.md"),
+        env.rimz_home().join("agents/preview.md"),
+    )
+    .unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!("[tiers]\nrouting = '{routing}'\n[agents]\nisolation = 'host'\n"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(env.rimz_home().join("teams")).unwrap();
+    std::fs::write(env.rimz_home().join("teams/duo.md"), "---\ndescription: Duo\nleader: writer\nstages: [Work]\nroles:\n  - role: writer\n    agent: preview\n    owns: [Work]\n  - role: coder\n    agent: preview\n---\nWork together.").unwrap();
+    trust_codex_project(&env, &env.project_root);
+    trust_codex_hooks(&env);
+    let agent_bin = write_failing_agent_shim(&env, "codex", 1);
+    write_failing_agent_shim(&env, "claude", 1);
+    let shell = write_fake_login_shell(&env, "tier-test-sh", &[]);
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().unwrap();
+    env.publish_rate_limits(&RateLimitsCache {
+        entries: [(
+            rimz::ids::LoginKey::default_for(AgentKind::new_unchecked("claude")),
+            RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        used_percentage: Some(100),
+                        resets_at: Some("2099-01-01T00:00:00Z".parse().unwrap()),
+                        duration_mins: Some(300),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    });
+    let kind = if routing == "fallback" {
+        "codex"
+    } else {
+        "claude"
+    };
+    let model = if routing == "fallback" {
+        "astra"
+    } else {
+        "opus"
+    };
+    let preview = env
+        .rimz()
+        .args(["agents", "explain", "preview", "--json"])
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&agent_bin))
+        .bounded_output()
+        .unwrap();
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let preview: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview["kind"], kind);
+    assert_eq!(preview["model"], model);
+    assert_eq!(preview["tier"], "senior");
+    assert_eq!(
+        preview["profile"]["chain"],
+        serde_json::json!(["preview", kind])
+    );
+    if routing == "fallback" {
+        assert_eq!(preview["tier_skipped"][0]["reason"], "exhausted");
+    }
+    assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
+    let trace = env.project_root.join("tier-launch.log");
+    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store.record_workspace(&workspace).unwrap();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                agent_id: "parent-session".into(),
+                launch_id: Some("parent-launch".into()),
+                agent_name: "parent".into(),
+                agent_name_explicit: true,
+                launch: if surface == "resume" {
+                    LaunchParams {
+                        profile: Some("duo.coder".into()),
+                        team: Some("duo".into()),
+                        role: Some("coder".into()),
+                        tier: Some(Box::new(rimz::agents::TierStamp {
+                            tier: rimz::config::tiers::ModelTier::Senior,
+                            model: "opus".into(),
+                            used_tier: None,
+                            skipped: vec![rimz::agents::TierSkip {
+                                model: "astra".into(),
+                                reason: rimz::agents::TierSkipReason::LoggedOut,
+                            }],
+                        })),
+                        ..Default::default()
+                    }
+                } else {
+                    LaunchParams::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    if surface == "resume" {
+        let transcript = env.project_root.join("closed.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+        let mut observation =
+            AgentLifecycleObservation::new(Some("parent-session".into()), LifecycleSignal::Ended);
+        observation.transcript_path = Some(transcript.display().to_string());
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "SessionEnd",
+                &observation,
+            ))
+            .unwrap();
+    }
+    seed_live_zellij_room(
+        &runtime,
+        &workspace.session_name,
+        serde_json::from_str(panes).unwrap(),
+    );
+    let presence = env.project_root.join("presence.wasm");
+    std::fs::write(&presence, b"test-presence").unwrap();
+    let mut command = env.rimz();
+    command
+        .args(match surface {
+            "same-pane" => vec!["--mux", "zellij", "agents", "preview"],
+            "resume" => vec!["--mux", "zellij", "agents", "duo", "--resume"],
+            _ => vec!["--mux", "zellij", "subagents", "worker", "work"],
+        })
+        .envs(rimz::workspace::pin_env(
+            &env.workspace_id,
+            &env.project_root,
+        ))
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .env("RIMZ_PRESENCE_PLUGIN", presence)
+        .env("ZELLIJ_PANE_ID", "2")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes);
+    if interactive {
+        command.env_remove(rimz::harness::launch::ENV_AGENT_KIND);
+        command.env_remove(rimz::harness::launch::ENV_AGENT_ID);
+    }
+    let launched = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        if !interactive {
+            scope.spawn(|| bind_child_panes(&store, &trace, &workspace.session_name, &launched));
+        }
+        let output = command.bounded_output();
+        launched.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            surface == "same-pane" || output.as_ref().unwrap().status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.as_ref().unwrap().stderr)
+        );
+        output
+    })
+    .unwrap();
+    let events = env.read_events();
+    let launches: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event.kind() {
+            rimz::store::event::EventKind::AgentLaunch(payload)
+                if payload.state == AgentLaunchState::Starting
+                    && payload.launch.profile.as_deref()
+                        == Some(match surface {
+                            "resume" => "duo.writer",
+                            "same-pane" => "preview",
+                            _ => "worker",
+                        }) =>
+            {
+                Some((event, payload))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(launches.len(), 1);
+    let wire = serde_json::to_value(launches[0].0).unwrap();
+    assert_eq!(wire["source"], kind);
+    assert_eq!(wire["params"]["tier"]["model"], model);
+    assert_eq!(wire["params"]["tier"]["tier"], "senior");
+    assert_eq!(
+        launches[0].1.launch.tier.as_ref().unwrap().skipped.len(),
+        usize::from(routing == "fallback")
+    );
+    let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    let fallbacks: Vec<_> = assists
+        .iter()
+        .filter(|record| {
+            matches!(
+                &record.assist,
+                rimz::harness::assist_log::Assist::TierFallback { .. }
+            )
+        })
+        .collect();
+    assert_eq!(fallbacks.len(), usize::from(routing == "fallback"));
 }
 
 #[cfg(unix)]

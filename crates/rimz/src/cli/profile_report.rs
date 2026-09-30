@@ -624,6 +624,7 @@ mod tests {
             allowed_tools: None,
             definition_renders: None,
             model_tier: None,
+            tier_stamp: None,
             isolation: None,
             auto_compact: None,
             agent: agent.to_owned(),

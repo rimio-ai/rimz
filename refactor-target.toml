@@ -136,7 +136,8 @@ upward-dependencies = ["address"]
 # Account-scoped model alias resolution shares request, catalog source, outcome, and cache membership with launch orchestration (+10).
 # Folder trust shares decisions, previews, guarded writes and room-login rows (+8).
 # Account-cache types, status projection, and reader moved from sidebar for launch consumers.
-surface-budget = 938
+# Launch tier stamps and positive exhaustion evidence cross into launch/store consumers.
+surface-budget = 942
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -365,7 +366,8 @@ path = "crates/rimz/src/harness"
 # Exec resolves model postures and reports checked assist appends (+2).
 # Worktree producers share best-effort in-process signal append and fire.
 # Signal matching, scope presentation and definition validation share the wildcard predicate.
-surface-budget = 589
+# Launch availability, per-scope cap evidence, and committed tier-fallback assists.
+surface-budget = 594
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -792,6 +794,8 @@ surface-budget = 14
 path = "crates/rimz/src/harness/plan.rs"
 allowed-dependencies = [
     "agents",
+    "agents::account",
+    "agents::spending",
     "config",
     "disk::paths",
     "harness::ancestry",
@@ -810,7 +814,8 @@ allowed-dependencies = [
 # Shared child isolation cap, outcome, clamp source, and refusal.
 # Posture-owned exec request construction shared by relaunch doorways (pass 28f).
 # Tier selection is a config overlay before spec resolution; finalization no longer carries tier context (-1).
-surface-budget = 34
+# One fork-free usage snapshot supplies all fresh-launch tier walks.
+surface-budget = 37
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"

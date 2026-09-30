@@ -257,6 +257,7 @@ pub(in crate::cli) fn relaunch_request(
         launched_by: agent.launched_by.clone().map(Box::new),
         profile: agent.profile.clone(),
         login: agent.login.clone(),
+        tier: agent.tier.clone(),
         role: agent.role.clone(),
         team: agent.team.clone(),
         launch_group: agent.launch_group.clone(),

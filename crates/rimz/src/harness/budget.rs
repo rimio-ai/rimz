@@ -1382,39 +1382,45 @@ pub fn scope_gate(
     config: &MachineConfig,
     now: Timestamp,
 ) -> Option<String> {
-    let zone = config.time_zone();
-    let cutoff = local_day_start(now, &zone)?;
-    let cutoff_secs = local_day_cutoff_secs(now, &zone)?;
-
-    let mut provider = None;
-    for scope in std::iter::once(DailyBudgetScope::Fleet)
+    let provider = crate::agents::spending::read_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+    );
+    std::iter::once(DailyBudgetScope::Fleet)
         .chain(login.cloned().map(DailyBudgetScope::Account))
-    {
-        let ledger = scope.read_ledger(runtime, Some(state));
-        let Some(cap) = scope.effective_cap_usd(&ledger, config) else {
-            continue;
-        };
-        let mut spend = match &scope {
+        .find_map(|scope| {
+            scope
+                .exhausted(runtime, state, config, now, &provider)
+                .map(|(spend, cap)| scope.exhausted_reason(spend, cap))
+        })
+}
+
+impl DailyBudgetScope {
+    pub(crate) fn exhausted(
+        &self,
+        runtime: &RuntimePaths,
+        state: &crate::StatePaths,
+        config: &MachineConfig,
+        now: Timestamp,
+        provider: &crate::agents::spending::ProviderSpendingCache,
+    ) -> Option<(f64, f64)> {
+        let zone = config.time_zone();
+        let cutoff = local_day_start(now, &zone)?;
+        let cutoff_secs = local_day_cutoff_secs(now, &zone)?;
+        let ledger = self.read_ledger(runtime, Some(state));
+        let cap = self.effective_cap_usd(&ledger, config)?;
+        let mut spend = match self {
             DailyBudgetScope::Fleet => {
                 current_workspace_day(runtime, Some(cutoff_secs)).unwrap_or_default()
             }
             DailyBudgetScope::Account(key) => {
-                let provider = provider.get_or_insert_with(|| {
-                    crate::agents::spending::read_provider_spending_cache(
-                        &runtime.shared_provider_spending_path(),
-                    )
-                });
                 login_day_usd(provider, Some(cutoff_secs), key).unwrap_or_default()
             }
         };
         if let Some(parked) = ledger.parked.as_ref().filter(|parked| parked.at >= cutoff) {
             spend = spend.max(parked.at_cost);
         }
-        if spend >= cap {
-            return Some(scope.exhausted_reason(spend, cap));
-        }
+        (spend >= cap).then_some((spend, cap))
     }
-    None
 }
 
 fn ledger_day_reset(ledger: &BudgetLedger, now: Timestamp, zone: &TimeZone) -> Option<Timestamp> {
