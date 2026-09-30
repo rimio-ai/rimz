@@ -30,10 +30,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::agents::{
-    AgentCardRef, AgentState, ProviderCapacity, TurnErrorClass, display_turn_error,
-    effective_turn_error_class,
-};
+use crate::agents::{AgentCardRef, AgentState, ProviderCapacity, TurnErrorClass};
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
@@ -120,13 +117,8 @@ fn resume_park(
     if agent.is_provider_subagent() || agent.agent_id.is_empty() {
         return None;
     }
-    let error = display_turn_error(
-        agent.status,
-        agent.context.as_ref(),
-        agent.last_activity,
-        agent.turn_started_at,
-    )?;
-    match effective_turn_error_class(error) {
+    let (class, error) = agent.displayed_turn_error()?;
+    match class {
         TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit => {
             let deadline =
                 capacity?.latest_spent_window_reset_for_model(now, agent.model.as_deref())?;
@@ -158,14 +150,9 @@ pub(crate) fn resume_gate_recovered(
     match resume_park(agent, capacity.as_ref(), now) {
         Some(ResumeArm::Overloaded { .. }) => true,
         Some(ResumeArm::RateLimit { .. }) => false,
-        None => display_turn_error(
-            agent.status,
-            agent.context.as_ref(),
-            agent.last_activity,
-            agent.turn_started_at,
-        )
-        .map(effective_turn_error_class)
-        .is_some_and(|class| class.is_limit() && capacity_recovered(capacity.as_ref(), agent, now)),
+        None => agent.displayed_turn_error().is_some_and(|(class, _)| {
+            class.is_limit() && capacity_recovered(capacity.as_ref(), agent, now)
+        }),
     }
 }
 
@@ -306,14 +293,9 @@ fn capacity_recovered(
 }
 
 fn limit_marker_active(agent: &AgentState) -> bool {
-    display_turn_error(
-        agent.status,
-        agent.context.as_ref(),
-        agent.last_activity,
-        agent.turn_started_at,
-    )
-    .map(effective_turn_error_class)
-    .is_some_and(TurnErrorClass::is_limit)
+    agent
+        .displayed_turn_error()
+        .is_some_and(|(class, _)| class.is_limit())
 }
 
 /// Capture (or refresh) the park while the reading is still active. A new park
