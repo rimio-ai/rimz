@@ -4,10 +4,10 @@ use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::store::message::MessageStatus;
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-use crate::common::Env;
+use crate::common::{Env, zellij_trace_shim};
 
 #[test]
 fn channel_new_list_and_remove_round_trip() {
@@ -347,8 +347,4 @@ fn git(cwd: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-}
-
-fn zellij_trace_shim() -> PathBuf {
-    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }

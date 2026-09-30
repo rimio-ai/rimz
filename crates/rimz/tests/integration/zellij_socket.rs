@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tempfile::TempDir;
 
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::{CommandTimeoutExt, Env, zellij_trace_shim};
 
 #[test]
 fn socket_preflight_fails_before_calling_zellij() {
@@ -192,10 +192,6 @@ impl FakeZellij {
             mode,
         }
     }
-}
-
-fn zellij_trace_shim() -> PathBuf {
-    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }
 
 fn rimz_start_pty_output(env: &Env, shim: &FakeZellij, session_name: &str) -> String {

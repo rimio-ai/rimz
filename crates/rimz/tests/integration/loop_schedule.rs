@@ -24,7 +24,10 @@ use rimz::wakeup::heartbeat::SidebarHeartbeat;
 
 use crate::common::{Env, ScrubSessionEnvExt, canonical};
 #[cfg(unix)]
-use crate::common::{path_with_front, write_fake_login_shell, write_path_shim};
+use crate::common::{
+    path_with_front, trust_codex_preflight_hooks, trust_codex_project, write_fake_login_shell,
+    write_path_shim,
+};
 
 #[test]
 fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
@@ -3994,7 +3997,8 @@ fn manual_fire_forwards_interrupt_to_the_check_group() {
 fn loop_stop_cancels_a_spawn_run_in_an_unroomed_project() {
     let env = Env::new();
     env.install_agent_hooks("codex");
-    trust_loop_codex(&env);
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
     let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = env.resolve_workspace(&env.project_root);
@@ -4146,41 +4150,6 @@ fn loop_stop_cancels_a_spawn_run_in_an_unroomed_project() {
             .status,
         RunStatus::Canceled
     );
-}
-
-#[cfg(unix)]
-fn trust_loop_codex(env: &Env) {
-    let config = env.agent_config_path("codex");
-    let mut text = std::fs::read_to_string(&config).expect("read codex config");
-    for token in [
-        "session_start",
-        "user_prompt_submit",
-        "subagent_start",
-        "subagent_stop",
-        "stop",
-        "permission_request",
-        "pre_tool_use",
-        "post_tool_use",
-        "pre_compact",
-        "post_compact",
-    ] {
-        text.push_str(&format!(
-            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
-            config.display()
-        ));
-    }
-    let mut table: toml::Table = text.parse().expect("parse codex config");
-    table.insert(
-        "projects".to_owned(),
-        toml::Value::Table(toml::Table::from_iter([(
-            env.project_root.display().to_string(),
-            toml::Value::Table(toml::Table::from_iter([(
-                "trust_level".to_owned(),
-                toml::Value::String("trusted".to_owned()),
-            )])),
-        )])),
-    );
-    std::fs::write(config, toml::to_string(&table).unwrap()).expect("write codex trust");
 }
 
 #[cfg(unix)]

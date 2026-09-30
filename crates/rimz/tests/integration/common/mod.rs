@@ -9,8 +9,10 @@
 //!   library tier) for tests that drive store APIs directly.
 //!
 //! `payloads` holds the agent hook-payload fixtures and environment probes
-//! shared across tiers.
+//! shared across tiers; `codex` holds the hook and project trust setup a real
+//! Codex launch needs.
 
+mod codex;
 mod command;
 mod env;
 mod harness;
@@ -26,6 +28,7 @@ mod zellij;
 #[cfg(unix)]
 use std::time::Duration;
 
+pub use codex::{trust_codex_hooks, trust_codex_preflight_hooks, trust_codex_project};
 pub use command::{COMMAND_TIMEOUT, CommandTimeoutExt, ScrubSessionEnvExt};
 pub use env::{Env, af_unix_bind_sandboxed, canonical, tmux_pane};
 pub use harness::Harness;
@@ -34,7 +37,7 @@ pub use payloads::{
     lifecycle_event, permission_payload, pi_tool_call_payload,
 };
 #[cfg(unix)]
-pub use shim::cargo_bin;
+pub use shim::{cargo_bin, zellij_trace_shim};
 #[cfg(unix)]
 pub use shim::{
     path_with_front, write_env_dump_shim, write_failing_agent_shim, write_fake_bash_shell,
