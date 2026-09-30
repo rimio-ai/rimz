@@ -187,7 +187,7 @@ User-shell launches take focus unless `--bg` is passed. Agent callers cannot ove
 
 ### Relaunch into a named worktree
 
-A checkout holding another team (a live member, or team history with a board stage other than `Done`) [refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-checkout); setting that board to `Stage: Done` releases a stopped run.
+A checkout holding another team (a live member, or team history with a board stage other than `Done`) [refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-checkout); setting that board to `Stage: Done` releases a stopped run. A channel held at a different checkout [also refuses a fresh team launch](../../internals/harness/fleet.md#one-team-per-channel), even for the same team, whether the channel is explicit or derived from the checkout.
 
 Launching a named team, or an inline spec of two or more cells, into a named worktree that already has a cohort reconciles with that cohort before creating anything:
 
