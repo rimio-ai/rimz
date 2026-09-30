@@ -2,6 +2,43 @@ use super::super::run_report::{render_record_detail, write_failure_pointer};
 use super::*;
 
 #[test]
+fn true_condition_without_hold_renders_due() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        when: Some(vec!["team.stage=Done".to_owned()]),
+        check: Some("true".to_owned()),
+        ..TaskEntry::default()
+    };
+    let parsed = schedule::parse_trigger("ready", &entry);
+    let mut out = Vec::new();
+    super::super::condition::write_receipt(&mut out, &entry, parsed.as_ref().unwrap()).unwrap();
+    assert!(String::from_utf8(out).unwrap().contains("now: due\n"));
+    let now = Timestamp::now();
+    let timing = schedule::TaskTiming::evaluate(
+        &parsed,
+        schedule::catalog::TaskSource::Config,
+        Some(now),
+        None,
+        &now.to_zoned(jiff::tz::TimeZone::UTC),
+    );
+    let timing = super::super::condition::observe("ready", &entry, timing, now);
+    let mut out = Vec::new();
+    super::super::condition::write_show(&mut out, &entry, &timing).unwrap();
+    assert!(
+        String::from_utf8(out)
+            .unwrap()
+            .starts_with("condition: due\n")
+    );
+    let mut table = ui::Table::new(["NEXT"]);
+    table.row([next_cell(&timing, now)]);
+    let mut out = Vec::new();
+    table.render(&mut out).unwrap();
+    assert!(String::from_utf8(out).unwrap().contains("due"));
+}
+
+#[test]
 fn room_badge_names_the_external_timer_only_without_a_room() {
     assert_eq!(room_label_with_timer(false, true), "no room · timer");
     assert_eq!(room_label_with_timer(false, false), "no room");

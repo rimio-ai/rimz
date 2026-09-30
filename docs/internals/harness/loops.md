@@ -4,7 +4,7 @@
 
 ## What the scheduler does
 
-`rimz loop` fires agent work on a trigger. A fire starts a fresh supervised turn, delivers a prompt to an agent that is already running, or runs a shell command that can guard either one. The trigger is a clock, a signal selector, or a watch spec. `rimz wait` is the agent-facing front end over the same task rows.
+`rimz loop` fires agent work on a trigger. A fire starts a fresh supervised turn, delivers a prompt to an agent that is already running, or runs a shell command that can guard either one. The trigger is a clock, a signal selector, a watch spec, or a state condition. `rimz wait` is the agent-facing front end over the same task rows, for delays and watches.
 
 There is no RimZ scheduler daemon. The room already elects one process to do shared work, the sidebar producer or elder ([state.md § Renderers, the producer, and consumers](../sidebar/state.md#renderers-the-producer-and-consumers)), and the elder keeps time for loop tasks on its ordinary data tick. For schedules that must run with the room closed, a user can install one OS timer that launches a one-off `rimz loop tick` and exits; it yields every root whose room is open ([The external tick](#the-external-tick)).
 
@@ -30,6 +30,7 @@ Every path below is under `crates/rimz/src/`; `schedule/` means `harness/schedul
 | [`schedule/arming.rs`](../../../crates/rimz/src/harness/schedule/arming.rs), [`strikes.rs`](../../../crates/rimz/src/harness/schedule/strikes.rs) | Machine-local overlays: enablement, bounded pauses, effective arming and source defaults through `ArmState::resolve`, the effective-last-fire rule, and consecutive failure counts. |
 | [`schedule/config_edit.rs`](../../../crates/rimz/src/harness/schedule/config_edit.rs) | Comment-preserving TOML edits to machine `loop.toml` and project `.rimz/config.toml`. |
 | [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) | Clock firing shared by the elder and the external tick: root ownership, arm-on-first-sight, due planning, `lanes/loop-fire.json`, and how the detached `rimz loop run <name>` is hosted. |
+| [`schedule/when.rs`](../../../crates/rimz/src/harness/schedule/when.rs) | Condition grammar, ordered terms/readings, room CI source, predicate evaluation, hold state, and typed fire evidence. |
 | [`cli/loop_timer.rs`](../../../crates/rimz/src/cli/loop_timer.rs) | The systemd user timer and launchd agent: install, status, removal, unit rendering, and the external tick. |
 | [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) | `TaskFire`: the gate ladder, the run lock, the check, prompt preparation, the prepared effect, and the one terminal history transition; `stop_task`, the stop ladder. |
 | [`schedule/runner/prompt.rs`](../../../crates/rimz/src/harness/schedule/runner/prompt.rs) | `compose_wait`: the wait line, the verdict line, the evidence, and the verbatim note. |
@@ -71,7 +72,7 @@ Three sources back the catalog.
 
 The instance store keeps runtime churn out of user config. An agent that arms `rimz wait --in 30m` writes an instance row, not `loop.toml`, and the row retires itself after it fires. `TaskCatalog::load(Some(root))` reads that workspace's instances and `load(None)` reads machine tasks only. Wait rows found in `loop.toml` stay `Config` rows, and machine-scope `rimz gc --all` reaps them.
 
-A project task cannot make machine-local claims, so loading rejects four fields: `root` and `dir` (a project task runs at the project root), `wait` (it cannot pin a session on another machine), and `deadline` (a poll-until timestamp is machine state). It also requires `every`, `cron`, or `signal`, because a one-shot would have to delete itself from a trust-hashed file.
+A project task cannot make machine-local claims, so loading rejects nine fields: `root`, `dir`, `wait`, `deadline`, `watch`, `wait-meta`, `once`, `when`, and `for`. Conditions are machine-local in this version; no new fields enter the project trust hash. Project rows require `every`, `cron`, or `signal`, because a one-shot would have to delete itself from a trust-hashed file.
 
 A project task runs commands on whoever pulls it, so it enters the project trust hash ([trust.md](./trust.md)) and needs two approvals. Trust approves the config contents; the machine-local enablement record ([History, strikes, and arming](#history-strikes-and-arming)) approves that task for unattended execution here. `rimz loop add --project` writes an enabled record for its author, and a clone has no record, so the task starts disabled.
 
@@ -93,6 +94,7 @@ An untrusted project row with no same-named base row still enters the runnable m
 | `Schedule` | `at`, `every`, or `cron` | the elder tick or the external tick, when `due` says so |
 | `Signal` | `signal = "<selector>"`, optional `match = { k = "v" }` | the process that emits a matching signal |
 | `Watch` | `watch` as a command string or a PID, check, or file spec | the detached `rimz wait watch` process, or the elder's watch-lost rule |
+| `Condition` | `when = ["team.stage=Done", "ci=passed"]`, optional `for = "30m"` | the clock planner, once per true period, or once total with `once` |
 
 A `SignalSelector` is `Exact(SignalName)` or `Family(String)`, parsed from `a.b` or `a.*` and serialized back to the same string. `*`, `a.b.*`, and `a*` are rejected, and emission refuses wildcards outright.
 
@@ -101,7 +103,9 @@ Validation rejects the shapes that cannot mean anything:
 | Error | Shape |
 | --- | --- |
 | `TriggerConflict` | two trigger families on one row |
-| `MatchWithoutSignal`, `OnceWithoutSignal` | `match` or `once` with no `signal` |
+| `MatchWithoutSignal` | `match` with no `signal` |
+| `OnceWithoutSignal` | `once` with neither `signal` nor `when` |
+| `ForWithoutWhen` | `for` with no `when` |
 | `BlankMatch` | a match value empty after trimming; the error names the task and key |
 | `WatchWithCheck` | `watch` with a separate `check` guard |
 | `BadSignal`, `BadWatch` | an unparseable selector or an empty watch command, file path, or pattern |
@@ -169,6 +173,27 @@ The plan decides each task from its stamp, first matching row wins:
 | stamped, not due | keep the stamp |
 
 Because state is written before any runner spawns, a fire is at-most-once per occurrence even when ticks are hot.
+
+### Condition planning
+
+Conditions use the same planner pass. `fire_tasks` evaluates readings before the pure planner; the elder supplies `CiSource`, and the external tick supplies none. Scope is `TaskEntry::run_dir()`. Board stages come from `scratch::board_stage`; CI uses the cache's exact path key: an Open or Merged PR with CI wins, then branch CI, then unknown. The elder keeps last-known-good CI on failed probes. There is no signal-driven evaluation. Grammar and unknown/negation semantics are in [Conditions](../../reference/cli/loop.md#conditions).
+
+`lanes/loop-when.json` is a runtime-class map from task name to `{fingerprint, since, fired}`, retained only while true (or held by arming policy), rebuilt from runnable rows each pass. The fingerprint holds the canonical expression, parsed hold duration, and run directory; a missing or mismatched fingerprint starts a new true period. First sight creates only the fire stamp. A standing condition is not an ephemeral task; `once` makes it ephemeral.
+
+| Stamp / arming | Verdict / hold state | Action |
+| --- | --- | --- |
+| none | any | Stamp now, no evaluation or hold state. |
+| stamped, not Live | any | Carry both maps unchanged. |
+| stamped, Live | false | Drop hold state, carry stamp. |
+| stamped, Live | true, no state | Start `{since: now, fired: false}`; apply the next row. |
+| stamped, Live | true, not fired | Fire at `now - since >= hold` (absent hold is zero), stamp now, set fired. |
+| stamped, Live | true, fired | Carry; no repeat until a false tick. |
+
+Write `loop-fire.json`, then `loop-when.json`, before any spawn. A fire-stamp write failure aborts the pass without spawning. A condition-state write failure suppresses only condition fires, which retry on the next tick; already-stamped clock fires and lost-watch actions still proceed. Runtime teardown resets both holds and the CI cache. The existing elder/tick ownership defenses remain the synchronization boundary.
+
+`ConditionEvidence` travels in hidden `--condition-json`, renders through `Evidence::Condition`, and is stored as the optional `LoopRunRecord.condition`: canonical `when`, optional `hold`, `held_ms`, and readings (unknown is JSON null). Manual fire uses `Evidence::Manual`. A condition delivery is `Type: WAIT` at the Done boundary, never a synthetic signal.
+
+The delivery builder stores a single canonical joined clause and a normalized hold. Condition dedupe compares the target session, clause list, hold, resolved project root, and scope (`TaskEntry::run_dir()`); identical expressions on different worktrees remain separate subscriptions. Signal dedupe still compares only the session, selector, matches, and resolved project root. Pending one-shot waits project as `PendingWaitTrigger::Condition`; the sidebar renders their expression and hold with a static wait glyph.
 
 ### The external tick
 

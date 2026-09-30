@@ -90,6 +90,7 @@ enum RowState {
     Blocked,
     Listening,
     Watching,
+    Condition,
     Upcoming(Timestamp),
     NeverRun,
 }
@@ -134,7 +135,10 @@ impl WatchRow {
             WatchBand::Failed => 1,
             WatchBand::Ok => match self.state {
                 RowState::Due => 2,
-                RowState::Upcoming(_) | RowState::Listening | RowState::Watching => 3,
+                RowState::Upcoming(_)
+                | RowState::Listening
+                | RowState::Watching
+                | RowState::Condition => 3,
                 RowState::NeverRun => 5,
                 RowState::Running | RowState::Held | RowState::Blocked => 0,
             },
@@ -248,6 +252,7 @@ fn next_text(state: RowState, timing: &schedule::TaskTiming, now: Timestamp) -> 
         RowState::Upcoming(next) => ui::until_label(next, now),
         RowState::Listening => "listening".to_owned(),
         RowState::Watching => "watching".to_owned(),
+        RowState::Condition => timing.state().condition_label().unwrap_or_default(),
         RowState::NeverRun => "—".to_owned(),
     }
 }
@@ -270,6 +275,9 @@ fn row_state_for_timing(timing: &schedule::TaskTiming) -> RowState {
         schedule::TaskTimingState::Upcoming(next) => RowState::Upcoming(next),
         schedule::TaskTimingState::Listening { .. } => RowState::Listening,
         schedule::TaskTimingState::Watching { .. } => RowState::Watching,
+        schedule::TaskTimingState::Waiting { .. }
+        | schedule::TaskTimingState::Holding { .. }
+        | schedule::TaskTimingState::Fired => RowState::Condition,
         schedule::TaskTimingState::Invalid
         | schedule::TaskTimingState::Unarmed
         | schedule::TaskTimingState::NoOccurrence => RowState::NeverRun,
@@ -345,7 +353,7 @@ fn render_watch_rows(out: &mut impl Write, rows: &[&WatchRow], cols: usize) -> s
             RowState::Held | RowState::Blocked => ui::palette::muted(),
             RowState::NeverRun => ui::palette::faint(),
             RowState::Due => ui::palette::warn(),
-            RowState::Listening | RowState::Watching => ui::palette::cool(),
+            RowState::Listening | RowState::Watching | RowState::Condition => ui::palette::cool(),
             RowState::Upcoming(_) => anstyle::Style::new(),
         };
         let name = ui::clip_to_width(&row.name, (cols / 4).max(1));

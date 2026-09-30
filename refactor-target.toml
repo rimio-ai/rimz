@@ -375,7 +375,8 @@ path = "crates/rimz/src/harness"
 # TeamTabLaunch carries restored seats to CLI placement before fallback assists are recorded.
 # Fresh launches share checkout and channel holds, including the holder's checkout.
 # Condition parsing, ordered readings, CI sources, hold state and evidence cross the scheduler/CLI seam (+17).
-surface-budget = 617
+# Condition admission and timing presentation share stage validation, state refinement and labels (+3).
+surface-budget = 620
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

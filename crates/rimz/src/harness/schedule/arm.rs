@@ -47,6 +47,11 @@ pub enum SubscriptionLifetime {
 }
 
 pub enum DeliveryTrigger {
+    Condition {
+        expr: super::when::WhenExpr,
+        hold: Option<Duration>,
+        lifetime: SubscriptionLifetime,
+    },
     Delay(Duration),
     /// `on` is the row's delivery polarity: the user's `--on` for a command,
     /// `any` for a polled spec, whose watcher emits only once its condition holds.
@@ -435,6 +440,16 @@ fn build_entry(
         entry.surplus_after = surplus.after;
     }
     let delay = match spec.trigger {
+        DeliveryTrigger::Condition {
+            expr,
+            hold,
+            lifetime,
+        } => {
+            entry.when = Some(vec![expr.to_string()]);
+            entry.hold = hold.map(duration_label);
+            entry.once = matches!(lifetime, SubscriptionLifetime::Once).then_some(true);
+            None
+        }
         DeliveryTrigger::Delay(delay) => {
             entry.at = Some(super::delayed_at(delay).map_err(|err| ArmFailure::State(err.into()))?);
             Some(duration_label(delay))

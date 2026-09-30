@@ -89,6 +89,7 @@ pub fn prompt(agent: &AgentState, now: Timestamp) -> String {
                 facts.extend(elapsed);
             }
             PendingWaitTrigger::Pid { .. }
+            | PendingWaitTrigger::Condition { .. }
             | PendingWaitTrigger::File { .. }
             | PendingWaitTrigger::Signal { .. } => {
                 facts.push(format!("{} {}", trigger.kind_word(), trigger.headline(now)));

@@ -1,6 +1,6 @@
 # Loop CLI
 
-`rimz loop` runs work on a clock or on a signal. A task is a name, one trigger, and one action: start a fresh supervised agent (`--agent`), deliver a prompt to a live agent session (`--wait`), or run a shell command (`--check`). A check can also stand in front of an agent action as a guard. The [loops guide](../../guide/loops.md) teaches when to use each; an alarm an agent sets for itself, after a delay or a watched command, is [`rimz wait`](./wait.md).
+`rimz loop` runs work on a clock, on a signal, or while state conditions hold. A task is a name, one trigger, and one action: start a fresh supervised agent (`--agent`), deliver a prompt to a live agent session (`--wait`), or run a shell command (`--check`). A check can also stand in front of an agent action as a guard. The [loops guide](../../guide/loops.md) teaches when to use each; an alarm an agent sets for itself, after a delay or a watched command, is [`rimz wait`](./wait.md).
 
 A clock task fires while a room for its project is open, from that room's sidebar, or from the optional machine-wide [timer](#timer) when no room is open. A signal task fires from whichever process emits the signal, so it needs no room.
 
@@ -56,6 +56,7 @@ Every command takes the [global flags](../cli.md#global-flags). No `loop` comman
 | Raw cron | `--cron "<5 fields>"` | Per the expression. |
 | Poll-until | `--every <DUR> --until <DUR> --check <CMD>` plus `--agent` or `--wait` | Until the guard fires the action or the deadline passes. |
 | Signal | `--signal <NAME\|FAMILY.*>`, narrowed by `--match` | On every delivering signal, or once with `--once`; see [signals](#signals). |
+| Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period; `--once` retires after the first fire. |
 
 The trigger values follow these rules:
 
@@ -70,12 +71,34 @@ The trigger values follow these rules:
 
 `--every 1d` fires a day after the last fire and drifts with it; `--every day --at 07:00` fires at 07:00. Calendar times, `--in`, and `--until` resolve in the top-level `timezone` setting, or the system zone when it is unset. A clock task arms the first time a clock sees it and fires on the next occurrence after that, so a late room or a new timer never replays missed fires.
 
+### Conditions
+
+`--when 'team.stage=Done && ci=passed' --for 30m` waits for both readings to stay true for 30 minutes. Evaluation uses the clock tick, not signal history: CI can pass before or after the board reaches Done. The first tick arms without evaluating. A false tick resets the hold; a fired standing task re-arms after a false tick. Holds start at the first true observation, never at a board timestamp, and reset when the room's runtime state is removed.
+
+Expressions accept `!`, `&&`, `||`, and parentheses, in that precedence order. A term is `key=value` or `key=value1,value2` (either value). Repeating `--when` ANDs the clauses. Whitespace between tokens is ignored; values use letters, digits, `_`, `.`, or `-`. There are no literals or functions. Use `!ci=failed`, not `ci!=failed`.
+
+| Key | Values | Reading |
+| --- | --- | --- |
+| `team.stage` | `Done` and stages declared by any team in the effective configuration, case-sensitive | The scoped checkout's `blackboard.md` Stage line. |
+| `ci` | `passed`, `failed`, `pending` | The room sidebar's last-known CI result. Without a fresh sidebar it is unknown, including under the external timer. |
+
+An unknown reading makes its term false, but `!` is boolean NOT: `!ci=failed` is true when CI is unknown. Use `ci=passed,pending` for known and not failed. A failed CI probe leaves the sidebar's last-known reading in place.
+
+Scope is the checkout where the task was added, or `--root <worktree path>`. From the project-root checkout CI means trunk CI. `--worktree` still chooses the agent pane or wait target, not condition scope. `--when` conflicts with `--at`, `--every`, `--cron`, `--in`, `--signal`, and `--until`. `--for` requires `--when` and a positive duration in `s`, `m`, `h`, or `d`. `--project --when` is not yet supported; add without `--project`.
+
+The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout>`, and `now: waiting · team.stage: Review, ci: unknown` (or `holding 0s/30m` when already true). Without a room, a CI condition also prints `ci readings come from the room's sidebar; the loop timer alone never sees them`.
+
+`--wait --when` pins the live session like other waits. A live subscription with the same target session, canonical expression, hold, project root, and scoped checkout prints `already subscribed as <name>` without rewriting it, even if its prompt or `--once` differs. Identical conditions on different worktrees remain separate waits.
+
 ### Flags
 
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
 | `--prompt <TEXT>`, `--prompt-file <PATH>` | `--agent`, `--wait` | The prompt the action delivers. The two conflict. |
 | `--check <CMD>` | all | Shell command to run; alone it is the action, otherwise the guard. |
+| `--when <EXPR>` | all | Repeatable state condition; see [conditions](#conditions). |
+| `--for <DUR>` | `--when` | Continuous hold before firing. |
+| `--once` | `--signal`, `--when` | Retire after the first delivering fire. |
 | `--on fail\|success\|any` | `--check` | Which check outcome fires the action. Default `fail`. |
 | `--verify <CMD>` | `--agent` | Command that must pass after the turn; a failure re-prompts the same session. |
 | `--max-attempts <N>` | `--verify` | Total turns allowed to make `--verify` pass. Default `3`, at least `1`. |
@@ -123,7 +146,7 @@ Each task lives in one of three stores, which `rimz loop list` names in its SOUR
 
 ### Project tasks
 
-`--project` writes a task that ships with the repository. It needs `--every`, `--cron`, or `--signal`, and refuses `--wait`, `--until`, and `--once`. `--root` must lie inside the project of the current directory. A project task stores no `root` or `dir` and always runs at the project root.
+`--project` writes a task that ships with the repository. It needs `--every`, `--cron`, or `--signal`, and refuses `--wait`, `--until`, `--once`, and `--when`. Hand-written project tasks also reject `when` and `for`. `--root` must lie inside the project of the current directory. A project task stores no `root` or `dir` and always runs at the project root.
 
 A project task runs unattended only when both hold:
 
@@ -289,6 +312,10 @@ Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and 
 | `in 12m` | The next clock fire. |
 | `listening` | A signal subscription. |
 | `watching` | A `rimz wait` command, PID, check, or file watch. |
+| `waiting · team.stage: Review, ci: unknown` | Condition readings, in expression order; the whole expression is false. |
+| `holding 12m/30m` | Continuously true since the observed start of the hold. |
+| `due` | A clock fire is due, or a condition without `--for` is true and awaiting its next tick. |
+| `fired` | Already fired in this true period; waits for a false tick to re-arm. |
 | `disabled`, `disabled · N strikes`, `disabled · enable to arm` | Held until enabled; the last is a project task not yet enabled here. |
 | `paused · in 2h` | Paused until then. |
 | `blocked · trust` | A project task whose project is not trusted. |
@@ -301,6 +328,8 @@ Footers count tasks blocked by trust and project tasks not yet enabled, with the
 `loop watch` holds the list open as a live dashboard, repainting countdowns and `running now` every second. It is the loop pane in the room's `rimzd` tab.
 
 ### `loop show`
+
+A condition adds a `condition: <NEXT text>` block immediately below the trigger. Each leaf term appears in expression order, followed by `✓` or `✗` for that term's truth and its current reading (`unknown` if absent). Negation applies to the expression, not the leaf's glyph.
 
 `loop show <name>` opens with the task's schedule and next fire or hold, a health verdict from the latest conclusive run, and the task's facts: action, check, root (and `dir` for a linked worktree), source, effective timeout, budgets, surplus gate, spend, and `strikes N/max` once a strike is recorded. An active run adds its run id and the `loop stop` command. The sections below follow:
 
@@ -322,6 +351,8 @@ A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind)
 | `--failed` | Only `failed`, `timed out`, `budget exceeded`, `verify failed`, and `error` runs. |
 
 ## Rename and remove
+
+Condition runs in `loop logs` include `when: <expression> · held <duration>` and a JSON readings line. The record keeps the canonical expression, configured hold, observed held milliseconds, and readings; manual fires do not synthesize readings.
 
 `loop rename <name> <new-name>` moves the task to the new key in its store. The new name must differ and be free. The task re-arms, so an interval task next fires one interval after the rename.
 

@@ -30,6 +30,200 @@ use crate::common::{
 };
 
 #[test]
+fn condition_tick_observes_board_and_records_evidence() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    let scope = env.home_root.join("condition-scope");
+    assert!(git_ok(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "condition-scope",
+            scope.to_str().unwrap()
+        ]
+    ));
+    let root_board = env.project_root.join("blackboard.md");
+    let board = scope.join("blackboard.md");
+    std::fs::write(&root_board, "Stage: Done\n").unwrap();
+    std::fs::write(&board, "Stage: Review\n").unwrap();
+    let receipt = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "ready",
+            "--when",
+            "team.stage=Done",
+            "--check",
+            "true",
+            "--root",
+            scope.to_str().unwrap(),
+            "--once",
+        ],
+    );
+    assert!(
+        receipt.contains(&format!("scope: {}", canonical(&scope).display())),
+        "{receipt}"
+    );
+    assert!(
+        receipt.contains("waiting · team.stage: Review"),
+        "{receipt}"
+    );
+    let instances = read_loop_instances(&env);
+    assert_eq!(instances.0["ready"].run_dir(), canonical(&scope));
+    assert_eq!(instances.0["ready"].once, Some(true));
+    loop_ok(&env, &["loop", "tick"]);
+    let armed = rimz::harness::schedule::last_stamps(&env.runtime_paths());
+    assert!(armed.contains_key("ready"));
+    loop_ok(&env, &["loop", "tick"]);
+    assert_eq!(
+        rimz::harness::schedule::last_stamps(&env.runtime_paths()),
+        armed
+    );
+    assert!(read_loop_run_records(&env).is_empty());
+    let listing = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        listing.contains("waiting · team.stage: Review"),
+        "{listing}"
+    );
+    std::fs::write(&root_board, "Stage: Review\n").unwrap();
+    std::fs::write(&board, "Stage: Done\n").unwrap();
+    loop_ok(&env, &["loop", "tick"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while (read_loop_run_records(&env).is_empty()
+        || read_loop_instances(&env).0.contains_key("ready"))
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let record = last_loop_record(&env);
+    assert_eq!(record.result, LoopRunResult::Completed);
+    let condition = record.condition.unwrap();
+    assert_eq!(condition.when, "team.stage=Done");
+    assert_eq!(condition.readings["team.stage"].as_deref(), Some("Done"));
+    assert!(!read_loop_instances(&env).0.contains_key("ready"));
+}
+
+#[test]
+fn condition_add_refuses_invalid_predicates_and_options() {
+    let env = Env::new();
+    for (flags, expected) in [
+        (vec!["--when", "wat=yes"], "team.stage, ci"),
+        (
+            vec!["--when", "team.stage=Missing"],
+            "no team defines stage Missing; stages: Done",
+        ),
+        (vec!["--for", "30m"], "--when"),
+        (
+            vec!["--project", "--when", "ci=passed"],
+            "--project tasks cannot use --when yet",
+        ),
+        (vec!["--when", "ci!=failed"], "!ci=failed"),
+    ] {
+        let output = env
+            .rimz()
+            .args(["loop", "add", "bad", "--check", "true"])
+            .args(flags)
+            .output()
+            .unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success());
+        assert!(error.contains(expected), "expected {expected}: {error}");
+    }
+}
+
+#[test]
+fn condition_wait_pins_projects_and_deduplicates() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    let first = env.home_root.join("condition-first");
+    let second = env.home_root.join("condition-second");
+    for (branch, path) in [("first", &first), ("second", &second)] {
+        assert!(git_ok(
+            &env.project_root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                branch,
+                path.to_str().unwrap()
+            ]
+        ));
+    }
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-condition", "feature-loop");
+    for (name, scope, expected) in [
+        ("ready", &first, "added loop task `ready`"),
+        ("duplicate", &first, "already subscribed as ready"),
+        ("second", &second, "added loop task `second`"),
+        ("second-duplicate", &second, "already subscribed as second"),
+    ] {
+        let output = calling_loop(&env, "sess-condition")
+            .args([
+                "loop",
+                "add",
+                name,
+                "--wait",
+                "--when",
+                "team.stage=Done",
+                "--for",
+                "30m",
+                "--once",
+            ])
+            .arg("--root")
+            .arg(scope)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(expected),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    let instances = read_loop_instances(&env);
+    assert_eq!(instances.0.len(), 2);
+    assert_eq!(instances.0["ready"].run_dir(), canonical(&first));
+    assert_eq!(instances.0["second"].run_dir(), canonical(&second));
+    assert_eq!(
+        instances.0["ready"].when.as_ref().unwrap(),
+        &["team.stage=Done"]
+    );
+    assert_eq!(instances.0["ready"].hold.as_deref(), Some("30m"));
+    let output = env
+        .rimz()
+        .args(["sidebar", "snapshot", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        snapshot
+            .to_string()
+            .contains("\"when\":\"team.stage=Done\""),
+        "{snapshot}"
+    );
+    loop_ok(&env, &["loop", "run", "ready"]);
+    assert_eq!(
+        env.store().list_pending_messages().unwrap()[0].sender,
+        rimz::store::message::MessageSender::Harness {
+            notice: rimz::store::message::HarnessNotice::Wait
+        }
+    );
+}
+#[test]
 fn trunk_signal_fires_only_through_git_source() {
     let env = Env::new();
     loop_ok(

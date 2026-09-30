@@ -478,11 +478,92 @@ pub enum TaskTimingState {
     Upcoming(Timestamp),
     Due(Timestamp),
     NoOccurrence,
-    Listening { name: signal::SignalSelector },
-    Watching { spec: crate::config::WatchSpec },
+    Listening {
+        name: signal::SignalSelector,
+    },
+    Watching {
+        spec: crate::config::WatchSpec,
+    },
+    Waiting {
+        readings: Vec<(String, Option<String>)>,
+    },
+    Holding {
+        elapsed: Duration,
+        hold: Duration,
+    },
+    Fired,
+}
+
+impl TaskTimingState {
+    pub fn condition_label(&self) -> Option<String> {
+        match self {
+            Self::Waiting { readings } => Some(format!(
+                "waiting · {}",
+                readings
+                    .iter()
+                    .map(|(key, value)| format!("{key}: {}", value.as_deref().unwrap_or("unknown")))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            Self::Holding { elapsed, hold } => Some(format!(
+                "holding {}/{}",
+                crate::utils::time::format_duration_coarse(
+                    elapsed.as_secs().min(i64::MAX as u64) as i64
+                ),
+                arm::duration_label(*hold)
+            )),
+            Self::Fired => Some("fired".to_owned()),
+            Self::Due(_) => Some("due".to_owned()),
+            _ => None,
+        }
+    }
 }
 
 impl TaskTiming {
+    /// Refine an armed condition from the same current reading used by the CLI.
+    pub fn with_condition(
+        mut self,
+        verdict: &when::Verdict,
+        state: Option<&when::WhenState>,
+        now: Timestamp,
+    ) -> Self {
+        if !matches!(self.state, TaskTimingState::NoOccurrence) {
+            return self;
+        }
+        let Ok(ParsedTrigger {
+            trigger: Trigger::Condition { expr, hold },
+            ..
+        }) = &self.parsed
+        else {
+            return self;
+        };
+        self.state = if !verdict.ok {
+            TaskTimingState::Waiting {
+                readings: expr
+                    .readings(verdict)
+                    .map(|(key, value)| (key.to_owned(), value.map(ToOwned::to_owned)))
+                    .collect(),
+            }
+        } else if state.is_some_and(|state| state.fired) {
+            TaskTimingState::Fired
+        } else if let Some(hold) = hold {
+            TaskTimingState::Holding {
+                elapsed: state
+                    .map(|state| {
+                        Duration::from_millis(
+                            now.as_millisecond()
+                                .saturating_sub(state.since.as_millisecond())
+                                .max(0) as u64,
+                        )
+                    })
+                    .unwrap_or_default(),
+                hold: *hold,
+            }
+        } else {
+            TaskTimingState::Due(now)
+        };
+        self
+    }
     pub fn evaluate(
         parsed: &Result<ParsedTrigger, ScheduleErr>,
         source: catalog::TaskSource,

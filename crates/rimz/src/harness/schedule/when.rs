@@ -119,6 +119,14 @@ pub struct WhenError {
 
 impl WhenExpr {
     pub fn parse(clauses: &[String]) -> Result<Self, WhenError> {
+        Self::parse_with_stages(clauses, None)
+    }
+
+    /// Validate stage names against the effective configuration at admission.
+    pub fn parse_with_stages(
+        clauses: &[String],
+        stages: Option<&std::collections::BTreeSet<String>>,
+    ) -> Result<Self, WhenError> {
         let mut joined = None;
         let mut nodes = 0;
         for (index, clause) in clauses.iter().enumerate() {
@@ -128,6 +136,7 @@ impl WhenExpr {
                 clause: index + 1,
                 depth: 0,
                 nodes,
+                stages,
             };
             if joined.is_some() {
                 parser.node()?;
@@ -247,6 +256,7 @@ struct Parser<'a> {
     clause: usize,
     depth: usize,
     nodes: usize,
+    stages: Option<&'a std::collections::BTreeSet<String>>,
 }
 
 impl Parser<'_> {
@@ -352,6 +362,18 @@ impl Parser<'_> {
             let mut values = vec![self.word()?];
             while self.take(",") {
                 values.push(self.word()?);
+            }
+            if key == "team.stage"
+                && let Some(stages) = self.stages
+            {
+                for value in &values {
+                    if !stages.contains(value) {
+                        return Err(self.error(format!(
+                            "no team defines stage {value}; stages: {}",
+                            stages.iter().cloned().collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                }
             }
             if key == "ci"
                 && values
