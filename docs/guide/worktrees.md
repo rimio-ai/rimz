@@ -52,7 +52,7 @@ Already made the tree with `git worktree add`? If it is in the configured worktr
 
 `--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in its worktree, named `pr-<N>` when creating one by default. Reach for it to address review comments or chase a failing check: the agent works the PR's own branch, and on a forge RimZ can ask, its fixes push straight back to the PR.
 
-If you started the same-repository PR's branch in a `-w` tree, `--from-pr` returns to that marked tree and records the PR number for later resume; when the tips differ, the [PR checkout rules](../reference/cli/worktree.md#check-out-a-pull-request) determine whether RimZ asks you to choose or fast-forwards an unattended launch.
+If you started the same-repository PR's branch in a `-w` tree, `--from-pr` returns to that marked tree and records the PR number for later resume; when the tips differ, the [PR checkout rules](../reference/cli/worktree.md#check-out-a-pull-request) determine whether RimZ asks you to choose or fast-forwards an unattended launch. Teams and multi-agent layouts first [reconcile the existing cohort](../reference/cli/agents.md#relaunch-into-a-named-worktree), so a running team is reported without moving its branch or launching a duplicate.
 
 ```sh
 rimz agents claude --from-pr 42               # review PR 42 in its own tree
