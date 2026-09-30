@@ -46,7 +46,7 @@ The board is the leader's first product. On its first turn the leader runs `rimz
 
 When the board is at Done at launch, the board and stage files are the previous run's leftovers. The leader decides whether this is a new request (clear them, open a fresh board) or a follow-up (keep them, flip out of Done).
 
-The Stage line and the Progress records belong to `rimz teams flip`. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. Add to Goal, Decisions, or Result with `rimz teams record <section> "<text>"` (or `--file PATH` or `--stdin`). It appends a timestamped entry under your role while holding the same board lock as a flip, and prints what it wrote. When the picture changes, append the newer truth and leave the old lines standing. Amending an existing line is a direct edit and takes no lock.
+The Stage line and the Progress records belong to `rimz teams flip`. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. Add to Goal, Decisions, or Result with `rimz teams record <section> "<text>"` (or `--file PATH` or `--stdin`). It appends a timestamped entry under your role while holding the same board lock as a flip, and prints only `recorded <Section> @<role>`. Text holding backticks or `$` goes through `--stdin` with a quoted heredoc (`<<'EOF'`): the shell substitutes inside a double-quoted TEXT, and the entry is not echoed back to show it. When the picture changes, append the newer truth and leave the old lines standing. Amending an existing line is a direct edit and takes no lock.
 
 ### Stage files
 

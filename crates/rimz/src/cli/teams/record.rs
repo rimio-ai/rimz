@@ -1,4 +1,4 @@
-//! Append one board entry and print its exact receipt.
+//! Append one board entry and print a one-line receipt naming its section and author.
 
 use std::io::{Read, Write};
 
@@ -10,7 +10,7 @@ use super::super::{Ctx, GlobalFlags};
 use super::{RecordArgs, board_context};
 
 pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
-    let section = args.section.parse()?;
+    let section: board::BoardSection = args.section.parse()?;
     let text = if let Some(text) = args.text {
         text
     } else if let Some(path) = args.file {
@@ -44,7 +44,7 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         "user"
     };
-    let receipt = board::record(RecordRequest {
+    board::record(RecordRequest {
         store: &ctx.store,
         worktree: &worktree,
         section,
@@ -52,6 +52,6 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
         text: &text,
         now: Timestamp::now(),
     })?;
-    writeln!(std::io::stdout().lock(), "{}", receipt.entry)?;
+    writeln!(std::io::stdout().lock(), "recorded {section} @{by}")?;
     Ok(())
 }
