@@ -121,14 +121,20 @@ pub(crate) fn project_pending_waits(
     project_run_waits(snapshot, paths);
 }
 
+/// Whether any agent has launched children or a team, the only case in which
+/// the projection lists `runs/`; a room without launched work never reads it.
+fn has_launched_work(agents: &[crate::agents::AgentState]) -> bool {
+    agents.iter().any(|agent| {
+        crate::harness::fleet::has_members(agents, agent)
+            || (agent.is_team_seat() && agent.launched_by.is_some())
+    })
+}
+
 fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) {
     use crate::harness::fleet::{self, FleetRuns};
     use crate::store::run::{self, RunStatus};
 
-    if !snapshot.agents.iter().any(|agent| {
-        fleet::has_members(&snapshot.agents, agent)
-            || (agent.is_team_seat() && agent.launched_by.is_some())
-    }) {
+    if !has_launched_work(&snapshot.agents) {
         return;
     }
     let runs = match run::list(&paths.runs_dir) {
@@ -239,6 +245,31 @@ impl SessionWaits {
 mod tests {
     use super::*;
     use crate::config::TaskEntry;
+
+    #[test]
+    fn runs_are_read_only_when_an_agent_launched_children_or_a_team() {
+        use crate::agents::{AgentState, AgentStatus, LaunchedBy};
+        let parent = AgentState::stub("claude", "parent", AgentStatus::Idle);
+        let mut peer = AgentState::stub("claude", "peer", AgentStatus::Idle);
+        assert!(!has_launched_work(&[parent.clone(), peer.clone()]));
+
+        let mut child = AgentState::stub("claude", "child", AgentStatus::Idle);
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+        assert!(has_launched_work(&[parent.clone(), child]));
+
+        peer.team = Some("forge".into());
+        assert!(
+            !has_launched_work(&[parent.clone(), peer.clone()]),
+            "a team seat nobody launched is not launched work"
+        );
+        peer.launched_by = Some(LaunchedBy {
+            kind: parent.kind.clone(),
+            agent_id: parent.agent_id.clone(),
+        });
+        assert!(has_launched_work(&[parent, peer]));
+    }
 
     #[test]
     fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
