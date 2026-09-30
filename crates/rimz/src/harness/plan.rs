@@ -1067,7 +1067,7 @@ pub fn launch_identity_requests(
             }
         }
         requests.push(AgentLaunchRequest {
-            login: crate::store::writer::LaunchLogin::RoomDefault,
+            login: crate::store::writer::LaunchLogin::from_ancestry(ancestry, &cell.kind),
             kind: cell.kind.clone(),
             agent_id: mint_launch_id(),
             name,

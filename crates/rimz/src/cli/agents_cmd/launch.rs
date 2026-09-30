@@ -184,12 +184,14 @@ pub(super) fn launch_layout(
     };
     let prompt_agent_index = prompt.and(receipt_leader_index);
     let mut checked_folder_trust = HashSet::new();
+    let mut preflighted_logins = Vec::new();
     if !args.launch.cohort.resume {
         for (index, cell) in layout.agent_cells().enumerate() {
-            preflight_cell(
+            preflighted_logins.push(preflight_cell(
                 workspace,
                 store.runtime_paths(),
                 cell,
+                rimz::store::writer::LaunchLogin::from_ancestry(ancestry.as_ref(), &cell.kind),
                 rimz::config::Isolation::resolve(
                     cell.launch.isolation,
                     cell.isolation_default,
@@ -197,7 +199,7 @@ pub(super) fn launch_layout(
                 ),
                 prompt.filter(|_| Some(index) == prompt_agent_index),
                 &mut checked_folder_trust,
-            )?;
+            )?);
         }
     }
     // Resolve where the launch lands before any side effect — the live-session
@@ -451,7 +453,7 @@ pub(super) fn launch_layout(
         team_name.as_deref(),
         explicit_channel,
     );
-    let launch_requests = launch_identity_requests(
+    let mut launch_requests = launch_identity_requests(
         &layout,
         args.launch.name.as_deref(),
         launch.generated_name(),
@@ -462,6 +464,9 @@ pub(super) fn launch_layout(
         None,
         ancestry.as_ref(),
     )?;
+    for (request, login) in launch_requests.iter_mut().zip(preflighted_logins) {
+        request.login = rimz::store::writer::LaunchLogin::Pinned(login);
+    }
     let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,
         AgentLaunchScope {
@@ -715,10 +720,11 @@ fn preflight_cell(
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
     cell: &rimz::harness::spec::AgentCell,
+    selection: rimz::store::writer::LaunchLogin,
     isolation: rimz::config::Isolation,
     prompt: Option<&str>,
     checked_folder_trust: &mut HashSet<rimz::ids::LoginKey>,
-) -> Result<()> {
+) -> Result<rimz::ids::LoginName> {
     let adapter = rimz::agents::find_definition(cell.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", cell.kind))?;
     rimz::sandbox::preflight_launch(
@@ -729,6 +735,13 @@ fn preflight_cell(
     )?;
     let mut request =
         rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
+    let state = rimz::StatePaths::for_workspace(runtime.workspace_id.clone())?;
+    let login = selection.resolve(
+        &cell.kind,
+        &rimz::agents::room_logins(&state.workspace_record)?,
+        &rimz::config::MachineConfig::load_lenient().accounts,
+    )?;
+    request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
     request.skills.clone_from(&cell.skills);
     request.isolation_default = cell.isolation_default;
     request.action = rimz::harness::launch::ExecAction::Launch {
@@ -749,13 +762,11 @@ fn preflight_cell(
     {
         rimz::agents::version::check_launch_version_floor(adapter, &path)?;
     }
-    let logins = rimz::agents::RoomLoginSet::for_runtime(runtime);
-    if let Some(login) = logins.default_login(cell.kind.as_str())
-        && checked_folder_trust.insert(login.key())
+    if checked_folder_trust.insert(login.key())
         && let Some(rimz::agents::FolderTrust::Undecided(gap)) = adapter.folder_trust(
             &workspace.worktree_root,
             Some(workspace.launch_repo_root()),
-            &logins.env(&login),
+            &login.env(&rimz::agents::ambient_env()),
         )
     {
         writeln!(
@@ -766,7 +777,7 @@ fn preflight_cell(
             gap.fix(cell.kind.as_str())
         )?;
     }
-    Ok(())
+    Ok(login.name().clone())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -818,6 +829,7 @@ fn launch_resume_layout(
         profiles,
         &launch_override_preset(&args.launch.overrides)?,
     )?;
+    let mut preflighted_logins = Vec::new();
     for (cell, seed) in layout.agent_cells().zip(&plan.seeds) {
         let isolation = match seed {
             rimz::harness::plan::CohortSeed::Resume(agent) => {
@@ -828,10 +840,20 @@ fn launch_resume_layout(
             }
             rimz::harness::plan::CohortSeed::Fresh => cell.launch.isolation,
         };
-        preflight_cell(
+        let login = preflight_cell(
             workspace,
             store.runtime_paths(),
             cell,
+            match seed {
+                rimz::harness::plan::CohortSeed::Resume(agent) => {
+                    rimz::store::writer::LaunchLogin::Pinned(
+                        agent.login.clone().unwrap_or_default(),
+                    )
+                }
+                rimz::harness::plan::CohortSeed::Fresh => {
+                    rimz::store::writer::LaunchLogin::from_ancestry(ancestry, &cell.kind)
+                }
+            },
             rimz::config::Isolation::resolve(
                 isolation,
                 cell.isolation_default,
@@ -840,6 +862,9 @@ fn launch_resume_layout(
             None,
             &mut checked_folder_trust,
         )?;
+        if matches!(seed, rimz::harness::plan::CohortSeed::Fresh) {
+            preflighted_logins.push(login);
+        }
     }
     let cwd = plan
         .cwd
@@ -887,7 +912,7 @@ fn launch_resume_layout(
     )?;
     let mux = room.mux_name();
     let backend = room.backend();
-    let launch_requests = launch_identity_requests(
+    let mut launch_requests = launch_identity_requests(
         &layout,
         None,
         None,
@@ -901,6 +926,9 @@ fn launch_resume_layout(
         Some(&plan),
         ancestry,
     )?;
+    for (request, login) in launch_requests.iter_mut().zip(preflighted_logins) {
+        request.login = rimz::store::writer::LaunchLogin::Pinned(login);
+    }
     let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,
         AgentLaunchScope {

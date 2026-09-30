@@ -1036,6 +1036,22 @@ fn agent_launch_root_mismatch_refuses_without_creating_room() {
 
 #[cfg(unix)]
 fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) {
+    assert_subagent_checkout_with_login(fanout, repo_subdir, cwd, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_inherits_the_parent_account_after_the_room_switches() {
+    assert_subagent_checkout_with_login(false, false, None, true);
+}
+
+#[cfg(unix)]
+fn assert_subagent_checkout_with_login(
+    fanout: bool,
+    repo_subdir: bool,
+    cwd: Option<&str>,
+    switch: bool,
+) {
     let env = Env::new();
     let checkout = if repo_subdir {
         let git = Command::new("git")
@@ -1066,6 +1082,39 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
+    if switch {
+        for name in ["work", "spare"] {
+            let home = env.home_root.join(name);
+            let output = env
+                .rimz()
+                .args(["accounts", "add", "codex", name, "--home"])
+                .arg(&home)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let config = env.agent_config_path("codex");
+            let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
+            let state = table["hooks"]["state"].as_table_mut().unwrap();
+            let prefix = format!("{}:", config.display());
+            let named: Vec<_> = state
+                .iter()
+                .filter_map(|(key, value)| {
+                    key.strip_prefix(&prefix).map(|event| {
+                        (
+                            format!("{}:{event}", home.join("config.toml").display()),
+                            value.clone(),
+                        )
+                    })
+                })
+                .collect();
+            state.extend(named);
+            std::fs::write(config, toml::to_string(&table).unwrap()).unwrap();
+        }
+    }
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = rimz::WorkspaceResolver::resolve_under(
@@ -1078,7 +1127,16 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
     store
         .record_workspace(&workspace)
         .expect("record pinned room");
-    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_kind = AgentKind::new_unchecked(if switch { "codex" } else { "claude" });
+    if switch {
+        store
+            .switch_room_login(
+                &workspace,
+                &AgentKind::new_unchecked("codex"),
+                &"spare".parse().unwrap(),
+            )
+            .unwrap();
+    }
     let parent_id = AgentSessionId::from("parent-session");
     let parent_launch_id = AgentSessionId::from("parent-launch");
     store
@@ -1091,7 +1149,10 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
                 launch_id: Some(parent_launch_id.clone()),
                 agent_name: "parent".to_owned(),
                 agent_name_explicit: true,
-                launch: LaunchParams::default(),
+                launch: LaunchParams {
+                    login: switch.then(|| "work".parse().unwrap()),
+                    ..Default::default()
+                },
                 state: AgentLaunchState::Bound,
                 run_id: None,
                 pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
@@ -1208,6 +1269,10 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
             );
         }
         assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_launch_id));
+        assert_eq!(
+            child.login.as_ref().map(|name| name.as_str()),
+            switch.then_some("work")
+        );
     }
     let trace = std::fs::read_to_string(&trace_path).expect("read child pane trace");
     let panes = trace
@@ -2230,6 +2295,13 @@ fn failed_supervised_run_retries_with_failure_context() {
     assert!(worktree.is_dir(), "attempt 1 created the shared worktree");
     let mut failed = records.pop().expect("first run");
     assert_eq!(failed.agent_name.as_deref(), Some("fixed-name"));
+    store
+        .switch_room_login(
+            &env.resolve_workspace(&env.project_root),
+            &rimz::ids::AgentKind::new_unchecked("codex"),
+            &"personal".parse().unwrap(),
+        )
+        .unwrap();
     failed.status = RunStatus::Failed;
     failed.failure_tail = Some("compiler exploded\nlast diagnostic".to_owned());
     failed.transcript_path = Some("/tmp/attempt-one.jsonl".to_owned());
@@ -2244,6 +2316,16 @@ fn failed_supervised_run_retries_with_failure_context() {
         .iter()
         .find(|record| record.retry_of.as_ref() == Some(&failed.run_id))
         .expect("retry run");
+    assert!(
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .filter(|agent| agent.kind.as_str() == "codex")
+            .all(|agent| agent.login.is_none()),
+        "retry must keep its preflighted default account"
+    );
     assert!(
         retry
             .agent_name
