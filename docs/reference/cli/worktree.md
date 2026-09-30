@@ -24,7 +24,7 @@ A name is one or more segments of ASCII letters, digits, `_`, or `-`, separated 
 | `feat/login` | `feat-login` | `feat/login` |
 | `feat-a --branch spike/a` | `feat-a` | `spike/a` |
 | nothing | a generated adjective-noun pair, such as `swift-harbor` | the same |
-| nothing, with `--from-pr 42` | `pr-42` | [from the pull request](#check-out-a-pull-request) |
+| nothing, with `--from-pr 42` | The existing marked tree holding the same-repository head branch, otherwise `pr-42` | [from the pull request](#check-out-a-pull-request) |
 
 Trees live under the `[agents.worktree] dir` template, `../{repo}-worktrees` by default, where `{repo}` is the repository's directory name and a relative path resolves from the repository root ([configuration](../../guide/configuration.md#worktrees)). `cd`, `merge`, and `remove` take the same name and resolve it the same way, so `feat/login` and `feat-login` both reach the `feat-login` tree.
 
@@ -71,7 +71,7 @@ rimz worktree new --from-pr 42
 rimz worktree new review-42 --from-pr https://github.com/acme/query-engine/pull/42
 ```
 
-`--from-pr` takes a pull request number or URL and creates the tree at that pull request's head. A URL must name the same host and repository as `origin`. Review-only and fork checkouts fetch the PR ref from `origin` (`refs/pull/<N>/head` on GitHub, Gitea, and Forgejo, `refs/merge-requests/<N>/head` on GitLab); a same-repository checkout fetches the head branch itself. `--from-pr` cannot be combined with `--base`.
+`--from-pr` takes a pull request number or URL and creates or reuses a tree for that pull request. A URL must name the same host and repository as `origin`. Review-only and fork checkouts require a fresh tree and fetch the PR ref from `origin` (`refs/pull/<N>/head` on GitHub, Gitea, and Forgejo, `refs/merge-requests/<N>/head` on GitLab); a same-repository checkout fetches the head branch itself. `--from-pr` cannot be combined with `--base`.
 
 What the branch tracks depends on whether RimZ can ask the forge who owns the head. It asks through `gh` when `origin` is on `github.com`, and through `tea` when the `origin` host name contains `gitea`, `forgejo`, or `codeberg`.
 
@@ -84,12 +84,17 @@ What the branch tracks depends on whether RimZ can ask the forge who owns the he
 
 When a fork checkout's local branch name differs from the PR's head branch, the report adds a `push :` line with the exact command to push back, such as `git push <fork-url> HEAD:<branch>`.
 
-A same-repository checkout reuses an existing local branch of that name when the branch is at or behind the PR head, fast-forwarding it first.
+A same-repository checkout reuses the marked worktree holding the PR's head branch, including a tree created with `-w` and no recorded PR number. Otherwise it adopts an existing local branch into a fresh tree, or creates a tracking branch when none exists. A marker recording another PR number refuses. An explicit name must match the tree holding the branch; omit the name to find that tree automatically. Reuse records the PR number when missing, preserves the tree's creation time, and prints `reused NAME` with only the path and branch lines. It does not seed the tree, rerun its created hook, or archive channel messages.
+
+When the local tip differs, RimZ warns on stderr with the commit counts, the worktree path when present, and a reminder that the previous tip stays in the reflog. In a terminal it asks `Continue from the PR head (remote) or the local tip (local)?`. The default is `remote` when the branch is behind or its local-only commits are patch-equivalent to commits in the PR head; otherwise the default is `local`, even when the two tips merge cleanly. EOF aborts. Choosing `remote` moves the branch to the PR head, using `git reset --keep` in an existing tree so changes that would be overwritten refuse with a commit-or-stash hint. Choosing `local` keeps the tip. Both choices set the upstream to `origin/<branch>`.
+
+Without terminal stdin, only a behind branch advances automatically, with a `fast-forwarding` warning. Rebased or locally changed tips refuse with commands to take the PR head or push the local tip, then rerun; rerunning in a terminal offers the choice instead.
 
 | Refusal | When |
 | --- | --- |
 | ``could not resolve the head branch of PR #N (REASON); install/log in to gh or tea, or pass --branch <name> for a review-only checkout`` | `gh` or `tea` is installed but fails or prints output RimZ cannot read, most often because it is not logged in. There is no automatic review-only fallback in this case. |
-| ``local PR branch `BRANCH` conflicts with the remote head (DETAIL); resolve the local branch or pass --branch <name> for a review-only checkout`` | The local branch is checked out elsewhere, is ahead of the PR head, or has diverged from it. For a fork, both the bare and the owner-prefixed name are taken. |
+| ``local PR branch `BRANCH` conflicts with the remote head (DETAIL); resolve the local branch or pass --branch <name> for a review-only checkout`` | The branch is held by the main checkout or an unmanaged checkout, or the explicit name differs from its marked tree's name. For a fork, both the bare and the owner-prefixed name are taken. |
+| ``local PR branch `BRANCH` differs from the PR head: DIVERGENCE; ...`` | Without terminal stdin, a rebased tip or local-only patches require a decision. The message gives `git -C PATH reset --keep origin/BRANCH` for a held branch or `git branch -f BRANCH origin/BRANCH` otherwise, plus `git push origin BRANCH` as the local-tip alternative. A merely behind branch fast-forwards with a warning. |
 | ``PR URL targets `REPO` but origin is `ORIGIN` `` | The URL names another repository. |
 | ``could not fetch PR #N from REMOTE: ...`` | The fetch failed or ran past 120 seconds. Git never prompts for credentials here. |
 
