@@ -19,7 +19,9 @@
 
 mod account;
 mod ask;
+mod folder_trust;
 mod install;
+mod json_edit;
 mod local_context;
 mod local_sessions;
 mod managed_pricing;
@@ -1058,6 +1060,15 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::InstallationCapability for ClaudeAdapter {
+    fn folder_trust(
+        &self,
+        cwd: &Path,
+        repo_root: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<crate::agents::FolderTrust> {
+        Some(folder_trust::folder_trust(cwd, repo_root, login_env))
+    }
+
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&MANAGED_SOURCE)
     }

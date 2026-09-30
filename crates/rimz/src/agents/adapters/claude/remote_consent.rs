@@ -145,19 +145,10 @@ pub(crate) fn seed(path: &Path) -> Result<ConsentState, AtomicErr> {
 /// serde round trip would rewrite the whole file. The result is accepted only
 /// when it parses back to the same object plus this one key.
 fn insert_consent(text: &str) -> Option<String> {
-    let before = root_len(text)?;
-    let open = text.find('{')?;
-    let (head, tail) = text.split_at(open + 1);
-    let entry = if tail.trim_start().starts_with('}') {
-        format!("\n  \"{CONSENT_KEY}\": true\n")
-    } else {
-        format!("\n  \"{CONSENT_KEY}\": true,")
-    };
-    let next = format!("{head}{entry}{tail}");
-    (root_len(&next) == Some(before + 1) && consent_state_from(&next) == ConsentState::Seeded)
-        .then_some(next)
+    super::json_edit::set_true(text, &[CONSENT_KEY])
 }
 
+#[cfg(test)]
 fn root_len(text: &str) -> Option<usize> {
     match serde_json::from_str::<Value>(text).ok()? {
         Value::Object(root) => Some(root.len()),

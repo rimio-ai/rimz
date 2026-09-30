@@ -835,18 +835,29 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
-    fn launch_dir_trust_gap(
+    fn headless_requires_folder_trust(&self) -> bool {
+        true
+    }
+
+    fn folder_trust(
         &self,
         cwd: &Path,
         repo_root: Option<&Path>,
         login_env: &BTreeMap<String, String>,
-    ) -> Option<String> {
-        match install::codex_config_path(login_env) {
+    ) -> Option<crate::agents::FolderTrust> {
+        Some(match install::codex_config_path(login_env) {
             Ok(config) => project_trust::trust_gap_at(&config, cwd, repo_root),
-            Err(err) => Some(format!(
-                "set CODEX_HOME to the Codex config directory: {err}"
-            )),
-        }
+            Err(err) => crate::agents::FolderTrust::Undecided(crate::agents::FolderTrustGap {
+                path: PathBuf::new(),
+                key: repo_root
+                    .unwrap_or(cwd)
+                    .canonicalize()
+                    .unwrap_or_else(|_| repo_root.unwrap_or(cwd).to_path_buf()),
+                grant: Err(format!(
+                    "set CODEX_HOME to the Codex config directory: {err}"
+                )),
+            }),
+        })
     }
 
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {

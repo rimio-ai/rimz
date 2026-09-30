@@ -18,6 +18,7 @@ pub mod credits;
 pub mod definition;
 pub(crate) mod delegated_account;
 mod emblems;
+mod folder_trust;
 pub(crate) mod hook_types;
 pub(crate) mod identity;
 pub(crate) mod jsonc;
@@ -90,6 +91,10 @@ use definition::{
     StaticPresetMatcher,
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
+pub use folder_trust::{
+    FolderTrust, FolderTrustErr, FolderTrustGap, FolderTrustPreview, FolderTrustRow,
+    folder_trust_rows, grant_folder_trust,
+};
 pub use hook_types::{HookOutput, HookReply, HookRouting};
 use identity::{RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity};
 pub(crate) use lifecycle::step;
@@ -1064,11 +1069,14 @@ pub fn preflight_launch_dir(
     repo_root: Option<&Path>,
     login_env: &BTreeMap<String, String>,
 ) -> std::result::Result<(), LaunchDirUntrusted> {
-    if let Some(fix) = adapter.launch_dir_trust_gap(cwd, repo_root, login_env) {
+    if !adapter.headless_requires_folder_trust() {
+        return Ok(());
+    }
+    if let Some(FolderTrust::Undecided(gap)) = adapter.folder_trust(cwd, repo_root, login_env) {
         return Err(LaunchDirUntrusted {
             kind: adapter.spec().kind,
             dir: cwd.to_path_buf(),
-            fix,
+            fix: gap.fix(adapter.spec().kind),
         });
     }
     Ok(())

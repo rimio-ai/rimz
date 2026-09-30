@@ -2,7 +2,7 @@
 
 > Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [claude-reference.md](../../externals/agent-adapter/claude-reference.md).
 
-This page maps Claude Code onto RimZ's internal types: which hook carries which signal, how a Claude session launches, how Task-tool children become rows, where context, account, and spend figures come from, and how RimZ hosts `claude remote-control`. The code lives in [`agents/adapters/claude/`](../../../crates/rimz/src/agents/adapters/claude/mod.rs), and `ClaudeAdapter` in `mod.rs` implements every capability trait.
+This page maps Claude Code onto RimZ's internal types: which hook carries which signal, how a Claude session launches and folder trust is recorded, how Task-tool children become rows, where context, account, and spend figures come from, and how RimZ hosts `claude remote-control`. The code lives in [`agents/adapters/claude/`](../../../crates/rimz/src/agents/adapters/claude/mod.rs), and `ClaudeAdapter` in `mod.rs` implements every capability trait.
 
 | Module | Owns |
 | --- | --- |
@@ -17,6 +17,15 @@ This page maps Claude Code onto RimZ's internal types: which hook carries which 
 | `account.rs`, `oauth_usage.rs` | `claude auth status`, window normalization, the OAuth usage probe, and the account key |
 | `spend.rs`, `managed_pricing.rs` | the full-history spend parser and the managed-settings price overlay |
 | `remote_control.rs`, `remote_consent.rs`, `remote_liveness.rs` | remote-control readiness, consent, and host liveness |
+| `folder_trust.rs`, `json_edit.rs` | folder-trust decisions, grant previews, and byte-preserving JSON leaf edits |
+
+## Folder trust
+
+[`folder_trust`](../../../crates/rimz/src/agents/adapters/claude/folder_trust.rs) models the [upstream folder-trust decision](../../externals/agent-adapter/claude-reference.md#folder-trust). It resolves `.claude.json` through the same login-aware path as remote-control consent. A main repository root, when supplied, is the trust key for a linked worktree; outside Git, the cwd and its ancestors are checked. Both canonical and as-written paths match. Only `hasTrustDialogAccepted: true` decides; `false` remains an offer to grant.
+
+The grant key is the canonical main root or cwd. Claude never persists a home-directory grant, so that key returns a gap without a writable preview. Missing homes and unreadable, malformed, or non-object JSON also produce actionable gaps rather than silently appearing decided.
+
+The preview sets `projects.<key>.hasTrustDialogAccepted` using a borrowed JSON parser to locate the edited value, preserving all unrelated bytes and key order. It is accepted only after parsing back to the original value with exactly that leaf changed. The same helper inserts remote-control consent. The neutral [`grant_folder_trust`](../../../crates/rimz/src/agents/folder_trust.rs) writer rejects bytes changed since preview and publishes through the durable atomic writer; consent belongs to its caller. A provider write between that freshness check and replacement is not serialized by this API.
 
 ## Hooks and lifecycle
 
