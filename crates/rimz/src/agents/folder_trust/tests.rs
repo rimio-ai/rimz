@@ -227,7 +227,9 @@ fn rows_require_detection_and_a_model_and_use_the_room_login() {
             );
         }
         let logins = RoomLoginSet::new(Some(selection.clone()), Some(catalog.clone()), env);
-        let rows = rows_with_locator(&logins, dir.path(), None, |_| Some("/detected".into()));
+        let rows = rows_with_locator(&logins, dir.path(), dir.path(), |_| {
+            Some("/detected".into())
+        });
         assert_eq!(rows.len(), 2);
         for row in rows {
             assert_eq!(row.login.as_str(), "work");
@@ -243,8 +245,8 @@ fn rows_require_detection_and_a_model_and_use_the_room_login() {
             };
             assert_eq!(gap.path, expected);
         }
-        assert!(rows_with_locator(&logins, dir.path(), None, |_| None).is_empty());
-        let rows = rows_with_locator(&logins, dir.path(), None, |spec| {
+        assert!(rows_with_locator(&logins, dir.path(), dir.path(), |_| None).is_empty());
+        let rows = rows_with_locator(&logins, dir.path(), dir.path(), |spec| {
             (spec.kind == "codex").then(|| "/detected".into())
         });
         assert_eq!(rows.len(), 1);

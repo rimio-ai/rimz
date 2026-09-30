@@ -15,7 +15,7 @@ pub(super) fn collect(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<FolderT
     Ok(rimz::agents::folder_trust_rows(
         &logins,
         &workspace.worktree_root,
-        Some(workspace.launch_repo_root()),
+        workspace.launch_repo_root(),
     ))
 }
 
