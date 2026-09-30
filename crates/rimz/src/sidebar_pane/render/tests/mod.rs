@@ -58,7 +58,7 @@ fn fixed_now() -> Timestamp {
 struct Dashboard<'a> {
     theme: &'a Theme,
     providers: &'a [SidebarProviderPanel],
-    active: Option<&'a str>,
+    active: Option<crate::ids::LoginKey>,
     mode: DashboardMode,
     fleet: Option<&'a crate::SpendTally>,
     pet: Option<&'a crate::sidebar_pane::pets::PetView>,
@@ -91,7 +91,9 @@ impl<'a> Dashboard<'a> {
     }
 
     fn active(mut self, kind: &'a str) -> Self {
-        self.active = Some(kind);
+        self.active = Some(crate::ids::LoginKey::default_for(
+            crate::ids::AgentKind::new_unchecked(kind),
+        ));
         self
     }
 
@@ -114,7 +116,7 @@ impl<'a> Dashboard<'a> {
         dashboard_block(DashboardContext {
             theme: self.theme,
             providers: self.providers,
-            active_provider: self.active,
+            active_provider: self.active.as_ref(),
             mode: self.mode,
             fleet_tally: self.fleet,
             pet: self.pet,
@@ -144,7 +146,7 @@ impl<'a> Dashboard<'a> {
 
 fn provider_tab_kind(hit: &HitRegion) -> &str {
     match &hit.target {
-        HitTarget::ProviderTab(kind) => kind,
+        HitTarget::ProviderTab(key) => key.kind.as_str(),
         target => panic!("expected provider-tab hit, got {target:?}"),
     }
 }
@@ -658,6 +660,7 @@ fn provider_panel(
         ..Default::default()
     };
     SidebarProviderPanel {
+        account: Default::default(),
         kind: kind.to_owned(),
         account_scope: Default::default(),
         account_key: None,

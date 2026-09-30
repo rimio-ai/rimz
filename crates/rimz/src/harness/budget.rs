@@ -1355,11 +1355,13 @@ pub(crate) fn project_budget_views(
                 parked: fleet.parked.is_some() && spend_usd >= cap_usd,
             }
         });
+    let in_use = logins.keys_in_use();
     for panel in &mut snapshot.providers {
         panel.day_budget = None;
-        let Some(key) = logins.default_key(&panel.kind) else {
+        let key = panel.login_key();
+        if !in_use.contains(&key) {
             continue;
-        };
+        }
         let scope = DailyBudgetScope::Account(key.clone());
         let ledger = scope.read_ledger(runtime, state);
         panel.day_budget = scope.effective_cap_usd(&ledger, config).map(|cap_usd| {

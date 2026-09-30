@@ -894,13 +894,12 @@ fn fold_machine_config(
         snapshot,
         config,
         accounts,
-        &spending.provider.spending.by_provider,
+        &spending.provider.spending.by_login,
         remote_control_health,
         logins,
     );
     // Every fold merges the producer-published account windows read-only. The
     // refresh lane owns writes.
-    label_provider_logins(&mut snapshot.providers, logins);
     apply_cached_rate_limits(&mut snapshot, runtime, logins);
     apply_credits_cache(&mut snapshot, runtime, &accounts_config, logins);
     (snapshot, spending)
@@ -912,7 +911,7 @@ pub fn provider_panels_from_caches(
     runtime: &RuntimePaths,
     logins: &crate::agents::RoomLoginSet,
     config: &crate::config::MachineConfig,
-    accounts: BTreeMap<String, crate::agents::AgentAccount>,
+    accounts: BTreeMap<crate::ids::LoginKey, crate::agents::AgentAccount>,
     provider_spending: &crate::agents::spending::ProviderSpendingCache,
 ) -> Vec<SidebarProviderPanel> {
     let now = Timestamp::now();
@@ -927,11 +926,10 @@ pub fn provider_panels_from_caches(
         snapshot,
         &config,
         accounts,
-        &provider_spending.spending.by_provider,
+        &provider_spending.spending.by_login,
         RemoteControlServerHealth::default(),
         logins,
     );
-    label_provider_logins(&mut snapshot.providers, logins);
     apply_cached_rate_limits(&mut snapshot, runtime, logins);
     apply_credits_cache(&mut snapshot, runtime, &config.accounts, logins);
     crate::harness::budget::project_budget_views(
@@ -951,28 +949,14 @@ pub fn provider_panels_from_caches(
     snapshot.providers
 }
 
-fn label_provider_logins(
-    panels: &mut [SidebarProviderPanel],
-    logins: &crate::agents::RoomLoginSet,
-) {
-    for panel in panels {
-        if let Some(key) = logins
-            .default_key(&panel.kind)
-            .filter(|key| !key.name.is_default())
-        {
-            panel.product_name.push_str(&format!(" · {}", key.name));
-        }
-    }
-}
-
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
 /// the per-provider `⇅ rc` flags, the dashboard aggregates, and each agent
 /// row's context-severity verdict.
 pub(super) fn fold_machine_config_with(
     mut snapshot: SidebarSnapshot,
     config: &crate::config::MachineConfig,
-    accounts: BTreeMap<String, crate::agents::AgentAccount>,
-    provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
+    accounts: BTreeMap<crate::ids::LoginKey, crate::agents::AgentAccount>,
+    provider_spending: &BTreeMap<crate::ids::LoginKey, crate::agents::SpendTally>,
     remote_control_health: RemoteControlServerHealth,
     logins: &crate::agents::RoomLoginSet,
 ) -> SidebarSnapshot {
@@ -995,7 +979,7 @@ pub(super) fn fold_machine_config_with(
         let pane_auto = definition.capabilities.remote_control.pane_sessions
             && logins.default_login(definition.kind).is_some_and(|login| {
                 adapter
-                    .remote_control_status(accounts.get(definition.kind), &logins.env(&login))
+                    .remote_control_status(accounts.get(&login.key()), &logins.env(&login))
                     .pane_auto
             });
         remote_control_flags.insert(
@@ -1008,7 +992,12 @@ pub(super) fn fold_machine_config_with(
         );
     }
 
-    snapshot.with_provider_aggregates(&accounts, &remote_control_flags, provider_spending)
+    snapshot.with_provider_aggregates(
+        &accounts,
+        &remote_control_flags,
+        provider_spending,
+        &logins.keys_in_use(),
+    )
 }
 
 /// Derive the rc badge from enablement and the managed-server probe. An absent

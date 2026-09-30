@@ -384,7 +384,7 @@ fn live_context_versions_merge_without_writing_cache() {
         },
     );
     let cache = read_accounts_cache(&path);
-    let versions = BTreeMap::from([("codex".to_owned(), "0.135.0".to_owned())]);
+    let versions = BTreeMap::from([(key("codex"), "0.135.0".to_owned())]);
 
     let merged = accounts_with_context_versions(&cache, &versions, &RoomLoginSet::native());
     let persisted = read_accounts_cache(&path);
@@ -392,7 +392,7 @@ fn live_context_versions_merge_without_writing_cache() {
     assert_eq!(persisted.logins[&key("codex")].probed_at_ms, 42);
     assert_eq!(
         merged
-            .get("codex")
+            .get(&key("codex"))
             .and_then(|account| account.version.as_deref()),
         Some("0.135.0")
     );
@@ -457,11 +457,15 @@ fn account_merges_and_projection_are_login_scoped() {
     );
     write_accounts_cache(&runtime.shared_accounts_path(), &cache);
     assert_eq!(
-        cached_accounts_for_snapshot(&runtime, &empty_snapshot(), &work)["claude"]
+        cached_accounts_for_snapshot(&runtime, &empty_snapshot(), &work)[&work_key]
             .plan
             .as_deref(),
         Some("work")
     );
+    let mixed = work.with_agents(&[root_agent("claude", "native", None)]);
+    let projected = cached_accounts_for_snapshot(&runtime, &empty_snapshot(), &mixed);
+    assert_eq!(projected[&key("claude")].plan.as_deref(), Some("updated"));
+    assert_eq!(projected[&work_key].plan.as_deref(), Some("work"));
 }
 
 #[test]

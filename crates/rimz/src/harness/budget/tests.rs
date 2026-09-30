@@ -1124,6 +1124,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
+        None,
     );
     assert!(
         availability.unavailable("claude", "opus").is_none(),
@@ -1170,6 +1171,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
+        None,
     );
     assert!(matches!(
         availability.unavailable("claude", "opus"),
@@ -1208,6 +1210,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
+        None,
     );
     assert!(matches!(
         scoped.unavailable("claude", "opus"),
@@ -1234,6 +1237,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
+        None,
     );
     assert!(unknown.unavailable("codex", "gpt-6-astra").is_none());
     accounts.logins.get_mut(&key).unwrap().ok = true;
@@ -1248,6 +1252,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
+        None,
     );
     assert_eq!(
         logged_out.unavailable("codex", "gpt-6-astra"),
@@ -1310,7 +1315,12 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
     let default_key = LoginKey::default_for(default.kind.clone());
     let work_key = LoginKey::new(work.kind.clone(), work.login.clone().expect("login"));
     let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![default, work], now)
-        .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+        .with_provider_aggregates(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Default::default(),
+        );
     let mut provider = ProviderSpendingCache {
         day_cutoff_secs: cutoff,
         day_by_provider: BTreeMap::from([(
@@ -1409,7 +1419,8 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
         )])),
         Some(crate::agents::LoginCatalog::from_config(&config.accounts).expect("catalog")),
         BTreeMap::new(),
-    );
+    )
+    .with_agents(&snapshot.agents);
     project_budget_views(
         &mut snapshot,
         &runtime,
@@ -1421,11 +1432,21 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
     let panel = snapshot
         .providers
         .iter()
-        .find(|panel| panel.kind == "claude")
+        .find(|panel| panel.login_key() == work_key)
         .expect("panel");
     let budget = panel.day_budget.as_ref().expect("budget");
     assert_eq!(budget.spend_usd, 12.0);
     assert!(budget.parked);
+    let native = snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.account.is_default())
+        .unwrap()
+        .day_budget
+        .as_ref()
+        .unwrap();
+    assert_eq!(native.spend_usd, 2.0);
+    assert!(!native.parked);
     provider.day_by_login.clear();
     write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
     assert!(

@@ -75,16 +75,24 @@ pub(super) fn refresh_codex_daemon_reap_cache(
     {
         return;
     }
-    let Some(login) = logins.default_login("codex") else {
+    let selected = logins.in_use("codex");
+    if selected.is_empty() {
         return;
-    };
-    let login_env = logins.env(&login);
-    let evidence = crate::agents::session::daemon_session_evidence("codex", &login_env);
-    let inputs = CodexDaemonReap {
+    }
+    let mut inputs = CodexDaemonReap {
         produced_at_ms: now_ms,
-        daemon_pids: evidence.pids,
-        loaded: evidence.loaded_session_ids,
+        daemon_pids: BTreeSet::new(),
+        loaded: Some(BTreeSet::new()),
     };
+    for login in selected {
+        let evidence =
+            crate::agents::session::daemon_session_evidence("codex", &logins.env(&login));
+        inputs.daemon_pids.extend(evidence.pids);
+        match (&mut inputs.loaded, evidence.loaded_session_ids) {
+            (Some(all), Some(loaded)) => all.extend(loaded),
+            _ => inputs.loaded = None,
+        }
+    }
     if let Err(err) = write_codex_daemon_reap(runtime, &inputs) {
         tracing::debug!(
             error = %err,

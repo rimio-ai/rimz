@@ -56,13 +56,7 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
             },
         )
         .unwrap();
-        let availability = LaunchAvailability::read(
-            &runtime,
-            &state,
-            &config,
-            now,
-            &crate::store::writer::LaunchLogin::RoomDefault,
-        );
+        let availability = LaunchAvailability::read(&runtime, &state, &config, now, None);
         assert_eq!(
             availability.unavailable(kind, alias),
             Some(TierSkipReason::Exhausted { until: Some(reset) }),
@@ -83,7 +77,14 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
             &state,
             &config,
             now,
-            &crate::store::writer::LaunchLogin::Pinned("work".parse().unwrap()),
+            Some(&LaunchAncestry::Peer {
+                parent_login: crate::ids::LoginKey::new(
+                    AgentKind::new_unchecked(kind),
+                    "work".parse().unwrap(),
+                ),
+                launch_generation: 1,
+                launched_by: None,
+            }),
         );
         assert!(
             pinned.unavailable(kind, alias).is_none(),

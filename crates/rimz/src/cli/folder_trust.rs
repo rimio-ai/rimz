@@ -11,7 +11,13 @@ use super::render;
 pub(super) fn collect(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<FolderTrustRow>> {
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let machine = rimz::config::MachineConfig::load()?;
-    let logins = RoomLoginSet::resolve(&paths.workspace_record, &machine.accounts);
+    let agents = super::open_existing_store(workspace)?
+        .map(|store| store.snapshot_cached())
+        .transpose()?
+        .map(|snapshot| snapshot.agents)
+        .unwrap_or_default();
+    let logins =
+        RoomLoginSet::resolve(&paths.workspace_record, &machine.accounts).with_agents(&agents);
     Ok(rimz::agents::folder_trust_rows(
         &logins,
         &workspace.worktree_root,

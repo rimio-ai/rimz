@@ -416,7 +416,7 @@ fn dashboard_chrome(
     let mut panel = dashboard_block(DashboardContext {
         theme,
         providers: &snapshot.providers,
-        active_provider: active_tab.as_deref(),
+        active_provider: active_tab.as_ref(),
         mode,
         fleet_tally: snapshot.value_tally.as_ref(),
         pet: ui.pet.as_ref(),

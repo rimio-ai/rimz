@@ -13,14 +13,19 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         sub_provider: Some("openai".to_owned()),
         credentials_updated_at_ms: None,
     };
-    let mut probed: BTreeMap<String, AgentAccount> = BTreeMap::new();
-    probed.insert("pi".to_owned(), account);
+    let mut probed: BTreeMap<crate::ids::LoginKey, AgentAccount> = BTreeMap::new();
+    probed.insert(provider_key("pi"), account);
 
     let snapshot = room(vec![
         agent("codex", "x1", AgentStatus::Idle, 10).limits(vec![codex_reading]),
         agent("pi", "p1", AgentStatus::Idle, 20).limits(vec![pi_reading.clone()]),
     ])
-    .with_provider_aggregates(&probed, &BTreeMap::new(), &BTreeMap::new());
+    .with_provider_aggregates(
+        &probed,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
     let pi_panel = snapshot
         .providers
         .iter()
@@ -34,7 +39,12 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         agent("codex", "x1", AgentStatus::Idle, 10).limits(vec![window(40, 3_600)]),
         agent("pi", "p1", AgentStatus::Idle, 20),
     ])
-    .with_provider_aggregates(&probed, &BTreeMap::new(), &BTreeMap::new());
+    .with_provider_aggregates(
+        &probed,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &Default::default(),
+    );
     let pi_panel = snapshot
         .providers
         .iter()

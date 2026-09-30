@@ -554,11 +554,13 @@ fn apply_credits_cache_with(
     logins: &RoomLoginSet,
     now_ms: u64,
 ) {
+    let in_use = logins.keys_in_use();
     for panel in &mut snapshot.providers {
         let ceiling = accounts.usage_limit(&panel.kind);
         if panel.metered {
-            let displayable_entry = logins
-                .default_key(&panel.kind)
+            let displayable_entry = in_use
+                .contains(&panel.login_key())
+                .then(|| panel.login_key())
                 .and_then(|key| cache.logins.get(&key))
                 .filter(|entry| entry.scope == panel.account_scope)
                 .filter(|entry| entry_is_displayable(entry, now_ms));

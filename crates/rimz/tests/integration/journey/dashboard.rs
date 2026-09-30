@@ -12,6 +12,58 @@ use super::{RoomHarness, SETTLE, session_start_at, user_prompt_submit};
 use crate::common::Env;
 
 #[test]
+fn dashboard_renders_both_logins_after_a_room_switch() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[accounts.claude.work]\nhome = '/srv/journey-work'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        env.rimz_home().join("theme.toml"),
+        "[theme.display]\nprovider_tabs = 'never'\nprovider_list = ['claude']\n",
+    )
+    .unwrap();
+    let store = env.store();
+    let mut cached = accounts();
+    let native: rimz::ids::LoginKey = "claude@default".parse().unwrap();
+    let work: rimz::ids::LoginKey = "claude@work".parse().unwrap();
+    cached
+        .logins
+        .insert(work.clone(), cached.logins[&native].clone());
+    for record in cached.logins.values_mut() {
+        record.probed_at_ms = unix_now_ms().saturating_add(SETTLE.as_millis() as u64);
+    }
+    env.publish_accounts(&cached);
+    let room = RoomHarness::launch_wide(&env, MuxName::Tmux);
+    room.onboard(&["claude"]);
+    room.agent_hook(
+        "claude",
+        &session_start_at(
+            "native-dashboard",
+            "Opus 4.8",
+            "high",
+            env.project_root.display().to_string(),
+            Some("main"),
+        ),
+    );
+    let workspace = env.resolve_workspace(&env.project_root);
+    store
+        .switch_room_login(&workspace, &work.kind, &work.name)
+        .unwrap();
+    let screen = room.wait_for(
+        |screen| screen.contains("Claude · work") && screen.contains("Claude v2.1.158"),
+        SETTLE,
+    );
+    assert!(screen.contains("Claude · work"), "{screen}");
+    assert!(screen.contains("Claude v2.1.158"), "{screen}");
+}
+
+#[test]
 fn provider_dashboard_renders_published_spend_and_session_cost() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
@@ -149,6 +201,16 @@ fn accounts() -> AccountsCache {
 
 fn spending() -> Spending {
     Spending {
+        by_login: BTreeMap::from([
+            (
+                "claude@default".parse().unwrap(),
+                spend_tally(3.50, 0.0, 0.0, 12),
+            ),
+            (
+                "codex@default".parse().unwrap(),
+                spend_tally(1.20, 0.0, 0.0, 3),
+            ),
+        ]),
         total: spend_tally(4.70, 1.20, 1.20, 15),
         by_provider: BTreeMap::from([
             ("claude".to_owned(), spend_tally(3.50, 0.0, 0.0, 12)),

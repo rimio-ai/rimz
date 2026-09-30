@@ -57,7 +57,11 @@ fn refresh_account_usage_with(
         }
         let started = Instant::now();
         let kind = panel.kind.as_str();
-        let Some(login) = logins.default_login(kind) else {
+        let Some(login) = logins
+            .in_use(kind)
+            .into_iter()
+            .find(|login| login.key() == panel.login_key())
+        else {
             trace_claim(runtime, kind, "login_unresolved", started.elapsed());
             continue;
         };

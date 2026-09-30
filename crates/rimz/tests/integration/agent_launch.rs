@@ -3483,3 +3483,88 @@ fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
         );
     }
 }
+#[test]
+fn inherited_account_tier_routing_ignores_exhausted_room_default() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n[tiers]\nsenior = ['opus', 'astra']\n[accounts.claude.work]\nhome = '/srv/work'\n").unwrap();
+    for kind in ["claude", "codex"] {
+        crate::common::write_definition(&env, "agents", kind, "description: Base", "Base.");
+    }
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\ntier: senior\ntools: [Bash]",
+        "",
+    );
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store
+        .begin_agent_launch_batch(
+            &[rimz::store::writer::AgentLaunchRequest {
+                kind: rimz::ids::AgentKind::new_unchecked("claude"),
+                login: rimz::store::writer::LaunchLogin::Pinned("work".parse().unwrap()),
+                agent_id: "caller".into(),
+                name: rimz::store::writer::AgentLaunchName::Explicit("caller".into()),
+                launch: Default::default(),
+                run_id: None,
+                prompt: None,
+            }],
+            rimz::store::writer::AgentLaunchScope {
+                session_name: workspace.session_name,
+                cwd: env.project_root.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    let runtime = env.runtime_paths();
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_rate_limits_path(),
+        &rimz::agents::account::RateLimitsCache {
+            entries: [(
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
+                rimz::agents::account::RateLimitCacheEntry {
+                    limits: rimz::agents::AgentRateLimits {
+                        windows: vec![rimz::agents::RateLimitWindow {
+                            used_percentage: Some(100),
+                            duration_mins: Some(300),
+                            resets_at: Some(
+                                jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+                            ),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let output = env
+        .rimz()
+        .args(["agents", "explain", "worker", "--json"])
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "caller")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["kind"], "claude",
+        "inherited work account is available"
+    );
+    assert!(
+        report["tier_skipped"].as_array().is_none_or(Vec::is_empty),
+        "{report}"
+    );
+}

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 
 use crate::agents::account::{ProviderCapacity, ProviderStatus, read_accounts_cache};
-use crate::agents::{PermissionMode, RoomLoginSet, TierSkipReason};
+use crate::agents::{PermissionMode, TierSkipReason};
 use crate::config::RoleBinding;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::harness::ancestry::LaunchAncestry;
@@ -35,15 +35,36 @@ impl LaunchAvailability {
         state: &StatePaths,
         config: &crate::config::MachineConfig,
         now: jiff::Timestamp,
+        ancestry: Option<&LaunchAncestry>,
     ) -> Self {
-        let logins = RoomLoginSet::resolve(&state.workspace_record, &config.accounts);
+        let defaults = crate::agents::room_logins(&state.workspace_record).ok();
+        let logins: BTreeMap<_, _> = crate::agents::known_kinds()
+            .filter_map(|kind| {
+                let kind = AgentKind::new_unchecked(kind);
+                let login = crate::store::writer::LaunchLogin::from_ancestry(ancestry, &kind)
+                    .resolve(&kind, defaults.as_ref()?, &config.accounts)
+                    .ok()?;
+                Some((kind, login.key()))
+            })
+            .collect();
         let accounts = read_accounts_cache(&runtime.shared_accounts_path());
         let provider = crate::agents::spending::read_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
         );
+        let selected = crate::agents::RoomLoginSet::new(
+            Some(
+                logins
+                    .values()
+                    .map(|key| (key.kind.clone(), key.name.clone()))
+                    .collect(),
+            ),
+            crate::agents::LoginCatalog::from_config(&config.accounts).ok(),
+            crate::agents::ambient_env(),
+        );
         let mut result = Self {
-            capacities: ProviderCapacity::read_all(runtime, &logins)
+            capacities: ProviderCapacity::read_all(runtime, &selected)
                 .into_iter()
+                .filter(|(key, _)| logins.get(&key.kind) == Some(key))
                 .map(|(key, capacity)| (key.kind, capacity))
                 .collect(),
             logged_out: Default::default(),
@@ -57,10 +78,10 @@ impl LaunchAvailability {
             .map(|(_, kind, _)| kind)
             .collect();
         for kind in families {
-            let Some(login) = logins.default_key(kind) else {
+            let Some(login) = logins.get(kind) else {
                 continue;
             };
-            if ProviderStatus::from_record(accounts.logins.get(&login)) == ProviderStatus::LoggedOut
+            if ProviderStatus::from_record(accounts.logins.get(login)) == ProviderStatus::LoggedOut
             {
                 result.logged_out.insert(login.kind.clone());
             }
@@ -71,9 +92,10 @@ impl LaunchAvailability {
                     serde_json::Number::from_f64(cap),
                 )
             {
-                result
-                    .daily_caps
-                    .insert(login.kind, TierSkipReason::DailyCap { spend_usd, cap_usd });
+                result.daily_caps.insert(
+                    login.kind.clone(),
+                    TierSkipReason::DailyCap { spend_usd, cap_usd },
+                );
             }
         }
         result
@@ -344,8 +366,13 @@ pub fn resolve_single_agent_launch(
     let mut launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
     let state = StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = RuntimePaths::for_state(&state)?;
-    let availability =
-        LaunchAvailability::read(&runtime, &state, &machine_config, jiff::Timestamp::now());
+    let availability = LaunchAvailability::read(
+        &runtime,
+        &state,
+        &machine_config,
+        jiff::Timestamp::now(),
+        None,
+    );
     launch.route(
         &machine_config.tiers,
         crate::config::effective::ProfileScope::Agents,

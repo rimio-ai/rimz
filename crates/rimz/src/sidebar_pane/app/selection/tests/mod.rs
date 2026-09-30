@@ -149,6 +149,7 @@ fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
 /// A minimal provider panel — only `kind` matters to the tab model.
 fn provider(kind: &str) -> crate::store::snapshot::SidebarProviderPanel {
     crate::store::snapshot::SidebarProviderPanel {
+        account: Default::default(),
         kind: kind.to_owned(),
         account_scope: Default::default(),
         account_key: None,

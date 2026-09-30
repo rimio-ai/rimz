@@ -116,6 +116,7 @@ fn spend_window(usd: f64) -> SpendWindow {
 
 fn provider_panel(index: usize) -> SidebarProviderPanel {
     SidebarProviderPanel {
+        account: Default::default(),
         kind: format!("provider{index}"),
         account_scope: Default::default(),
         account_key: None,

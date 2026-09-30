@@ -539,7 +539,8 @@ path = "crates/rimz/src/store"
 # SidebarSnapshot::apply_machine_config stamps the per-machine config for the fold spine and the room-less CLI read.
 # Git-source admission shares the typed trunk signal vocabulary.
 # Explicit launch-login requests and room-default switching share the locked account boundary (+2).
-surface-budget = 346
+# Per-login provider panels expose their cache and renderer identity.
+surface-budget = 347
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -2137,6 +2138,11 @@ reason = "Pane binding calls the classifier inside the fold; the re-export survi
 kind = "item"
 key = "store::snapshot::view::model::SidebarPipeline"
 reason = "A pub field of SidebarWorktreeGroup in the published snapshot schema the renderer decodes (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarProviderPanel::login_key"
+reason = "Account-scoped cache projection, renderer selection, carry episodes and diagnostics share the panel's login identity."
 
 [[verdict]]
 kind = "item"

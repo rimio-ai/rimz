@@ -49,6 +49,8 @@ pub enum RemoteControlBadge {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarProviderPanel {
     pub kind: String,
+    #[serde(default, skip_serializing_if = "crate::ids::LoginName::is_default")]
+    pub account: crate::ids::LoginName,
     /// Account cache identity selected by the adapter for this panel.
     #[serde(default, skip_serializing_if = "ProviderAccountScope::is_kind_wide")]
     pub account_scope: ProviderAccountScope,
@@ -111,6 +113,15 @@ pub struct SidebarProviderPanel {
     /// The account-scoped budget windows, ordered short→long by duration.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<RateLimitWindow>,
+}
+
+impl SidebarProviderPanel {
+    pub(crate) fn login_key(&self) -> crate::ids::LoginKey {
+        crate::ids::LoginKey {
+            kind: crate::ids::AgentKind::new_unchecked(&self.kind),
+            name: self.account.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,6 +1,25 @@
 use super::*;
 use crate::ids::MuxName;
 
+#[test]
+fn legacy_provider_aggregates_decode_as_default_logins() {
+    for line in [
+        r#"{"aggregate":"provider_spend","kind":"claude"}"#,
+        r#"{"aggregate":"provider_mana","kind":"claude","duration_mins":300}"#,
+    ] {
+        let decoded = serde_json::from_str::<AggregateKey>(line);
+        assert!(decoded.is_ok(), "legacy record: {decoded:?}");
+        let decoded = decoded.unwrap();
+        assert!(decoded.identity().contains("claude@default"));
+        let json = serde_json::to_value(&decoded).unwrap();
+        assert_eq!(json["login"], "claude@default");
+        assert_eq!(
+            serde_json::from_value::<AggregateKey>(json).unwrap(),
+            decoded
+        );
+    }
+}
+
 fn workspace_id() -> WorkspaceId {
     WorkspaceId::from_project_root(std::path::Path::new("/repo"))
 }
@@ -605,11 +624,11 @@ fn representative_events_keep_json_wire_shape() {
             },
         ),
         (
-            r#"{"kind":"frame_anomaly","anomaly":{"detector":"aggregate_oscillation","aggregate":{"aggregate":"provider_spend","kind":"claude"},"from":"1234","via":"0","back":"1234","span_ms":7000,"pulled_via":"0"},"frame":{"produced_at_ms":13000,"rows":2,"agents":2,"processes":0,"pulled_rows":2,"pulled_panes_produced_at_ms":13000},"events_recent":{"pane_closed":[],"pane_opened":[]},"gate_reject_streak":0,"health_failure_streak":0,"dropped_msgs":0}"#,
+            r#"{"kind":"frame_anomaly","anomaly":{"detector":"aggregate_oscillation","aggregate":{"aggregate":"provider_spend","login":"claude@default"},"from":"1234","via":"0","back":"1234","span_ms":7000,"pulled_via":"0"},"frame":{"produced_at_ms":13000,"rows":2,"agents":2,"processes":0,"pulled_rows":2,"pulled_panes_produced_at_ms":13000},"events_recent":{"pane_closed":[],"pane_opened":[]},"gate_reject_streak":0,"health_failure_streak":0,"dropped_msgs":0}"#,
             DiagEvent::FrameAnomaly {
                 anomaly: AnomalyKind::AggregateOscillation {
                     aggregate: AggregateKey::ProviderSpend {
-                        kind: "claude".to_owned(),
+                        login: "claude@default".parse().unwrap(),
                     },
                     from: "1234".to_owned(),
                     via: "0".to_owned(),
@@ -639,25 +658,28 @@ fn representative_events_keep_json_wire_shape() {
 #[test]
 fn provider_mana_identity_prefers_scope_and_keeps_legacy_duration_wire() {
     let build = AggregateKey::ProviderMana {
-        kind: "plugin".to_owned(),
+        login: "plugin@default".parse().unwrap(),
         scope_id: Some("build_minutes".to_owned()),
         duration_mins: None,
     };
     let deployment = AggregateKey::ProviderMana {
-        kind: "plugin".to_owned(),
+        login: "plugin@default".parse().unwrap(),
         scope_id: Some("deployments".to_owned()),
         duration_mins: None,
     };
     assert_ne!(build.identity(), deployment.identity());
-    assert_eq!(build.identity(), "provider_mana:plugin:scope:build_minutes");
+    assert_eq!(
+        build.identity(),
+        "provider_mana:plugin@default:scope:build_minutes"
+    );
 
     let legacy: AggregateKey = serde_json::from_value(serde_json::json!({
         "aggregate": "provider_mana",
-        "kind": "codex",
+        "login": "codex@default",
         "duration_mins": 300
     }))
     .unwrap();
-    assert_eq!(legacy.identity(), "provider_mana:codex:300");
+    assert_eq!(legacy.identity(), "provider_mana:codex@default:300");
 }
 
 #[test]

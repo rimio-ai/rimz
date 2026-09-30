@@ -445,38 +445,37 @@ pub(crate) fn redeem_credits(
     config: &ResumeConfig,
     now: Timestamp,
 ) {
-    let Some(login) = logins.default_login(CODEX_KIND) else {
-        return;
-    };
-    let key = login.key();
-    let Some(panel) = panels.iter().find(|panel| panel.kind == CODEX_KIND) else {
-        return;
-    };
-    let capacity = ProviderCapacity::read(runtime, &key);
-    let rate_pct_per_day = update_rate_cache(runtime, &key, capacity.as_ref(), now);
-    let Some(credits) = panel.reset_credits.as_ref() else {
-        return;
-    };
-    let Some(reason) = redeem_verdict(
-        capacity.as_ref(),
-        credits,
-        rate_pct_per_day,
-        config.auto_redeem_min_gain(),
-        config.auto_redeem,
-        now,
-    ) else {
-        return;
-    };
+    for login in logins.in_use(CODEX_KIND) {
+        let key = login.key();
+        let Some(panel) = panels.iter().find(|panel| panel.login_key() == key) else {
+            continue;
+        };
+        let capacity = ProviderCapacity::read(runtime, &key);
+        let rate_pct_per_day = update_rate_cache(runtime, &key, capacity.as_ref(), now);
+        let Some(credits) = panel.reset_credits.as_ref() else {
+            continue;
+        };
+        let Some(reason) = redeem_verdict(
+            capacity.as_ref(),
+            credits,
+            rate_pct_per_day,
+            config.auto_redeem_min_gain(),
+            config.auto_redeem,
+            now,
+        ) else {
+            continue;
+        };
 
-    let request_id = uuid::Uuid::now_v7();
-    // A pending reservation deliberately uses the 10-minute attempt cooldown
-    // as its dead-helper lease. Redemption is rare and account-scoped, so the
-    // conservative backstop is preferable to a second freshness clock.
-    if !reserve_attempt(runtime, &key, reason, now, &request_id.to_string()) {
-        return;
-    }
-    if !spawn_auto_redeem(runtime, &key, reason, request_id) {
-        cancel_attempt_reservation(runtime, &key, &request_id.to_string());
+        let request_id = uuid::Uuid::now_v7();
+        // A pending reservation deliberately uses the 10-minute attempt cooldown
+        // as its dead-helper lease. Redemption is rare and account-scoped, so the
+        // conservative backstop is preferable to a second freshness clock.
+        if !reserve_attempt(runtime, &key, reason, now, &request_id.to_string()) {
+            continue;
+        }
+        if !spawn_auto_redeem(runtime, &key, reason, request_id) {
+            cancel_attempt_reservation(runtime, &key, &request_id.to_string());
+        }
     }
 }
 
@@ -490,14 +489,18 @@ pub(crate) fn project_redeem_forecasts(
     logins: &crate::agents::RoomLoginSet,
 ) {
     let now = snapshot.now;
+    let in_use = logins.keys_in_use();
     for panel in &mut snapshot.providers {
         panel.redeem_forecast = None;
         if panel.kind != CODEX_KIND {
             continue;
         }
-        let (Some(credits), Some(key)) =
-            (panel.reset_credits.as_ref(), logins.default_key(CODEX_KIND))
-        else {
+        let (Some(credits), Some(key)) = (
+            panel.reset_credits.as_ref(),
+            in_use
+                .contains(&panel.login_key())
+                .then(|| panel.login_key()),
+        ) else {
             continue;
         };
         let capacity = ProviderCapacity::read(runtime, &key);

@@ -1482,14 +1482,31 @@ pub enum AggregateKey {
     CockpitTally,
     WorkspaceTally,
     ProviderSpend {
-        kind: String,
+        #[serde(alias = "kind", deserialize_with = "deserialize_aggregate_login")]
+        login: crate::ids::LoginKey,
     },
     ProviderMana {
-        kind: String,
+        #[serde(alias = "kind", deserialize_with = "deserialize_aggregate_login")]
+        login: crate::ids::LoginKey,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope_id: Option<String>,
         duration_mins: Option<u32>,
     },
+}
+
+fn deserialize_aggregate_login<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<crate::ids::LoginKey, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Login {
+        Current(crate::ids::LoginKey),
+        Legacy(AgentKind),
+    }
+    Ok(match Login::deserialize(deserializer)? {
+        Login::Current(login) => login,
+        Login::Legacy(kind) => crate::ids::LoginKey::default_for(kind),
+    })
 }
 
 impl AggregateKey {
@@ -1497,19 +1514,19 @@ impl AggregateKey {
         match self {
             Self::CockpitTally => "cockpit_tally".to_owned(),
             Self::WorkspaceTally => "workspace_tally".to_owned(),
-            Self::ProviderSpend { kind } => format!("provider_spend:{kind}"),
+            Self::ProviderSpend { login } => format!("provider_spend:{login}"),
             Self::ProviderMana {
-                kind,
+                login,
                 scope_id,
                 duration_mins,
             } => {
                 if let Some(scope_id) = scope_id {
-                    return format!("provider_mana:{kind}:scope:{scope_id}");
+                    return format!("provider_mana:{login}:scope:{scope_id}");
                 }
                 let duration = duration_mins
                     .map(|mins| mins.to_string())
                     .unwrap_or_else(|| "unknown".to_owned());
-                format!("provider_mana:{kind}:{duration}")
+                format!("provider_mana:{login}:{duration}")
             }
         }
     }

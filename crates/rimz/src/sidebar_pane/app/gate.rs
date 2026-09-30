@@ -7,7 +7,7 @@
 //! Agent→Process demotion.
 
 use crate::diag::record::GateRule;
-use crate::ids::{AgentKind, PaneId};
+use crate::ids::{LoginKey, PaneId};
 use crate::store::snapshot::SidebarSnapshot;
 use jiff::Timestamp;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -36,7 +36,7 @@ pub struct GateState {
 pub struct SpendCarryEpisodes {
     pub fleet: Option<Timestamp>,
     pub workspace: Option<Timestamp>,
-    pub providers: BTreeMap<AgentKind, Timestamp>,
+    pub providers: BTreeMap<LoginKey, Timestamp>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -262,14 +262,14 @@ fn repair_collapsed_spend(
             panel
                 .spending
                 .as_ref()
-                .map(|spending| (&panel.kind, spending))
+                .map(|spending| (panel.login_key(), spending))
         })
         .collect::<HashMap<_, _>>();
     let mut present_kinds = HashSet::new();
     for panel in &mut incoming.providers {
-        let kind = AgentKind::new_unchecked(&panel.kind);
+        let kind = panel.login_key();
         present_kinds.insert(kind.clone());
-        let prior = prior_spending.get(&panel.kind).copied();
+        let prior = prior_spending.get(&kind).copied();
         let since = carry_episode(
             prior.is_some_and(|tally| !tally.is_zero()),
             has_nonzero_tally(&panel.spending),

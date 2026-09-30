@@ -1,20 +1,51 @@
 use super::*;
 
 #[test]
+fn tabs_distinguish_two_logins_of_one_kind() {
+    let ws = workspace();
+    let mut snapshot = tabbed_snapshot(&ws);
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
+    let mut work = snapshot.providers[0].clone();
+    work.account = "work".parse().unwrap();
+    snapshot.providers = vec![snapshot.providers[0].clone(), work];
+    let mut ui = UiState::default();
+    handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    assert_eq!(
+        render::active_dashboard_tab(&snapshot, &ui)
+            .unwrap()
+            .to_string(),
+        "claude@work"
+    );
+    snapshot.providers.remove(1);
+    reconcile_dashboard(&mut ui, &snapshot);
+    assert!(ui.dashboard_tab.is_none());
+    assert_eq!(
+        render::active_dashboard_tab(&snapshot, &ui)
+            .unwrap()
+            .to_string(),
+        "claude@default"
+    );
+}
+
+#[test]
 fn tab_keys_cycle_the_dashboard_and_wrap() {
     let ws = workspace();
     let snapshot = tabbed_snapshot(&ws);
     let mut ui = UiState::default();
     // Selected row 0 is the claude agent, so the derived tab starts there.
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("claude")
     );
 
     let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("codex")
     );
     // The first pick captures the derived kind it began from.
@@ -23,25 +54,32 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
             .as_ref()
             .unwrap()
             .derived_at_start
-            .as_deref(),
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("claude")
     );
 
     // A later pick only moves the tab — the anchor holds.
     handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("pi")
     );
     handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("claude"),
         "→ wraps past the last tab"
     );
     handle_key(KeyAction::TabPrev, &mut ui, &snapshot);
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("pi"),
         "← wraps back from the first tab"
     );
@@ -50,7 +88,8 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
             .as_ref()
             .unwrap()
             .derived_at_start
-            .as_deref(),
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("claude"),
         "the browse anchor survives every pick"
     );
@@ -76,7 +115,9 @@ fn tab_keys_noop_without_a_second_cyclable_panel() {
         assert!(ui.dashboard_tab.is_none(), "{label}");
         // With no tab pick the dashboard shows its first, derived account.
         assert_eq!(
-            render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+            render::active_dashboard_tab(&snapshot, &ui)
+                .as_ref()
+                .map(|key| key.kind.as_str()),
             Some("claude"),
             "{label}"
         );
@@ -92,20 +133,20 @@ fn pets_enabled_keeps_provider_default_and_cycles_providers_only() {
 
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui),
-        Some("claude".to_owned())
+        Some("claude@default".parse().unwrap())
     );
 
     let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui),
-        Some("codex".to_owned())
+        Some("codex@default".parse().unwrap())
     );
 
     handle_key(KeyAction::TabPrev, &mut ui, &snapshot);
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui),
-        Some("claude".to_owned()),
+        Some("claude@default".parse().unwrap()),
         "cycling walks provider tabs only"
     );
 }
@@ -120,7 +161,9 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
     handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("codex")
     );
 
@@ -145,7 +188,9 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
         "a genuine derived-kind change hands the tab back"
     );
     assert_eq!(
-        render::active_dashboard_tab(&moved, &ui).as_deref(),
+        render::active_dashboard_tab(&moved, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("pi")
     );
 }
@@ -161,13 +206,17 @@ fn dashboard_holds_the_last_agent_across_a_non_agent_selection() {
 
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane));
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("codex")
     );
 
     reconcile_selection(&mut ui, &snapshot, Some(process_pane));
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("codex"),
         "a non-agent selection holds the last agent's tab"
     );
@@ -183,7 +232,9 @@ fn dashboard_ignores_agent_kinds_without_a_panel_for_hold_last() {
 
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("codex")
     );
 
@@ -192,7 +243,9 @@ fn dashboard_ignores_agent_kinds_without_a_panel_for_hold_last() {
     reconcile_selection(&mut ui, &unpanelled, Some(agent_pane));
 
     assert_eq!(
-        render::active_dashboard_tab(&unpanelled, &ui).as_deref(),
+        render::active_dashboard_tab(&unpanelled, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("codex"),
         "only an agent kind with a dashboard panel advances the remembered tab"
     );
@@ -227,8 +280,16 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
         interactions: render::FrameInteractions::from_parts(
             vec![None; 31],
             vec![
-                render::HitRegion::line(30, 3..13, HitTarget::ProviderTab("claude".to_owned())),
-                render::HitRegion::line(30, 15..24, HitTarget::ProviderTab("codex".to_owned())),
+                render::HitRegion::line(
+                    30,
+                    3..13,
+                    HitTarget::ProviderTab("claude@default".parse().unwrap()),
+                ),
+                render::HitRegion::line(
+                    30,
+                    15..24,
+                    HitTarget::ProviderTab("codex@default".parse().unwrap()),
+                ),
             ],
         ),
         ..Default::default()
@@ -240,7 +301,9 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(outcome.effect, None);
     assert_eq!(
-        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui)
+            .as_ref()
+            .map(|key| key.kind.as_str()),
         Some("codex")
     );
 
