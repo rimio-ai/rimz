@@ -1,7 +1,7 @@
 //! One thread's last parse of a JSON cache file, keyed by path plus byte
 //! identity `(mtime, len)` — the shared core behind every single-slot
-//! stat-gated parse cache (`rollup.json`, `latest.json`, the published
-//! `snapshot.json`, and, under the full [`StampedPath`] identity,
+//! stat-gated parse cache (`rollup.json`, the published `snapshot.json`,
+//! and, under the full [`StampedPath`] identity, `latest.json` and
 //! `agents.carryover.json`).
 //! [`FileStamp`] and [`StampedPath`] expose the same cheap identity outside a
 //! parse cache, extended with the device/inode pair on Unix so atomic

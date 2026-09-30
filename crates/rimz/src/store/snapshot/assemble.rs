@@ -12,7 +12,7 @@ use super::fold::{ResumeOutcome, RollupCursor, catch_up_rollup, write_rollup_cac
 use super::view::{SNAPSHOT_VERSION, SidebarSnapshot};
 use crate::agents::AgentState;
 use crate::disk::atomic::{self};
-use crate::disk::parse_cache::ParseCache;
+use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::disk::paths::StatePaths;
 use crate::store::event_log::{self};
 use crate::store::runtime::RuntimeProjection;
@@ -104,8 +104,7 @@ fn assemble_snapshot<'a>(
 /// and the atomic rename means a readable `latest.json` is always a complete
 /// rollup.
 pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
-    let meta = fs::metadata(&paths.latest_snapshot).ok()?;
-    let latest_mtime = meta.modified().ok()?;
+    fs::metadata(&paths.latest_snapshot).ok()?;
     let log_len = fs::metadata(&paths.events_log)
         .map(|meta| meta.len())
         .unwrap_or(0);
@@ -124,9 +123,12 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     let snapshot_is_current = |snapshot: &SidebarSnapshot| {
         stamp_is_current(snapshot) && snapshot.snapshot_version == SNAPSHOT_VERSION
     };
-    let len = meta.len();
-    let path = paths.latest_snapshot.as_path();
-    if let Some(snapshot) = LATEST_PARSE_CACHE.with(|cache| cache.get(path, latest_mtime, len)) {
+    // `latest.json` is only ever replaced by atomic rename, so the full stamp
+    // (device and inode included) keys the parse: a same-tick, equal-length
+    // republish is a distinct inode and never serves the prior parse, whose
+    // stale extent would decline the fast path until the next publish.
+    let stamped = StampedPath::of(&paths.latest_snapshot);
+    if let Some(snapshot) = LATEST_PARSE_CACHE.with(|cache| cache.get_stamped(&stamped)) {
         // The snapshot's projection clock is reader-local, so a shared cached
         // parse becomes owned at this mutation point.
         let mut snapshot = Arc::unwrap_or_clone(snapshot);
@@ -144,7 +146,7 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     // stale-stamped snapshot is still worth caching so the next delta skips
     // the re-parse.
     LATEST_PARSE_CACHE.with(|cache| {
-        cache.store(path, latest_mtime, len, Arc::new(snapshot.clone()));
+        cache.store_stamped(&stamped, Arc::new(snapshot.clone()));
     });
     snapshot_is_current(&snapshot).then_some(snapshot)
 }
@@ -512,12 +514,12 @@ mod tests {
             "log outran the stamp → a just-appended event is unreflected; re-project"
         );
 
-        // Republishing catches the stamp up; the guard serves again. The
-        // republish can alias the warm parse (see `read_fresh_latest_cold`),
-        // so a cold reader checks what is on disk.
+        // Republishing catches the stamp up; the guard serves again, on this
+        // thread's warm parse cache too: the republish is a fresh inode, so
+        // even a same-tick, equal-length rename never serves the prior parse.
         rebuild(&paths).unwrap();
         assert!(
-            read_fresh_latest_cold(&paths).is_some(),
+            read_fresh_latest(&paths).is_some(),
             "republish reflects the appended event → served again"
         );
     }
@@ -556,10 +558,8 @@ mod tests {
     }
 
     /// [`read_fresh_latest`] on a fresh thread, past this thread's parse
-    /// cache. The cache is keyed on `(path, mtime, len)`, so a republish at
-    /// equal byte length inside one coarse mtime tick serves the prior parse —
-    /// the aliasing `disk::parse_cache` accepts by design. A test asserting on
-    /// the republished file reads it cold.
+    /// cache: the reader a new binary starts with, for a check whose
+    /// production path is always a cold-cache event.
     fn read_fresh_latest_cold(paths: &StatePaths) -> Option<SidebarSnapshot> {
         std::thread::scope(|scope| scope.spawn(|| read_fresh_latest(paths)).join().unwrap())
     }
