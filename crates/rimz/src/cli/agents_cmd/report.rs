@@ -8,7 +8,7 @@ use rimz::agents::PermissionMode;
 use rimz::agents::{
     AgentCardRef, AgentState, AgentStatus, ContextSeverity, OpenAsk, TurnErrorClass, TurnPhase,
 };
-use rimz::ids::{AgentKind, AgentSessionId, PaneId};
+use rimz::ids::{AgentKind, AgentSessionId, LoginKey, PaneId};
 use rimz::store::snapshot::{
     AgentCard, SidebarRow, SidebarSnapshot, SubAgentTokens, WorktreeCi, WorktreePrState,
     group_live_agents_by_worktree,
@@ -28,6 +28,8 @@ pub(super) struct AgentListReport {
 pub(super) struct AgentReportEntry {
     pub id: AgentSessionId,
     pub kind: AgentKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<LoginKey>,
     pub handle: String,
     pub name: Option<String>,
     pub name_explicit: bool,
@@ -311,6 +313,7 @@ pub(super) fn build_entry(
     AgentReportEntry {
         id: agent.agent_id.clone(),
         kind: agent.kind.clone(),
+        login: agent.login.as_ref().map(|_| agent.login_key()),
         handle: rimz::address::agent_handle(agent, peers, false),
         name: agent.name.clone(),
         name_explicit: agent.name_explicit,
@@ -728,6 +731,7 @@ mod tests {
     fn full_entry_has_a_stable_projection() {
         let now = Timestamp::from_second(2_000).unwrap();
         let mut state = agent("full");
+        state.login = Some("work".parse().unwrap());
         state.launch_warnings = vec!["tool rules unsupported".into(), "skill shadowed".into()];
         state.name_explicit = true;
         state.profile = Some("builder".to_owned());
@@ -835,6 +839,7 @@ mod tests {
             serde_json::to_value(&entry).unwrap()["launch_warnings"],
             serde_json::json!(state.launch_warnings)
         );
+        assert_eq!(serde_json::to_value(&entry).unwrap()["login"], "codex@work");
         insta::assert_json_snapshot!("full_agent_report", entry);
     }
 
@@ -856,6 +861,7 @@ mod tests {
             serde_json::to_value(&entry).unwrap()["launch_warnings"],
             serde_json::json!([])
         );
+        assert!(serde_json::to_value(&entry).unwrap().get("login").is_none());
         insta::assert_json_snapshot!("sparse_agent_report", entry);
     }
 

@@ -2024,6 +2024,7 @@ mod render {
         second.agent_id = "second".into();
         second.name = Some("bright-lark".to_owned());
         second.kind_ordinal = Some(2);
+        second.login = Some("work".parse().unwrap());
         let mut bare = first.clone();
         bare.agent_id = "bare".into();
         bare.name = Some("swift-otter".to_owned());
@@ -2046,10 +2047,10 @@ mod render {
             ],
             "{text}"
         );
-        for (handle, profile) in [
-            ("@calm-fox", "planner"),
-            ("@bright-lark", "planner"),
-            ("@swift-otter", "-"),
+        for (handle, profile, kind) in [
+            ("@calm-fox", "planner", "claude"),
+            ("@bright-lark", "planner", "claude@work"),
+            ("@swift-otter", "-", "claude"),
         ] {
             let row = text
                 .lines()
@@ -2057,7 +2058,7 @@ mod render {
                 .expect("petname row");
             assert_eq!(
                 row.split_whitespace().take(3).collect::<Vec<_>>(),
-                [handle, profile, "claude"],
+                [handle, profile, kind],
                 "{text}"
             );
         }

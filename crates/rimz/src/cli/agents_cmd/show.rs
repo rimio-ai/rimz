@@ -304,6 +304,12 @@ fn render_agent_section(w: &mut impl Write, agent: &AgentReportEntry) -> std::io
         "kind",
         render::cell(agent.kind.to_string()).fg(render::palette::meta()),
     );
+    if let Some(login) = &agent.login {
+        kv.push(
+            "account",
+            render::cell(login.to_string()).fg(render::palette::meta()),
+        );
+    }
     if let Some(profile) = agent.profile.as_deref() {
         kv.push("profile", render::cell(profile).fg(render::palette::meta()));
     }
@@ -882,6 +888,7 @@ mod tests {
     #[test]
     fn show_json_wraps_the_projected_agent() {
         let mut state = rimz::testkit::agent_state("codex", "show", jiff::Timestamp::UNIX_EPOCH);
+        state.login = Some("work".parse().unwrap());
         state.launch_warnings = vec!["tool rules unsupported".into()];
         let peers = [&state];
         let report = ShowReport {
@@ -916,7 +923,33 @@ mod tests {
             serde_json::to_value(&report).unwrap()["agent"]["launch_warnings"],
             serde_json::json!(["tool rules unsupported"])
         );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["agent"]["login"],
+            "codex@work"
+        );
         insta::assert_json_snapshot!("show_agent_report", report);
+    }
+
+    #[test]
+    fn agent_section_shows_only_named_accounts() {
+        let mut state = rimz::testkit::agent_state("codex", "show", jiff::Timestamp::UNIX_EPOCH);
+        for login in [None, Some("work".parse().unwrap())] {
+            state.login = login;
+            let entry = build_entry(
+                &state,
+                None,
+                None,
+                &[&state],
+                None,
+                jiff::Timestamp::UNIX_EPOCH,
+                ReportOverrides::default(),
+            );
+            let text = strip(|out| render_agent_section(out, &entry));
+            assert_eq!(text.contains("account"), state.login.is_some(), "{text}");
+            if state.login.is_some() {
+                assert!(text.contains("codex@work"), "{text}");
+            }
+        }
     }
 
     #[test]

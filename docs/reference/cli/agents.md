@@ -474,7 +474,7 @@ Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain 
 | --- | --- |
 | `HANDLE` | The shortest handle you can type under that header: the role (`@coder`), else the `--name` (`@writer`), else the profile when unique (`@planner`), else `@<kind>` when unique, else the pet name. Launched agents show the pet name rather than an ordinal. |
 | `PROFILE` | The launch profile, or a faint `-` when absent. |
-| `AGENT` | The provider kind, such as `claude` or `codex`. |
+| `AGENT` | The provider kind, such as `claude` or `codex`; a named account includes its name, such as `claude@work`. |
 | `STATUS` | The card status (below). |
 | `MODEL` | Model and effort, as `model@effort`. |
 | `CTX` | Context-window fill. |
@@ -495,11 +495,12 @@ Under each row, the agent's activity description (the line the sidebar card show
 
 The status is derived for display. [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`. `show` adds the turn phase.
 
-`--json` emits `{"schema":1,"agents":[...]}`. Each entry is the card the table renders, not the store's provider-shaped record, and every key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
+`--json` emits `{"schema":1,"agents":[...]}`. Each entry is the card the table renders, not the store's provider-shaped record. Except for `login`, every key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
 
 | Field | Contents |
 | --- | --- |
 | `id`, `kind`, `handle`, `name`, `name_explicit`, `profile`, `role`, `team`, `mode` | Identity. |
+| `login` | The agent's recorded named account as `kind@name`, such as `claude@work`; omitted for the default account. Switching the room default does not change this field for an existing agent. |
 | `me` | `true` on at most one entry: the caller. RimZ matches `TMUX_PANE` or `ZELLIJ_PANE_ID` to the pane binding first, then the `RIMZ_AGENT_KIND`, `RIMZ_AGENT_NAME`, `RIMZ_AGENT_PROFILE`, and `RIMZ_AGENT_ROLE` launch identity. Outside an agent pane every entry is `false`. |
 | `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. |
 | `pending_waits` | Armed one-shot deliveries, each with its name, trigger, and optional arm timestamp. Trigger kinds include `check` with `command` and `file` with `path` and `grep`, alongside timers, PIDs, commands, and signals. Timers come first by due time, then watches and signals; names break ties. |
@@ -517,7 +518,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 
 `rimz agents show <REF>` prints one agent's report in the sections Agent, Activity, Context, Placement, Run, Messages, and Recent transcript. It works for live agents and for stopped ones still in the audit record. To see what an agent would launch or restart with, use [`explain`](#explain-a-launch).
 
-The Agent section includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch.
+The Agent section includes an `account` line for a named account, as `kind@name`; the default account has no account line. It includes `launch_warnings` when the current launch printed warnings, one per line. A clean relaunch clears the entry; the warnings still print to stderr at launch.
 
 Context cost, token split, and active time cover the agent's seat for its whole life: every resumed session plus the pane-backed children it launched. Addressing a child directly reports that child alone. Context fill, window, and tool activity describe the current session. An open run of identical tool calls appears once it reaches the configured warning threshold, as `Bash ×23, 4m`.
 
@@ -529,7 +530,7 @@ When room tmp exists, `show` prints its host path and notes that sandboxed panes
 | --- | --- |
 | `--capture` | Append a Capture section framing the pane's visible area, with the pane id in the top border. An agent without a bound pane is an error. |
 | `--ansi` | Keep colors inside the capture frame. |
-| `--json` | Emit the report: the [`list` entry](#list) under `agent`, plus `stale`, the full `ask`, `run`, `messages` (the same filtered list, without the hidden count), `capture`, `tmp_dir`, and `scratch_dir` when they apply. A stopped agent keeps every entry key, with live-only fields such as context severity `null`. Active time includes its seat and launched children while their records are retained; it is `null` only when none remain. A child addressed directly reports its own seat alone. |
+| `--json` | Emit the report: the [`list` entry](#list) under `agent`, plus `stale`, the full `ask`, `run`, `messages` (the same filtered list, without the hidden count), `capture`, `tmp_dir`, and `scratch_dir` when they apply. A stopped agent keeps the same entry shape, including `login` for a named account, with live-only fields such as context severity `null`. Active time includes its seat and launched children while their records are retained; it is `null` only when none remain. A child addressed directly reports its own seat alone. |
 
 #### `logs`
 

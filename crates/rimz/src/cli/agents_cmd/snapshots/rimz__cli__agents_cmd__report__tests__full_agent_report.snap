@@ -5,6 +5,7 @@ expression: entry
 {
   "id": "full",
   "kind": "codex",
+  "login": "codex@work",
   "handle": "@coder",
   "name": null,
   "name_explicit": true,
