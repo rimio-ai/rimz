@@ -352,6 +352,8 @@ fn untrusted_hooks_report_by_trust_state() {
     enum Case {
         StateAbsent,
         EveryEventTrusted,
+        OtherHomeTrusted,
+        CanonicalHomeTrusted,
         MissingStopAndPermission,
         RimzHooksNotInstalled,
     }
@@ -363,13 +365,18 @@ fn untrusted_hooks_report_by_trust_state() {
         ),
         (Case::EveryEventTrusted, "every event trusted reports none"),
         (
+            Case::OtherHomeTrusted,
+            "another home's trust does not count",
+        ),
+        (Case::CanonicalHomeTrusted, "canonical home trust counts"),
+        (
             Case::MissingStopAndPermission,
             "partial trust reports the exact missing subset",
         ),
         (Case::RimzHooksNotInstalled, "user-only config reports none"),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
+        let mut path = dir.path().join("config.toml");
         let expected = match case {
             Case::StateAbsent => {
                 install_into(&path).unwrap();
@@ -383,6 +390,28 @@ fn untrusted_hooks_report_by_trust_state() {
                 for event in EXPECTED_EVENTS {
                     trust_event(&path, &snake_event_token(event));
                 }
+                Vec::new()
+            }
+            Case::OtherHomeTrusted => {
+                let other = dir.path().join("other.toml");
+                install_into(&other).unwrap();
+                for event in EXPECTED_EVENTS {
+                    trust_event(&other, &snake_event_token(event));
+                }
+                std::fs::copy(other, &path).unwrap();
+                EXPECTED_EVENTS
+                    .iter()
+                    .map(|event| (*event).to_owned())
+                    .collect()
+            }
+            Case::CanonicalHomeTrusted => {
+                install_into(&path).unwrap();
+                for event in EXPECTED_EVENTS {
+                    trust_event(&path, &snake_event_token(event));
+                }
+                let alias = dir.path().join("alias");
+                std::os::unix::fs::symlink(dir.path(), &alias).unwrap();
+                path = alias.join("config.toml");
                 Vec::new()
             }
             Case::MissingStopAndPermission => {
