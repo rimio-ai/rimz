@@ -71,6 +71,7 @@ Rerunning `add` for an account that already exists leaves the config entry alone
 | `NAME` breaks the name rules | `` invalid account name `<name>`; expected 1-32 characters of ... `` |
 | `--home` differs from the existing account's home | `` <kind> account `<name>` already lives at `<home>`; rerun without --home, or remove the account first `` |
 | The home breaks a [home rule](#kinds-names-and-homes) | `` `accounts.<kind>.<name>.home` is `<home>`, ... `` with the rule it breaks |
+| A new account's home is what the shell exports as `CLAUDE_CONFIG_DIR` or `CODEX_HOME` | `` `CODEX_HOME` is exported as `<home>`, the home of codex account `<name>`, so the `default` account launches into it too; unset `CODEX_HOME` and run `rimz accounts use codex <name>` to start new rooms on it `` |
 
 ## `use`
 
@@ -129,7 +130,7 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
 | `problem` | The problem line with its fix. Present only when the account has a problem. |
 
-`NEW ROOMS` marks the machine selection. A dangling machine selection adds a problem row with the commands to declare or clear it. `rimz doctor` also marks named machine selections in its ACCOUNTS section, alongside the ones the current room uses; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
+`NEW ROOMS` marks the machine selection. A dangling machine selection adds a problem row with the commands to declare or clear it. `rimz doctor` reports the exported-home conflict from the `add` table above as the problem on that account's row, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` also marks named machine selections in its ACCOUNTS section, alongside the ones the current room uses; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
 
 ## `remove`
 

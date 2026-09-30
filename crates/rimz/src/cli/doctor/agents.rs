@@ -116,7 +116,12 @@ fn account_rows(
             home: login.home().map(|home| home.display().to_string()),
             room: in_room(login.kind(), login.name()),
             machine_default: machine.get(login.kind()) == Some(login.name()),
-            problem: login.preflight(ambient).err().map(|err| err.to_string()),
+            // A pane born on this account exports its home by design.
+            problem: (!in_room(login.kind(), login.name()))
+                .then(|| login.check_exported_home(ambient).err())
+                .flatten()
+                .map(|err| err.to_string())
+                .or_else(|| login.preflight(ambient).err().map(|err| err.to_string())),
         })
         .collect();
     for (kind, name) in room.into_iter().flatten() {
@@ -271,5 +276,36 @@ mod tests {
                 .unwrap()
                 .contains("rimz accounts use claude default")
         );
+    }
+
+    #[test]
+    fn account_rows_flag_an_exported_home_outside_the_room_born_on_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("rimio");
+        std::fs::create_dir(&home).unwrap();
+        let config: rimz::config::AccountsConfig = toml::from_str(&format!(
+            "[codex.rimio]\nhome = {:?}\n",
+            home.display().to_string()
+        ))
+        .unwrap();
+        let catalog = rimz::agents::LoginCatalog::from_config(&config).unwrap();
+        let ambient = std::collections::BTreeMap::from([
+            ("HOME".to_owned(), "/home/u".to_owned()),
+            ("CODEX_HOME".to_owned(), home.display().to_string()),
+        ]);
+        let problem = |room: Option<&rimz::ids::RoomLogins>| {
+            let rows = account_rows(&catalog, room, &ambient, &config.use_accounts);
+            let rows = serde_json::to_value(rows).unwrap();
+            rows[0]["problem"].as_str().map(str::to_owned)
+        };
+
+        let outside = problem(None).expect("an exported account home is a problem");
+        assert!(outside.contains("unset `CODEX_HOME`"), "{outside}");
+        let room = rimz::ids::RoomLogins::from([(
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            "rimio".parse().unwrap(),
+        )]);
+        let inside = problem(Some(&room)).unwrap_or_default();
+        assert!(!inside.contains("CODEX_HOME"), "{inside}");
     }
 }

@@ -35,7 +35,7 @@ RimZ writes no credentials and copies no settings. Run the printed login command
 
 Rerunning `add` for an account you already declared is how you finish a setup that stopped part way. It leaves the config entry alone, creates the home if it is missing, and reinstalls the hooks.
 
-The account named `default` is the provider's own home and is never declared. It is whatever the provider CLI resolves for itself: `~/.claude` or `~/.codex`, unless you export `CLAUDE_CONFIG_DIR` or `CODEX_HOME` in the shell you start the room from.
+The account named `default` is the provider's own home and is never declared. It is whatever the provider CLI resolves for itself: `~/.claude` or `~/.codex`, unless you export `CLAUDE_CONFIG_DIR` or `CODEX_HOME` in the shell you start the room from. Do not export one that points at a named account's home: `default` would then launch into that account too. Select the account with `rimz accounts use` instead. `rimz accounts add` refuses such a home, and `rimz doctor` flags it.
 
 `rimz accounts list` shows every account and whether a room can use it:
 
