@@ -21,6 +21,23 @@ pub(super) fn has_members(agents: &[AgentState], launcher: &AgentState) -> bool 
 /// Newest non-peer run and all open or unclaimed peer turns per member, deduplicated by run id and ordered as `address::launched_fleet` orders its members.
 pub struct FleetRuns<'a>(Vec<(&'a AgentState, &'a RunRecord)>);
 
+/// Open team runs report once at Done, separately from the per-member fleet digest.
+pub(super) fn open_team_runs<'a>(
+    agents: &[AgentState],
+    runs: &'a [RunRecord],
+    launcher: &AgentState,
+) -> Vec<&'a RunRecord> {
+    runs.iter()
+        .filter(|run| {
+            !run.status.is_terminal()
+                && run.team.as_ref().is_some_and(|team| {
+                    crate::address::launch_row(agents, &run.kind, &team.launch_id)
+                        .is_some_and(|leader| leader.launcher_is(launcher))
+                })
+        })
+        .collect()
+}
+
 impl<'a> FleetRuns<'a> {
     pub fn of(agents: &'a [AgentState], runs: &'a [RunRecord], launcher: &AgentState) -> Self {
         let mut seen = HashSet::new();
@@ -52,6 +69,14 @@ impl<'a> FleetRuns<'a> {
 
     pub fn any_running(&self) -> bool {
         self.0.iter().any(|(_, run)| !run.status.is_terminal())
+    }
+
+    pub(super) fn unsettled(&self) -> Vec<(&'a AgentState, &'a RunRecord)> {
+        self.0
+            .iter()
+            .copied()
+            .filter(|(_, run)| !run.status.is_terminal() || run.owes_report())
+            .collect()
     }
 
     /// Terminal rows in member order; claimed peer turns have left the fleet.
@@ -107,6 +132,7 @@ mod tests {
         let mut runs = vec![first, second];
         let agents = [parent.clone(), child.clone()];
         assert_eq!(FleetRuns::of(&agents, &runs, &parent).unreported().len(), 2);
+        assert_eq!(FleetRuns::of(&agents, &runs, &parent).unsettled().len(), 2);
         runs[0].joined_at = Some(Timestamp::UNIX_EPOCH);
         runs[1].report_message_id = Some(crate::MessageId::new());
         assert!(FleetRuns::of(&agents, &runs, &parent).settled().is_empty());
@@ -121,6 +147,41 @@ mod tests {
         assert!(newest_run(&child, &runs).is_some());
         child.kind = AgentKind::new_unchecked("claude");
         assert!(newest_run(&child, &runs).is_none());
+    }
+
+    #[test]
+    fn open_team_runs_belong_only_to_the_agent_launcher_until_settled() {
+        let parent = AgentState::stub("codex", "parent", AgentStatus::Idle);
+        let mut leader = AgentState::stub("codex", "leader", AgentStatus::Idle);
+        leader.team = Some("forge".into());
+        leader.launch_id = Some("leader-launch".into());
+        leader.launched_by = Some(crate::agents::LaunchedBy {
+            kind: parent.kind.clone(),
+            agent_id: parent.agent_id.clone(),
+        });
+        let mut run = RunRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            leader.kind.clone(),
+            PermissionMode::Auto,
+            "work".into(),
+            "/repo".into(),
+        );
+        run.team = Some(crate::store::run::TeamRun {
+            launch_id: "leader-launch".into(),
+            instance: "forge#feat-x".into(),
+        });
+        let mut runs = vec![run];
+        let mut agents = vec![parent.clone(), leader];
+        let open = open_team_runs(&agents, &runs, &parent);
+        assert_eq!(open.len(), 1, "an open team run belongs to its launcher");
+        assert_eq!(open[0].team.as_ref().unwrap().instance, "forge#feat-x");
+        runs[0].status = crate::store::run::RunStatus::Completed;
+        assert!(open_team_runs(&agents, &runs, &parent).is_empty());
+        runs[0].status = crate::store::run::RunStatus::Running;
+        agents[1].launched_by.as_mut().unwrap().agent_id = "someone-else".into();
+        assert!(open_team_runs(&agents, &runs, &parent).is_empty());
+        agents[1].launched_by = None;
+        assert!(open_team_runs(&agents, &runs, &parent).is_empty());
     }
 
     #[test]
@@ -184,6 +245,13 @@ mod tests {
         let fleet = FleetRuns::of(&agents, &runs, &parent);
         assert!(fleet.any_running());
         assert!(fleet.unreported().is_empty());
+        runs[1].status = crate::store::run::RunStatus::Completed;
+        let fleet = FleetRuns::of(&agents, &runs, &parent);
+        let unsettled = fleet.unsettled();
+        assert_eq!(unsettled.len(), 2);
+        let ordered = crate::address::launched_fleet(&agents, &parent);
+        assert_eq!(unsettled[0].0.agent_id, ordered[0].agent_id);
+        assert_eq!(unsettled[1].0.agent_id, ordered[1].agent_id);
         for run in &mut runs {
             run.status = crate::store::run::RunStatus::Completed;
         }
@@ -195,6 +263,11 @@ mod tests {
         assert_eq!(settled[0].0.agent_id, ordered[0].agent_id);
         runs[0].joined_at = Some(Timestamp::UNIX_EPOCH);
         runs[1].report_message_id = Some(crate::MessageId::new());
+        assert!(
+            FleetRuns::of(&agents, &runs, &parent)
+                .unsettled()
+                .is_empty()
+        );
         assert!(
             FleetRuns::of(&agents, &runs, &parent)
                 .unreported()

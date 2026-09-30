@@ -584,11 +584,11 @@ fn enrich_core(
             store.map(Store::paths),
             &machine_config,
         );
-        // Waits are loop-catalog rows, not store state; producer and consumer
-        // both attach them here because the rollup base carries none.
+        // Catalog and launched-run waits are enrich-only; both producer and consumer attach them here.
         let project_root = snapshot.project_root.clone();
         crate::harness::schedule::pending::project_pending_waits(
             &mut snapshot,
+            state,
             project_root.as_deref(),
             &machine_config,
         );
