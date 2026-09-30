@@ -109,7 +109,7 @@ pub use locate::locate_binary;
 use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use login::{
     BirthLoginErr, LoginCatalog, LoginConfigErr, LoginMismatch, ProviderLogin, RoomLoginErr,
-    RoomLoginSet, ambient_env, room_login, room_logins, session_login_env,
+    RoomLoginSet, ambient_env, room_login, room_logins, session_login, session_login_env,
 };
 pub use managed_source::ManagedIntegration;
 pub use observation::{

@@ -13,6 +13,67 @@ fn accounts(toml: &str) -> AccountsConfig {
 }
 
 #[test]
+fn session_login_resolves_the_stamp_without_a_room_default() {
+    let accounts = accounts("[claude.work]\nhome = \"/srv/work\"\n");
+    let login = session_login(&kind("claude"), Some(&name("work")), &accounts).unwrap();
+    assert_eq!(login.home(), Some(Path::new("/srv/work")));
+    assert!(
+        session_login(&kind("claude"), None, &accounts)
+            .unwrap()
+            .is_default()
+    );
+    assert!(matches!(
+        session_login(&kind("claude"), Some(&name("missing")), &accounts),
+        Err(RoomLoginErr::Login(LoginErr::Unknown { .. }))
+    ));
+}
+
+#[test]
+fn room_login_set_includes_only_defaults_and_live_root_stamps() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[claude.work]\nhome = \"/srv/work\"\n[claude.old]\nhome = \"/srv/old\"\n"),
+        Some(Path::new("/home/u")),
+    )
+    .unwrap();
+    let set = RoomLoginSet::new(Some(RoomLogins::new()), Some(catalog), BTreeMap::new());
+    let mut root = super::super::AgentState::seed(
+        kind("claude"),
+        "root".into(),
+        super::super::AgentStatus::Idle,
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    root.login = Some(name("work"));
+    let mut ended = root.clone();
+    ended.login = Some(name("old"));
+    ended.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
+    let mut native_child = root.clone();
+    native_child.login = Some(name("old"));
+    native_child.parent_agent_id = Some("root".into());
+    let set = set.with_agents(&[root.clone(), root, ended, native_child]);
+    let keys: Vec<_> = set
+        .in_use("claude")
+        .iter()
+        .map(|login| login.key().to_string())
+        .collect();
+    assert_eq!(keys, ["claude@default", "claude@work"]);
+    assert!(
+        set.keys_in_use()
+            .contains(&LoginKey::new(kind("claude"), name("work")))
+    );
+    assert!(
+        !set.keys_in_use()
+            .contains(&LoginKey::new(kind("claude"), name("old")))
+    );
+    let reset = set.with_agents(&[]);
+    assert_eq!(reset.in_use("claude").len(), 1);
+    assert!(
+        reset
+            .keys_in_use()
+            .contains(&LoginKey::new(kind("claude"), name("default")))
+    );
+}
+
+#[test]
 fn named_login_overrides_only_the_provider_home_key() {
     let ambient = BTreeMap::from([
         ("HOME".to_owned(), "/home/u".to_owned()),
@@ -41,15 +102,16 @@ fn named_login_overrides_only_the_provider_home_key() {
 fn session_login_env_resolves_named_accounts_and_refuses_an_undeclared_one() {
     let ambient = BTreeMap::from([("HOME".to_owned(), "/home/u".to_owned())]);
     let accounts = accounts("[claude.work]\nhome = \"/srv/work\"\n");
-    let work = session_login_env_from(&kind("claude"), &name("work"), &accounts, &ambient)
-        .expect("declared account");
+    let work = session_login(&kind("claude"), Some(&name("work")), &accounts)
+        .expect("declared account")
+        .env(&ambient);
     assert_eq!(
         work.get("CLAUDE_CONFIG_DIR").map(String::as_str),
         Some("/srv/work")
     );
     assert_eq!(work.get("HOME"), ambient.get("HOME"));
     assert!(matches!(
-        session_login_env_from(&kind("claude"), &name("missing"), &accounts, &ambient),
+        session_login(&kind("claude"), Some(&name("missing")), &accounts),
         Err(RoomLoginErr::Login(LoginErr::Unknown { .. }))
     ));
     assert_eq!(
@@ -407,7 +469,7 @@ fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
         ambient.clone(),
     );
 
-    let claude = set.login("claude").expect("claude login");
+    let claude = set.default_login("claude").expect("claude login");
     assert_eq!(claude.key().to_string(), "claude@work");
     assert_eq!(
         set.env(&claude)
@@ -416,7 +478,7 @@ fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
         Some("/srv/work")
     );
     assert_eq!(
-        set.key("codex").map(|key| key.to_string()),
+        set.default_key("codex").map(|key| key.to_string()),
         Some("codex@default".to_owned())
     );
 
@@ -425,15 +487,15 @@ fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
         Some(catalog),
         ambient.clone(),
     );
-    assert_eq!(removed.login("claude"), None);
+    assert_eq!(removed.default_login("claude"), None);
     assert!(
         removed
-            .login("codex")
+            .default_login("codex")
             .is_some_and(|login| login.is_default())
     );
 
     let unreadable = RoomLoginSet::new(None, None, ambient);
-    assert_eq!(unreadable.login("codex"), None);
+    assert_eq!(unreadable.default_login("codex"), None);
 }
 
 #[test]

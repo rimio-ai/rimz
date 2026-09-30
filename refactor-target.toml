@@ -141,7 +141,8 @@ upward-dependencies = ["address"]
 # Account declaration and settings sharing reuse the same canonical-home refusal (+1).
 # Launch rejection and version-floor capability inputs, version types, and the shared floor check (+7).
 # Pass 31b: narrow internal helpers and aliases; move attention defaults to config (-33).
-surface-budget = 925
+# Session login resolution, its facade export, and live-login sets share stamped account identity with consumers (+5).
+surface-budget = 930
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -377,7 +378,8 @@ path = "crates/rimz/src/harness"
 # Condition parsing, ordered readings, CI sources, hold state and evidence cross the scheduler/CLI seam (+17).
 # Condition admission and timing presentation share stage validation, state refinement and labels (+3).
 # Live condition scopes cross the harness/sidebar seam to keep pane-free CI probes alive (+1).
-surface-budget = 621
+# LaunchLogin::from_ancestry shares the stamped account inheritance rule (+1).
+surface-budget = 622
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -536,7 +538,8 @@ path = "crates/rimz/src/store"
 # Exec-wrapper warnings add their durable payload, event constructor, and writer boundary.
 # SidebarSnapshot::apply_machine_config stamps the per-machine config for the fold spine and the room-less CLI read.
 # Git-source admission shares the typed trunk signal vocabulary.
-surface-budget = 344
+# Explicit launch-login requests and room-default switching share the locked account boundary (+2).
+surface-budget = 346
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -790,6 +793,8 @@ surface-budget = 17
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"
 allowed-dependencies = [
+    "config",
+    "store::writer",
     "agents",
     "harness::launch",
     "address",
@@ -800,7 +805,8 @@ allowed-dependencies = [
 ]
 # `check_launch_room` shares the pure pinned-room decision with the CLI launch entries.
 # `LaunchFocus` shares caller-aware focus policy across interactive launch doors.
-surface-budget = 14
+# LaunchLogin shares account inheritance and preflight resolution (+2).
+surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/harness/plan.rs"

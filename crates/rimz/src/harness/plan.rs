@@ -54,7 +54,7 @@ impl LaunchAvailability {
             .map(|(_, kind, _)| kind)
             .collect();
         for kind in families {
-            let Some(login) = logins.key(kind) else {
+            let Some(login) = logins.default_key(kind) else {
                 continue;
             };
             if ProviderStatus::from_record(accounts.logins.get(&login)) == ProviderStatus::LoggedOut
@@ -1045,6 +1045,7 @@ pub fn launch_identity_requests(
         if let Some(ancestry) = ancestry {
             match ancestry {
                 LaunchAncestry::Peer {
+                    parent_login: _,
                     launch_generation,
                     launched_by,
                 } => {
@@ -1052,6 +1053,7 @@ pub fn launch_identity_requests(
                     launch.launched_by = launched_by.clone().map(Box::new);
                 }
                 LaunchAncestry::Subagent {
+                    parent_login: _,
                     parent_agent_id,
                     parent_agent_kind,
                     launch_generation,
@@ -1063,6 +1065,7 @@ pub fn launch_identity_requests(
             }
         }
         requests.push(AgentLaunchRequest {
+            login: crate::store::writer::LaunchLogin::RoomDefault,
             kind: cell.kind.clone(),
             agent_id: mint_launch_id(),
             name,

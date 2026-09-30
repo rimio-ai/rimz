@@ -33,6 +33,7 @@ fn attribution_omits_a_promptless_launch_in_every_mode() {
     store
         .begin_agent_launch_batch(
             &[AgentLaunchRequest {
+                login: rimz::store::writer::LaunchLogin::RoomDefault,
                 kind: rimz::ids::AgentKind::new_unchecked("codex"),
                 agent_id: "promptless-seat".into(),
                 name: AgentLaunchName::Explicit("quiet-seat".to_owned()),

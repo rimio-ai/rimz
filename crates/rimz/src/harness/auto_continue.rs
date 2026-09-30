@@ -145,7 +145,7 @@ pub(crate) fn resume_gate_recovered(
     }
     let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
     let capacity = logins
-        .key(agent.kind.as_str())
+        .default_key(agent.kind.as_str())
         .and_then(|key| ProviderCapacity::read(runtime, &key));
     match resume_park(agent, capacity.as_ref(), now) {
         Some(ResumeArm::Overloaded { .. }) => true,

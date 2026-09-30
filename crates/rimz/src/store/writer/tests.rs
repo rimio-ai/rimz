@@ -59,6 +59,27 @@ fn record_launch_warnings_appends_one_frame() {
 }
 
 #[test]
+fn launch_batch_pins_named_and_default_accounts_over_the_room_selection() {
+    let kind = AgentKind::new_unchecked("claude");
+    let room = crate::ids::RoomLogins::from([(kind.clone(), "personal".parse().unwrap())]);
+    for name in ["work", "default"] {
+        let mut request = launch_request("launch-test", AgentLaunchName::Mint);
+        request.kind = kind.clone();
+        request.login = LaunchLogin::Pinned(name.parse().unwrap());
+        request.launch.login = Some("ignored".parse().unwrap());
+        let identities = allocate_agent_launch_identities(&[request], &[], Some(&room)).unwrap();
+        assert_eq!(
+            identities[0]
+                .launch
+                .login
+                .as_ref()
+                .map(crate::ids::LoginName::as_str),
+            (name != "default").then_some(name)
+        );
+    }
+}
+
+#[test]
 fn launch_event_builder_preserves_serialized_state_shapes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());
@@ -68,6 +89,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
     let run_id = crate::ids::RunId::new();
     let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%7");
     let request = AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("codex"),
         agent_id: AgentSessionId::from("launch_follow_up"),
         name: AgentLaunchName::Explicit("writer".to_owned()),
@@ -269,6 +291,7 @@ fn launch_event_builder_omits_blank_text() {
     let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
     let store = Store::open(paths, runtime).expect("open store");
     let request = AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("codex"),
         agent_id: AgentSessionId::from("launch_fallback"),
         name: AgentLaunchName::Mint,
@@ -303,6 +326,7 @@ fn launch_batch_keeps_request_and_follow_up_order() {
     let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
     let store = Store::open(paths, runtime).expect("open store");
     let requests = ["first", "second"].map(|name| AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("codex"),
         agent_id: AgentSessionId::from(format!("launch-{name}")),
         name: AgentLaunchName::Explicit(name.to_owned()),
@@ -362,6 +386,7 @@ fn launch_batch_failure_keeps_earlier_identity_committed() {
     let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
     let store = Store::open(paths, runtime).expect("open store");
     let requests = ["first", "second"].map(|name| AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("codex"),
         agent_id: AgentSessionId::from(format!("launch-{name}")),
         name: AgentLaunchName::Explicit(name.to_owned()),
@@ -415,6 +440,7 @@ fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
     let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
     let store = Store::open(paths, runtime).expect("open store");
     let request = AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from("launch_state_flow"),
         name: AgentLaunchName::Explicit("planner".to_owned()),
@@ -518,6 +544,53 @@ fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
     let replaced = record::read(&paths.workspace_record).expect("read replacement");
     assert_eq!(replaced.rimz_bin.as_deref(), Some(second.as_path()));
     assert_eq!(replaced.rimz_build.as_deref(), Some("build-2"));
+}
+
+#[test]
+fn room_account_switch_preserves_other_defaults_and_returns_the_prior_login() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    let claude = AgentKind::new_unchecked("claude");
+    let codex = AgentKind::new_unchecked("codex");
+    let work = "work".parse().unwrap();
+    let personal = "personal".parse().unwrap();
+    store.record_workspace(&workspace).unwrap();
+    assert_eq!(
+        store.switch_room_login(&workspace, &claude, &work).unwrap(),
+        Default::default()
+    );
+    assert_eq!(
+        record::read(&paths.workspace_record).unwrap().logins,
+        Some(crate::ids::RoomLogins::from([(
+            claude.clone(),
+            work.clone()
+        )]))
+    );
+    store
+        .switch_room_login(&workspace, &codex, &personal)
+        .unwrap();
+    assert_eq!(
+        store
+            .switch_room_login(&workspace, &claude, &personal)
+            .unwrap(),
+        work
+    );
+    let logins = record::read(&paths.workspace_record)
+        .unwrap()
+        .logins
+        .unwrap();
+    assert_eq!(logins.get(&claude), Some(&personal));
+    assert_eq!(logins.get(&codex), Some(&personal));
+    assert_eq!(
+        store
+            .switch_room_login(&workspace, &claude, &personal)
+            .unwrap(),
+        personal
+    );
+    assert!(store.read_events().unwrap().is_empty());
 }
 
 #[test]
@@ -963,6 +1036,7 @@ fn launch_identity_allocation_rejects_explicit_live_name_or_session_prefix() {
         agent_state("claude", "prefix-session", Some("solid-lumen")),
     ];
     let duplicate = AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from("launch_a"),
         name: AgentLaunchName::Explicit("lucid-atlas".to_owned()),
@@ -971,6 +1045,7 @@ fn launch_identity_allocation_rejects_explicit_live_name_or_session_prefix() {
         prompt: None,
     };
     let prefix = AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from("launch_b"),
         name: AgentLaunchName::Explicit("prefix".to_owned()),
@@ -991,6 +1066,7 @@ fn soft_launch_name_falls_back_when_it_collides() {
         Some("lucid-atlas"),
     )];
     let request = AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from("launch_a"),
         name: AgentLaunchName::Soft("lucid-atlas".to_owned()),
@@ -1034,6 +1110,7 @@ fn launch_identity_tracks_explicit_name_provenance() {
 
 fn launch_request(id: &str, name: AgentLaunchName) -> AgentLaunchRequest {
     AgentLaunchRequest {
+        login: crate::store::writer::LaunchLogin::RoomDefault,
         kind: AgentKind::new_unchecked("claude"),
         agent_id: AgentSessionId::from(id),
         name,

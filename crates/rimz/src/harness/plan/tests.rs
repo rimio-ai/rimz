@@ -56,7 +56,13 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
             },
         )
         .unwrap();
-        let availability = LaunchAvailability::read(&runtime, &state, &config, now);
+        let availability = LaunchAvailability::read(
+            &runtime,
+            &state,
+            &config,
+            now,
+            &crate::store::writer::LaunchLogin::RoomDefault,
+        );
         assert_eq!(
             availability.unavailable(kind, alias),
             Some(TierSkipReason::Exhausted { until: Some(reset) }),
@@ -71,6 +77,18 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
         if pin.is_some() {
             assert!(availability.unavailable(kind, "gpt-6-astra").is_none());
         }
+        config.accounts = toml::from_str(&format!("[{kind}.work]\nhome = '/srv/work'\n")).unwrap();
+        let pinned = LaunchAvailability::read(
+            &runtime,
+            &state,
+            &config,
+            now,
+            &crate::store::writer::LaunchLogin::Pinned("work".parse().unwrap()),
+        );
+        assert!(
+            pinned.unavailable(kind, alias).is_none(),
+            "a fresh named login must not inherit the default's exhausted window"
+        );
     }
 }
 
@@ -1880,6 +1898,7 @@ fn launch_request_names_and_metadata() {
     }));
 
     let ancestry = LaunchAncestry::Subagent {
+        parent_login: "claude@work".parse().unwrap(),
         parent_agent_id: AgentSessionId::from("root-session"),
         parent_agent_kind: AgentKind::new_unchecked("claude"),
         launch_generation: 2,
@@ -1897,6 +1916,10 @@ fn launch_request_names_and_metadata() {
     )
     .unwrap();
     assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].login,
+        crate::store::writer::LaunchLogin::Pinned("work".parse().unwrap())
+    );
     assert_eq!(
         requests[0].name,
         AgentLaunchName::Explicit("docs".to_owned())
@@ -1930,6 +1953,7 @@ fn launch_request_names_and_metadata() {
         None,
         None,
         Some(&LaunchAncestry::Peer {
+            parent_login: "claude@default".parse().unwrap(),
             launch_generation: 2,
             launched_by: Some(crate::agents::LaunchedBy {
                 kind: AgentKind::new_unchecked("claude"),
@@ -1939,6 +1963,10 @@ fn launch_request_names_and_metadata() {
     )
     .unwrap();
     assert_eq!(peer_requests[0].launch.parent_agent_id, None);
+    assert_eq!(
+        peer_requests[0].login,
+        crate::store::writer::LaunchLogin::Pinned(Default::default())
+    );
     assert_eq!(peer_requests[0].launch.parent_agent_kind, None);
     assert_eq!(peer_requests[0].launch.launch_depth, Some(2));
     assert_eq!(

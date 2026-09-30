@@ -175,7 +175,7 @@ fn refresh_session_transcript_context_core(
     let prior = crate::store::agent_context::read_one(runtime, kind, session_id);
     let shared_pricing_cache_path = runtime.shared_pricing_cache_path();
     // A room account that no longer resolves has no home to read.
-    let Some(login) = logins.login(kind) else {
+    let Some(login) = logins.default_login(kind) else {
         return Ok(false);
     };
     let login_env = logins.env(&login);
@@ -296,7 +296,7 @@ pub fn confirm_codex_turn_death_from_pane(
         let now = Timestamp::now();
         let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
         let capacity = logins
-            .key("codex")
+            .default_key("codex")
             .and_then(|key| crate::agents::ProviderCapacity::read(runtime, &key));
         crate::agents::session::infer_turn_death_from_spent_window(
             "codex",

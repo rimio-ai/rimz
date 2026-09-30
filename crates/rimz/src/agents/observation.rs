@@ -119,7 +119,7 @@ pub struct LaunchParams {
     /// card handle when no role is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
-    /// The provider account the launch ran under, stamped by Store from the room's frozen selection; callers never set it. `None` is the provider's own `default` home, including legacy rows.
+    /// The provider account the process runs under. Store ignores this field on a launch request and stamps the allocated identity from its explicit login selection. `None` is the provider's own `default` home, including legacy rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<crate::ids::LoginName>,
     /// The permission posture selected by the launcher. Stored durably so an

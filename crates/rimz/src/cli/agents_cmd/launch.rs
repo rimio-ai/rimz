@@ -750,7 +750,7 @@ fn preflight_cell(
         rimz::agents::version::check_launch_version_floor(adapter, &path)?;
     }
     let logins = rimz::agents::RoomLoginSet::for_runtime(runtime);
-    if let Some(login) = logins.login(cell.kind.as_str())
+    if let Some(login) = logins.default_login(cell.kind.as_str())
         && checked_folder_trust.insert(login.key())
         && let Some(rimz::agents::FolderTrust::Undecided(gap)) = adapter.folder_trust(
             &workspace.worktree_root,

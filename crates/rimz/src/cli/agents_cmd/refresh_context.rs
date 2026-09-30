@@ -31,7 +31,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     let prior = rimz::store::agent_context::read_one(&runtime, kind, session_id);
     let logins = agents::RoomLoginSet::for_runtime(&runtime);
     // A room account that no longer resolves has no home to refresh from.
-    let Some(login) = logins.login(kind) else {
+    let Some(login) = logins.default_login(kind) else {
         return Ok(());
     };
     let login_env = logins.env(&login);
@@ -62,7 +62,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     }
 
     if let Some(realtime) = refresh.realtime_usage
-        && let Some(login) = agents::RoomLoginSet::for_runtime(&runtime).login(kind)
+        && let Some(login) = agents::RoomLoginSet::for_runtime(&runtime).default_login(kind)
     {
         wrote |=
             rimz::sidebar::refresh::complete_realtime_account_usage(&runtime, &login, realtime);

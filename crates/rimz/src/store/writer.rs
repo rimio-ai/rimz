@@ -70,8 +70,17 @@ pub enum AgentLaunchName {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaunchLogin {
+    /// Resolve the room default under the launch batch's workspace lock.
+    RoomDefault,
+    /// Preserve a session's or launching parent's exact account.
+    Pinned(crate::ids::LoginName),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentLaunchRequest {
     pub kind: AgentKind,
+    pub login: LaunchLogin,
     pub agent_id: AgentSessionId,
     pub name: AgentLaunchName,
     pub launch: LaunchParams,
@@ -253,6 +262,27 @@ impl Store {
             crate::disk::atomic::link_executable_atomically(&rimz_bin, &txn.paths.room_bin)
                 .map_err(record::WorkspaceRecordErr::from)?;
             Ok(())
+        })
+    }
+
+    /// Move one provider's default for future launches without changing existing agent stamps.
+    #[must_use = "durability barrier; check the result"]
+    pub fn switch_room_login(
+        &self,
+        workspace: &ResolvedWorkspace,
+        kind: &AgentKind,
+        name: &crate::ids::LoginName,
+    ) -> Result<crate::ids::LoginName> {
+        self.commit(|txn| {
+            let prior = record::read_optional(&txn.paths.workspace_record)?;
+            let mut record =
+                workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
+            let logins = record.logins.get_or_insert_default();
+            let prior = logins
+                .insert(kind.clone(), name.clone())
+                .unwrap_or_default();
+            record::write(txn.paths, &record)?;
+            Ok(prior)
         })
     }
 
@@ -749,10 +779,12 @@ fn allocate_agent_launch_identities(
         };
         taken.insert(name.clone());
         let mut launch = request.launch.clone();
-        launch.login = logins
-            .and_then(|l| l.get(&request.kind))
-            .filter(|name| !name.is_default())
-            .cloned();
+        launch.login = match &request.login {
+            LaunchLogin::RoomDefault => logins.and_then(|logins| logins.get(&request.kind)),
+            LaunchLogin::Pinned(name) => Some(name),
+        }
+        .filter(|name| !name.is_default())
+        .cloned();
         identities.push(AgentLaunchIdentity {
             kind: request.kind.clone(),
             agent_id: request.agent_id.clone(),

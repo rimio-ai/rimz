@@ -57,7 +57,7 @@ fn refresh_account_usage_with(
         }
         let started = Instant::now();
         let kind = panel.kind.as_str();
-        let Some(login) = logins.login(kind) else {
+        let Some(login) = logins.default_login(kind) else {
             trace_claim(runtime, kind, "login_unresolved", started.elapsed());
             continue;
         };
@@ -116,7 +116,7 @@ fn refresh_claimed_account_usage_with(
 ) -> bool {
     let started = Instant::now();
     let kind = key.kind.as_str();
-    let Some(login) = set.login(kind).filter(|login| login.key() == *key) else {
+    let Some(login) = set.default_login(kind).filter(|login| login.key() == *key) else {
         cancel_provider_account_usage_claim(runtime, key, claim_id);
         trace_usage_helper(runtime, kind, "login_changed", 0, 0, 0, started.elapsed());
         return false;

@@ -44,7 +44,7 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         None => DailyBudgetScope::Fleet,
         Some(kind) => DailyBudgetScope::Account(
             RoomLoginSet::for_runtime(store.runtime_paths())
-                .key(kind.as_str())
+                .default_key(kind.as_str())
                 .with_context(|| {
                     format!("cannot resolve this room's {kind} account; check `rimz accounts list`")
                 })?,

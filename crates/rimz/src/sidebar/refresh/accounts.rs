@@ -254,7 +254,7 @@ fn due_provider_logins(
 fn provider_logins(snapshot: &SidebarSnapshot, logins: &RoomLoginSet) -> Vec<ProviderLogin> {
     provider_kinds(snapshot)
         .iter()
-        .filter_map(|kind| logins.login(kind))
+        .filter_map(|kind| logins.default_login(kind))
         .collect()
 }
 
@@ -480,7 +480,7 @@ fn accounts_with_context_versions(
     let accounts = cache
         .logins
         .iter()
-        .filter(|(key, _)| logins.key(key.kind.as_str()).as_ref() == Some(*key))
+        .filter(|(key, _)| logins.default_key(key.kind.as_str()).as_ref() == Some(*key))
         .filter_map(|(key, record)| {
             record
                 .account

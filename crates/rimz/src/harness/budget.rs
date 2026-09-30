@@ -1357,7 +1357,7 @@ pub(crate) fn project_budget_views(
         });
     for panel in &mut snapshot.providers {
         panel.day_budget = None;
-        let Some(key) = logins.key(&panel.kind) else {
+        let Some(key) = logins.default_key(&panel.kind) else {
             continue;
         };
         let scope = DailyBudgetScope::Account(key.clone());

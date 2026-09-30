@@ -23,6 +23,7 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
     let requests = identities
         .iter()
         .map(|identity| rimz::store::writer::AgentLaunchRequest {
+            login: rimz::store::writer::LaunchLogin::RoomDefault,
             kind: identity.kind.clone(),
             agent_id: identity.agent_id.clone(),
             name: rimz::store::writer::AgentLaunchName::Explicit(identity.name.clone()),
