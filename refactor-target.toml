@@ -217,7 +217,8 @@ surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/cli"
-surface-budget = 26
+# Both worktree entrypoints share the PR branch choice prompt.
+surface-budget = 27
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -574,7 +575,8 @@ path = "crates/rimz/src/worktree"
 # The read-only lifetime resolver supplies attribution consumers across modules.
 # Unmanaged-launch validation and lifecycle ownership also serve the binary CLI.
 # Attribution probes the selected checkout's branch through the shared resolver.
-surface-budget = 57
+# PR branch choices and divergence facts cross the domain/CLI boundary.
+surface-budget = 59
 
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
@@ -3550,6 +3552,16 @@ reason = "Error type of pub orphan_sweep::resolve (orphan_sweep.rs:85-97); atlas
 kind = "item"
 key = "worktree::PushDestination"
 reason = "Pub field CreatedWorktree.push_destination (worktree.rs:182), and the binary renders CreatedWorktree (cli/worktree.rs:189); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "worktree::pr::PrBranchChoice"
+reason = "The binary chooses a PR branch tip before retrying domain checkout resolution."
+
+[[verdict]]
+kind = "item"
+key = "worktree::pr::PrBranchDivergence"
+reason = "The binary renders and selects defaults from the domain's PR divergence classification."
 
 [[verdict]]
 kind = "item"

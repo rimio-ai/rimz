@@ -274,6 +274,7 @@ fn unmanaged_launch_checkout_preserves_ownership_and_local_work() {
             &config,
             Some("feat/review"),
             None,
+            None,
             None
         ),
         Err(rimz::worktree::WorktreeErr::Unmarked { .. })
@@ -1304,6 +1305,7 @@ fn from_pr_reuse_requires_matching_pr_provenance() {
         Some("review"),
         None,
         true,
+        None,
     )
     .expect_err("different PR must not reuse worktree");
 
@@ -1318,6 +1320,7 @@ fn from_pr_reuse_requires_matching_pr_provenance() {
         Some("review"),
         None,
         true,
+        None,
     )
     .expect_err("reused worktree must still validate URL identity");
     assert!(err.to_string().contains("other/repo"), "{err}");
@@ -1392,7 +1395,8 @@ fn worktree_new_from_pr_fast_forwards_ancestor_local_branch() {
         .args(["worktree", "new", "--from-pr", "1"])
         .env("PATH", path_with_front(&shim_dir))
         .assert()
-        .success();
+        .success()
+        .stderr(contains("fast-forwarding"));
 
     let path = env.home_root.join("project-worktrees/pr-1");
     assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
@@ -1408,6 +1412,7 @@ fn worktree_new_from_pr_refuses_diverged_local_branch() {
     publish_pr_ref(&env, "refs/pull/1/head");
     git(&env.project_root, &["checkout", "-b", "feature"]);
     commit_file(&env.project_root, "local.txt", "local\n", "diverge locally");
+    let local = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
     git(&env.project_root, &["checkout", "main"]);
     configure_github_origin_rewrite(&env);
     let shim_dir = write_gh_pr_head_shim(&env, gh_same_repo_head());
@@ -1417,8 +1422,12 @@ fn worktree_new_from_pr_refuses_diverged_local_branch() {
         .env("PATH", path_with_front(&shim_dir))
         .assert()
         .failure()
-        .stderr(contains("local PR branch `feature` conflicts"))
-        .stderr(contains("diverged"));
+        .stderr(contains("local commits are not in the PR head"))
+        .stderr(contains("merge cleanly"));
+    assert_eq!(
+        git_stdout(&env.project_root, &["rev-parse", "feature"]),
+        local
+    );
 }
 
 #[cfg(unix)]
@@ -1449,7 +1458,213 @@ fn worktree_new_from_pr_refuses_branch_checked_out_elsewhere() {
         .assert()
         .failure()
         .stderr(contains("local PR branch `feature` conflicts"))
-        .stderr(contains("checked out at"));
+        .stderr(contains("does not manage"));
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_new_from_pr_reuses_marked_head_and_preserves_channel() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (head, _) = publish_pr_ref(&env, "refs/pull/1/head");
+    env.rimz()
+        .args(["worktree", "new", "feature", "--base", &head])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/feature");
+    let mut marker = rimz::worktree::read_marker_for_worktree(&path)
+        .unwrap()
+        .unwrap();
+    queue_channel_message(&env, "feature", "keep this");
+    configure_github_origin_rewrite(&env);
+    let shim = write_gh_pr_head_shim(&env, gh_same_repo_head());
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim))
+        .assert()
+        .success()
+        .stdout(contains("reused feature"));
+    marker.from_pr = Some(1);
+    assert_eq!(
+        rimz::worktree::read_marker_for_worktree(&path).unwrap(),
+        Some(marker)
+    );
+    assert!(!env.home_root.join("project-worktrees/pr-1").exists());
+    assert_eq!(env.store().list_messages().unwrap().len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_new_from_pr_named_holder_backfills_and_wrong_name_refuses() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (head, _) = publish_pr_ref(&env, "refs/pull/1/head");
+    env.rimz()
+        .args(["worktree", "new", "feature", "--base", &head])
+        .assert()
+        .success();
+    configure_github_origin_rewrite(&env);
+    let shim = write_gh_pr_head_shim(&env, gh_same_repo_head());
+    env.rimz()
+        .args(["worktree", "new", "other", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim))
+        .assert()
+        .failure()
+        .stderr(contains("omit -w, or pass -w feature"));
+    env.rimz()
+        .args(["worktree", "new", "feature", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim))
+        .assert()
+        .success()
+        .stdout(contains("reused feature"));
+    let path = env.home_root.join("project-worktrees/feature");
+    assert_eq!(
+        rimz::worktree::read_marker_for_worktree(&path)
+            .unwrap()
+            .unwrap()
+            .from_pr,
+        Some(1)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_new_from_pr_holder_fast_forward_protects_dirty_files() {
+    if git_missing() {
+        return;
+    }
+    for dirty in [false, true] {
+        let env = Env::new();
+        let (head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
+        env.rimz()
+            .args(["worktree", "new", "feature", "--base", &trunk])
+            .assert()
+            .success();
+        let path = env.home_root.join("project-worktrees/feature");
+        if dirty {
+            std::fs::write(path.join("feature.txt"), "uncommitted").unwrap();
+        }
+        configure_github_origin_rewrite(&env);
+        let shim = write_gh_pr_head_shim(&env, gh_same_repo_head());
+        let output = env
+            .rimz()
+            .args(["worktree", "new", "--from-pr", "1"])
+            .env("PATH", path_with_front(&shim))
+            .output()
+            .unwrap();
+        if dirty {
+            output
+                .assert()
+                .failure()
+                .stderr(contains("commit or stash"))
+                .stderr(contains(path.to_str().unwrap()));
+            assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), trunk);
+            assert_eq!(
+                std::fs::read_to_string(path.join("feature.txt")).unwrap(),
+                "uncommitted"
+            );
+        } else {
+            output
+                .assert()
+                .success()
+                .stderr(contains("fast-forwarding"))
+                .stdout(contains("reused feature"));
+            assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), head);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_new_from_pr_refuses_main_and_other_pr_holders() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (head, _) = publish_pr_ref(&env, "refs/pull/1/head");
+    git(&env.project_root, &["checkout", "-b", "feature", &head]);
+    configure_github_origin_rewrite(&env);
+    let shim = write_gh_pr_head_shim(&env, gh_same_repo_head());
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim))
+        .assert()
+        .failure()
+        .stderr(contains("main checkout"));
+    git(&env.project_root, &["checkout", "main"]);
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "2"])
+        .env("PATH", path_with_front(&shim))
+        .assert()
+        .success();
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim))
+        .assert()
+        .failure()
+        .stderr(contains("not requested PR 1"));
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_new_from_pr_rebased_and_conflicting_tips_do_not_move() {
+    if git_missing() {
+        return;
+    }
+    for holder in [false, true] {
+        for rebased in [false, true] {
+            let env = Env::new();
+            let (head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
+            git(&env.project_root, &["checkout", "-b", "feature", &trunk]);
+            if rebased {
+                commit_file(&env.project_root, "base.txt", "base\n", "new base");
+                git(&env.project_root, &["cherry-pick", &head]);
+            } else {
+                commit_file(
+                    &env.project_root,
+                    "feature.txt",
+                    "conflicting\n",
+                    "local patch",
+                );
+            }
+            let local = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+            // For patch equivalence, keep only the common feature patch on the local side.
+            if rebased {
+                git(&env.project_root, &["push", "--force", "origin", "feature"]);
+                git(&env.project_root, &["reset", "--hard", &head]);
+            }
+            let expected = if rebased { &head } else { &local };
+            git(&env.project_root, &["checkout", "main"]);
+            if holder {
+                git(&env.project_root, &["branch", "-D", "feature"]);
+                env.rimz()
+                    .args(["worktree", "new", "feature", "--base", expected])
+                    .assert()
+                    .success();
+            }
+            configure_github_origin_rewrite(&env);
+            let shim = write_gh_pr_head_shim(&env, gh_same_repo_head());
+            env.rimz()
+                .args(["worktree", "new", "--from-pr", "1"])
+                .env("PATH", path_with_front(&shim))
+                .assert()
+                .failure()
+                .stderr(contains(if rebased {
+                    "are all contained in it"
+                } else {
+                    "they conflict"
+                }))
+                .stderr(contains(if holder { "reset --keep" } else { "branch -f" }));
+            assert_eq!(
+                git_stdout(&env.project_root, &["rev-parse", "feature"]),
+                *expected
+            );
+        }
+    }
 }
 
 #[test]

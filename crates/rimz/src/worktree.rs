@@ -30,7 +30,7 @@ mod link;
 mod pr;
 
 pub use exclude::exclude_team_scratch;
-pub use pr::create_from_pr;
+pub use pr::{PrBranchChoice, PrBranchDivergence, create_from_pr};
 
 const MARKER_FILE: &str = "rimz-worktree.json";
 const MARKER_VERSION: u32 = 4;
@@ -149,6 +149,12 @@ pub enum WorktreeErr {
         "local PR branch `{branch}` conflicts with the remote head ({detail}); resolve the local branch or pass --branch <name> for a review-only checkout"
     )]
     PrBranchConflict { branch: String, detail: String },
+    #[error("local PR branch `{branch}` differs from the PR head: {divergence}; {}", pr::alignment_commands(branch, holder.as_deref()))]
+    PrBranchDiverged {
+        branch: String,
+        holder: Option<PathBuf>,
+        divergence: PrBranchDivergence,
+    },
     #[error("could not parse git output: {0}")]
     Parse(String),
     #[error(transparent)]
@@ -179,6 +185,7 @@ pub struct WorktreeMarker {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CreatedWorktree {
     pub marker: WorktreeMarker,
+    pub reused: bool,
     /// Files copied into the worktree from the project's `.worktreeinclude`.
     /// Zero for a reused worktree, which is never re-seeded.
     pub included: usize,
@@ -201,6 +208,7 @@ pub struct PushDestination {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchCheckout {
     pub cwd: PathBuf,
+    pub reused: bool,
     pub branch: Option<String>,
     /// Repository root from workspace resolution, or `None` outside Git; `--root` can override it.
     pub repo_root: Option<PathBuf>,
@@ -559,7 +567,7 @@ pub fn create(
         branch: derived_branch,
     } = match resolve_fresh_worktree(repo_root, config, name, None, reuse_existing)? {
         WorktreeCreateTarget::Fresh(fresh) => fresh,
-        WorktreeCreateTarget::Reuse(reused) => return Ok(reused),
+        WorktreeCreateTarget::Reuse(reused) => return Ok(*reused),
     };
     let branch = resolve_branch(branch, derived_branch.as_deref(), &name)?;
 
@@ -591,10 +599,12 @@ pub fn resolve_launch_checkout(
     config: &WorktreeConfig,
     worktree: Option<&str>,
     from_pr: Option<&PrTarget>,
+    pr_branch: Option<PrBranchChoice>,
     cwd: Option<&Path>,
 ) -> Result<LaunchCheckout> {
     if let Some(cwd) = cwd {
         return Ok(LaunchCheckout {
+            reused: false,
             cwd: cwd.to_path_buf(),
             branch: current_branch(cwd),
             repo_root: None,
@@ -610,10 +620,11 @@ pub fn resolve_launch_checkout(
             return Err(WorktreeErr::LaunchPrRequiresRepo);
         }
         let name = worktree.map(str::trim).filter(|name| !name.is_empty());
-        let created = create_from_pr(repo_root, config, pr, name, None, name.is_some())?;
+        let created = create_from_pr(repo_root, config, pr, name, None, name.is_some(), pr_branch)?;
         let review_only_reason = created.review_only_reason;
         let marker = created.marker;
         return Ok(LaunchCheckout {
+            reused: created.reused,
             branch: current_branch(&marker.worktree_path),
             cwd: marker.worktree_path,
             repo_root: Some(repo_root.to_path_buf()),
@@ -626,6 +637,7 @@ pub fn resolve_launch_checkout(
 
     let Some(raw_name) = worktree else {
         return Ok(LaunchCheckout {
+            reused: false,
             branch: current_branch(&workspace.worktree_root),
             cwd: workspace.worktree_root.clone(),
             repo_root: workspace.cwd_project_root.clone(),
@@ -649,6 +661,7 @@ pub fn resolve_launch_checkout(
     )?;
     let marker = created.marker;
     Ok(LaunchCheckout {
+        reused: created.reused,
         branch: current_branch(&marker.worktree_path),
         cwd: marker.worktree_path,
         repo_root: Some(repo_root.to_path_buf()),
@@ -698,6 +711,7 @@ pub fn resolve_unmanaged_launch_checkout(
         });
     }
     Ok(LaunchCheckout {
+        reused: false,
         branch: current_branch(&path),
         cwd: path,
         repo_root: Some(repo_root.to_path_buf()),
@@ -964,6 +978,23 @@ pub fn remove_marked_worktree(
     force: bool,
     hooks: &WorktreeHooks,
 ) -> Result<RemovalOutcome> {
+    remove_checkout(repo_root, path, marker, force, hooks)?;
+    let branch_deletion = delete_branch(repo_root, marker, force)?;
+    Ok(RemovalOutcome {
+        worktree_name: marker.name.clone(),
+        branch: marker.branch.clone(),
+        removed_path: path.to_owned(),
+        branch_deletion,
+    })
+}
+
+fn remove_checkout(
+    repo_root: &Path,
+    path: &Path,
+    marker: &WorktreeMarker,
+    force: bool,
+    hooks: &WorktreeHooks,
+) -> Result<()> {
     hooks.validate()?;
     ensure_repo(repo_root)?;
     leave_worktree_before_removal(repo_root, path)?;
@@ -987,13 +1018,7 @@ pub fn remove_marked_worktree(
     ) {
         tracing::warn!(worktree = %marker.name, error = %error, "worktree.removed hook failed");
     }
-    let branch_deletion = delete_branch(repo_root, marker, force)?;
-    Ok(RemovalOutcome {
-        worktree_name: marker.name.clone(),
-        branch: marker.branch.clone(),
-        removed_path: path.to_owned(),
-        branch_deletion,
-    })
+    Ok(())
 }
 
 fn repository_operation_in_progress(cwd: &Path) -> bool {
@@ -1249,7 +1274,7 @@ struct MarkerProvenance {
 
 enum WorktreeCreateTarget {
     Fresh(FreshWorktree),
-    Reuse(CreatedWorktree),
+    Reuse(Box<CreatedWorktree>),
 }
 
 fn resolve_fresh_worktree(
@@ -1274,13 +1299,14 @@ fn resolve_fresh_worktree(
                 name: name.clone(),
                 path: path.clone(),
             })?;
-            return Ok(WorktreeCreateTarget::Reuse(CreatedWorktree {
+            return Ok(WorktreeCreateTarget::Reuse(Box::new(CreatedWorktree {
+                reused: true,
                 marker,
                 included: 0,
                 linked: 0,
                 push_destination: None,
                 review_only_reason: None,
-            }));
+            })));
         }
         return Err(WorktreeErr::Exists { name, path });
     }
@@ -1339,7 +1365,7 @@ fn add_worktree(
             ["worktree", "add", path_arg.as_str(), branch.as_str()],
         )?,
     }
-    finish_worktree(repo_root, name, path, branch, provenance, hooks)
+    finish_worktree(repo_root, name, path, branch, provenance, checkout, hooks)
 }
 
 fn finish_worktree(
@@ -1348,6 +1374,7 @@ fn finish_worktree(
     path: PathBuf,
     branch: String,
     provenance: MarkerProvenance,
+    checkout: Checkout<'_>,
     hooks: &WorktreeHooks,
 ) -> Result<CreatedWorktree> {
     let MarkerProvenance {
@@ -1375,7 +1402,13 @@ fn finish_worktree(
         &marker,
         hooks::TIMEOUT,
     ) {
-        let rollback = match remove_marked_worktree(repo_root, &path, &marker, true, hooks) {
+        let removal = match checkout {
+            Checkout::Existing => remove_checkout(repo_root, &path, &marker, true, hooks),
+            Checkout::NewBranch(_) | Checkout::Tracking(_) => {
+                remove_marked_worktree(repo_root, &path, &marker, true, hooks).map(|_| ())
+            }
+        };
+        let rollback = match removal {
             Ok(_) => "tree removed".to_owned(),
             Err(error) => format!("rollback failed: {error}"),
         };
@@ -1385,6 +1418,7 @@ fn finish_worktree(
         });
     }
     Ok(CreatedWorktree {
+        reused: false,
         marker,
         included,
         linked,

@@ -178,9 +178,15 @@ fn workspace(root_class: RootClass) -> ResolvedWorkspace {
 fn launch_checkout_without_flags_keeps_current_worktree() {
     let workspace = workspace(RootClass::Directory);
 
-    let checkout =
-        resolve_launch_checkout(&workspace, &WorktreeConfig::default(), None, None, None)
-            .expect("current checkout");
+    let checkout = resolve_launch_checkout(
+        &workspace,
+        &WorktreeConfig::default(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("current checkout");
 
     assert_eq!(checkout.cwd, workspace.worktree_root);
     assert_eq!(checkout.branch, None);
@@ -197,6 +203,7 @@ fn launch_checkout_cwd_override_is_user_owned() {
     let checkout = resolve_launch_checkout(
         &workspace,
         &WorktreeConfig::default(),
+        None,
         None,
         None,
         Some(directory.path()),
@@ -234,7 +241,7 @@ fn launch_checkout_reports_non_repository_flags_exactly() {
     let workspace = workspace(RootClass::Directory);
     let config = WorktreeConfig::default();
 
-    let worktree = resolve_launch_checkout(&workspace, &config, Some("demo"), None, None)
+    let worktree = resolve_launch_checkout(&workspace, &config, Some("demo"), None, None, None)
         .expect_err("worktree needs repo");
     assert_eq!(
         worktree.to_string(),
@@ -247,7 +254,7 @@ fn launch_checkout_reports_non_repository_flags_exactly() {
         host: None,
         repo: None,
     };
-    let from_pr = resolve_launch_checkout(&workspace, &config, None, Some(&pr), None)
+    let from_pr = resolve_launch_checkout(&workspace, &config, None, Some(&pr), None, None)
         .expect_err("PR needs repo");
     assert_eq!(
         from_pr.to_string(),
@@ -268,6 +275,7 @@ fn launch_checkout_creates_from_the_current_repo_root() {
         &workspace,
         &WorktreeConfig::default(),
         Some("cross-root"),
+        None,
         None,
         None,
     )
@@ -301,18 +309,32 @@ fn launch_checkout_reports_actual_branch_not_directory_name() {
     workspace.cwd_project_root = Some(repo.clone());
     workspace.worktree_root = repo.clone();
     workspace.worktree_branch = Some("stale-branch".to_owned());
-    let checkout = resolve_launch_checkout(&workspace, &config, Some("directory-name"), None, None)
-        .expect("managed checkout");
+    let checkout = resolve_launch_checkout(
+        &workspace,
+        &config,
+        Some("directory-name"),
+        None,
+        None,
+        None,
+    )
+    .expect("managed checkout");
     git_run(&checkout.cwd, ["checkout", "-b", "actual-branch"]).expect("change branch");
 
-    let selected = resolve_launch_checkout(&workspace, &config, Some("directory-name"), None, None)
-        .expect("existing managed checkout");
+    let selected = resolve_launch_checkout(
+        &workspace,
+        &config,
+        Some("directory-name"),
+        None,
+        None,
+        None,
+    )
+    .expect("existing managed checkout");
     assert_eq!(selected.branch.as_deref(), Some("actual-branch"));
     assert_eq!(selected.worktree_name.as_deref(), Some("directory-name"));
 
     workspace.worktree_root = checkout.cwd.clone();
-    let current =
-        resolve_launch_checkout(&workspace, &config, None, None, None).expect("current checkout");
+    let current = resolve_launch_checkout(&workspace, &config, None, None, None, None)
+        .expect("current checkout");
     assert_eq!(current.branch.as_deref(), Some("actual-branch"));
 
     let unmanaged_path = worktree_path(&repo, &config, "user-checkout").expect("path");
@@ -332,11 +354,18 @@ fn launch_checkout_reports_actual_branch_not_directory_name() {
     assert_eq!(unmanaged.branch.as_deref(), Some("user-branch"));
 
     git_run(&checkout.cwd, ["checkout", "--detach"]).expect("detach managed checkout");
-    let detached = resolve_launch_checkout(&workspace, &config, Some("directory-name"), None, None)
-        .expect("detached managed checkout");
+    let detached = resolve_launch_checkout(
+        &workspace,
+        &config,
+        Some("directory-name"),
+        None,
+        None,
+        None,
+    )
+    .expect("detached managed checkout");
     assert_eq!(detached.branch, None);
-    let current =
-        resolve_launch_checkout(&workspace, &config, None, None, None).expect("detached current");
+    let current = resolve_launch_checkout(&workspace, &config, None, None, None, None)
+        .expect("detached current");
     assert_eq!(current.branch, None);
 
     git_run(&unmanaged_path, ["checkout", "--detach"]).expect("detach user checkout");
@@ -359,6 +388,7 @@ fn launch_checkout_falls_back_to_the_room_repo_without_a_current_repo() {
         Some("room-root"),
         None,
         None,
+        None,
     )
     .expect("create from room repo");
 
@@ -372,6 +402,7 @@ fn launch_checkout_falls_back_to_the_room_repo_without_a_current_repo() {
 #[test]
 fn generated_launch_name_is_exposed_only_for_bare_checkout() {
     let generated = LaunchCheckout {
+        reused: false,
         cwd: PathBuf::from("/code/query-engine-worktrees/swift-orbit"),
         branch: Some("swift-orbit".to_owned()),
         repo_root: Some(PathBuf::from("/code/query-engine")),
