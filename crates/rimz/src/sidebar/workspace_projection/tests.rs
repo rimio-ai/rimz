@@ -193,12 +193,19 @@ fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
     let before = fold_at(
         last_activity
             + jiff::SignedDuration::from_secs(i64::from(
-                crate::agents::DEFAULT_STALL_AFTER_SECS - 1,
+                crate::config::AttentionConfig::default()
+                    .stalled_after_secs
+                    .get()
+                    - 1,
             )),
     );
     let after = fold_at(
         last_activity
-            + jiff::SignedDuration::from_secs(i64::from(crate::agents::DEFAULT_STALL_AFTER_SECS)),
+            + jiff::SignedDuration::from_secs(i64::from(
+                crate::config::AttentionConfig::default()
+                    .stalled_after_secs
+                    .get(),
+            )),
     );
     assert_eq!(status(before.snapshot()), Some(AgentStatus::Running));
     assert_eq!(status(after.snapshot()), Some(AgentStatus::Failed));

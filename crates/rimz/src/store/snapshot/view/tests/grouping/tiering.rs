@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{ATTENTION_AGE_CEILING_SECS, DEFAULT_INACTIVE_AFTER_SECS};
+use crate::agents::ATTENTION_AGE_CEILING_SECS;
 use crate::store::snapshot::{RowCard, WorktreeTrunkSync};
 
 fn ranked_snapshot(mut agents: Vec<AgentState>) -> SidebarSnapshot {
@@ -165,8 +165,13 @@ fn clean_success_group_leads_merged_success_group() {
 fn merged_success_archives_immediately_and_attention_revives_it() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done", "/repo/done", AgentStatus::Success, 1_000).active_ago(5 * 60),
-        agent_in("warm", "/repo/warm", AgentStatus::Idle, 2_000)
-            .active_ago(i64::from(DEFAULT_INACTIVE_AFTER_SECS) + 1),
+        agent_in("warm", "/repo/warm", AgentStatus::Idle, 2_000).active_ago(
+            i64::from(
+                crate::config::AttentionConfig::default()
+                    .inactive_after_secs
+                    .get(),
+            ) + 1,
+        ),
     ]);
     let done = snapshot
         .worktree_groups

@@ -1454,7 +1454,10 @@ fn repeated_tool_payload_updates_and_restarts_the_activity_run() {
     assert_eq!(repeated.tool, "Bash");
     assert_eq!(repeated.count, 3);
 
-    for _ in 3..rimz::agents::DEFAULT_TOOL_REPEAT_ATTENTION_AFTER {
+    for _ in 3..rimz::config::AttentionConfig::default()
+        .tool_repeat_attention_after
+        .get()
+    {
         run_claude_lifecycle(&env, payload("cargo check"));
     }
     let escalated = rimz::agent_activity::read_for_keys(&runtime, [("claude", "sess-repeat")])
@@ -1463,7 +1466,9 @@ fn repeated_tool_payload_updates_and_restarts_the_activity_run() {
         .expect("escalated repeated-tool run");
     assert_eq!(
         escalated.count,
-        rimz::agents::DEFAULT_TOOL_REPEAT_ATTENTION_AFTER
+        rimz::config::AttentionConfig::default()
+            .tool_repeat_attention_after
+            .get()
     );
     let pane = tmux_pane("%0", "claude", &env.project_root);
     let looping = env.snapshot_json_with_panes(std::slice::from_ref(&pane));
@@ -1506,7 +1511,7 @@ fn repeated_tool_payload_updates_and_restarts_the_activity_run() {
         } if agent_kind.as_str() == "claude"
             && agent_id.as_str() == "sess-repeat"
             && tool == "Bash"
-            && *count == rimz::agents::DEFAULT_TOOL_REPEAT_ATTENTION_AFTER
+            && *count == rimz::config::AttentionConfig::default().tool_repeat_attention_after.get()
     ));
 
     run_claude_lifecycle(&env, payload("cargo test"));

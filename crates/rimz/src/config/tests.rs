@@ -1408,26 +1408,15 @@ fn sidebar_fields_parse_defaults_and_reject_zero() {
 fn attention_config_defaults_parses_and_rejects_zero() {
     let dir = tempdir().expect("tempdir");
     let config = load_no_fragments(&write(&dir, "")).expect("load");
-    assert_eq!(
-        config.agents.attention.active_grace_secs.get(),
-        crate::agents::DEFAULT_ACTIVE_GRACE_SECS,
-    );
-    assert_eq!(
-        config.agents.attention.stalled_after_secs.get(),
-        crate::agents::DEFAULT_STALL_AFTER_SECS,
-    );
-    assert_eq!(
-        config.agents.attention.tool_repeat_warn_after.get(),
-        crate::agents::DEFAULT_TOOL_REPEAT_WARN_AFTER,
-    );
+    assert_eq!(config.agents.attention.active_grace_secs.get(), 180);
+    assert_eq!(config.agents.attention.stalled_after_secs.get(), 1800);
+    assert_eq!(config.agents.attention.tool_repeat_warn_after.get(), 3);
     assert_eq!(
         config.agents.attention.tool_repeat_attention_after.get(),
-        crate::agents::DEFAULT_TOOL_REPEAT_ATTENTION_AFTER,
+        20,
     );
-    assert_eq!(
-        config.agents.attention.archive_after_secs.get(),
-        crate::agents::DEFAULT_ARCHIVE_AFTER_SECS,
-    );
+    assert_eq!(config.agents.attention.archive_after_secs.get(), 86400);
+    assert_eq!(config.agents.attention.inactive_after_secs.get(), 3600);
 
     let tuned = load_no_fragments(&write_named(
         &dir,
