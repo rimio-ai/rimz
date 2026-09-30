@@ -79,6 +79,10 @@ fn provider_compiler_preserves_action_and_trailing_argument_order() {
         assert!(argv.windows(2).any(|pair| pair == ["--model", "o3"]));
         assert!(argv.iter().any(|arg| arg == verb), "{argv:?}");
         assert!(session.is_none_or(|id| argv.iter().any(|arg| arg == id)));
+        assert_eq!(argv.iter().filter(|arg| *arg == "--no-daemon").count(), 1);
+        let flag = if session.is_some() { 3 } else { 1 };
+        assert_eq!(argv[flag], "--no-daemon");
+        assert_eq!(&argv[flag + 1..flag + 3], &["--model", "o3"]);
     }
 }
 
@@ -99,6 +103,38 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         identity: ExecIdentity::default(),
+    }
+}
+
+#[test]
+fn provider_compiler_rejects_remote_codex_on_every_action() {
+    for args in [vec!["--remote", "host:1"], vec!["--remote=host:1"]] {
+        let extra_args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+        for action in [
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: extra_args.clone(),
+            },
+            ExecAction::Resume {
+                session_id: "sess-1".to_owned(),
+                extra_args: extra_args.clone(),
+            },
+            ExecAction::Fork {
+                session_id: "sess-1".to_owned(),
+                extra_args: extra_args.clone(),
+            },
+        ] {
+            let codex = crate::agents::find_definition("codex").unwrap();
+            assert!(matches!(
+                compile_provider_argv(codex, "codex", &action, Path::new("/repo")),
+                Err(AgentProcessCompileErr::RejectedArg {
+                    flag: "--remote",
+                    ..
+                })
+            ));
+            let claude = crate::agents::find_definition("claude").unwrap();
+            assert!(compile_provider_argv(claude, "claude", &action, Path::new("/repo")).is_ok());
+        }
     }
 }
 
@@ -359,8 +395,14 @@ fn process_compiler_locks_down_only_subagent_launches() {
         );
         let ordinary = compile_agent_process(project.path(), &invocation, project.path(), None)
             .expect("ordinary process");
+        let args_start = 1 + crate::agents::find_definition(kind)
+            .unwrap()
+            .spec()
+            .launch
+            .fixed_args
+            .len();
         assert_eq!(
-            ordinary.provider_argv[1..1 + profile_args.len()],
+            ordinary.provider_argv[args_start..args_start + profile_args.len()],
             profile_args
         );
 
@@ -1971,20 +2013,21 @@ fn program_lookup_uses_path_from_shell_startup() {
     .expect("write shell");
     chmod_executable(&shell);
 
-    assert!(
-        program_resolves_with(
+    assert_eq!(
+        resolve_program_with(
             Some(&shell),
             true,
             &BTreeMap::new(),
             agent.file_name().unwrap().to_str().unwrap()
         )
-        .expect("lookup")
+        .expect("lookup"),
+        Some(agent)
     );
 }
 
 #[test]
 fn program_lookup_rejects_invalid_launch_env_keys() {
-    let err = program_resolves_with(
+    let err = resolve_program_with(
         Some(Path::new("/bin/sh")),
         true,
         &env(&[("BAD=KEY", "one")]),

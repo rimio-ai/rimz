@@ -14,7 +14,7 @@ fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
         &path,
         "#!/bin/bash\n\
          case \"${1:-}\" in\n\
-           --version) printf '%s 0.0.0\\n' \"${0##*/}\"; exit 0;;\n\
+           --version) printf '%s 0.159.2\\n' \"${0##*/}\"; exit 0;;\n\
            auth|login) exit 1;;\n\
          esac\n\
          printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
@@ -1097,7 +1097,7 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
     std::fs::write(
         agent_bin.join("codex"),
         "#!/bin/bash\n\
-         case \"$1\" in --version) printf 'codex 0.0.0\\n'; exit 0;; app-server) exit 0;; esac\n\
+         case \"$1\" in --version) printf 'codex 0.159.2\\n'; exit 0;; app-server) exit 0;; esac\n\
          printf '%s\\n' \"$@\" >> \"$RIMZ_TEST_AGENT_ARGV\"\n\
          printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
          exec -a codex sleep 300\n",

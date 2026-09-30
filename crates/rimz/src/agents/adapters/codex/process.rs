@@ -119,6 +119,7 @@ mod tests {
         // A plain in-pane codex TUI is a standalone session, not the daemon —
         // process liveness reaps it, so it must not join the daemon set.
         assert!(!is_codex_daemon_cmdline("codex"));
+        assert!(!is_codex_daemon_cmdline("codex --no-daemon"));
         assert!(!is_codex_daemon_cmdline("codex --model gpt-5.5"));
         // A non-codex server that merely spells a marker is not the codex daemon.
         assert!(!is_codex_daemon_cmdline("some-other app-server"));
@@ -128,6 +129,7 @@ mod tests {
     fn codex_cli_cmdline_matches_bare_cli_not_daemon() {
         // The in-pane TUI a user launches, including the npm `node` wrapper.
         assert!(is_interactive_process("codex"));
+        assert!(is_interactive_process("codex --no-daemon"));
         assert!(is_interactive_process("codex --model gpt-5.5"));
         assert!(is_interactive_process("node /usr/bin/codex"));
         assert!(is_interactive_process("codex-aarch64-apple-darwin"));
@@ -148,6 +150,10 @@ mod tests {
 
     #[test]
     fn codex_resume_cmdline_yields_session_id() {
+        assert_eq!(
+            codex_resumed_session_id_from_cmdline("codex resume sess-1 --no-daemon").as_deref(),
+            Some("sess-1")
+        );
         assert_eq!(
             codex_resumed_session_id_from_cmdline("codex resume 019ea276").as_deref(),
             Some("019ea276")

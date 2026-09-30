@@ -106,6 +106,12 @@ pub enum ProgramLookupErr {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentProcessCompileErr {
+    #[error("{kind} does not accept {flag} under RimZ: {reason}")]
+    RejectedArg {
+        kind: String,
+        flag: &'static str,
+        reason: &'static str,
+    },
     #[error(transparent)]
     LaunchSettings(#[from] crate::agents::skills::LaunchSettingsErr),
     #[error("unknown agent kind `{kind}`")]
@@ -391,7 +397,6 @@ pub enum ExecAction {
 }
 
 impl ExecAction {
-    #[cfg(test)]
     pub(super) fn extra_args(&self) -> &[String] {
         match self {
             Self::Launch { extra_args, .. }
@@ -614,6 +619,13 @@ pub fn compile_provider_argv(
     action: &ExecAction,
     cwd: &Path,
 ) -> AgentProcessResult<Vec<String>> {
+    if let Some(rejected) = adapter.rejected_extra_arg(action.extra_args()) {
+        return Err(AgentProcessCompileErr::RejectedArg {
+            kind: kind.to_owned(),
+            flag: rejected.flag,
+            reason: rejected.reason,
+        });
+    }
     if let ExecAction::Launch {
         prompt: Some(prompt),
         ..
@@ -1029,8 +1041,8 @@ pub fn preflight_agent_process(
     request: &ExecRequest,
     cwd: &Path,
     host_runtime: Option<&RuntimePaths>,
-) -> AgentProcessResult<()> {
-    compile_agent_process(project_root, request, cwd, host_runtime).map(drop)
+) -> AgentProcessResult<CompiledAgentProcess> {
+    compile_agent_process(project_root, request, cwd, host_runtime)
 }
 
 /// Preflight one fresh provider launch before detailed pane identity exists.
@@ -1041,6 +1053,7 @@ pub fn preflight_agent_kind(project_root: &Path, kind: &str, cwd: &Path) -> Agen
         cwd,
         None,
     )
+    .map(drop)
 }
 
 /// Encode the launch prompt by artifact path, keeping its body out of mux argv.
@@ -1402,13 +1415,13 @@ fn invalid_env_key(env: &BTreeMap<String, String>) -> Option<&str> {
         .map(String::as_str)
 }
 
-/// Return whether `program` resolves in the PATH that an agent launch will
+/// Resolve `program` in the PATH that an agent launch will
 /// see after shell startup files and RimZ's launch env are applied.
-pub fn program_resolves_after_shell_rc(
+pub fn resolve_program_after_shell_rc(
     env: &BTreeMap<String, String>,
     program: &str,
-) -> Result<bool, ProgramLookupErr> {
-    program_resolves_with(
+) -> Result<Option<PathBuf>, ProgramLookupErr> {
+    resolve_program_with(
         crate::proc::user_shell().as_deref(),
         Path::new(ENV_BIN).is_file(),
         env,
@@ -1416,17 +1429,17 @@ pub fn program_resolves_after_shell_rc(
     )
 }
 
-fn program_resolves_with(
+fn resolve_program_with(
     shell: Option<&Path>,
     env_bin_available: bool,
     env: &BTreeMap<String, String>,
     program: &str,
-) -> Result<bool, ProgramLookupErr> {
+) -> Result<Option<PathBuf>, ProgramLookupErr> {
     let Some(path) = final_launch_path_with(shell, env_bin_available, env)? else {
-        return Ok(false);
+        return Ok(None);
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    Ok(which::which_in(program, Some(path), cwd).is_ok())
+    Ok(which::which_in(program, Some(path), cwd).ok())
 }
 
 fn final_launch_path_with(

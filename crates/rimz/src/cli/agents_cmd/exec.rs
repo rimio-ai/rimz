@@ -194,6 +194,16 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .transpose()
         .inspect_err(|_| fail())?;
     let process = plan.process();
+    if let Some(adapter) = adapter
+        && adapter.min_version().is_some()
+        && let Ok(Some(path)) = rimz::harness::launch::resolve_program_after_shell_rc(
+            &process.env,
+            &process.provider_program,
+        )
+    {
+        rimz::agents::version::check_launch_version_floor(adapter, &path)
+            .inspect_err(|_| fail())?;
+    }
     if let Err(error) = rimz::lsp::registry::register_lease(
         &invocation.cwd,
         request.identity.launch_id.as_deref(),

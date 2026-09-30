@@ -644,12 +644,20 @@ fn preflight_cell(
         prompt: prompt.map(str::to_owned),
         extra_args: cell.args.clone(),
     };
-    rimz::harness::launch::preflight_agent_process(
+    let process = rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
         &request,
         &workspace.worktree_root,
         (isolation == rimz::config::Isolation::Host).then_some(runtime),
     )?;
+    if adapter.min_version().is_some()
+        && let Ok(Some(path)) = rimz::harness::launch::resolve_program_after_shell_rc(
+            &process.env,
+            &process.provider_program,
+        )
+    {
+        rimz::agents::version::check_launch_version_floor(adapter, &path)?;
+    }
     let logins = rimz::agents::RoomLoginSet::for_runtime(runtime);
     if let Some(login) = logins.login(cell.kind.as_str())
         && checked_folder_trust.insert(login.key())
