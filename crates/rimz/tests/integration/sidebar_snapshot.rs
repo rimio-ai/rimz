@@ -273,6 +273,39 @@ fn snapshot_for_a_room_less_id_is_empty_and_creates_nothing() {
 }
 
 #[test]
+fn snapshot_for_a_room_less_id_carries_the_machine_config() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.rimz_home()).expect("rimz home");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[sidebar]\ntrunk = \"develop\"\n",
+    )
+    .expect("write machine config");
+
+    let output = env
+        .rimz()
+        .args([
+            "sidebar",
+            "snapshot",
+            "--workspace-id",
+            ROOM_LESS_ID,
+            "--json",
+        ])
+        .output()
+        .expect("spawn sidebar snapshot");
+
+    assert!(
+        output.status.success(),
+        "snapshot failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("snapshot json");
+    assert_eq!(snapshot["sidebar"]["trunk"], "develop");
+    assert_no_dir_named_for_room_less_id(&env);
+}
+
+#[test]
 fn frame_for_a_room_less_id_renders_and_creates_nothing() {
     let env = Env::new();
 
