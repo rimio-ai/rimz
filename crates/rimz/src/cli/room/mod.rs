@@ -776,6 +776,21 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
     }
 }
 
+fn folder_trust_offer<'a>(
+    rows: &'a [rimz::agents::FolderTrustRow],
+    dismissed: &[String],
+) -> (Vec<&'a rimz::agents::FolderTrustRow>, Vec<String>) {
+    let rows: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            matches!(row.trust, rimz::agents::FolderTrust::Undecided(_))
+                && !dismissed.iter().any(|kind| kind == row.kind)
+        })
+        .collect();
+    let decline = rows.iter().map(|row| row.kind.to_owned()).collect();
+    (rows, decline)
+}
+
 fn prompt_folder_trust(
     workspace: &rimz::ResolvedWorkspace,
     logins: &rimz::agents::RoomLoginSet,
@@ -787,13 +802,7 @@ fn prompt_folder_trust(
         &workspace.worktree_root,
         Some(workspace.launch_repo_root()),
     );
-    let rows: Vec<_> = rows
-        .iter()
-        .filter(|row| {
-            matches!(row.trust, FolderTrust::Undecided(_))
-                && !dismissed.iter().any(|kind| kind == row.kind)
-        })
-        .collect();
+    let (rows, declined_kinds) = folder_trust_offer(&rows, &dismissed);
     if rows.is_empty() {
         return Ok(());
     }
@@ -829,8 +838,7 @@ fn prompt_folder_trust(
         rimz::trust::clear_folder_trust_dismissal(&workspace.project_root)?;
         crate::cli::folder_trust::grant(&grantable, "rimz")?;
     } else {
-        let kinds: Vec<_> = rows.iter().map(|row| row.kind.to_owned()).collect();
-        rimz::trust::dismiss_folder_trust_prompt(&workspace.project_root, &kinds)?;
+        rimz::trust::dismiss_folder_trust_prompt(&workspace.project_root, &declined_kinds)?;
         writeln!(
             crate::cli::render::err(),
             "rimz: left undecided; run `rimz trust grant --agents` when ready."

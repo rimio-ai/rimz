@@ -101,9 +101,39 @@ pub(super) fn grant(rows: &[&FolderTrustRow], prefix: &str) -> Result<bool> {
             )?,
             Err(error) => {
                 succeeded = false;
-                writeln!(out, "{prefix}: {}: {error}", row.kind)?;
+                writeln!(
+                    out,
+                    "{prefix}: {}: {}",
+                    row.kind,
+                    grant_error(row.kind, &error)
+                )?;
             }
         }
     }
     Ok(succeeded)
+}
+
+fn grant_error(kind: &str, error: &rimz::agents::FolderTrustErr) -> String {
+    match error {
+        rimz::agents::FolderTrustErr::Changed { path } => format!(
+            "{} changed since the preview; run `rimz trust grant --agents {kind}`",
+            path.display()
+        ),
+        _ => error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn stale_folder_trust_preview_names_the_grant_command() {
+        let error = rimz::agents::FolderTrustErr::Changed {
+            path: "/config".into(),
+        };
+        let advice = super::grant_error("agent", &error);
+        assert_eq!(
+            advice,
+            "/config changed since the preview; run `rimz trust grant --agents agent`"
+        );
+    }
 }

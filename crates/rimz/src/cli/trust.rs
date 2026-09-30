@@ -50,6 +50,8 @@ pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
             trust::status(&workspace.project_root).context("reading trust state")?
         }
         TrustSubcmd::Grant { .. } => {
+            trust::clear_folder_trust_dismissal(&workspace.project_root)
+                .context("clearing folder-trust decline")?;
             trust::grant(&workspace.project_root).context("granting trust")?
         }
         TrustSubcmd::Revoke => trust::revoke(&workspace.project_root).context("revoking trust")?,
