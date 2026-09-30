@@ -120,6 +120,18 @@ fn channel_hold_table() {
         team: Some("other".into()),
         ..team_agent("claude", "other", "lead", checkout.to_str().unwrap(), 0)
     };
+    let ended_on_y = |secs_ago| AgentState {
+        channel: Some("Y".into()),
+        team: Some("other".into()),
+        ended_at: Some(Timestamp::now()),
+        ..team_agent(
+            "claude",
+            "on-y",
+            "lead",
+            checkout.to_str().unwrap(),
+            secs_ago,
+        )
+    };
     let cases = [
         (vec![present.clone()], None, Some(live_hold.clone())),
         (
@@ -131,6 +143,19 @@ fn channel_hold_table() {
             }),
         ),
         (vec![ended.clone()], Some("Stage: Done"), None),
+        (
+            vec![ended.clone(), ended_on_y(0)],
+            Some("Stage: Build"),
+            None,
+        ),
+        (
+            vec![ended.clone(), ended_on_y(20)],
+            Some("Stage: Build"),
+            Some(TeamHold {
+                reason: TeamHoldReason::BoardStage("Build".into()),
+                ..live_hold.clone()
+            }),
+        ),
         (vec![ended], None, None),
         (
             vec![AgentState {
