@@ -4,8 +4,8 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `8169df102`, before round 31: 4631 scoped commits (pace window 1158), 24 admission intents, 236 holds; no parse failures, ledger problems, pending restamps, or stale or ambiguous verdict keys. One open shape family, the queued seam below (15 suppressed by verdict).
-- **Seam queue:** `queued`: the synthetic-message delivery workflow (compose a `MessageRecord` with sender, channel and pane, `deliver_now`, record delivery failures), spelled in `cli/agents_cmd` (`cache_keepalive`, `subagent_report::report_fleet_with_kind`, `team_report::report_done`) and twice in `cli/remote/web`, and once in its owner as `message::compact::send_compact`. Rehome it out of the `cli` edge into one `message` interface. A seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
+- **Survey:** base `8169df102`, before round 31: 4631 scoped commits (pace window 1158), 24 admission intents, 236 holds; no parse failures, ledger problems, pending restamps, or stale or ambiguous verdict keys. After pass 31a: no open shape family; the residual synthetic-message family is held by verdict.
+- **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Reopened:** `agents/state` and `agents/(root)` (scoped churn past its row's count; `(root)` rows count their root file's commits since the history-path fix).
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
@@ -153,7 +153,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
 | `lsp` | holds; landed pass-26a | `1ec086301` | 30 | one sweep, memory measure, parsed target and lease list; domain presentation and broker RAII hold. |
-| `message` | holds; landed pass-27c | `844951543` | 30 | timing-only DispatchMode; one interrupt-key and delivery-kind owner; reply machine holds. |
+| `message` | holds; landed pass-31a | `57dd68a57` | 30 | synthetic-message delivery owned by `synthetic.rs`; compact, reply machine and dispatch modes hold; approved SLOC ceiling +23 for request type and struct-literal composition at seven call sites. |
 | `mux` | holds; landed pass-18c | `9ba3585b9` | 30 | planner verdicts private; `SplitPaneOptions::from_command` owns the pane-command projection. |
 | `mux/(root)` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
 | `mux/tmux` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
@@ -294,6 +294,7 @@ One row per intended upward edge, `` `from` → `to` `` with an optional `to::{a
 
 Refactor candidates a pass judged real but could not land, each with its concrete blocker. Pace is not a blocker: a candidate in a module under feature work is picked, and its conflicts are resolved at merge. Compiler-refused narrowings (atlas caveat 13) are never deferrals; do not re-plan them from `inspect`'s `narrow to` column.
 
+- `harness/schedule/pending` and `cli`: the human `RunStatus` label is spelled twice in `cli` (`crates/rimz/src/cli/supervised/output.rs::status_label`, `crates/rimz/src/cli/agents_cmd/subagent_report.rs::status_label`, both `completed`) and once more in `crates/rimz/src/harness/schedule/pending.rs` as `done`; one owner on `store::run::RunStatus` needs the user to pick `done` or `completed`, which is user-visible wording.
 - `harness/team_stage` ↔ `cli/teams`: trusted team loading remains duplicated; sharing it needs a typed harness error and a pass owning the CLI flip caller.
 - `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
 - `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
