@@ -84,6 +84,31 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
 }
 
 #[test]
+fn wildcard_subscription_scope_uses_the_next_concrete_value() {
+    for (path, suffix) in [(None, ""), (Some("/x"), " on /x")] {
+        let mut task = task();
+        task.signal = Some("pr.conflicted".to_owned());
+        let mut matches = std::collections::BTreeMap::from([("branch".to_owned(), "*".to_owned())]);
+        if let Some(path) = path {
+            matches.insert("path".to_owned(), path.to_owned());
+        }
+        task.matches = Some(matches);
+        let prompt = compose_wait(
+            "any",
+            &task,
+            Some(&meta("@coder")),
+            Evidence::Manual,
+            "",
+            now(),
+        );
+        assert_eq!(
+            prompt.lines().next().unwrap(),
+            format!("waited on pr.conflicted{suffix}")
+        );
+    }
+}
+
+#[test]
 fn watch_exit_success_keeps_output_summary_path_and_note() {
     assert_watch(
         WatchVerdict::Exited {

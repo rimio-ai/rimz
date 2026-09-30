@@ -156,7 +156,9 @@ fn subscription_scope(task: &TaskEntry) -> String {
         return String::new();
     };
     for key in ["branch", "path", "instance", "team", "handle", "session"] {
-        if let Some(scope) = matches.get(key) {
+        if let Some(scope) = matches.get(key)
+            && !crate::harness::schedule::signal::is_match_wildcard(scope)
+        {
             return format!(" on {scope}");
         }
     }
