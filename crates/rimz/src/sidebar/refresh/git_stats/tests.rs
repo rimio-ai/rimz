@@ -6,6 +6,115 @@ use jiff::Timestamp;
 use std::process::Command;
 
 #[test]
+fn condition_scopes_union_with_panes_without_duplicates() {
+    let pane_dir = tempfile::tempdir().unwrap();
+    let condition_dir = tempfile::tempdir().unwrap();
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::from_project_root(pane_dir.path()),
+        vec![],
+        Timestamp::now(),
+    );
+    snapshot.worktree_groups = vec![worktree_group(pane_dir.path(), vec![])];
+    let scopes = BTreeSet::from([
+        pane_dir.path().display().to_string(),
+        condition_dir.path().display().to_string(),
+    ]);
+    let needed = needed_worktree_paths(&snapshot, scopes.clone());
+    assert_eq!(needed.len(), 2);
+    assert_eq!(needed.into_iter().collect::<BTreeSet<_>>(), scopes);
+}
+
+#[test]
+fn condition_catalog_supplies_pane_free_probe_scopes() {
+    use crate::config::{TaskEntry, Tasks};
+    use crate::harness::schedule::{arming, when};
+
+    let root = tempfile::tempdir().unwrap();
+    let scope = root.path().join("checkout");
+    std::fs::create_dir(&scope).unwrap();
+    let paths = crate::StatePaths::for_project_root(root.path()).unwrap();
+    let runtime =
+        crate::RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path())
+            .unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        dir: Some(scope.clone()),
+        when: Some(vec!["ci=passed".to_owned()]),
+        check: Some("true".to_owned()),
+        ..TaskEntry::default()
+    };
+    let tasks = Tasks(BTreeMap::from([
+        ("live".to_owned(), entry.clone()),
+        (
+            "disabled".to_owned(),
+            TaskEntry {
+                dir: Some(root.path().to_owned()),
+                ..entry.clone()
+            },
+        ),
+        (
+            "paused".to_owned(),
+            TaskEntry {
+                dir: Some(root.path().to_owned()),
+                ..entry.clone()
+            },
+        ),
+        (
+            "invalid".to_owned(),
+            TaskEntry {
+                when: Some(vec!["ci=typo".to_owned()]),
+                ..entry.clone()
+            },
+        ),
+        (
+            "stage".to_owned(),
+            TaskEntry {
+                dir: Some(root.path().to_owned()),
+                when: Some(vec!["team.stage=Done".to_owned()]),
+                ..entry.clone()
+            },
+        ),
+        (
+            "missing".to_owned(),
+            TaskEntry {
+                dir: Some(root.path().join("missing")),
+                ..entry.clone()
+            },
+        ),
+        (
+            "foreign".to_owned(),
+            TaskEntry {
+                root: scope.clone(),
+                ..entry
+            },
+        ),
+    ]));
+    let catalog_path = crate::StatePaths::class_path(
+        &paths.root,
+        crate::disk::paths::Class::Records,
+        "loop-instances.json",
+    );
+    std::fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+    std::fs::write(&catalog_path, serde_json::to_vec(&tasks).unwrap()).unwrap();
+    let catalog = crate::harness::schedule::catalog::TaskCatalog::load_lenient(Some(root.path()));
+    arming::disable(&catalog.visible()["disabled"].key("disabled"), None).unwrap();
+    let paused = &catalog.visible()["paused"];
+    arming::pause(
+        &paused.key("paused"),
+        paused.source(),
+        Timestamp::now()
+            .checked_add(std::time::Duration::from_secs(3600))
+            .unwrap(),
+    )
+    .unwrap();
+    let snapshot = SidebarSnapshot::build(runtime.workspace_id.clone(), vec![], Timestamp::now());
+    let needed = needed_worktree_paths(&snapshot, when::ci_scopes(&runtime, Some(root.path())));
+    assert_eq!(needed, vec![scope.display().to_string()]);
+    std::fs::remove_file(catalog_path).unwrap();
+    assert!(when::ci_scopes(&runtime, Some(root.path())).is_empty());
+}
+
+#[test]
 fn git_cache_freshness_boundaries_are_inclusive() {
     let entry = DiffStatsCacheEntry {
         refreshed_at_ms: 1_000,
@@ -259,7 +368,9 @@ fn focused_worktree_paths_keys_on_viewed_row_panes() {
 
     let focused_paths = focused_worktree_paths(&snapshot);
     let needed: std::collections::BTreeSet<_> =
-        needed_worktree_paths(&snapshot).into_iter().collect();
+        needed_worktree_paths(&snapshot, Default::default())
+            .into_iter()
+            .collect();
 
     assert_eq!(
         focused_paths,
@@ -285,7 +396,10 @@ fn repo_root_pane_is_included_in_git_reads() {
         snapshot.worktree_groups[0].kind,
         SidebarWorktreeKind::Worktree
     );
-    assert_eq!(needed_worktree_paths(&snapshot), vec![root_cwd]);
+    assert_eq!(
+        needed_worktree_paths(&snapshot, Default::default()),
+        vec![root_cwd]
+    );
 }
 
 #[test]
@@ -319,7 +433,10 @@ fn root_pod_is_excluded_from_git_reads() {
         kinds,
         vec![SidebarWorktreeKind::Worktree, SidebarWorktreeKind::Root]
     );
-    assert_eq!(needed_worktree_paths(&snapshot), vec![child_cwd]);
+    assert_eq!(
+        needed_worktree_paths(&snapshot, Default::default()),
+        vec![child_cwd]
+    );
 }
 
 #[test]

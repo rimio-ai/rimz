@@ -1,6 +1,6 @@
 //! State predicates for clock-evaluated loop conditions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
@@ -9,6 +9,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::forge::pr_state::PrStateCache;
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
+
+/// Checkout scopes whose live loop conditions need sidebar CI probes.
+pub(crate) fn ci_scopes(
+    runtime: &crate::RuntimePaths,
+    project_root: Option<&Path>,
+) -> BTreeSet<String> {
+    let arming = super::arming::load();
+    let now = Timestamp::now();
+    super::fire::runnable_tasks_for(runtime, project_root)
+        .into_iter()
+        .filter_map(|(name, task)| {
+            if super::arming::ArmState::resolve(arming.get(&task.key(&name)), task.source(), now)
+                != super::arming::ArmState::Live
+            {
+                return None;
+            }
+            let super::Trigger::Condition { expr, .. } = &task.trigger().as_ref().ok()?.trigger
+            else {
+                return None;
+            };
+            let scope = task.entry().run_dir();
+            (expr.terms().any(|term| term.key == "ci") && scope.is_dir())
+                .then(|| scope.to_string_lossy().into_owned())
+        })
+        .collect()
+}
 
 /// A room's last-known CI reading. Absence of this source means unknown CI.
 pub struct CiSource(PrStateCache);
