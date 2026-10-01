@@ -553,11 +553,38 @@ pub fn fail_if_nonterminal(paths: &StatePaths, run_id: &RunId) -> Result<Option<
     Ok(wrote.then_some(record))
 }
 
-pub fn reopen_for_verify(
+/// Where a completed supervised run stands once one verify command finished.
+pub enum VerifyStep {
+    /// The run is terminal: canceled, verified, or out of verify attempts.
+    Settled(RunRecord),
+    /// The run reopened as `Running`, awaiting the re-prompted turn.
+    Reprompt(RunRecord),
+}
+
+/// Store one finished verify on a completed run and settle it: a requested
+/// cancellation wins, then a pass, then the attempt cap; otherwise the run
+/// reopens for a re-prompt.
+pub fn settle_verify(
     paths: &StatePaths,
     run_id: &RunId,
     verify: RunVerify,
-) -> Result<RunRecord> {
+    cancel_requested: bool,
+    max_attempts: u32,
+) -> Result<VerifyStep> {
+    if cancel_requested {
+        reopen_for_verify(paths, run_id, verify)?;
+        return cancel(paths, run_id).map(|(record, _wrote)| VerifyStep::Settled(record));
+    }
+    if verify.passed {
+        return verify_passed(paths, run_id, verify).map(VerifyStep::Settled);
+    }
+    if verify.attempts == max_attempts {
+        return verify_failed(paths, run_id, verify).map(VerifyStep::Settled);
+    }
+    reopen_for_verify(paths, run_id, verify).map(VerifyStep::Reprompt)
+}
+
+fn reopen_for_verify(paths: &StatePaths, run_id: &RunId, verify: RunVerify) -> Result<RunRecord> {
     update_record(paths, run_id, |record, _| {
         require_completed(record)?;
         record.status = RunStatus::Running;
@@ -568,7 +595,7 @@ pub fn reopen_for_verify(
     .map(|(record, ())| record)
 }
 
-pub fn verify_failed(paths: &StatePaths, run_id: &RunId, verify: RunVerify) -> Result<RunRecord> {
+fn verify_failed(paths: &StatePaths, run_id: &RunId, verify: RunVerify) -> Result<RunRecord> {
     update_record(paths, run_id, |record, now| {
         if record.status == RunStatus::VerifyFailed {
             return Ok(RecordMutation::Keep(()));
@@ -582,7 +609,7 @@ pub fn verify_failed(paths: &StatePaths, run_id: &RunId, verify: RunVerify) -> R
     .map(|(record, ())| record)
 }
 
-pub fn verify_passed(paths: &StatePaths, run_id: &RunId, verify: RunVerify) -> Result<RunRecord> {
+fn verify_passed(paths: &StatePaths, run_id: &RunId, verify: RunVerify) -> Result<RunRecord> {
     update_record(paths, run_id, |record, _| {
         require_completed(record)?;
         record.verify = Some(verify);

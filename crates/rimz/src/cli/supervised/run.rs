@@ -5,7 +5,7 @@ use crate::cli::render;
 use rimz::agents::PermissionMode;
 use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::plan::{LaunchFinalizeOptions, PermissionModeChoice, launch_identity_requests};
-use rimz::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
+use rimz::harness::run::{SupervisedRunOutcome, SupervisedRunRequest, VerifyStep};
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::harness::spec::LayoutSpec;
 use rimz::ids::AgentKind;
@@ -900,36 +900,26 @@ fn verify_phase(
             timed_out: detail.timed_out,
             output,
         };
-        if waiter.waiter.cancellation().is_requested() {
-            let _reopened = rimz::harness::run::reopen_for_verify(
-                prepared.store.paths(),
-                &record.run_id,
-                verify,
-            )?;
-            let (canceled, _wrote) =
-                rimz::harness::run::cancel(prepared.store.paths(), &record.run_id)?;
-            record = canceled;
-            break;
-        }
-        if outcome.passed() {
-            record =
-                rimz::harness::run::verify_passed(prepared.store.paths(), &record.run_id, verify)?;
-            break;
-        }
-        if verify_attempt == max_attempts {
-            record =
-                rimz::harness::run::verify_failed(prepared.store.paths(), &record.run_id, verify)?;
-            break;
-        }
         let status = supervised::output::verify_status_label(&verify);
+        let reprompt = rimz::harness::prompt_compose::verify_reprompt(cmd, &status, &verify.output);
+        record = match rimz::harness::run::settle_verify(
+            prepared.store.paths(),
+            &record.run_id,
+            verify,
+            waiter.waiter.cancellation().is_requested(),
+            max_attempts,
+        )? {
+            VerifyStep::Settled(settled) => {
+                record = settled;
+                break;
+            }
+            VerifyStep::Reprompt(reopened) => reopened,
+        };
         writeln!(
             render::err(),
             "rimz: verify `{cmd}` exited {status}; re-prompting (attempt {} of {max_attempts})",
             verify_attempt + 1,
         )?;
-        let reprompt = rimz::harness::prompt_compose::verify_reprompt(cmd, &status, &verify.output);
-        record =
-            rimz::harness::run::reopen_for_verify(prepared.store.paths(), &record.run_id, verify)?;
         if let Err(err) = supervised::verify::deliver_reprompt(
             &prepared.workspace,
             &prepared.store,

@@ -1152,6 +1152,92 @@ fn verify_transitions_reopen_completed_runs_and_finish_once() {
     assert_eq!(repeated.updated_at, updated_at);
 }
 
+fn completed_for_verify() -> (tempfile::TempDir, StatePaths, RunRecord) {
+    let (dir, paths, record) = setup();
+    let completed = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    let record = record_lifecycle(&paths, &record.run_id, "claude", &completed, None, || None)
+        .unwrap()
+        .expect("completed run");
+    assert_eq!(record.status, RunStatus::Completed);
+    (dir, paths, record)
+}
+
+fn red_verify(attempts: u32) -> RunVerify {
+    RunVerify {
+        cmd: "cargo xtask test run".to_owned(),
+        attempts,
+        passed: false,
+        code: Some(1),
+        timed_out: false,
+        output: "red".to_owned(),
+    }
+}
+
+#[test]
+fn settle_verify_cancels_after_storing_the_verify() {
+    let (_dir, paths, record) = completed_for_verify();
+    let verify = RunVerify {
+        passed: true,
+        ..red_verify(3)
+    };
+    let VerifyStep::Settled(settled) =
+        settle_verify(&paths, &record.run_id, verify.clone(), true, 3).unwrap()
+    else {
+        panic!("a requested cancellation settles the run");
+    };
+    assert_eq!(settled.status, RunStatus::Canceled);
+    assert_eq!(settled.verify.as_ref(), Some(&verify));
+}
+
+#[test]
+fn settle_verify_keeps_a_passed_run_completed() {
+    let (_dir, paths, record) = completed_for_verify();
+    let verify = RunVerify {
+        passed: true,
+        code: Some(0),
+        ..red_verify(3)
+    };
+    let VerifyStep::Settled(settled) =
+        settle_verify(&paths, &record.run_id, verify.clone(), false, 3).unwrap()
+    else {
+        panic!("a pass settles the run");
+    };
+    assert_eq!(settled.status, RunStatus::Completed);
+    assert_eq!(settled.verify.as_ref(), Some(&verify));
+}
+
+#[test]
+fn settle_verify_fails_a_red_run_at_the_attempt_cap() {
+    let (_dir, paths, record) = completed_for_verify();
+    let VerifyStep::Settled(settled) =
+        settle_verify(&paths, &record.run_id, red_verify(3), false, 3).unwrap()
+    else {
+        panic!("the attempt cap settles the run");
+    };
+    assert_eq!(settled.status, RunStatus::VerifyFailed);
+    assert_eq!(settled.verify.as_ref(), Some(&red_verify(3)));
+}
+
+#[test]
+fn settle_verify_reopens_a_red_run_under_the_cap() {
+    let (_dir, paths, record) = completed_for_verify();
+    let VerifyStep::Reprompt(reopened) =
+        settle_verify(&paths, &record.run_id, red_verify(1), false, 3).unwrap()
+    else {
+        panic!("a red verify under the cap re-prompts");
+    };
+    assert_eq!(reopened.status, RunStatus::Running);
+    assert_eq!(reopened.completed_at, None);
+    assert_eq!(reopened.verify.as_ref(), Some(&red_verify(1)));
+}
+
 #[test]
 fn record_spend_persists_tokens_and_ignores_non_finite_cost() {
     let (_dir, paths, record) = setup();
