@@ -536,3 +536,15 @@ fn turn_error_label_classifier_maps_provider_labels() {
     }
     assert_eq!(TurnErrorClass::classify_label(None), TurnErrorClass::Failed);
 }
+
+#[test]
+fn turn_error_label_cap_trims_drops_blank_and_keeps_80_chars() {
+    assert_eq!(cap_turn_error_label(""), None);
+    assert_eq!(cap_turn_error_label(" \n\t "), None);
+    assert_eq!(
+        cap_turn_error_label("  API Error: Overloaded \n").as_deref(),
+        Some("API Error: Overloaded")
+    );
+    let capped = cap_turn_error_label(&"é".repeat(200)).unwrap();
+    assert_eq!(capped.chars().count(), 80);
+}

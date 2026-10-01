@@ -18,7 +18,7 @@ use super::rollout::{
 use super::spend::{live_fold_needs_token_counter_backfill, resume_live_fold};
 use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettle,
-    TurnSettleOutcome,
+    TurnSettleOutcome, cap_turn_error_label,
 };
 use crate::agents::pricing;
 use crate::agents::{
@@ -467,8 +467,6 @@ pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     scan_transcript_tail(&text, TranscriptScanNeed::UsageOnly).into_usage()
 }
 
-/// Cap on provider error text surfaced on the agent card.
-const TURN_ERROR_LABEL_MAX: usize = 80;
 const MESSAGELESS_TASK_COMPLETE_LABEL: &str = "turn ended with no final message";
 
 pub(super) enum RestingTurnOutcome {
@@ -728,14 +726,6 @@ fn is_codex_input_prompt_text(text: &str) -> bool {
 
 fn turn_error_label(error: &RolloutError<'_>) -> Option<String> {
     error.label.as_deref().and_then(cap_turn_error_label)
-}
-
-fn cap_turn_error_label(text: &str) -> Option<String> {
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-    Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
 }
 
 fn classify_turn_error(kinds: &[std::borrow::Cow<'_, str>], label: Option<&str>) -> TurnErrorClass {

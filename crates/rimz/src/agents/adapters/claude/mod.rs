@@ -1031,7 +1031,7 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
                 let label = parsed
                     .last_assistant_message
                     .as_deref()
-                    .and_then(statusline::cap_turn_error_label);
+                    .and_then(crate::agents::context::cap_turn_error_label);
                 Some(AgentTurnError {
                     class: statusline::classify_api_error(Some(error), None, label.as_deref()),
                     at: Timestamp::now(),
