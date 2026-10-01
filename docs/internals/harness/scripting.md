@@ -152,13 +152,14 @@ A second path enforces deadlines without any waiter. On its heavy-lane refresh, 
 ```text
 turn completes
   └─ run verify command in the run cwd
-       ├─ passes ─────────► verify_passed; record stays `completed`
-       ├─ attempt == max ─► verify_failed; record becomes `verify_failed` (exit 123)
-       └─ red, attempts left
-            ├─ reopen_for_verify: `completed` → `running`, evidence stored
-            ├─ deliver the verify_reprompt through message::synthetic::deliver_now
-            │    into the same pane and the same agent session
-            └─ wait on the same bound socket for the next root TurnEnded
+       └─ run::settle_verify stores the evidence and settles the record
+            ├─ canceled ───────► record becomes `canceled`
+            ├─ passes ─────────► record stays `completed`
+            ├─ attempt == max ─► record becomes `verify_failed` (exit 123)
+            └─ red, attempts left: `completed` → `running` (VerifyStep::Reprompt)
+                 ├─ deliver the verify_reprompt through message::synthetic::deliver_now
+                 │    into the same pane and the same agent session
+                 └─ wait on the same bound socket for the next root TurnEnded
 ```
 
 No provider resume and no replacement pane enter this path, so the next `TurnEnded` makes the same record terminal again and wakes the same socket. `--max-attempts` counts total agent turns, defaults to `3`, and must be at least `1`. The verify command runs under `--timeout` when set and `CHECK_DEFAULT_TIMEOUT` (5 minutes) otherwise, and a timed-out verify is red. The re-prompt carries the command, its exit status, and a 4 KiB output tail, and it goes through the [message path](./messaging.md) with gate `Any`. A re-prompt that is queued but not delivered fails the run. A cancellation observed during verification stores the evidence, then cancels.
