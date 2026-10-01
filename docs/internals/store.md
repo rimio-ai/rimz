@@ -136,7 +136,7 @@ This page owns the log, the caches derived from it, and the workspace record. Th
 | `audit/transcript/` | [transcript.md](./harness/transcript.md#the-log) |
 | `owned/runs/` | [scripting.md](./harness/scripting.md#the-record) |
 | `records/loop-instances.json`, `out/<reader>/wait-*.output` | [loops.md](./harness/loops.md#where-tasks-live) |
-| `tmp/`, `shared/`, `owned/agents/` | [sandbox.md](./sandbox.md#room-tmp) |
+| `tmp/`, `shared/`, `owned/agents/` | [sandbox.md](./sandbox.md#temp-units) |
 | Audit diagnostics | [diagnostics.md](./diagnostics.md) |
 | Rebirth records and crash archives | [Session death](#session-death) below |
 

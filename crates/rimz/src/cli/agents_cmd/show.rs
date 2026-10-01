@@ -13,8 +13,6 @@ struct ShowReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     tmp_dir: Option<std::path::PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    scratch_dir: Option<std::path::PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     agent: Option<AgentReportEntry>,
     #[serde(skip)]
     agent_state: Option<AgentState>,
@@ -125,14 +123,15 @@ fn collect_show_report(
     });
     Ok((
         ShowReport {
-            tmp_dir: store
-                .paths()
-                .tmp_dir
-                .exists()
-                .then(|| store.paths().tmp_dir.clone()),
-            scratch_dir: agent
+            tmp_dir: agent
                 .as_ref()
-                .map(|agent| store.paths().scratch_dir(agent.name.as_deref()))
+                .map(|agent| {
+                    rimz::harness::launch_plan::agent_temp_unit(
+                        agent,
+                        &snapshot.agents,
+                        store.paths(),
+                    )
+                })
                 .filter(|dir| dir.exists()),
             agent: report_agent,
             agent_state: agent,
@@ -172,16 +171,9 @@ fn render_show_report(
     if let Some(tmp_dir) = &report.tmp_dir {
         writeln!(
             out,
-            "  tmp: {} (mounted at /tmp in sandboxed panes)",
+            "  tmp: {} (/tmp in a sandboxed pane)",
             tmp_dir.display()
         )?;
-        if let Some(scratch_dir) = &report.scratch_dir {
-            writeln!(
-                out,
-                "  scratch: {} (mounted at /tmp/scratchpad in sandboxed panes)",
-                scratch_dir.display()
-            )?;
-        }
         writeln!(out)?;
     }
     let fallback_run = if report.run.is_none() {
@@ -893,7 +885,6 @@ mod tests {
         let peers = [&state];
         let report = ShowReport {
             tmp_dir: None,
-            scratch_dir: None,
             agent: Some(build_entry(
                 &state,
                 None,

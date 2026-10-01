@@ -321,8 +321,10 @@ fn gc_prunes_dead_root_workspace() {
     let gone_root = env.project_root.join("gone-project");
     env.record(&gone_root);
     let gone_paths = env.state_path_for(&gone_root);
-    gone_paths.ensure_tmp_dir().expect("tmp dir");
-    let tmp_file = gone_paths.tmp_dir.join("agent-work");
+    let tmp_file = gone_paths
+        .ensure_temp_unit(None)
+        .expect("tmp dir")
+        .join("agent-work");
     std::fs::write(&tmp_file, b"tmp").expect("write tmp");
     std::fs::remove_dir_all(&gone_root).expect("remove gone root");
 

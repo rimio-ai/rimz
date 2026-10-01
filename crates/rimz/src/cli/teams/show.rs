@@ -7,7 +7,6 @@ use super::super::{GlobalFlags, render};
 use super::list::{
     CohortState, LiveInstance, LiveMember, PrReport, SignalFire, TeamReport, ci_style, stage_label,
 };
-use rimz::config::Isolation;
 use rimz::harness::schedule::run_log::LoopRunResult;
 use rimz::store::snapshot::{WorktreeCi, WorktreePrState};
 
@@ -386,14 +385,13 @@ fn write_lane(
         checkout.push_str(&format!(" · branch {branch}"));
     }
     facts.push("worktree", render::cell(checkout).dash());
-    let tmp = instance.tmp_dir.display().to_string();
-    let tmp = match instance.isolation {
-        Isolation::Sandbox => format!("{} (as /tmp)", render::home_relative(&tmp)),
-        Isolation::Host => tmp,
-    };
     facts.push(
         "isolation",
-        render::cell(format!("{} · tmp {tmp}", instance.isolation)),
+        render::cell(format!(
+            "{} · shared {}",
+            instance.isolation,
+            render::home_relative(&instance.shared_dir.display().to_string())
+        )),
     );
     if !instance.memory.is_empty() {
         let names = instance
@@ -484,6 +482,7 @@ mod tests {
     use super::*;
     use crate::cli::teams::list::{LiveInstance, RoleReport, TeamReport};
     use rimz::agents::{AgentStatus, TurnPhase};
+    use rimz::config::Isolation;
     use std::collections::BTreeMap;
 
     fn report(instances: Vec<LiveInstance>) -> TeamReport {
@@ -538,7 +537,7 @@ mod tests {
             worktree: Some("/repo/worktrees/feat-x".into()),
             branch: Some("feat-x".to_owned()),
             isolation: Isolation::Host,
-            tmp_dir: "/tmp".into(),
+            shared_dir: "/state/room/shared".into(),
             stages: vec!["Explore".into(), "Plan".into(), "Implement".into()],
             stage: Some(super::super::list::StageReport {
                 name: "Plan (delta)".into(),
@@ -615,7 +614,7 @@ mod tests {
         assert!(output.contains("ci passing"));
         assert!(output.contains("blackboard.md"));
         assert_eq!(output.matches("/repo/worktrees/feat-x").count(), 1);
-        assert!(output.contains("isolation: host · tmp /tmp"));
+        assert!(output.contains("isolation: host · shared /state/room/shared"));
         assert!(output.contains("41 lines · 2m ago"));
         assert!(output.lines().any(|line| {
             line.split_whitespace()
@@ -648,7 +647,7 @@ mod tests {
         );
         let member = &json["instances"][0]["members"][0];
         assert_eq!(json["instances"][0]["isolation"], "host");
-        assert_eq!(json["instances"][0]["tmp_dir"], "/tmp");
+        assert_eq!(json["instances"][0]["shared_dir"], "/state/room/shared");
         assert_eq!(json["instances"][0]["state"], "working");
         assert_eq!(
             json["instances"][0]["stage"]["since"],
@@ -739,12 +738,15 @@ mod tests {
     }
 
     #[test]
-    fn human_show_describes_sandbox_tmp_mount() {
-        let mut instance = live_instance();
-        instance.isolation = Isolation::Sandbox;
-        instance.tmp_dir = "/state/room/tmp".into();
-        let output = rendered(&report(vec![instance]), Some("feat-x"));
-        assert!(output.contains("isolation: sandbox · tmp /state/room/tmp (as /tmp)"));
+    fn human_show_names_the_room_shared_dir_in_both_isolations() {
+        for isolation in [Isolation::Sandbox, Isolation::Host] {
+            let mut instance = live_instance();
+            instance.isolation = isolation;
+            let output = rendered(&report(vec![instance]), Some("feat-x"));
+            assert!(output.contains(&format!(
+                "isolation: {isolation} · shared /state/room/shared"
+            )));
+        }
     }
 
     #[test]

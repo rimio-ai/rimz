@@ -4,7 +4,7 @@ use rimz::disk::paths::StatePaths;
 use rimz::disk::summary::FileSummary;
 
 #[test]
-fn room_tmp_layout_is_private_and_created_on_demand() {
+fn temp_units_are_private_and_created_on_demand() {
     let root = tempfile::tempdir().unwrap();
     let paths = StatePaths::under(
         rimz::WorkspaceId::from_project_root(root.path()),
@@ -13,23 +13,15 @@ fn room_tmp_layout_is_private_and_created_on_demand() {
     .unwrap();
     paths.ensure_dirs().unwrap();
     assert!(!paths.tmp_dir.exists());
-    paths.ensure_tmp_dir().unwrap();
-    for directory in [&paths.scratchpad_dir, &paths.agents_dir, &paths.shared_dir] {
-        assert!(directory.is_dir());
-    }
-    assert!(
-        !paths.out_dir.exists() && !paths.room_shared_dir.exists(),
-        "out/ and shared/ are created by their writers"
-    );
+    let unit = paths.ensure_temp_unit(Some("otter")).unwrap();
+    assert_eq!(unit, paths.temp_unit_dir(Some("otter")));
+    assert!(unit.is_dir() && paths.room_shared_dir.is_dir());
+    assert!(!paths.out_dir.exists(), "out/ is created by its writer");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
-            std::fs::metadata(&paths.tmp_dir)
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
+            std::fs::metadata(&unit).unwrap().permissions().mode() & 0o777,
             0o700
         );
     }

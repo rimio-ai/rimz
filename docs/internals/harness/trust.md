@@ -77,7 +77,7 @@ A trusted project task still needs its own arming: trust approves the config con
 2. shell rc and profile env
 3. trusted project `[[agents]]` env
 4. adapter launch built-ins ([`LaunchCapability::launch_env`](../../../crates/rimz/src/agents/capabilities.rs))
-5. launch-plan env: the materialized system-prompt env, the account-home override, `RIMZ_ISOLATION` (`ENV_ISOLATION`: `sandbox` when the plan wraps the provider in bubblewrap, `host` otherwise), `RIMZ_SCRATCH` (`ENV_SCRATCH`: the host path of the launch's scratch dir; the sandbox pin layer replaces it with `/tmp/scratchpad`), and `RIMZ_SHARED` (`ENV_SHARED`: the host path of the room's shared dir; the sandbox pin layer replaces it with `/tmp/shared`)
+5. launch-plan env: the materialized system-prompt env, the account-home override, `RIMZ_ISOLATION` (`ENV_ISOLATION`: `sandbox` when the plan wraps the provider in bubblewrap, `host` otherwise), `TMPDIR` (the launch's temp unit; the sandbox pin layer replaces it with `/tmp`), `RIMZ_SHARED` (`ENV_SHARED`: the host path of the room's shared dir, in both modes), and `ZELLIJ_SOCKET_DIR` (the socket base the exec wrapper resolved)
 6. launch identity from `exec_identity_env`: `RIMZ_AGENT_KIND`, `RIMZ_AGENT_ID`, `RIMZ_RUN_ID`, `RIMZ_AGENT_NAME`, and the env-backed launch parameters (`RIMZ_AGENT_ROLE`, `RIMZ_TEAM`, `RIMZ_LAUNCH_GROUP`, `RIMZ_LAUNCH_ORDINAL`, `RIMZ_CHANNEL`, `RIMZ_AGENT_PROFILE`, `RIMZ_AGENT_MODEL`, `RIMZ_AGENT_EFFORT`, `RIMZ_AGENT_BUDGET`)
 7. subagent lockdown env, for supervised children (`AgentDefinition::lockdown_subagent_env`)
 8. `RIMZ_LAUNCH_REMINDERS` (`ENV_LAUNCH_REMINDERS`), the rendered launch reminders for adapters whose extension carries them (`SystemTextChannel::ExtensionEnv`)

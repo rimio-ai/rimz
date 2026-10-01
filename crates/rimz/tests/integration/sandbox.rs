@@ -49,7 +49,8 @@ fn child_cap_launch(explicit_host: bool) {
     );
     env.install_agent_hooks("claude");
     let store = env.store();
-    let cwd = store.paths().tmp_dir.join("clean");
+    // The caller's `/tmp` is its own temp unit.
+    let cwd = store.paths().temp_unit_dir(Some("parent")).join("clean");
     std::fs::create_dir_all(&cwd).unwrap();
     let workspace = env.resolve_workspace(&env.project_root);
     store
@@ -101,6 +102,7 @@ fn child_cap_launch(explicit_host: bool) {
         .env("RIMZ_ISOLATION", "sandbox")
         .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
         .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
+        .env(rimz::harness::launch::ENV_AGENT_NAME, "parent")
         .env("SHELL", shell).env("PATH", path_with_front(&shim))
         .env("RIMZ_ZELLIJ_BIN", crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")))
         .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("mux.log"))
@@ -190,8 +192,7 @@ fn skill_prepare(
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
-        tmp_dir: &state.paths().tmp_dir,
-        scratch_dir: &state.paths().scratch_dir(None),
+        tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
@@ -303,7 +304,7 @@ fn sandbox_unconfigured_unreadable_skills_keep_native_launch_behavior() {
         )
         .unwrap();
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
-        let probe = env.store().paths().tmp_dir.join("skill-probe");
+        let probe = env.store().paths().temp_unit_dir(None).join("skill-probe");
         env.rimz()
             .args(exec_args(&env, &request))
             .env("PATH", path_with_front(&shim_dir))
@@ -348,8 +349,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
-        tmp_dir: &state.paths().tmp_dir,
-        scratch_dir: &state.paths().scratch_dir(None),
+        tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
@@ -525,7 +525,13 @@ printf consumed > /tmp/library-probe
         .env("PATH", path_with_front(&shim_dir))
         .assert_success_within_timeout("library-only skill discovery");
     assert_eq!(
-        std::fs::read_to_string(env.store().paths().tmp_dir.join("library-probe")).unwrap(),
+        std::fs::read_to_string(
+            env.store()
+                .paths()
+                .temp_unit_dir(None)
+                .join("library-probe")
+        )
+        .unwrap(),
         "consumed"
     );
     assert!(root.is_dir());
@@ -850,8 +856,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
-        tmp_dir: &state.paths().tmp_dir,
-        scratch_dir: &state.paths().scratch_dir(None),
+        tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &["CODEX_HOME"],
@@ -983,7 +988,7 @@ fn sandbox_symlinked_manual_skills_resolve_shared_modules() {
         let shim_dir = write_env_dump_shim(&env, "claude");
         std::fs::write(
             shim_dir.join("claude"),
-            "#!/bin/sh\nset -eu\ntest -L \"$HOME/.claude/skills/relative\"\ntest -L \"$HOME/.claude/skills/absolute\"\ntest -L \"$HOME/.claude/skills/CLAUDE.md\"\ntest \"$(cat \"$HOME/.claude/skills/CLAUDE.md\")\" = 'root instructions'\npython3 \"$HOME/.claude/skills/relative/scripts/run.py\" > /tmp/shared-probe\n",
+            "#!/bin/sh\nset -eu\ntest -L \"$HOME/.claude/skills/relative\"\ntest -L \"$HOME/.claude/skills/absolute\"\ntest -L \"$HOME/.claude/skills/CLAUDE.md\"\ntest \"$(cat \"$HOME/.claude/skills/CLAUDE.md\")\" = 'root instructions'\npython3 \"$HOME/.claude/skills/relative/scripts/run.py\" > /tmp/probe-shared\n",
         )
         .unwrap();
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
@@ -994,7 +999,8 @@ fn sandbox_symlinked_manual_skills_resolve_shared_modules() {
             .env_remove("CLAUDE_CONFIG_DIR")
             .assert_success_within_timeout("symlinked skill shared module import");
         assert_eq!(
-            std::fs::read_to_string(env.store().paths().tmp_dir.join("shared-probe")).unwrap(),
+            std::fs::read_to_string(env.store().paths().temp_unit_dir(None).join("probe-shared"))
+                .unwrap(),
             "shared module\n"
         );
     }
@@ -1110,8 +1116,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
-        tmp_dir: &state.paths().tmp_dir,
-        scratch_dir: &state.paths().scratch_dir(None),
+        tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
@@ -1130,21 +1135,36 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
             env.runtime_root.to_str().unwrap(),
             env.runtime_root.to_str().unwrap()
         ]));
-    inputs.cwd = Path::new("/tmp");
-    assert!(matches!(
-        rimz::sandbox::prepare(&inputs),
-        Err(SandboxErr::TmpCollision)
-    ));
+    let var_tmp = tempfile::tempdir_in("/var/tmp").unwrap();
+    inputs.cwd = var_tmp.path();
+    let plan = rimz::sandbox::prepare(&inputs).unwrap();
+    let argv = rimz::sandbox::bwrap_argv(Path::new("/usr/bin/bwrap"), &plan.plan, inputs.cwd, &[]);
+    let cwd = var_tmp.path().to_str().unwrap();
+    assert!(
+        argv.windows(3).any(|args| args == ["--bind", cwd, cwd]),
+        "a required path under /var/tmp stays reachable"
+    );
+    for mount in ["/tmp", "/var/tmp"] {
+        inputs.cwd = Path::new(mount);
+        assert!(matches!(
+            rimz::sandbox::prepare(&inputs),
+            Err(SandboxErr::TmpCollision { path }) if path == Path::new(mount)
+        ));
+    }
 }
 
 #[test]
-fn sandboxed_exec_shows_profile_skill_view_and_room_tmp() {
+fn sandboxed_exec_shows_profile_skill_view_and_shared_temp_unit() {
     if !available() {
         return;
     }
     let env = Env::new();
     enable(&env);
-    let cwd = env.store().paths().tmp_dir.join("clean");
+    let cwd = env
+        .store()
+        .paths()
+        .temp_unit_dir(Some("scout"))
+        .join("clean");
     std::fs::create_dir_all(&cwd).unwrap();
     assert!(
         std::process::Command::new("git")
@@ -1201,14 +1221,14 @@ test "$(cat "$HOME/.agents/skills/c/agents/openai.yaml")" = 'policy:
   allow_implicit_invocation: false'
 test -d "$XDG_RUNTIME_DIR/rimz/ws/$RIMZ_TEST_WORKSPACE_DIR"
 test -c /dev/null
-test "$RIMZ_SCRATCH" = /tmp/scratchpad
-test "$RIMZ_SHARED" = /tmp/shared
-test -d /tmp/shared
-printf parent > /tmp/scratchpad/same-name
+test "$RIMZ_SHARED" = "$RIMZ_TEST_SHARED"
+test -d "$RIMZ_SHARED"
+printf parent > /tmp/same-name
+test "$(cat /var/tmp/same-name)" = parent
 test "$(cat "$HOME/.codex/config.toml")" = sandbox-test
 if touch "$HOME/.agents/skills/b/changed" 2>/dev/null; then exit 1; fi
 test ! -e "$RIMZ_TEST_HOST_TMP_FILE"
-printf '%s\n' shared > /tmp/team-file
+test ! -e "$RIMZ_TEST_HOST_VAR_TMP_FILE"
 "#,
     )
     .unwrap();
@@ -1220,6 +1240,7 @@ printf '%s\n' shared > /tmp/team-file
     let shell_body = std::fs::read_to_string(&shell).unwrap();
     std::fs::write(&shell, shell_body.replacen("#!/bin/sh\n", "#!/bin/sh\nexport CLAUDE_CONFIG_DIR=$HOME/elsewhere\nexport CODEX_HOME=$HOME/elsewhere\nexport XDG_RUNTIME_DIR=/tmp/wrong-runtime\nexport HOME=/tmp/evil\n", 1)).unwrap();
     let host_tmp = tempfile::NamedTempFile::new_in("/tmp").unwrap();
+    let host_var_tmp = tempfile::NamedTempFile::new_in("/var/tmp").unwrap();
     let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
     request.skills = Some(vec!["b".parse().unwrap()]);
     request.identity.name = Some("scout".to_owned());
@@ -1234,6 +1255,8 @@ printf '%s\n' shared > /tmp/team-file
         .env("PATH", path_with_front(&shim_dir))
         .env("SHELL", shell)
         .env("RIMZ_TEST_HOST_TMP_FILE", host_tmp.path())
+        .env("RIMZ_TEST_HOST_VAR_TMP_FILE", host_var_tmp.path())
+        .env("RIMZ_TEST_SHARED", &env.store().paths().room_shared_dir)
         .env(
             "RIMZ_TEST_WORKSPACE_DIR",
             env.state_path_for(&env.project_root).dir_name.as_str(),
@@ -1254,7 +1277,7 @@ printf '%s\n' shared > /tmp/team-file
     assert!(String::from_utf8_lossy(&output.stderr).contains("rimz: starting without skill \"d\""));
     assert_eq!(std::fs::read(&bad).unwrap(), metadata.as_bytes());
     let store = env.store();
-    let tmp = &store.paths().tmp_dir;
+    let tmp = &store.paths().temp_unit_dir(Some("scout"));
     assert_eq!(
         std::fs::read_to_string(tmp.join("provider-cwd")).unwrap(),
         "/tmp/clean\n"
@@ -1282,26 +1305,76 @@ printf '%s\n' shared > /tmp/team-file
         env.home_root.to_str().unwrap()
     );
 
-    std::fs::write(shim_dir.join("codex"), "#!/bin/sh\nset -eu\ntest \"$(cat /tmp/team-file)\" = shared\nprintf child > /tmp/child-file\ntest ! -e /tmp/scratchpad/same-name\ntest ! -e /tmp/agents/scout/same-name\nprintf child > /tmp/scratchpad/same-name\n").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(tmp.join("same-name")).unwrap(),
+        "parent"
+    );
+
+    // A launched child shares its parent's unit, found through the parent's row.
+    let workspace = env.resolve_workspace(&env.project_root);
+    store
+        .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("codex"),
+            rimz::store::event::AgentLaunchPayload {
+                agent_id: "scout-session".into(),
+                launch_id: Some("scout-launch".into()),
+                agent_name: "scout".to_owned(),
+                agent_name_explicit: true,
+                launch: rimz::agents::LaunchParams::default(),
+                state: rimz::store::event::AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: None,
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    std::fs::write(
+        shim_dir.join("codex"),
+        "#!/bin/sh\nset -eu\ntest \"$(cat /tmp/same-name)\" = parent\nprintf child > /tmp/child-file\n",
+    )
+    .unwrap();
     request.subagent = true;
     request.identity.name = Some("otter".to_owned());
+    request.identity.params.parent_agent_id = Some("scout-launch".into());
+    request.identity.params.parent_agent_kind = Some(AgentKind::new_unchecked("codex"));
     env.rimz()
         .args(exec_args(&env, &request))
         .env("PATH", path_with_front(&shim_dir))
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("CODEX_HOME")
-        .assert_success_within_timeout("sandbox subagent shared tmp");
+        .assert_success_within_timeout("sandbox subagent shares its parent's tmp");
     assert_eq!(
         std::fs::read_to_string(tmp.join("child-file")).unwrap(),
         "child"
     );
-    for (handle, contents) in [("scout", "parent"), ("otter", "child")] {
-        assert_eq!(
-            std::fs::read_to_string(store.paths().scratch_dir(Some(handle)).join("same-name"))
-                .unwrap(),
-            contents
-        );
-    }
+
+    // A peer gets a unit of its own.
+    std::fs::write(
+        shim_dir.join("codex"),
+        "#!/bin/sh\nset -eu\ntest ! -e /tmp/same-name\ntest ! -e /var/tmp/child-file\nprintf peer > /tmp/peer-file\n",
+    )
+    .unwrap();
+    request.subagent = false;
+    request.identity.name = Some("fox".to_owned());
+    request.identity.params.parent_agent_id = None;
+    request.identity.params.parent_agent_kind = None;
+    env.rimz()
+        .args(exec_args(&env, &request))
+        .env("PATH", path_with_front(&shim_dir))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .assert_success_within_timeout("sandbox peer sees its own tmp");
+    assert_eq!(
+        std::fs::read_to_string(store.paths().temp_unit_dir(Some("fox")).join("peer-file"))
+            .unwrap(),
+        "peer"
+    );
 }
 
 #[test]
@@ -1333,7 +1406,13 @@ fn sandboxed_exec_uses_probed_bwrap_with_trusted_path() {
         .env("SHELL", "/definitely/not/a/shell")
         .assert_success_within_timeout("sandbox with provider-only PATH");
     assert_eq!(
-        std::fs::read_to_string(env.store().paths().tmp_dir.join("provider-path")).unwrap(),
+        std::fs::read_to_string(
+            env.store()
+                .paths()
+                .temp_unit_dir(None)
+                .join("provider-path")
+        )
+        .unwrap(),
         shim_dir.to_str().unwrap()
     );
 }
@@ -1376,10 +1455,10 @@ fn sandbox_skills_under_host_use_provider_switches() {
         };
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), args);
         request.identity.name = Some(format!("host-{kind}"));
-        let scratch = env
+        let unit = env
             .store()
             .paths()
-            .scratch_dir(request.identity.name.as_deref());
+            .temp_unit_dir(request.identity.name.as_deref());
         let mut lists = vec![vec!["missing-skill"], vec![]];
         if kind == "claude" {
             lists.push(vec!["commit"]);
@@ -1466,10 +1545,10 @@ fn sandbox_skills_under_host_use_provider_switches() {
             }
             assert!(
                 dump.lines()
-                    .any(|line| line == format!("RIMZ_SCRATCH={}", scratch.display())),
-                "host launch exports its scratch host path for {kind}"
+                    .any(|line| line == format!("TMPDIR={}", unit.display())),
+                "host launch exports its temp unit's host path for {kind}"
             );
-            assert!(scratch.is_dir());
+            assert!(unit.is_dir());
             std::fs::remove_file(&probe).unwrap();
             assert!(!env.store().paths().skills_dir.exists());
         }
@@ -1913,8 +1992,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
         cwd: &env.project_root,
         project_root: &env.project_root,
         worktree: None,
-        tmp_dir: &state.paths().tmp_dir,
-        scratch_dir: &state.paths().scratch_dir(None),
+        tmp_dir: &state.paths().temp_unit_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
@@ -1999,7 +2077,7 @@ fn sandboxed_run_timeout_stops_provider() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let pid_path = store.paths().tmp_dir.join("provider-pid");
+    let pid_path = store.paths().temp_unit_dir(None).join("provider-pid");
     let deadline = Instant::now() + Duration::from_secs(10);
     let provider = loop {
         run = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
@@ -2048,5 +2126,51 @@ fn sandboxed_run_timeout_stops_provider() {
             .unwrap()
             .status,
         RunStatus::TimedOut
+    );
+}
+
+#[test]
+fn sandboxed_caller_prompt_file_under_tmp_resolves_to_its_temp_unit() {
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    let unit = env.store().paths().temp_unit_dir(Some("scout"));
+    std::fs::create_dir_all(&unit).unwrap();
+    std::fs::write(unit.join("brief.md"), "Brief.\n").unwrap();
+    // The caller writes `/tmp/brief.md` in its view; the launch reads it on the host.
+    let output = env
+        .rimz()
+        .args([
+            "agents",
+            "explain",
+            "codex",
+            "--system-prompt-file",
+            "/tmp/brief.md",
+            "--json",
+        ])
+        .envs(rimz::workspace::pin_env(
+            &env.workspace_id,
+            &env.project_root,
+        ))
+        .env("RIMZ_ISOLATION", "sandbox")
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_NAME, "scout")
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["prompt"]["sources"][0]["path"],
+        unit.join("brief.md")
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
     );
 }

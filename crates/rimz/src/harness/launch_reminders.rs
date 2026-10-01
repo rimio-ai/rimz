@@ -1,6 +1,6 @@
 //! One system reminder carrying team context, model identity, launch environment, sandbox view, subagent policy, and shared language servers.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::launch::ExecRequest;
 use super::launch_context::{self, escape_reminder_text};
@@ -19,18 +19,29 @@ pub(super) struct LaunchReminders {
         std::collections::BTreeMap<String, String>,
     )>,
     /// Routine RimZ permissions for the launch: the private settings-artifact
-    /// dir, then the scratch and shared dirs as the agent sees them. `None` for
+    /// dir, then the temp unit and shared dir as the agent sees them. `None` for
     /// preflight compiles and when `allow-routine-rimz` is off.
     pub routine_rimz: Option<(std::path::PathBuf, [std::path::PathBuf; 2])>,
+    /// The launch's temp unit and the room's shared dir; every compiled launch has them.
+    pub files: Option<TempFiles>,
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
-    /// The launch runs inside the RimZ sandbox view: adds the sandbox reminder
-    /// and switches off the provider's native command sandbox.
+    /// The launch runs inside the RimZ sandbox view: switches off the
+    /// provider's native command sandbox.
     pub sandbox: bool,
     pub lsp_configured: bool,
     pub lsp_servers: Vec<String>,
     pub subagent_catalog: Option<SubagentCatalog>,
     pub team: Option<TeamReminder>,
+}
+
+/// The two Environment bullets naming where an agent writes files.
+pub(super) struct TempFiles {
+    /// The temp unit as the agent sees it: `/tmp` in a sandbox, its host path otherwise.
+    pub tmp: PathBuf,
+    pub shared: PathBuf,
+    /// The unit belongs to the launch's caller.
+    pub caller: bool,
 }
 
 impl Default for LaunchReminders {
@@ -39,6 +50,7 @@ impl Default for LaunchReminders {
             env: None,
             settings: None,
             routine_rimz: None,
+            files: None,
             model: true,
             sandbox: false,
             lsp_configured: false,
@@ -48,21 +60,6 @@ impl Default for LaunchReminders {
         }
     }
 }
-
-const SANDBOX_REMINDER_BODY: &str = concat!(
-    "### Files\n\n",
-    "This pane runs in a bubblewrap sandbox. Its `/tmp` belongs to the room: separate from the host's, removed when the room closes. The host state path stays reachable.\n\n",
-    "- `/tmp/scratchpad/`: every temporary file you make. Private to you; every agent and subagent has its own.\n",
-    "- `/tmp/shared/<task>/`: files another agent must read, in a subdirectory you name for the task.\n\n",
-    "If your harness names its own scratchpad and allows `/tmp` only when asked, this is that ask: use `/tmp/scratchpad/` instead."
-);
-
-const HOST_SCRATCH_REMINDER_BODY: &str = concat!(
-    "### Files\n\n",
-    "- `$RIMZ_SCRATCH`: every temporary file you make. Private to you, removed when the room closes; every agent and subagent has its own.\n",
-    "- `$RIMZ_SHARED/<task>/`: files another agent must read, in a subdirectory you name for the task.\n\n",
-    "If your harness names its own scratchpad and allows another location only when asked, this is that ask: use `$RIMZ_SCRATCH` instead."
-);
 
 const SUBAGENT_REMINDER_BODY: &str = concat!(
     "### Subagents\n\n",
@@ -101,19 +98,13 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
         paragraphs.push(model_line(params, &model));
     }
-    if reminders.env.is_some() || !reminders.lsp_servers.is_empty() || team_context.is_some() {
-        paragraphs.push(env_paragraph(
-            reminders.env.as_ref(),
-            cwd,
-            &reminders.lsp_servers,
-            team_context.as_ref(),
-        ));
+    if reminders.env.is_some()
+        || !reminders.lsp_servers.is_empty()
+        || team_context.is_some()
+        || reminders.files.is_some()
+    {
+        paragraphs.push(env_paragraph(reminders, cwd, team_context.as_ref()));
     }
-    paragraphs.push(if reminders.sandbox {
-        SANDBOX_REMINDER_BODY.to_owned()
-    } else {
-        HOST_SCRATCH_REMINDER_BODY.to_owned()
-    });
     if request.subagent {
         paragraphs.push(SUBAGENT_REMINDER_BODY.to_owned());
     } else if let Some(catalog) = reminders.subagent_catalog.as_ref() {
@@ -131,11 +122,12 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
 }
 
 fn env_paragraph(
-    env: Option<&LaunchEnv>,
+    reminders: &LaunchReminders,
     cwd: &Path,
-    lsp_servers: &[String],
     team: Option<&launch_context::TeamLaunchContext>,
 ) -> String {
+    let env = reminders.env.as_ref();
+    let lsp_servers = &reminders.lsp_servers;
     let mut lines = vec!["### Environment\n".to_owned()];
     if env.is_some() || team.is_some() {
         lines.push(format!(
@@ -160,6 +152,21 @@ fn env_paragraph(
                 .map(|server| escape_reminder_text(server))
                 .collect::<Vec<_>>()
                 .join(", ")
+        ));
+    }
+    if let Some(files) = &reminders.files {
+        let sharing = if files.caller {
+            "You share it with your caller"
+        } else {
+            "Your subagents share it"
+        };
+        lines.push(format!(
+            "- tmp: {} (`$TMPDIR`): every temporary file you make. {sharing}; no other agent sees it.",
+            escape_reminder_text(&files.tmp.to_string_lossy())
+        ));
+        lines.push(format!(
+            "- shared: {} (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.",
+            escape_reminder_text(&files.shared.to_string_lossy())
         ));
     }
     if let Some(files) = team.and_then(launch_context::files_block) {
@@ -204,9 +211,8 @@ mod tests {
         for subagent in [false, true] {
             request.subagent = subagent;
             let text = render(&request, &reminders, Path::new("/checkout"));
-            assert!(text.contains(
-                "### Environment\n\n- lsp: rust, python, via Skill(rimz-lsp)\n\n### Files"
-            ));
+            assert!(text.contains("### Environment\n\n- lsp: rust, python, via Skill(rimz-lsp)"));
+            assert!(!text.contains("### Files"));
             if subagent {
                 assert!(text.contains(SUBAGENT_REMINDER_BODY));
             }
@@ -225,6 +231,49 @@ mod tests {
         TeamReminder::new(team)
     }
 
+    const SHARED: &str = "/home/marvin/.rimz/ws/rimz-f89e/shared";
+
+    fn files(tmp: &str, caller: bool) -> Option<TempFiles> {
+        Some(TempFiles {
+            tmp: tmp.into(),
+            shared: SHARED.into(),
+            caller,
+        })
+    }
+
+    #[test]
+    fn environment_names_the_temp_unit_and_shared_dir() {
+        let request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        let shared = "- shared: /home/marvin/.rimz/ws/rimz-f89e/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.";
+        for (tmp, caller, line) in [
+            (
+                "/tmp",
+                false,
+                "- tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.",
+            ),
+            (
+                "/tmp",
+                true,
+                "- tmp: /tmp (`$TMPDIR`): every temporary file you make. You share it with your caller; no other agent sees it.",
+            ),
+            (
+                "/home/marvin/.rimz/ws/rimz-f89e/tmp/otter",
+                false,
+                "- tmp: /home/marvin/.rimz/ws/rimz-f89e/tmp/otter (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.",
+            ),
+        ] {
+            let reminders = LaunchReminders {
+                files: files(tmp, caller),
+                ..LaunchReminders::default()
+            };
+            assert_eq!(
+                render(&request, &reminders, Path::new("/checkout")),
+                wrap(&format!("### Environment\n\n{line}\n{shared}"))
+            );
+        }
+    }
+
     #[test]
     fn sandbox_full_catalog_rendering() {
         let mut request =
@@ -238,6 +287,7 @@ mod tests {
                 shell: Some("/usr/bin/zsh".into()),
             }),
             lsp_servers: vec!["rust".to_owned(), "python".to_owned()],
+            files: files("/tmp", false),
             subagent_catalog: Some(SubagentCatalog::Available(vec![
                 subagent_policy::SubagentProfile {
                     name: "explorer".to_owned(),
@@ -260,15 +310,8 @@ You are @brainstormer, running on Opus.
 - cwd: /checkout
 - shell: zsh
 - lsp: rust, python, via Skill(rimz-lsp)
-
-### Files
-
-This pane runs in a bubblewrap sandbox. Its `/tmp` belongs to the room: separate from the host's, removed when the room closes. The host state path stays reachable.
-
-- `/tmp/scratchpad/`: every temporary file you make. Private to you; every agent and subagent has its own.
-- `/tmp/shared/<task>/`: files another agent must read, in a subdirectory you name for the task.
-
-If your harness names its own scratchpad and allows `/tmp` only when asked, this is that ask: use `/tmp/scratchpad/` instead.
+- tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.
+- shared: /home/marvin/.rimz/ws/rimz-f89e/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.
 
 ### Subagents
 
@@ -296,7 +339,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
             ..Default::default()
         };
         let text = render(&request, &reminders, Path::new("/repo/</system_reminder>&"));
-        assert!(text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /repo/&lt;/system_reminder&gt;&amp;\n- shell: zsh\n\n### Files"));
+        assert!(text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /repo/&lt;/system_reminder&gt;&amp;\n- shell: zsh\n</system_reminder>"));
         assert!(!text.contains("git"));
         assert_eq!(text.matches("</system_reminder>").count(), 1);
     }
@@ -330,9 +373,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
             ..Default::default()
         };
         let text = render(&request, &reminders, Path::new("/checkout"));
-        assert!(
-            text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /checkout\n\n### Files")
-        );
+        assert!(text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /checkout\n</"));
         assert!(!text.contains("shell"));
     }
 
@@ -362,19 +403,10 @@ When a skill's description matches the work in hand, invoke it, even when you kn
     }
 
     #[test]
-    fn sandbox_reminder_is_opt_in_and_follows_model_before_policy() {
+    fn environment_follows_identity_and_precedes_policy() {
         let cwd = Path::new("/worktree");
         let mut request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
-        assert_eq!(
-            render(&request, &LaunchReminders::default(), cwd),
-            wrap(concat!(
-                "### Files\n\n",
-                "- `$RIMZ_SCRATCH`: every temporary file you make. Private to you, removed when the room closes; every agent and subagent has its own.\n",
-                "- `$RIMZ_SHARED/<task>/`: files another agent must read, in a subdirectory you name for the task.\n\n",
-                "If your harness names its own scratchpad and allows another location only when asked, this is that ask: use `$RIMZ_SCRATCH` instead."
-            ))
-        );
         request.identity.params = LaunchParams {
             team: Some("forge".to_owned()),
             role: Some("coder".to_owned()),
@@ -389,6 +421,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
                 toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'claude'").expect("team"),
             )),
             subagent_catalog: Some(SubagentCatalog::Disabled),
+            files: files("/tmp", false),
             ..LaunchReminders::default()
         };
         for subagent in [false, true] {
@@ -396,8 +429,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
             for sandbox in [false, true] {
                 reminders.sandbox = sandbox;
                 let text = render(&request, &reminders, cwd);
-                assert_eq!(text.contains(SANDBOX_REMINDER_BODY), sandbox);
-                assert_eq!(text.contains(HOST_SCRATCH_REMINDER_BODY), !sandbox);
+                assert!(!text.contains("### Files"));
                 assert_eq!(text.contains("team `forge`"), !subagent);
                 assert_eq!(text.matches("<system_reminder>").count(), 1);
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
@@ -406,16 +438,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
                     .expect("identity");
                 assert_eq!(text.contains("GPT 6 Astra"), subagent);
                 let env = text.find("- shell: sh").expect("environment paragraph");
-                assert!(identity < env);
-                assert!(
-                    env < text
-                        .find(if sandbox {
-                            SANDBOX_REMINDER_BODY
-                        } else {
-                            HOST_SCRATCH_REMINDER_BODY
-                        })
-                        .unwrap()
-                );
+                let tmp = text.find("- tmp: /tmp").expect("tmp bullet");
                 let policy = text
                     .find(if subagent {
                         SUBAGENT_REMINDER_BODY
@@ -423,15 +446,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
                         "Subagents are disabled"
                     })
                     .expect("policy paragraph");
-                assert!(env < policy);
-                let view = text
-                    .find(if sandbox {
-                        SANDBOX_REMINDER_BODY
-                    } else {
-                        HOST_SCRATCH_REMINDER_BODY
-                    })
-                    .expect("view paragraph");
-                assert!(identity < view && view < policy);
+                assert!(identity < env && env < tmp && tmp < policy);
             }
         }
     }
@@ -542,6 +557,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
             }),
             lsp_servers: vec!["rust".to_owned()],
             team: Some(team_reminder(team)),
+            files: files("/tmp", false),
             ..Default::default()
         };
         for present in [false, true] {
@@ -554,7 +570,10 @@ When a skill's description matches the work in hand, invoke it, even when you kn
             } else {
                 "(no such files)"
             };
-            assert!(text.contains(&format!("- shell: zsh\n- lsp: rust, via Skill(rimz-lsp)\n\n```\n$ ls blackboard.md *-notes.md\n{listing}\n```\n\n### Files")));
+            assert!(text.contains(
+                "- shell: zsh\n- lsp: rust, via Skill(rimz-lsp)\n- tmp: /tmp (`$TMPDIR`)"
+            ));
+            assert!(text.contains(&format!("you name.\n\n```\n$ ls blackboard.md *-notes.md\n{listing}\n```\n</system_reminder>")));
             assert_eq!(text.matches(worktree.path().to_str().unwrap()).count(), 1);
             assert_eq!(text.contains("[Done]"), present);
         }
@@ -562,7 +581,7 @@ When a skill's description matches the work in hand, invoke it, even when you kn
         reminders.lsp_servers.clear();
         let text = render(&request, &reminders, worktree.path());
         assert!(text.contains(&format!(
-            "### Environment\n\n- cwd: {}\n\n```",
+            "### Environment\n\n- cwd: {}\n- tmp: /tmp",
             worktree.path().display()
         )));
         reminders.team.as_mut().unwrap().team.scratch_files = Some(Vec::new());

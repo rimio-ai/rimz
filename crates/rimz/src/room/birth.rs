@@ -166,9 +166,6 @@ impl RoomContext {
                 tracing::debug!(error = %err, "creating home runtime link failed");
             }
         }
-        if self.machine_config.agents.isolation == crate::config::Isolation::Sandbox {
-            StatePaths::for_project_root(&self.workspace.project_root)?.ensure_tmp_dir()?;
-        }
         if renamed {
             let paths = StatePaths::for_project_root(&self.workspace.project_root)
                 .context("preparing store paths for birth")?;

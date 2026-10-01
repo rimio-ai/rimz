@@ -110,7 +110,7 @@ forge#feat-rate-limits · working
   signals: ci.failed → @coder · never fired · team-forge-feat-rate-limits-coder-ci-failed
 
   worktree:  /home/you/code/ingest-worktrees/feat-rate-limits
-  isolation: host · tmp /tmp
+  isolation: host · shared ~/.rimz/ws/ingest-3f2a/shared
   memory:    blackboard.md   41 lines · 2m ago
              plan-notes.md  120 lines · 18m ago
 

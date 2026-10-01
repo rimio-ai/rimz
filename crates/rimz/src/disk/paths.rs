@@ -190,9 +190,7 @@ pub struct StatePaths {
     pub dir_name: WorkspaceDirName,
     pub root: PathBuf,
     pub tmp_dir: PathBuf,
-    pub scratchpad_dir: PathBuf,
     pub agents_dir: PathBuf,
-    pub shared_dir: PathBuf,
     /// The room tier every agent reads and writes: `<state>/shared`.
     pub room_shared_dir: PathBuf,
     /// RimZ-written results, one `<reader>/` directory per agent they report to.
@@ -268,9 +266,7 @@ impl StatePaths {
         Self {
             workspace_id,
             dir_name,
-            scratchpad_dir: tmp_dir.join("scratchpad"),
             agents_dir: owned_dir.join("agents"),
-            shared_dir: tmp_dir.join("shared"),
             room_shared_dir: Class::Shared.path_under(&root),
             out_dir: Class::Out.path_under(&root),
             skills_dir: cache_dir.join("skills"),
@@ -323,14 +319,6 @@ impl StatePaths {
         Ok(())
     }
 
-    /// Prepare the room tmp layout, bound at `/tmp` under sandbox isolation.
-    pub fn ensure_tmp_dir(&self) -> Result<()> {
-        ensure_private_runtime_dir(&self.tmp_dir)?;
-        mkdir_p(&self.scratchpad_dir)?;
-        ensure_private_runtime_dir(&self.agents_dir)?;
-        mkdir_p(&self.shared_dir)
-    }
-
     /// The temp unit an agent and every subagent it launches share:
     /// `tmp/<owner>/`, or `tmp/_unnamed/` for a launch without a handle.
     /// Handles are path-safe (`petname::valid_agent_name`) and never start with `_`.
@@ -351,17 +339,6 @@ impl StatePaths {
         remove_tree(&self.out_reader_dir(Some(handle)))
     }
 
-    /// The launch's private scratch dir, bound at `/tmp/scratchpad` under
-    /// sandbox isolation: `owned/agents/<handle>/scratch` for a named agent, the shared
-    /// `scratchpad` for a launch without a handle. Handles are path-safe
-    /// (`petname::valid_agent_name`).
-    pub fn scratch_dir(&self, handle: Option<&str>) -> PathBuf {
-        handle.map_or_else(
-            || self.scratchpad_dir.clone(),
-            |handle| self.agents_dir.join(handle).join("scratch"),
-        )
-    }
-
     pub(crate) fn agent_skills_dir(&self, handle: Option<&str>) -> PathBuf {
         handle.map_or_else(
             || self.skills_dir.clone(),
@@ -378,11 +355,12 @@ impl StatePaths {
         Self::class_path(&self.root, Class::Audit, name)
     }
 
-    pub(crate) fn ensure_scratch_dir(&self, handle: Option<&str>) -> Result<PathBuf> {
-        self.ensure_tmp_dir()?;
-        let dir = self.scratch_dir(handle);
-        mkdir_p(&dir)?;
-        Ok(dir)
+    /// Create `owner`'s temp unit and the room's shared dir, both private to their user.
+    pub fn ensure_temp_unit(&self, owner: Option<&str>) -> Result<PathBuf> {
+        let unit = self.temp_unit_dir(owner);
+        ensure_private_runtime_dir(&unit)?;
+        ensure_private_runtime_dir(&self.room_shared_dir)?;
+        Ok(unit)
     }
 
     /// Remove the entire room state tree, including incompatible history.

@@ -565,7 +565,7 @@ That probes bubblewrap and then writes `isolation = "sandbox"` under `[agents]` 
 
 To try one launch the other way, pass `--isolation host` or `--isolation sandbox` to `rimz agents`, `rimz teams`, or `rimz subagents`. That agent keeps the choice through restart and resume, and its subagents inherit the override, but never run looser than their parent's effective isolation: a sandboxed parent refuses a child's host override and clamps host defaults to sandbox with a note. Inside the mount view a Codex agent runs with its own command sandbox off (`--sandbox danger-full-access`); host mode leaves it on.
 
-Every launched agent carries three variables, so a script or skill inside the pane can read them instead of guessing: `RIMZ_ISOLATION` is `sandbox` or `host`, `RIMZ_SCRATCH` names that agent's own scratch directory (`/tmp/scratchpad` in the sandbox, a host path otherwise), and `RIMZ_SHARED` names the directory the whole room shares for files agents hand each other (`/tmp/shared` in the sandbox, a host path otherwise). What the sandbox does and does not hide is [security → sandbox isolation](./security.md#sandbox-isolation).
+Every launched agent carries three variables, so a script or skill inside the pane can read them instead of guessing: `RIMZ_ISOLATION` is `sandbox` or `host`, `TMPDIR` names the agent's temp directory, which its subagents share (`/tmp` in the sandbox, a host path otherwise), and `RIMZ_SHARED` names the directory the whole room shares for files agents hand each other (the same host path in both). What the sandbox does and does not hide is [security → sandbox isolation](./security.md#sandbox-isolation).
 
 ### Agent profiles, commands, and teams
 

@@ -175,7 +175,10 @@ pub(super) fn resolve_launch_prompt_file(
     let Some(path) = path else {
         return Ok(None);
     };
-    let resolved = path
+    let absolute = std::env::current_dir()
+        .context("reading the caller cwd")?
+        .join(path);
+    let resolved = crate::cli::caller_host_path(&absolute, None)?
         .canonicalize()
         .with_context(|| format!("reading {flag} `{}`", path.display()))?;
     if !resolved.is_file() {

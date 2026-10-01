@@ -230,7 +230,8 @@ surface-budget = 14
 path = "crates/rimz/src/cli"
 # Both worktree entrypoints share the PR branch choice prompt.
 # `accounts use` and the `providers` hint share the verified-pin room check.
-surface-budget = 28
+# Launch cwd and prompt-file resolution share the caller tmp reversal (+1).
+surface-budget = 29
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -262,7 +263,7 @@ upward-dependencies = [
 # ToolRule carries validated definition permission rules across launch boundaries (+1).
 # MachineConfig::require_readable_core shares birth/worktree refusal; ConfigEditor::use_account preserves machine selection edits (+2).
 # MachineConfig::model_alias exposes machine pins to the launch wrapper (+1).
-surface-budget = 187
+surface-budget = 186
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -280,7 +281,7 @@ surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/diag"
-surface-budget = 80
+surface-budget = 79
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -297,7 +298,7 @@ allowed-dependencies = [
 # Stage flips share a canonical-worktree board lock across rooms.
 # Output-file summaries estimate tokens through `utils::tokens` and expose `is_empty` for the wait and digest renderers.
 # The skill library resolves from process env for uninstall and from a launch env map for sandbox and launch planning.
-# Launches derive and create each agent's private scratch and skill dirs in its owned unit.
+# Launches derive and create each agent's temp unit and its skill dirs in its owned unit.
 # One home: every root resolves through a named `disk::paths` dir function, and
 # workspace dirs through the `for_project_root`/`under_named` constructors;
 # `holds_rimz_home` keeps the home out of project-marker and trust lookups.
@@ -316,14 +317,14 @@ allowed-dependencies = [
 # Sidebar workers lease account-global pixel slots through one classed lock accessor.
 # Assist logging exposes the checked rotating append for launch-time warnings (+1).
 # The trunk signal lane owns a separate classed runtime cache path.
-surface-budget = 208
+surface-budget = 206
 
 [[module]]
 path = "crates/rimz/src/forge"
 # Shared same-repository PR graph and stack walk feed sidebar enrichment.
 # Forge signal vocabulary is shared with CLI admission.
 # Open PR facts and settled-at mergeability cross the parser/projection seam.
-surface-budget = 47
+surface-budget = 46
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -389,7 +390,8 @@ path = "crates/rimz/src/harness"
 # ResumeOverrides shares saved-posture overrides with cohort CLI callers (+1).
 # resolve_member_posture gives agents restart a team member's role layers (+1).
 # auto_continue::limit_marker_active is the one limit-park predicate auto-redeem's gate shares (+1).
-surface-budget = 626
+# `agents show` resolves an agent's temp unit through the launch owner rule (+1).
+surface-budget = 627
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -484,12 +486,11 @@ path = "crates/rimz/src/sandbox"
 allowed-dependencies = ["agents", "config", "disk", "ids", "mux", "utils"]
 # Launch passes adapter-declared skill inputs separately from provider-home binds.
 # Static profile preflight shares typed provider identity across CLI entry points.
-# Host-side output writers share the current agent-visible room tmp view.
+# The launch compile site maps the owner's temp unit to what the agent sees.
 # Exec presents typed skill omissions returned by sandbox preparation.
 # Inspection shares read-only mount/copy plans and explicit application with exec.
-# The launch plan sets the scratch-dir and shared-dir keys the sandbox pins override.
-# Explicit launch cwd resolution reverses the caller's tmp view through TmpView::host_path.
-surface-budget = 25
+# Explicit launch cwd resolution and prompt-file resolution reverse the caller's tmp view through TmpView::host_path.
+surface-budget = 23
 
 [[module]]
 path = "crates/rimz/src/room"
@@ -507,7 +508,7 @@ path = "crates/rimz/src/sidebar"
 # accounts::cached_account supplies published account facts to both idle-compaction consumers without probing.
 # Account-cache types and status projection now belong to agents.
 # Consumers import those types directly; the refresh re-exports are gone.
-surface-budget = 226
+surface-budget = 224
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -716,7 +717,6 @@ surface-budget = 10
 path = "crates/rimz/src/mux/mount_proof.rs"
 allowed-dependencies = [
     "build_id",
-    "disk::paths",
     "ids",
     "mux",
     "wakeup",
@@ -820,7 +820,7 @@ allowed-dependencies = [
 # `check_launch_room` shares the pure pinned-room decision with the CLI launch entries.
 # `LaunchFocus` shares caller-aware focus policy across interactive launch doors.
 # LaunchLogin shares account inheritance and preflight resolution (+2).
-surface-budget = 16
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/harness/plan.rs"
@@ -909,6 +909,7 @@ surface-budget = 43
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"
 allowed-dependencies = [
+    "address",
     "agents",
     "agents::capabilities",
     "config",
@@ -923,13 +924,15 @@ allowed-dependencies = [
     "harness::team_prompt",
     "ids",
     "lsp::registry",
+    "mux::domain",
     "sandbox",
 ]
 # The exec wrapper and inspection share one read-only compiler and write boundary.
 # Apply refreshes the built-in consensus copy as best-effort enrichment.
 # Compile probes the provider cwd's shell and git state read-only for the launch reminder.
 # The exec wrapper resolves model aliases before the read-only compiler (+1).
-surface-budget = 8
+# Compile resolves the temp-unit owner from the parent's launch row (`address`) and pins the wrapper's Zellij socket base (`mux::domain`); `agents show` shares the owner rule (+1).
+surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
@@ -996,7 +999,7 @@ allowed-dependencies = [
 # Composed prompts can be planned without materializing their artifacts.
 # Prompt sources carry the team layer that `agents explain` lists.
 # Prompt pieces are config's PromptSource, a file or a definition's text.
-surface-budget = 15
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"

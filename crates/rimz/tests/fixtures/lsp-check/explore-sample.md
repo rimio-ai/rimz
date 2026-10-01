@@ -39,7 +39,7 @@ Aim: make the per-definition `rimz: <file> cannot be used: ...` lines that `rimz
 
 - Build/tests: `cargo xtask check`, then `cargo xtask lint`; `cargo xtask docs-links` for Markdown; `cargo xtask gate` before hand-off.
 - Focused: `cargo xtask test --name <exact test name>`; module: `cargo xtask test 'cli::room::start_notice'`, `cargo xtask test 'cli::doctor::render::tests'`, `cargo xtask test 'config::definitions::tests'`.
-- Repro: `cargo xtask sandbox -- sh /var/tmp/handoff-start-notice-repro-script.md > /tmp/scratchpad/out.txt 2>&1` after pointing the script's binary path at this worktree's `target/debug/rimz`.
+- Repro: `cargo xtask sandbox -- sh /var/tmp/handoff-start-notice-repro-script.md > "$TMPDIR/out.txt" 2>&1` after pointing the script's binary path at this worktree's `target/debug/rimz`.
 
 ## Open questions
 

@@ -38,7 +38,7 @@ rimz remote connect dev --no-reconnect                   # one ssh run, no super
 rimz remote reset dev                                    # same as connect --reset
 ```
 
-By default the connection is supervised: RimZ keeps an SSH ControlMaster open, reconnects after a drop, measures the link for the sidebar badge, and forwards new dev-server ports. It ends when you detach or the remote room closes. `--no-reconnect` hands the terminal to a single `ssh` run with none of that.
+By default the connection is supervised: RimZ keeps an SSH ControlMaster open, reconnects after a drop, measures the link for the sidebar badge, and forwards new dev-server ports. It ends when you detach or the remote room ends. `--no-reconnect` hands the terminal to a single `ssh` run with none of that.
 
 | Flag | Effect |
 | --- | --- |

@@ -9,13 +9,16 @@ use crate::agents::skill_links::{self, Desired, SkillLinkErr, SkillLinkOutcome, 
 use crate::config::effective::LaunchAgents;
 use crate::config::{AccountsConfig, CommandsConfig, Isolation};
 use crate::disk::paths::{RuntimePaths, StatePaths};
-use crate::sandbox::{self, ENV_SCRATCH, ENV_SHARED, SandboxPlan};
+use crate::sandbox::{self, SandboxPlan};
 
 use super::launch::{self, AgentProcessStage, CompiledAgentProcess, ExecRequest};
-use super::launch_reminders::{LaunchReminders, TeamReminder};
+use super::launch_reminders::{LaunchReminders, TeamReminder, TempFiles};
 use super::prompt_compose::{
     self, MaterializedSystemPrompt, SystemPromptPlan, SystemPromptSources,
 };
+
+/// The room's shared dir, at its host path in both isolations.
+const ENV_SHARED: &str = "RIMZ_SHARED";
 
 pub struct LaunchPlanInputs<'a> {
     pub request: &'a ExecRequest,
@@ -28,6 +31,9 @@ pub struct LaunchPlanInputs<'a> {
     pub commands: &'a CommandsConfig,
     pub accounts: &'a AccountsConfig,
     pub bwrap: Option<&'a Path>,
+    /// The room's agent rows, where a launched child finds its parent's
+    /// handle, or why they could not be read.
+    pub agents: Result<&'a [crate::agents::AgentState], &'a str>,
     pub ambient_env: &'a BTreeMap<String, String>,
 }
 
@@ -42,6 +48,7 @@ pub struct LaunchPlan {
     pub sandbox: Option<SandboxPlan>,
     pub skill_links: Option<SkillLinkPlan>,
     pub warnings: Vec<LaunchPlanWarning>,
+    temp_owner: Option<String>,
     runtime: RuntimePaths,
     state: StatePaths,
 }
@@ -60,6 +67,45 @@ pub enum LaunchPlanWarning {
     DefaultReminders,
     #[error("team `{0}` is no longer configured; launching without the team context reminder")]
     MissingTeam(String),
+    #[error("parent {0} has no row in the room; this launch uses its own temp directory")]
+    ParentUnitMissing(crate::ids::AgentSessionId),
+    #[error(
+        "could not read the room's agents to find parent {parent}'s temp directory ({error}); this launch uses its own"
+    )]
+    ParentUnitUnread {
+        parent: crate::ids::AgentSessionId,
+        error: String,
+    },
+}
+
+/// The handle whose temp unit an agent uses: a launched child shares its
+/// parent's, read from the parent's row; anyone else owns its own. `Err` names
+/// a parent with no row, and the agent falls back to its own unit.
+fn temp_owner<'a>(
+    own: Option<&'a str>,
+    parent: Option<(&crate::ids::AgentKind, &crate::ids::AgentSessionId)>,
+    agents: &'a [crate::agents::AgentState],
+) -> Result<(Option<&'a str>, bool), crate::ids::AgentSessionId> {
+    let Some((kind, id)) = parent else {
+        return Ok((own, false));
+    };
+    crate::address::launch_row(agents, kind, id)
+        .map(|row| (row.name.as_deref(), true))
+        .ok_or_else(|| id.clone())
+}
+
+/// The host temp unit `agent` uses, as its launch resolved it.
+pub fn agent_temp_unit(
+    agent: &crate::agents::AgentState,
+    agents: &[crate::agents::AgentState],
+    state: &StatePaths,
+) -> PathBuf {
+    let parent = agent
+        .parent_agent_id
+        .as_ref()
+        .map(|id| (agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind), id));
+    let own = agent.name.as_deref();
+    state.temp_unit_dir(temp_owner(own, parent, agents).map_or(own, |(owner, _)| owner))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -252,29 +298,56 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         crate::config::Isolation::Host
     };
     extra_env.insert(Isolation::ENV.to_owned(), isolation.to_string());
-    let scratch_dir = inputs.state.scratch_dir(request.identity.name.as_deref());
+    let params = &request.identity.params;
+    let parent = params.parent_agent_id.as_ref().map(|id| {
+        (
+            params.parent_agent_kind.as_ref().unwrap_or(&request.kind),
+            id,
+        )
+    });
+    let own = request.identity.name.as_deref();
+    let (owner, caller) = match inputs.agents {
+        Ok(agents) => temp_owner(own, parent, agents).unwrap_or_else(|parent| {
+            warnings.push(LaunchPlanWarning::ParentUnitMissing(parent));
+            // Still a child: it has a caller and no subagents of its own.
+            (own, true)
+        }),
+        Err(error) => {
+            if let Some((_, parent)) = parent {
+                warnings.push(LaunchPlanWarning::ParentUnitUnread {
+                    parent: parent.clone(),
+                    error: error.to_owned(),
+                });
+            }
+            (own, parent.is_some())
+        }
+    };
+    let temp_owner = owner.map(str::to_owned);
+    let unit = inputs.state.temp_unit_dir(owner);
+    let view = sandbox::TmpView::current(isolation, owner, inputs.state);
+    let tmp = view.agent_path(&unit);
+    let shared = inputs.state.room_shared_dir.clone();
     if inputs
         .effective
         .is_none_or(|effective| effective.allow_routine_rimz)
     {
-        let view = sandbox::TmpView::current(
-            Some(isolation),
-            request.identity.name.as_deref(),
-            inputs.state,
-        );
-        reminders.routine_rimz = Some((
-            inputs.runtime.prompt_dir(),
-            [
-                view.agent_path(&scratch_dir),
-                view.agent_path(&inputs.state.shared_dir),
-            ],
-        ));
+        reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
-    extra_env.insert(ENV_SCRATCH.to_owned(), scratch_dir.display().to_string());
+    extra_env.insert("TMPDIR".to_owned(), tmp.display().to_string());
+    extra_env.insert(ENV_SHARED.to_owned(), shared.display().to_string());
+    // zellij derives its socket base from TMPDIR when nothing pins it; keep
+    // the endpoint the wrapper's own environment resolves.
     extra_env.insert(
-        ENV_SHARED.to_owned(),
-        inputs.state.shared_dir.display().to_string(),
+        "ZELLIJ_SOCKET_DIR".to_owned(),
+        crate::mux::domain::ProcessDomain::zellij_socket_base(inputs.ambient_env)
+            .display()
+            .to_string(),
     );
+    reminders.files = Some(TempFiles {
+        tmp,
+        shared,
+        caller,
+    });
     let mut stage = launch::compile_agent_process_stage_with_extra_env(
         inputs.project_root,
         &request,
@@ -316,8 +389,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 cwd: inputs.cwd,
                 project_root: inputs.project_root,
                 worktree: request.worktree_path.as_deref(),
-                tmp_dir: &inputs.state.tmp_dir,
-                scratch_dir: &scratch_dir,
+                tmp_dir: &unit,
                 skills_dir: &inputs
                     .state
                     .agent_skills_dir(request.identity.name.as_deref()),
@@ -331,12 +403,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 },
             })?;
             process.pin_env(plan.pins.clone());
-            let cwd = sandbox::TmpView::current(
-                Some(Isolation::Sandbox),
-                request.identity.name.as_deref(),
-                inputs.state,
-            )
-            .agent_path(inputs.cwd);
+            let cwd = view.agent_path(inputs.cwd);
             process.argv = sandbox::bwrap_argv(bwrap, &plan.plan, &cwd, &process.argv);
             Some(plan)
         } else {
@@ -352,6 +419,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         sandbox,
         skill_links,
         warnings,
+        temp_owner,
         runtime: inputs.runtime.clone(),
         state: inputs.state.clone(),
     })
@@ -374,8 +442,7 @@ pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanEr
             launch::write_prompt_artifact(artifact)?;
         }
     }
-    plan.state
-        .ensure_scratch_dir(plan.request.identity.name.as_deref())?;
+    plan.state.ensure_temp_unit(plan.temp_owner.as_deref())?;
     if let Some(sandbox) = &plan.sandbox {
         sandbox::apply(sandbox)?;
     }
@@ -540,6 +607,7 @@ pub mod testkit {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             bwrap: None,
+            agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
         })
         .unwrap();

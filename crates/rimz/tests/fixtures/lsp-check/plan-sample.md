@@ -104,4 +104,4 @@ One PR; commit split is the implementer's.
 
 - `cargo xtask check`, `cargo xtask lint`, `cargo xtask docs-links`, then `cargo xtask gate` before hand-off.
 - Focused: `cargo xtask test 'cli::room::start_notice'`, `cargo xtask test 'cli::doctor::render::tests'`, `cargo xtask test 'config::definitions::tests'`, `cargo xtask test 'config::tests'`.
-- End to end: point `/var/tmp/handoff-start-notice-repro-script.md` at this worktree's `target/debug/rimz`, run `cargo xtask sandbox -- sh <script> > /tmp/scratchpad/out.txt 2>&1`, and check the first lines match the start-notice contract (2 definition lines + tail, then the root-class line); then `rimz doctor` in the same sandbox home for the MACHINE CONFIG shape.
+- End to end: point `/var/tmp/handoff-start-notice-repro-script.md` at this worktree's `target/debug/rimz`, run `cargo xtask sandbox -- sh <script> > "$TMPDIR/out.txt" 2>&1`, and check the first lines match the start-notice contract (2 definition lines + tail, then the root-class line); then `rimz doctor` in the same sandbox home for the MACHINE CONFIG shape.

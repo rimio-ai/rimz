@@ -1,10 +1,10 @@
-//! Linux agent mount views: room-owned tmp and profile-selected directory overlays.
+//! Linux agent mount views: the agent's temp unit and profile-selected directory overlays.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::ManualSkill;
-use crate::config::{Isolation, MachineConfig, SkillName};
+use crate::config::{Isolation, SkillName};
 use crate::disk::paths::StatePaths;
 use crate::ids::AgentKind;
 
@@ -16,69 +16,45 @@ mod skills;
 pub use rewrite::PlannedCopy;
 
 const SANDBOX_TMP: &str = "/tmp";
-const SANDBOX_SCRATCH: &str = "/tmp/scratchpad";
-const SANDBOX_SHARED: &str = "/tmp/shared";
-/// The launch's private scratch dir: its host path on every launch, pinned to
-/// `/tmp/scratchpad` under the sandbox.
-pub(crate) const ENV_SCRATCH: &str = "RIMZ_SCRATCH";
-/// The room's shared dir, one for every agent in it: its host path on every
-/// launch, pinned to `/tmp/shared` under the sandbox.
-pub(crate) const ENV_SHARED: &str = "RIMZ_SHARED";
+/// Where a sandboxed agent sees its temp unit: both host temp roots.
+const TMP_MOUNTS: [&str; 2] = [SANDBOX_TMP, "/var/tmp"];
 
-/// Where an agent sees room tmp: `/tmp` in a sandbox, with its own scratch dir
-/// at `/tmp/scratchpad`; the host path otherwise.
+/// Where an agent sees its temp unit: at both temp roots in a sandbox, at its
+/// host path otherwise.
 pub struct TmpView {
-    tmp_dir: PathBuf,
-    scratch_dir: PathBuf,
+    unit_dir: PathBuf,
     sandboxed: bool,
 }
 
 impl TmpView {
-    fn new(isolation: Isolation, handle: Option<&str>, paths: &StatePaths) -> Self {
+    pub fn current(isolation: Isolation, owner: Option<&str>, paths: &StatePaths) -> Self {
         Self {
-            tmp_dir: paths.tmp_dir.clone(),
-            scratch_dir: paths.scratch_dir(handle),
+            unit_dir: paths.temp_unit_dir(owner),
             sandboxed: isolation == Isolation::Sandbox,
         }
     }
 
-    /// The view of the agent `handle` launched with this `--isolation`
-    /// override; `None` follows current machine policy.
-    pub fn current(isolation: Option<Isolation>, handle: Option<&str>, paths: &StatePaths) -> Self {
-        let isolation = isolation.unwrap_or_else(|| MachineConfig::load_lenient().agents.isolation);
-        Self::new(isolation, handle, paths)
-    }
-
+    /// The host path behind a path the agent names.
     pub fn host_path(&self, agent: &Path) -> PathBuf {
-        if !self.sandboxed {
-            return agent.to_path_buf();
-        }
         let agent = crate::utils::path::normalize_path_lexical(agent);
-        if let Ok(relative) = agent.strip_prefix(SANDBOX_SCRATCH) {
-            return self.scratch_dir.join(relative).components().collect();
+        if !self.sandboxed {
+            return agent;
         }
-        if let Ok(relative) = agent.strip_prefix(SANDBOX_TMP) {
-            return self.tmp_dir.join(relative).components().collect();
-        }
-        agent
+        TMP_MOUNTS
+            .iter()
+            .find_map(|mount| agent.strip_prefix(mount).ok())
+            .map_or_else(
+                || agent.clone(),
+                |rest| self.unit_dir.join(rest).components().collect(),
+            )
     }
 
+    /// The path the agent sees for a host path.
     pub fn agent_path(&self, host: &Path) -> PathBuf {
-        if !self.sandboxed {
-            return host.to_path_buf();
+        match host.strip_prefix(&self.unit_dir) {
+            Ok(rest) if self.sandboxed => Path::new(SANDBOX_TMP).join(rest).components().collect(),
+            _ => host.to_path_buf(),
         }
-        // `components().collect()` drops the trailing `/` that joining an
-        // empty relative path adds when `host` is the bound dir itself.
-        if let Ok(relative) = host.strip_prefix(&self.scratch_dir) {
-            return Path::new(SANDBOX_SCRATCH)
-                .join(relative)
-                .components()
-                .collect();
-        }
-        if let Ok(relative) = host.strip_prefix(&self.tmp_dir) {
-            return Path::new(SANDBOX_TMP).join(relative).components().collect();
-        }
-        host.to_path_buf()
     }
 }
 
@@ -105,9 +81,11 @@ pub enum SandboxErr {
     #[error("sandbox requires an absolute UTF-8 path, got {0:?}; use an absolute UTF-8 path")]
     InvalidPath(PathBuf),
     #[error(
-        "sandbox tmp would hide required path /tmp; move the working directory or configured root below /tmp, or set agents.isolation = \"host\""
+        "sandbox tmp would hide required path {}; move the working directory or configured root below {}, or set agents.isolation = \"host\"",
+        .path.display(),
+        .path.display()
     )]
-    TmpCollision,
+    TmpCollision { path: PathBuf },
     #[error(
         "unknown skill {name:?}; searched {roots:?}; install the skill or remove it from the profile"
     )]
@@ -141,8 +119,6 @@ pub struct SandboxInputs<'a> {
     pub project_root: &'a Path,
     pub worktree: Option<&'a Path>,
     pub tmp_dir: &'a Path,
-    /// The launch's private scratch dir, bound at `/tmp/scratchpad`.
-    pub scratch_dir: &'a Path,
     pub skills_dir: &'a Path,
     pub provider_home: Option<ProviderHome>,
     pub provider_home_env_keys: &'a [&'a str],
@@ -161,7 +137,6 @@ pub struct SandboxPlan {
     pub skipped: Vec<SkippedSkill>,
     pub copies: Vec<PlannedCopy>,
     tmp_dir: PathBuf,
-    scratch_dir: PathBuf,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -294,10 +269,7 @@ pub fn apply(plan: &SandboxPlan) -> Result<(), SandboxErr> {
         rewrite::apply(copy)?;
     }
     crate::disk::paths::ensure_private_runtime_dir(&plan.tmp_dir)?;
-    std::fs::create_dir_all(&plan.scratch_dir).map_err(|source| SandboxErr::Io {
-        path: plan.scratch_dir.clone(),
-        source,
-    })
+    Ok(())
 }
 
 pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
@@ -329,14 +301,6 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         );
     }
     pins.insert("TMPDIR".to_owned(), EnvPin::Set(SANDBOX_TMP.to_owned()));
-    pins.insert(
-        ENV_SCRATCH.to_owned(),
-        EnvPin::Set(SANDBOX_SCRATCH.to_owned()),
-    );
-    pins.insert(
-        ENV_SHARED.to_owned(),
-        EnvPin::Set(SANDBOX_SHARED.to_owned()),
-    );
     // A shared sccache server runs rustc in the view that spawned it; client-side
     // mode (sccache >= 0.17) compiles in this view and uses the server for storage.
     pins.insert(
@@ -362,23 +326,22 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         required.push(home.source.clone());
     }
     validate_path(inputs.tmp_dir)?;
-    mounts.push(Mount::Bind {
-        source: inputs.tmp_dir.to_path_buf(),
-        target: PathBuf::from(SANDBOX_TMP),
-    });
-    validate_path(inputs.scratch_dir)?;
-    mounts.push(Mount::Bind {
-        source: inputs.scratch_dir.to_path_buf(),
-        target: PathBuf::from(SANDBOX_SCRATCH),
-    });
+    // bwrap resolves each bind source against the host root, so the second
+    // mount sees the unit and not the first mount.
+    for mount in TMP_MOUNTS {
+        mounts.push(Mount::Bind {
+            source: inputs.tmp_dir.to_path_buf(),
+            target: PathBuf::from(mount),
+        });
+    }
     let mut reach = BTreeSet::new();
     for path in required {
         validate_path(&path)?;
         let path = crate::utils::path::normalize_path_lexical(&path);
-        if path == Path::new("/tmp") {
-            return Err(SandboxErr::TmpCollision);
+        if TMP_MOUNTS.iter().any(|mount| path == Path::new(mount)) {
+            return Err(SandboxErr::TmpCollision { path });
         }
-        if path.starts_with("/tmp") && path.exists() {
+        if TMP_MOUNTS.iter().any(|mount| path.starts_with(mount)) && path.exists() {
             reach.insert(path);
         }
     }
@@ -417,7 +380,6 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         skipped: views.skipped,
         copies: views.copies,
         tmp_dir: inputs.tmp_dir.to_path_buf(),
-        scratch_dir: inputs.scratch_dir.to_path_buf(),
     })
 }
 
@@ -550,23 +512,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn owned_scratch_keeps_the_agent_mount_paths() {
-        let state = StatePaths::under(
+    fn state() -> StatePaths {
+        StatePaths::under(
             crate::ids::WorkspaceId::from_project_root(Path::new("/project")),
             Path::new("/state"),
         )
-        .unwrap();
-        let scratch = state.scratch_dir(Some("otter"));
-        let skills = state.agent_skills_dir(Some("otter"));
-        let plan = plan(&SandboxInputs {
+        .unwrap()
+    }
+
+    fn unit_plan(unit: &Path, cwd: &Path) -> Result<SandboxPlan, SandboxErr> {
+        plan(&SandboxInputs {
             env: &BTreeMap::new(),
-            cwd: Path::new("/project"),
+            cwd,
             project_root: Path::new("/project"),
             worktree: None,
-            tmp_dir: &state.tmp_dir,
-            scratch_dir: &scratch,
-            skills_dir: &skills,
+            tmp_dir: unit,
+            skills_dir: &state().agent_skills_dir(Some("otter")),
             provider_home: None,
             provider_home_env_keys: &[],
             skills: SkillInputs {
@@ -576,59 +537,100 @@ mod tests {
                 callable: None,
             },
         })
-        .unwrap();
-        for (host, target) in [(&state.tmp_dir, "/tmp"), (&scratch, "/tmp/scratchpad")] {
-            assert!(plan.plan.mounts.iter().any(|mount| matches!(mount, Mount::Bind { source, target: mounted } if source == host && mounted == Path::new(target))));
-        }
-        assert!(!skills.starts_with(&scratch));
-        let view = TmpView::new(Isolation::Sandbox, Some("otter"), &state);
-        assert_eq!(view.agent_path(&state.shared_dir), Path::new("/tmp/shared"));
-        assert_eq!(
-            view.agent_path(&state.tmp_dir.join("child.output")),
-            Path::new("/tmp/child.output")
-        );
     }
 
     #[test]
-    fn tmp_view_maps_only_sandbox_room_paths() {
-        let paths = StatePaths::under(
-            crate::ids::WorkspaceId::from_project_root(Path::new("/project")),
-            Path::new("/state"),
-        )
-        .unwrap();
-        let output = paths.tmp_dir.join("rimz-waits/wait-test.output");
-        let own = paths.scratch_dir(Some("otter")).join("f");
-        let other = paths.scratch_dir(Some("fox")).join("f");
-        let sandbox = TmpView::new(Isolation::Sandbox, Some("otter"), &paths);
+    fn the_temp_unit_binds_at_tmp_and_var_tmp() {
+        let unit = state().temp_unit_dir(Some("otter"));
+        let plan = unit_plan(&unit, Path::new("/project")).unwrap();
+        let tmp = plan
+            .plan
+            .mounts
+            .iter()
+            .position(|mount| {
+                mount
+                    == &Mount::Bind {
+                        source: unit.clone(),
+                        target: "/tmp".into(),
+                    }
+            })
+            .expect("unit at /tmp");
+        assert_eq!(
+            plan.plan.mounts.get(tmp + 1),
+            Some(&Mount::Bind {
+                source: unit.clone(),
+                target: "/var/tmp".into(),
+            })
+        );
+        assert_eq!(
+            plan.pins.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "HOME",
+                "RIMZ_AGENTS_HOME",
+                "RIMZ_HOME",
+                "SCCACHE_CLIENT_SIDE",
+                "TMPDIR",
+                "TMUX",
+                "XDG_CACHE_HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "XDG_RUNTIME_DIR",
+                "XDG_STATE_HOME",
+                "ZELLIJ_SOCKET_DIR",
+            ]
+        );
+        assert_eq!(plan.pins["TMPDIR"], EnvPin::Set("/tmp".to_owned()));
+    }
+
+    #[test]
+    fn a_required_path_at_either_mount_point_collides() {
+        let unit = state().temp_unit_dir(Some("otter"));
+        for mount in ["/tmp", "/var/tmp", "/var/tmp/"] {
+            let error = unit_plan(&unit, Path::new(mount)).err().expect(mount);
+            let expected = Path::new(mount).components().collect::<PathBuf>();
+            assert!(
+                matches!(&error, SandboxErr::TmpCollision { path } if *path == expected),
+                "{error}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("required path {}", expected.display()))
+            );
+        }
+    }
+
+    #[test]
+    fn tmp_view_maps_the_owner_unit_only() {
+        let paths = state();
+        let unit = paths.temp_unit_dir(Some("otter"));
+        let other = paths.temp_unit_dir(Some("fox")).join("f");
+        let sandbox = TmpView::current(Isolation::Sandbox, Some("otter"), &paths);
         for (host, agent) in [
-            (output.as_path(), "/tmp/rimz-waits/wait-test.output"),
-            (own.as_path(), "/tmp/scratchpad/f"),
-            (other.as_path(), other.to_str().unwrap()),
-            (Path::new("/elsewhere/file"), "/elsewhere/file"),
+            (unit.join("f"), "/tmp/f"),
+            (unit.clone(), "/tmp"),
+            (other.clone(), other.to_str().unwrap()),
+            (PathBuf::from("/elsewhere/file"), "/elsewhere/file"),
         ] {
-            assert_eq!(sandbox.agent_path(host), Path::new(agent));
+            assert_eq!(sandbox.agent_path(&host), Path::new(agent));
             assert_eq!(sandbox.host_path(Path::new(agent)), host);
         }
-        assert_eq!(
-            sandbox.host_path(Path::new("/tmp/scratchpad/../shared/x")),
-            paths.tmp_dir.join("shared/x")
-        );
+        assert_eq!(sandbox.host_path(Path::new("/var/tmp/x")), unit.join("x"));
+        assert_eq!(sandbox.host_path(Path::new("/var/tmp")), unit);
         assert_eq!(
             sandbox.host_path(Path::new("/tmp/../home/x")),
             Path::new("/home/x")
         );
         assert_eq!(
-            TmpView::new(Isolation::Sandbox, None, &paths)
-                .agent_path(&paths.scratchpad_dir.join("f")),
-            Path::new("/tmp/scratchpad/f")
+            TmpView::current(Isolation::Sandbox, None, &paths)
+                .agent_path(&paths.temp_unit_dir(None).join("f")),
+            Path::new("/tmp/f")
         );
-        let host = TmpView::new(Isolation::Host, Some("otter"), &paths);
-        assert_eq!(host.agent_path(&output), output);
-        assert_eq!(host.agent_path(&own), own);
-        assert_eq!(
-            host.host_path(Path::new("/tmp/scratchpad/f")),
-            Path::new("/tmp/scratchpad/f")
-        );
+        let host = TmpView::current(Isolation::Host, Some("otter"), &paths);
+        assert_eq!(host.agent_path(&unit.join("f")), unit.join("f"));
+        for path in ["/tmp/f", "/var/tmp/f"] {
+            assert_eq!(host.host_path(Path::new(path)), Path::new(path));
+        }
     }
 
     #[test]
@@ -655,7 +657,7 @@ mod tests {
                     target: "/home/user/.claude".into(),
                 },
                 Mount::Bind {
-                    source: "/state/tmp".into(),
+                    source: "/state/tmp/otter".into(),
                     target: "/tmp".into(),
                 },
                 Mount::Bind {
@@ -689,7 +691,7 @@ mod tests {
             "/home/user/.claude",
             "/home/user/.claude",
             "--bind",
-            "/state/tmp",
+            "/state/tmp/otter",
             "/tmp",
             "--bind",
             "/tmp/runtime",

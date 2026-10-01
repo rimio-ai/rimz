@@ -8,9 +8,7 @@ impl StatePaths {
             self.workspace_lock.clone(),
             self.publish_lock.clone(),
             self.tmp_dir.clone(),
-            self.scratchpad_dir.clone(),
             self.agents_dir.clone(),
-            self.shared_dir.clone(),
             self.room_shared_dir.clone(),
             self.out_dir.clone(),
             self.skills_dir.clone(),
@@ -120,7 +118,7 @@ fn room_tree_removal_tolerates_absence_and_names_failures() {
     state.remove_root().unwrap();
     runtime.remove_root().unwrap();
 
-    fs::create_dir_all(&state.scratchpad_dir).unwrap();
+    fs::create_dir_all(state.temp_unit_dir(None)).unwrap();
     fs::create_dir_all(&runtime.live_dir).unwrap();
     state.remove_root().unwrap();
     assert!(!state.root.exists());
@@ -645,14 +643,7 @@ fn state_paths_resolve_under_the_home() {
         paths.out_dir.join("otter")
     );
     assert_eq!(paths.out_reader_dir(None), paths.out_dir.join("_unnamed"));
-    assert_eq!(paths.scratchpad_dir, paths.tmp_dir.join("scratchpad"));
     assert_eq!(paths.agents_dir, paths.root.join("owned/agents"));
-    assert_eq!(paths.shared_dir, paths.tmp_dir.join("shared"));
-    assert_eq!(
-        paths.scratch_dir(Some("otter")),
-        paths.agents_dir.join("otter/scratch")
-    );
-    assert_eq!(paths.scratch_dir(None), paths.scratchpad_dir);
     assert_eq!(paths.transcript_dir.file_name().unwrap(), "transcript");
     assert_eq!(
         paths.workspace_record.file_name().unwrap(),
@@ -1020,5 +1011,22 @@ fn store_catalog_documents_every_lifetime_class() {
             catalog.contains(&format!("| `{}/` |", class.dir_name())),
             "missing catalog rule for {class:?}"
         );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_temp_unit_creates_the_unit_and_room_shared_dir_private() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o775)).unwrap();
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+
+    let unit = paths.ensure_temp_unit(Some("otter")).unwrap();
+
+    for path in [&unit, &paths.room_shared_dir] {
+        let mode = fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "{} is private", path.display());
     }
 }

@@ -106,18 +106,17 @@ fn reset_archives_records_and_clears_disposable_classes() {
     let skill_copy = paths.skills_dir.join("skill-digest");
     fs::create_dir(&skill_copy).expect("skill copy dir");
     fs::write(skill_copy.join("SKILL.md"), b"user-only skill").expect("write skill copy");
-    paths.ensure_tmp_dir().expect("tmp dir");
-    fs::write(paths.tmp_dir.join("agent-work"), b"tmp").expect("write tmp");
-    paths.ensure_tmp_dir().expect("tmp ensure is idempotent");
-    assert_eq!(
-        fs::read(paths.tmp_dir.join("agent-work")).expect("read tmp"),
-        b"tmp"
-    );
+    let unit = paths.ensure_temp_unit(None).expect("tmp dir");
+    fs::write(unit.join("agent-work"), b"tmp").expect("write tmp");
+    paths
+        .ensure_temp_unit(None)
+        .expect("tmp ensure is idempotent");
+    assert_eq!(fs::read(unit.join("agent-work")).expect("read tmp"), b"tmp");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
-            fs::metadata(&paths.tmp_dir)
+            fs::metadata(&unit)
                 .expect("tmp metadata")
                 .permissions()
                 .mode()
@@ -161,8 +160,8 @@ fn reset_archives_records_and_clears_disposable_classes() {
     }
     assert!(runtime.locks_dir.exists(), "runtime locks survive reset");
     assert!(
-        paths.tmp_dir.join("agent-work").exists(),
-        "soft reset keeps room tmp"
+        unit.join("agent-work").exists(),
+        "soft reset keeps the temp unit"
     );
     assert!(
         !paths.skills_dir.exists(),

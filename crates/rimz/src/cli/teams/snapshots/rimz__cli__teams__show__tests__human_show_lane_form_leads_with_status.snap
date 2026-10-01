@@ -13,7 +13,7 @@ forge#feat-x · working
   signals: ci.failed → @planner · fired 1m ago ×2 · team-forge-feat-x-planner-ci-failed
 
   worktree:  /repo/worktrees/feat-x
-  isolation: host · tmp /tmp
+  isolation: host · shared /state/room/shared
 
 forge
   source: /tmp/.agents/teams/forge/team.toml

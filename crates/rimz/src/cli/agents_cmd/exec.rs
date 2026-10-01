@@ -156,6 +156,17 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .model
             .clone_from(&request.identity.params.model);
     }
+    // A child resolves its temp unit from its parent's row; a failed read
+    // falls back to its own unit, and the plan's warning carries the error.
+    let agents = if request.identity.params.parent_agent_id.is_some() {
+        invocation
+            .store()
+            .and_then(|store| Ok(store.snapshot_cached()?))
+            .map(|snapshot| snapshot.agents.clone())
+            .map_err(|err| format!("{err:#}"))
+    } else {
+        Ok(Vec::new())
+    };
     let plan = rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
         request: &request,
         cwd: &invocation.cwd,
@@ -167,6 +178,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         commands: &machine_config.agents.commands,
         accounts: &machine_config.accounts,
         bwrap: bwrap.as_deref(),
+        agents: agents.as_deref().map_err(String::as_str),
         ambient_env: &ambient_env,
     })
     .inspect_err(|_| fail())?;
