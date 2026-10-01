@@ -4,15 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::{self, ManualSkill, PresetField, ToolSet};
-use crate::config::tiers::{
-    DefinitionRenders, ModelTier, TierConfig, TierPreference, TierProvenance,
-};
+use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
 use crate::config::{Isolation, Profile, PromptSource, SkillName};
 
 use super::frontmatter::AgentFrontmatter;
 use super::{
-    DefinitionCause, DefinitionErr, LoadedDefinitions, Namespace, SkillCatalog, SkillCheck,
-    frontmatter, traits,
+    DefinitionCause, DefinitionErr, LoadScope, LoadedDefinitions, Namespace, SkillCatalog,
+    SkillCheck, frontmatter, traits,
 };
 
 #[derive(Clone)]
@@ -72,23 +70,17 @@ pub(super) fn resolve_namespace(mut resolver: Resolver<'_>, loaded: &mut LoadedD
 
 impl<'a> Resolver<'a> {
     pub(super) fn new(
-        home: &'a Path,
+        scope: LoadScope<'a>,
         namespace: &'a str,
         [tree, foreign]: [&'a Namespace; 2],
-        bases: &'a BTreeSet<String>,
-        skills: &'a SkillCatalog<'a>,
         allowed_children: &'a BTreeSet<String>,
-        tiers: &'a TierConfig,
     ) -> Self {
         Self {
-            home,
+            scope,
             namespace,
             tree,
             foreign,
-            bases,
-            skills,
             allowed_children,
-            tiers,
             resolved: BTreeMap::new(),
             trail: Vec::new(),
             errors: Vec::new(),
@@ -97,14 +89,11 @@ impl<'a> Resolver<'a> {
 }
 
 pub(super) struct Resolver<'a> {
-    home: &'a Path,
+    scope: LoadScope<'a>,
     namespace: &'a str,
     tree: &'a Namespace,
     foreign: &'a Namespace,
-    bases: &'a BTreeSet<String>,
-    skills: &'a SkillCatalog<'a>,
     allowed_children: &'a BTreeSet<String>,
-    tiers: &'a TierConfig,
     resolved: BTreeMap<String, Option<Resolved>>,
     trail: Vec<String>,
     errors: Vec<DefinitionErr>,
@@ -284,11 +273,11 @@ impl Resolver<'_> {
             .or_else(|| {
                 fm.model
                     .as_deref()
-                    .and_then(|model| self.tiers.tier_for_model(&profile.agent, model))
+                    .and_then(|model| self.scope.tiers.tier_for_model(&profile.agent, model))
             });
         let mut renders = BTreeMap::new();
         let mut exclusions = BTreeMap::new();
-        for (_, kind, model) in self.tiers.entries(ModelTier::Intern) {
+        for (_, kind, model) in self.scope.tiers.entries(ModelTier::Intern) {
             if renders.contains_key(kind) || exclusions.contains_key(kind) {
                 continue;
             }
@@ -307,6 +296,7 @@ impl Resolver<'_> {
         }
         let mut profile = if let Some(tier) = tier {
             let pick = self
+                .scope
                 .tiers
                 .walk(
                     tier,
@@ -489,7 +479,7 @@ impl Resolver<'_> {
             }
             profile.subagents = Some(names);
         }
-        let skill_check = match self.skills.check {
+        let skill_check = match self.scope.skills.check {
             SkillCheck::Check {
                 machine_isolation, ..
             } if (!cfg!(target_os = "linux")
@@ -512,7 +502,7 @@ impl Resolver<'_> {
             fm.skills.as_deref(),
             tools.as_ref(),
             skill_check,
-            self.skills,
+            self.scope.skills,
         )?;
         let defaults = agents::definition_defaults(kind, fm.model.as_deref());
         profile.isolation = fm.isolation;
@@ -548,7 +538,7 @@ impl Resolver<'_> {
         profile.model_reminder = fm.model_reminder;
         profile.description = Some(frontmatter::description(path, fm.description.as_deref())?);
         let craft = traits::render(
-            self.home,
+            self.scope.home,
             path,
             &definition.body,
             fm.traits.as_deref().unwrap_or_default(),
@@ -569,13 +559,13 @@ impl Resolver<'_> {
         // A kind that takes a system prompt always runs on its base; any other kind
         // needs one only to carry a craft, which its launch then refuses.
         if (replaces_system_prompt || !profile.append_system_prompt_files.is_empty())
-            && !self.bases.contains(kind)
+            && !self.scope.bases.contains(kind)
         {
             return Err(DefinitionErr::new(
                 path,
                 format!(
                     "runs on {kind}, {}",
-                    super::missing_kind_base(self.home, kind)
+                    super::missing_kind_base(self.scope.home, kind)
                 ),
             ));
         }

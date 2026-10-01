@@ -12,39 +12,30 @@ use crate::store::message::AutoCompact;
 
 use super::frontmatter::{RoleFrontmatter, SignalFrontmatter, TeamFrontmatter};
 use super::{
-    Definition, DefinitionCause, DefinitionErr, LoadedDefinitions, Namespace, SkillCatalog, agent,
+    Definition, DefinitionCause, DefinitionErr, LoadScope, LoadedDefinitions, Namespace, agent,
     files, frontmatter,
 };
 
 struct SeatLoader<'a> {
-    home: &'a Path,
+    scope: LoadScope<'a>,
     agents: &'a Namespace,
     subagents: &'a Namespace,
-    bases: &'a BTreeSet<String>,
-    skills: &'a SkillCatalog<'a>,
     children: &'a BTreeSet<String>,
-    tiers: &'a crate::config::tiers::TierConfig,
 }
 
 pub(super) fn load(
-    home: &Path,
+    scope: LoadScope<'_>,
     [agents, subagents]: [&Namespace; 2],
-    bases: &BTreeSet<String>,
-    skills: &SkillCatalog<'_>,
     children: &BTreeSet<String>,
-    tiers: &crate::config::tiers::TierConfig,
     loaded: &mut LoadedDefinitions,
 ) {
     let seats = SeatLoader {
-        home,
+        scope,
         agents,
         subagents,
-        bases,
-        skills,
         children,
-        tiers,
     };
-    let paths = match files(home, "teams") {
+    let paths = match files(scope.home, "teams") {
         Ok(paths) => paths,
         Err(error) => {
             loaded.errors.push(error);
@@ -65,11 +56,7 @@ pub(super) fn load(
             let (yaml, body) = frontmatter::split(&path, &text)?;
             let fm: TeamFrontmatter = frontmatter::parse(&path, yaml)?;
             name = fm.name.clone().unwrap_or_else(|| name.clone());
-            if name.is_empty()
-                || !name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-            {
+            if !super::is_safe_name(&name) {
                 return Err(DefinitionErr::new(
                     &path,
                     format!("unsafe team name {name:?}"),
@@ -298,12 +285,12 @@ impl SeatLoader<'_> {
             .as_deref()
             .and_then(agents::definition_model_kind)
             .unwrap_or(&original.agent);
-        if fm.tier.is_none() && !self.bases.contains(kind) {
+        if fm.tier.is_none() && !self.scope.bases.contains(kind) {
             return Err(DefinitionErr::new(
                 path,
                 format!(
                     "seats {kind}, {}",
-                    super::missing_kind_base(self.home, kind)
+                    super::missing_kind_base(self.scope.home, kind)
                 ),
             ));
         }
@@ -360,15 +347,7 @@ impl SeatLoader<'_> {
         };
         let mut seat = LoadedDefinitions::default();
         agent::resolve_namespace(
-            agent::Resolver::new(
-                self.home,
-                "agents",
-                [&tree, self.subagents],
-                self.bases,
-                self.skills,
-                self.children,
-                self.tiers,
-            ),
+            agent::Resolver::new(self.scope, "agents", [&tree, self.subagents], self.children),
             &mut seat,
         );
         if let Some(error) = seat.errors.into_iter().next() {
