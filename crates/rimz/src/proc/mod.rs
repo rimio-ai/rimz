@@ -98,12 +98,22 @@ pub fn rimz_exe() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(bin_name("rimz")))
 }
 
+/// The user's own shell, stamped on an agent launched under a configured
+/// `[agents] shell` so a `rimz` that agent runs still opens the user's shell
+/// panes rather than the agent's `$SHELL`.
+pub(crate) const USER_SHELL_ENV: &str = "RIMZ_USER_SHELL";
+
 /// Resolve the user's configured shell for launches that should match a
-/// normal terminal. A set `$SHELL` wins; an unlaunchable value returns `None`.
-/// The passwd shell is consulted only when `$SHELL` is unset or empty.
-/// Sentinels such as `false` and `nologin`, and missing absolute paths, are rejected.
+/// normal terminal. A set [`USER_SHELL_ENV`] wins over a set `$SHELL`; either
+/// one, when unlaunchable, returns `None`. The passwd shell is consulted only
+/// when both are unset or empty. Sentinels such as `false` and `nologin`, and
+/// missing absolute paths, are rejected.
 pub(crate) fn user_shell() -> Option<PathBuf> {
-    match env_shell() {
+    user_shell_from(env_shell(USER_SHELL_ENV), env_shell("SHELL"))
+}
+
+fn user_shell_from(stamped: Option<PathBuf>, shell: Option<PathBuf>) -> Option<PathBuf> {
+    match stamped.or(shell) {
         Some(shell) => launchable_shell(&shell).then_some(shell),
         None => passwd_shell().filter(|shell| launchable_shell(shell)),
     }
@@ -128,8 +138,8 @@ pub fn shell_pane_name() -> String {
         .unwrap_or_else(|| "sh".to_owned())
 }
 
-fn env_shell() -> Option<PathBuf> {
-    std::env::var_os("SHELL")
+fn env_shell(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
@@ -1113,6 +1123,28 @@ mod tests {
         assert!(!launchable_shell(Path::new("/definitely/not/a/shell")));
         assert!(!launchable_shell(Path::new("/usr/sbin/nologin")));
         assert!(!launchable_shell(Path::new("/bin/false")));
+    }
+
+    #[test]
+    fn user_shell_prefers_stamped_user_shell_over_agent_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("zsh");
+        let agent = dir.path().join("bash");
+        std::fs::write(&user, b"").unwrap();
+        std::fs::write(&agent, b"").unwrap();
+
+        assert_eq!(
+            user_shell_from(Some(user.clone()), Some(agent.clone())),
+            Some(user)
+        );
+        assert_eq!(
+            user_shell_from(None, Some(agent.clone())),
+            Some(agent.clone())
+        );
+        assert_eq!(
+            user_shell_from(Some(dir.path().join("missing")), Some(agent)),
+            None
+        );
     }
 
     #[test]
