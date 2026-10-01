@@ -231,7 +231,9 @@ surface-budget = 10
 [[module]]
 path = "crates/rimz/src/child_process.rs"
 # Loop dispatch shares isolated-program spawning with its cgroup handoff.
-surface-budget = 14
+# The temp-environment rule moves here from mux: both save-variable names, the
+# decision type, and its function serve mux, launch compile, and the sandbox (+4).
+surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/cli"
@@ -450,9 +452,7 @@ path = "crates/rimz/src/mux"
 # The cross-backend live-session snapshot moves here from room (pass 15c).
 # The resolved Zellij session option list is one public type plus its resolver,
 # consumed by the live backend tests that prove room options at the multiplexer.
-# `USER_TMPDIR_ENV` is the save launch writes, the sandbox unsets, and the chokepoints restore (+1).
-# `TEMP_ROOT_KEYS_ENV` lists the provider temp roots that save travels with (+1).
-surface-budget = 253
+surface-budget = 251
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -499,7 +499,7 @@ surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/sandbox"
-allowed-dependencies = ["agents", "config", "disk", "ids", "mux", "utils"]
+allowed-dependencies = ["agents", "child_process", "config", "disk", "ids", "mux", "utils"]
 # Launch passes adapter-declared skill inputs separately from provider-home binds.
 # Static profile preflight shares typed provider identity across CLI entry points.
 # The launch compile site maps the owner's temp unit to what the agent sees.
@@ -932,6 +932,7 @@ allowed-dependencies = [
     "address",
     "agents",
     "agents::capabilities",
+    "child_process",
     "config",
     "config::effective",
     "disk::atomic",

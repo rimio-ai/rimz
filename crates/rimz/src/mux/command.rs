@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use super::domain::{TEMP_ROOT_KEYS_ENV, USER_TMPDIR_ENV};
 use super::{MuxErr, Result};
+use crate::child_process::user_temp_env;
 
 /// Upper bound on a single control-command round-trip ([`CommandSpec::run`]).
 /// Generous — a real `zellij`/`tmux` control command answers in milliseconds, so
@@ -90,31 +90,28 @@ impl CommandSpec {
     }
 
     /// Give the child the `TMPDIR` a launch saved in `saved` (the caller's
-    /// [`USER_TMPDIR_ENV`]), so a mux server started from an agent's tree
-    /// never hands panes the agent's temp unit. `None` leaves the inherited
-    /// value alone; an empty save removes `TMPDIR`. With a save, the provider
-    /// temp-root keys listed in `temp_root_keys` (the caller's
-    /// [`TEMP_ROOT_KEYS_ENV`]) are dropped too, since they name the same unit.
-    /// Neither save reaches the child, so a shell in the room starts its own
-    /// agents fresh.
+    /// [`crate::child_process::USER_TMPDIR_ENV`]), so a mux server started
+    /// from an agent's tree never hands panes the agent's temp unit. `None`
+    /// leaves the inherited value alone; an empty save removes `TMPDIR`. With
+    /// a save, the provider temp-root keys listed in `temp_root_keys` (the
+    /// caller's [`crate::child_process::TEMP_ROOT_KEYS_ENV`]) are dropped too,
+    /// since they name the same unit. Neither save reaches the child, so a
+    /// shell in the room starts its own agents fresh.
     pub(crate) fn restore_user_tmpdir(
         self,
         saved: Option<&str>,
         temp_root_keys: Option<&str>,
     ) -> Self {
-        let Some(saved) = saved else {
+        let Some(restore) = user_temp_env(saved, temp_root_keys) else {
             return self;
         };
-        let mut spec = self
-            .env_remove(USER_TMPDIR_ENV)
-            .env_remove(TEMP_ROOT_KEYS_ENV);
-        for key in temp_root_keys.unwrap_or_default().split_whitespace() {
+        let mut spec = self;
+        for key in restore.removed {
             spec = spec.env_remove(key);
         }
-        if saved.is_empty() {
-            spec.env_remove("TMPDIR")
-        } else {
-            spec.env("TMPDIR", saved)
+        match restore.tmpdir {
+            Some(tmpdir) => spec.env("TMPDIR", tmpdir),
+            None => spec.env_remove("TMPDIR"),
         }
     }
 
@@ -344,6 +341,7 @@ fn kill_by_pid(_pid: u32) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::child_process::{TEMP_ROOT_KEYS_ENV, USER_TMPDIR_ENV};
 
     #[test]
     fn a_saved_user_tmpdir_replaces_the_inherited_one() {

@@ -340,7 +340,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     // Save the TMPDIR replaced here for the mux children the agent starts.
     // Inside an agent's tree the ambient TMPDIR is already a unit, so an
     // inherited save carries forward.
-    let user_tmpdir = crate::mux::domain::USER_TMPDIR_ENV;
+    let user_tmpdir = crate::child_process::USER_TMPDIR_ENV;
     let saved = inputs
         .ambient_env
         .get(user_tmpdir)
@@ -350,7 +350,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     extra_env.insert(user_tmpdir.to_owned(), saved);
     // List the temp-root keys pointed at a unit, inherited ones included, so
     // the mux restore drops them without knowing any provider.
-    let keys_env = crate::mux::domain::TEMP_ROOT_KEYS_ENV;
+    let keys_env = crate::child_process::TEMP_ROOT_KEYS_ENV;
     let temp_root_keys: std::collections::BTreeSet<&str> = inputs
         .ambient_env
         .get(keys_env)
