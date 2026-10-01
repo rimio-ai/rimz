@@ -67,6 +67,57 @@ pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
 /// The canonical dollar cap selected by launch flags, profiles, or roles.
 /// Set by the launch wrapper and read into lifecycle observations.
 pub(crate) const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
+/// Claude Code's own shell override, stamped beside `SHELL` under a configured
+/// `[agents] shell` so the provider's tool shell is the wrapper's.
+const ENV_CLAUDE_CODE_SHELL: &str = "CLAUDE_CODE_SHELL";
+const AGENT_SHELL_FIX: &str = "set it to the absolute path of an installed bash, zsh, fish or sh-family shell, or remove the line from the per-machine config";
+
+/// A configured `[agents] shell` that cannot carry an agent launch.
+#[derive(Debug, thiserror::Error)]
+#[error("[agents] shell = \"{}\" {reason}; {AGENT_SHELL_FIX}", shell.display())]
+pub struct AgentShellErr {
+    shell: PathBuf,
+    reason: &'static str,
+}
+
+/// Refuse a configured `[agents] shell` the launch wrapper cannot run under.
+/// A relative name would resolve through a PATH other than the one checked
+/// here, and a csh-family shell would silently skip the wrapper.
+pub fn validate_agent_shell(shell: &Path) -> Result<(), AgentShellErr> {
+    let reason = if !shell.is_absolute() {
+        "is not an absolute path"
+    } else if !shell.is_file() {
+        "does not exist"
+    } else if !crate::proc::launchable_shell(shell) {
+        "disables logins"
+    } else if ShellFamily::from_shell(shell) == ShellFamily::Csh {
+        "is a csh-family shell"
+    } else {
+        return Ok(());
+    };
+    Err(AgentShellErr {
+        shell: shell.to_path_buf(),
+        reason,
+    })
+}
+
+/// The env a configured `[agents] shell` stamps on a launch: the shell under
+/// both names the provider reads, and the user's own shell for shell panes a
+/// nested `rimz` opens.
+fn agent_shell_env(shell: &Path, user_shell: Option<&Path>) -> BTreeMap<String, String> {
+    let shell = shell.display().to_string();
+    let mut env = BTreeMap::from([
+        ("SHELL".to_owned(), shell.clone()),
+        (ENV_CLAUDE_CODE_SHELL.to_owned(), shell),
+    ]);
+    if let Some(user) = user_shell {
+        env.insert(
+            crate::proc::USER_SHELL_ENV.to_owned(),
+            user.display().to_string(),
+        );
+    }
+    env
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProgramLookupErr {
@@ -136,6 +187,8 @@ pub enum AgentProcessCompileErr {
     },
     #[error(transparent)]
     Trust(#[from] crate::trust::TrustErr),
+    #[error(transparent)]
+    Shell(#[from] AgentShellErr),
     #[error(
         "agent `{kind}` env is configured in {}/.rimz/config.toml but the project is {state}; {fix}",
         root.display()
@@ -170,6 +223,8 @@ pub struct CompiledAgentProcess {
     pub reminder: String,
     /// Environment keys removed before execution and again after shell startup.
     pub unset: BTreeSet<String>,
+    /// The one shell every wrapper and the PATH probe of this launch run under.
+    shell: Option<PathBuf>,
 }
 
 impl CompiledAgentProcess {
@@ -189,8 +244,29 @@ impl CompiledAgentProcess {
         }
         // Finalized account stages have already moved provider_argv into argv.
         if !self.provider_argv.is_empty() {
-            self.argv = login_shell_argv(&self.env, &self.unset, &self.provider_argv);
+            self.argv = self.login_shell_argv(&self.provider_argv);
         }
+    }
+
+    fn login_shell_argv(&self, agent_argv: &[String]) -> Vec<String> {
+        login_shell_argv_with(
+            self.shell.as_deref(),
+            Path::new(ENV_BIN).is_file(),
+            &self.env,
+            &self.unset,
+            agent_argv,
+        )
+    }
+
+    /// Resolve the provider program in the PATH this launch will see after
+    /// its shell's startup files and RimZ's launch env are applied.
+    pub fn resolve_program_after_shell_rc(&self) -> Result<Option<PathBuf>, ProgramLookupErr> {
+        resolve_program_with(
+            self.shell.as_deref(),
+            Path::new(ENV_BIN).is_file(),
+            &self.env,
+            &self.provider_program,
+        )
     }
 }
 
@@ -691,10 +767,11 @@ fn compile_agent_process(
     cwd: &Path,
     host_runtime: Option<&RuntimePaths>,
 ) -> AgentProcessResult<CompiledAgentProcess> {
+    let machine = crate::config::MachineConfig::load_lenient();
     let login = crate::agents::session_login(
         &request.kind,
         request.identity.params.login.as_ref(),
-        &crate::config::MachineConfig::load_lenient().accounts,
+        &machine.accounts,
     )?;
     compile_agent_process_with_extra_env(
         host_runtime,
@@ -702,7 +779,10 @@ fn compile_agent_process(
         request,
         cwd,
         &login.env(&BTreeMap::new()),
-        &LaunchReminders::default(),
+        &LaunchReminders {
+            agent_shell: machine.agents.shell.clone(),
+            ..LaunchReminders::default()
+        },
     )
 }
 
@@ -720,6 +800,15 @@ fn compile_agent_process_with_extra_env(
             kind: kind.to_owned(),
         }
     })?;
+    let user_shell = crate::proc::user_shell();
+    let (shell, shell_env) = match reminders.agent_shell.as_deref() {
+        Some(configured) => {
+            validate_agent_shell(configured)?;
+            let env = agent_shell_env(configured, user_shell.as_deref());
+            (Some(configured.to_path_buf()), env)
+        }
+        None => (user_shell, BTreeMap::new()),
+    };
     let mut action = request.action.clone();
     if reminders.lsp_configured {
         adapter.disable_native_lsp_args(action.extra_args_mut());
@@ -730,14 +819,17 @@ fn compile_agent_process_with_extra_env(
     if reminders.sandbox {
         adapter.disable_native_sandbox_args(action.extra_args_mut());
     }
-    let reminder = crate::harness::launch_reminders::render(request, reminders, cwd);
+    let reminder =
+        crate::harness::launch_reminders::render(request, reminders, cwd, shell.as_deref());
     let channel = adapter.append_system_text_channel();
     if let Some(channel) = &channel {
         merge_appended_system_text(action.extra_args_mut(), channel, &reminder);
     }
     let trusted_env = trusted_agent_env(project_root, kind)?;
     let secret_keys = trusted_env.keys().cloned().collect();
-    let mut env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
+    let mut launch_env = extra_env.clone();
+    launch_env.extend(shell_env);
+    let mut env = compose_agent_env(trusted_env, adapter, request, &launch_env)?;
     let mut skill_env = reminders
         .settings
         .as_ref()
@@ -799,19 +891,20 @@ fn compile_agent_process_with_extra_env(
     if channel == Some(SystemTextChannel::ExtensionEnv) {
         env.insert(ENV_LAUNCH_REMINDERS.to_owned(), reminder.clone());
     }
-    let unset = BTreeSet::new();
-    let argv = login_shell_argv(&env, &unset, &provider_argv);
-    Ok(CompiledAgentProcess {
+    let mut process = CompiledAgentProcess {
         host_skills,
         settings_artifact,
         provider_argv,
         provider_program,
-        argv,
+        argv: Vec::new(),
         env,
         secret_keys,
         reminder,
-        unset,
-    })
+        unset: BTreeSet::new(),
+        shell,
+    };
+    process.argv = process.login_shell_argv(&process.provider_argv);
+    Ok(process)
 }
 
 /// The argv shape a channel occupies; the extension channel has none.
@@ -980,7 +1073,7 @@ fn finalize_agent_process_stage(
                 binding: binding.clone(),
             };
             let plan = plan_exec_argv(rimz_bin, runtime, &finalized)?;
-            let argv = login_shell_argv(&process.env, &process.unset, &plan.argv);
+            let argv = process.login_shell_argv(&plan.argv);
             if argv.is_empty() {
                 return Err(AgentProcessStageErr::EmptyReentry);
             }
@@ -1283,7 +1376,7 @@ fn effective_launch_env(overrides: &BTreeMap<String, String>) -> BTreeMap<String
     env
 }
 
-/// Wrap an agent command in the user's default shell startup path so shell rc
+/// Wrap an agent command in the launch shell's startup path so shell rc
 /// env applies, while RimZ's launch env is re-applied after rc processing.
 ///
 /// Launch env is encoded as `KEY=VALUE` argv entries for `/usr/bin/env`, which
@@ -1291,20 +1384,6 @@ fn effective_launch_env(overrides: &BTreeMap<String, String>) -> BTreeMap<String
 /// The inputs today are trusted project config, adapter pins, and run ids; a
 /// future secret-bearing launch source needs a two-stage re-exec channel that
 /// does not place assignments in argv.
-fn login_shell_argv(
-    env: &BTreeMap<String, String>,
-    unset: &BTreeSet<String>,
-    agent_argv: &[String],
-) -> Vec<String> {
-    login_shell_argv_with(
-        crate::proc::user_shell().as_deref(),
-        Path::new(ENV_BIN).is_file(),
-        env,
-        unset,
-        agent_argv,
-    )
-}
-
 fn login_shell_argv_with(
     shell: Option<&Path>,
     env_bin_available: bool,
@@ -1423,20 +1502,6 @@ fn invalid_env_key(env: &BTreeMap<String, String>) -> Option<&str> {
     env.keys()
         .find(|key| !valid_env_key(key))
         .map(String::as_str)
-}
-
-/// Resolve `program` in the PATH that an agent launch will
-/// see after shell startup files and RimZ's launch env are applied.
-pub fn resolve_program_after_shell_rc(
-    env: &BTreeMap<String, String>,
-    program: &str,
-) -> Result<Option<PathBuf>, ProgramLookupErr> {
-    resolve_program_with(
-        crate::proc::user_shell().as_deref(),
-        Path::new(ENV_BIN).is_file(),
-        env,
-        program,
-    )
 }
 
 fn resolve_program_with(

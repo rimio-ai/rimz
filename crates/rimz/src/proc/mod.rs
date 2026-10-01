@@ -157,7 +157,7 @@ fn passwd_shell() -> Option<PathBuf> {
     None
 }
 
-fn launchable_shell(shell: &Path) -> bool {
+pub(crate) fn launchable_shell(shell: &Path) -> bool {
     !is_login_disabled_shell(shell) && shell_exists(shell)
 }
 

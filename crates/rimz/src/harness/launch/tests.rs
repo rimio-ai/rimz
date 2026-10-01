@@ -19,6 +19,7 @@ fn child_reminder() -> String {
         &request,
         &LaunchReminders::default(),
         Path::new("/"),
+        None,
     );
     assert!(reminder.contains("You are a subagent:"));
     reminder
@@ -691,6 +692,7 @@ fn process_compiler_appends_team_context_for_native_adapters() {
                 ..LaunchReminders::default()
             },
             project.path(),
+            None,
         )
     };
 
@@ -777,6 +779,7 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
                 ..LaunchReminders::default()
             },
             project.path(),
+            None,
         );
         let team_reminder = team_reminder
             .trim_start_matches("<system_reminder>\n")
@@ -851,7 +854,12 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             assert_eq!(text.contains("You are a subagent:"), subagent);
             assert_eq!(
                 text,
-                crate::harness::launch_reminders::render(&invocation, &reminders, project.path())
+                crate::harness::launch_reminders::render(
+                    &invocation,
+                    &reminders,
+                    project.path(),
+                    None
+                )
             );
         }
     }
@@ -875,7 +883,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                     &BTreeMap::new(),
                     &LaunchReminders {
                         model,
-                        env: None,
+                        env: false,
                         sandbox: false,
                         team: Some(team()),
                         subagent_catalog: Some(
@@ -972,7 +980,7 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
         )
         .expect("process");
         let reminder =
-            crate::harness::launch_reminders::render(&invocation, &reminders, project.path());
+            crate::harness::launch_reminders::render(&invocation, &reminders, project.path(), None);
         assert!(reminder.contains("- tmp: /tmp (`$TMPDIR`)"), "{kind}");
         assert_eq!(process.env[ENV_LAUNCH_REMINDERS], reminder, "{kind}");
         assert!(
@@ -1887,6 +1895,7 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
         secret_keys: BTreeSet::from(["ANTHROPIC_API_KEY".to_owned()]),
         reminder: String::new(),
         unset: BTreeSet::new(),
+        shell: Some(PathBuf::from("/bin/sh")),
     };
 
     let report_argv = redact_env_tokens(&wrapped, |key| process.secret_keys.contains(key));
@@ -2093,4 +2102,166 @@ fn the_room_account_home_wins_over_a_trusted_project_env() {
         .expect("launch env");
 
     assert_eq!(composed["CLAUDE_CONFIG_DIR"], "/srv/work");
+}
+
+fn shell_file(dir: &Path, name: &str) -> PathBuf {
+    let shell = dir.join(name);
+    std::fs::write(&shell, "").expect("write shell");
+    shell
+}
+
+fn compile_under_agent_shell(
+    project: &Path,
+    agent_shell: Option<PathBuf>,
+) -> AgentProcessResult<CompiledAgentProcess> {
+    compile_agent_process_with_extra_env(
+        None,
+        project,
+        &request(
+            "claude",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        ),
+        project,
+        &BTreeMap::new(),
+        &LaunchReminders {
+            env: true,
+            agent_shell,
+            ..LaunchReminders::default()
+        },
+    )
+}
+
+#[test]
+fn agent_shell_validation_refuses_what_the_wrapper_cannot_run_under() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (shell, reason) in [
+        (PathBuf::from("bash"), "is not an absolute path"),
+        (dir.path().join("zsh"), "does not exist"),
+        (shell_file(dir.path(), "nologin"), "disables logins"),
+        (shell_file(dir.path(), "tcsh"), "is a csh-family shell"),
+    ] {
+        let err = validate_agent_shell(&shell).expect_err("refused shell");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "[agents] shell = \"{}\" {reason}; set it to the absolute path of an installed bash, zsh, fish or sh-family shell, or remove the line from the per-machine config",
+                shell.display()
+            )
+        );
+    }
+    for name in ["bash", "fish"] {
+        validate_agent_shell(&shell_file(dir.path(), name)).expect("accepted shell");
+    }
+}
+
+#[test]
+fn configured_agent_shell_carries_the_wrapper_env_and_reminder() {
+    let project = tempfile::tempdir().expect("project");
+    let bash = shell_file(project.path(), "bash");
+
+    let process =
+        compile_under_agent_shell(project.path(), Some(bash.clone())).expect("compiled process");
+
+    let configured = bash.display().to_string();
+    assert_eq!(process.env.get("SHELL"), Some(&configured));
+    assert_eq!(process.env.get(ENV_CLAUDE_CODE_SHELL), Some(&configured));
+    assert_eq!(
+        process.env.get(crate::proc::USER_SHELL_ENV),
+        crate::proc::user_shell()
+            .map(|shell| shell.display().to_string())
+            .as_ref()
+    );
+    assert_eq!(process.argv.first(), Some(&configured));
+    assert!(process.reminder.contains("- shell: bash\n"));
+
+    let mut pinned = process.clone();
+    pinned.pin_env(BTreeMap::from([(
+        "HOME".to_owned(),
+        crate::sandbox::EnvPin::Set("/sandbox/home".to_owned()),
+    )]));
+    assert_eq!(pinned.argv.first(), Some(&configured));
+
+    let missing = project.path().join("missing").join("bash");
+    let err = compile_under_agent_shell(project.path(), Some(missing)).expect_err("refused");
+    assert!(err.to_string().contains("[agents] shell"), "{err}");
+}
+
+#[test]
+fn unset_agent_shell_adds_no_shell_env() {
+    let project = tempfile::tempdir().expect("project");
+
+    let process = compile_under_agent_shell(project.path(), None).expect("compiled process");
+
+    for key in ["SHELL", ENV_CLAUDE_CODE_SHELL, crate::proc::USER_SHELL_ENV] {
+        assert!(!process.env.contains_key(key), "{key}");
+    }
+}
+
+#[test]
+fn agent_shell_env_beats_a_trusted_project_shell() {
+    let adapter = crate::agents::find_definition("claude").expect("claude");
+    let invocation = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bash = shell_file(dir.path(), "bash");
+
+    let composed = compose_agent_env(
+        env(&[
+            ("SHELL", "/project/zsh"),
+            (ENV_CLAUDE_CODE_SHELL, "/project/zsh"),
+        ]),
+        adapter,
+        &invocation,
+        &agent_shell_env(&bash, Some(Path::new("/bin/zsh"))),
+    )
+    .expect("launch env");
+
+    assert_eq!(composed["SHELL"], bash.display().to_string());
+    assert_eq!(composed[ENV_CLAUDE_CODE_SHELL], bash.display().to_string());
+    assert_eq!(composed[crate::proc::USER_SHELL_ENV], "/bin/zsh");
+}
+
+#[test]
+fn program_lookup_runs_under_the_configured_agent_shell() {
+    let project = tempfile::tempdir().expect("project");
+    let bin_dir = project.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
+    let agent = bin_dir.join(format!("{}-agent-shell", unique_probe_program()));
+    std::fs::write(&agent, "#!/bin/sh\nexit 0\n").expect("write agent");
+    chmod_executable(&agent);
+    let shell = project.path().join("bash");
+    std::fs::write(
+        &shell,
+        format!(
+            "#!/bin/sh\n\
+             export PATH='{}':\"$PATH\"\n\
+             while [ \"$#\" -gt 0 ]; do\n\
+               case \"$1\" in\n\
+                 -c) shift; script=$1; shift; exec /bin/sh -c \"$script\" \"$@\" ;;\n\
+                 *) shift ;;\n\
+               esac\n\
+             done\n\
+             exit 127\n",
+            bin_dir.display()
+        ),
+    )
+    .expect("write shell");
+    chmod_executable(&shell);
+
+    let mut process =
+        compile_under_agent_shell(project.path(), Some(shell)).expect("compiled process");
+    process.provider_program = agent.file_name().unwrap().to_str().unwrap().to_owned();
+
+    assert_eq!(
+        process.resolve_program_after_shell_rc().expect("lookup"),
+        Some(agent)
+    );
 }

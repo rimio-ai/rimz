@@ -2757,6 +2757,90 @@ fn missing_shell_path_falls_back_to_direct_exec() {
     );
 }
 
+fn write_agent_shell_config(env: &Env, shell: &std::path::Path) {
+    let config_dir = env.rimz_home();
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!("[agents]\nshell = \"{}\"\n", shell.display()),
+    )
+    .expect("write agent shell config");
+}
+
+/// The configured shell, not the user's `$SHELL`, runs the agent: its rc file
+/// reaches the provider, which sees the shell under both names, and the
+/// user's own shell survives for shell panes a nested `rimz` opens.
+#[cfg(unix)]
+#[test]
+fn configured_agent_shell_runs_the_spawned_agent() {
+    let env = Env::new();
+    let user_shell = write_fake_login_shell(
+        &env,
+        "rimz-test-sh",
+        &[("RIMZ_TEST_USER_RC_MARKER", "from-user-shell")],
+    );
+    let agent_shell = write_fake_bash_shell(&env);
+    std::fs::write(
+        env.home_root.join(".bashrc"),
+        "export RIMZ_TEST_BASHRC_MARKER=from-bashrc\n",
+    )
+    .expect("write bashrc");
+    write_agent_shell_config(&env, &agent_shell);
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    let dump = env.home_root.join("codex-agent-shell.env");
+
+    env.rimz()
+        .args(exec_args(&env, &fresh_exec("codex", None)))
+        .env("SHELL", &user_shell)
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .assert_success_within_timeout("codex configured shell launch");
+
+    let dumped = std::fs::read_to_string(&dump).expect("read env dump");
+    for line in [
+        format!("SHELL={}", agent_shell.display()),
+        format!("CLAUDE_CODE_SHELL={}", agent_shell.display()),
+        format!("RIMZ_USER_SHELL={}", user_shell.display()),
+        "RIMZ_TEST_BASHRC_MARKER=from-bashrc".to_owned(),
+    ] {
+        assert!(
+            dumped.lines().any(|dumped| dumped == line),
+            "agent process env misses {line}:\n{dumped}"
+        );
+    }
+    assert!(
+        !dumped.contains("RIMZ_TEST_USER_RC_MARKER"),
+        "the user's shell rc ran instead:\n{dumped}"
+    );
+}
+
+/// Unlike an unlaunchable `$SHELL`, which falls back to direct exec, a
+/// configured shell is a precondition: the provider never starts.
+#[cfg(unix)]
+#[test]
+fn missing_configured_agent_shell_refuses_the_launch() {
+    let env = Env::new();
+    write_agent_shell_config(&env, &env.home_root.join("missing").join("bash"));
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    let dump = env.home_root.join("codex-missing-agent-shell.env");
+
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &fresh_exec("codex", None)))
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .output()
+        .expect("run exec");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("[agents] shell") && stderr.contains("does not exist"),
+        "{stderr}"
+    );
+    assert!(!dump.exists(), "the provider started");
+}
+
 /// An invalid explicit `--new-pane` (here a multi-cell layout) refuses the
 /// whole launch before any side effect, so it leaves no provisional store rows
 /// and never creates the requested worktree. Resolution runs ahead of the
