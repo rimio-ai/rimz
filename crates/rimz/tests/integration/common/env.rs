@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use super::command::ScrubSessionEnvExt;
+use super::command::{PROVIDER_HOME_KEYS, ScrubSessionEnvExt};
 use super::zellij::HERMETIC_CONFIG_KDL;
 use rimz::diag::DiagSink;
 use rimz::diag::record::DiagEnvelope;
@@ -264,9 +264,6 @@ impl Env {
             .env_remove("BASH_ENV")
             .env_remove("ZDOTDIR")
             .env_remove("RUST_LOG")
-            .env_remove("COPILOT_HOME")
-            .env_remove("COPILOT_OTEL_FILE_EXPORTER_PATH")
-            .env_remove("GROK_HOME")
             .env_remove("RIMZ_GROK_HOOKS")
             .env_remove("XAI_API_KEY")
             .current_dir(&self.project_root);
@@ -777,4 +774,21 @@ fn rimz_command_pins_persistent_roots_and_both_mux_namespaces() {
     assert_eq!(configured("ZELLIJ_CONFIG_DIR"), env.zellij_config_dir());
     assert_eq!(configured("TMUX_TMPDIR"), env.tmux_tmpdir());
     assert!(env.tmux_tmpdir().starts_with(&env.runtime_root));
+
+    let mut pty = portable_pty::CommandBuilder::new("rimz");
+    pty.env("CODEX_HOME", "/ambient/codex");
+    env.pin_pty_command(&mut pty);
+    for key in PROVIDER_HOME_KEYS {
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == key && value.is_none()),
+            "{key} not scrubbed from Env::rimz"
+        );
+        assert_eq!(
+            pty.get_env(key),
+            None,
+            "{key} not scrubbed from a PTY command"
+        );
+    }
 }
