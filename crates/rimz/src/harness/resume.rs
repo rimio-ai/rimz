@@ -331,32 +331,35 @@ pub enum PostureDegrade {
 }
 
 impl ResumePosture {
-    /// A bare posture that replays only the permission mode stamped on the
-    /// original launch event, so an agent launched with no profile still comes
-    /// back with the posture the user granted it.
-    fn bare(stamped_mode: Option<PermissionMode>, kind: &AgentKind) -> Self {
-        Self {
-            launch: ResumeLaunchPosture {
-                args: stamped_mode
-                    .zip(find_definition(kind.as_str()))
-                    .map(|(mode, adapter)| adapter.spec().launch.permission_args(mode))
-                    .unwrap_or_default(),
-                mode: stamped_mode,
-                ..Default::default()
+    /// The resolved posture, or the bare posture carrying why resolution failed.
+    fn degrade_to_bare(
+        request: PostureRequest<'_>,
+        resolved: Result<ResumeLaunchPosture, PostureDegrade>,
+    ) -> Self {
+        match resolved {
+            Ok(launch) => Self {
+                launch,
+                degraded: None,
             },
-            degraded: None,
+            Err(reason) => Self {
+                launch: bare_posture(request.stamped_mode, request.kind),
+                degraded: Some(reason),
+            },
         }
     }
+}
 
-    fn degrade(
-        stamped_mode: Option<PermissionMode>,
-        kind: &AgentKind,
-        reason: PostureDegrade,
-    ) -> Self {
-        Self {
-            degraded: Some(reason),
-            ..Self::bare(stamped_mode, kind)
-        }
+/// A bare posture that replays only the permission mode stamped on the
+/// original launch event, so an agent launched with no profile still comes
+/// back with the posture the user granted it.
+fn bare_posture(stamped_mode: Option<PermissionMode>, kind: &AgentKind) -> ResumeLaunchPosture {
+    ResumeLaunchPosture {
+        args: stamped_mode
+            .zip(find_definition(kind.as_str()))
+            .map(|(mode, adapter)| adapter.spec().launch.permission_args(mode))
+            .unwrap_or_default(),
+        mode: stamped_mode,
+        ..Default::default()
     }
 }
 
@@ -384,7 +387,7 @@ pub struct PostureRequest<'a> {
 // scope on launch events before subagent-only profiles can resume in posture
 // outside the parent-message resume doorway, which passes the scope itself.
 pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -> ResumePosture {
-    resolve_posture_with_role(request, profiles, None)
+    ResumePosture::degrade_to_bare(request, resolve_posture_with_role(request, profiles, None))
 }
 
 /// [`resolve_posture`] for a team member reopened on its own, as `agents
@@ -406,16 +409,19 @@ pub fn resolve_member_posture(
             .iter()
             .find(|binding| binding.role == role)
     });
-    resolve_posture_with_role(request, profiles, binding)
+    ResumePosture::degrade_to_bare(
+        request,
+        resolve_posture_with_role(request, profiles, binding),
+    )
 }
 
 fn resolve_posture_with_role(
     request: PostureRequest<'_>,
     profiles: &ProfilesConfig,
     role: Option<&crate::config::RoleBinding>,
-) -> ResumePosture {
+) -> Result<ResumeLaunchPosture, PostureDegrade> {
     if request.profile.is_none() && request.record.is_none() {
-        return ResumePosture::bare(request.stamped_mode, request.kind);
+        return Ok(bare_posture(request.stamped_mode, request.kind));
     }
     let name = request.profile.unwrap_or(request.kind.as_str());
     let mut profiles = std::borrow::Cow::Borrowed(profiles);
@@ -450,15 +456,11 @@ fn resolve_posture_with_role(
             let now = crate::harness::spec::profile_cell(name, &profiles)
                 .map(|cell| cell.kind)
                 .unwrap_or_else(|_| request.kind.clone());
-            return ResumePosture::degrade(
-                request.stamped_mode,
-                request.kind,
-                PostureDegrade::KindChanged {
-                    profile: name.to_owned(),
-                    was: request.kind.clone(),
-                    now,
-                },
-            );
+            return Err(PostureDegrade::KindChanged {
+                profile: name.to_owned(),
+                was: request.kind.clone(),
+                now,
+            });
         }
     }
     let base_name = request.record.and_then(|record| record.agent.as_deref());
@@ -474,26 +476,18 @@ fn resolve_posture_with_role(
     let mut cell = match resolved {
         Ok(cell) => cell,
         Err(err) => {
-            return ResumePosture::degrade(
-                request.stamped_mode,
-                request.kind,
-                PostureDegrade::Unresolved {
-                    profile: base_name.unwrap_or(name).to_owned(),
-                    reason: err.to_string(),
-                },
-            );
+            return Err(PostureDegrade::Unresolved {
+                profile: base_name.unwrap_or(name).to_owned(),
+                reason: err.to_string(),
+            });
         }
     };
     if &cell.kind != request.kind {
-        return ResumePosture::degrade(
-            request.stamped_mode,
-            request.kind,
-            PostureDegrade::KindChanged {
-                profile: name.to_owned(),
-                was: request.kind.clone(),
-                now: cell.kind,
-            },
-        );
+        return Err(PostureDegrade::KindChanged {
+            profile: name.to_owned(),
+            was: request.kind.clone(),
+            now: cell.kind,
+        });
     }
     cell.launch.tier = request.stamped_tier.cloned().map(Box::new);
     if let Some(record) = request.record {
@@ -524,14 +518,10 @@ fn resolve_posture_with_role(
             if let Err(err) =
                 crate::harness::plan::apply_preset_args(&mut cell.args, adapter, &preset, &replaced)
             {
-                return ResumePosture::degrade(
-                    request.stamped_mode,
-                    request.kind,
-                    PostureDegrade::Unresolved {
-                        profile: name.to_owned(),
-                        reason: err.to_string(),
-                    },
-                );
+                return Err(PostureDegrade::Unresolved {
+                    profile: name.to_owned(),
+                    reason: err.to_string(),
+                });
             }
         }
     }
@@ -539,7 +529,7 @@ fn resolve_posture_with_role(
         crate::harness::plan::validate_finalized_cell(&cell, find_definition(cell.kind.as_str()))
     {
         let reason = err.to_string();
-        let degraded = match err {
+        return Err(match err {
             crate::harness::plan::LaunchFinalizeError::PromptFile(_) => {
                 PostureDegrade::PromptFileMissing {
                     profile: name.to_owned(),
@@ -550,29 +540,24 @@ fn resolve_posture_with_role(
                 profile: name.to_owned(),
                 reason,
             },
-        };
-        return ResumePosture::degrade(request.stamped_mode, request.kind, degraded);
+        });
     }
-    let mut posture = ResumePosture {
-        launch: ResumeLaunchPosture::from(&cell),
-        degraded: None,
-    };
+    let mut posture = ResumeLaunchPosture::from(&cell);
     // Recorded launches replay the last grant; legacy rows retain profile precedence.
-    if (request.record.is_some() || posture.launch.mode.is_none())
+    if (request.record.is_some() || posture.mode.is_none())
         && let Some(mode) = request.stamped_mode
         && let Some(adapter) = find_definition(request.kind.as_str())
     {
         adapter
             .spec()
             .launch
-            .strip_permission_args(&mut posture.launch.args);
+            .strip_permission_args(&mut posture.args);
         posture
-            .launch
             .args
             .extend(adapter.spec().launch.permission_args(mode));
-        posture.launch.mode = Some(mode);
+        posture.mode = Some(mode);
     }
-    posture
+    Ok(posture)
 }
 
 /// Durable launch records begun for the fresh seats of one restored team tab,
@@ -2376,12 +2361,12 @@ pub fn restore_routed_cells(
                 .find(|role| cell.launch.role.as_deref() == Some(role.role.as_str()))
         });
         // Legacy unstamped members retain the resolved layout, including role prompt layers.
-        let posture = if overrides.agent.is_some() {
+        let mut posture = if overrides.agent.is_some() {
             let mode = match seed {
                 CohortSeed::Resume(agent) => agent.mode,
                 CohortSeed::Fresh => cell.launch.mode,
             };
-            ResumePosture::bare(mode, &kind)
+            bare_posture(mode, &kind)
         } else if let CohortSeed::Resume(agent) = seed
             && (agent.record.is_some() || agent.tier.is_some())
         {
@@ -2395,17 +2380,10 @@ pub fn restore_routed_cells(
                 },
                 profiles,
                 role,
-            )
+            )?
         } else {
-            ResumePosture {
-                launch: ResumeLaunchPosture::from(&*cell),
-                degraded: None,
-            }
+            ResumeLaunchPosture::from(&*cell)
         };
-        if let Some(reason) = posture.degraded {
-            return Err(reason);
-        }
-        let mut posture = posture.launch;
         if let Some(base_name) = overrides.agent {
             let base = crate::harness::spec::resolve_agent_override(Some(base_name), profiles)
                 .map_err(|err| error(err.to_string()))?;
