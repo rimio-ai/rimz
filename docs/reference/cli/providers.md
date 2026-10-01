@@ -111,7 +111,7 @@ This command never computes spend itself. On a machine where nothing has publish
 | `version` | Agent CLI version. |
 | `windows` | Array of rate-limit windows; empty when none are known. |
 | `extra_credits` | The string `"disabled"`, or `{"known": {…}}` with any of `used_usd`, `remaining_usd`, `limit_usd`. |
-| `reset_credits` | `{"count": N}` plus `soonest_expiry` and the sorted `expiries` array when known. |
+| `reset_credits` | `{"count": N, "effect": …}` plus `soonest_expiry` and the sorted `expiries` array when known. `effect` says what redeeming a credit does to the window's reset: `"restarts_window"` (Codex: the reset moves a full window from the redemption) or `"keeps_schedule"` (Claude: the reset stays where it was). |
 | `spending` | Spend tally on the `default` account; `null` on named accounts. |
 | `day_budget` | `{"cap_usd", "spend_usd", "parked"}` for the account's daily cap, where `spend_usd` is spend since local midnight. |
 | `active_sessions` | Always `0` from this command. |

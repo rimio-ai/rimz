@@ -40,6 +40,7 @@ fn credits(now: Timestamp, expiry: Option<Duration>) -> ResetCredits {
         count: 1,
         soonest_expiry: expiry.map(|duration| now + duration),
         expiries: Vec::new(),
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     }
 }
 
@@ -144,6 +145,7 @@ fn verdict_covers_gain_hold_and_missing_data_matrix() {
                 count: 0,
                 soonest_expiry: Some(now + Duration::from_secs(60)),
                 expiries: Vec::new(),
+                effect: crate::agents::RedeemEffect::RestartsWindow,
             },
             now,
         ),
@@ -261,6 +263,7 @@ fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
         count: 3,
         soonest_expiry: Some(expiry),
         expiries: expiries.to_vec(),
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     };
     let deadline = rescue - refill - refill;
     let capacity = capacity_started_at(deadline - refill, 80);
@@ -296,6 +299,7 @@ fn expired_credit_does_not_suppress_the_live_chain() {
         count: 2,
         soonest_expiry: Some(now - Duration::from_secs(1)),
         expiries: vec![now - Duration::from_secs(1), expiry, expiry],
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     };
     let deadline = expiry - EXPIRY_RESCUE_LEAD - Duration::from_secs(5 * 86_400);
     let capacity = capacity_started_at(deadline - Duration::from_secs(5 * 86_400), 80);
@@ -321,6 +325,7 @@ fn window_start_paces_a_late_chain_after_every_reset() {
         count: 3,
         soonest_expiry: Some(expiry),
         expiries: vec![expiry, expiry, expiry],
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     };
     let fresh = capacity_started_at(now, 0);
 
@@ -358,6 +363,7 @@ fn slow_burn_does_not_drain_an_overdue_chain_after_the_cooldown() {
         count: 2,
         soonest_expiry: Some(expiry),
         expiries: vec![expiry, expiry],
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     };
     let fresh = capacity_started_at(now, 0);
 
@@ -383,6 +389,7 @@ fn scheduled_redeem_requires_a_dated_duration_window() {
         count: 3,
         soonest_expiry: Some(expiry),
         expiries: vec![expiry, expiry, expiry],
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     };
     let missing_reset = ProviderCapacity::from_windows(vec![RateLimitWindow {
         used_percentage: Some(50),
@@ -425,6 +432,7 @@ fn near_free_reset_defers_only_a_credit_that_comfortably_survives() {
         count: 3,
         soonest_expiry: Some(expiry),
         expiries: vec![expiry, expiry, expiry],
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     };
 
     assert_eq!(
@@ -461,6 +469,7 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
         count: 13,
         soonest_expiry: Some(expiry),
         expiries: vec![expiry; 13],
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     };
     let blocked = spent_capacity(now, Duration::from_secs(2 * 86_400));
 
@@ -480,6 +489,7 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
         count: 3,
         soonest_expiry: Some(doomed_expiry),
         expiries: vec![doomed_expiry; 3],
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     };
     let short_block = spent_capacity(now, Duration::from_secs(60 * 60));
     assert_eq!(
@@ -802,6 +812,7 @@ fn chain(expiry: Timestamp) -> ResetCredits {
         count: 2,
         soonest_expiry: Some(expiry),
         expiries: vec![expiry, expiry + Duration::from_secs(86_400)],
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     }
 }
 

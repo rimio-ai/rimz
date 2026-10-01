@@ -256,15 +256,41 @@ pub struct ResetCredits {
     pub soonest_expiry: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expiries: Vec<Timestamp>,
+    /// A credit cached before this field existed is a Codex credit, the only
+    /// kind anything redeems, so a missing key reads as `RestartsWindow`.
+    #[serde(default = "RedeemEffect::restarts_window")]
+    pub effect: RedeemEffect,
+}
+
+/// What redeeming a reset credit does to the window's natural reset, as
+/// observed per provider: both refill the window, but only some restart it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RedeemEffect {
+    /// The window restarts a full period from the redemption (Codex).
+    RestartsWindow,
+    /// The window's reset stays where it was (Claude).
+    KeepsSchedule,
+}
+
+impl RedeemEffect {
+    fn restarts_window() -> Self {
+        Self::RestartsWindow
+    }
 }
 
 impl ResetCredits {
-    pub(super) fn normalized(count: u32, mut expiries: Vec<Timestamp>) -> Self {
+    pub(super) fn normalized(
+        count: u32,
+        mut expiries: Vec<Timestamp>,
+        effect: RedeemEffect,
+    ) -> Self {
         expiries.sort_unstable();
         Self {
             count,
             soonest_expiry: expiries.first().copied(),
             expiries,
+            effect,
         }
     }
 }
@@ -464,10 +490,12 @@ mod tests {
         let old: ResetCredits =
             serde_json::from_str(r#"{"count":2,"soonest_expiry":"2026-07-06T06:30:00Z"}"#).unwrap();
         assert!(old.expiries.is_empty());
+        assert_eq!(old.effect, RedeemEffect::RestartsWindow);
 
         let first = "2026-07-06T06:30:00Z".parse::<Timestamp>().unwrap();
         let second = "2026-07-06T12:00:00Z".parse::<Timestamp>().unwrap();
-        let populated = ResetCredits::normalized(3, vec![second, first, first]);
+        let populated =
+            ResetCredits::normalized(3, vec![second, first, first], RedeemEffect::KeepsSchedule);
         assert_eq!(populated.soonest_expiry, Some(first));
         assert_eq!(populated.expiries, [first, first, second]);
         assert_eq!(
@@ -479,7 +507,8 @@ mod tests {
                     "2026-07-06T06:30:00Z",
                     "2026-07-06T06:30:00Z",
                     "2026-07-06T12:00:00Z"
-                ]
+                ],
+                "effect": "keeps_schedule"
             })
         );
     }

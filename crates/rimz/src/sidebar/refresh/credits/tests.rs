@@ -76,6 +76,7 @@ fn claimed_entry(nonce: Uuid, scope: ProviderAccountScope) -> ProviderCreditsEnt
             count: 3,
             soonest_expiry: None,
             expiries: Vec::new(),
+            effect: crate::agents::RedeemEffect::RestartsWindow,
         }),
         direct_query_claim: Some(DirectQueryClaim {
             nonce,
@@ -935,6 +936,7 @@ fn successful_partial_read_preserves_prior_optional_credits() {
                         count: 3,
                         soonest_expiry: None,
                         expiries: Vec::new(),
+                        effect: crate::agents::RedeemEffect::RestartsWindow,
                     }),
                     ..Default::default()
                 },
@@ -998,6 +1000,7 @@ fn realtime_write_preserves_attempt_and_claim() {
                         count: 2,
                         soonest_expiry: None,
                         expiries: Vec::new(),
+                        effect: crate::agents::RedeemEffect::RestartsWindow,
                     }),
                     direct_query_claim: Some(claim.clone()),
                     ..Default::default()
@@ -1039,6 +1042,7 @@ fn realtime_write_preserves_attempt_and_claim() {
                 count: 0,
                 soonest_expiry: None,
                 expiries: Vec::new(),
+                effect: crate::agents::RedeemEffect::RestartsWindow,
             }),
             ..Default::default()
         },

@@ -82,7 +82,9 @@ pub use context::{
 };
 use context::{ContextObservation, SessionContextRefresh, SubagentObservation};
 use credits::HttpErrKind;
-pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
+pub use credits::{
+    AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, RedeemEffect, ResetCredits,
+};
 pub use definition::{
     AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage,
     HookCoverage, IntegrationConcern, PermissionMode, PlanLabel, SamePaneSessionPolicy,
