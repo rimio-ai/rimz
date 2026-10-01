@@ -475,6 +475,10 @@ fn rel_until_uses_seconds_minutes_hours_days_and_marks_past_due() {
         "in 2h"
     );
     assert_eq!(
+        rel_until(Timestamp::from_second(207_140).expect("timestamp"), now),
+        "in 1h 59m"
+    );
+    assert_eq!(
         rel_until(Timestamp::from_second(372_800).expect("timestamp"), now),
         "in 2d"
     );

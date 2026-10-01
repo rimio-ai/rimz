@@ -387,7 +387,12 @@ pub(crate) fn rel_until(ts: Timestamp, now: Timestamp) -> String {
     } else if secs < 3_600 {
         format!("in {}m", secs / 60)
     } else if secs < 86_400 {
-        format!("in {}h", secs / 3_600)
+        let (hours, minutes) = (secs / 3_600, secs % 3_600 / 60);
+        if minutes == 0 {
+            format!("in {hours}h")
+        } else {
+            format!("in {hours}h {minutes}m")
+        }
     } else {
         format!("in {}d", secs / 86_400)
     }
