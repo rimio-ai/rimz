@@ -731,15 +731,27 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     assert_eq!(run_exit_policy(false), (false, false));
 
     let run_id = rimz::RunId::new();
-    let launch = rimz::agents::LaunchParams::default();
+    let launch = rimz::agents::LaunchParams {
+        model: Some("gpt-5".to_owned()),
+        ..Default::default()
+    };
     let launch_id = rimz::ids::AgentSessionId::from("child-id");
     let team_prompt = rimz::harness::team_prompt::TeamPrompt {
         consensus: rimz::harness::team_prompt::Consensus::BuiltIn,
         files: vec!["/team/pipeline.md".into()],
     };
+    let system_prompt = rimz::config::PromptSource::File("/agents/child.md".into());
+    let appended = [rimz::config::PromptSource::File("/agents/extra.md".into())];
+    let skills = ["review".parse().unwrap()];
     let allowed_tools = ["Read".parse().unwrap()];
+    let permission_args = ["--full-auto".to_owned()];
+    let binding = rimz::agents::ProviderAccountBinding::decode(
+        r#"{"scope":{"kind":"kind_wide"},"account_key":"acct"}"#,
+    )
+    .expect("provider binding");
+    let worktree = Path::new("/tmp/child-worktree");
     let pane = run_pane_cmd(RunPaneCmdArgs {
-        isolation_default: None,
+        isolation_default: Some(rimz::config::Isolation::Sandbox),
         runtime: &runtime,
         adapter: rimz::agents::definition_by_kind("codex").unwrap(),
         run_id: &run_id,
@@ -747,35 +759,61 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         agent_name_explicit: true,
         launch: &launch,
         launch_id: Some(&launch_id),
-        cwd: Path::new("/tmp"),
+        cwd: worktree,
         prompt: "work",
-        cleanup_worktree: false,
-        permission_args: &[],
-        system_prompt_file: None,
-        append_system_prompt_files: &[],
+        cleanup_worktree: true,
+        permission_args: &permission_args,
+        system_prompt_file: Some(&system_prompt),
+        append_system_prompt_files: &appended,
         team_prompt: Some(&team_prompt),
-        skills: None,
+        skills: Some(&skills),
         allowed_tools: Some(&allowed_tools),
         self_cleanup_on_completion: true,
         subagent: true,
-        provider_account_binding: None,
+        provider_account_binding: Some(&binding),
     })
     .unwrap();
+    assert_eq!(pane.name.as_deref(), Some("codex"));
     let request = rimz::harness::launch::decode_exec_request(
         "codex",
-        None,
+        Some(worktree),
         pane.argv.last().expect("exec payload"),
     )
     .unwrap();
-    assert!(request.close_pane_on_exit);
-    assert!(request.exit_on_run_completion);
-    assert!(request.subagent);
+    // Together `close_pane_on_exit`, `exit_on_run_completion`, `subagent` and
+    // `team_prompt` select the wrapper's parent-receipt hold before it closes the pane.
     assert_eq!(
-        request.allowed_tools.as_deref(),
-        Some(allowed_tools.as_slice())
+        request,
+        rimz::harness::launch::ExecRequest {
+            isolation_default: Some(rimz::config::Isolation::Sandbox),
+            kind: rimz::agents::definition_by_kind("codex")
+                .unwrap()
+                .spec()
+                .kind_id(),
+            action: rimz::harness::launch::ExecAction::Launch {
+                prompt: Some("work".to_owned()),
+                extra_args: permission_args.to_vec(),
+            },
+            system_prompt_file: Some(system_prompt),
+            append_system_prompt_files: appended.to_vec(),
+            team_prompt: Some(team_prompt),
+            skills: Some(skills.to_vec()),
+            allowed_tools: Some(allowed_tools.to_vec()),
+            provider_account: rimz::harness::launch::ProviderAccountState::Pending { binding },
+            run_id: Some(run_id),
+            worktree_path: Some(worktree.to_path_buf()),
+            close_pane_on_exit: true,
+            exit_on_run_completion: true,
+            subagent: true,
+            identity: rimz::harness::launch::ExecIdentity {
+                resume_model_override: false,
+                name: Some("child".to_owned()),
+                name_explicit: true,
+                launch_id: Some("child-id".to_owned()),
+                params: launch,
+            },
+        }
     );
-    // Together these select the wrapper's parent-receipt hold before it closes the pane.
-    assert_eq!(request.team_prompt, Some(team_prompt));
 }
 
 struct RunFixture {
