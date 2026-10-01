@@ -205,6 +205,7 @@ fn ctx<'a>(
         runtime: &RUNTIME,
         profiles,
         max,
+        logins: &NO_LOGINS,
     }
 }
 
@@ -376,6 +377,7 @@ fn cohort_with(
 ) -> Result<CohortResumePlan, CohortResumeErr> {
     plan_cohort_resume(
         agents,
+        &NO_LOGINS,
         liveness,
         cells,
         team,

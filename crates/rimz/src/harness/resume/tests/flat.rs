@@ -513,7 +513,7 @@ fn resume_session_present_requires_a_redeemable_conversation() {
 }
 
 #[test]
-fn resumes_each_session_under_its_stamp_after_the_room_switches() {
+fn skips_a_session_from_another_account_and_resumes_the_rest() {
     let personal = AgentState {
         login: Some("personal".parse().expect("login name")),
         ..agent("claude", "a1", "/code/qe", 5)
@@ -522,53 +522,47 @@ fn resumes_each_session_under_its_stamp_after_the_room_switches() {
         login: Some("work".parse().expect("login name")),
         ..agent("claude", "a2", "/code/qe-feature", 10)
     };
+    let room = claude_room("work");
 
     let plan = plan_resume(
         &[personal, work],
         &BTreeSet::new(),
-        ctx(
-            crate::config::ResumeConfig::default().max,
-            None,
-            &no_profiles(),
-        ),
+        ResumeContext {
+            logins: &room,
+            ..ctx(
+                crate::config::ResumeConfig::default().max,
+                None,
+                &no_profiles(),
+            )
+        },
         |_| true,
         |_| true,
     );
 
-    assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
-    assert!(plan.warnings.is_empty());
-    assert_eq!(plan.tabs.len(), 2);
-    let logins: BTreeSet<_> = plan
-        .tabs
-        .iter()
-        .map(|tab| {
-            decode_exec_request(&first_argv(tab))
-                .identity
-                .params
-                .login
-                .unwrap()
-                .to_string()
-        })
-        .collect();
     assert_eq!(
-        logins,
-        BTreeSet::from(["personal".to_owned(), "work".to_owned()])
+        plan.skipped,
+        [ResumeSkip {
+            label: "claude:qe".to_owned(),
+            reason: ResumeSkipReason::LoginMismatch,
+        }]
+    );
+    assert_eq!(plan.warnings.len(), 1);
+    assert!(
+        plan.warnings[0].contains("rimz accounts use --room claude personal"),
+        "{}",
+        plan.warnings[0]
+    );
+    assert_eq!(plan.tabs.len(), 1);
+    let request = decode_exec_request(&first_argv(&plan.tabs[0]));
+    assert!(
+        matches!(&request.action, crate::harness::launch::ExecAction::Resume { session_id, .. } if session_id == "a2"),
+        "{:?}",
+        request.action
     );
     let dir = tempfile::tempdir().unwrap();
-    for tab in &plan.tabs {
-        let request = decode_exec_request(&first_argv(tab));
-        let crate::harness::launch::ExecAction::Resume { session_id, .. } = &request.action else {
-            panic!("resume action")
-        };
-        let expected = if session_id == "a1" {
-            "personal"
-        } else {
-            "work"
-        };
-        crate::harness::launch_plan::testkit::assert_claude_stamped_home(
-            &request,
-            dir.path(),
-            Some(expected),
-        );
-    }
+    crate::harness::launch_plan::testkit::assert_claude_stamped_home(
+        &request,
+        dir.path(),
+        Some("work"),
+    );
 }

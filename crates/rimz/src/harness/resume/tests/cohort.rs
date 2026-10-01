@@ -230,6 +230,7 @@ fn team_restore_routes_fresh_seats_before_planning() {
     for fresh in [false, true] {
         let tabs = plan_team_restore_tabs(
             std::slice::from_ref(&coder),
+            &NO_LOGINS,
             &config.teams,
             &config.profiles,
             &config.commands,
@@ -422,6 +423,7 @@ fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
     let coder = team_agent("codex", "coder", "coder", "/repo/forge", 5);
     let tabs = plan_team_restore_tabs(
         &[planner, coder],
+        &NO_LOGINS,
         &teams,
         &profiles,
         &commands,
@@ -1106,6 +1108,7 @@ fn team_restore_tabs_seed_every_declared_role() {
     ] {
         let tabs = plan_team_restore_tabs(
             &agents,
+            &NO_LOGINS,
             &teams,
             &profiles,
             &commands,
@@ -1140,6 +1143,7 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
 
     let (tabs, flat_agents) = split_team_and_flat(
         &[planner, flat],
+        &NO_LOGINS,
         &teams,
         &profiles,
         &commands,
@@ -1156,40 +1160,26 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
 }
 
 #[test]
-fn cohort_resume_keeps_the_member_account_after_the_room_switches() {
+fn cohort_resume_refuses_a_member_from_another_account() {
     let planner = AgentState {
         login: Some("personal".parse().expect("login name")),
         ..team_agent("claude", "planner", "planner", "/code/forge", 1)
     };
+    let room = claude_room("work");
 
-    let result = plan_cohort_resume(
+    let err = plan_cohort_resume(
         &[planner],
+        &room,
         dead,
         &[cohort_cell("claude", Some("planner"))],
         Some("forge"),
         |_| true,
         |_| true,
-    );
-    assert!(result.is_ok(), "{result:?}");
-    let plan = result.unwrap();
-    let CohortSeed::Resume(agent) = &plan.seeds[0] else {
-        panic!("resume seed")
-    };
-    assert_eq!(
-        agent.login.as_ref().map(crate::ids::LoginName::as_str),
-        Some("personal")
-    );
-    let argv = crate::harness::plan::resume_command(
-        Path::new(RIMZ_BIN),
-        &RUNTIME,
-        &crate::harness::plan::ResumeLaunchIdentity::from(agent.as_ref()),
-        None,
-        &crate::harness::plan::ResumeLaunchPosture::default(),
-    );
-    let dir = tempfile::tempdir().unwrap();
-    crate::harness::launch_plan::testkit::assert_claude_stamped_home(
-        &decode_exec_request(&argv),
-        dir.path(),
-        Some("personal"),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&err, CohortResumeErr::LoginMismatch(mismatch) if mismatch.session_login.as_str() == "personal"),
+        "{err:?}"
     );
 }

@@ -191,7 +191,6 @@ pub(super) fn launch_layout(
                 workspace,
                 store.runtime_paths(),
                 cell,
-                rimz::store::writer::LaunchLogin::RoomDefault,
                 rimz::config::Isolation::resolve(
                     cell.launch.isolation,
                     cell.isolation_default,
@@ -720,7 +719,6 @@ fn preflight_cell(
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
     cell: &rimz::harness::spec::AgentCell,
-    selection: rimz::store::writer::LaunchLogin,
     isolation: rimz::config::Isolation,
     prompt: Option<&str>,
     checked_folder_trust: &mut HashSet<rimz::ids::LoginKey>,
@@ -736,7 +734,7 @@ fn preflight_cell(
     let mut request =
         rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
     let state = rimz::StatePaths::for_workspace(runtime.workspace_id.clone())?;
-    let login = selection.resolve(
+    let login = rimz::store::writer::LaunchLogin::RoomDefault.resolve(
         &cell.kind,
         &rimz::agents::room_logins(&state.workspace_record)?,
         &rimz::config::MachineConfig::load_lenient().accounts,
@@ -815,8 +813,10 @@ fn launch_resume_layout(
     let cells = cohort_cells(&layout);
     let spec = args.launch.spec.as_deref().unwrap_or("<spec>");
     let scope = worktree_filter.and_then(worktree_scope_label);
+    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
     let mut plan = rimz::harness::resume::plan_cohort_resume(
         &agents,
+        &logins,
         rimz::store::runtime::agent_liveness,
         &cells,
         team_name.as_deref(),
@@ -845,16 +845,6 @@ fn launch_resume_layout(
             workspace,
             store.runtime_paths(),
             cell,
-            match seed {
-                rimz::harness::plan::CohortSeed::Resume(agent) => {
-                    rimz::store::writer::LaunchLogin::Pinned(
-                        agent.login.clone().unwrap_or_default(),
-                    )
-                }
-                rimz::harness::plan::CohortSeed::Fresh => {
-                    rimz::store::writer::LaunchLogin::RoomDefault
-                }
-            },
             rimz::config::Isolation::resolve(
                 isolation,
                 cell.isolation_default,
@@ -1123,6 +1113,7 @@ fn cohort_resume_error(
                 labels.join(", ")
             )
         }
+        rimz::harness::resume::CohortResumeErr::LoginMismatch(mismatch) => mismatch.into(),
     }
 }
 

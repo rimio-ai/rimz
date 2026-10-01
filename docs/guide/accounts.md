@@ -110,7 +110,7 @@ rimz accounts use --room claude work
 
 The command checks the selected home's hooks, then changes only that provider's launch default in the room record. It leaves machine and project configuration alone and reports how many running agents keep the prior account. Reverse it with `rimz accounts use --room claude default`. Its output confirms the switch immediately; sidebar account information follows on the next refresh.
 
-Every new launch uses the room's current account for its provider, including children and peers launched by existing agents and team members. A session always resumes under the account it started with, even after the room switches or is recovered after a crash. Keep that account declared to resume it. A running [remote-control host](./remote.md#answer-asks-from-your-phone) keeps its account until its next spawn.
+Every new launch uses the room's current account for its provider, including children and peers launched by existing agents and team members. Resuming, restarting, or forking a session also runs on the room's current account, so RimZ refuses to reopen a session that started on another one: the conversation lives in that account's home. The refusal names both accounts and the fix, for example `rimz accounts use --room claude default` to resume the session, then switch back. Recovery after a crash skips such sessions and lists each as `different account`. Keep an account declared to resume its sessions. A running [remote-control host](./remote.md#answer-asks-from-your-phone) keeps its account until its next spawn.
 
 Inside a room that is already running, `rimz start --account` refuses and points at `rimz accounts use --room`. `rimz reset --account` remains available when you want to tear down and rebuild the room instead.
 
@@ -122,7 +122,7 @@ rimz accounts remove claude work
 
 This removes the `[accounts.claude.work]` declaration and clears the machine selection if it names that account. The home, its credentials, and its transcripts stay on disk; `rimz accounts add claude work --home <that home>` brings the account back. A room still selecting a removed account needs it added again or its launch default switched to another account.
 
-If a live room selects the account as its launch default, `remove` warns and names it. Add the account back, or switch that room's default. The warning checks room defaults, not every running agent's account; an older session still needs its own account declared to resume.
+If a live room selects the account as its launch default, `remove` warns and names it. Add the account back, or switch that room's default. The warning checks room defaults, not every running agent's account; an older session still needs its own account declared, and selected in the room, to resume.
 
 `rimz uninstall` keeps account homes too: it removes RimZ's hooks from every declared account's home and leaves `~/.rimz/accounts/` in place, whichever flags you pass it.
 

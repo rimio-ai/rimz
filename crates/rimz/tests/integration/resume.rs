@@ -76,6 +76,7 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
             runtime: h.store.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
+            logins: &rimz::ids::RoomLogins::new(),
         },
         |_| true,
         |_| true,
@@ -173,7 +174,7 @@ fn resumes_an_agent_stamped_in_the_real_rollup() {
 }
 
 #[test]
-fn rebirth_resumes_a_session_under_its_stamped_account() {
+fn rebirth_skips_a_session_stamped_with_another_account() {
     let h = Harness::new();
     let mut obs = registered(
         "sess-claude",
@@ -189,24 +190,22 @@ fn rebirth_resumes_a_session_under_its_stamped_account() {
 
     let plan = plan_from_rollup(&h);
 
-    assert_eq!(plan.tabs.len(), 1);
-    assert!(plan.skipped.is_empty());
-    assert!(plan.warnings.is_empty());
-    let request = decode_exec_request(&single_column(&plan.tabs[0])[0]);
-    assert_eq!(
-        request
-            .identity
-            .params
-            .login
-            .as_ref()
-            .map(rimz::ids::LoginName::as_str),
-        Some("personal")
+    assert!(
+        plan.tabs.is_empty(),
+        "a personal session never resumes in a default room"
     );
-    let dir = tempfile::tempdir().unwrap();
-    rimz::harness::launch_plan::testkit::assert_claude_stamped_home(
-        &request,
-        dir.path(),
-        Some("personal"),
+    assert_eq!(
+        plan.skipped,
+        [rimz::harness::resume::ResumeSkip {
+            label: "claude:feature".to_owned(),
+            reason: rimz::harness::resume::ResumeSkipReason::LoginMismatch,
+        }]
+    );
+    assert_eq!(
+        plan.warnings,
+        [
+            "@warm-drift's session belongs to claude account `personal`; this room now launches claude on `default`. Run `rimz accounts use --room claude personal` to resume it, then switch back."
+        ]
     );
 }
 
@@ -371,6 +370,7 @@ fn soft_reset_preserves_dead_paneless_resume_identity() {
             runtime: h.store.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
+            logins: &rimz::ids::RoomLogins::new(),
         },
         |_| true,
         |_| true,
@@ -481,6 +481,7 @@ fn missing_worktree_candidate_is_stamped_ended_not_reported() {
             runtime: h.store.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
+            logins: &rimz::ids::RoomLogins::new(),
         },
         |_| false,
         |_| true,
