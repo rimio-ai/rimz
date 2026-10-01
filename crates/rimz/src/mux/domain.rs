@@ -20,10 +20,7 @@ pub struct ProcessDomain {
 impl ProcessDomain {
     /// Filesystem roots needed to keep the launch environment's mux endpoints reachable.
     pub(crate) fn required_paths(env: &std::collections::BTreeMap<String, String>) -> Vec<PathBuf> {
-        let domain = Self::from_env(
-            |key| env.get(key).filter(|value| !value.is_empty()).cloned(),
-            crate::proc::own_uid().unwrap_or_default(),
-        );
+        let domain = Self::from_env_map(env);
         let mut paths = vec![
             domain.rimz_home,
             domain.runtime_home,
@@ -33,6 +30,20 @@ impl ProcessDomain {
             paths.push(parent.to_path_buf());
         }
         paths
+    }
+
+    /// The Zellij socket base `env` resolves. A launch that moves `TMPDIR` pins
+    /// `ZELLIJ_SOCKET_DIR` here, so zellij and this guard keep the endpoint the
+    /// launcher's environment named.
+    pub(crate) fn zellij_socket_base(env: &std::collections::BTreeMap<String, String>) -> PathBuf {
+        Self::from_env_map(env).zellij_socket_base
+    }
+
+    fn from_env_map(env: &std::collections::BTreeMap<String, String>) -> Self {
+        Self::from_env(
+            |key| env.get(key).filter(|value| !value.is_empty()).cloned(),
+            crate::proc::own_uid().unwrap_or_default(),
+        )
     }
 
     /// Resolve the invoker's process domain from its current environment.
@@ -223,6 +234,44 @@ mod tests {
         assert!(left.same_world(&right));
         assert!(left.same_mux_endpoint(&right, MuxName::Zellij));
         assert!(left.same_mux_endpoint(&right, MuxName::Tmux));
+    }
+
+    #[test]
+    fn a_launch_moving_tmpdir_keeps_world_and_pinned_zellij_endpoint() {
+        let wrapper = [
+            ("HOME", "/home/u"),
+            ("RIMZ_HOME", "/home/u/.rimz"),
+            ("TMPDIR", "/var/folders/t"),
+        ];
+        let launcher = domain(&wrapper);
+        // What `zellij_socket_base` returns for the wrapper, at the fixture uid.
+        let base = launcher.zellij_socket_base.to_str().unwrap();
+        let unit = "/home/u/.rimz/ws/w/tmp/otter";
+        let with_runtime = |tmpdir| {
+            domain(&[
+                ("HOME", "/home/u"),
+                ("RIMZ_HOME", "/home/u/.rimz"),
+                ("XDG_RUNTIME_DIR", "/run/user/1000"),
+                ("TMPDIR", tmpdir),
+            ])
+        };
+        assert!(with_runtime("/var/folders/t").same_world(&with_runtime(unit)));
+
+        let agent = |pin: Option<&str>| {
+            let mut values = vec![
+                ("HOME", "/home/u"),
+                ("RIMZ_HOME", "/home/u/.rimz"),
+                ("TMPDIR", unit),
+            ];
+            values.extend(pin.map(|base| ("ZELLIJ_SOCKET_DIR", base)));
+            domain(&values)
+        };
+        assert!(launcher.same_mux_endpoint(&agent(Some(base)), MuxName::Zellij));
+        assert!(launcher.same_mux_endpoint(&agent(Some(base)), MuxName::Tmux));
+        assert!(
+            !launcher.same_mux_endpoint(&agent(None), MuxName::Zellij),
+            "without the pin, zellij falls back to the moved TMPDIR"
+        );
     }
 
     #[test]

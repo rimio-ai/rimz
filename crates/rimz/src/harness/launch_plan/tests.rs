@@ -179,6 +179,7 @@ fn model_alias_resolution_at_the_process_boundary() {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             bwrap: None,
+            agents: Ok(&[]),
             ambient_env: &ambient,
         })
         .unwrap();
@@ -304,6 +305,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         commands: &machine.agents.commands,
                         accounts: &machine.accounts,
                         bwrap: sandboxed.then_some(Path::new("/bin/bwrap")),
+                        agents: Ok(&[]),
                         ambient_env: &ambient,
                     })
                     .unwrap();
@@ -325,14 +327,14 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                             ),
                             rules
                         );
-                        let dirs = if sandboxed {
-                            vec![
-                                PathBuf::from("/tmp/scratchpad"),
-                                PathBuf::from("/tmp/shared"),
-                            ]
-                        } else {
-                            vec![state.scratch_dir(Some("otter")), state.shared_dir.clone()]
-                        };
+                        let dirs = [
+                            if sandboxed {
+                                PathBuf::from("/tmp")
+                            } else {
+                                state.temp_unit_dir(Some("otter"))
+                            },
+                            state.room_shared_dir.clone(),
+                        ];
                         assert_eq!(
                             value["permissions"]["additionalDirectories"],
                             if enabled {
@@ -395,6 +397,7 @@ fn sandbox_settings_artifact_is_written_only_on_apply() {
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         bwrap: Some(Path::new("/bin/bwrap")),
+        agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
     })
     .unwrap();
@@ -433,6 +436,7 @@ fn allowed_tools_warn_on_unsupported_kind_without_changing_argv() {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             bwrap: None,
+            agents: Ok(&[]),
             ambient_env: &ambient,
         })
         .unwrap()
@@ -499,6 +503,7 @@ fn host_settings_are_private_artifacts_written_only_on_apply() {
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         bwrap: None,
+        agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
     })
     .unwrap();
@@ -891,21 +896,23 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             bwrap: None,
+            agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
         })
         .unwrap();
         assert!(!root.exists(), "{kind} compilation must not write");
         assert!(plan.sandbox.is_none());
         assert!(!plan.process().env.contains_key("SCCACHE_CLIENT_SIDE"));
-        let scratch = state.scratch_dir(Some("swift-otter"));
+        let unit = state.temp_unit_dir(Some("swift-otter"));
         assert_eq!(
-            plan.process().env.get(ENV_SCRATCH).map(PathBuf::from),
-            Some(scratch.clone())
+            plan.process().env.get("TMPDIR").map(PathBuf::from),
+            Some(unit.clone())
         );
         assert_eq!(
-            plan.process().env.get(ENV_SHARED).map(PathBuf::from),
-            Some(state.shared_dir.clone())
+            plan.process().env.get("RIMZ_SHARED").map(PathBuf::from),
+            Some(state.room_shared_dir.clone())
         );
+        assert!(!plan.process().env.keys().any(|key| key.contains("SCRATCH")));
         let reminder = &plan.process().reminder;
         assert!(reminder.contains("<system_reminder>"));
         assert_eq!(
@@ -945,8 +952,8 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             plan.prompt.composed.as_deref().unwrap()
         );
         assert!(
-            scratch.is_dir(),
-            "{kind}: host launches create their scratch dir"
+            unit.is_dir() && state.room_shared_dir.is_dir(),
+            "{kind}: host launches create their temp unit and the shared dir"
         );
     }
 }
@@ -980,6 +987,7 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
                     commands: &machine.agents.commands,
                     accounts: &machine.accounts,
                     bwrap: None,
+                    agents: Ok(&[]),
                     ambient_env: &BTreeMap::new(),
                 })
                 .unwrap();
@@ -1062,6 +1070,7 @@ fn the_stamped_account_sets_the_provider_home_after_the_room_switches() {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             bwrap: None,
+            agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
         })
         .expect("compile");
@@ -1102,6 +1111,7 @@ fn the_default_account_leaves_the_provider_home_to_the_provider() {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             bwrap: None,
+            agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
         })
         .expect("compile");
@@ -1143,6 +1153,7 @@ fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         bwrap: None,
+        agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
     });
 
@@ -1179,7 +1190,10 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
 
     for (cwd, expected) in [
         (project.path().to_path_buf(), project.path().to_path_buf()),
-        (state.tmp_dir.join("clean"), PathBuf::from("/tmp/clean")),
+        (
+            state.temp_unit_dir(None).join("clean"),
+            PathBuf::from("/tmp/clean"),
+        ),
     ] {
         let plan = compile(LaunchPlanInputs {
             request: &request,
@@ -1192,6 +1206,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
             bwrap: Some(Path::new("/usr/bin/bwrap")),
+            agents: Ok(&[]),
             ambient_env: &BTreeMap::from([(
                 "HOME".to_owned(),
                 project.path().display().to_string(),
@@ -1218,6 +1233,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
         bwrap: Some(Path::new("/usr/bin/bwrap")),
+        agents: Ok(&[]),
         ambient_env: &BTreeMap::from([
             ("HOME".to_owned(), project.path().display().to_string()),
             ("SCCACHE_CLIENT_SIDE".to_owned(), "0".to_owned()),
@@ -1236,12 +1252,12 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         Some("sandbox")
     );
     assert_eq!(
-        plan.process().env.get(ENV_SCRATCH).map(String::as_str),
-        Some("/tmp/scratchpad")
+        plan.process().env.get("TMPDIR").map(String::as_str),
+        Some("/tmp")
     );
     assert_eq!(
-        plan.process().env.get(ENV_SHARED).map(String::as_str),
-        Some("/tmp/shared")
+        plan.process().env.get("RIMZ_SHARED").map(PathBuf::from),
+        Some(state.room_shared_dir.clone())
     );
     assert_eq!(
         plan.process()
@@ -1252,19 +1268,12 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         "the view compiles client-side over an ambient opt-out"
     );
     let sandbox = plan.sandbox.as_ref().expect("sandbox plan");
-    let tmp_bind = sandbox
-        .plan
-        .mounts
-        .iter()
-        .position(|mount| matches!(mount, crate::sandbox::Mount::Bind { target, .. } if target == Path::new("/tmp")))
-        .expect("room tmp bind");
-    assert_eq!(
-        sandbox.plan.mounts.get(tmp_bind + 1),
-        Some(&crate::sandbox::Mount::Bind {
-            source: state.scratchpad_dir.clone(),
-            target: "/tmp/scratchpad".into(),
+    assert!(
+        sandbox.plan.mounts.contains(&crate::sandbox::Mount::Bind {
+            source: state.temp_unit_dir(None),
+            target: "/tmp".into(),
         }),
-        "a launch without a handle binds the shared scratchpad over itself"
+        "a launch without a handle binds the unnamed unit"
     );
     assert!(
         sandbox.plan.mounts.iter().any(
@@ -1277,5 +1286,109 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         Some(&crate::sandbox::EnvPin::Set(
             home.to_string_lossy().into_owned()
         ))
+    );
+}
+
+#[test]
+fn a_launched_child_shares_its_parent_unit_across_restart() {
+    let project = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .unwrap();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let mut parent =
+        crate::testkit::agent_state("claude", "parent-session", jiff::Timestamp::UNIX_EPOCH);
+    parent.name = Some("otter".to_owned());
+    // A restart keeps the durable parent stamp and drops `subagent`.
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    request.identity.name = Some("fox".to_owned());
+    request.identity.params.parent_agent_id = Some("parent-session".into());
+    request.identity.params.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    let ambient = BTreeMap::from([("XDG_RUNTIME_DIR".to_owned(), "/run/user/1000".to_owned())]);
+    let compile_with = |agents: Result<&[crate::agents::AgentState], &str>| {
+        compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: Some(&effective),
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: None,
+            agents,
+            ambient_env: &ambient,
+        })
+        .unwrap()
+    };
+    let parented = |plan: &LaunchPlan| {
+        plan.warnings
+            .iter()
+            .any(|warning| warning.to_string().contains("parent-session"))
+    };
+
+    let plan = compile_with(Ok(std::slice::from_ref(&parent)));
+    assert_eq!(
+        plan.process().env.get("TMPDIR").map(PathBuf::from),
+        Some(state.temp_unit_dir(Some("otter")))
+    );
+    assert!(
+        plan.process()
+            .reminder
+            .contains("every temporary file you make. You share it with your caller;")
+    );
+    assert!(!parented(&plan));
+    if cfg!(target_os = "linux") {
+        assert_eq!(
+            plan.process()
+                .env
+                .get("ZELLIJ_SOCKET_DIR")
+                .map(String::as_str),
+            Some("/run/user/1000/zellij"),
+            "moving TMPDIR pins the socket base the wrapper resolved"
+        );
+    }
+
+    let orphan = compile_with(Ok(&[]));
+    assert_eq!(
+        orphan.process().env.get("TMPDIR").map(PathBuf::from),
+        Some(state.temp_unit_dir(Some("fox")))
+    );
+    assert!(
+        orphan
+            .process()
+            .reminder
+            .contains("every temporary file you make. You share it with your caller;"),
+        "a child is never told it has subagents"
+    );
+    assert!(parented(&orphan), "a lost parent row warns");
+    let unread = compile_with(Err("snapshot unreadable"));
+    let warning = unread
+        .warnings
+        .iter()
+        .map(ToString::to_string)
+        .find(|warning| warning.contains("parent-session"))
+        .expect("an unread room warns");
+    assert!(
+        warning.contains("snapshot unreadable") && !warning.contains("has no row"),
+        "{warning}"
+    );
+    assert_eq!(
+        unread.process().env.get("TMPDIR").map(PathBuf::from),
+        Some(state.temp_unit_dir(Some("fox")))
+    );
+
+    let mut child =
+        crate::testkit::agent_state("claude", "child-session", jiff::Timestamp::UNIX_EPOCH);
+    child.name = Some("fox".to_owned());
+    child.parent_agent_id = Some("parent-session".into());
+    assert_eq!(
+        agent_temp_unit(&child, std::slice::from_ref(&parent), &state),
+        state.temp_unit_dir(Some("otter")),
+        "agents show names the unit the launch used"
     );
 }

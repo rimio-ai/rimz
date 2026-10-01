@@ -984,16 +984,7 @@ fn resolve_launch_cwd(
     let absolute = std::env::current_dir()
         .context("reading the caller cwd")?
         .join(path);
-    let caller = rimz::harness::ancestry::CallerIdentity::from_env();
-    let view = rimz::sandbox::TmpView::current(
-        Some(
-            rimz::config::Isolation::ambient(&rimz::agents::ambient_env())
-                .unwrap_or(rimz::config::Isolation::Host),
-        ),
-        caller.as_ref().and_then(|caller| caller.name.as_deref()),
-        paths,
-    );
-    let host = view.host_path(&absolute);
+    let host = caller_host_path(&absolute, Some(paths))?;
     if !host.is_dir() {
         anyhow::bail!(
             "--cwd `{}` is not a directory; create it first or pass an existing one",
@@ -1003,6 +994,44 @@ fn resolve_launch_cwd(
     host.canonicalize()
         .map(Some)
         .with_context(|| format!("resolving --cwd `{}`", path.display()))
+}
+
+/// The host path behind an absolute path a calling agent names. A sandboxed
+/// caller names its temp unit as `/tmp`, while the launch reads the path
+/// outside that view; `paths` defaults to the room the caller is pinned to.
+pub(crate) fn caller_host_path(
+    absolute: &std::path::Path,
+    paths: Option<&rimz::StatePaths>,
+) -> Result<std::path::PathBuf> {
+    use rimz::config::Isolation;
+    if Isolation::ambient(&rimz::agents::ambient_env()) != Some(Isolation::Sandbox) {
+        return Ok(absolute.to_path_buf());
+    }
+    let pinned;
+    let paths = match paths {
+        Some(paths) => paths,
+        None => {
+            let Some(root) = std::env::var(rimz::workspace::ENV_WORKSPACE_ID)
+                .ok()
+                .zip(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT))
+                .and_then(|(id, root)| {
+                    rimz::workspace::verify_pin(&id, std::path::Path::new(&root))
+                })
+            else {
+                return Ok(absolute.to_path_buf());
+            };
+            pinned =
+                rimz::StatePaths::for_workspace(rimz::ids::WorkspaceId::from_project_root(&root))?;
+            &pinned
+        }
+    };
+    let caller = rimz::harness::ancestry::CallerIdentity::from_env();
+    let view = rimz::sandbox::TmpView::current(
+        Isolation::Sandbox,
+        caller.as_ref().and_then(|caller| caller.name.as_deref()),
+        paths,
+    );
+    Ok(view.host_path(absolute))
 }
 
 pub(crate) fn confirm_cross_repo_worktree(workspace: &rimz::ResolvedWorkspace) -> Result<bool> {

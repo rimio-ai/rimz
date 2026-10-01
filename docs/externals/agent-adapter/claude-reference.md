@@ -457,7 +457,7 @@ A second pass used the `--settings` value `rimz agents explain claude` rendered 
 
 | Probe | Observed result |
 | --- | --- |
-| `--permission-mode auto`, run `rimz agents --json > "$RIMZ_SCRATCH/x.json"` | Ran without a prompt or denial. It also ran without the settings, so the classifier alone allowed it in that case. |
+| `--permission-mode auto`, run `rimz agents --json` redirected into the launch's scratch directory | Ran without a prompt or denial. It also ran without the settings, so the classifier alone allowed it in that case. |
 | `--permission-mode auto`, run `rimz lsp status` | Ran without a prompt or denial. |
 | Default mode, run `rimz pane send @nobody hi` | “This command requires approval”. The launch settings grant no rule for it. |
 | The rendered `autoMode` placed in the config dir's `settings.json`, then `claude auto-mode config` | 22 `environment` entries: the 21 that `claude auto-mode defaults` prints, plus the RimZ entry. `$defaults` expanded in place. |

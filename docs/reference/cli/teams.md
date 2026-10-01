@@ -89,7 +89,7 @@ forge#feat-x · idle 48s
   signals: ci.failed → @coder · never fired · team-forge-feat-x-coder-ci-failed
 
   worktree:  /repo-worktrees/feat-x
-  isolation: host · tmp /tmp
+  isolation: host · shared ~/.rimz/ws/repo-3f2a/shared
   memory:    blackboard.md   41 lines · 2m ago
              plan-notes.md  120 lines · 18m ago
 
@@ -137,7 +137,7 @@ A lane block reads top to bottom:
 | Member table | `MEMBER STATUS AGE ACTIVITY CTX COST`, members in the team's declared role order. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `AGE` is the time since the member's last activity, and `COST` is each role's lifetime spend in this worktree. |
 | `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `never fired`, `fired <age> ago` when the last firing delivered, `skipped <age> ago` when it matched the family but not the subscription, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` gives the total run count once it has run more than once. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
 | `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
-| `isolation` | `host · tmp /tmp`, or `sandbox · tmp <room tmp dir> (as /tmp)`: where each member ran: the isolation its launch enforced, else the `--isolation` recorded at launch or replaced on resume, else the machine's `agents.isolation`. The enforced isolation already folds in a profile `isolation` default. Members that disagree show the machine setting. |
+| `isolation` | `host · shared <dir>` or `sandbox · shared <dir>`: the room's shared directory (`$RIMZ_SHARED`, the same host path in both isolations), and where each member ran: the isolation its launch enforced, else the `--isolation` recorded at launch or replaced on resume, else the machine's `agents.isolation`. The enforced isolation already folds in a profile `isolation` default. Members that disagree show the machine setting. |
 | `memory` | Files matching the team's effective scratch patterns (defaults or explicit `scratch-files`), relative to the worktree, with line counts and modification ages. Omitted when none exist. |
 
 A script that blocks until the work is done runs [`rimz teams wait`](#wait-for-a-cohort-to-finish) rather than polling `.stage.name` from `--json`. The report ends with the definition, with no launch, resume, or focus hints.
@@ -183,7 +183,7 @@ PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` neve
 | `status_counts` | Object mapping each member status to its count. |
 | `last_activity_at` | The newest member `last_activity_at` (UTC timestamp). |
 | `worktree`, `branch` | Absolute checkout path and branch; `null` when unavailable or when members disagree. |
-| `isolation`, `tmp_dir` | `host` or `sandbox`; `/tmp` for host, the absolute room tmp directory mounted at `/tmp` for sandbox. |
+| `isolation`, `shared_dir` | `host` or `sandbox`; the absolute host path of the room's shared directory. |
 | `stages` | Declared stage names in order; `[]` when undeclared or the team is no longer defined. |
 | `stage` | `{ "name": "Implement", "owner": "coder", "since": "2026-09-15T08:33:23Z" }`; `null` when the board has no stage. `name` is `Done` once the board is flipped to `Done`, so `.stage.name` is the field to script against. `owner` is without `@` and nullable; `since` is the UTC time of the flip into this stage, `null` when no recorded flip matches. |
 | `pr` | `number`, `state` (`open`, `merged`, `closed`), `ci` (`passing`, `pending`, `failing`), and `url`, each nullable; `null` when no pull request is cached. |

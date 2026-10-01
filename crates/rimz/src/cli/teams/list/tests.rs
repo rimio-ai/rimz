@@ -259,7 +259,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
             &CommandsConfig::default(),
             LiveCatalog {
                 isolation: Isolation::Host,
-                tmp_dir: Path::new("/tmp"),
+                shared_dir: Path::new("/state/room/shared"),
                 tasks: &BTreeMap::new(),
                 flips: &flips,
                 runs: &BTreeMap::new(),
@@ -403,7 +403,7 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
         &CommandsConfig::default(),
         LiveCatalog {
             isolation: Isolation::Host,
-            tmp_dir: Path::new("/tmp"),
+            shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
             flips: &[],
             runs: &BTreeMap::new(),
@@ -469,7 +469,7 @@ fn catalog_merges_definition_and_live_instance() {
         &CommandsConfig::default(),
         LiveCatalog {
             isolation: Isolation::Host,
-            tmp_dir: Path::new("/state/room/tmp"),
+            shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
             flips: &[],
             runs: &BTreeMap::new(),
@@ -505,8 +505,8 @@ fn catalog_merges_definition_and_live_instance() {
     assert_eq!(reports[0].instances[0].state, CohortState::Working);
     assert_eq!(reports[0].instances[0].isolation, Isolation::Sandbox);
     assert_eq!(
-        reports[0].instances[0].tmp_dir,
-        Path::new("/state/room/tmp")
+        reports[0].instances[0].shared_dir,
+        Path::new("/state/room/shared")
     );
     let json = serde_json::to_value(&reports).unwrap();
     assert_eq!(
@@ -537,7 +537,7 @@ fn catalog_merges_definition_and_live_instance() {
         &CommandsConfig::default(),
         LiveCatalog {
             isolation: Isolation::Host,
-            tmp_dir: Path::new("/tmp"),
+            shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
             flips: &[],
             runs: &BTreeMap::new(),
@@ -588,7 +588,7 @@ fn live_member_cost_comes_from_its_audit_slot() {
         &CommandsConfig::default(),
         LiveCatalog {
             isolation: Isolation::Host,
-            tmp_dir: Path::new("/tmp"),
+            shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
             flips: &[],
             runs: &BTreeMap::new(),
@@ -667,7 +667,7 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
             &CommandsConfig::default(),
             LiveCatalog {
                 isolation: Isolation::Host,
-                tmp_dir: Path::new("/tmp"),
+                shared_dir: Path::new("/state/room/shared"),
                 tasks: &BTreeMap::new(),
                 flips: &[],
                 runs: &BTreeMap::new(),
@@ -738,7 +738,7 @@ fn invalid_team_stays_visible_with_its_error() {
         &CommandsConfig::default(),
         LiveCatalog {
             isolation: Isolation::Host,
-            tmp_dir: Path::new("/tmp"),
+            shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
             flips: &[],
             runs: &BTreeMap::new(),
@@ -813,7 +813,7 @@ fn human_catalog_and_empty_state_teach_the_command() {
         &CommandsConfig::default(),
         LiveCatalog {
             isolation: Isolation::Host,
-            tmp_dir: Path::new("/tmp"),
+            shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
             flips: &[],
             runs: &BTreeMap::new(),
@@ -879,7 +879,7 @@ fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
             &CommandsConfig::default(),
             LiveCatalog {
                 isolation: Isolation::Host,
-                tmp_dir: Path::new("/tmp"),
+                shared_dir: Path::new("/state/room/shared"),
                 tasks: &BTreeMap::new(),
                 flips: &[],
                 runs: &BTreeMap::new(),

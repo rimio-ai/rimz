@@ -48,7 +48,7 @@ fn routine_rimz_settings_union_and_idempotence() {
         .unwrap();
     }
     std::fs::create_dir(provider.join("rimz-c")).unwrap();
-    let dirs = [root.path().join("scratch"), root.path().join("shared")];
+    let dirs = [root.path().join("tmp"), root.path().join("shared")];
     for profile in [
         None,
         Some(
@@ -116,12 +116,10 @@ fn routine_rimz_settings_union_and_idempotence() {
         assert_eq!(env.iter().filter(|entry| **entry == "$defaults").count(), 1);
         let text = env.last().unwrap().as_str().unwrap();
         for name in [
-            "$RIMZ_SCRATCH",
-            "$RIMZ_SHARED",
-            dirs[0].to_str().unwrap(),
-            dirs[1].to_str().unwrap(),
+            format!("$TMPDIR ({})", dirs[0].display()),
+            format!("$RIMZ_SHARED ({})", dirs[1].display()),
         ] {
-            assert!(text.contains(name));
+            assert!(text.contains(&name), "{text}");
         }
         let mut expected_dirs = vec![json!(dirs[0]), json!(dirs[1])];
         if profile.is_some() {
@@ -160,7 +158,7 @@ fn routine_rimz_file_and_pending_skills_artifact() {
         "{ // jsonc\n\"env\":{\"TOKEN\":\"private-secret\"},}",
     )
     .unwrap();
-    let dirs = [root.path().join("scratch"), root.path().join("shared")];
+    let dirs = [root.path().join("tmp"), root.path().join("shared")];
     for skills in [false, true] {
         let mut args = vec![
             "--settings={}".into(),

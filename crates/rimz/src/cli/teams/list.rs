@@ -76,7 +76,7 @@ pub(super) struct LiveInstance {
     pub worktree: Option<PathBuf>,
     pub branch: Option<String>,
     pub isolation: Isolation,
-    pub tmp_dir: PathBuf,
+    pub shared_dir: PathBuf,
     pub stages: Vec<String>,
     pub stage: Option<StageReport>,
     pub pr: Option<PrReport>,
@@ -226,7 +226,7 @@ pub(super) fn load_catalog(
             prices: &prices,
             worktree,
             isolation: machine.agents.isolation,
-            tmp_dir: &ctx.store.paths().tmp_dir,
+            shared_dir: &ctx.store.paths().room_shared_dir,
         },
         |name| team_source(&ctx.workspace.project_root, name, &sources),
     ))
@@ -294,7 +294,7 @@ struct LiveCatalog<'a> {
     prices: &'a rimz::agents::PriceBook,
     worktree: Option<&'a str>,
     isolation: Isolation,
-    tmp_dir: &'a Path,
+    shared_dir: &'a Path,
 }
 
 fn definition_report(
@@ -679,10 +679,7 @@ fn live_instances(
                 worktree,
                 branch,
                 isolation,
-                tmp_dir: match isolation {
-                    Isolation::Sandbox => catalog.tmp_dir.to_path_buf(),
-                    Isolation::Host => PathBuf::from("/tmp"),
-                },
+                shared_dir: catalog.shared_dir.to_path_buf(),
                 stages: team.map(Team::pipeline_stages).unwrap_or_default(),
                 stage,
                 pr,

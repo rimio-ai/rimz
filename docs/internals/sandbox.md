@@ -1,6 +1,6 @@
 # Agent sandbox mount views
 
-Sandbox isolation runs each agent's provider process inside Linux bubblewrap with a rearranged filesystem view. It is machine policy, `agents.isolation = "sandbox"` in `config.toml`, and the default is `host`. The view gives every agent in a room a private shared `/tmp` ([room tmp](#room-tmp)) and lets a profile decide which skills the model may call ([profile skill views](#profile-skill-views)). Raw command panes and the room's multiplexer stay on the host.
+Sandbox isolation runs each agent's provider process inside Linux bubblewrap with a rearranged filesystem view. It is machine policy, `agents.isolation = "sandbox"` in `config.toml`, and the default is `host`. The view gives every agent a private `/tmp` and `/var/tmp` that its subagents share ([temp units](#temp-units)) and lets a profile decide which skills the model may call ([profile skill views](#profile-skill-views)). Raw command panes and the room's multiplexer stay on the host.
 
 The view is not containment. The host root stays bound read-write, credentials stay visible, the PID, network, and IPC namespaces are shared, and provider approval flags apply unchanged while provider command sandboxes are switched off, so an approval policy stops prompting for sandbox escalations ([provider command sandboxes](#provider-command-sandboxes)). Trust decides what a repository may run; a sandbox does not make an untrusted command safe ([trust.md](./harness/trust.md#the-executable-surface)).
 
@@ -14,7 +14,7 @@ The profile default travels beside `skills` as `isolation_default` through `Reso
 
 The exec wrapper stamps `effective_isolation` on `agent.attached` before provider startup, independently of the recorded override. `AgentState::runs_in(machine)` reads this durable stamp; older rows fall back to override then machine policy. Observers read the stamp, while relaunches resolve the current definition rather than replaying the stamp.
 
-A subagent launched without its own `--isolation` inherits its parent's recorded override, not its profile default. Otherwise it follows its own definition and then machine policy. `harness::plan::cap_child_isolation` caps this choice against the parent's effective `RIMZ_ISOLATION`, at supervised child launch and parent-message child resume. Under a sandboxed parent, an explicit or recorded host override refuses with the fix: launch from a host agent or host shell. A host profile default or host machine policy instead clamps to sandbox, prints a note naming the profile and source, and records `Some(Sandbox)` as the child's override so restart and resume preserve it. A host parent or absent ambient isolation imposes no cap. This is a consistency rule, not containment; ordinary agent launches, teams, forks, and loops are not capped. Subagents open their own panes through the multiplexer, so each builds its own view from its own profile and shares the parent's room tmp.
+A subagent launched without its own `--isolation` inherits its parent's recorded override, not its profile default. Otherwise it follows its own definition and then machine policy. `harness::plan::cap_child_isolation` caps this choice against the parent's effective `RIMZ_ISOLATION`, at supervised child launch and parent-message child resume. Under a sandboxed parent, an explicit or recorded host override refuses with the fix: launch from a host agent or host shell. A host profile default or host machine policy instead clamps to sandbox, prints a note naming the profile and source, and records `Some(Sandbox)` as the child's override so restart and resume preserve it. A host parent or absent ambient isolation imposes no cap. This is a consistency rule, not containment; ordinary agent launches, teams, forks, and loops are not capped. Subagents open their own panes through the multiplexer, so each builds its own view from its own profile and shares the parent's temp unit.
 
 ## Preflight
 
@@ -36,9 +36,9 @@ Every entry point that can start a sandboxed agent probes bubblewrap first and r
 
 ## The launch plan
 
-`sandbox::plan` reads the environment, paths, skill directories, and skill source bytes into a `SandboxPlan` without creating anything. The plan holds the ordered `MountPlan`, the environment `pins`, the `skipped` skills, and the rewritten `copies` with their content-addressed targets. `sandbox::apply` writes the copies and ensures the private tmp directory and the launch's scratch dir; `sandbox::prepare` runs both.
+`sandbox::plan` reads the environment, paths, skill directories, and skill source bytes into a `SandboxPlan` without creating anything. The plan holds the ordered `MountPlan`, the environment `pins`, the `skipped` skills, and the rewritten `copies` with their content-addressed targets. `sandbox::apply` writes the copies and ensures the private temp unit; `sandbox::prepare` runs both.
 
-The exec wrapper uses the shared [launch plan](./harness/fleet.md#the-exec-wrapper). `launch_plan::compile` plans a view only for a ready provider process (`AgentProcessStage::Ready`), pins its environment into the compiled process, and lowers the mounts with `sandbox::bwrap_argv`. `launch_plan::apply` ensures the room tmp layout and the launch's scratch dir in both isolation modes, then calls `sandbox::apply` on a sandbox launch, so a launch in a room whose birth never created room tmp (a host-policy birth, for example) still gets it. Qwen's login-shell reentry stage runs on the host without a view; its finalized exec is the ready stage that builds one.
+The exec wrapper uses the shared [launch plan](./harness/fleet.md#the-exec-wrapper). `launch_plan::compile` plans a view only for a ready provider process (`AgentProcessStage::Ready`), pins its environment into the compiled process, and lowers the mounts with `sandbox::bwrap_argv`. `launch_plan::apply` creates the launch's temp unit and the room's `shared/`, both mode `0700`, in both isolation modes, then calls `sandbox::apply` on a sandbox launch; `compile` creates nothing. Qwen's login-shell reentry stage runs on the host without a view; its finalized exec is the ready stage that builds one.
 
 [`rimz agents explain`](../reference/cli/agents.md#explain-a-launch) prints the mounts, pins, copy targets, and omissions without applying them. It plans from its own invoking environment plus the launch overrides, which can differ from the target pane's environment.
 
@@ -57,25 +57,24 @@ Codex replaces every `--sandbox`/`-s` flag and `sandbox_mode` override with `--s
 
 ### Toolchain homes
 
-The view neither pins nor binds `CARGO_HOME` or `RUSTUP_HOME`. The agent keeps the host `HOME`, so the root bind shows the host toolchain at its host paths: an exported `CARGO_HOME` and `RUSTUP_HOME`, or `~/.cargo` and `~/.rustup` when they are unset. Both stay read-write on purpose, because cargo writes its registry, git checkouts, and installed binaries under `CARGO_HOME` during a build, and rustup writes toolchains and components under `RUSTUP_HOME` when it installs them. The view is not containment here: a sandboxed agent can modify the host toolchain as it can any other host file it can write. An exported `CARGO_HOME` or `RUSTUP_HOME` below host `/tmp` is not itself a [reachable host path](#reachable-host-paths) candidate, so room tmp hides it unless a rebound candidate such as HOME or the worktree contains it; a default `~/.cargo` under a rebound HOME stays visible.
+The view neither pins nor binds `CARGO_HOME` or `RUSTUP_HOME`. The agent keeps the host `HOME`, so the root bind shows the host toolchain at its host paths: an exported `CARGO_HOME` and `RUSTUP_HOME`, or `~/.cargo` and `~/.rustup` when they are unset. Both stay read-write on purpose, because cargo writes its registry, git checkouts, and installed binaries under `CARGO_HOME` during a build, and rustup writes toolchains and components under `RUSTUP_HOME` when it installs them. The view is not containment here: a sandboxed agent can modify the host toolchain as it can any other host file it can write. An exported `CARGO_HOME` or `RUSTUP_HOME` below host `/tmp` is not itself a [reachable host path](#reachable-host-paths) candidate, so the temp unit hides it unless a rebound candidate such as HOME or the worktree contains it; a default `~/.cargo` under a rebound HOME stays visible.
 
-A compiler cache wrapper crosses views. Every sccache client forwards compiles to one server over its socket (`SCCACHE_SERVER_UDS`, or TCP port 4226), which the view shares with the host because `/run/user` is not rebound and the network is not unshared. A server-side compile runs rustc in the mount namespace of whichever process spawned the server, so a sandboxed pane's `/tmp` paths resolve against another view, or against room tmp that is already gone, and the build fails with `error writing dependencies ... No such file or directory` or exit status 254. The view therefore pins `SCCACHE_CLIENT_SIDE=1` ([environment pins](#environment-pins)): sccache 0.17 or later then runs rustc inside the client, in the pane's own view, and uses the shared server only for cache storage, so every view still shares one cache. Older sccache ignores the key and stays broken, and sccache turns client-side mode off whenever `SCCACHE_LOG` is set or a distributed-compilation scheduler is configured, so either brings the failure back. After upgrading, run `sccache --stop-server` once, because a client in client-side mode cannot talk to a pre-0.17 server still running. Host launches are not pinned, so a host shell's server-side compile can still land on a server a sandboxed pane spawned; set `client_side_mode = true` in the sccache config, or export `SCCACHE_CLIENT_SIDE=1` machine-wide, to close that too. Reproduce with `CARGO_INCREMENTAL=0` on a fresh crate under `/tmp/scratchpad`, since incremental compiles bypass the cache.
+A compiler cache wrapper crosses views. Every sccache client forwards compiles to one server over its socket (`SCCACHE_SERVER_UDS`, or TCP port 4226), which the view shares with the host because `/run/user` is not rebound and the network is not unshared. A server-side compile runs rustc in the mount namespace of whichever process spawned the server, so a sandboxed pane's `/tmp` paths resolve against another view, or against a temp unit that is already gone, and the build fails with `error writing dependencies ... No such file or directory` or exit status 254. The view therefore pins `SCCACHE_CLIENT_SIDE=1` ([environment pins](#environment-pins)): sccache 0.17 or later then runs rustc inside the client, in the pane's own view, and uses the shared server only for cache storage, so every view still shares one cache. Older sccache ignores the key and stays broken, and sccache turns client-side mode off whenever `SCCACHE_LOG` is set or a distributed-compilation scheduler is configured, so either brings the failure back. After upgrading, run `sccache --stop-server` once, because a client in client-side mode cannot talk to a pre-0.17 server still running. Host launches are not pinned, so a host shell's server-side compile can still land on a server a sandboxed pane spawned; set `client_side_mode = true` in the sccache config, or export `SCCACHE_CLIENT_SIDE=1` machine-wide, to close that too. Reproduce with `CARGO_INCREMENTAL=0` on a fresh crate under `/tmp`, since incremental compiles bypass the cache.
 
 ## Mount order
 
 `sandbox::bwrap_argv` emits `bwrap --bind / / --dev-bind /dev /dev --die-with-parent`, then the plan's mounts in this order, then `--chdir <cwd> -- <provider argv>`:
 
 1. The adapter's provider config home (`config_home`), bound at its own path, when it exists. Built-ins resolve it from the effective launch environment, and a room's named account carries its home override there (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the bind follows the room's account. Plugins declare no config home.
-2. `StatePaths.tmp_dir` bound at `/tmp`.
-3. The launch's scratch dir (`StatePaths::scratch_dir`) bound at `/tmp/scratchpad`, over the room's own `scratchpad/`.
-4. Host paths beneath `/tmp` that must stay reachable, rebound at their original paths ([reachable host paths](#reachable-host-paths)).
-5. The skill view, when one is needed: a tmpfs over the resolved skill root, one entry per skill, and read-only shadows of rewritten skills at their canonical paths ([building the view](#building-the-view)).
+2. The launch's temp unit (`StatePaths::temp_unit_dir`) bound at `/tmp`, then the same unit at `/var/tmp`. Bubblewrap resolves each bind source against the host root, so the second bind shows the unit, not the first mount.
+3. Host paths beneath `/tmp` or `/var/tmp` that must stay reachable, rebound at their original paths ([reachable host paths](#reachable-host-paths)).
+4. The skill view, when one is needed: a tmpfs over the resolved skill root, one entry per skill, and read-only shadows of rewritten skills at their canonical paths ([building the view](#building-the-view)).
 
 The command has no `--unshare-*` flag, no replacement `/proc`, and no cleared environment. `/dev` takes `--dev-bind` because an ordinary bind breaks device files such as `/dev/null`.
 
 ## Reachable host paths
 
-Replacing `/tmp` would hide any RimZ state, socket, or project that lives under host `/tmp`, so `sandbox::plan` rebinds those paths at their original locations. Paths stay identical inside and outside the sandbox because process ownership comparisons and short Unix socket paths depend on it.
+Replacing `/tmp` and `/var/tmp` would hide any RimZ state, socket, or project that lives under them on the host, so `sandbox::plan` rebinds those paths at their original locations. Paths stay identical inside and outside the sandbox because process ownership comparisons and short Unix socket paths depend on it.
 
 | Candidate | Source |
 | --- | --- |
@@ -84,11 +83,11 @@ Replacing `/tmp` would hide any RimZ state, socket, or project that lives under 
 | Working directory, project root, worktree | The launch. |
 | Provider config home | Mount step 1, when it exists. |
 
-Each candidate is normalized lexically. A candidate equal to `/tmp` refuses the launch with `SandboxErr::TmpCollision`. A candidate below `/tmp` that exists is rebound, and a candidate nested under one already rebound is skipped. Candidates elsewhere need no mount, since the root bind already shows them.
+Each candidate is normalized lexically. A candidate equal to `/tmp` or `/var/tmp` refuses the launch with `SandboxErr::TmpCollision`, whose message names the path. A candidate below either that exists is rebound, and a candidate nested under one already rebound is skipped. Candidates elsewhere need no mount, since the root bind already shows them.
 
-The tmux endpoint is the server named by an inherited `$TMUX`, or RimZ's managed server when `$TMUX` is absent. An unrelated tmux server under `/tmp/tmux-<uid>` is not rebound, so a command inside the pane that targets that default socket directory sees room tmp instead.
+The tmux endpoint is the server named by an inherited `$TMUX`, or RimZ's managed server when `$TMUX` is absent. An unrelated tmux server under `/tmp/tmux-<uid>` is not rebound, so a command inside the pane that targets that default socket directory sees the temp unit instead.
 
-Bubblewrap creates missing mount-point directories beneath the tmp bind. Empty directories named after host paths therefore appear in room tmp; they are mount points, not leaked host data.
+Bubblewrap creates missing mount-point directories beneath the tmp binds. Empty directories named after host paths (`rimz-<uid>` and the like) therefore appear in the temp unit; they are mount points, not leaked host data.
 
 ## Environment pins
 
@@ -97,67 +96,50 @@ The plan pins every environment variable it consulted, so shell startup files ca
 | Key | Pin |
 | --- | --- |
 | `HOME`, `RIMZ_HOME`, the five `XDG_*` roots above, `RIMZ_AGENTS_HOME` | Reapplied with the planned value; removed with `env -u` when absent. |
-| `TMUX`, `ZELLIJ_SOCKET_DIR` | Same. |
+| `TMUX`, `ZELLIJ_SOCKET_DIR` | Same; the launch sets `ZELLIJ_SOCKET_DIR` first (below), so the pin keeps the wrapper's socket base. |
 | The adapter's native override keys (`config_home_env_keys`: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `QWEN_HOME`, `KIRO_HOME`, and others) | Same, so a room account's home key is among them. |
 | `TMPDIR` | Always `/tmp`. |
-| `RIMZ_SCRATCH` | Always `/tmp/scratchpad`. |
-| `RIMZ_SHARED` | Always `/tmp/shared`. |
 | `SCCACHE_CLIENT_SIDE` | Always `1`, so a shared sccache server never compiles in another view ([toolchain homes](#toolchain-homes)). |
 
-Separately, every launch sets `RIMZ_ISOLATION` to `sandbox` or `host`, `RIMZ_SCRATCH` to the host path of its scratch dir, and `RIMZ_SHARED` to the host path of the room's shared dir ([env application](./harness/trust.md#env-application), layer 5), so a process can tell which view it runs in without probing namespaces and find both directories in either mode (`Isolation::ambient` is the one reader); the pins above replace the host paths under the sandbox.
+Separately, every launch sets ([env application](./harness/trust.md#env-application), layer 5):
+
+| Key | Value |
+| --- | --- |
+| `RIMZ_ISOLATION` | `sandbox` or `host`, so a process can tell which view it runs in without probing namespaces (`Isolation::ambient` is the one reader). |
+| `TMPDIR` | The temp unit as the agent sees it: the unit's host path on a host launch; the sandbox pin replaces it with `/tmp`. |
+| `RIMZ_SHARED` | The host path of the room's `shared/`, in both modes. The state root is already reachable in the view, so it needs no mount. |
+| `ZELLIJ_SOCKET_DIR` | The Zellij socket base resolved from the exec wrapper's own environment (`ProcessDomain::zellij_socket_base`). Zellij falls back to `TMPDIR` for its socket base where it ignores `XDG_RUNTIME_DIR` (macOS); pinning the base the wrapper resolved keeps the agent on the room's server and keeps the kill guard's endpoint comparison (`ProcessDomain::same_world_as_process`) true when only `TMPDIR` moved. |
 
 A key present with an empty value is pinned to the empty value. To move a root, export it before launching RimZ or set it in trusted launch environment config; changing it only in the pane's startup files does not change the planned mounts. Finalized provider-account launches keep their raw argv and get the same pins without another shell.
 
-## Room tmp
+## Temp units
 
-For an explicit launch `--cwd`, `TmpView::host_path` reverses the calling process's view: `/tmp/scratchpad/...` maps to its scratch directory and other `/tmp/...` paths to room tmp. The caller's `RIMZ_ISOLATION`, not machine policy, selects this mapping; a host shell keeps host paths. Relative paths resolve against the calling process's cwd before mapping and canonicalization. Launch records and pane placement use the host path; only the sandbox provider's `--chdir` is lowered back through the launched agent's `TmpView::agent_path`.
+Every agent gets one temp unit, `~/.rimz/ws/<workspace-dir>/tmp/<handle>/`, created at mode `0700`; a launch without a handle (a bare `rimz agents exec`, a pre-launch-id resume) uses `tmp/_unnamed/`, a name no handle can take. A sandboxed pane sees its unit at both `/tmp` and `/var/tmp`; a host agent's `TMPDIR` names it. A child launched with `parent_agent_id` uses its parent's unit in both modes: `launch_plan::compile` resolves the owner once from the parent's row (`address::launch_row`), so a restarted child, which keeps `parent_agent_id` and drops `subagent`, keeps it too. A child whose parent row no longer resolves falls back to its own unit and the launch warns; its reminder keeps the child wording (`You share it with your caller`), since a child launches no subagents. `launch_plan::agent_temp_unit` is the same resolution for `rimz agents show`. Peers never share a unit.
 
-Room tmp is one directory per workspace, `~/.rimz/ws/<workspace-dir>/tmp/`, created at mode `0700`. Sandboxed panes see it at `/tmp`. `StatePaths::ensure_tmp_dir` builds its layout:
+The room's `shared/` (`StatePaths.room_shared_dir`) is the one directory every agent in the room reaches, named by `$RIMZ_SHARED` at its host path in both modes. RimZ's result files live in the state `out/` class and are printed as host paths.
 
-| Path | Holds |
-| --- | --- |
-| `scratchpad/` | Scratch files of a launch without a handle (a bare `rimz agents exec`, a pre-launch-id resume). |
-| `shared/` | Files agents in the room exchange on purpose; named to agents as `/tmp/shared` or `$RIMZ_SHARED`, as the [launch reminder](#launch-reminder) instructs. |
+For an explicit launch `--cwd`, `--system-prompt-file`, or `--append-system-prompt-file`, `cli::caller_host_path` reverses the calling process's view: `/tmp/...` and `/var/tmp/...` map to the caller's own unit. The caller's `RIMZ_ISOLATION`, not machine policy, selects this mapping; a host shell keeps host paths. The prompt files need it because the exec wrapper reads them in the new pane, outside the caller's view. Relative paths resolve against the calling process's cwd before mapping and canonicalization. Launch records and pane placement use the host path; only the sandbox provider's `--chdir` is lowered back through the launched agent's `TmpView::agent_path`. `sandbox::TmpView` holds that one mapping, the owner's unit to `/tmp` and back, and nothing prints a result path through it.
 
-Three callers ensure the layout. Room birth does so under sandbox policy, `launch_plan::apply` on every launch (with the launch's scratch dir), and the output writers (wait arming in `harness/schedule/arm.rs`, subagent response publication in `harness/run.rs`, also called by the fleet reporter) on demand in either isolation mode. Host mode therefore has room tmp too, for RimZ's own output files.
+A sandboxed child of a host parent gets the same `/tmp` reminder line as any child, so a bare `/tmp/x` in its report names the unit only as the child sees it; the host parent finds the file under the unit's host path.
 
-`sandbox::TmpView` maps host paths to agent paths for output records and messages. Under sandbox isolation a path inside the recipient's own scratch dir becomes `/tmp/scratchpad/<relative path>`, and any other path inside room tmp becomes `/tmp/<relative path>`, while another agent's owned scratch stays a host path; every other path, and every path under host isolation, stays a host path. `TmpView::current` takes an isolation, falling back to machine policy, and a handle, falling back to the shared `scratchpad/`. Subagent reports pass the parent's `runs_in(machine)` and handle. Wait watchers and signal firing pass neither, so a wait armed by an agent whose isolation differs from machine policy names its output path as machine policy maps it.
-
-Room tmp is separate from host `/tmp`, not hidden from the host. The host state path stays reachable inside and outside the sandbox, and host processes can read the directory directly. `rimz agents show` prints the host path when the directory exists, and the agent's scratch dir host path when that exists.
-
-Every sandboxed agent and subagent in the room sees the same `shared/`; RimZ's result files live in the state `out/` class and are printed as host paths; `/tmp/scratchpad` is bound separately from `owned/agents/<handle>/scratch/`, keyed by handle, so it survives restart with the handle. Room tmp survives agent restart but is not a store record and carries no fsync guarantee. Teardown, `rimz uninstall`, a plain session exit and soft reset leave it in place; hard reset deletes it, and dead-workspace GC removes it with the state root. Team scratch files are a different mechanism that lives in the worktree ([teams.md](./harness/teams.md#scratch-files)).
+The unit is separate from host `/tmp`, not hidden from the host: the host state path stays reachable inside and outside the sandbox, and host processes can read the directory directly. `rimz agents show` prints the agent's unit host path (its parent's for a child) when it exists. A unit survives a resumed restart; a fresh restart mints a new handle and a new unit, and a child launched before it keeps resolving the old row's unit. A unit is not a store record and carries no fsync guarantee. Teardown, `rimz uninstall`, a plain session exit and soft reset leave it in place; hard reset deletes `tmp/`, and GC removes a unit seven days after its owner's latest session ends, under the `owned/` agent-unit rule ([store.md](./store.md)). A child that outlives its parent by more than that grace, or whose parent's handle goes to a new agent after the row is pruned, can lose the unit. Team scratch files are a different mechanism that lives in the worktree ([teams.md](./harness/teams.md#scratch-files)).
 
 ### Rewritten skill copies
 
-Rewritten skills live in `owned/agents/<handle>/skills/<sha256>/`; launches without a handle use `cache/skills/<sha256>/`, cleared by either reset and never age-swept. Copies sit outside writable tmp and scratch mounts and are bound read-only at the skill destinations. `rewrite::digest` hashes the rewrite kind and, for each source entry, its relative path, mode, file-or-directory flag, and bytes, so any change to a source produces a new copy. `rewrite::apply` builds a copy in a temporary sibling and renames it into place; a target that already exists is kept, which deduplicates concurrent launches. The `skills/` directory is created only when a copy is needed.
+Rewritten skills live in `owned/agents/<handle>/skills/<sha256>/`; launches without a handle use `cache/skills/<sha256>/`, cleared by either reset and never age-swept. Copies sit outside the writable temp unit and are bound read-only at the skill destinations. `rewrite::digest` hashes the rewrite kind and, for each source entry, its relative path, mode, file-or-directory flag, and bytes, so any change to a source produces a new copy. `rewrite::apply` builds a copy in a temporary sibling and renames it into place; a target that already exists is kept, which deduplicates concurrent launches. The `skills/` directory is created only when a copy is needed.
 
-Copies deduplicate within a handle. GC removes the owned unit seven days after its latest session ends, never while its process owner is live; teardown and soft reset keep it, hard reset drops it. Handleless copies share tmp's room lifetime. Storage reports count both under the workspace state root.
+Copies deduplicate within a handle. GC removes the owned unit seven days after its latest session ends, never while its process owner is live; teardown and soft reset keep it, hard reset drops it. Handleless copies live with the room. Storage reports count both under the workspace state root.
 
 ## Launch reminder
 
-A sandbox launch adds a Files section to the agent's launch reminder. `launch_plan::compile` sets `LaunchReminders.sandbox` when the bubblewrap preflight succeeded, and `harness/launch_reminders.rs` renders `SANDBOX_REMINDER_BODY`:
+Every compiled launch names its temp unit and the room's shared dir in the Environment section of its launch reminder (`harness/launch_reminders.rs`, from `LaunchReminders.files`), after the `lsp` bullet and before a team's memory-file listing:
 
-> ### Files
->
-> This pane runs in a bubblewrap sandbox. Its `/tmp` belongs to the room: separate from the host's, removed when the room closes. The host state path stays reachable.
->
-> - `/tmp/scratchpad/`: every temporary file you make. Private to you; every agent and subagent has its own.
-> - `/tmp/shared/<task>/`: files another agent must read, in a subdirectory you name for the task.
->
-> If your harness names its own scratchpad and allows `/tmp` only when asked, this is that ask: use `/tmp/scratchpad/` instead.
+> - tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.
+> - shared: ~/.rimz/ws/rimz-f89e/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.
 
-The section gives the agent two paths and the rule that separates them: `/tmp/scratchpad` is per-handle, so a file a parent names for a child lands in a directory the child cannot see, and `/tmp/shared` is the one directory the whole room reaches. It is room-scoped rather than worktree-scoped, since every worktree of a repo collapses into one workspace, which is why the reminder asks for a task-named subdirectory rather than a bare filename. A harness such as Claude Code injects its own environment block that names a session-specific scratchpad and reserves `/tmp` for an explicit request. The reminder supplies that request and replaces the private path outright, so the agent never has to reconcile two rules from two sources.
+The value after `tmp:` is `/tmp` under the sandbox and the unit's host path otherwise. A launch whose unit belongs to its parent reads `You share it with your caller` in place of `Your subagents share it`. `shared/` is room-scoped rather than worktree-scoped, since every worktree of a repo collapses into one workspace, which is why the line asks for a task-named subdirectory. The reminder names no `out/` path, because every wait message and subagent report carries its own, and makes no promise about deletion. `TMPDIR` is also what a harness such as Claude Code follows for its own scratchpad on Linux.
 
-The section does not name `out/`, because every wait message and subagent report carries its own file path. Host launches carry the same two rules in its place, naming the variables rather than the paths:
-
-> ### Files
->
-> - `$RIMZ_SCRATCH`: every temporary file you make. Private to you, removed when the room closes; every agent and subagent has its own.
-> - `$RIMZ_SHARED/<task>/`: files another agent must read, in a subdirectory you name for the task.
->
-> If your harness names its own scratchpad and allows another location only when asked, this is that ask: use `$RIMZ_SCRATCH` instead.
-
-Every launch therefore carries a reminder. Its position among the reminder sections and the providers that receive it (Claude, Qwen, Droid, and Codex, on every launch kind including subagents) are owned by [fleet.md](./harness/fleet.md#launch-reminders).
+Claude's routine-permission settings carry the same two directories as `additionalDirectories` and in their `autoMode.environment` text ([adapter_claude.md](./agents/adapter_claude.md)). The reminder's position among the sections and the providers that receive it are owned by [fleet.md](./harness/fleet.md#launch-reminders).
 
 ## Profile skill views
 

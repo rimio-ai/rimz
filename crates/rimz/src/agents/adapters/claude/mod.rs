@@ -827,15 +827,16 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             name.starts_with("rimz-") && !name.contains('*')
         })
         .map_err(LaunchSettingsErr::RoutineSkills)?;
-        let [scratch, shared] = dirs.each_ref().map(|path| path.display().to_string());
+        let [tmp, shared] = dirs.each_ref().map(|path| path.display().to_string());
         let allow = ROUTINE_RIMZ_PREFIXES
             .iter()
             .map(|prefix| format!("Bash({prefix} *)"))
             .chain(skills.keys().map(|name| format!("Skill({name})")));
         let environment = format!(
             "rimz is this machine's agent-coordination CLI. These subcommands are routine \
-             coordination: {}. $RIMZ_SCRATCH ({scratch}) and $RIMZ_SHARED ({shared}) are this \
-             agent's own scratch space, including for redirected command output.",
+             coordination: {}. $TMPDIR ({tmp}) is this agent's temporary directory, including \
+             for redirected command output; $RIMZ_SHARED ({shared}) holds files a peer or \
+             teammate must read.",
             ROUTINE_RIMZ_PREFIXES.join(", "),
         );
         let merged = merge_settings(
@@ -850,7 +851,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
                     object,
                     "permissions",
                     "additionalDirectories",
-                    [scratch.clone(), shared.clone()],
+                    [tmp.clone(), shared.clone()],
                 )?;
                 union_settings_array(
                     object,

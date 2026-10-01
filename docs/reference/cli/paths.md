@@ -12,30 +12,30 @@ The [global flags](../cli.md#global-flags) apply; `--root` picks the project the
 
 ```console
 $ rimz paths
-PATH                  LOCATION
-home                  /home/me/.rimz
-config                /home/me/.rimz/config.toml
-theme                 /home/me/.rimz/theme.toml
-loop config           /home/me/.rimz/loop.toml
-remote                /home/me/.rimz/remote.toml
-agents home           /home/me/.rimz
-workspace id          ws_f89e49906df0621ad2765112
-workspace dir         myrepo-f89e
-project root          /home/me/src/myrepo
-state dir             /home/me/.rimz/ws/myrepo-f89e
-runtime dir           /run/user/1000/rimz/ws/myrepo-f89e
-room tmp              /home/me/.rimz/ws/myrepo-f89e/tmp
-scratch               /home/me/.rimz/ws/myrepo-f89e/tmp/scratchpad
-scratch (agent view)  /tmp/scratchpad
-handoffs              /home/me/.rimz/handoffs
-runtime root          /run/user/1000/rimz
-logs                  /home/me/.rimz/logs
-loops                 /home/me/.rimz/loops
-web                   /home/me/.rimz/web
-accounts              /home/me/.rimz/accounts
-cache                 /home/me/.rimz/cache
-providers cache       /home/me/.rimz/cache/providers
-builds                /home/me/.rimz/builds
+PATH             LOCATION
+home             /home/me/.rimz
+config           /home/me/.rimz/config.toml
+theme            /home/me/.rimz/theme.toml
+loop config      /home/me/.rimz/loop.toml
+remote           /home/me/.rimz/remote.toml
+agents home      /home/me/.rimz
+workspace id     ws_f89e49906df0621ad2765112
+workspace dir    myrepo-f89e
+project root     /home/me/src/myrepo
+state dir        /home/me/.rimz/ws/myrepo-f89e
+runtime dir      /run/user/1000/rimz/ws/myrepo-f89e
+room tmp         /home/me/.rimz/ws/myrepo-f89e/tmp
+shared           /home/me/.rimz/ws/myrepo-f89e/shared
+out              /home/me/.rimz/ws/myrepo-f89e/out
+handoffs         /home/me/.rimz/handoffs
+runtime root     /run/user/1000/rimz
+logs             /home/me/.rimz/logs
+loops            /home/me/.rimz/loops
+web              /home/me/.rimz/web
+accounts         /home/me/.rimz/accounts
+cache            /home/me/.rimz/cache
+providers cache  /home/me/.rimz/cache/providers
+builds           /home/me/.rimz/builds
 ```
 
 | Row | Meaning |

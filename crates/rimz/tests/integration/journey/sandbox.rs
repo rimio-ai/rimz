@@ -1,4 +1,4 @@
-//! A real team consumes peer messages and subagent tmp across mount views.
+//! A real team consumes peer messages, a subagent's shared temp unit, and the room's shared dir across mount views.
 
 #![cfg(target_os = "linux")]
 
@@ -7,6 +7,24 @@ use std::time::{Duration, Instant};
 use rimz::config::Isolation;
 
 use crate::common::{CommandTimeoutExt, Env, path_with_front, write_hook_firing_agent};
+
+/// The host temp unit of the team seat playing `role`, once its row names it.
+fn seat_unit(store: &rimz::Store, role: &str, deadline: Instant) -> std::path::PathBuf {
+    loop {
+        let name = store.snapshot().ok().and_then(|snapshot| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.role.as_deref() == Some(role))
+                .and_then(|agent| agent.name.clone())
+        });
+        if let Some(name) = name {
+            return store.paths().temp_unit_dir(Some(&name));
+        }
+        assert!(Instant::now() < deadline, "no {role} seat row");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
 
 #[test]
 fn tmux_sandbox_subagent_skills_are_judged_from_host_truth() {
@@ -49,7 +67,7 @@ fn tmux_sandbox_subagent_skills_are_judged_from_host_truth() {
         body.push_str(
             r#"set -eu
 test "$TMPDIR" = /tmp
-case "$*" in *'### Files'*'This pane runs in a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
+case "$*" in *'- tmp: /tmp (`$TMPDIR`): every temporary file you make.'*) ;; *) exit 1 ;; esac
 skill="$HOME/.claude/skills/librarian/SKILL.md"
 case "$*" in
     *sandbox-librarian-task*)
@@ -125,8 +143,9 @@ while IFS= read -r line; do :; done
             .args(["--mux", "tmux", "teams", "library", "--bg"])
             .assert_success_within_timeout("launch sandbox parent seat");
         let store = env.store();
-        let tmp = &store.paths().tmp_dir;
         let deadline = Instant::now() + Duration::from_secs(90);
+        // The child shares the parent seat's unit.
+        let tmp = &seat_unit(&store, "parent", deadline);
         let terminal = loop {
             let runs = rimz::harness::run::list(store.paths()).expect("child runs");
             assert!(runs.len() <= 1, "unexpected child runs: {runs:?}");
@@ -223,15 +242,17 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
     body.push_str(
         r#"set -eu
 test "$TMPDIR" = /tmp
-test -d /tmp/scratchpad
-case "$*" in *'### Files'*'This pane runs in a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
+test -d "$RIMZ_SHARED"
+case "$*" in *'- tmp: /tmp (`$TMPDIR`): every temporary file you make.'*"- shared: $RIMZ_SHARED"*) ;; *) exit 1 ;; esac
 test ! -e "$RIMZ_TEST_HOST_TMP_FILE"
+handoff=$RIMZ_SHARED/handoff
 grep -q 'disable-model-invocation: true' "$HOME/.claude/skills/hidden/SKILL.md"
 grep -qx visible "$HOME/.claude/skills/visible/SKILL.md"
 case "$*" in
     *sandbox-child-task*)
+        case "$*" in *'You share it with your caller'*) ;; *) exit 1 ;; esac
         test "$(cat /tmp/parent-file)" = parent-to-child
-        printf '%s\n' child-to-room > /tmp/child-file
+        printf '%s\n' child-to-parent > /tmp/child-file
         feed '{"hook_event_name":"Stop","session_id":"'"$session"'","last_assistant_message":"tmp written"}'
         exit 0
         ;;
@@ -241,12 +262,13 @@ case "$RIMZ_AGENT_ROLE" in
     parent)
         printf '%s\n' parent-to-child > /tmp/parent-file
         "$rimz" --mux tmux subagents worker-child sandbox-child-task --timeout 1m > /tmp/child-launch 2>&1
-        while [ ! -s /tmp/child-file ] || [ ! -e /tmp/other-ready ]; do sleep 0.1; done
+        while [ ! -s /tmp/child-file ] || [ ! -e "$handoff/other-ready" ]; do sleep 0.1; done
         child_text=$(cat /tmp/child-file)
-        test "$child_text" = child-to-room
-        "$rimz" --mux tmux message @other "sandbox-handoff:$child_text" > /tmp/message-send 2>&1
-        while [ ! -s /tmp/other-consumed ]; do sleep 0.1; done
-        test "$(cat /tmp/other-consumed)" = "$child_text"
+        test "$child_text" = child-to-parent
+        printf '%s\n' child-to-room > "$handoff/child-file"
+        "$rimz" --mux tmux message @other "sandbox-handoff:$handoff/child-file" > /tmp/message-send 2>&1
+        while [ ! -s "$handoff/other-consumed" ]; do sleep 0.1; done
+        test "$(cat "$handoff/other-consumed")" = child-to-room
         "$rimz" --mux tmux wait --run "printf 'wait-file\n'" > /tmp/wait-launch 2>&1
         while IFS= read -r line; do
             case "$line" in
@@ -270,13 +292,16 @@ case "$RIMZ_AGENT_ROLE" in
         ;;
     other)
         printf '%s\n' "$$" > /tmp/other-generation
-        touch /tmp/other-ready
+        mkdir -p "$handoff"
+        touch "$handoff/other-ready"
         while IFS= read -r line; do
             case "$line" in
-                *sandbox-handoff:child-to-room*)
-                    child_text=$(cat /tmp/child-file)
+                *sandbox-handoff:"$handoff/child-file"*)
+                    test ! -e /tmp/parent-file
+                    test ! -e /tmp/child-file
+                    child_text=$(cat "$handoff/child-file")
                     test "$child_text" = child-to-room
-                    printf '%s\n' "$child_text" > /tmp/other-consumed
+                    printf '%s\n' "$child_text" > "$handoff/other-consumed"
                     break
                     ;;
             esac
@@ -356,11 +381,13 @@ while IFS= read -r line; do :; done
     );
 
     let store = env.store();
-    let tmp = &store.paths().tmp_dir;
     let deadline = Instant::now() + Duration::from_secs(90);
+    let tmp = seat_unit(&store, "parent", deadline);
+    let other_tmp = seat_unit(&store, "other", deadline);
+    let handoff = store.paths().room_shared_dir.join("handoff");
     loop {
         let completed = std::fs::read_to_string(tmp.join("journey-complete"));
-        if matches!(completed.as_deref(), Ok("parent-read:child-to-room\n")) {
+        if matches!(completed.as_deref(), Ok("parent-read:child-to-parent\n")) {
             break;
         }
         assert!(
@@ -368,7 +395,7 @@ while IFS= read -r line; do :; done
             "sandbox consumers did not finish: completion={completed:?}, child launch={:?}, message send={:?}, teammate read={:?}, wait launch={:?}, response read={:?}, wait read={:?}",
             std::fs::read_to_string(tmp.join("child-launch")),
             std::fs::read_to_string(tmp.join("message-send")),
-            std::fs::read_to_string(tmp.join("other-consumed")),
+            std::fs::read_to_string(handoff.join("other-consumed")),
             std::fs::read_to_string(tmp.join("wait-launch")),
             std::fs::read_to_string(tmp.join("response-consumed")),
             std::fs::read_to_string(tmp.join("wait-consumed")),
@@ -376,19 +403,23 @@ while IFS= read -r line; do :; done
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(
-        std::fs::read_to_string(tmp.join("other-consumed")).expect("teammate consumed message"),
+        std::fs::read_to_string(handoff.join("other-consumed")).expect("teammate consumed message"),
         "child-to-room\n",
+    );
+    assert!(
+        !other_tmp.join("child-file").exists(),
+        "a peer's temp unit is its own"
     );
     assert!(host_tmp.path().exists(), "host tmp remains untouched");
     let generation =
-        std::fs::read_to_string(tmp.join("other-generation")).expect("first generation");
+        std::fs::read_to_string(other_tmp.join("other-generation")).expect("first generation");
     env.rimz()
         .env("PATH", path_with_front(&agent_bin))
         .args(["--mux", "tmux", "agents", "restart", "@other"])
         .assert_success_within_timeout("restart sandboxed teammate");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let next = std::fs::read_to_string(tmp.join("other-generation"));
+        let next = std::fs::read_to_string(other_tmp.join("other-generation"));
         if next
             .as_ref()
             .is_ok_and(|next| !next.is_empty() && next != &generation)
@@ -403,23 +434,34 @@ while IFS= read -r line; do :; done
     }
     assert_eq!(
         std::fs::read_to_string(tmp.join("child-file")).expect("tmp survives restart"),
-        "child-to-room\n"
+        "child-to-parent\n"
     );
-    let owned = store.paths().agents_dir.join("reset-proof/scratch/note");
+    let owned = store.paths().agents_dir.join("reset-proof/note");
     std::fs::create_dir_all(owned.parent().unwrap()).unwrap();
-    std::fs::write(&owned, "owned scratch").unwrap();
+    std::fs::write(&owned, "owned state").unwrap();
     env.rimz()
         .args(["--mux", "tmux", "reset", "--no-start", "--yes"])
         .assert_success_within_timeout("reset sandbox room");
     assert_eq!(
         std::fs::read_to_string(tmp.join("child-file")).unwrap(),
+        "child-to-parent\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(handoff.join("child-file")).unwrap(),
         "child-to-room\n"
     );
-    assert_eq!(std::fs::read_to_string(&owned).unwrap(), "owned scratch");
+    assert_eq!(std::fs::read_to_string(&owned).unwrap(), "owned state");
     env.rimz()
         .args(["--mux", "tmux", "reset", "--hard", "--no-start", "--yes"])
         .assert_success_within_timeout("hard reset sandbox room");
-    assert!(!tmp.exists(), "hard reset removes shared tmp");
+    assert!(
+        !store.paths().tmp_dir.exists(),
+        "hard reset removes temp units"
+    );
+    assert!(
+        !store.paths().room_shared_dir.exists(),
+        "hard reset removes the shared dir"
+    );
     assert!(
         !store.paths().agents_dir.exists(),
         "hard reset removes owned state"

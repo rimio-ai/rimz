@@ -26,9 +26,9 @@ A `console` block carries output as the command printed it. Never invent one, an
 **Capture it.** To get output under a home that reads like a reader's, run the built binary inside a nested bubblewrap, which touches nothing on the machine:
 
 ```sh
-bwrap --dev-bind / / --tmpfs /home --bind /tmp/scratchpad/<dir> /home/me \
+bwrap --dev-bind / / --tmpfs /home --bind "$TMPDIR/<dir>" /home/me \
   --setenv HOME /home/me --setenv RIMZ_HOME /home/me/.rimz --chdir /tmp \
-  -- /tmp/scratchpad/rimz <args>
+  -- "$TMPDIR/rimz" <args>
 ```
 
 `home_relative` then prints `~/...` while the copy-paste lines print `/home/me/...`. Copy the binary out of `target/debug/` first: the tmpfs hides the worktree.

@@ -1,7 +1,16 @@
 use super::*;
-use crate::harness::launch_reminders::{subagent_reminder, wrap};
+use crate::harness::launch_reminders::{TempFiles, subagent_reminder, wrap};
 
-/// The reminder a bare subagent launch carries: Files, then the child policy under Subagents.
+/// The temp unit and shared dir a compiled launch names in Environment.
+fn temp_files(tmp: &str, caller: bool) -> Option<TempFiles> {
+    Some(TempFiles {
+        tmp: tmp.into(),
+        shared: "/state/shared".into(),
+        caller,
+    })
+}
+
+/// The reminder a bare subagent launch carries: the child policy under Subagents.
 fn child_reminder() -> String {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
@@ -11,7 +20,7 @@ fn child_reminder() -> String {
         &LaunchReminders::default(),
         Path::new("/"),
     );
-    assert!(reminder.contains("`$RIMZ_SCRATCH`") && reminder.contains("You are a subagent:"));
+    assert!(reminder.contains("You are a subagent:"));
     reminder
 }
 
@@ -814,6 +823,7 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             invocation.identity.params.model = Some("gpt-6-astra".to_owned());
             let reminders = LaunchReminders {
                 sandbox: true,
+                files: temp_files("/tmp", subagent),
                 team: Some(team()),
                 subagent_catalog: Some(crate::harness::subagent_policy::SubagentCatalog::Disabled),
                 ..LaunchReminders::default()
@@ -837,8 +847,7 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             let text = parse_toml_string_or_raw(&occurrences[0].value);
             assert_eq!(text.matches("<system_reminder>").count(), 1);
             assert_eq!(text.matches("</system_reminder>").count(), 1);
-            assert!(text.contains("This pane runs in a bubblewrap sandbox."));
-            assert!(text.contains("- `/tmp/scratchpad/`:"));
+            assert!(text.contains("- tmp: /tmp (`$TMPDIR`): every temporary file you make."));
             assert_eq!(text.contains("You are a subagent:"), subagent);
             assert_eq!(
                 text,
@@ -904,7 +913,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
 }
 
 #[test]
-fn process_compiler_carries_only_the_scratch_line_when_nothing_else_applies() {
+fn process_compiler_carries_only_the_temp_lines_when_nothing_else_applies() {
     let project = tempfile::tempdir().expect("project");
     let mut invocation = request(
         "claude",
@@ -922,13 +931,22 @@ fn process_compiler_carries_only_the_scratch_line_when_nothing_else_applies() {
         &BTreeMap::new(),
         &LaunchReminders {
             model: false,
+            files: temp_files("/state/tmp/otter", false),
             ..LaunchReminders::default()
         },
     )
     .expect("process");
     assert!(process.provider_argv.contains(&process.reminder));
-    assert!(process.reminder.contains("`$RIMZ_SCRATCH`"));
-    assert!(process.reminder.contains("`$RIMZ_SHARED/<task>/`"));
+    assert!(
+        process
+            .reminder
+            .contains("- tmp: /state/tmp/otter (`$TMPDIR`)")
+    );
+    assert!(
+        process
+            .reminder
+            .contains("- shared: /state/shared (`$RIMZ_SHARED`)")
+    );
     assert!(!process.reminder.contains("You are"));
 }
 
@@ -941,6 +959,7 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
         let reminders = LaunchReminders {
             team: Some(team.clone()),
             sandbox: true,
+            files: temp_files("/tmp", false),
             ..LaunchReminders::default()
         };
         let process = compile_agent_process_with_extra_env(
@@ -954,7 +973,7 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
         .expect("process");
         let reminder =
             crate::harness::launch_reminders::render(&invocation, &reminders, project.path());
-        assert!(reminder.contains("bubblewrap sandbox"), "{kind}");
+        assert!(reminder.contains("- tmp: /tmp (`$TMPDIR`)"), "{kind}");
         assert_eq!(process.env[ENV_LAUNCH_REMINDERS], reminder, "{kind}");
         assert!(
             process
@@ -972,11 +991,12 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
             &BTreeMap::new(),
             &LaunchReminders {
                 model: false,
+                files: temp_files("/tmp", false),
                 ..LaunchReminders::default()
             },
         )
         .expect("process without reminders");
-        assert!(bare.reminder.contains("`$RIMZ_SCRATCH`"), "{kind}");
+        assert!(bare.reminder.contains("- tmp: /tmp"), "{kind}");
         assert_eq!(bare.env[ENV_LAUNCH_REMINDERS], bare.reminder, "{kind}");
     }
 }
