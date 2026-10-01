@@ -81,6 +81,17 @@ pub enum MuxErr {
         #[source]
         source: crate::disk::lock::LockErr,
     },
+    #[error(
+        "pane {pane} is not in room {session}; run `rimz pane list` to see its panes, or pass `--root <project>` to address another room"
+    )]
+    PaneNotInRoom { pane: PaneId, session: String },
+    #[error("could not check that pane {pane} is in room {session}: {source}")]
+    PaneRoomUnchecked {
+        pane: PaneId,
+        session: String,
+        #[source]
+        source: Box<MuxErr>,
+    },
     #[error("multiplexer command `{program}` not found on PATH")]
     NotInstalled { program: String },
     #[error("no multiplexer found: install zellij or tmux")]
@@ -914,6 +925,30 @@ pub trait MuxBackend: Send + Sync {
     fn register_room_key(&self, binding: &RoomKeyBinding) -> Result<()> {
         let _ = binding;
         Ok(())
+    }
+    /// Fail unless `session`'s authoritative listing holds `pane`. Zellij exits
+    /// 0 for an absent `--pane-id` and tmux ids reach every session on the
+    /// server, so neither write proves the pane is in the room; an explicit
+    /// pane read or write checks first.
+    fn require_pane_in_session(&self, pane: &PaneId, session: &str) -> Result<()> {
+        let listing = self
+            .list_panes(PaneListOptions {
+                session_name: Some(session.to_owned()),
+                consistency: PaneReadConsistency::RequireAuthoritative,
+                ..Default::default()
+            })
+            .map_err(|source| MuxErr::PaneRoomUnchecked {
+                pane: pane.clone(),
+                session: session.to_owned(),
+                source: Box::new(source),
+            })?;
+        if listing.panes.iter().any(|listed| listed.pane_id == *pane) {
+            return Ok(());
+        }
+        Err(MuxErr::PaneNotInRoom {
+            pane: pane.clone(),
+            session: session.to_owned(),
+        })
     }
     /// Pane reads and writes take the pane's session like [`Self::focus_pane`]:
     /// Zellij addresses `Some(session)` explicitly and lets `None` resolve from

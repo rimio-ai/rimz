@@ -461,7 +461,8 @@ path = "crates/rimz/src/mux"
 # The cross-backend live-session snapshot moves here from room (pass 15c).
 # The resolved Zellij session option list is one public type plus its resolver,
 # consumed by the live backend tests that prove room options at the multiplexer.
-surface-budget = 251
+# `MuxBackend::require_pane_in_session` is the room-membership check `pane send` and `pane capture` run before any pane I/O (+1).
+surface-budget = 252
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"

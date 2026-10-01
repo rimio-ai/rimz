@@ -133,8 +133,10 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             ansi,
         } => {
             let target = resolve_pane_target(&target, globals)?;
+            let session_name = resolve_session_name(globals, target.session_name)?;
             let backend = rimz::mux::backend_for(target.pane.mux());
-            capture(&*backend, &target.pane, lines, json, ansi)
+            backend.require_pane_in_session(&target.pane, &session_name)?;
+            capture(&*backend, &target.pane, &session_name, lines, json, ansi)
         }
         PaneSubcmd::Send {
             target,
@@ -143,9 +145,13 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             text,
         } => {
             let target = resolve_pane_target(&target, globals)?;
+            let session_name = resolve_session_name(globals, target.session_name)?;
+            rimz::mux::backend_for(target.pane.mux())
+                .require_pane_in_session(&target.pane, &session_name)?;
             send(
                 &RuntimePaths::shared(),
                 &target.pane,
+                &session_name,
                 text.as_deref(),
                 &key,
                 enter,
@@ -159,12 +165,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
         } => {
             let target = resolve_pane_target(&target, globals)?;
             let backend = rimz::mux::backend_for(target.pane.mux());
-            let session_name = match session_name.or(target.session_name) {
-                Some(session_name) => session_name,
-                None => {
-                    WorkspaceResolver::resolve_participant(".", globals.root.clone())?.session_name
-                }
-            };
+            let session_name = resolve_session_name(globals, session_name.or(target.session_name))?;
             focus(&*backend, &target.pane, &session_name, pane_process_start)
         }
         PaneSubcmd::Zoom { session_name } => {
@@ -557,11 +558,12 @@ fn is_false(value: &bool) -> bool {
 fn capture(
     backend: &dyn MuxBackend,
     pane: &PaneId,
+    session_name: &str,
     lines: Option<u16>,
     json: bool,
     ansi: bool,
 ) -> Result<()> {
-    let capture = backend.capture_pane(pane, None, lines, ansi)?;
+    let capture = backend.capture_pane(pane, Some(session_name), lines, ansi)?;
     if json {
         render::json_pretty(&capture)?;
     } else {
@@ -728,6 +730,7 @@ fn resolve_session_name(globals: &GlobalFlags, session_name: Option<String>) -> 
 fn send(
     runtime: &RuntimePaths,
     pane: &PaneId,
+    session_name: &str,
     text: Option<&str>,
     keys: &[NamedKey],
     enter: bool,
@@ -738,7 +741,7 @@ fn send(
     if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
         bail!("expected text, --key, or --enter");
     }
-    let writer = PaneWriter::open(runtime, pane, None)?;
+    let writer = PaneWriter::open(runtime, pane, Some(session_name))?;
     if let Some(text) = text.filter(|text| !text.is_empty()) {
         writer.type_text(text)?;
     }
