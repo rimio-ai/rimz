@@ -25,8 +25,14 @@ fn usage_credentials_and_birth_key_share_one_secret_choice() {
 
 #[test]
 fn user_agent_without_a_supplied_version_keeps_the_cli_product_shape() {
-    let ua = claude_code_user_agent();
-    assert!(ua.starts_with("claude-cli/") && ua.ends_with(" (external, cli)"));
+    assert_eq!(
+        claude_code_user_agent_from(None),
+        user_agent(USER_AGENT_FALLBACK_VERSION)
+    );
+    assert_eq!(
+        claude_code_user_agent_from(Some("2.2.0")),
+        "claude-cli/2.2.0 (external, cli)"
+    );
 }
 
 #[test]
