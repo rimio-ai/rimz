@@ -27,9 +27,9 @@ use super::super::rollout::{
 pub(super) struct CodexTokenEvent {
     /// ISO-8601 / RFC-3339 timestamp string from the event.
     pub(super) timestamp: String,
-    /// Model name, resolved from the event payload and tracked `turn_context`.
-    /// `None` only when the file contained no model hint at all.
-    pub(super) model: Option<String>,
+    /// Model name: the event's own hint, else the model tracked from earlier
+    /// entries and `turn_context`, else the `"gpt-5"` fallback.
+    pub(super) model: String,
     pub(super) input_tokens: u64,
     /// Cached (prompt-cache-hit) input tokens, capped to `input_tokens`.
     pub(super) cached_input_tokens: u64,
@@ -226,14 +226,9 @@ pub(super) fn parse_codex_session(
     let fallback_timestamp = file_mtime_rfc3339(path);
     let mut out = Vec::new();
     if !state.replay_checked {
-        match probe_replay(path) {
-            ReplayProbe::None => state.replay_checked = true,
-            ReplayProbe::Replay(second) => {
-                state.replay_second = Some(second);
-                state.skipping_replay = true;
-                state.replay_checked = true;
-            }
-        }
+        state.replay_second = probe_replay(path);
+        state.skipping_replay = state.replay_second.is_some();
+        state.replay_checked = true;
     }
 
     for line in content.split(|&b| b == b'\n') {
@@ -257,13 +252,7 @@ pub(super) fn parse_codex_session(
                 if suppress_replayed_entry(&record, state) {
                     continue;
                 }
-                visit_session_entry(
-                    record,
-                    &mut state.previous_totals,
-                    &mut state.current_model,
-                    &mut state.pending_tool_calls,
-                    &mut out,
-                );
+                visit_session_entry(record, state, &mut out);
             }
             Some(CodexLineKind::ResponseItem) => {
                 let Some(record) = decode_line(line) else {
@@ -282,13 +271,7 @@ pub(super) fn parse_codex_session(
             }
             Some(CodexLineKind::Headless) => {
                 if let Ok(entry) = serde_json::from_slice::<CodexLogEntry<'_>>(line) {
-                    visit_headless_entry(
-                        &entry,
-                        &fallback_timestamp,
-                        &mut state.current_model,
-                        &mut state.pending_tool_calls,
-                        &mut out,
-                    );
+                    visit_headless_entry(&entry, &fallback_timestamp, state, &mut out);
                 }
             }
             None => {}
@@ -305,38 +288,25 @@ pub(super) fn parse_codex_session(
     (out, next_offset)
 }
 
-enum ReplayProbe {
-    None,
-    Replay(String),
-}
-
-fn probe_replay(path: &Path) -> ReplayProbe {
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return ReplayProbe::None;
-    };
+/// The shared timestamp second of a copied parent history at the head of a
+/// forked or subagent rollout, when the file has one to skip.
+fn probe_replay(path: &Path) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
     let mut prefix = [0_u8; 16 * 1024];
-    let Ok(read) = file.read(&mut prefix) else {
-        return ReplayProbe::None;
-    };
+    let read = file.read(&mut prefix).ok()?;
     let replay = crate::agents::transcript_fs::bytes_contains(&prefix[..read], b"thread_spawn")
         || crate::agents::transcript_fs::bytes_contains(&prefix[..read], b"forked_from_id");
     if !replay {
-        return ReplayProbe::None;
+        return None;
     }
 
-    let Ok(file) = std::fs::File::open(path) else {
-        return ReplayProbe::None;
-    };
-    let mut reader = std::io::BufReader::new(file);
+    let mut reader = std::io::BufReader::new(std::fs::File::open(path).ok()?);
     let mut line = Vec::new();
     let mut first = None;
     loop {
         line.clear();
-        let Ok(read) = reader.read_until(b'\n', &mut line) else {
-            return ReplayProbe::None;
-        };
-        if read == 0 {
-            return ReplayProbe::None;
+        if reader.read_until(b'\n', &mut line).ok()? == 0 {
+            return None;
         }
         if !matches!(codex_line_kind(&line), Some(CodexLineKind::Session)) {
             continue;
@@ -352,8 +322,8 @@ fn probe_replay(path: &Path) -> ReplayProbe {
         };
         match first {
             None => first = Some(second),
-            Some(first) if first == second => return ReplayProbe::Replay(first),
-            Some(_) => return ReplayProbe::None,
+            Some(first) if first == second => return Some(first),
+            Some(_) => return None,
         }
     }
 }
@@ -403,14 +373,12 @@ fn timestamp_second(timestamp: Option<&CodexTimestamp<'_>>) -> Option<String> {
 
 fn visit_session_entry(
     record: RolloutRecord<'_>,
-    previous_totals: &mut Option<CodexRawUsage>,
-    current_model: &mut Option<String>,
-    pending_tool_calls: &mut BTreeMap<String, u32>,
+    state: &mut CodexSpendState,
     out: &mut Vec<CodexTokenEvent>,
 ) {
     if let RolloutKind::TurnContext(context) = &record.kind {
         if let Some(model) = context.model() {
-            *current_model = Some(model.to_owned());
+            state.current_model = Some(model.to_owned());
         }
         return;
     }
@@ -422,58 +390,48 @@ fn visit_session_entry(
     };
     let info = token_count.info();
     let total_usage = info.and_then(|i| i.total_token_usage);
-    let raw_usage = info
-        .and_then(|i| i.last_token_usage)
-        .or_else(|| total_usage.map(|total| subtract_raw_usage(&total, previous_totals.as_ref())));
+    let raw_usage = info.and_then(|i| i.last_token_usage).or_else(|| {
+        total_usage.map(|total| subtract_raw_usage(&total, state.previous_totals.as_ref()))
+    });
     if let Some(total) = total_usage {
-        *previous_totals = Some(total);
+        state.previous_totals = Some(total);
     }
     let Some(raw) = raw_usage else { return };
-    if is_zero_usage(&raw) {
-        return;
-    }
-
     let parsed_model = token_count.model().map(ToOwned::to_owned);
-    if let Some(ref m) = parsed_model {
-        *current_model = Some(m.clone());
-    }
-    let model = resolve_model(parsed_model, current_model);
-
-    out.push(CodexTokenEvent {
-        timestamp: ts,
-        model,
-        input_tokens: raw.input_tokens,
-        cached_input_tokens: raw.cached_input_tokens.min(raw.input_tokens),
-        cache_write_input_tokens: raw.cache_write_input_tokens.min(raw.input_tokens),
-        output_tokens: raw.output_tokens,
-        reasoning_output_tokens: raw.reasoning_output_tokens,
-        total_tokens: raw.total_tokens,
-        tool_calls: std::mem::take(pending_tool_calls),
-    });
+    push_usage(raw, ts, parsed_model, state, out);
 }
 
 fn visit_headless_entry(
     entry: &CodexLogEntry<'_>,
     fallback_timestamp: &str,
-    current_model: &mut Option<String>,
-    pending_tool_calls: &mut BTreeMap<String, u32>,
+    state: &mut CodexSpendState,
     out: &mut Vec<CodexTokenEvent>,
 ) {
     let Some(raw) = headless_usage(entry) else {
         return;
     };
+    let ts = headless_timestamp(entry).unwrap_or_else(|| fallback_timestamp.to_string());
+    push_usage(raw, ts, headless_model(entry), state, out);
+}
+
+/// Emit one non-zero usage entry under the event's model: its own hint, else
+/// the file's remembered model, else `"gpt-5"`, which is remembered in turn.
+fn push_usage(
+    raw: CodexRawUsage,
+    timestamp: String,
+    parsed_model: Option<String>,
+    state: &mut CodexSpendState,
+    out: &mut Vec<CodexTokenEvent>,
+) {
     if is_zero_usage(&raw) {
         return;
     }
-    let ts = headless_timestamp(entry).unwrap_or_else(|| fallback_timestamp.to_string());
-    let parsed_model = headless_model(entry);
-    if let Some(ref m) = parsed_model {
-        *current_model = Some(m.clone());
-    }
-    let model = resolve_model(parsed_model, current_model);
-
+    let model = parsed_model
+        .or_else(|| state.current_model.clone())
+        .unwrap_or_else(|| "gpt-5".to_owned());
+    state.current_model = Some(model.clone());
     out.push(CodexTokenEvent {
-        timestamp: ts,
+        timestamp,
         model,
         input_tokens: raw.input_tokens,
         cached_input_tokens: raw.cached_input_tokens.min(raw.input_tokens),
@@ -481,7 +439,7 @@ fn visit_headless_entry(
         output_tokens: raw.output_tokens,
         reasoning_output_tokens: raw.reasoning_output_tokens,
         total_tokens: raw.total_tokens,
-        tool_calls: std::mem::take(pending_tool_calls),
+        tool_calls: std::mem::take(&mut state.pending_tool_calls),
     });
 }
 
@@ -512,15 +470,6 @@ fn non_empty_cow(v: Option<&Cow<'_, str>>) -> Option<String> {
     v.and_then(|s| {
         let s = s.trim();
         (!s.is_empty()).then(|| s.to_string())
-    })
-}
-
-/// The event's model — the parsed hint, else the file's remembered model,
-/// else the `"gpt-5"` ultimate fallback (remembered for later entries).
-fn resolve_model(parsed: Option<String>, current_model: &mut Option<String>) -> Option<String> {
-    parsed.or_else(|| current_model.clone()).or_else(|| {
-        *current_model = Some("gpt-5".to_string());
-        current_model.clone()
     })
 }
 
