@@ -278,7 +278,7 @@ target/debug/xtask sandbox in "$ROOT" --as-ancestor '@coder' -- "$BIN" "--$MUX" 
 
 `--as-ancestor` starts the command below the stub, with exactly plain `in`'s environment: no `RIMZ_AGENT_*` or pane key. It relays stdin, stdout, and stderr through pipes, not a tty, and reports a failed command's exit status. An absent or dead serving seat refuses with the instruction to hold a fresh room with this build. Both modes default to the card's Worktree; `--cwd` overrides it. A relative program path containing `/` resolves from your checkout, as it does for plain `in`.
 
-The feed exits 0 with no output. Both backends resolved the caller to `@coder#probe`. These arming-line excerpts show `--as` followed by `--as-ancestor`, first on tmux:
+The feed exits 0 with no output. A SessionStart alone leaves the card fresh, and a fresh card has no subagents or waits line, so a wait armed now stays off the frame. To check delegation lines, also feed `UserPromptSubmit` (with a `prompt` field) and `Stop` for the same session before arming. The card then reads sleeping, with `⧖ waits (n)` and its entries. Both backends resolved the caller to `@coder#probe`. These arming-line excerpts show `--as` followed by `--as-ancestor`, first on tmux:
 
 ```console
 armed wait-still-marker: check: true → @coder#probe
