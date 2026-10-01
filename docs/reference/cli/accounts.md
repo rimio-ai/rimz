@@ -97,7 +97,7 @@ rimz accounts use codex default
 
 Without `--room`, the output names `rimz accounts use --room <kind> <name>` as the way to change a running room. Explicit birth flags and trusted project selections still take precedence ([Accounts at start](./getting-started.md#accounts)). `use <kind> default` removes that provider's machine entry and says new rooms use the provider's own home. It accepts any provider, so it also clears a hand-set entry for one without named accounts; an empty `[accounts.use]` table is removed, and clearing an absent entry succeeds without a write.
 
-With `--room`, selection must pass the home and hook checks before the room record changes. An unknown account names `rimz accounts add`; a missing home or missing or untrusted hooks refuses with its fix rather than merely warning. The command does not read project configuration. It prints the new default and the count of running root agents on the prior account; those agents keep it until they end, including across restart, resume, or fork. A repeated selection reports that the room already launches on that account. Outside a room it refuses with `--room needs a running room; run it inside one, or drop --room to set the machine default`.
+With `--room`, selection must pass the home and hook checks before the room record changes. An unknown account names `rimz accounts add`; a missing home or missing or untrusted hooks refuses with its fix rather than merely warning. The command does not read project configuration. It prints the new default and the count of running root agents on the prior account; those agents keep it until they end. Restart, resume, and fork of a session from the prior account refuse with the `rimz accounts use --room` command that reopens it; crash recovery skips it as `different account`. A repeated selection reports that the room already launches on that account. Outside a room it refuses with `--room needs a running room; run it inside one, or drop --room to set the machine default`.
 
 ```console
 $ rimz accounts use claude work
@@ -160,7 +160,7 @@ cleared the machine selection; new rooms now use claude account `default`
 removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use --room claude default` for future launches
 ```
 
-A room selecting the removed account keeps that default, so its next launch fails with the account's declaration fix. Add the account again, or run `rimz accounts use --room <KIND> default` inside the room for future launches. Old sessions still require their stamped account to be declared to resume. `rimz reset --account <KIND>=<NAME>` remains a destructive alternative that rebuilds the room.
+A room selecting the removed account keeps that default, so its next launch fails with the account's declaration fix. Add the account again, or run `rimz accounts use --room <KIND> default` inside the room for future launches. Old sessions still require their account to be declared, and selected in the room, to resume. `rimz reset --account <KIND>=<NAME>` remains a destructive alternative that rebuilds the room.
 
 If a live room still selects the account as its launch default, removal proceeds and warns with the room's name and the add-or-switch fixes. The warning reads room records only; it does not enumerate older account stamps on running agents.
 

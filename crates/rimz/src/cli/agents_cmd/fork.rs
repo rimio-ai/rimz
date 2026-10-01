@@ -46,6 +46,10 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.alive_snapshot()?;
     let focus = LaunchFocus::resolve(args.bg, resolve_caller(&snapshot.agents).as_ref());
     let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
+    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    if let Some(mismatch) = rimz::harness::resume::login_mismatch(&source, &logins) {
+        return Err(mismatch.into());
+    }
     let mut seed = validate_fork_source(
         &source,
         rimz::harness::resume::resume_session_present,
@@ -127,9 +131,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let backend = room.backend();
 
     let request = AgentLaunchRequest {
-        login: rimz::store::writer::LaunchLogin::Pinned(
-            seed.launch.login.clone().unwrap_or_default(),
-        ),
+        login: rimz::store::writer::LaunchLogin::RoomDefault,
         kind: seed.kind.clone(),
         agent_id: mint_launch_id(),
         name: args

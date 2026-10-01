@@ -73,7 +73,8 @@ pub(in crate::cli) fn restart_resolved(
         &cwd,
     )?;
 
-    let (action, fresh_reason) = relaunch_action(agent, &cwd)?;
+    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let (action, fresh_reason) = relaunch_action(agent, &logins, &cwd)?;
     if isolation == rimz::config::Isolation::Host {
         rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,
@@ -204,8 +205,12 @@ pub(in crate::cli) fn restart_resolved(
 
 pub(in crate::cli) fn relaunch_action(
     agent: &AgentState,
+    logins: &rimz::ids::RoomLogins,
     cwd: &Path,
 ) -> Result<(rimz::harness::launch::ExecAction, Option<&'static str>)> {
+    if let Some(mismatch) = rimz::harness::resume::login_mismatch(agent, logins) {
+        return Err(mismatch.into());
+    }
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let resume_support = !agent.agent_id.is_provisional()
@@ -400,8 +405,6 @@ fn append_fresh_launch(
         AgentLaunchName::Soft(name.clone())
     });
     request.launch.profile = agent.profile.clone();
-    request.login =
-        rimz::store::writer::LaunchLogin::Pinned(agent.login.clone().unwrap_or_default());
     request.launch.parent_agent_id = agent.parent_agent_id.clone();
     request.launch.parent_agent_kind = agent.parent_agent_kind.clone();
     request.launch.launch_depth = agent.launch_depth;
@@ -438,36 +441,6 @@ fn settle_peer_before_restart(store: &rimz::Store, agent: &AgentState) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fresh_restart_keeps_the_session_account_after_the_room_switches() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
-        let store = rimz::Store::open(
-            rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap(),
-            rimz::RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap(),
-        )
-        .unwrap();
-        let mut agent = rimz::testkit::agent_state("claude", "old", jiff::Timestamp::UNIX_EPOCH);
-        agent.login = Some("work".parse().unwrap());
-        store
-            .switch_room_login(&workspace, &agent.kind, &"personal".parse().unwrap())
-            .unwrap();
-        let posture = ResumePosture {
-            launch: Default::default(),
-            degraded: None,
-        };
-        let batch = append_fresh_launch(
-            &store,
-            &workspace,
-            &agent,
-            dir.path(),
-            restart_cell(&agent, &posture),
-            None,
-        )
-        .unwrap();
-        assert_eq!(batch.single_identity().unwrap().launch.login, agent.login);
-    }
 
     #[test]
     fn restarting_peer_fails_only_its_open_turn() {
@@ -610,14 +583,30 @@ mod tests {
     }
 
     #[test]
-    fn relaunch_accepts_a_session_after_the_room_switches() {
+    fn relaunch_refuses_a_session_from_another_account_and_reopens_its_own() {
         let agent = AgentState {
             login: Some("personal".parse().expect("login name")),
+            name: Some("x".to_owned()),
             ..rimz::testkit::agent_state("claude", "session-1", jiff::Timestamp::now())
         };
-        let result = relaunch_action(&agent, Path::new("/repo"));
-        assert!(result.is_ok(), "{result:?}");
-        let request = relaunch_request(&agent, &ResumePosture::default(), result.unwrap().0, None);
+        let room = |name: &str| {
+            rimz::ids::RoomLogins::from([(
+                rimz::ids::AgentKind::new_unchecked("claude"),
+                name.parse().expect("login name"),
+            )])
+        };
+
+        let err = relaunch_action(&agent, &room("work"), Path::new("/repo")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "@x's session belongs to claude account `personal`; this room now launches claude \
+             on `work`. Run `rimz accounts use --room claude personal` to resume it, then switch \
+             back."
+        );
+
+        let (action, _) = relaunch_action(&agent, &room("personal"), Path::new("/repo"))
+            .expect("same-account relaunch");
+        let request = relaunch_request(&agent, &ResumePosture::default(), action, None);
         let dir = tempfile::tempdir().unwrap();
         rimz::harness::launch_plan::testkit::assert_claude_stamped_home(
             &request,

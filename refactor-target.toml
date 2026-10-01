@@ -378,7 +378,8 @@ path = "crates/rimz/src/harness"
 # Condition parsing, ordered readings, CI sources, hold state and evidence cross the scheduler/CLI seam (+17).
 # Condition admission and timing presentation share stage validation, state refinement and labels (+3).
 # Live condition scopes cross the harness/sidebar seam to keep pane-free CI probes alive (+1).
-surface-budget = 621
+# The account-mismatch refusal is shared by restart, fork, and subagent resume with lane and cohort resume (+1).
+surface-budget = 622
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -863,7 +864,8 @@ allowed-dependencies = [
 # Cohort preflight shares stamped-family reconstruction with unattended restore.
 # TeamTabLaunch carries fresh-seat batches to CLI placement for fallback recording or failure.
 # Checkout and channel holds share board-stage parsing and the fleet's Done predicate.
-surface-budget = 55
+# Restart, fork, and subagent resume share the account-mismatch refusal with lane and cohort resume.
+surface-budget = 56
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"

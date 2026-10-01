@@ -2228,7 +2228,7 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
 }
 
 #[test]
-fn named_account_room_launches_into_its_home_and_resumes_under_its_stamp() {
+fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping named account journey");
         return;
@@ -2393,6 +2393,55 @@ fn named_account_room_launches_into_its_home_and_resumes_under_its_stamp() {
         String::from_utf8_lossy(&reborn.stderr)
     );
     assert!(reborn.status.success(), "rebirth failed: {output}");
+    let mismatch = "@account-worker's session belongs to claude account `work`; this room now launches claude on `default`. Run `rimz accounts use --room claude work` to resume it, then switch back.";
+    assert!(
+        output.contains(mismatch) && output.contains("(different account)"),
+        "rebirth warns and skips: {output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&launched_homes).expect("launched homes trace"),
+        format!("{}\n", work_home.display()),
+        "no work session is reopened under the default account"
+    );
+
+    let resume = || {
+        env.rimz()
+            .env("PATH", &agent_path)
+            .env("TMUX", tmux_env(&socket))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .args(["--mux", "tmux", "agents", "resume", "#project"])
+            .bounded_output_within(Duration::from_secs(45))
+            .expect("resume the work lane")
+    };
+    let refused = resume();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "explicit resume refuses: {stderr}"
+    );
+    assert!(stderr.contains(mismatch), "{stderr}");
+
+    let workspace = env.resolve_workspace(&env.project_root);
+    let switched = env
+        .rimz()
+        .envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &workspace.project_root,
+        ))
+        .args(["accounts", "use", "--room", "claude", "work"])
+        .bounded_output_within(Duration::from_secs(30))
+        .expect("switch the room back to work");
+    assert!(
+        switched.status.success(),
+        "{}",
+        String::from_utf8_lossy(&switched.stderr)
+    );
+    let resumed = resume();
+    assert!(
+        resumed.status.success(),
+        "same-account resume: {}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
     let expected = format!("{0}\n{0}\n", work_home.display());
     let deadline = Instant::now() + CAPTURE_BUDGET;
     let homes = loop {
@@ -2404,7 +2453,7 @@ fn named_account_room_launches_into_its_home_and_resumes_under_its_stamp() {
     };
     assert_eq!(
         homes, expected,
-        "rebirth in a default room resumes the work session under its stamped home: {output}"
+        "after switching back, the work session resumes in its home"
     );
 }
 

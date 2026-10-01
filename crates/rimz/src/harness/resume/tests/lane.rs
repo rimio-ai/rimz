@@ -960,29 +960,22 @@ fn recovery_plan_sorts_equal_freshness_by_label() {
 }
 
 #[test]
-fn lane_resumes_a_closed_member_after_the_room_switches() {
-    let agents = [agent("claude", "closed", "/lane", 1)];
+fn lane_refuses_a_closed_member_from_another_account() {
+    let agents = [AgentState {
+        name: Some("x".to_owned()),
+        ..agent("claude", "closed", "/lane", 1)
+    }];
     let room = claude_room("work");
 
-    let result = LaneCase::new(LaneResumeSelector::Current, &agents)
+    let error = LaneCase::new(LaneResumeSelector::Current, &agents)
         .current_root("/lane")
         .logins(&room)
-        .run();
-    assert!(result.is_ok(), "{result:?}");
-    let LaneResumeAction::RestoreClosed { plan, .. } = result.unwrap() else {
-        panic!("closed lane restore")
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let id = crate::WorkspaceId::from_project_root(dir.path());
-    let store = crate::Store::open(
-        crate::StatePaths::under(id.clone(), dir.path()).unwrap(),
-        crate::RuntimePaths::under(id, dir.path()).unwrap(),
-    )
-    .unwrap();
-    let plan = plan.materialize(&store, "room").unwrap();
-    crate::harness::launch_plan::testkit::assert_claude_stamped_home(
-        &decode_exec_request(&first_argv(&plan.tabs[0])),
-        dir.path(),
-        None,
+        .run()
+        .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "@x's session belongs to claude account `default`; this room now launches claude on \
+         `work`. Run `rimz accounts use --room claude default` to resume it, then switch back."
     );
 }
