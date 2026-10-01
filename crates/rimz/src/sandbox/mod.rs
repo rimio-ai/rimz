@@ -295,6 +295,11 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         );
     }
     pins.insert("TMPDIR".to_owned(), EnvPin::Set(SANDBOX_TMP.to_owned()));
+    // A host TMPDIR may not exist in the view; mux children here keep /tmp.
+    pins.insert(
+        crate::mux::domain::USER_TMPDIR_ENV.to_owned(),
+        EnvPin::Unset,
+    );
     // A shared sccache server runs rustc in the view that spawned it; client-side
     // mode (sccache >= 0.17) compiles in this view and uses the server for storage.
     pins.insert(
@@ -562,6 +567,7 @@ mod tests {
                 "HOME",
                 "RIMZ_AGENTS_HOME",
                 "RIMZ_HOME",
+                "RIMZ_USER_TMPDIR",
                 "SCCACHE_CLIENT_SIDE",
                 "TMPDIR",
                 "TMUX",
@@ -574,6 +580,7 @@ mod tests {
             ]
         );
         assert_eq!(plan.pins["TMPDIR"], EnvPin::Set("/tmp".to_owned()));
+        assert_eq!(plan.pins["RIMZ_USER_TMPDIR"], EnvPin::Unset);
     }
 
     #[test]

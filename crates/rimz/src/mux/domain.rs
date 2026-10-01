@@ -8,6 +8,12 @@ use std::path::PathBuf;
 
 use crate::ids::MuxName;
 
+/// The `TMPDIR` a launch replaced with the agent's temp unit, kept so a mux
+/// server the agent's tree starts hands its panes the user's value instead.
+/// Present and empty means the user had none; absent means the process is not
+/// in an agent's tree.
+pub(crate) const USER_TMPDIR_ENV: &str = "RIMZ_USER_TMPDIR";
+
 /// The state and multiplexer namespace inherited by a process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcessDomain {
@@ -272,6 +278,17 @@ mod tests {
             !launcher.same_mux_endpoint(&agent(None), MuxName::Zellij),
             "without the pin, zellij falls back to the moved TMPDIR"
         );
+
+        // A mux server the agent starts gets the user's TMPDIR back and keeps
+        // the inherited pin: the off-Linux shape, with no XDG_RUNTIME_DIR.
+        let restored = domain(&[
+            ("HOME", "/home/u"),
+            ("RIMZ_HOME", "/home/u/.rimz"),
+            ("TMPDIR", "/var/folders/t"),
+            ("ZELLIJ_SOCKET_DIR", base),
+        ]);
+        assert!(launcher.same_mux_endpoint(&restored, MuxName::Zellij));
+        assert!(launcher.same_world(&restored));
     }
 
     #[test]

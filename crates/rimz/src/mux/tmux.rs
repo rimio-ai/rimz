@@ -141,12 +141,18 @@ pub fn legacy_session_conflict(session: &str) -> Option<LegacySessionConflict> {
 }
 
 /// `tmux -S <socket>` run from a cwd that cannot vanish, with any inherited
-/// `$TMUX` cleared. The one place a managed tmux argv is built.
+/// `$TMUX` cleared and the user's `TMPDIR` restored. The one place a managed
+/// tmux argv is built.
 pub(crate) fn tmux_cmd(socket: &Path) -> CommandSpec {
     CommandSpec::new("tmux")
         .args(["-S".to_owned(), socket.to_string_lossy().into_owned()])
         .cwd(MANAGED_SERVER_CWD)
         .env_remove("TMUX")
+        .restore_user_tmpdir(
+            std::env::var(super::domain::USER_TMPDIR_ENV)
+                .ok()
+                .as_deref(),
+        )
 }
 
 /// Base command addressing the managed server, for the readers outside the

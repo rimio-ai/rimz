@@ -449,7 +449,8 @@ impl ZellijBackend {
         presence_plugin_path()
     }
 
-    /// Base `CommandSpec` for every Zellij invocation — the single chokepoint.
+    /// Base `CommandSpec` for every Zellij invocation — the single chokepoint,
+    /// with the user's `TMPDIR` restored.
     pub(super) fn cmd(&self) -> CommandSpec {
         #[cfg(test)]
         let program = self
@@ -460,7 +461,8 @@ impl ZellijBackend {
             .unwrap_or_else(|| "zellij".to_owned());
         #[cfg(not(test))]
         let program = env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
-        let mut spec = CommandSpec::new(program);
+        let mut spec = CommandSpec::new(program)
+            .restore_user_tmpdir(env::var(super::domain::USER_TMPDIR_ENV).ok().as_deref());
         if let Some(dir) = &self.runtime_dir {
             let dir = dir.to_string_lossy().into_owned();
             spec = spec

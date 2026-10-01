@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use super::domain::USER_TMPDIR_ENV;
 use super::{MuxErr, Result};
 
 /// Upper bound on a single control-command round-trip ([`CommandSpec::run`]).
@@ -86,6 +87,23 @@ impl CommandSpec {
     pub(crate) fn env_remove(mut self, key: impl Into<String>) -> Self {
         self.env_remove.insert(key.into());
         self
+    }
+
+    /// Give the child the `TMPDIR` a launch saved in `saved` (the caller's
+    /// [`USER_TMPDIR_ENV`]), so a mux server started from an agent's tree
+    /// never hands panes the agent's temp unit. `None` leaves the inherited
+    /// value alone; an empty save removes `TMPDIR`. The save itself never
+    /// reaches the child, so a shell in the room starts its own agents fresh.
+    pub(crate) fn restore_user_tmpdir(self, saved: Option<&str>) -> Self {
+        let Some(saved) = saved else {
+            return self;
+        };
+        let spec = self.env_remove(USER_TMPDIR_ENV);
+        if saved.is_empty() {
+            spec.env_remove("TMPDIR")
+        } else {
+            spec.env("TMPDIR", saved)
+        }
     }
 
     pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Self {
@@ -310,3 +328,39 @@ fn kill_by_pid(pid: u32) {
 /// waiter thread reaps the child whenever it eventually exits.
 #[cfg(not(unix))]
 fn kill_by_pid(_pid: u32) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_saved_user_tmpdir_replaces_the_inherited_one() {
+        let outside = CommandSpec::new("zellij").restore_user_tmpdir(None);
+        assert!(outside.env.is_empty() && outside.env_remove.is_empty());
+
+        let saved = CommandSpec::new("zellij").restore_user_tmpdir(Some("/var/folders/t"));
+        assert_eq!(
+            saved.env.get("TMPDIR").map(String::as_str),
+            Some("/var/folders/t")
+        );
+        assert!(saved.env_remove.contains(USER_TMPDIR_ENV));
+        assert!(!saved.env.contains_key(USER_TMPDIR_ENV));
+
+        let none = CommandSpec::new("zellij").restore_user_tmpdir(Some(""));
+        assert!(none.env.is_empty());
+        assert!(none.env_remove.contains("TMPDIR") && none.env_remove.contains(USER_TMPDIR_ENV));
+
+        let pinned = CommandSpec::new("zellij")
+            .restore_user_tmpdir(Some(""))
+            .env("TMPDIR", "/run/test");
+        let command = pinned.to_command();
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(key, _)| *key == "TMPDIR")
+                .and_then(|(_, value)| value),
+            Some(std::ffi::OsStr::new("/run/test")),
+            "an explicit spec TMPDIR still wins"
+        );
+    }
+}
