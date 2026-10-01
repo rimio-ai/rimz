@@ -19,7 +19,7 @@ use rimz::room::session::MissingSessionReport;
 use rimz::store::run::RunRecord;
 use rimz::store::snapshot::find_agent;
 
-pub(crate) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
+pub(super) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
 const SUBAGENT_PANE_BIND_TIMEOUT: Duration = Duration::from_secs(3);
 const SUBAGENT_PANE_BIND_POLL: Duration = Duration::from_millis(25);

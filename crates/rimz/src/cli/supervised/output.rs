@@ -114,7 +114,7 @@ pub(crate) fn print_final_message(
     Ok(())
 }
 
-pub(crate) fn print_run_forensics<W: Write + ?Sized>(
+pub(super) fn print_run_forensics<W: Write + ?Sized>(
     record: &RunRecord,
     err: &mut W,
 ) -> Result<()> {
@@ -252,7 +252,7 @@ impl<'a> StreamSink<'a> {
         }
     }
 
-    pub(crate) fn end_record(&mut self, record: &RunRecord) -> Result<()> {
+    pub(super) fn end_record(&mut self, record: &RunRecord) -> Result<()> {
         self.end_status(record.status, record.last_message.as_deref())?;
         if let Self::Text { err, .. } = self {
             print_run_forensics(record, &mut **err)?;

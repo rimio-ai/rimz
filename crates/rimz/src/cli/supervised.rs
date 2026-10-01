@@ -19,7 +19,7 @@ pub(super) mod output;
 pub(super) mod pane;
 pub(super) mod run;
 pub(super) mod stream;
-pub(super) mod verify;
+mod verify;
 
 /// Output projection for a supervised `--print` run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
@@ -58,7 +58,7 @@ use pane::{latest_resolved_run_pane, resolve_run_pane_in_snapshot};
 #[cfg(test)]
 use stream::{stream_attached_run, stream_blocking_run};
 
-pub(super) fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::ResolvedWorkspace> {
+fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::ResolvedWorkspace> {
     WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")
 }
@@ -89,7 +89,7 @@ fn anchor_subagent_workspace(
     Ok(anchored)
 }
 
-pub(super) fn preflight_agent(
+fn preflight_agent(
     adapter: &AgentDefinition,
     launch: &rimz::worktree::LaunchCheckout,
     login: &rimz::agents::ProviderLogin,
@@ -127,7 +127,7 @@ pub(super) fn preflight_agent(
     Ok(())
 }
 
-pub(super) fn preflight_program(
+fn preflight_program(
     adapter: &AgentDefinition,
     process: &rimz::harness::launch::CompiledAgentProcess,
 ) -> Result<()> {
@@ -171,30 +171,30 @@ pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Res
     Ok(())
 }
 
-pub(super) struct RunPaneCmdArgs<'a> {
-    pub(super) runtime: &'a rimz::RuntimePaths,
-    pub(super) adapter: &'a AgentDefinition,
-    pub(super) run_id: &'a rimz::RunId,
-    pub(super) agent_name: Option<&'a str>,
-    pub(super) agent_name_explicit: bool,
-    pub(super) launch: &'a rimz::agents::LaunchParams,
-    pub(super) launch_id: Option<&'a rimz::ids::AgentSessionId>,
-    pub(super) cwd: &'a Path,
-    pub(super) prompt: &'a str,
-    pub(super) cleanup_worktree: bool,
-    pub(super) permission_args: &'a [String],
-    pub(super) system_prompt_file: Option<&'a rimz::config::PromptSource>,
-    pub(super) append_system_prompt_files: &'a [rimz::config::PromptSource],
-    pub(super) team_prompt: Option<&'a rimz::harness::team_prompt::TeamPrompt>,
-    pub(super) skills: Option<&'a [rimz::config::SkillName]>,
-    pub(super) allowed_tools: Option<&'a [rimz::config::ToolRule]>,
-    pub(super) isolation_default: Option<rimz::config::Isolation>,
-    pub(super) self_cleanup_on_completion: bool,
-    pub(super) subagent: bool,
-    pub(super) provider_account_binding: Option<&'a rimz::agents::ProviderAccountBinding>,
+struct RunPaneCmdArgs<'a> {
+    runtime: &'a rimz::RuntimePaths,
+    adapter: &'a AgentDefinition,
+    run_id: &'a rimz::RunId,
+    agent_name: Option<&'a str>,
+    agent_name_explicit: bool,
+    launch: &'a rimz::agents::LaunchParams,
+    launch_id: Option<&'a rimz::ids::AgentSessionId>,
+    cwd: &'a Path,
+    prompt: &'a str,
+    cleanup_worktree: bool,
+    permission_args: &'a [String],
+    system_prompt_file: Option<&'a rimz::config::PromptSource>,
+    append_system_prompt_files: &'a [rimz::config::PromptSource],
+    team_prompt: Option<&'a rimz::harness::team_prompt::TeamPrompt>,
+    skills: Option<&'a [rimz::config::SkillName]>,
+    allowed_tools: Option<&'a [rimz::config::ToolRule]>,
+    isolation_default: Option<rimz::config::Isolation>,
+    self_cleanup_on_completion: bool,
+    subagent: bool,
+    provider_account_binding: Option<&'a rimz::agents::ProviderAccountBinding>,
 }
 
-pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
+fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     let (close_pane_on_exit, exit_on_run_completion) =
         run_exit_policy(args.self_cleanup_on_completion);
     let rimz_bin = rimz::proc::rimz_exe();
@@ -256,7 +256,7 @@ pub(in crate::cli) fn note_isolation_clamp(
     Ok(())
 }
 
-pub(super) fn install_run_interrupt_flag() -> Result<RunCancellation> {
+fn install_run_interrupt_flag() -> Result<RunCancellation> {
     let flag = RUN_INTERRUPT_SIGNAL_RECEIVED
         .get_or_init(RunCancellation::new)
         .clone();
