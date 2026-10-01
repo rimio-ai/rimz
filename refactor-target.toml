@@ -1246,6 +1246,61 @@ reason = "Null versus absent and the reported-field mask preserve cache-write pr
 
 [[verdict]]
 kind = "item"
+key = "agents::adapters::codex::CodexAdapter::decode_hook"
+reason = "Residual cx is the per-event selection table over the one-of CodexHook (ask kind, native answers, questions, Stop-only final message, child lookup, hook model) and the fork/compact session-origin rule; moving the origin block into build_codex_observation deletes nothing and only shifts cx (atlas caveat 17) (pass 31c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::spend::codex_homes"
+reason = "Splits CODEX_HOME on commas, and a present-but-empty value yields no roots instead of falling back to HOME; folding it into CodexAdapter::config_home changes spend discovery, and the intent is not recoverable from history (pass 31c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::spend::parse::CodexLogEntry"
+reason = "serde(flatten) over CodexResultFields would accept duplicate top-level keys that error today; the explicit fields keep the wire behaviour (pass 31c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::rollout::deserialize_optional_u64_lossy"
+reason = "The transcript_fs lossy reader reads array or object values as None, where this one errors; swapping it changes which rollout lines decode (pass 31c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::app_server::CodexAppServer::matched_model"
+reason = "Reads one model/list page inside the warm refresh; model_catalog paginates fully, so sharing it spends more of the refresh deadline (pass 31c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::CodexChildTranscript"
+reason = "validated_header carries the header already read while matching the child id; dropping it adds a second header read and a race window (pass 31c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::app_server::transport::JsonRpcTransport"
+reason = "FramedTransport and WsTransport differ in their send and receive halves; one request owner saves about 3 lines for an extra trait method (pass 31c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::install::has_rimz_hook_command"
+reason = "The mutable strip_rimz_hook_commands walk keeps the same table shape, so a shared read-side walk with has_any_rimz_hook_command leaves the knowledge in two places and deletes nothing (pass 31c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::model_alias::resolve"
+reason = "A sequential alias ladder, not a table or a fold; no shared shape reduces it (pass 31c)."
+
+[[verdict]]
+kind = "pass-through"
+key = "agents::adapters::codex::app_server::transport::WsTransport::notify_frame"
+reason = "JsonRpcTransport member forwarding to the WebSocket send; the seam is the trait (pass 31c)."
+
+[[verdict]]
+kind = "pass-through"
+key = "agents::adapters::codex::app_server::transport::FramedTransport::drop"
+reason = "Drop for FramedTransport stops the child app-server (stop_child) on every exit path; RAII teardown belongs here (pass 31c)."
+
+[[verdict]]
+kind = "item"
 key = "sidebar_pane::app::SidebarAppErr"
 reason = "Public supervise::run_worker returns app::Result, whose alias names this error; pub is the signature floor (atlas caveat 13, pass 26b)."
 

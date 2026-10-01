@@ -6,8 +6,8 @@
 
 | Module | Owns |
 | --- | --- |
-| `mod.rs` | Hook catalog, `decode_hook`, lifecycle mapping, `CODEX_DESCRIPTOR`, capability impls |
-| `payloads.rs` | Typed hook payloads |
+| `mod.rs` | Hook catalog, the one-of `CodexHook` payload, `decode_hook`, lifecycle mapping, `CODEX_DESCRIPTOR`, capability impls, `config_home` (the one Codex home rule) |
+| `payloads.rs` | Typed hook payloads and their one generic `parse` |
 | `ask.rs` | Structured answers for `rimz answer` |
 | `install.rs` | `config.toml` hook merge, uninstall, hook trust, `codex_config_path` |
 | `project_trust.rs` | Read-only `[projects]` directory trust for the launch preflight |
