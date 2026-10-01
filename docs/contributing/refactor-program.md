@@ -117,7 +117,7 @@ After the final rebase, set the contract's `base` to the branch's new merge base
 The last commit, `docs(refactor): record pass N`, carries the durable state, every number measured on the tree it ships:
 
 1. A ledger verdict row for every library module reviewed, at the survey's exact spelling: `holds`, or `holds; landed pass-N` when the interior was rethought; a seam pass that only reviewed edges writes bare `landed pass-N`. Stamp the post-rebase source tip (the record commit's parent); after a merge rewrites it, `survey --restamp` maps it to the trunk commit that wrote the row. The reopen count defaults to 30. The note is one clause naming what holds. Binary (`bin`) modules receive no ledger row: record them through `[[verdict]]` item rows.
-2. `[[verdict]]` rows in `refactor-target.toml` for every item, family or pass-through judged and kept, with the reason; re-key rows the survey lists as stale.
+2. `[[verdict]]` rows in `refactor-target.toml` for every item, family or pass-through judged and kept, with the reason; re-key rows the survey lists as stale. A key is stale only on the tree that records it: run `cargo xtask atlas survey` on the tip before deleting or re-keying a row, since a family can cross the gate again under the same key while the pass is in flight.
 3. An admission intent row for every upward edge reviewed: `keep` with the reason, or `close` naming the closing pass. A closed edge loses its admission and its row.
 4. An open deferral line for a refactor candidate judged real but not landable, with the concrete blocker; delete deferrals the pass landed or refuted. A bug goes in the PR, not the ledger.
 5. The tightened `refactor-target.toml`, carrying only the pass's own rules.
