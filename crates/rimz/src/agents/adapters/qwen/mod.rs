@@ -541,8 +541,7 @@ impl crate::agents::capabilities::HookCapability for QwenAdapter {
             let label = failure
                 .last_assistant_message
                 .as_deref()
-                .and_then(non_empty_trimmed)
-                .map(|text| text.chars().take(80).collect());
+                .and_then(crate::agents::context::cap_turn_error_label);
             let class = match failure.error {
                 QwenStopError::RateLimit => TurnErrorClass::PausedRateLimit,
                 QwenStopError::ServerError => TurnErrorClass::PausedOverloaded,
