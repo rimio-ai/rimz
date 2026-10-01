@@ -664,8 +664,8 @@ fn client_view_tracks_the_attached_client() {
 
 /// `pane send` and `pane capture` on a raw id address the resolved room's
 /// session even when another live session holds the same pane id and the caller
-/// sits outside any pane, and refuse an id the room does not hold before any
-/// write action runs.
+/// sits outside any pane, and refuse an id the room does not hold, or a plugin
+/// pane that holds no terminal, before any write action runs.
 #[test]
 fn pane_send_and_capture_address_the_resolved_room_among_two_sessions() {
     require_zellij!();
@@ -763,24 +763,33 @@ fn pane_send_and_capture_address_the_resolved_room_among_two_sessions() {
         String::from_utf8_lossy(&capture.stdout)
     );
 
+    let plugin_id = expect_list_panes(xdg, &here)
+        .panes
+        .iter()
+        .find(|pane| pane.is_plugin)
+        .map(|pane| pane.id)
+        .expect("a plugin pane in the room");
+    let plugin = PaneId::from_parts(MuxName::Zellij, format!("plugin_{plugin_id}"));
     std::fs::write(&trace_log, "").expect("reset zellij trace");
-    let absent = PaneId::from_parts(MuxName::Zellij, "terminal_99");
-    let refusal = format!(
-        "pane {absent} is not in room {here}; run `rimz pane list` to see its panes, or pass `--root <project>` to address another room"
-    );
-    for args in [
-        &["send", "--enter", "zellij:terminal_99", "echo ABSENT_MARK"][..],
-        &["capture", "zellij:terminal_99"][..],
-    ] {
-        let output = pane(args);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(1), "{args:?}: {stderr}");
-        assert!(stderr.contains(&refusal), "{args:?}: {stderr}");
-        assert!(
-            output.stdout.is_empty(),
-            "{args:?} printed {:?}",
-            output.stdout
+    for refused in [PaneId::from_parts(MuxName::Zellij, "terminal_99"), plugin] {
+        let refusal = format!(
+            "pane {refused} is not in room {here}; run `rimz pane list` to see its panes, or pass `--root <project>` to address another room"
         );
+        let id = refused.to_string();
+        for args in [
+            &["send", "--enter", &id, "echo ABSENT_MARK"][..],
+            &["capture", &id][..],
+        ] {
+            let output = pane(args);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.code(), Some(1), "{args:?}: {stderr}");
+            assert!(stderr.contains(&refusal), "{args:?}: {stderr}");
+            assert!(
+                output.stdout.is_empty(),
+                "{args:?} printed {:?}",
+                output.stdout
+            );
+        }
     }
     let log = std::fs::read_to_string(&trace_log).expect("read zellij trace");
     assert!(
@@ -789,7 +798,7 @@ fn pane_send_and_capture_address_the_resolved_room_among_two_sessions() {
                 .iter()
                 .any(|verb| line.contains(&format!("action {verb} ")))
         }),
-        "an absent pane got a pane action:\n{log}"
+        "a refused pane got a pane action:\n{log}"
     );
 }
 
