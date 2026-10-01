@@ -289,7 +289,7 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     let ui = UiState {
         dashboard_tab: Some(DashboardTab {
             login: "codex@default".parse().unwrap(),
-            derived_at_start: Some("claude@default".parse().unwrap()),
+            derived_at_start: Some(crate::ids::AgentKind::new_unchecked("claude")),
         }),
         ..Default::default()
     };
