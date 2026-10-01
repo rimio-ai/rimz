@@ -983,6 +983,91 @@ fn lsp_check_fixes_hints_without_rewriting_other_notes() {
 }
 
 #[test]
+fn lsp_check_fix_hints_inserts_hints_for_single_items() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    for file in ["show.rs", "lib.rs"] {
+        std::fs::write(env.project_root.join(file), "line\n".repeat(210)).unwrap();
+    }
+    let notes = env.project_root.join("notes.md");
+    let hintless = "`show.rs::Parent::child`\n`lib.rs::Type`\n`lib.rs::saved`\n`show.rs::child`\n";
+    std::fs::write(&notes, hintless).unwrap();
+    std::os::unix::fs::symlink("notes.md", env.project_root.join("link.md")).unwrap();
+    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    env.rimz()
+        .args(["lsp", "check", "notes.md", "--hints"])
+        .assert()
+        .code(2)
+        .stdout("");
+    for args in [&["--json"][..], &["--fix", "--json"][..]] {
+        let output = env
+            .rimz()
+            .args(["lsp", "check", "notes.md"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}");
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(value.get("ambiguous").is_none(), "{args:?}");
+        assert_eq!(std::fs::read_to_string(&notes).unwrap(), hintless);
+    }
+    std::fs::write(
+        &notes,
+        format!("{hintless}`show.rs::Parent::child (~90-99)`\n"),
+    )
+    .unwrap();
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "link.md", "--fix", "--hints"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "link.md:1  fixed  show.rs::Parent::child  show.rs::Parent::child (3-5)\n\
+         link.md:2  fixed  lib.rs::Type  lib.rs::Type (1-2)\n\
+         link.md:3  fixed  lib.rs::saved  lib.rs::saved (7)\n\
+         link.md:5  fixed  show.rs::Parent::child (~90-99)  show.rs::Parent::child (~3-5)\n\
+         link.md:4  ambiguous-symbol  show.rs::child  method Parent::child is at 3-5; function child is at 208-209\n\
+         1 anchor left without a hint: several items match\n\
+         5 anchors in link.md: 5 ok, 0 failed, 0 unchecked, 0 external\n"
+    );
+    assert!(env.project_root.join("link.md").is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(&notes).unwrap(),
+        "`show.rs::Parent::child` (3-5)\n`lib.rs::Type` (1-2)\n`lib.rs::saved` (7)\n`show.rs::child`\n`show.rs::Parent::child (~3-5)`\n"
+    );
+    let modified = std::fs::metadata(&notes).unwrap().modified().unwrap();
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "link.md", "--fix", "--hints", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["fixes"], serde_json::json!([]));
+    assert_eq!(value["ambiguous"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        std::fs::metadata(&notes).unwrap().modified().unwrap(),
+        modified
+    );
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+}
+
+#[test]
 fn lsp_check_reports_anchor_failures_and_coverage() {
     use serde_json::{Value, json};
 

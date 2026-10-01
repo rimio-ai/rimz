@@ -6,6 +6,14 @@ fn anchor(text: &str) -> Anchor {
 }
 
 fn rewrite_hints(source: &str, dirty: bool) -> String {
+    rewrite_with(source, dirty, false).0
+}
+
+fn rewrite_with(
+    source: &str,
+    dirty: bool,
+    hints: bool,
+) -> (String, Vec<fix::Fix>, Vec<fix::Ambiguous>) {
     let servers = BTreeMap::from([(
         "rust".into(),
         serde_json::from_value(json!({
@@ -23,7 +31,145 @@ fn rewrite_hints(source: &str, dirty: bool) -> String {
         files: vec!["a.rs".into()],
         outlines: BTreeMap::from([("a.rs".into(), FileOutline { nodes, dirty })]),
     };
-    fix::rewrite(source, &mut context).unwrap().0
+    fix::rewrite(source, &mut context, hints).unwrap()
+}
+
+fn insert_hints(source: &str) -> String {
+    rewrite_with(source, false, true).0
+}
+
+#[test]
+fn fix_hints_insert_the_range_of_the_one_named_item() {
+    for (source, expected) in [
+        ("`a.rs::Type::method`", "`a.rs::Type::method` (11-16)"),
+        ("`a.rs::Type`", "`a.rs::Type` (1-3)"),
+        ("`a.rs::Type::field`", "`a.rs::Type::field` (2)"),
+    ] {
+        assert_eq!(rewrite_hints(source, false), source);
+        let (updated, fixes, ambiguous) = rewrite_with(source, false, true);
+        assert_eq!(updated, expected);
+        assert_eq!(fixes.len(), 1);
+        assert_eq!(fixes[0].line, 1);
+        assert_eq!(fixes[0].before, source.trim_matches('`'));
+        assert_eq!(fixes[0].after, expected.replace('`', ""));
+        assert!(ambiguous.is_empty());
+    }
+    let source = "x\n`a.rs::load` and `a.rs::Type`";
+    let (updated, fixes, ambiguous) = rewrite_with(source, false, true);
+    assert_eq!(updated, "x\n`a.rs::load` and `a.rs::Type` (1-3)");
+    assert_eq!(fixes.len(), 1);
+    assert_eq!(ambiguous.len(), 1);
+    assert_eq!(
+        (ambiguous[0].line, ambiguous[0].text.as_str()),
+        (2, "a.rs::load")
+    );
+    let names: Vec<_> = ambiguous[0]
+        .candidates
+        .iter()
+        .map(|node| node.name.as_str())
+        .collect();
+    assert_eq!(names, ["load", "impl SeatLoader<'_>::load"]);
+    assert_eq!(
+        ambiguous[0].detail,
+        "function load is at 91-96; method impl SeatLoader<'_>::load is at 101-106"
+    );
+}
+
+#[test]
+fn fix_hints_leave_ineligible_anchors_and_refresh_hinted_ones() {
+    assert_eq!(rewrite_with("`a.rs::Type`", true, true).0, "`a.rs::Type`");
+    let source =
+        "`o/r@v1:a.rs::Type` `a.rs:99` `a.rs::absent` `a.rs::Type::method\n` `gone.rs::Type`";
+    let (updated, fixes, ambiguous) = rewrite_with(source, false, true);
+    assert_eq!(updated, source);
+    assert!(fixes.is_empty() && ambiguous.is_empty());
+    for source in [
+        "`a.rs::Type::method ~90`",
+        "`a.rs::Type::method` (~11-16)",
+        "`a.rs::Type ~4-5`",
+        "`a.rs::load ~93`",
+        "`a.rs::load ~200`",
+        "``a.rs::Type::method()`` (~99-100)",
+    ] {
+        let (updated, fixes, ambiguous) = rewrite_with(source, false, true);
+        assert_eq!(updated, rewrite_hints(source, false), "{source}");
+        assert_eq!(fixes.len(), usize::from(updated != source));
+        assert!(ambiguous.is_empty());
+    }
+}
+
+#[test]
+fn fix_hints_land_after_the_closing_delimiter_and_read_back() {
+    for (source, expected) in [
+        (
+            "é `a.rs::Type::method` tail\r\n",
+            "é `a.rs::Type::method` (11-16) tail\r\n",
+        ),
+        (
+            "é `` a.rs::Type `` tail\n",
+            "é `` a.rs::Type `` (1-3) tail\n",
+        ),
+        ("`a.rs::Type` (see below)", "`a.rs::Type` (1-3) (see below)"),
+        ("`a.rs::Type`, then", "`a.rs::Type` (1-3), then"),
+        ("`a.rs::Type`(see)", "`a.rs::Type` (1-3)(see)"),
+        ("end `a.rs::Type`\nnext", "end `a.rs::Type` (1-3)\nnext"),
+        ("*`a.rs::Type`*", "*`a.rs::Type` (1-3)*"),
+        ("**bold `a.rs::Type`**", "**bold `a.rs::Type` (1-3)**"),
+        ("[`a.rs::Type`](x.md)", "[`a.rs::Type` (1-3)](x.md)"),
+        (
+            "| a | `a.rs::Type` |\n|---|---|\n",
+            "| a | `a.rs::Type` (1-3) |\n|---|---|\n",
+        ),
+    ] {
+        assert_eq!(insert_hints(source), expected, "{source}");
+        let (again, fixes, ambiguous) = rewrite_with(expected, false, true);
+        assert_eq!(again, expected);
+        assert!(fixes.is_empty() && ambiguous.is_empty(), "{expected}");
+        let anchors = extract(expected);
+        assert!(
+            anchors[0].hint.is_some() && anchors[0].hint_source.is_some(),
+            "{expected}"
+        );
+    }
+}
+
+#[test]
+fn reports_list_ambiguous_anchors_only_with_hints() {
+    let nodes = symbols();
+    let ambiguous = |line| fix::Ambiguous {
+        line,
+        text: "a.rs::load".into(),
+        candidates: vec![nodes[8].clone(), nodes[10].clone()],
+        detail: "function load is at 91-96".into(),
+    };
+    let mut report = Report::new(Path::new("notes.md"), Path::new("/root"), vec![]);
+    report.fixes = Some(Vec::new());
+    let text = report.render(false).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&report.render(true).unwrap()).unwrap();
+    assert!(value.get("ambiguous").is_none());
+    report.ambiguous = Some(Vec::new());
+    assert_eq!(report.render(false).unwrap(), text);
+    let value: serde_json::Value = serde_json::from_str(&report.render(true).unwrap()).unwrap();
+    assert_eq!(value["ambiguous"], json!([]));
+    report.ambiguous = Some(vec![ambiguous(4)]);
+    assert_eq!(
+        report.render(false).unwrap(),
+        format!(
+            "notes.md:4  ambiguous-symbol  a.rs::load  function load is at 91-96\n1 anchor left without a hint: several items match\n{text}"
+        )
+    );
+    let value: serde_json::Value = serde_json::from_str(&report.render(true).unwrap()).unwrap();
+    assert_eq!(
+        value["ambiguous"][0],
+        json!({"line":4,"text":"a.rs::load","candidates":[{"name":"load","kind":"function","range":[91,96]},{"name":"impl SeatLoader<'_>::load","kind":"method","range":[101,106]}]})
+    );
+    report.ambiguous = Some(vec![ambiguous(4), ambiguous(9)]);
+    assert!(
+        report
+            .render(false)
+            .unwrap()
+            .contains("notes.md:9  ambiguous-symbol  a.rs::load  function load is at 91-96\n2 anchors left without a hint: several items match\n")
+    );
 }
 
 #[test]
@@ -378,7 +524,7 @@ fn external_only_report_needs_no_server_or_checkout_path() {
     let notes = root.path().join("notes.md");
     let text = "o/r@v1:absent.rs::f (~12)";
     std::fs::write(&notes, format!("`{text}`")).unwrap();
-    let report = run(&notes, root.path(), &[], &BTreeMap::new(), false).unwrap();
+    let report = run(&notes, root.path(), &[], &BTreeMap::new(), Mode::Check).unwrap();
     assert_eq!(report.exit_code(), 0);
     let rendered = report.render(false).unwrap();
     assert_eq!(rendered.lines().count(), 1);
