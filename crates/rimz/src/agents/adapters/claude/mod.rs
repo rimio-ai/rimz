@@ -786,6 +786,10 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         &["CLAUDE_CONFIG_DIR"]
     }
 
+    fn temp_dir_env_keys(&self) -> &'static [&'static str] {
+        &["CLAUDE_CODE_TMPDIR"]
+    }
+
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         remote_consent::configured_dir(env.get("CLAUDE_CONFIG_DIR").map(String::as_str)).or_else(
             || {

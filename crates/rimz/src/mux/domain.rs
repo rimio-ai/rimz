@@ -14,6 +14,11 @@ use crate::ids::MuxName;
 /// in an agent's tree.
 pub(crate) const USER_TMPDIR_ENV: &str = "RIMZ_USER_TMPDIR";
 
+/// The provider temp-root keys (such as `CLAUDE_CODE_TMPDIR`) a launch pointed
+/// at the agent's temp unit, space-separated, so the mux restore can drop them
+/// beside `TMPDIR` without naming any provider.
+pub(crate) const TEMP_ROOT_KEYS_ENV: &str = "RIMZ_TEMP_ROOT_KEYS";
+
 /// The state and multiplexer namespace inherited by a process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcessDomain {

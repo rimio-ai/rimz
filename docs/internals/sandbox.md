@@ -99,7 +99,7 @@ The plan pins every environment variable it consulted, so shell startup files ca
 | `TMUX`, `ZELLIJ_SOCKET_DIR` | Same; the launch sets `ZELLIJ_SOCKET_DIR` first (below), so the pin keeps the wrapper's socket base. |
 | The adapter's native override keys (`config_home_env_keys`: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `QWEN_HOME`, `KIRO_HOME`, and others) | Same, so a room account's home key is among them. |
 | `TMPDIR` | Always `/tmp`. |
-| `RIMZ_USER_TMPDIR` | Always removed, so a mux child started inside the view keeps `/tmp` rather than a host path the view may lack. |
+| `RIMZ_USER_TMPDIR`, `RIMZ_TEMP_ROOT_KEYS` | Always removed, so a mux child started inside the view keeps `/tmp` (and the provider temp roots that name it) rather than a host path the view may lack. |
 | `SCCACHE_CLIENT_SIDE` | Always `1`, so a shared sccache server never compiles in another view ([toolchain homes](#toolchain-homes)). |
 
 Separately, every launch sets ([env application](./harness/trust.md#env-application), layer 5):
@@ -109,6 +109,8 @@ Separately, every launch sets ([env application](./harness/trust.md#env-applicat
 | `RIMZ_ISOLATION` | `sandbox` or `host`, so a process can tell which view it runs in without probing namespaces (`Isolation::ambient` is the one reader). |
 | `TMPDIR` | The temp unit as the agent sees it: the unit's host path on a host launch; the sandbox pin replaces it with `/tmp`. |
 | `RIMZ_USER_TMPDIR` | The `TMPDIR` this launch replaced, for the mux chokepoints to restore ([multiplexers.md](./multiplexers.md#the-identity-pin)): the ambient `RIMZ_USER_TMPDIR` when present (a launch inside an agent's tree, whose `TMPDIR` is already a unit), else the ambient `TMPDIR`, else empty, which means the user had none. The sandbox pin removes it. |
+| The adapter's temp-root keys (`temp_dir_env_keys`: Claude's `CLAUDE_CODE_TMPDIR`) | The same value as `TMPDIR` as the agent sees it, so the provider's own temp files land in the unit on every platform; `/tmp` under the sandbox. |
+| `RIMZ_TEMP_ROOT_KEYS` | The temp-root keys this launch or an ancestor pointed at a unit, space-separated, sorted and de-duplicated: the ambient list plus the adapter's own keys, so a codex child of a Claude agent still lists `CLAUDE_CODE_TMPDIR`. The mux chokepoints drop each listed key beside the `TMPDIR` restore. The sandbox pin removes it. |
 | `RIMZ_SHARED` | The host path of the room's `shared/`, in both modes. The state root is already reachable in the view, so it needs no mount. |
 | `ZELLIJ_SOCKET_DIR` | The Zellij socket base resolved from the exec wrapper's own environment (`ProcessDomain::zellij_socket_base`). Zellij falls back to `TMPDIR` for its socket base where it ignores `XDG_RUNTIME_DIR` (macOS); pinning the base the wrapper resolved keeps the agent on the room's server and keeps the kill guard's endpoint comparison (`ProcessDomain::same_world_as_process`) true when only `TMPDIR` moved. |
 
@@ -139,7 +141,7 @@ Every compiled launch names its temp unit and the room's shared dir in the Envir
 > - tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.
 > - shared: ~/.rimz/ws/rimz-f89e/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.
 
-The value after `tmp:` is `/tmp` under the sandbox and the unit's host path otherwise. A launch whose unit belongs to its parent reads `You share it with your caller` in place of `Your subagents share it`. `shared/` is room-scoped rather than worktree-scoped, since every worktree of a repo collapses into one workspace, which is why the line asks for a task-named subdirectory. The reminder names no `out/` path, because every wait message and subagent report carries its own, and makes no promise about deletion. `TMPDIR` is also what a harness such as Claude Code follows for its own scratchpad on Linux.
+The value after `tmp:` is `/tmp` under the sandbox and the unit's host path otherwise. A launch whose unit belongs to its parent reads `You share it with your caller` in place of `Your subagents share it`. `shared/` is room-scoped rather than worktree-scoped, since every worktree of a repo collapses into one workspace, which is why the line asks for a task-named subdirectory. The reminder names no `out/` path, because every wait message and subagent report carries its own, and makes no promise about deletion. A harness keeps its own temp files under this value too: Claude Code through `CLAUDE_CODE_TMPDIR`, which the launch sets beside `TMPDIR` on every platform, and on 2.1.287 its per-session directory (`<unit>/claude-<uid>/<project>/<session>/`, the scratchpad's parent) lands there.
 
 Claude's routine-permission settings carry the same two directories as `additionalDirectories` and in their `autoMode.environment` text ([adapter_claude.md](./agents/adapter_claude.md)). The reminder's position among the sections and the providers that receive it are owned by [fleet.md](./harness/fleet.md#launch-reminders).
 

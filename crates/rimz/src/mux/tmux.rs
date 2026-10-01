@@ -152,6 +152,9 @@ pub(crate) fn tmux_cmd(socket: &Path) -> CommandSpec {
             std::env::var(super::domain::USER_TMPDIR_ENV)
                 .ok()
                 .as_deref(),
+            std::env::var(super::domain::TEMP_ROOT_KEYS_ENV)
+                .ok()
+                .as_deref(),
         )
 }
 

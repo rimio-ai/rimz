@@ -345,6 +345,12 @@ pub trait LaunchCapability: CoreCapability {
         &[]
     }
 
+    /// The provider's own temp-root override keys, which a launch sets to the
+    /// same value as `TMPDIR` so the provider's temp files land in the agent's unit.
+    fn temp_dir_env_keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Whether a command already matched by this adapter's launch descriptors
     /// is an interactive agent process. Providers with service subcommands
     /// override this while ordinary CLIs accept the descriptor match.

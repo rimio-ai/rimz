@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use super::domain::USER_TMPDIR_ENV;
+use super::domain::{TEMP_ROOT_KEYS_ENV, USER_TMPDIR_ENV};
 use super::{MuxErr, Result};
 
 /// Upper bound on a single control-command round-trip ([`CommandSpec::run`]).
@@ -92,13 +92,25 @@ impl CommandSpec {
     /// Give the child the `TMPDIR` a launch saved in `saved` (the caller's
     /// [`USER_TMPDIR_ENV`]), so a mux server started from an agent's tree
     /// never hands panes the agent's temp unit. `None` leaves the inherited
-    /// value alone; an empty save removes `TMPDIR`. The save itself never
-    /// reaches the child, so a shell in the room starts its own agents fresh.
-    pub(crate) fn restore_user_tmpdir(self, saved: Option<&str>) -> Self {
+    /// value alone; an empty save removes `TMPDIR`. With a save, the provider
+    /// temp-root keys listed in `temp_root_keys` (the caller's
+    /// [`TEMP_ROOT_KEYS_ENV`]) are dropped too, since they name the same unit.
+    /// Neither save reaches the child, so a shell in the room starts its own
+    /// agents fresh.
+    pub(crate) fn restore_user_tmpdir(
+        self,
+        saved: Option<&str>,
+        temp_root_keys: Option<&str>,
+    ) -> Self {
         let Some(saved) = saved else {
             return self;
         };
-        let spec = self.env_remove(USER_TMPDIR_ENV);
+        let mut spec = self
+            .env_remove(USER_TMPDIR_ENV)
+            .env_remove(TEMP_ROOT_KEYS_ENV);
+        for key in temp_root_keys.unwrap_or_default().split_whitespace() {
+            spec = spec.env_remove(key);
+        }
         if saved.is_empty() {
             spec.env_remove("TMPDIR")
         } else {
@@ -335,23 +347,30 @@ mod tests {
 
     #[test]
     fn a_saved_user_tmpdir_replaces_the_inherited_one() {
-        let outside = CommandSpec::new("zellij").restore_user_tmpdir(None);
+        let outside =
+            CommandSpec::new("zellij").restore_user_tmpdir(None, Some("CLAUDE_CODE_TMPDIR"));
         assert!(outside.env.is_empty() && outside.env_remove.is_empty());
 
-        let saved = CommandSpec::new("zellij").restore_user_tmpdir(Some("/var/folders/t"));
+        let saved = CommandSpec::new("zellij").restore_user_tmpdir(
+            Some("/var/folders/t"),
+            Some("CLAUDE_CODE_TMPDIR OTHER_TMPDIR"),
+        );
         assert_eq!(
             saved.env.get("TMPDIR").map(String::as_str),
             Some("/var/folders/t")
         );
         assert!(saved.env_remove.contains(USER_TMPDIR_ENV));
         assert!(!saved.env.contains_key(USER_TMPDIR_ENV));
+        for key in ["CLAUDE_CODE_TMPDIR", "OTHER_TMPDIR", TEMP_ROOT_KEYS_ENV] {
+            assert!(saved.env_remove.contains(key), "{key}");
+        }
 
-        let none = CommandSpec::new("zellij").restore_user_tmpdir(Some(""));
+        let none = CommandSpec::new("zellij").restore_user_tmpdir(Some(""), None);
         assert!(none.env.is_empty());
         assert!(none.env_remove.contains("TMPDIR") && none.env_remove.contains(USER_TMPDIR_ENV));
 
         let pinned = CommandSpec::new("zellij")
-            .restore_user_tmpdir(Some(""))
+            .restore_user_tmpdir(Some(""), None)
             .env("TMPDIR", "/run/test");
         let command = pinned.to_command();
         assert_eq!(

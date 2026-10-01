@@ -148,7 +148,8 @@ upward-dependencies = ["address"]
 # Account status, display health, the native ambient for `default`, the shared birth fold, and live login keys serve the account standing (+8).
 # RoomLoginSet::current_keys names each kind's launch login for the dashboard fold (+1).
 # The window-span vocabulary and its span selector serve loop window triggers in the scheduler and CLI (+4).
-surface-budget = 945
+# LaunchCapability::temp_dir_env_keys names a provider's own temp-root override for the launch plan (+1).
+surface-budget = 946
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -444,7 +445,8 @@ path = "crates/rimz/src/mux"
 # The resolved Zellij session option list is one public type plus its resolver,
 # consumed by the live backend tests that prove room options at the multiplexer.
 # `USER_TMPDIR_ENV` is the save launch writes, the sandbox unsets, and the chokepoints restore (+1).
-surface-budget = 252
+# `TEMP_ROOT_KEYS_ENV` lists the provider temp roots that save travels with (+1).
+surface-budget = 253
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
