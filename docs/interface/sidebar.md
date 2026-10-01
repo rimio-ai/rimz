@@ -277,7 +277,7 @@ A card's lines are set by its stage. Within a stage, data fills in place and no 
 | engaged, with subagents or waits | adds the subagents and waits line |
 | selected | lights the spines and lists the subagent and wait entries below the card |
 
-Selecting a card only appends lines below it. When the selected agent belongs to a named team, every visible teammate's card opens the same way, and the spines stay on the selected card.
+Selecting a card only appends lines below it. When the selected agent belongs to a named team, every visible teammate's card opens to its full shape too, with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line: only the selected card lists them, and the spines stay on it. `card_density = "expanded"` lists entries on every card, teammates included.
 
 `[theme.display] card_density` changes how much a resting card shows:
 

@@ -200,7 +200,7 @@ Each agent is a small stacked card whose anatomy is drawn in [the interface refe
 A card's line set is fixed before any content fills it, so a provider that starts reporting a field cannot grow a line. [`template`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/template.rs) maps four inputs to an ordered list of slots:
 
 - **Stage** (`CardStage`), from durable lifecycle facts only. A card is `Fresh` while it is `idle` with no submitted prompt, no session history, and an empty context gauge; `labeled` means it carries a RimZ-authored description instead of the compose affordance. Anything else is `Engaged`.
-- **Expansion** (`CardExpansion`): `by_selection` (selected, including every visible teammate of a selected named-team member) picks the card shape; `delegation` (the sticky header override, else `by_selection` or `expanded` density) picks whether the delegation entries show.
+- **Expansion** (`CardExpansion`): `by_selection` (selected, including every visible teammate of a selected named-team member, per `SelectionReach`) picks the card shape; `delegation` (the sticky header override, else the selected row itself or `expanded` density) picks whether the delegation entries show, so a teammate folds its entries behind the summary line.
 - **Density**: `[theme.display] card_density`, one of `auto`, `expanded`, `compact`.
 - **Status**, read only by the resting compact arm.
 
