@@ -561,19 +561,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     };
     let logins = birth_root
         .map(|project_root| {
-            rimz::room::select_birth_logins(project_root, &machine_config, &requested, was_live)
+            rimz::room::resolve_birth_logins(project_root, &machine_config, &requested, was_live)
         })
         .transpose()?;
-    if let Some(logins) = &logins {
-        // Every selected account must be usable before anything launches into
-        // the room; a supervised launch judges only its own.
-        let ambient = rimz::agents::ambient_env();
-        for login in
-            rimz::agents::LoginCatalog::from_config(&machine_config.accounts)?.room(logins)?
-        {
-            login.preflight(&ambient)?;
-        }
-    }
     let starting = matches!(
         entry,
         RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }

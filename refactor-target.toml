@@ -508,7 +508,8 @@ upward-dependencies = [
 ]
 # ReplacedRoom and replace_incompatible_room share replacement between start and reset.
 # The account standing, its scopes and deciding layer, and live agents per account serve accounts list, providers, and doctor (+5).
-surface-budget = 57
+# Birth-login selection stands apart from the all-account check room entry adds, since a supervised launch checks only its own account (+1).
+surface-budget = 58
 
 [[module]]
 path = "crates/rimz/src/sidebar"
