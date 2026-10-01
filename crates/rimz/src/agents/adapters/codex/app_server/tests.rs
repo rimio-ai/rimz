@@ -401,6 +401,7 @@ fn rate_limits_response_maps_reset_credit_summary() {
                 .into_iter()
                 .filter_map(|seconds| Timestamp::from_second(seconds).ok())
                 .collect(),
+            effect: crate::agents::RedeemEffect::RestartsWindow,
         })
     );
 
@@ -419,6 +420,7 @@ fn rate_limits_response_maps_reset_credit_summary() {
             count: 0,
             soonest_expiry: None,
             expiries: Vec::new(),
+            effect: crate::agents::RedeemEffect::RestartsWindow,
         })
     );
 }

@@ -305,6 +305,8 @@ Normalization clamps and rounds percentages and orders windows short to long. Wh
 | `balance`, a number or numeric string | known, clamped at 0 |
 | `hasCredits: false` | disabled |
 
+Reset credits, from the direct endpoint and from the app-server's `rateLimitResetCredits`, normalize through `ResetCredits::normalized` with the effect `RestartsWindow`: redeeming a Codex credit refills the window and restarts its natural reset a full window from the redemption. Auto-redeem reads that effect ([providers.md](./providers.md#auto-redeem)).
+
 The probe reads `$CODEX_HOME/auth.json` first:
 
 | `auth.json` | Result |

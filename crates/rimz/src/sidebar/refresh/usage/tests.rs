@@ -36,6 +36,7 @@ fn published_usage_preserves_identity_and_only_writes_present_credits() {
                     count: 1,
                     soonest_expiry: None,
                     expiries: Vec::new(),
+                    effect: crate::agents::RedeemEffect::RestartsWindow,
                 }),
                 ..Default::default()
             },

@@ -16,7 +16,7 @@ use crate::agents::account::file_mtime_ms;
 use crate::agents::context::WindowSource;
 use crate::agents::credits::{oauth_http_get, trusted_usage_url, url_host};
 use crate::agents::payload::non_empty_trimmed;
-use crate::agents::{AccountUsageSnapshot, HttpErrKind, ResetCredits};
+use crate::agents::{AccountUsageSnapshot, HttpErrKind, RedeemEffect, ResetCredits};
 
 use super::account::{UsageCredits, UsageWindow, normalize_usage, parse_balance};
 
@@ -345,6 +345,7 @@ fn summarize_reset_credits(
             .iter()
             .filter_map(|credit| credit.expires_at)
             .collect(),
+        RedeemEffect::RestartsWindow,
     )
 }
 

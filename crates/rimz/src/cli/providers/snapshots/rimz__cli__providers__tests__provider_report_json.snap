@@ -44,7 +44,8 @@ expression: json
       "expiries": [
         "2023-11-17T22:13:20Z",
         "2023-11-19T22:13:20Z"
-      ]
+      ],
+      "effect": "restarts_window"
     },
     "spending": {
       "today": {

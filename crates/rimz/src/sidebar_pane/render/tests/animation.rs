@@ -545,6 +545,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
         count: 1,
         soonest_expiry: None,
         expiries: Vec::new(),
+        effect: crate::agents::RedeemEffect::RestartsWindow,
     });
     reset_attention.providers = vec![codex];
     assert_eq!(

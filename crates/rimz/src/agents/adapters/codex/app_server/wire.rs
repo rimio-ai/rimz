@@ -10,7 +10,7 @@ use crate::agents::adapters::codex::account::{
     UsageCredits, UsageWindow, normalize_credits, normalize_usage, parse_balance,
 };
 use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits, WindowSource};
-use crate::agents::{AccountUsageSnapshot, ResetCredits};
+use crate::agents::{AccountUsageSnapshot, RedeemEffect, ResetCredits};
 
 use super::transport::AppServerErr;
 
@@ -328,7 +328,11 @@ pub(super) fn collect_reset_credits(parsed: &RateLimitsResponse) -> Option<Reset
         .filter_map(|credit| credit.expires_at)
         .filter_map(|seconds| Timestamp::from_second(seconds).ok())
         .collect();
-    Some(ResetCredits::normalized(count, expiries))
+    Some(ResetCredits::normalized(
+        count,
+        expiries,
+        RedeemEffect::RestartsWindow,
+    ))
 }
 
 /// Extract the Codex version from the server's `userAgent`. The first token is

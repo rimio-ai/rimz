@@ -250,6 +250,7 @@ fn reset_credits_parse_available_count_and_soonest_expiry() {
     .unwrap();
 
     assert_eq!(credits.count, 4);
+    assert_eq!(credits.effect, crate::agents::RedeemEffect::RestartsWindow);
     assert_eq!(
         credits.soonest_expiry,
         Some("2026-07-06T06:30:00Z".parse::<Timestamp>().unwrap())

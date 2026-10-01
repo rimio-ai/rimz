@@ -369,6 +369,7 @@ fn eligible_limit_reset_fixture_preserves_usage() {
     assert_eq!(reset.count, 1);
     assert_eq!(reset.soonest_expiry, Some(expiry));
     assert_eq!(reset.expiries, vec![expiry]);
+    assert_eq!(reset.effect, crate::agents::RedeemEffect::KeepsSchedule);
     let windows = usage.rate_limits.unwrap().windows;
     assert_eq!(windows[0].used_percentage, Some(17));
     assert_eq!(windows[1].used_percentage, Some(49));

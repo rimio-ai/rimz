@@ -372,7 +372,11 @@ impl UsageWire {
         AccountUsageSnapshot {
             rate_limits: collect_rate_limits(self.five_hour, self.seven_day, self.limits),
             extra_credits: collect_extra_usage(self.extra_usage),
-            reset_credits: Some(crate::agents::ResetCredits::normalized(count, expiries)),
+            reset_credits: Some(crate::agents::ResetCredits::normalized(
+                count,
+                expiries,
+                crate::agents::RedeemEffect::KeepsSchedule,
+            )),
             ..Default::default()
         }
     }
