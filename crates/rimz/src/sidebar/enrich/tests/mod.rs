@@ -34,7 +34,8 @@ fn provider_labels_include_only_non_default_logins() {
         Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
         BTreeMap::new(),
     );
-    let (_, _, snapshot) = runtime();
+    let (_dir, runtime, _) = runtime();
+    // `rimz providers` folds once per account, each under a selection naming it.
     for (login, logins, expected) in [
         (
             crate::ids::LoginKey::default_for(key.kind.clone()),
@@ -43,22 +44,106 @@ fn provider_labels_include_only_non_default_logins() {
         ),
         (key, work, "Claude · work"),
     ] {
-        let accounts = BTreeMap::from([(
-            login,
-            crate::agents::AgentAccount {
-                metered: Some(true),
-                ..Default::default()
-            },
-        )]);
-        let projected = fold_machine_config_with(
-            snapshot.clone(),
+        let accounts = BTreeMap::from([(login, metered_account())]);
+        let panels = provider_panels_from_caches(
+            &runtime,
+            &logins,
             &Default::default(),
             accounts,
-            &BTreeMap::new(),
-            Default::default(),
-            &logins,
+            &Default::default(),
         );
-        assert_eq!(projected.providers[0].product_name, expected);
+        let names: Vec<_> = panels.iter().map(|panel| &panel.product_name).collect();
+        assert_eq!(names, [expected]);
+    }
+}
+
+#[test]
+fn dashboard_shows_only_the_rooms_current_account_per_provider() {
+    let config: crate::config::MachineConfig =
+        toml::from_str("[accounts.codex.team-1]\nhome = \"/srv/rimz-test-team\"\n").unwrap();
+    let team: crate::ids::LoginKey = "codex@team-1".parse().unwrap();
+    let old = crate::ids::LoginKey::default_for(team.kind.clone());
+    let agents = vec![
+        root_agent("claude", "c1", None),
+        root_agent("codex", "old-1", None),
+        root_agent("codex", "old-2", None),
+    ];
+    let (_dir, runtime, snapshot) = runtime();
+    let snapshot =
+        SidebarSnapshot::build_with_agents(snapshot.workspace_id.clone(), agents, snapshot.now);
+    let lanes = crate::sidebar::refresh::RefreshedLanes {
+        spending: Default::default(),
+        accounts: BTreeMap::from([
+            (old.clone(), metered_account()),
+            (team.clone(), metered_account()),
+        ]),
+        pr_states: BTreeMap::new(),
+        branch_ci: BTreeMap::new(),
+    };
+    let room = |selection: Option<crate::ids::RoomLogins>| {
+        crate::agents::RoomLoginSet::new(
+            selection,
+            Some(crate::agents::LoginCatalog::from_config(&config.accounts).unwrap()),
+            BTreeMap::new(),
+        )
+        .with_agents(&snapshot.agents)
+    };
+    let switched = room(Some(crate::ids::RoomLogins::from([(
+        team.kind.clone(),
+        team.name.clone(),
+    )])));
+    let panels = |logins: &crate::agents::RoomLoginSet| {
+        fold_machine_config(
+            snapshot.clone(),
+            &runtime,
+            &config,
+            logins,
+            Default::default(),
+            Some(&lanes),
+        )
+        .0
+        .providers
+        .into_iter()
+        .map(|panel| (panel.product_name, panel.active_sessions))
+        .collect::<BTreeSet<_>>()
+    };
+
+    assert_eq!(
+        panels(&switched),
+        BTreeSet::from([("Claude".to_owned(), 0), ("Codex · team-1".to_owned(), 0)]),
+        "the old account's live agents and probe earn no block"
+    );
+    assert_eq!(
+        panels(&room(Some(Default::default()))),
+        BTreeSet::from([("Claude".to_owned(), 0), ("Codex".to_owned(), 0)])
+    );
+    assert!(
+        panels(&room(None)).is_empty(),
+        "an unreadable room record names no current account"
+    );
+
+    // The producer's scoped fold keeps every in-use login for its cache writes.
+    let in_use = fold_machine_config_with(
+        snapshot.clone(),
+        &config,
+        lanes.accounts.clone(),
+        &BTreeMap::new(),
+        Default::default(),
+        &switched,
+        PanelScope::InUse,
+    );
+    let names: BTreeSet<_> = in_use
+        .providers
+        .iter()
+        .map(|panel| panel.product_name.as_str())
+        .collect();
+    assert_eq!(names, BTreeSet::from(["Claude", "Codex", "Codex · team-1"]));
+}
+
+fn metered_account() -> crate::agents::AgentAccount {
+    crate::agents::AgentAccount {
+        metered: Some(true),
+        ..Default::default()
     }
 }
 

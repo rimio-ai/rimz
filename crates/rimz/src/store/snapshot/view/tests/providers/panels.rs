@@ -18,7 +18,7 @@ fn live_provider_outranks_heavier_history_and_cap_keeps_usage_leaders() {
         &accounts,
         &BTreeMap::new(),
         &by_provider,
-        &Default::default(),
+        &shown(&["claude", "codex", "pi"]),
     );
 
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
@@ -30,7 +30,7 @@ fn live_provider_outranks_heavier_history_and_cap_keeps_usage_leaders() {
         &accounts,
         &BTreeMap::new(),
         &by_provider,
-        &Default::default(),
+        &shown(&["claude", "codex", "pi"]),
     );
 
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex"]);
@@ -48,7 +48,7 @@ fn session_windows_rank_lexicographically() {
         &accounts,
         &BTreeMap::new(),
         &spending,
-        &Default::default(),
+        &shown(&["claude", "codex", "pi"]),
     );
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
 }
@@ -65,7 +65,7 @@ fn login_and_credential_recency_break_unused_live_ties() {
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["claude", "codex", "pi"]),
     );
     assert_eq!(provider_kinds(&snapshot), vec!["pi", "codex", "claude"]);
 }
@@ -81,7 +81,7 @@ fn full_usage_tie_falls_back_to_registry_order() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["claude", "codex", "pi"]),
     );
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "codex", "pi"]);
 }
@@ -106,7 +106,7 @@ fn tabbed_dashboard_shows_every_provider_past_the_cap() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["claude", "codex", "amp", "pi", "opencode"]),
     );
 
     // Painted in the registry's display order, not alphabetically.
@@ -123,7 +123,7 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &Default::default(),
+            &shown(&["claude"]),
         );
         snapshot
             .providers
@@ -141,7 +141,7 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &Default::default(),
+            &shown(&["grok"]),
         )
         .providers
         .into_iter()
@@ -211,7 +211,7 @@ fn provider_panels_carry_descriptor_window_placeholders() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["claude", "unregistered"]),
     );
 
     let claude = snapshot
@@ -236,7 +236,7 @@ fn copilot_catalog_tints_survive_color_overrides_but_not_art_overrides() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &Default::default(),
+            &shown(&["copilot"]),
         );
         snapshot
             .providers
@@ -322,7 +322,7 @@ fn provider_list_filters_and_orders_dashboard_panels() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &Default::default(),
+            &shown(&agent_kinds),
         );
 
         assert_eq!(provider_kinds(&snapshot), expected, "{label}");
@@ -343,7 +343,7 @@ fn provider_list_all_expands_remaining_in_usage_order() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &spending,
-        &Default::default(),
+        &shown(&["claude", "codex", "pi"]),
     );
     assert_eq!(provider_kinds(&snapshot), vec!["claude", "pi", "codex"]);
 }
@@ -373,7 +373,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &by_provider,
-        &Default::default(),
+        &shown(&["claude"]),
     );
     assert!(
         spend_only.providers.is_empty(),
@@ -397,7 +397,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
         &probed,
         &BTreeMap::new(),
         &by_provider,
-        &Default::default(),
+        &shown(&["claude"]),
     );
 
     let claude = snapshot
@@ -414,7 +414,7 @@ fn idle_provider_presence_requires_account_substance() {
                        spending: BTreeMap<crate::ids::LoginKey, SpendTally>| {
         let accounts = BTreeMap::from([(provider_key("kimi"), account)]);
         room(Vec::new())
-            .with_provider_aggregates(&accounts, &BTreeMap::new(), &spending, &Default::default())
+            .with_provider_aggregates(&accounts, &BTreeMap::new(), &spending, &shown(&["kimi"]))
             .providers
             .len()
     };
@@ -458,7 +458,7 @@ fn idle_provider_presence_requires_account_substance() {
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["kimi"]),
     );
     assert_eq!(provider_kinds(&live), vec!["kimi"]);
 }
@@ -476,7 +476,7 @@ fn antigravity_account_stays_metered_before_and_after_quota_arrives() {
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["antigravity"]),
     );
     let panel = initial.providers.first().expect("account-only panel");
     assert_eq!(panel.kind, "antigravity");
@@ -506,7 +506,7 @@ fn antigravity_account_stays_metered_before_and_after_quota_arrives() {
         &accounts,
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["antigravity"]),
     );
     let panel = with_quota.providers.first().expect("live panel");
     assert!(panel.metered);
@@ -537,7 +537,7 @@ fn provider_active_sessions_count_bound_identity_panes_not_durable_rows() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &Default::default(),
+            &shown(&["antigravity"]),
         );
     let panel = snapshot
         .providers
@@ -562,7 +562,7 @@ fn provider_active_sessions_count_bound_identity_panes_not_durable_rows() {
             &accounts,
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &Default::default(),
+            &shown(&["antigravity"]),
         );
     assert_eq!(identityless.providers[0].active_sessions, 0);
 }
@@ -582,7 +582,7 @@ fn launched_child_counts_as_a_live_provider_session() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["claude", "codex"]),
     );
 
     let codex = snapshot
@@ -616,7 +616,7 @@ fn active_session_count_does_not_replace_real_provider_history() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &spending,
-            &Default::default(),
+            &shown(&["claude"]),
         );
     let panel = &snapshot.providers[0];
     assert_eq!(panel.active_sessions, 1);
@@ -671,29 +671,60 @@ fn provider_accounts(
         })
         .collect()
 }
+
 #[test]
-fn two_live_logins_have_separate_panels_and_old_login_drops_on_end() {
+fn fold_builds_a_block_only_for_each_passed_login() {
     let native = agent("claude", "native", AgentStatus::Idle, 10);
-    let mut work = agent("claude", "work", AgentStatus::Idle, 10);
+    let mut work = agent("claude", "work", AgentStatus::Idle, 20);
     work.login = Some("work".parse().unwrap());
-    let mut snapshot = room(vec![work.clone(), native.clone()]);
-    snapshot.theme.display.provider_list = vec!["claude".to_owned()];
+    let probed = BTreeMap::from([(
+        provider_key("claude"),
+        AgentAccount {
+            metered: Some(true),
+            ..Default::default()
+        },
+    )]);
+    let fold = |logins: &[&str]| {
+        room_with_agent_panes(vec![native.clone(), work.clone()])
+            .with_provider_aggregates(&probed, &BTreeMap::new(), &BTreeMap::new(), &shown(logins))
+            .providers
+            .into_iter()
+            .map(|panel| (panel.product_name, panel.active_sessions))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        fold(&["claude", "claude@work"]),
+        [("Claude".to_owned(), 1), ("Claude · work".to_owned(), 1)]
+    );
+    assert_eq!(
+        fold(&["claude@work"]),
+        [("Claude · work".to_owned(), 1)],
+        "a live session and a probed account outside the set earn no block"
+    );
+}
+
+#[test]
+fn a_login_outside_the_set_takes_no_cap_slot() {
+    let mut team = agent("codex", "team", AgentStatus::Idle, 30);
+    team.login = Some("team-1".parse().unwrap());
+    let mut snapshot = room(vec![
+        agent("claude", "c1", AgentStatus::Idle, 10),
+        agent("codex", "old", AgentStatus::Idle, 20),
+        team,
+    ]);
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
+    snapshot.theme.display.max_provider_blocks = 2;
     let snapshot = snapshot.with_provider_aggregates(
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["claude", "codex@team-1"]),
     );
-    assert_eq!(snapshot.providers.len(), 2);
-    assert_eq!(snapshot.providers[0].product_name, "Claude");
-    assert_eq!(snapshot.providers[1].product_name, "Claude · work");
-    work.ended_at = Some(epoch());
-    let snapshot = room(vec![native, work]).with_provider_aggregates(
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &Default::default(),
-    );
-    assert_eq!(snapshot.providers.len(), 1);
-    assert_eq!(snapshot.providers[0].product_name, "Claude");
+    let names: Vec<_> = snapshot
+        .providers
+        .iter()
+        .map(|panel| panel.product_name.as_str())
+        .collect();
+    assert_eq!(names, ["Claude", "Codex · team-1"]);
 }

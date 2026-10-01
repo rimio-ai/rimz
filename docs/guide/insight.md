@@ -9,7 +9,7 @@ If you have run `ccusage` over Claude's transcripts, you already know the answer
   <br/><sub><code>rimz stats</code>: a year of token activity, then where it went by model and by agent.</sub>
 </p>
 
-You read the picture in three places. `rimz stats` prints the whole year on demand, from anywhere on the machine. The sidebar keeps a live slice in front of you: the cockpit for the room you are standing in, the provider dashboard for each account. And `rimz providers` prints the dashboard's account blocks as text when you are outside a room.
+You read the picture in three places. `rimz stats` prints the whole year on demand, from anywhere on the machine. The sidebar keeps a live slice in front of you: the cockpit for the room you are standing in, the provider dashboard for each provider's current account. And `rimz providers` prints every account's block as text, in or out of a room.
 
 ## The marks you read everywhere
 
@@ -88,7 +88,7 @@ The spend row is account-global: sessions, the token breakdown, and dollars pinn
 
 Totals rows close the dashboard, summing every provider across the trailing week and month. A wide pane gives them one row per window; a narrower one moves the dollars onto a third row of their own. These totals are account-global like `rimz stats`, counting every project on the machine, so one glance tells you where the week is going whichever room you are standing in.
 
-Outside the sidebar, `rimz providers` prints the same picture as text. A provider with [named accounts](./accounts.md) gets one table with a row per account, so you can compare their windows and 7-day spend side by side; `●` marks the account your next launch uses, and when it runs past 80% of a window a hint names the sibling with the most room and the `rimz accounts use` command that switches to it. It probes every login and runs any usage read that is due, publishing what it learns into the caches the sidebar reads; it touches no agent and no room. The blocks, the flags, and the JSON form are the [providers reference](../reference/cli/providers.md).
+Outside the sidebar, `rimz providers` prints the picture as text for every account, where the dashboard shows the room's current one. A provider with [named accounts](./accounts.md) gets one table with a row per account, so you can compare their windows and 7-day spend side by side; `●` marks the account your next launch uses, and when it runs past 80% of a window a hint names the sibling with the most room and the `rimz accounts use` command that switches to it. It probes every login and runs any usage read that is due, publishing what it learns into the caches the sidebar reads; it touches no agent and no room. The blocks, the flags, and the JSON form are the [providers reference](../reference/cli/providers.md).
 
 #### Budget is not spend
 

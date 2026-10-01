@@ -146,7 +146,8 @@ upward-dependencies = ["address"]
 # LaunchRecord preserves verbatim launch posture across store and relaunch boundaries.
 # LaunchRecord::replay_or_new shares record fallback construction across relaunch paths.
 # Account status, display health, the native ambient for `default`, the shared birth fold, and live login keys serve the account standing (+8).
-surface-budget = 940
+# RoomLoginSet::current_keys names each kind's launch login for the dashboard fold (+1).
+surface-budget = 941
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
