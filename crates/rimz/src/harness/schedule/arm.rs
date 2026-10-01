@@ -460,6 +460,9 @@ fn build_entry(
             hold,
             lifetime,
         } => {
+            if expr.window_spans().next().is_some() {
+                entry.provider = entry.wait.as_ref().map(|target| target.kind.clone());
+            }
             entry.when = Some(vec![expr.to_string()]);
             entry.hold = hold.map(duration_label);
             entry.once = matches!(lifetime, SubscriptionLifetime::Once).then_some(true);

@@ -243,6 +243,7 @@ mod tests {
             watch: None,
             once: Some(true),
             deadline: Some(jiff::Timestamp::UNIX_EPOCH),
+            provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
         };
 
         let machine = task_entry_table(&entry, true).expect("serialize machine");
@@ -262,6 +263,7 @@ mod tests {
         assert!(machine_text.contains("branch = \"feature\""));
         assert!(machine_text.contains("when = [\"team.stage=Done\", \"ci=passed\"]"));
         assert!(machine_text.contains("for = \"30m\""));
+        assert!(machine_text.contains("provider = \"claude\""));
         assert_eq!(
             toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(machine))
                 .expect("machine round trip"),

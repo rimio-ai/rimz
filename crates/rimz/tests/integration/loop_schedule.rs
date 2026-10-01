@@ -111,7 +111,14 @@ fn condition_tick_observes_board_and_records_evidence() {
 fn condition_add_refuses_invalid_predicates_and_options() {
     let env = Env::new();
     for (flags, expected) in [
-        (vec!["--when", "wat=yes"], "team.stage, ci"),
+        (
+            vec!["--when", "wat=yes"],
+            "team.stage, ci, window.5h.left, window.7d.left",
+        ),
+        (
+            vec!["--when", "window.5h.left>=40"],
+            "a --check-only task has none; add --agent or --wait",
+        ),
         (
             vec!["--when", "team.stage=Missing"],
             "no team defines stage Missing; stages: Done",
@@ -133,6 +140,78 @@ fn condition_add_refuses_invalid_predicates_and_options() {
         assert!(!output.status.success());
         assert!(error.contains(expected), "expected {expected}: {error}");
     }
+}
+
+fn publish_claude_5h(env: &Env, used: u8) {
+    env.publish_rate_limits(&RateLimitsCache {
+        entries: BTreeMap::from([(
+            "claude@default".parse().unwrap(),
+            RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        used_percentage: Some(used),
+                        resets_at: Some(Timestamp::now() + SignedDuration::from_hours(2)),
+                        duration_mins: Some(rimz::agents::WindowSpan::FiveHour.minutes()),
+                        ..RateLimitWindow::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    });
+}
+
+#[test]
+fn window_condition_waits_for_room_in_the_provider_window() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-window", "feature-loop");
+    publish_claude_5h(&env, 92);
+    let output = calling_loop(&env, "sess-window")
+        .args([
+            "loop",
+            "add",
+            "roomy",
+            "--wait",
+            "--when",
+            "window.5h.left >= 40",
+            "--once",
+        ])
+        .output()
+        .unwrap();
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        receipt.contains("now: waiting · window.5h.left: 8"),
+        "{receipt}"
+    );
+    let row = &read_loop_instances(&env).0["roomy"];
+    assert_eq!(
+        row.when.as_deref(),
+        Some(&["window.5h.left>=40".to_owned()][..])
+    );
+    assert_eq!(row.provider, Some(AgentKind::new_unchecked("claude")));
+    loop_ok(&env, &["loop", "tick"]);
+    loop_ok(&env, &["loop", "tick"]);
+    assert!(read_loop_run_records(&env).is_empty());
+    publish_claude_5h(&env, 10);
+    loop_ok(&env, &["loop", "tick"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while (read_loop_run_records(&env).is_empty()
+        || read_loop_instances(&env).0.contains_key("roomy"))
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let condition = last_loop_record(&env).condition.unwrap();
+    assert_eq!(condition.when, "window.5h.left>=40");
+    assert_eq!(condition.readings["window.5h.left"].as_deref(), Some("90"));
+    assert!(!read_loop_instances(&env).0.contains_key("roomy"));
 }
 
 #[test]

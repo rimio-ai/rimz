@@ -52,6 +52,13 @@
 ## session = "sess-abc123"
 ## handle = "@planner"
 ##
+## [tasks.roomy]
+## agent = "claude"
+## prompt = "refactor the next rough module"
+## root = "/home/you/code/app"
+## when = ["window.5h.left>=60"]
+## provider = "claude"                 # `rimz loop add` stores the kind a window term reads as state
+##
 ## [tasks.self_wait]
 ## prompt = "resume the review and fix the next blocking comment"
 ## root = "/home/you/code/app"

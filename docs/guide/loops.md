@@ -210,6 +210,20 @@ rimz loop add refactor --agent claude --prompt "Refactor the next rough module a
 
 `--surplus 1.5x` opens the gate only at that headroom or above. `--surplus-after 3d` keeps the task quiet until three days of the window have elapsed, so an untouched early week is not spent before your own heavy days land (used alone, it still requires `1.0x`). The gate guards `--agent` and `--wait` actions alike and runs before any `--check`, so a closed gate runs nothing and costs nothing: the fire records `surplus skipped` without adding a strike, and the schedule keeps polling until real slack appears. An account without a window reading, such as an API key or a window that has not started, keeps the gate closed. Which window counts per provider, the headroom model with a worked example, and the fail-closed rules are in [budgets → the surplus gate](./budget.md#the-surplus-gate).
 
+## Wait for room in a usage window
+
+The surplus gate decides whether a fire may spend; it never picks the moment. Some work only pays off once the window has room: a long refactor that starts in a nearly spent 5-hour window stalls halfway, and what you want is to start it when the window has refilled.
+
+`window.5h.left` and `window.7d.left` are condition keys for that. Each reads the percent left in the task provider's 5-hour or 7-day window, from the provider usage cache the room's sidebar keeps, and compares it with a whole percent:
+
+```sh
+rimz loop add big-refactor --when 'window.5h.left>=60' --once --agent claude --prompt 'Refactor the storage layer and leave the branch green.'
+```
+
+Each tick projects the cached reading to now, so a window whose reset has passed reads `100` before a new reading lands; that is what lets the loop timer fire the task at the reset with no room open. Without a room nothing refreshes the cache, so the reading is only that projection: it rises at the reset but misses usage since the last refresh. `--for 30m` requires the window to stay at that level for half an hour, so it measures a window that stays quiet and full: any use that drops it below the bound restarts the hold.
+
+The provider is fixed at add: the kind `--agent` or `--wait` resolves to, recorded on the task. Adding reads the current window first and refuses what it cannot read: a check-only task, which has no provider; Qwen, whose account is chosen per launch; and a missing or already-reset reading, which `rimz providers --refresh` or an open sidebar replaces. A window that has not started still reports about 1% used, so it reads `99` and `>=100` rarely holds; ask for `>=95` instead. Window conditions are not available to `--project` tasks. The expression rules are under [conditions](../reference/cli/loop.md#conditions).
+
 ## Budgets and strikes
 
 Two brakes bound a task that runs without you.

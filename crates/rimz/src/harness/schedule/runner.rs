@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use super::{LOOP_TASK_ENV, fire::deadline_expired_at};
 use crate::agents::PermissionMode;
 use crate::agents::{
-    HookPreflightErr, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed, WindowSurplus,
-    find_definition, preflight_hooks,
+    HookPreflightErr, ManagedLaunchState, ProviderCapacity, RateLimitWindow, TurnLifecycleNeed,
+    WindowSpan, WindowSurplus, find_definition, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, WatchSpec};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
@@ -43,6 +43,7 @@ use crate::harness::schedule::signal::{
     Signal as TriggerSignal, WAIT_TAIL_CAP, WatchOutcome, WatchVerdict,
 };
 use crate::harness::schedule::{TaskAction, Trigger};
+use crate::ids::AgentKind;
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::RunRecord;
 use crate::utils::time::{DurationUnit, parse_duration_units};
@@ -258,7 +259,8 @@ impl FireContext {
                     StatePaths::for_project_root(&project_root)?,
                     None,
                 );
-                scope.managed_launch = unresolved_managed_state(entry, &target.kind);
+                scope.managed_launch =
+                    unresolved_managed_state(&entry.resolved_root(), &target.kind);
                 scope
             }
             TaskAction::CheckOnly => unreachable!("check-only context returned above"),
@@ -993,6 +995,120 @@ fn preflight_kind(kind: &str, runtime: &RuntimePaths) -> Result<()> {
             fix
         ),
     }
+}
+
+/// Why `rimz loop add` refuses a window trigger; each display carries its fix.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum WindowRefusal {
+    #[error(
+        "a window trigger reads the task's provider, and a --check-only task has none; add --agent or --wait"
+    )]
+    NoProvider,
+    #[error(
+        "{kind} selects an exact managed account at launch, so its windows cannot be read before the run; window triggers do not support {kind}"
+    )]
+    ManagedAccount { kind: String },
+    #[error("cannot resolve the room's {kind} account; run `rimz accounts list`")]
+    NoAccount { kind: String },
+    #[error(
+        "no current {kind} {span} window reading; open the room's sidebar or run `rimz providers --refresh`"
+    )]
+    NoReading { kind: String, span: WindowSpan },
+    #[error("{kind} has no {span} window")]
+    NoWindow { kind: String, span: WindowSpan },
+}
+
+/// A provider's window of one span as `rimz loop add` reads it.
+#[derive(Clone, Debug, PartialEq)]
+struct WindowAtAdd {
+    pub kind: AgentKind,
+    pub span: WindowSpan,
+    pub window: RateLimitWindow,
+}
+
+/// The provider a task's `window.*` terms read, once add can read each window
+/// they name; `None` when the clauses read no window or do not parse.
+pub fn window_condition_provider(
+    when: &[String],
+    kind: Option<&str>,
+    root: &Path,
+    runtime: &RuntimePaths,
+    now: Timestamp,
+) -> Result<Option<AgentKind>, WindowRefusal> {
+    if super::when::WhenExpr::parse(when).map_or(true, |expr| expr.window_spans().next().is_none())
+    {
+        return Ok(None);
+    }
+    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+    condition_provider_in(when, kind, root, runtime, &logins, now)
+}
+
+fn condition_provider_in(
+    when: &[String],
+    kind: Option<&str>,
+    root: &Path,
+    runtime: &RuntimePaths,
+    logins: &crate::agents::RoomLoginSet,
+    now: Timestamp,
+) -> Result<Option<AgentKind>, WindowRefusal> {
+    let Ok(expr) = super::when::WhenExpr::parse(when) else {
+        return Ok(None);
+    };
+    let spans = expr
+        .window_spans()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut provider = None;
+    for span in spans {
+        provider = Some(window_at_add(kind, span, root, runtime, logins, now)?.kind);
+    }
+    Ok(provider)
+}
+
+/// The stored reading of `kind`'s `span` window, refused in the order the
+/// fixes apply: provider, account selection, account, reading, window.
+fn window_at_add(
+    kind: Option<&str>,
+    span: WindowSpan,
+    root: &Path,
+    runtime: &RuntimePaths,
+    logins: &crate::agents::RoomLoginSet,
+    now: Timestamp,
+) -> Result<WindowAtAdd, WindowRefusal> {
+    let kind = kind.ok_or(WindowRefusal::NoProvider)?;
+    let owned = || kind.to_owned();
+    if !matches!(
+        unresolved_managed_state(root, kind),
+        ManagedLaunchState::Unsupported
+    ) {
+        return Err(WindowRefusal::ManagedAccount { kind: owned() });
+    }
+    let key = logins
+        .default_key(kind)
+        .ok_or_else(|| WindowRefusal::NoAccount { kind: owned() })?;
+    let capacity =
+        ProviderCapacity::read(runtime, &key).ok_or_else(|| WindowRefusal::NoReading {
+            kind: owned(),
+            span,
+        })?;
+    // Projecting to the earliest instant leaves the stored reading as cached:
+    // add refuses an expired window instead of reading it as refilled.
+    let window = capacity
+        .window_of_span(span, Timestamp::MIN)
+        .ok_or_else(|| WindowRefusal::NoWindow {
+            kind: owned(),
+            span,
+        })?;
+    if window.resets_at.is_some_and(|reset| reset <= now) {
+        return Err(WindowRefusal::NoReading {
+            kind: owned(),
+            span,
+        });
+    }
+    Ok(WindowAtAdd {
+        kind: AgentKind::new_unchecked(kind),
+        span,
+        window,
+    })
 }
 
 pub fn parse_mode(raw: &str) -> Result<String> {
@@ -1786,16 +1902,11 @@ fn drain_pipe(
     })
 }
 
-fn unresolved_managed_state(entry: &TaskEntry, kind: &str) -> ManagedLaunchState {
+fn unresolved_managed_state(root: &Path, kind: &str) -> ManagedLaunchState {
     let Some(adapter) = find_definition(kind) else {
         return ManagedLaunchState::Unsupported;
     };
-    let state = adapter.resolve_managed_launch(
-        &entry.resolved_root(),
-        &std::collections::BTreeMap::new(),
-        None,
-        &[],
-    );
+    let state = adapter.resolve_managed_launch(root, &std::collections::BTreeMap::new(), None, &[]);
     if matches!(state, ManagedLaunchState::Unsupported) {
         state
     } else {

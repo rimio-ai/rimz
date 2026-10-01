@@ -7,7 +7,9 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::agents::{ProviderCapacity, RoomLoginSet, WindowSpan};
 use crate::forge::pr_state::PrStateCache;
+use crate::ids::AgentKind;
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
 /// Checkout scopes whose live loop conditions need sidebar CI probes.
@@ -47,6 +49,60 @@ impl CiSource {
     }
 }
 
+/// The room's kind-wide provider windows, read at most once and only when a
+/// `window.*` term asks for one.
+pub struct WindowReadings<'a> {
+    runtime: Option<&'a crate::RuntimePaths>,
+    now: Timestamp,
+    capacities: std::cell::OnceCell<BTreeMap<AgentKind, ProviderCapacity>>,
+}
+
+impl<'a> WindowReadings<'a> {
+    pub fn new(runtime: Option<&'a crate::RuntimePaths>, now: Timestamp) -> Self {
+        Self {
+            runtime,
+            now,
+            capacities: std::cell::OnceCell::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixed(now: Timestamp, capacities: BTreeMap<AgentKind, ProviderCapacity>) -> Self {
+        Self {
+            runtime: None,
+            now,
+            capacities: std::cell::OnceCell::from(capacities),
+        }
+    }
+
+    /// Percent of `kind`'s `span` window left, projected to now; a lifted window has no limit.
+    fn left(&self, kind: &AgentKind, span: WindowSpan) -> Option<String> {
+        let window = self
+            .capacities
+            .get_or_init(|| self.read())
+            .get(kind)?
+            .window_of_span(span, self.now)?;
+        let left = if window.lifted {
+            100
+        } else {
+            100 - window.used_percentage?.min(100)
+        };
+        Some(left.to_string())
+    }
+
+    fn read(&self) -> BTreeMap<AgentKind, ProviderCapacity> {
+        let Some(runtime) = self.runtime else {
+            return BTreeMap::new();
+        };
+        let logins = RoomLoginSet::for_runtime(runtime);
+        ProviderCapacity::read_all(runtime, &logins)
+            .into_iter()
+            .filter(|(key, _)| logins.default_key(key.kind.as_ref()).as_ref() == Some(key))
+            .map(|(key, capacity)| (key.kind, capacity))
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verdict {
     pub ok: bool,
@@ -69,7 +125,13 @@ pub struct ConditionEvidence {
     pub readings: BTreeMap<String, Option<String>>,
 }
 
-pub fn evaluate(expr: &WhenExpr, scope: &Path, ci_source: Option<&CiSource>) -> Verdict {
+pub fn evaluate(
+    expr: &WhenExpr,
+    scope: &Path,
+    ci_source: Option<&CiSource>,
+    provider: Option<&AgentKind>,
+    windows: &WindowReadings<'_>,
+) -> Verdict {
     let mut readings = BTreeMap::new();
     for term in expr.terms() {
         readings
@@ -96,14 +158,26 @@ pub fn evaluate(expr: &WhenExpr, scope: &Path, ci_source: Option<&CiSource>) -> 
                             .to_owned()
                         })
                 }),
-                // WhenExpr can only be constructed through the key-validating parser.
-                _ => unreachable!("the parser admits only team.stage and ci"),
+                key => {
+                    // WhenExpr can only be constructed through the key-validating parser.
+                    let span = window_span(key)
+                        .expect("the parser admits only team.stage, ci, and window keys");
+                    provider.and_then(|kind| windows.left(kind, span))
+                }
             });
     }
     Verdict {
         ok: expr.0.matches(&readings),
         readings,
     }
+}
+
+/// The span a `window.<span>.left` key reads.
+fn window_span(key: &str) -> Option<WindowSpan> {
+    key.strip_prefix("window.")?
+        .strip_suffix(".left")?
+        .parse()
+        .ok()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,18 +194,68 @@ enum Node {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WhenTerm {
     pub key: String,
+    op: Op,
     pub values: Vec<String>,
+}
+
+/// How a term compares its reading: membership for named states, order for window percents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Op {
+    In,
+    Ge,
+    Le,
+    Gt,
+    Lt,
+}
+
+impl Op {
+    /// Comparisons in lexing order: a two-byte token before its one-byte prefix.
+    const COMPARISONS: [Self; 4] = [Self::Ge, Self::Le, Self::Gt, Self::Lt];
+
+    fn token(self) -> &'static str {
+        match self {
+            Self::In => "=",
+            Self::Ge => ">=",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Lt => "<",
+        }
+    }
 }
 
 impl WhenTerm {
     pub fn matches(&self, reading: Option<&str>) -> bool {
-        reading.is_some_and(|reading| self.values.iter().any(|value| value == reading))
+        let Some(reading) = reading else {
+            return false;
+        };
+        if self.op == Op::In {
+            return self.values.iter().any(|value| value == reading);
+        }
+        let (Ok(reading), Some(Ok(bound))) = (
+            reading.parse::<u8>(),
+            self.values.first().map(|value| value.parse::<u8>()),
+        ) else {
+            return false;
+        };
+        match self.op {
+            Op::Ge => reading >= bound,
+            Op::Le => reading <= bound,
+            Op::Gt => reading > bound,
+            Op::Lt => reading < bound,
+            Op::In => unreachable!("membership returned above"),
+        }
     }
 }
 
 impl fmt::Display for WhenTerm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}={}", self.key, self.values.join(","))
+        write!(
+            f,
+            "{}{}{}",
+            self.key,
+            self.op.token(),
+            self.values.join(",")
+        )
     }
 }
 
@@ -194,6 +318,11 @@ impl WhenExpr {
         let mut terms = Vec::new();
         self.0.terms(&mut terms);
         terms.into_iter()
+    }
+
+    /// The spans the expression's `window.*` terms read, in expression order.
+    pub(super) fn window_spans(&self) -> impl Iterator<Item = WindowSpan> {
+        self.terms().filter_map(|term| window_span(&term.key))
     }
 
     /// Unique readings in expression order rather than the map's key order.
@@ -373,6 +502,9 @@ impl Parser<'_> {
         } else {
             self.node()?;
             let key = self.word()?;
+            if window_span(&key).is_some() {
+                return self.window_term(key);
+            }
             if self.take("!=") {
                 return Err(self.error(format!(
                     "!= is not supported; use !{key}={}",
@@ -380,7 +512,15 @@ impl Parser<'_> {
                 )));
             }
             if key != "team.stage" && key != "ci" {
-                return Err(self.error("unknown key; keys: team.stage, ci"));
+                return Err(
+                    self.error("unknown key; keys: team.stage, ci, window.5h.left, window.7d.left")
+                );
+            }
+            if Op::COMPARISONS.iter().any(|op| self.take(op.token())) {
+                let value = self.word()?;
+                return Err(self.error(format!(
+                    "comparisons apply only to window keys; use {key}={value}"
+                )));
             }
             if !self.take("=") {
                 return Err(self.error("expected '='; use key=value"));
@@ -408,16 +548,74 @@ impl Parser<'_> {
             {
                 return Err(self.error("unknown ci value; values: passed, failed, pending"));
             }
-            Node::Term(WhenTerm { key, values })
+            Node::Term(WhenTerm {
+                key,
+                op: Op::In,
+                values,
+            })
         };
         self.depth -= 1;
         Ok(node)
+    }
+
+    /// A `window.<span>.left` comparison against a whole percent.
+    fn window_term(&mut self, key: String) -> Result<Node, WhenError> {
+        if self.take("!=") {
+            let bound = self.percent(&key, Op::Lt)?;
+            return Err(self.error(format!(
+                "!= is not supported; use {key}<{bound} || {key}>{bound}"
+            )));
+        }
+        if let Some(op) = Op::COMPARISONS.into_iter().find(|op| self.take(op.token())) {
+            let bound = self.percent(&key, op)?;
+            return Ok(Node::Term(WhenTerm {
+                key,
+                op,
+                values: vec![bound.to_string()],
+            }));
+        }
+        if self.take("=") {
+            let bound = self.percent(&key, Op::Ge)?;
+            return Err(self.error(format!(
+                "= is not supported on window keys; use {key}>={bound} && {key}<={bound}"
+            )));
+        }
+        Err(self.error(format!(
+            "expected a comparison (>=, <=, >, <); use {key}>=40"
+        )))
+    }
+
+    fn percent(&mut self, key: &str, op: Op) -> Result<u8, WhenError> {
+        let op = op.token();
+        let Ok(word) = self.word() else {
+            return Err(self.error(format!(
+                "expected a whole percent from 0 to 100; use {key}{op}40"
+            )));
+        };
+        match word.parse::<i64>() {
+            Ok(value) => u8::try_from(value)
+                .ok()
+                .filter(|percent| *percent <= 100)
+                .ok_or_else(|| {
+                    self.error(format!(
+                        "percent left runs from 0 to 100; use {key}{op}{}",
+                        value.clamp(0, 100)
+                    ))
+                }),
+            Err(_) => Err(self.error(format!(
+                "expected a whole percent from 0 to 100; use {key}{op}40"
+            ))),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn no_windows() -> WindowReadings<'static> {
+        WindowReadings::fixed(Timestamp::now(), BTreeMap::new())
+    }
 
     #[test]
     fn whole_expression_node_limit_includes_flat_chains_and_clauses() {
@@ -482,11 +680,11 @@ mod tests {
                     label
                 };
                 let expr = WhenExpr::parse(&[format!("ci={expected}")]).unwrap();
-                let verdict = evaluate(&expr, &entry.run_dir(), Some(&cache));
+                let verdict = evaluate(&expr, &entry.run_dir(), Some(&cache), None, &no_windows());
                 assert!(verdict.ok, "{state:?} {ci:?}");
                 assert_eq!(verdict.readings["ci"].as_deref(), Some(expected));
-                assert!(!evaluate(&expr, root.path(), Some(&cache)).ok);
-                assert!(!evaluate(&expr, &entry.run_dir(), None).ok);
+                assert!(!evaluate(&expr, root.path(), Some(&cache), None, &no_windows()).ok);
+                assert!(!evaluate(&expr, &entry.run_dir(), None, None, &no_windows()).ok);
             }
         }
         let expr = WhenExpr::parse(&["ci=passed".to_owned()]).unwrap();
@@ -494,7 +692,9 @@ mod tests {
             evaluate(
                 &expr,
                 &entry.run_dir(),
-                Some(&CiSource(PrStateCache::default()))
+                Some(&CiSource(PrStateCache::default())),
+                None,
+                &no_windows(),
             )
             .readings["ci"],
             None
@@ -510,7 +710,11 @@ mod tests {
             ("team.stage=Done", false),
         ] {
             let expr = WhenExpr::parse(&[input.to_owned()]).unwrap();
-            assert_eq!(evaluate(&expr, scope.path(), None).ok, expected, "{input}");
+            assert_eq!(
+                evaluate(&expr, scope.path(), None, None, &no_windows()).ok,
+                expected,
+                "{input}"
+            );
         }
         std::fs::write(scope.path().join("blackboard.md"), "Stage: Done\n").unwrap();
         let cache = CiSource(PrStateCache {
@@ -530,14 +734,14 @@ mod tests {
         ] {
             let expr = WhenExpr::parse(&[input.to_owned()]).unwrap();
             assert_eq!(
-                evaluate(&expr, scope.path(), Some(&cache)).ok,
+                evaluate(&expr, scope.path(), Some(&cache), None, &no_windows()).ok,
                 expected,
                 "{input}"
             );
         }
         let expr = WhenExpr::parse(&["team.stage=Done && ci=pending".to_owned()]).unwrap();
         assert_eq!(
-            evaluate(&expr, scope.path(), None).readings,
+            evaluate(&expr, scope.path(), None, None, &no_windows()).readings,
             BTreeMap::from([
                 ("team.stage".to_owned(), Some("Done".to_owned())),
                 ("ci".to_owned(), None),
@@ -567,6 +771,15 @@ mod tests {
                 vec!["ci=passed || ci=pending", "team.stage=Done"],
                 "(ci=passed || ci=pending) && team.stage=Done",
             ),
+            (vec![" window.5h.left >= 40 "], "window.5h.left>=40"),
+            (
+                vec!["window.7d.left<10 || !window.5h.left>90"],
+                "window.7d.left<10 || !window.5h.left>90",
+            ),
+            (
+                vec!["window.5h.left<=0 && ci=passed", "window.7d.left>100"],
+                "window.5h.left<=0 && ci=passed && window.7d.left>100",
+            ),
         ] {
             let clauses = clauses.into_iter().map(str::to_owned).collect::<Vec<_>>();
             let expr = WhenExpr::parse(&clauses).unwrap();
@@ -581,7 +794,14 @@ mod tests {
     #[test]
     fn refusals_name_clause_position_and_fix() {
         for (input, hint) in [
-            ("agent=idle", "team.stage, ci"),
+            (
+                "agent=idle",
+                "team.stage, ci, window.5h.left, window.7d.left",
+            ),
+            (
+                "window.1h.left>=40",
+                "team.stage, ci, window.5h.left, window.7d.left",
+            ),
             ("ci=green", "passed, failed, pending"),
             ("ci!=failed", "!ci=failed"),
             ("", "empty term"),
@@ -601,5 +821,122 @@ mod tests {
             assert!(error.contains(hint), "{input}: {error}");
         }
         assert!(WhenExpr::parse(&[]).is_err());
+    }
+
+    #[test]
+    fn window_refusals_suggest_a_form_that_parses() {
+        for (input, hint) in [
+            (
+                "window.5h.left=40",
+                "window.5h.left>=40 && window.5h.left<=40",
+            ),
+            (
+                "window.5h.left!=40",
+                "window.5h.left<40 || window.5h.left>40",
+            ),
+            ("window.7d.left>=101", "window.7d.left>=100"),
+            ("window.7d.left<-5", "window.7d.left<0"),
+            ("window.5h.left>=lots", "window.5h.left>=40"),
+            ("window.5h.left", "window.5h.left>=40"),
+            ("ci>=passed", "ci=passed"),
+            ("team.stage<Done", "team.stage=Done"),
+        ] {
+            let error = WhenExpr::parse(&["ci=passed".to_owned(), input.to_owned()])
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("clause 2, position"), "{input}: {error}");
+            assert!(error.ends_with(&format!("use {hint}")), "{input}: {error}");
+            assert!(WhenExpr::parse(&[hint.to_owned()]).is_ok(), "{hint}");
+        }
+        let error = WhenExpr::parse(&["window.5h.left!=40".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("!window"), "{error}");
+    }
+
+    #[test]
+    fn window_terms_read_percent_left_at_the_boundaries() {
+        use crate::agents::RateLimitWindow;
+
+        let scope = tempfile::tempdir().unwrap();
+        let now = Timestamp::now();
+        let window = |used, resets_in: i64, span: WindowSpan| RateLimitWindow {
+            used_percentage: used,
+            resets_at: Some(now + jiff::SignedDuration::from_secs(resets_in)),
+            duration_mins: Some(span.minutes()),
+            ..RateLimitWindow::default()
+        };
+        let claude = AgentKind::new_unchecked("claude");
+        let codex = AgentKind::new_unchecked("codex");
+        let windows = WindowReadings::fixed(
+            now,
+            BTreeMap::from([
+                (
+                    claude.clone(),
+                    ProviderCapacity::from_windows(vec![
+                        window(Some(60), 3_600, WindowSpan::FiveHour),
+                        window(None, 86_400, WindowSpan::SevenDay),
+                    ]),
+                ),
+                (
+                    codex.clone(),
+                    ProviderCapacity::from_windows(vec![
+                        RateLimitWindow {
+                            lifted: true,
+                            resets_at: None,
+                            ..window(None, 0, WindowSpan::FiveHour)
+                        },
+                        window(Some(70), -60, WindowSpan::SevenDay),
+                    ]),
+                ),
+            ]),
+        );
+        let check = |input: &str, provider: Option<&AgentKind>| {
+            let expr = WhenExpr::parse(&[input.to_owned()]).unwrap();
+            evaluate(&expr, scope.path(), None, provider, &windows)
+        };
+        for (input, expected) in [
+            ("window.5h.left>=40", true),
+            ("window.5h.left>40", false),
+            ("window.5h.left<=40", true),
+            ("window.5h.left<40", false),
+            ("window.5h.left>=41", false),
+            ("window.7d.left>=0", false),
+            ("!window.7d.left>=0", true),
+            ("window.7d.left<=100 || window.5h.left>39", true),
+        ] {
+            assert_eq!(check(input, Some(&claude)).ok, expected, "claude {input}");
+        }
+        let verdict = check("window.5h.left>=40 && window.7d.left<10", Some(&claude));
+        assert_eq!(
+            verdict.readings,
+            BTreeMap::from([
+                ("window.5h.left".to_owned(), Some("40".to_owned())),
+                ("window.7d.left".to_owned(), None),
+            ])
+        );
+        let verdict = check("window.5h.left>=100 && window.7d.left>=100", Some(&codex));
+        assert!(verdict.ok, "a lifted window and a rolled window are full");
+        assert!(!check("window.5h.left>=0", None).ok);
+        assert!(!check("window.5h.left>=0", Some(&AgentKind::new_unchecked("pi"))).ok);
+    }
+
+    #[test]
+    fn window_readings_read_nothing_until_a_window_term_asks() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = crate::RuntimePaths::under(
+            crate::ids::WorkspaceId::from_project_root(root.path()),
+            root.path(),
+        )
+        .unwrap();
+        let windows = WindowReadings::new(Some(&runtime), Timestamp::now());
+        let claude = AgentKind::new_unchecked("claude");
+        let expr = WhenExpr::parse(&["ci=passed".to_owned()]).unwrap();
+        evaluate(&expr, root.path(), None, Some(&claude), &windows);
+        assert!(windows.capacities.get().is_none());
+        let expr = WhenExpr::parse(&["window.5h.left>=40".to_owned()]).unwrap();
+        let verdict = evaluate(&expr, root.path(), None, Some(&claude), &windows);
+        assert_eq!(verdict.readings["window.5h.left"], None);
+        assert!(windows.capacities.get().is_some());
     }
 }

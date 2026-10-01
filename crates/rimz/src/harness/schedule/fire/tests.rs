@@ -68,6 +68,68 @@ fn condition_write_failure_preserves_clock_fires() {
     );
 }
 
+#[test]
+fn window_condition_reads_the_provider_window_under_the_elder() {
+    use crate::agents::{
+        AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache, WindowSpan,
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    let publish = |used| {
+        write_temp_then_rename_cache(
+            &runtime.shared_rate_limits_path(),
+            &RateLimitsCache {
+                entries: BTreeMap::from([(
+                    "claude@default".parse().unwrap(),
+                    RateLimitCacheEntry {
+                        limits: AgentRateLimits {
+                            windows: vec![RateLimitWindow {
+                                used_percentage: Some(used),
+                                resets_at: Some(seconds_before(now.timestamp(), -3_600)),
+                                duration_mins: Some(WindowSpan::FiveHour.minutes()),
+                                ..RateLimitWindow::default()
+                            }],
+                        },
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    };
+    write_temp_then_rename_cache(
+        &state_path(&runtime),
+        &one(seconds_before(now.timestamp(), 60)),
+    )
+    .unwrap();
+    let tasks = one(loaded(TaskEntry {
+        root: root.path().to_owned(),
+        check: Some("true".to_owned()),
+        when: Some(vec!["window.5h.left>=40".to_owned()]),
+        provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
+        ..TaskEntry::default()
+    }));
+    let tick = || {
+        fire_tasks(
+            &runtime,
+            Some(root.path()),
+            tasks.clone(),
+            &now,
+            LoopRunHost::Detached,
+            None,
+        )
+    };
+    publish(92);
+    assert!(tick().is_empty());
+    publish(10);
+    assert_eq!(tick(), vec![NAME]);
+}
+
 fn condition_state(hold: Option<u64>, since: Timestamp, fired: bool) -> WhenState {
     WhenState {
         fingerprint: Some((

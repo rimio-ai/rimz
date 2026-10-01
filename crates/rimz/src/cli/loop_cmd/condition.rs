@@ -1,7 +1,7 @@
 //! Condition admission and room-aware presentation.
 
 use super::*;
-use schedule::when::{self, CiSource, Verdict, WhenExpr};
+use schedule::when::{self, CiSource, Verdict, WhenExpr, WindowReadings};
 
 pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
     if clauses.is_empty() {
@@ -21,10 +21,19 @@ pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
 
 fn reading(entry: &TaskEntry, expr: &WhenExpr) -> Verdict {
     let root = entry.resolved_root();
-    let source = runtime_for_root(&root)
+    let runtime = runtime_for_root(&root);
+    let source = runtime
+        .as_ref()
         .filter(|_| render::room_open(&root))
-        .map(|runtime| CiSource::read(&runtime));
-    when::evaluate(expr, &entry.run_dir(), source.as_ref())
+        .map(CiSource::read);
+    let windows = WindowReadings::new(runtime.as_ref(), Timestamp::now());
+    when::evaluate(
+        expr,
+        &entry.run_dir(),
+        source.as_ref(),
+        entry.provider.as_ref(),
+        &windows,
+    )
 }
 
 pub(super) fn observe(

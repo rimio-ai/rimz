@@ -170,6 +170,10 @@ pub enum ScheduleErr {
         name: String,
         source: Box<when::WhenError>,
     },
+    #[error(
+        "schedule `{name}` reads a provider window without `provider`; set `provider = \"<agent kind>\"` or re-add the task with `rimz loop add`"
+    )]
+    WindowWithoutProvider { name: String },
     #[error("schedule `{name}` sets both `watch` and `check`; the watched command is the check")]
     WatchWithCheck { name: String },
     #[error("schedule `{name}` has an invalid signal name `{value}`")]
@@ -802,6 +806,11 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             name: name.to_owned(),
             source: Box::new(source),
         })?;
+        if entry.provider.is_none() && expr.window_spans().next().is_some() {
+            return Err(ScheduleErr::WindowWithoutProvider {
+                name: name.to_owned(),
+            });
+        }
         let hold = entry
             .hold
             .as_deref()

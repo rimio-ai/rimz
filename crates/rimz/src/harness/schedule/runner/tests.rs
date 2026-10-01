@@ -943,3 +943,147 @@ fn vanished_task_root_keeps_its_persisted_workspace_identity() {
         WorkspaceId::from_project_root(&root)
     );
 }
+
+fn publish_windows(runtime: &RuntimePaths, kind: &str, windows: Vec<RateLimitWindow>) {
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_rate_limits_path(),
+        &crate::agents::RateLimitsCache {
+            entries: std::collections::BTreeMap::from([(
+                crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)),
+                crate::agents::RateLimitCacheEntry {
+                    limits: crate::agents::AgentRateLimits { windows },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn window_triggers_refuse_at_add_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = Timestamp::now();
+    let window = |used, resets_in: i64, span: WindowSpan| RateLimitWindow {
+        used_percentage: used,
+        resets_at: Some(now + jiff::SignedDuration::from_secs(resets_in)),
+        duration_mins: Some(span.minutes()),
+        ..RateLimitWindow::default()
+    };
+    let native = crate::agents::RoomLoginSet::new(
+        Some(Default::default()),
+        None,
+        std::collections::BTreeMap::new(),
+    );
+    let at_add = |kind, span, logins: &crate::agents::RoomLoginSet| {
+        window_at_add(kind, span, dir.path(), &runtime, logins, now)
+    };
+    let five = WindowSpan::FiveHour;
+    let seven = WindowSpan::SevenDay;
+    assert_eq!(at_add(None, five, &native), Err(WindowRefusal::NoProvider));
+    let refusal = at_add(Some("qwen"), five, &native).unwrap_err();
+    assert!(matches!(refusal, WindowRefusal::ManagedAccount { .. }));
+    assert!(
+        refusal.to_string().contains("do not support qwen"),
+        "{refusal}"
+    );
+    let unresolvable = crate::agents::RoomLoginSet::new(
+        Some(std::collections::BTreeMap::from([(
+            AgentKind::new_unchecked("claude"),
+            "work".parse().unwrap(),
+        )])),
+        None,
+        std::collections::BTreeMap::new(),
+    );
+    let refusal = at_add(Some("claude"), five, &unresolvable).unwrap_err();
+    assert!(
+        refusal.to_string().ends_with("run `rimz accounts list`"),
+        "{refusal}"
+    );
+    let refusal = at_add(Some("claude"), five, &native).unwrap_err();
+    assert_eq!(
+        refusal.to_string(),
+        "no current claude 5h window reading; open the room's sidebar or run `rimz providers --refresh`"
+    );
+    publish_windows(&runtime, "claude", vec![window(Some(30), -60, five)]);
+    assert!(matches!(
+        at_add(Some("claude"), five, &native),
+        Err(WindowRefusal::NoReading { .. })
+    ));
+    publish_windows(&runtime, "claude", vec![window(Some(30), 3_600, five)]);
+    assert_eq!(
+        at_add(Some("claude"), seven, &native)
+            .unwrap_err()
+            .to_string(),
+        "claude has no 7d window"
+    );
+    let started = at_add(Some("claude"), five, &native).unwrap();
+    assert_eq!(started.kind.as_str(), "claude");
+    assert_eq!(started.window, window(Some(30), 3_600, five));
+    let lifted = RateLimitWindow {
+        lifted: true,
+        resets_at: None,
+        used_percentage: None,
+        ..window(None, 0, five)
+    };
+    publish_windows(&runtime, "codex", vec![lifted.clone()]);
+    assert_eq!(at_add(Some("codex"), five, &native).unwrap().window, lifted);
+}
+
+#[test]
+fn window_conditions_record_the_provider_their_terms_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = Timestamp::now();
+    let native = crate::agents::RoomLoginSet::new(
+        Some(Default::default()),
+        None,
+        std::collections::BTreeMap::new(),
+    );
+    let provider = |when: &str, kind| {
+        condition_provider_in(&[when.to_owned()], kind, dir.path(), &runtime, &native, now)
+    };
+    assert_eq!(provider("ci=passed", None), Ok(None));
+    assert_eq!(provider("ci=passed", Some("claude")), Ok(None));
+    assert_eq!(provider("ci=", None), Ok(None));
+    assert_eq!(
+        provider("ci=passed || window.5h.left>=40", None),
+        Err(WindowRefusal::NoProvider)
+    );
+    assert!(matches!(
+        provider("window.5h.left>=40", Some("claude")),
+        Err(WindowRefusal::NoReading { .. })
+    ));
+    publish_windows(
+        &runtime,
+        "claude",
+        vec![RateLimitWindow {
+            used_percentage: Some(92),
+            resets_at: Some(now + jiff::SignedDuration::from_secs(3_600)),
+            duration_mins: Some(WindowSpan::FiveHour.minutes()),
+            ..RateLimitWindow::default()
+        }],
+    );
+    assert_eq!(
+        provider("window.5h.left>=40", Some("claude")),
+        Ok(Some(AgentKind::new_unchecked("claude")))
+    );
+    assert_eq!(
+        provider("window.5h.left>=40 && window.7d.left>=10", Some("claude"))
+            .unwrap_err()
+            .to_string(),
+        "claude has no 7d window"
+    );
+}
