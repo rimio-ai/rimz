@@ -340,7 +340,7 @@ rimz start --account claude=work              # a room whose Claude agents all r
 rimz config set agents.isolation sandbox      # Linux: a bubblewrap mount view for every agent pane
 ```
 
-- A [provider account](./docs/guide/accounts.md) is fixed when the room is born, and everything the room launches (agents, team members, subagents, loop tasks, restarts) runs under it, with its own limits, budget, and sessions. `rimz reset --account claude=default` rebuilds the room on Claude's own home.
+- A [provider account](./docs/guide/accounts.md) is chosen when the room is born, and everything the room launches (agents, team members, subagents, loop tasks, restarts) runs under it, with its own limits, budget, and sessions. `rimz accounts use claude default` inside the room moves new launches to Claude's own home; agents already running keep the account they launched under.
 - [Sandbox isolation](./docs/guide/security.md#sandbox-isolation) gives each agent the room's own `/tmp` and the RimZ skill library merged into its provider's skill root, with a profile's `skills:` list deciding which skills the model may call on its own. It is a mount view and not containment: the host filesystem stays writable and your credentials stay readable. `rimz start` refuses to launch when bubblewrap is missing or unusable, and `--isolation host|sandbox` overrides the setting for one launch.
 
 The [setup guide](./docs/guide/setup.md) walks the whole first pass, agent hooks included; the [Zellij and tmux guide](./docs/guide/multiplexer.md) has a modern baseline with [ready-to-adopt example configs](./examples/README.md), and the full key catalog is the [configuration guide](./docs/guide/configuration.md).
