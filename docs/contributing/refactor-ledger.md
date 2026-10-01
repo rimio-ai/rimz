@@ -4,7 +4,7 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `292a99451`, pass 32b: 4824 scoped commits (pace window 1206), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys; the pending restamps are written. No `cli/render` Table shape family forms, so it has no verdict. Left open: one shape family, `crates/rimz/src/agents/adapters/copilot/install.rs::uninstall_with` with `crates/rimz/src/agents/adapters/cursor/install.rs::uninstall_pair`.
+- **Survey:** base `1986a3caa`, pass 32a: 4828 scoped commits (pace window 1207), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys. Outside pass 32a and left open: the pending restamp of the pass 32b `harness/launch_plan` row (`survey --restamp` writes it), and one open shape family, the `cli` table renderers (`crates/rimz/src/cli/accounts.rs::write_accounts`, `crates/rimz/src/cli/agents_cmd/explain.rs::render_explain` and 13 siblings).
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Reopened:** none.
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
@@ -26,11 +26,11 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/account_links` | holds; landed pass-31b | `ac8b4038a` | 30 | guarded settings sharing with signature-floored error and report types. |
 | `agents/provider_file` | holds; landed pass-31b | `ac8b4038a` | 30 | symlink-following writer also serves pricing snapshots under the provider-file invariant. |
 | `agents/context` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
-| `agents/definition` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
+| `agents/definition` | holds; landed pass-18a; pass-32a | `1986a3caa` | 30 | with `agents`; the spec declares the hook-context reply shape (`HookContextReply`) and `AgentDefinition::attach_hook_context` is its one writer. |
 | `agents/adapters` | landed pass-2 | — | — | sibling families are provider policy over shared helpers; interiors are per-adapter rows. |
 | `agents/adapters/(root)` | holds | `4a82d6b28` | 30 | module declarations and the registry; nothing escapes `agents`. |
 | `agents/adapters/install_report` | holds | `4a82d6b28` | 30 | `report_files` is `pub(super)` for the sibling installers. |
-| `agents/adapters/claude` | holds; landed pass-9; pass-27a | `ba3ca4dfa` | 30 | one ask decision and payload parser, proc-owned ancestry, three distinct home rules, child-cost fold, remote trio, and `deny_native_tool` (multi-value `--disallowedTools`, either denial order, 696a4d504). |
+| `agents/adapters/claude` | holds; landed pass-9; pass-27a; pass-32a | `1986a3caa` | 30 | one-of hook payload (`ClaudeHook`) parsed once per hook, one ask decision and payload parser, proc-owned ancestry, three distinct home rules, child-cost fold, remote trio, and `deny_native_tool` (multi-value `--disallowedTools`, either denial order, 696a4d504). |
 | `agents/adapters/codex` | holds; landed pass-9; pass-31c | `7bbf4a576` | 30 | one-of hook payload, `config_home` as the one home rule, one spend emission tail; one framed transport and handshake. |
 | `agents/adapters/kimi` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/qwen` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
@@ -48,7 +48,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/lifecycle` | holds; landed pass-22c | `ca23feb3b` | 30 | `step` crate-private; signal vocabulary and state types public by signature. |
 | `agents/pricing` | holds; landed pass-22c | `ca23feb3b` | 30 | rate model private; `PriceBook` and cached-book entries public for binary, bench and integration. |
 | `agents/spending` | holds; landed pass-13 | `8e9477b57` | 30 | one writer per cache, one engine election; wire, walker, fold and cache records hold. |
-| `agents/capabilities` | holds | `6f49ccef0` | 30 | trait methods have no own visibility and `AgentDefinition` hands out `dyn AgentIntegration`: all ten traits stay `pub`. |
+| `agents/capabilities` | holds; landed pass-32a | `1986a3caa` | 30 | trait floor unchanged with hook-context attachment moved to the spec: trait methods have no own visibility and `AgentDefinition` hands out `dyn AgentIntegration`: all ten traits stay `pub`. |
 | `agents/hook_types` | holds; landed pass-24b | `6f49ccef0` | 30 | hook representation at `pub(super)`; `HookRouting` and two binary-called `HookOutput` readers stay `pub`. |
 | `agents/account` | holds; landed pass-24b | `6f49ccef0` | 30 | cache schema and reset-credit types stay `pub` for the integration crate. |
 | `agents/credits` | holds; landed pass-24b | `6f49ccef0` | 30 | OAuth transport `pub(super)`; probe and snapshot types floored by signature. |
@@ -299,9 +299,6 @@ Refactor candidates a pass judged real but could not land, each with its concret
 
 - `harness/team_stage` ↔ `cli/teams`: trusted team loading remains duplicated; sharing it needs a typed harness error and a pass owning the CLI flip caller.
 - `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
-- `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
-- `agents/adapters/claude`: `crates/rimz/src/agents/adapters/claude/mod.rs::ClaudeLifecycleParts` is the Options-struct shape codex's former `CodexLifecycleParts` had (one payload set per event name, re-opened per arm); a one-of enum with one generic parse, as codex now has, is ready for a pass owning `agents/adapters/claude`.
-- `agents/adapters/kimi` and `agents/adapters/qwen`: `crates/rimz/src/agents/adapters/kimi/mod.rs::kimi_turn_error` and qwen's `StopFailure` arm in `crates/rimz/src/agents/adapters/qwen/mod.rs::QwenAdapter::decode_hook` trim and take 80 chars, the rule `agents::context::cap_turn_error_label` owns; the helper is `pub(in crate::agents)`, so either adapter can call it. Ready for a pass owning either adapter.
 - `harness/resume` ↔ `config/tiers`: the resume `--tier` row pick duplicates `TierConfig::walk` bounded to one row, and the stamp-effort rule (definition effort, else model default) has three spellings, two in resume and one in `config/effective`; sharing needs `config::tiers` to export a row-bounded pick (two escaping items, `walk` and `TierPick`, and a row bound in `walk` today). Waits for a pass that owns `config::tiers`.
 - `harness/resume` ↔ `cli/agents_cmd/launch`: `launch_resume_layout` and `resume.rs` both assemble `plan_cohort_resume` then `restore_routed_cells`, and the former's stages I and J mirror `materialize_team_restore_tab`. Waits for a pass owning `harness/resume.rs` with its CLI caller.
 - `cli/agents_cmd/launch` ↔ `cli/supervised`: launcher-side admission repeats in `preflight_cell` and `prepare_supervised`. Reconsider once pass 32c's shape has merged.
