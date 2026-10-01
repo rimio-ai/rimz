@@ -4,13 +4,13 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `bd5df2fbf`, pass 32d: 4780 scoped commits (pace window 1195), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys. Outside pass 32d and left open: the pending restamps of the pass 31c `agents/adapters/codex` row, the pass 31d rows (`agents/attribution`, `config/definitions`, `config/glyphs`, `config/tiers`, `sandbox`, `store/run`) and the pass 31e `disk` row (`survey --restamp` writes them), and one open shape family, `crates/rimz/src/agents/adapters/copilot/install.rs::uninstall_with` with `crates/rimz/src/agents/adapters/cursor/install.rs::uninstall_pair`.
+- **Survey:** base `292a99451`, pass 32b: 4824 scoped commits (pace window 1206), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys; the pending restamps are written. No `cli/render` Table shape family forms, so it has no verdict. Left open: one shape family, `crates/rimz/src/agents/adapters/copilot/install.rs::uninstall_with` with `crates/rimz/src/agents/adapters/cursor/install.rs::uninstall_pair`.
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Reopened:** none.
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles. The survey also lists same-layer `harness ↔ worktree`.
-- **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 47, `cli/agents_cmd/mod.rs` 24, `cli/transcript` 18, `cli/agents_cmd/exec.rs` 13, `cli/room` 12); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
+- **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 47, `cli/agents_cmd/mod.rs` 24, `cli/transcript` 18, `cli/room` 12, `cli/agents_cmd/exec.rs` 1); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
 
 ## Module verdicts
 
@@ -31,7 +31,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/adapters/(root)` | holds | `4a82d6b28` | 30 | module declarations and the registry; nothing escapes `agents`. |
 | `agents/adapters/install_report` | holds | `4a82d6b28` | 30 | `report_files` is `pub(super)` for the sibling installers. |
 | `agents/adapters/claude` | holds; landed pass-9; pass-27a | `ba3ca4dfa` | 30 | one ask decision and payload parser, proc-owned ancestry, three distinct home rules, child-cost fold, remote trio, and `deny_native_tool` (multi-value `--disallowedTools`, either denial order, 696a4d504). |
-| `agents/adapters/codex` | holds; landed pass-9; pass-31c | `3eb2bd522` | 30 | one-of hook payload, `config_home` as the one home rule, one spend emission tail; one framed transport and handshake. |
+| `agents/adapters/codex` | holds; landed pass-9; pass-31c | `7bbf4a576` | 30 | one-of hook payload, `config_home` as the one home rule, one spend emission tail; one framed transport and handshake. |
 | `agents/adapters/kimi` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/qwen` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/copilot` | holds; landed pass-20c | `e55c49fd4` | 30 | registry adapter is the sole escaping item; payload types floored (caveat 13). |
@@ -44,7 +44,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/adapters/droid` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/kiro` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/amp` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter only; tolerant `parse_payload` holds. |
-| `agents/attribution` | holds | `f10952c94` | 30 | report types stay `pub`: the binary's renderer reads their fields in production. |
+| `agents/attribution` | holds | `2f84d791a` | 30 | report types stay `pub`: the binary's renderer reads their fields in production. |
 | `agents/lifecycle` | holds; landed pass-22c | `ca23feb3b` | 30 | `step` crate-private; signal vocabulary and state types public by signature. |
 | `agents/pricing` | holds; landed pass-22c | `ca23feb3b` | 30 | rate model private; `PriceBook` and cached-book entries public for binary, bench and integration. |
 | `agents/spending` | holds; landed pass-13 | `8e9477b57` | 30 | one writer per cache, one engine election; wire, walker, fold and cache records hold. |
@@ -93,13 +93,13 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `config/attention` | holds | `2a9ec66e5` | 30 | `MachineConfig` field type. |
 | `config/color` | holds; landed pass-24a | `2a9ec66e5` | 30 | `Semantic::DEFAULT` test-gated; production reads the embedded catalog. |
 | `config/daemon` | holds | `2a9ec66e5` | 30 | `MachineConfig` field type. |
-| `config/definitions` | holds; landed pass-24a; pass-31d | `f10952c94` | 30 | one private load scope feeds every resolver; one safe-name predicate. |
+| `config/definitions` | holds; landed pass-24a; pass-31d | `2f84d791a` | 30 | one private load scope feeds every resolver; one safe-name predicate. |
 | `config/diagnosis` | holds; landed pass-24a | `2a9ec66e5` | 30 | two test-gated accessors pin `1862840`. |
 | `config/display` | holds; landed pass-24a | `2a9ec66e5` | 30 | section record; `is_unset` is a live serde predicate. |
 | `config/edit` | holds; landed pass-24a | `2a9ec66e5` | 30 | comment-preserving writer and template merge hold. |
 | `config/effective` | holds; landed pass-24a | `2a9ec66e5` | 30 | project-task parse and error types floored by `load`. |
 | `config/gc` | holds | `2a9ec66e5` | 30 | `MachineConfig` field type. |
-| `config/glyphs` | holds; landed pass-24a; pass-31d | `f10952c94` | 30 | `GlyphRole` names stay `pub` for `theme/glyphs.rs`. |
+| `config/glyphs` | holds; landed pass-24a; pass-31d | `2f84d791a` | 30 | `GlyphRole` names stay `pub` for `theme/glyphs.rs`. |
 | `config/harness` | holds; landed pass-26c | `38b487c52` | 30 | `DayCap`/`TurnCap` verdicts hold; owns the prompt-cache margin its TTL parse validates against. |
 | `config/loop_` | holds; landed pass-24a | `2a9ec66e5` | 30 | `Tasks` and `LoopConfig` stay `pub` for the integration crate. |
 | `config/lsp` | holds; landed pass-26a | `1ec086301` | 30 | one root-marker predicate on the server config; façade controls reach. |
@@ -113,16 +113,16 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `config/sidebar` | holds; landed pass-24a | `2a9ec66e5` | 30 | section record. |
 | `config/skills` | holds; landed pass-24a | `2a9ec66e5` | 30 | skill-list validator at crate reach for sandbox and agents. |
 | `config/theme` | holds | `2a9ec66e5` | 30 | `MachineConfig` field type; predicates are live serde predicates. |
-| `config/tiers` | holds; landed pass-31d | `f10952c94` | 30 | tier table and resolver; walking stays inside `config`. |
+| `config/tiers` | holds; landed pass-31d | `2f84d791a` | 30 | tier table and resolver; walking stays inside `config`. |
 | `config/tool_rules` | holds | `8169df102` | 30 | one validated rule newtype; `ToolRuleErr` stays `pub` as `FromStr::Err`. |
 | `config/web` | holds | `2a9ec66e5` | 30 | `WebPrefs` left the façade. |
 | `config/worktree` | holds; landed pass-24a | `2a9ec66e5` | 30 | base parse errors left the façade. |
 | `daemon_view` | holds; landed pass-15c | `944c8120e` | 30 | loop-panel acquisition is one operation; both cycles held by intent. |
 | `diag` | holds; landed pass-16 | `b90a229cb` | 30 | evidence vocabulary and append mechanics at L3 below store; one sink admission point. |
-| `disk` | holds; landed pass-31e | `15003b3b4` | 30 | the constructor family holds as ambient and explicit-root pairs; the raw runtime builder is private. |
+| `disk` | holds; landed pass-31e | `6581643a3` | 30 | the constructor family holds as ambient and explicit-root pairs; the raw runtime builder is private. |
 | `harness` | landed pass-5; pass-7; pass-8; pass-14; pass-20a; pass-23b; pass-25 | — | — | policy reaching down; never reaches `sidebar`: usage refresh returns, its CLI entry publishes. |
 | `harness/schedule` | holds; landed pass-14; pass-23b; pass-28e | `38acd72cb` | 30 | one arming rule and one check gate with `run_command`, `team_lifecycle_signals` and `build_entry` inherent by verdict. |
-| `harness/resume` | holds; landed pass-32d | `43e27d355` | 30 | the resolver core is fallible with one degrade policy, and cohort restore has one arm per posture source. |
+| `harness/resume` | holds; landed pass-32d | `292a99451` | 30 | the resolver core is fallible with one degrade policy, and cohort restore has one arm per posture source. |
 | `harness/plan` | holds; landed pass-28f | `f4084e548` | 30 | posture owns exec-request construction for every relaunch doorway. |
 | `harness/launch` | holds | `f4084e548` | 30 | fresh requests and the private pane-identity key table keep the exec wire unchanged. |
 | `harness/spec` | holds; landed pass-20a | `4d7889261` | 30 | layout parse family stays `pub`. |
@@ -152,7 +152,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/cache_keepalive` | holds | `38b487c52` | 30 | request type stays `pub` for the integration crate. |
 | `harness/deadline` | holds; landed pass-26c | `38b487c52` | 30 | rung selection `pub(super)` for `run`; stop channel private. |
 | `harness/launch_env` | holds | `38b487c52` | 30 | already `pub(super)`; `LaunchEnv` floored by the launch reminders render. |
-| `harness/launch_plan` | holds; landed pass-24c | `e083557ba` | 30 | error and warning types floor `compile`/`apply`. |
+| `harness/launch_plan` | holds; landed pass-24c; pass-32b | `d31ae3c28` | 30 | error and warning types floor `compile`/`apply`; `prepare_exec` is the exec wrapper's one launch-decision entry. |
 | `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
 | `lsp` | holds; landed pass-26a | `1ec086301` | 30 | one sweep, memory measure, parsed target and lease list; domain presentation and broker RAII hold. |
@@ -182,7 +182,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `remote` | holds; landed pass-21a; pass-29d | `85448a2f5` | 30 | pure transitions here, drivers in `cli/remote`; recovery frame owns the panel's row model. |
 | `remote_control` | holds; landed pass-15c | `944c8120e` | 30 | one enable preflight; typed snapshot and batch toggle. |
 | `room` | holds; landed pass-28f | `f4084e548` | 30 | owns live-tab admission and managed birth with source-specific ownership. |
-| `sandbox` | holds; landed pass-28f; pass-31d | `f10952c94` | 30 | launch preflight admits skills before probing isolation; callers run `plan` then `apply`. |
+| `sandbox` | holds; landed pass-28f; pass-31d | `2f84d791a` | 30 | launch preflight admits skills before probing isolation; callers run `plan` then `apply`. |
 | `sidebar` | landed pass-4 | — | — | election, fusion, refresh lanes, own cadences; interiors have rows. |
 | `sidebar/(root)` | holds; landed pass-23c | `1830bd0c6` | 30 | one data plane; `pub` items are binary, bench or integration reached, or signature floors. |
 | `sidebar/refresh` | holds; landed pass-29e | `eb03b2204` | 30 | one rate-limit transaction and one `pub` account-cache publish entry, sharing keyed fusion behind one producer/login boundary. |
@@ -238,7 +238,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `store/follow` | holds | `250f10820` | 30 | floored by the follower signatures. |
 | `store/agent_context` | holds; landed pass-25 | `4a82d6b28` | 30 | rest-certificate guard is store-owned and `pub`. |
 | `store/subagent_context` | holds | `250f10820` | 30 | reached by integration and sidebar enrichment. |
-| `store/run` | holds; landed pass-31d | `f10952c94` | 30 | `WakeupFrame` is the pinned run-wake wire; `RunStatus` owns the one human label. |
+| `store/run` | holds; landed pass-31d | `2f84d791a` | 30 | `WakeupFrame` is the pinned run-wake wire; `RunStatus` owns the one human label. |
 | `store/active_time` | holds | `250f10820` | 30 | floored by `read_for_keys`. |
 | `theme` | holds; landed pass-22b | `339310452` | 30 | every re-export has an outside reader; OKLab blends private. |
 | `transcript` | holds; landed pass-24a; pass-29g | `0df251b8a` | 30 | `SectionOrigin` and its entry encoding sit beside `origin()`. |
@@ -303,6 +303,8 @@ Refactor candidates a pass judged real but could not land, each with its concret
 - `agents/adapters/claude`: `crates/rimz/src/agents/adapters/claude/mod.rs::ClaudeLifecycleParts` is the Options-struct shape codex's former `CodexLifecycleParts` had (one payload set per event name, re-opened per arm); a one-of enum with one generic parse, as codex now has, is ready for a pass owning `agents/adapters/claude`.
 - `agents/adapters/kimi` and `agents/adapters/qwen`: `crates/rimz/src/agents/adapters/kimi/mod.rs::kimi_turn_error` and qwen's `StopFailure` arm in `crates/rimz/src/agents/adapters/qwen/mod.rs::QwenAdapter::decode_hook` trim and take 80 chars, the rule `agents::context::cap_turn_error_label` owns; the helper is `pub(in crate::agents)`, so either adapter can call it. Ready for a pass owning either adapter.
 - `harness/resume` ↔ `config/tiers`: the resume `--tier` row pick duplicates `TierConfig::walk` bounded to one row, and the stamp-effort rule (definition effort, else model default) has three spellings, two in resume and one in `config/effective`; sharing needs `config::tiers` to export a row-bounded pick (two escaping items, `walk` and `TierPick`, and a row bound in `walk` today). Waits for a pass that owns `config::tiers`.
+- `harness/resume` ↔ `cli/agents_cmd/launch`: `launch_resume_layout` and `resume.rs` both assemble `plan_cohort_resume` then `restore_routed_cells`, and the former's stages I and J mirror `materialize_team_restore_tab`. Waits for a pass owning `harness/resume.rs` with its CLI caller.
+- `cli/agents_cmd/launch` ↔ `cli/supervised`: launcher-side admission repeats in `preflight_cell` and `prepare_supervised`. Reconsider once pass 32c's shape has merged.
 - `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
