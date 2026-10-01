@@ -883,3 +883,34 @@ fn expiry_predicates_match_observed_root_signals() {
         );
     }
 }
+
+#[test]
+fn effort_reads_the_stop_payloads_and_falls_back_to_thinking_level() {
+    let effort = |event: &str, payload: serde_json::Value| {
+        hook_lifecycle(&ClaudeAdapter, event, &payload)
+            .launch
+            .effort
+    };
+    let marked = |extra: serde_json::Value| {
+        let mut payload = json!({
+            "session_id": "sess-parent",
+            "effort": {"level": "high"},
+            "thinking_level": "low",
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        payload
+    };
+    assert_eq!(effort("Stop", marked(json!({}))).as_deref(), Some("high"));
+    assert_eq!(
+        effort("SubagentStop", marked(json!({"agent_id": "child-1"}))).as_deref(),
+        Some("high")
+    );
+    assert_eq!(
+        effort("PostToolUse", marked(json!({"tool_name": "Read"}))).as_deref(),
+        Some("low"),
+        "only the stop payloads carry a typed effort marker"
+    );
+}

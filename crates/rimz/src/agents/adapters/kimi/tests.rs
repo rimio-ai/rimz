@@ -1134,3 +1134,28 @@ fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
             .is_none()
     );
 }
+
+#[test]
+fn stop_failure_label_prefers_error_message_and_caps_it() {
+    let adapter = KimiAdapter;
+    let label = |payload: serde_json::Value| {
+        hook_output(&adapter, "StopFailure", &payload)
+            .turn_error()
+            .cloned()
+            .unwrap()
+            .label
+    };
+    let long = format!("  {}bcd  ", "a".repeat(79));
+    assert_eq!(
+        label(json!({"error_message": long, "error_type": "rate_limit"})),
+        Some(format!("{}b", "a".repeat(79)))
+    );
+    assert_eq!(
+        label(json!({"error_type": " rate_limit "})),
+        Some("rate_limit".to_owned())
+    );
+    assert_eq!(
+        label(json!({"error_message": "   ", "error_type": "rate_limit"})),
+        None
+    );
+}
