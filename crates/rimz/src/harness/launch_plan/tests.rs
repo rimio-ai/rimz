@@ -1722,3 +1722,190 @@ fn a_shared_codex_account_points_its_databases_at_the_default_home_without_touch
         assert_eq!(std::fs::read_dir(home).expect("home").count(), 0);
     }
 }
+
+fn host_request(kind: &str, action: ExecAction) -> ExecRequest {
+    let mut request = request(kind, action);
+    request.identity.params.isolation = Some(Isolation::Host);
+    request
+}
+
+fn envelope(request: &ExecRequest, prompt_file: Option<&Path>) -> launch::ExecEnvelope {
+    let mut wire = serde_json::to_value(request).unwrap();
+    if let Some(path) = prompt_file {
+        wire["prompt_file"] = path.display().to_string().into();
+    }
+    launch::decode_exec_envelope(request.kind.as_str(), None, &wire.to_string()).unwrap()
+}
+
+fn prepare(
+    request: &ExecRequest,
+    prompt_file: Option<&Path>,
+    machine: &crate::config::MachineConfig,
+    effective: Option<&LaunchAgents>,
+    room_agents: &dyn Fn() -> Result<Vec<crate::agents::AgentState>, String>,
+) -> ExecPreparation {
+    let root = tempfile::tempdir().unwrap();
+    prepare_exec(
+        envelope(request, prompt_file),
+        root.path(),
+        root.path(),
+        Path::new("/bin/rimz"),
+        machine,
+        effective,
+        room_agents,
+        |_, _| Ok(Vec::new()),
+    )
+}
+
+#[test]
+fn exec_refuses_only_fresh_launches_of_an_unshadowed_failed_profile() {
+    let root = tempfile::tempdir().unwrap();
+    let mut machine = crate::config::MachineConfig::default();
+    let path = PathBuf::from("/tmp/.agents/agents/worker.md");
+    machine
+        .notices
+        .failed_definitions
+        .insert("worker".to_owned(), [path.clone()].into());
+    machine
+        .notices
+        .definition_errors
+        .push(crate::config::definitions::DefinitionErr {
+            path,
+            message: "invalid frontmatter".to_owned(),
+            cause: crate::config::definitions::DefinitionCause::Invalid,
+        });
+    let request = |action| {
+        let mut request = request("codex", action);
+        request.identity.params.profile = Some("worker".to_owned());
+        request
+    };
+    let launch = request(ExecAction::Launch {
+        prompt: None,
+        extra_args: Vec::new(),
+    });
+    let resume = request(ExecAction::Resume {
+        session_id: "s".to_owned(),
+        extra_args: Vec::new(),
+    });
+    let fork = request(ExecAction::Fork {
+        session_id: "s".to_owned(),
+        extra_args: Vec::new(),
+    });
+    let mut effective =
+        crate::config::effective::load_with_roots(&machine, root.path(), &root.path().join("home"))
+            .unwrap();
+
+    let detail = "/tmp/.agents/agents/worker.md: invalid frontmatter";
+    assert_eq!(
+        definition_failure(&launch, &machine, Some(&effective)).as_deref(),
+        Some(detail)
+    );
+    let refused = prepare(&launch, None, &machine, Some(&effective), &|| {
+        panic!("the definition gate reads no room")
+    })
+    .outcome
+    .err()
+    .expect("a failed definition refuses a fresh launch");
+    assert_eq!(refused.to_string(), detail);
+    assert!(std::error::Error::source(&refused).is_none());
+    assert!(definition_failure(&launch, &machine, None).is_some());
+    assert_eq!(
+        definition_failure(&resume, &machine, Some(&effective)),
+        None
+    );
+    assert_eq!(definition_failure(&fork, &machine, Some(&effective)), None);
+
+    let shadow: crate::config::Profile = toml::from_str("agent = 'claude'").unwrap();
+    effective.profiles.0.insert("worker".to_owned(), shadow);
+    assert_eq!(
+        definition_failure(&launch, &machine, Some(&effective)),
+        None
+    );
+}
+
+#[test]
+fn exec_preparation_reads_the_room_only_for_a_resume_or_a_child() {
+    let machine = crate::config::MachineConfig::default();
+    let reads = std::cell::Cell::new(0);
+    let unreadable = || {
+        reads.set(reads.get() + 1);
+        Err("snapshot unreadable".to_owned())
+    };
+
+    let fresh = host_request("codex", action_with_args("launch", Vec::new()));
+    let prepared = prepare(&fresh, None, &machine, None, &|| {
+        panic!("a fresh launch reads no room")
+    });
+    let (plan, isolation) = prepared.outcome.expect("a fresh launch compiles");
+    assert_eq!(isolation, Isolation::Host);
+    assert!(
+        plan.warnings
+            .iter()
+            .all(|warning| !matches!(warning, LaunchPlanWarning::ParentUnitUnread { .. }))
+    );
+
+    let resume = host_request("codex", action_with_args("resume", Vec::new()));
+    let prepared = prepare(&resume, None, &machine, None, &unreadable);
+    assert!(
+        prepared.outcome.is_ok(),
+        "an unread room never fails a resume"
+    );
+    assert_eq!(reads.get(), 1);
+
+    let mut child = host_request("codex", action_with_args("launch", Vec::new()));
+    child.identity.name = Some("fox".to_owned());
+    child.identity.params.parent_agent_id = Some("parent-session".into());
+    let prepared = prepare(&child, None, &machine, None, &unreadable);
+    let (plan, _) = prepared.outcome.expect("a child compiles without its room");
+    assert_eq!(reads.get(), 2);
+    assert!(plan.warnings.iter().any(|warning| matches!(
+        warning,
+        LaunchPlanWarning::ParentUnitUnread { error, .. } if error == "snapshot unreadable"
+    )));
+}
+
+#[test]
+fn exec_preparation_names_a_missing_launch_prompt() {
+    let missing = tempfile::tempdir().unwrap().path().join("task.md");
+    let launch = host_request("codex", action_with_args("launch", Vec::new()));
+    let err = prepare(
+        &launch,
+        Some(&missing),
+        &crate::config::MachineConfig::default(),
+        None,
+        &|| panic!("a fresh launch reads no room"),
+    )
+    .outcome
+    .err()
+    .expect("a missing prompt artifact fails the launch");
+    assert_eq!(err.to_string(), "materializing launch prompt");
+    assert!(matches!(
+        std::error::Error::source(&err)
+            .and_then(|source| source.downcast_ref::<launch::ExecWireErr>()),
+        Some(launch::ExecWireErr::PromptRead { path, .. }) if *path == missing
+    ));
+}
+
+#[test]
+fn exec_preparation_returns_model_warnings_when_compile_fails() {
+    let machine: crate::config::MachineConfig =
+        toml::from_str("[models.claude]\nsol = 'claude-sol-1'").unwrap();
+    let mut resume = host_request("claude", action_with_args("resume", Vec::new()));
+    resume.identity.params.model = Some("sol".into());
+    resume.system_prompt_file = Some(crate::config::PromptSource::File(
+        tempfile::tempdir().unwrap().path().join("missing.md"),
+    ));
+    let prepared = prepare(&resume, None, &machine, None, &|| Ok(Vec::new()));
+    assert!(
+        prepared.outcome.is_err(),
+        "the missing prompt fails compile"
+    );
+    assert!(
+        prepared
+            .model_warnings
+            .iter()
+            .any(|warning| warning.contains("has no recorded session model")),
+        "{:?}",
+        prepared.model_warnings
+    );
+}

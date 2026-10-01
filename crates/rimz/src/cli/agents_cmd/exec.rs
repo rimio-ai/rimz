@@ -41,111 +41,50 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if let Err(err) = &effective {
         warn(err.to_string());
     }
-    if let Some(detail) =
-        exec_definition_failure(envelope.request(), &machine_config, effective.as_ref().ok())
-    {
-        mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
-        if let Some(context) = run_context.as_ref()
-            && let Err(err) = rimz::harness::run::record_failure_tail(
-                context.store.paths(),
-                &context.run_id,
-                &detail,
-            )
-        {
-            tracing::debug!(
-                run_id = %context.run_id,
-                error = %err,
-                "could not record supervised run definition failure",
-            );
-        }
-        fail_run_on_exec_precondition(run_context.as_ref());
-        anyhow::bail!(detail);
-    }
-    let isolation = rimz::config::Isolation::resolve(
-        envelope.request().identity.params.isolation,
-        envelope.request().isolation_default,
-        machine_config.agents.isolation,
-    );
-    invocation.effective_isolation = Some(isolation);
-    let fail = || {
-        mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
-        fail_run_on_exec_precondition(run_context.as_ref());
-    };
-    let adapter = rimz::agents::find_definition(envelope.request().kind.as_str());
-    let bwrap = rimz::sandbox::preflight_launch(
-        isolation,
-        &envelope.request().kind,
-        envelope.request().skills.is_some(),
-        adapter.map_or(rimz::agents::ManualSkill::Unsupported, |adapter| {
-            adapter.manual_skill()
-        }),
-    )
-    .inspect_err(|_| fail())?;
-    let mut request = envelope
-        .materialize()
-        .inspect_err(|_| fail())
-        .context("materializing launch prompt")?;
-    let attach_target = exec_attach_target(&request);
-    let (runtime, state) = rimz::StatePaths::for_project_root(&workspace.project_root)
-        .and_then(|state| rimz::RuntimePaths::for_state(&state).map(|runtime| (runtime, state)))
-        .inspect_err(|_| fail())?;
-    let ambient_env = rimz::agents::ambient_env();
-    let login = rimz::agents::session_login(
-        &request.kind,
-        request.identity.params.login.as_ref(),
-        &machine_config.accounts,
-    )
-    .inspect_err(|_| fail())?;
-    // Before the plan compiles: it resolves the skill root through these links.
-    let launching: Vec<AgentSessionId> = request
-        .identity
-        .launch_id
-        .as_deref()
-        .map(AgentSessionId::from)
-        .into_iter()
-        .chain(attach_target.iter().map(|(_, id)| id.clone()))
-        .collect();
-    let shared = rimz::agents::account_links::reconcile(&login, &ambient_env, &|| {
-        rimz::room::other_live_agents_on(&login.key(), &launching).ok()
-    })
-    .inspect_err(|_| fail())?;
-    for warning in shared.iter().flat_map(|shared| shared.warnings()) {
-        warn(warning);
-    }
-    let recorded_session = match &request.action {
-        rimz::harness::launch::ExecAction::Launch { .. } => None,
-        rimz::harness::launch::ExecAction::Resume { session_id, .. }
-        | rimz::harness::launch::ExecAction::Fork { session_id, .. } => invocation
+    let kind = envelope.request().kind.clone();
+    let room_agents = || {
+        invocation
             .store()
             .and_then(|store| Ok(store.snapshot_cached()?))
-            .ok()
-            .and_then(|snapshot| {
-                find_agent(
-                    &snapshot.agents,
-                    &request.kind,
-                    &AgentSessionId::from(session_id.as_str()),
-                )
-                .cloned()
-            }),
+            .map(|snapshot| snapshot.agents.clone())
+            .map_err(|err| format!("{err:#}"))
     };
-    let (warnings, movement) = rimz::harness::launch_plan::resolve_model(
-        &mut request,
+    let prepared = rimz::harness::launch_plan::prepare_exec(
+        envelope,
+        &invocation.cwd,
+        &workspace.project_root,
+        &rimz::proc::rimz_exe(),
         &machine_config,
-        &runtime,
-        &login,
-        recorded_session.as_ref(),
-        None,
-        &ambient_env,
-    )
-    .inspect_err(|_| fail())?;
-    for warning in warnings {
+        effective.as_ref().ok(),
+        &room_agents,
+        // Before the plan compiles: it resolves the skill root through these links.
+        |request, login| {
+            let launching: Vec<AgentSessionId> = request
+                .identity
+                .launch_id
+                .as_deref()
+                .map(AgentSessionId::from)
+                .into_iter()
+                .chain(exec_attach_target(request).into_iter().map(|(_, id)| id))
+                .collect();
+            let shared = rimz::agents::account_links::reconcile(
+                login,
+                &rimz::agents::ambient_env(),
+                &|| rimz::room::other_live_agents_on(&login.key(), &launching).ok(),
+            )?;
+            Ok(shared.iter().flat_map(|shared| shared.warnings()).collect())
+        },
+    );
+    for warning in prepared.link_warnings {
         warn(warning);
     }
-    if let Some(movement) = movement {
+    for warning in prepared.model_warnings {
+        warn(warning);
+    }
+    if let Some((movement, login)) = prepared.model_move {
         let _ = writeln!(
             crate::cli::render::err(),
-            "rimz: {} alias {} now resolves to {} (was {})",
-            request.kind,
+            "rimz: {kind} alias {} now resolves to {} (was {})",
             movement.alias,
             movement.to,
             movement.from
@@ -154,8 +93,8 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             rimz::harness::assist_log::try_append(&rimz::harness::assist_log::AssistRecord {
                 at: jiff::Timestamp::now(),
                 assist: rimz::harness::assist_log::Assist::ModelAlias {
-                    kind: request.kind.clone(),
-                    login: login.key(),
+                    kind,
+                    login,
                     alias: movement.alias,
                     from: movement.from,
                     to: movement.to,
@@ -165,6 +104,35 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             warn(format!("could not record model alias move: {error}"));
         }
     }
+    let (plan, isolation) = match prepared.outcome {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
+            if let rimz::harness::launch_plan::LaunchPlanErr::DefinitionFailed(detail) = &err
+                && let Some(context) = run_context.as_ref()
+                && let Err(err) = rimz::harness::run::record_failure_tail(
+                    context.store.paths(),
+                    &context.run_id,
+                    detail,
+                )
+            {
+                tracing::debug!(
+                    run_id = %context.run_id,
+                    error = %err,
+                    "could not record supervised run definition failure",
+                );
+            }
+            fail_run_on_exec_precondition(run_context.as_ref());
+            return Err(err.into());
+        }
+    };
+    invocation.effective_isolation = Some(isolation);
+    let fail = || {
+        mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
+        fail_run_on_exec_precondition(run_context.as_ref());
+    };
+    let request = &plan.request;
+    let attach_target = exec_attach_target(request);
     let mut launch_identity = provisional_identity.clone();
     if let Some(identity) = &mut launch_identity {
         identity
@@ -172,33 +140,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .model
             .clone_from(&request.identity.params.model);
     }
-    // A child resolves its temp unit from its parent's row; a failed read
-    // falls back to its own unit, and the plan's warning carries the error.
-    let agents = if request.identity.params.parent_agent_id.is_some() {
-        invocation
-            .store()
-            .and_then(|store| Ok(store.snapshot_cached()?))
-            .map(|snapshot| snapshot.agents.clone())
-            .map_err(|err| format!("{err:#}"))
-    } else {
-        Ok(Vec::new())
-    };
-    let plan = rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
-        request: &request,
-        cwd: &invocation.cwd,
-        project_root: &workspace.project_root,
-        rimz_bin: &rimz::proc::rimz_exe(),
-        runtime: &runtime,
-        state: &state,
-        effective: effective.as_ref().ok(),
-        commands: &machine_config.agents.commands,
-        accounts: &machine_config.accounts,
-        bwrap: bwrap.as_deref(),
-        agents: agents.as_deref().map_err(String::as_str),
-        ambient_env: &ambient_env,
-        agent_shell: machine_config.agents.shell.as_deref(),
-    })
-    .inspect_err(|_| fail())?;
     for warning in &plan.warnings {
         warn(warning.to_string());
     }
@@ -225,7 +166,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .transpose()
         .inspect_err(|_| fail())?;
     let process = plan.process();
-    if let Some(adapter) = adapter
+    if let Some(adapter) = rimz::agents::find_definition(request.kind.as_str())
         && adapter.min_version().is_some()
         && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
     {
@@ -300,7 +241,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let (program, rest) = process.argv.split_first().ok_or_else(|| {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
     })?;
-    if should_exec_agent_directly(&request) {
+    if should_exec_agent_directly(request) {
         match exec_agent_command(program, rest, &process.env, &process.unset) {
             Ok(()) => return Ok(()),
             Err(err) => {
@@ -327,7 +268,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .map(|context| rimz::harness::run::load(context.store.paths(), &context.run_id))
         .transpose()
         .context("reading resumed run before spawning provider")?
-        .and_then(|record| resumed_run_follow_ups(&request, &record));
+        .and_then(|record| resumed_run_follow_ups(request, &record));
     let child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;
@@ -377,7 +318,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         })
         .is_some_and(|record| record.keep);
     let parent_watchdog = subagent_parent_watchdog(
-        &request,
+        request,
         run_context.as_ref(),
         launch_identity.as_ref(),
         keep,
@@ -396,7 +337,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     )
     .context("supervising agent process")?;
     settle_after_exit(
-        &request,
+        request,
         globals,
         &invocation,
         RunExitContext {
@@ -573,31 +514,6 @@ fn linger_subagent(
         }
         std::thread::sleep(Duration::from_secs(1));
     }
-}
-
-/// The host-side refusal for a fresh launch of a profile whose definition failed to load. Resume
-/// and fork are left alone: lane resume degrades to a bare resume by design, and restart/fork
-/// refuse at the CLI. A trusted project profile that shadows the failed name launches normally.
-fn exec_definition_failure(
-    request: &rimz::harness::launch::ExecRequest,
-    machine: &rimz::config::MachineConfig,
-    effective: Option<&rimz::config::effective::LaunchAgents>,
-) -> Option<String> {
-    if !matches!(
-        request.action,
-        rimz::harness::launch::ExecAction::Launch { .. }
-    ) {
-        return None;
-    }
-    let profile = request.identity.params.profile.as_deref()?;
-    let shadowed = effective.is_some_and(|effective| {
-        effective.profiles.0.contains_key(profile)
-            || effective.subagent_profiles.0.contains_key(profile)
-    });
-    if shadowed {
-        return None;
-    }
-    machine.definition_failure_for(profile)
 }
 
 fn should_exec_agent_directly(request: &rimz::harness::launch::ExecRequest) -> bool {

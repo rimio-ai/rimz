@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::ProviderLogin;
+use crate::agents::account_links::ShareErr;
 use crate::agents::capabilities::SystemTextChannel;
 use crate::agents::skill_links::{self, Desired, SkillLinkErr, SkillLinkOutcome, SkillLinkPlan};
 use crate::config::effective::LaunchAgents;
@@ -131,6 +132,13 @@ pub enum LaunchPlanErr {
     Login(#[from] crate::agents::RoomLoginErr),
     #[error(transparent)]
     Preset(#[from] crate::agents::PresetErr),
+    /// A fresh launch of a profile whose definition failed to load.
+    #[error("{0}")]
+    DefinitionFailed(String),
+    #[error(transparent)]
+    AccountLinks(#[from] ShareErr),
+    #[error("materializing launch prompt")]
+    Materialize(#[source] launch::ExecWireErr),
 }
 
 impl LaunchPlan {
@@ -142,7 +150,152 @@ impl LaunchPlan {
     }
 }
 
-pub fn resolve_model(
+/// What the exec wrapper's launch decisions produced. The account-link and
+/// model warnings and the alias move survive a later failure, since the
+/// wrapper reports them either way.
+pub struct ExecPreparation {
+    /// What `link_account` reported, printed ahead of the model warnings.
+    pub link_warnings: Vec<String>,
+    pub model_warnings: Vec<String>,
+    /// The alias move, with the login whose catalog moved.
+    pub model_move: Option<(
+        crate::agents::capabilities::ModelAliasMove,
+        crate::ids::LoginKey,
+    )>,
+    /// The compiled plan and the isolation it resolved.
+    pub outcome: Result<(LaunchPlan, Isolation), LaunchPlanErr>,
+}
+
+/// Decide what the exec wrapper launches, from its decoded envelope to the
+/// compiled plan. Writes and prints nothing itself; `room_agents` reads the
+/// room's agent rows and is called only for a resume, a fork, or a child.
+/// `link_account` is the wrapper's account-home reconcile, the one write on
+/// this path: it runs once the login resolves and before the plan compiles,
+/// which resolves the skill root through those links.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the wrapper's launch inputs plus its two room-side steps, from one caller"
+)]
+pub fn prepare_exec(
+    envelope: launch::ExecEnvelope,
+    cwd: &Path,
+    project_root: &Path,
+    rimz_bin: &Path,
+    machine: &crate::config::MachineConfig,
+    effective: Option<&LaunchAgents>,
+    room_agents: &dyn Fn() -> Result<Vec<crate::agents::AgentState>, String>,
+    link_account: impl Fn(&ExecRequest, &ProviderLogin) -> Result<Vec<String>, ShareErr>,
+) -> ExecPreparation {
+    let mut link_warnings = Vec::new();
+    let mut model_warnings = Vec::new();
+    let mut model_move = None;
+    let prepare = || {
+        let request = envelope.request();
+        if let Some(detail) = definition_failure(request, machine, effective) {
+            return Err(LaunchPlanErr::DefinitionFailed(detail));
+        }
+        let isolation = Isolation::resolve(
+            request.identity.params.isolation,
+            request.isolation_default,
+            machine.agents.isolation,
+        );
+        let adapter = crate::agents::find_definition(request.kind.as_str());
+        let bwrap = sandbox::preflight_launch(
+            isolation,
+            &request.kind,
+            request.skills.is_some(),
+            adapter.map_or(crate::agents::ManualSkill::Unsupported, |adapter| {
+                adapter.manual_skill()
+            }),
+        )?;
+        let mut request = envelope.materialize().map_err(LaunchPlanErr::Materialize)?;
+        let state = StatePaths::for_project_root(project_root)?;
+        let runtime = RuntimePaths::for_state(&state)?;
+        let ambient_env = crate::agents::ambient_env();
+        let login = crate::agents::session_login(
+            &request.kind,
+            request.identity.params.login.as_ref(),
+            &machine.accounts,
+        )?;
+        link_warnings = link_account(&request, &login)?;
+        let recorded_session = match &request.action {
+            launch::ExecAction::Launch { .. } => None,
+            launch::ExecAction::Resume { session_id, .. }
+            | launch::ExecAction::Fork { session_id, .. } => {
+                let session = crate::ids::AgentSessionId::from(session_id.as_str());
+                room_agents().ok().and_then(|agents| {
+                    agents
+                        .into_iter()
+                        .find(|agent| agent.kind == request.kind && agent.agent_id == session)
+                })
+            }
+        };
+        let (warnings, movement) = resolve_model(
+            &mut request,
+            machine,
+            &runtime,
+            &login,
+            recorded_session.as_ref(),
+            None,
+            &ambient_env,
+        )?;
+        model_warnings = warnings;
+        model_move = movement.map(|movement| (movement, login.key()));
+        // A child resolves its temp unit from its parent's row; a failed read
+        // falls back to its own unit, and the plan's warning carries the error.
+        let agents = if request.identity.params.parent_agent_id.is_some() {
+            room_agents()
+        } else {
+            Ok(Vec::new())
+        };
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd,
+            project_root,
+            rimz_bin,
+            runtime: &runtime,
+            state: &state,
+            effective,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: bwrap.as_deref(),
+            agents: agents.as_deref().map_err(String::as_str),
+            ambient_env: &ambient_env,
+            agent_shell: machine.agents.shell.as_deref(),
+        })?;
+        Ok((plan, isolation))
+    };
+    ExecPreparation {
+        outcome: prepare(),
+        link_warnings,
+        model_warnings,
+        model_move,
+    }
+}
+
+/// The refusal for a fresh launch of a profile whose definition failed to load. Resume
+/// and fork are left alone: lane resume degrades to a bare resume by design, and restart/fork
+/// refuse at the CLI. A trusted project profile that shadows the failed name launches normally.
+fn definition_failure(
+    request: &ExecRequest,
+    machine: &crate::config::MachineConfig,
+    effective: Option<&LaunchAgents>,
+) -> Option<String> {
+    if !matches!(request.action, launch::ExecAction::Launch { .. }) {
+        return None;
+    }
+    let profile = request.identity.params.profile.as_deref()?;
+    let shadowed = effective.is_some_and(|effective| {
+        effective.profiles.0.contains_key(profile)
+            || effective.subagent_profiles.0.contains_key(profile)
+    });
+    if shadowed {
+        return None;
+    }
+    machine.definition_failure_for(profile)
+}
+
+pub(super) fn resolve_model(
     request: &mut ExecRequest,
     machine: &crate::config::MachineConfig,
     runtime: &RuntimePaths,
