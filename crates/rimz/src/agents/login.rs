@@ -416,16 +416,31 @@ impl LoginCatalog {
         Ok(self
             .account_kinds
             .iter()
-            .map(|kind| {
-                let name = requested
-                    .get(kind)
-                    .or_else(|| project.get(kind))
-                    .or_else(|| machine.get(kind))
-                    .cloned()
-                    .unwrap_or_default();
-                (kind.clone(), name)
-            })
+            .map(|kind| (kind.clone(), birth_name(kind, requested, project, machine)))
             .collect())
+    }
+
+    /// `ambient` as `kind`'s own home reads it: an exported home override
+    /// that names a declared account's home is dropped, since a pane born on
+    /// that account exports it by design and `default` is not that account.
+    pub fn native_ambient(
+        &self,
+        kind: &AgentKind,
+        ambient: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
+        let exported = self
+            .logins
+            .values()
+            .filter(|login| login.kind() == kind)
+            .find_map(|login| match login.check_exported_home(ambient) {
+                Err(LoginConfigErr::ExportedHome { env_key, .. }) => Some(env_key),
+                _ => None,
+            });
+        let mut native = ambient.clone();
+        if let Some(env_key) = exported {
+            native.remove(env_key);
+        }
+        native
     }
 
     /// Every login, defaults included, in `<kind>@<name>` order.
@@ -440,6 +455,77 @@ impl LoginCatalog {
             .filter(|login| login.kind() == kind)
             .map(|login| login.name().clone())
             .collect()
+    }
+}
+
+/// The account a fresh room launches `kind` under: the requested one, then
+/// the project's, then the machine's, then `default`.
+pub(crate) fn birth_name(
+    kind: &AgentKind,
+    requested: &RoomLogins,
+    project: &RoomLogins,
+    machine: &RoomLogins,
+) -> LoginName {
+    requested
+        .get(kind)
+        .or_else(|| project.get(kind))
+        .or_else(|| machine.get(kind))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The command that repairs an account's home: `default` is the provider's
+/// own home, which `rimz hooks install` wires; a named one is re-added.
+fn home_fix(kind: &AgentKind, name: &LoginName) -> String {
+    if name.is_default() {
+        format!("rimz hooks install {kind}")
+    } else {
+        format!("rimz accounts add {kind} {name}")
+    }
+}
+
+fn started_as(env_key: Option<&str>, home: &Path, kind: &AgentKind) -> String {
+    env_key.map_or_else(String::new, |env_key| {
+        format!(", started as `{env_key}={} {kind}`", home.display())
+    })
+}
+
+/// Whether a room can launch into an account, in the words `rimz accounts
+/// list` and `rimz doctor` show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountStatus {
+    Ready,
+    HomeMissing,
+    HooksMissing,
+    HooksUntrusted,
+    Unavailable,
+}
+
+impl AccountStatus {
+    pub fn of(problem: Option<&BirthLoginErr>) -> Self {
+        match problem {
+            None => Self::Ready,
+            Some(BirthLoginErr::MissingHome { .. }) => Self::HomeMissing,
+            Some(BirthLoginErr::HooksMissing { .. }) => Self::HooksMissing,
+            Some(BirthLoginErr::HooksUntrusted { .. }) => Self::HooksUntrusted,
+            Some(
+                BirthLoginErr::Frozen { .. }
+                | BirthLoginErr::Login(_)
+                | BirthLoginErr::MachineUnknown { .. }
+                | BirthLoginErr::MachineUnsupported { .. },
+            ) => Self::Unavailable,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::HomeMissing => "home missing",
+            Self::HooksMissing => "hooks missing",
+            Self::HooksUntrusted => "hooks untrusted",
+            Self::Unavailable => "unavailable",
+        }
     }
 }
 
@@ -475,8 +561,9 @@ pub enum BirthLoginErr {
     #[error(transparent)]
     Login(#[from] LoginErr),
     #[error(
-        "{kind} account `{name}` home `{}` is not a directory; run `rimz accounts add {kind} {name}`",
-        home.display()
+        "{kind} account `{name}` home `{}` is not a directory; run `{}`",
+        home.display(),
+        home_fix(kind, name)
     )]
     MissingHome {
         kind: AgentKind,
@@ -484,8 +571,9 @@ pub enum BirthLoginErr {
         home: PathBuf,
     },
     #[error(
-        "RimZ hooks are missing for {kind} account `{name}` at `{}`; run `rimz accounts add {kind} {name}`",
-        home.display()
+        "RimZ hooks are missing for {kind} account `{name}` at `{}`; run `{}`",
+        home.display(),
+        home_fix(kind, name)
     )]
     HooksMissing {
         kind: AgentKind,
@@ -493,15 +581,16 @@ pub enum BirthLoginErr {
         home: PathBuf,
     },
     #[error(
-        "RimZ hooks for {kind} account `{name}` at `{}` are untrusted ({hooks}); {fix}, started as `{env_key}={} {kind}`",
+        "RimZ hooks for {kind} account `{name}` at `{}` are untrusted ({hooks}); {fix}{}",
         home.display(),
-        home.display()
+        started_as(*env_key, home, kind)
     )]
     HooksUntrusted {
         kind: AgentKind,
         name: LoginName,
         home: PathBuf,
-        env_key: &'static str,
+        /// The home override a named account's provider is started with.
+        env_key: Option<&'static str>,
         hooks: Box<str>,
         fix: Box<str>,
     },
@@ -512,13 +601,29 @@ impl ProviderLogin {
     /// exist and carry trusted RimZ hooks. The default account keeps the
     /// provider's own hook flow, which `rimz start` already walks.
     pub fn preflight(&self, ambient: &BTreeMap<String, String>) -> Result<(), BirthLoginErr> {
-        let (Some(home), Some(adapter)) = (&self.home, crate::agents::find_definition(&self.kind))
+        if self.is_default() {
+            return Ok(());
+        }
+        self.health(ambient)
+    }
+
+    /// Whether this account's home is a directory carrying trusted RimZ
+    /// hooks. Unlike [`Self::preflight`] it checks `default` too, for display;
+    /// pass `default` the [`LoginCatalog::native_ambient`] of its kind.
+    pub fn health(&self, ambient: &BTreeMap<String, String>) -> Result<(), BirthLoginErr> {
+        let Some(adapter) = crate::agents::find_definition(&self.kind) else {
+            return Ok(());
+        };
+        let env = self.env(ambient);
+        let Some(path) = self
+            .home()
+            .map(Path::to_path_buf)
+            .or_else(|| adapter.config_home(&env))
         else {
             return Ok(());
         };
         let kind = self.kind.clone();
         let name = self.name.clone();
-        let path = home.path.clone();
         if !path.is_dir() {
             return Err(BirthLoginErr::MissingHome {
                 kind,
@@ -526,11 +631,8 @@ impl ProviderLogin {
                 home: path,
             });
         }
-        match crate::agents::preflight_hooks(
-            adapter,
-            &self.env(ambient),
-            crate::agents::TurnLifecycleNeed::None,
-        ) {
+        match crate::agents::preflight_hooks(adapter, &env, crate::agents::TurnLifecycleNeed::None)
+        {
             Ok(()) | Err(crate::agents::HookPreflightErr::TurnLifecycleUnsupported { .. }) => {
                 Ok(())
             }
@@ -546,7 +648,7 @@ impl ProviderLogin {
                     kind,
                     name,
                     home: path,
-                    env_key: home.env_key,
+                    env_key: self.home.as_ref().map(|home| home.env_key),
                     hooks: hooks.into(),
                     fix: fix.into(),
                 })
@@ -596,6 +698,15 @@ pub enum RoomLoginErr {
     Login(#[from] LoginErr),
 }
 
+/// The account of every live pane-backed agent: ended rows and provider
+/// subagents run on no account of their own.
+pub(crate) fn live_login_keys(agents: &[super::AgentState]) -> impl Iterator<Item = LoginKey> + '_ {
+    agents
+        .iter()
+        .filter(|agent| agent.ended_at.is_none() && !agent.is_provider_subagent())
+        .map(super::AgentState::login_key)
+}
+
 /// The account selection of the room whose `workspace.json` is `record`; a
 /// record without one, or none at all, selects `default` for every kind.
 pub fn room_logins(record: &Path) -> Result<RoomLogins, RoomLoginErr> {
@@ -622,11 +733,7 @@ pub struct RoomLoginSet {
 impl RoomLoginSet {
     /// Include live pane-backed agents' stamps alongside the room defaults.
     pub fn with_agents(mut self, agents: &[super::AgentState]) -> Self {
-        self.live_logins = agents
-            .iter()
-            .filter(|agent| agent.ended_at.is_none() && !agent.is_provider_subagent())
-            .map(super::AgentState::login_key)
-            .collect();
+        self.live_logins = live_login_keys(agents).collect();
         self
     }
 

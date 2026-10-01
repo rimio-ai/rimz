@@ -512,13 +512,14 @@ enum Body {
         detail: Option<Cell>,
     },
     Section(Vec<Cell>),
+    Blank,
 }
 
 impl Body {
     fn row_cells(&self) -> Option<&[Cell]> {
         match self {
             Self::Row(cells) | Self::Card { cells, .. } => Some(cells),
-            Self::Section(_) => None,
+            Self::Section(_) | Self::Blank => None,
         }
     }
 
@@ -602,6 +603,11 @@ impl Table {
         self.section_cells(vec![cell(label).fg(palette::header())]);
     }
 
+    /// Separate groups of rows with an empty line; the columns stay shared.
+    pub(crate) fn blank(&mut self) {
+        self.rows.push(Body::Blank);
+    }
+
     /// Open a group with styled spans joined by one space.
     pub(crate) fn section_cells(&mut self, cells: Vec<Cell>) {
         self.rows.push(Body::Section(cells));
@@ -665,6 +671,7 @@ impl Table {
                 Ok(())
             }
             Body::Section(cells) => self.write_section(w, cells),
+            Body::Blank => writeln!(w),
         }
     }
 

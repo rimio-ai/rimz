@@ -526,3 +526,74 @@ fn exported_provider_home_naming_an_account_is_refused() {
         Ok(())
     );
 }
+
+#[test]
+fn default_health_checks_the_provider_home_and_names_the_hooks_fix() {
+    let temp = tempfile::tempdir().unwrap();
+    let user = temp.path().join("u");
+    let ambient = BTreeMap::from([("HOME".to_owned(), user.to_string_lossy().into_owned())]);
+    let default = ProviderLogin::default_for(kind("claude"));
+
+    let missing = default.health(&ambient).unwrap_err();
+    assert_eq!(
+        AccountStatus::of(Some(&missing)),
+        AccountStatus::HomeMissing
+    );
+    assert!(
+        missing
+            .to_string()
+            .ends_with("run `rimz hooks install claude`"),
+        "{missing}"
+    );
+    std::fs::create_dir_all(user.join(".claude")).unwrap();
+    let unhooked = default.health(&ambient).unwrap_err();
+    assert_eq!(AccountStatus::of(Some(&unhooked)).as_str(), "hooks missing");
+    assert!(
+        unhooked
+            .to_string()
+            .ends_with("run `rimz hooks install claude`"),
+        "{unhooked}"
+    );
+    assert_eq!(default.preflight(&ambient), Ok(()));
+
+    crate::agents::find_definition("claude")
+        .unwrap()
+        .install_hooks(&ambient)
+        .unwrap();
+    assert_eq!(default.health(&ambient), Ok(()));
+    assert_eq!(AccountStatus::of(None).as_str(), "ready");
+    assert_eq!(
+        serde_json::to_value(AccountStatus::HooksUntrusted).unwrap(),
+        "hooks_untrusted"
+    );
+}
+
+#[test]
+fn native_ambient_drops_only_an_exported_home_naming_a_declared_account() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[codex.team]\nhome = \"/srv/team\"\n"),
+        Some(Path::new("/home/u")),
+    )
+    .expect("catalog");
+    let ambient = |value: &str| {
+        BTreeMap::from([
+            ("HOME".to_owned(), "/home/u".to_owned()),
+            ("CODEX_HOME".to_owned(), value.to_owned()),
+        ])
+    };
+    let default = ProviderLogin::default_for(kind("codex"));
+
+    let native = catalog.native_ambient(&kind("codex"), &ambient("/srv/team"));
+    assert_eq!(native.get("CODEX_HOME"), None);
+    assert_eq!(
+        default.home_dir(&native),
+        Some(PathBuf::from("/home/u/.codex"))
+    );
+    let elsewhere = ambient("/srv/elsewhere");
+    assert_eq!(
+        catalog.native_ambient(&kind("codex"), &elsewhere),
+        elsewhere
+    );
+    let team = ambient("/srv/team");
+    assert_eq!(catalog.native_ambient(&kind("claude"), &team), team);
+}

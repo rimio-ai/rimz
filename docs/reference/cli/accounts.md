@@ -112,31 +112,45 @@ new rooms now use claude account `work`; existing rooms, running or stopped, kee
 rimz accounts list [--json]
 ```
 
-`list` prints one row per account of each supported kind, `default` included, and then each problem on its own line with its fix:
+`list` prints one table with a row per account of each supported kind, `default` first within its kind and an empty line between kinds, and then each problem on its own line with its fix:
 
 ```console
 $ rimz accounts list
-KIND    NAME      HOME                          STATUS         NEW ROOMS
-claude  default   ~/.claude                     native         yes
-claude  work      ~/.rimz/accounts/claude/work  ready          -
-codex   default   ~/.codex                      native         yes
-codex   personal  ~/codex-me                    hooks missing  -
+   KIND    NAME      STATUS           DEFAULT FOR  AGENTS  HOME
+   claude  default   ready            -            -       ~/.claude
+●  claude  work      ready            new rooms    -       ~/.rimz/accounts/claude/work
+
+●  codex   default   hooks untrusted  new rooms    -       ~/.codex
+   codex   personal  hooks missing    -            -       ~/codex-me
+RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run `rimz accounts add codex personal`
 ```
 
-`HOME` for a `default` row is the directory the provider resolves from your environment, so a `CLAUDE_CONFIG_DIR` or `CODEX_HOME` you have exported shows there. `STATUS` is one of:
+`list` reads from a position: the room the command runs in, or the project at the current directory, or the one `--root` names. `●` marks the account a launch from there uses for its kind: the selection the room recorded at that root, running or stopped; without one, the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`, the order `rimz start` follows. When no room is recorded there and the project's account selection waits on `rimz trust grant`, no kind carries `●` and a warning on stderr names the fix, since `rimz start` would refuse. When the deciding selection names an account that is not declared, that kind carries no `●`; the account's `unavailable` row and problem line say why. When the position's selection cannot be read at all (a project `.rimz/config.toml` with a TOML error, say), a warning on stderr carries the error, no kind carries `●`, and `DEFAULT FOR` shows only the machine's `new rooms`; `list` still exits 0.
+
+`DEFAULT FOR` names every layer that selects the account, in this order, or `-`:
+
+| Word | The account is |
+| --- | --- |
+| `this room` | The selection recorded by the room at the position. A kind the record leaves out is `default`. |
+| `this project` | The trusted project's selection for its kind. |
+| `new rooms` | The machine's `[accounts.use]` selection, or `default` when the machine selects nothing for its kind. |
+
+`AGENTS` counts the live agents on the account across every live room, `-` for none. When the rooms cannot be listed, the column reads `–` and a warning on stderr names the cause.
+
+`HOME` for a `default` row is the directory the provider resolves from your environment, so a `CLAUDE_CONFIG_DIR` or `CODEX_HOME` you have exported shows there, unless it names a declared account's home, as it does in a pane born on that account; then the row shows the provider's own home. `STATUS` is one of:
 
 | Status | Meaning | Fix the problem line names |
 | --- | --- | --- |
-| `native` | The `default` account. RimZ runs no checks on it here; `rimz start` walks the provider's own hook setup. | none |
-| `ready` | A named account a room can launch into. | none |
-| `home missing` | The home is not a directory. | `rimz accounts add <kind> <name>` |
-| `hooks missing` | The home lacks RimZ hooks. | `rimz accounts add <kind> <name>` |
-| `hooks untrusted` | The hooks are installed but the provider has not trusted them. Codex gates new hooks behind its own trust step. | Start the provider under the home (`CODEX_HOME=<home> codex`), run `/hooks`, and trust the RimZ hooks |
+| `ready` | A room can launch into the account. | none |
+| `home missing` | The home is not a directory. | `rimz accounts add <kind> <name>`, or `rimz hooks install <kind>` for `default` |
+| `hooks missing` | The home lacks RimZ hooks. | `rimz accounts add <kind> <name>`, or `rimz hooks install <kind>` for `default` |
+| `hooks untrusted` | The hooks are installed but the provider has not trusted them. Codex gates new hooks behind its own trust step. | Start the provider under the home (`CODEX_HOME=<home> codex`, or plain `codex` for `default`), run `/hooks`, and trust the RimZ hooks |
+| `unavailable` | A room, project, or machine selection names an account that is not declared, or a kind without named accounts. | `rimz accounts add <kind> <name>`, or the command that clears the selection |
 
-`rimz start` refuses to launch into an account with any of the last three statuses ([Accounts at start](./getting-started.md#accounts)). `list` itself exits 0 whatever the statuses are.
+`rimz start` refuses to launch into a named account with a problem status ([Accounts at start](./getting-started.md#accounts)); for `default` it walks the provider's own hook setup instead. `list` itself exits 0 whatever the statuses are.
 
-`--json` prints an array with one object per row. It carries no status word: test for `problem`.
+`--json` prints an array with one object per row.
 
 | Field | Value |
 | --- | --- |
@@ -145,8 +159,12 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `home` | Absolute path of the home, or `null` when the provider's home cannot be resolved. |
 | `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
 | `problem` | The problem line with its fix. Present only when the account has a problem. |
+| `status` | The `STATUS` word in snake case: `ready`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. |
+| `active` | `true` on the account marked `●`. |
+| `default_for` | Always present: the `DEFAULT FOR` words in snake case (`this_room`, `this_project`, `new_rooms`), or `[]`. |
+| `agents` | The `AGENTS` count, `0` for none, or `null` when the rooms could not be listed. |
 
-`NEW ROOMS` marks the machine selection. A dangling machine selection adds a problem row with the commands to declare or clear it. `rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use --global`, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` also marks named machine selections in its ACCOUNTS section, alongside the ones the current room uses; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
+`rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use --global`, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` lists named accounts and the current room's selections in its ACCOUNTS section with the same `DEFAULT FOR` words; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
 
 ## `remove`
 

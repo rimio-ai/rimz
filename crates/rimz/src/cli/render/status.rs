@@ -3,6 +3,7 @@
 //! renaming a variant is a compile error here rather than a silent fall-through
 //! to the default tone in one command and a different tone in another.
 
+use rimz::agents::AccountStatus;
 use rimz::agents::AgentStatus;
 use rimz::agents::TurnPhase;
 use rimz::agents::account::ProviderStatus;
@@ -118,6 +119,17 @@ pub(crate) fn trust(state: TrustState) -> anstyle::Style {
         TrustState::Stale => role(StateRole::Failed),
         TrustState::Untrusted => role(StateRole::Waiting),
         TrustState::NoConfig => role(StateRole::Neutral),
+    }
+}
+
+/// Whether a room can launch into an account; every problem reads as a warning.
+pub(crate) fn account(status: AccountStatus) -> anstyle::Style {
+    match status {
+        AccountStatus::Ready => role(StateRole::Success),
+        AccountStatus::HomeMissing
+        | AccountStatus::HooksMissing
+        | AccountStatus::HooksUntrusted
+        | AccountStatus::Unavailable => role(StateRole::Waiting),
     }
 }
 

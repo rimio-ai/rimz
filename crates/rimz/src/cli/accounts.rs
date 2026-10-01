@@ -8,9 +8,10 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use rimz::agents::{BirthLoginErr, LoginCatalog, ProviderLogin};
+use rimz::agents::{AccountStatus, BirthLoginErr, LoginCatalog, ProviderLogin};
 use rimz::config::{AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
-use rimz::ids::{AgentKind, LoginName, RoomLogins};
+use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
+use rimz::room::{AccountStanding, Scopes};
 use rimz::utils::path::normalize_path_lexical;
 use serde::Serialize;
 
@@ -65,7 +66,7 @@ enum AccountsSubcmd {
 pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         AccountsSubcmd::Add { kind, name, home } => add(&account_kind(&kind)?, name, home),
-        AccountsSubcmd::List { json } => list(json),
+        AccountsSubcmd::List { json } => list(globals, json),
         AccountsSubcmd::Remove { kind, name } => remove(&account_kind(&kind)?, &name),
         AccountsSubcmd::Use { kind, name, global } => {
             if global {
@@ -198,11 +199,7 @@ fn lexical_home(login: &ProviderLogin) -> Option<PathBuf> {
 }
 
 fn use_room_account(globals: &GlobalFlags, kind: &AgentKind, name: &LoginName) -> Result<()> {
-    let pin = std::env::var(rimz::workspace::ENV_WORKSPACE_ID)
-        .ok()
-        .zip(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT))
-        .and_then(|(id, root)| rimz::workspace::verify_pin(&id, &PathBuf::from(root)));
-    let root = pin.context(
+    let root = super::pinned_room_root().context(
         "`rimz accounts use` changes the running room it is run inside; run it inside one, or pass --global to set the machine default for new rooms",
     )?;
     if let Some(override_root) = &globals.root
@@ -289,88 +286,174 @@ struct AccountRow {
     /// Why a room cannot launch into this account, with the fix.
     #[serde(skip_serializing_if = "Option::is_none")]
     problem: Option<String>,
-    #[serde(skip)]
-    status: &'static str,
+    status: AccountStatus,
+    /// A launch from here uses this account for its kind.
+    active: bool,
+    default_for: Scopes,
+    /// Live agents on this account across every live room; `None` when the
+    /// rooms could not be inventoried.
+    agents: Option<usize>,
 }
 
-fn list(json: bool) -> Result<()> {
+fn list(globals: &GlobalFlags, json: bool) -> Result<()> {
     let machine = MachineConfig::load()?;
     let catalog = LoginCatalog::from_config(&machine.accounts)?;
-    let ambient = rimz::agents::ambient_env();
-    let mut rows: Vec<AccountRow> = catalog
-        .all()
-        .filter(|login| machine.accounts.named(login.kind()).is_some())
-        .map(|login| {
-            let problem = login.preflight(&ambient).err();
-            AccountRow {
-                kind: login.kind().clone(),
-                name: login.name().clone(),
-                home: login.home_dir(&ambient),
-                machine_default: machine
-                    .accounts
-                    .use_accounts
-                    .get(login.kind())
-                    .cloned()
-                    .unwrap_or_default()
-                    == *login.name(),
-                status: match &problem {
-                    None if login.is_default() => "native",
-                    None => "ready",
-                    Some(BirthLoginErr::MissingHome { .. }) => "home missing",
-                    Some(BirthLoginErr::HooksMissing { .. }) => "hooks missing",
-                    Some(BirthLoginErr::HooksUntrusted { .. }) => "hooks untrusted",
-                    Some(
-                        BirthLoginErr::Frozen { .. }
-                        | BirthLoginErr::Login(_)
-                        | BirthLoginErr::MachineUnknown { .. }
-                        | BirthLoginErr::MachineUnsupported { .. },
-                    ) => "unavailable",
-                },
-                problem: problem.map(|err| err.to_string()),
-            }
-        })
-        .collect();
-    for (kind, name) in &machine.accounts.use_accounts {
-        if let Err(problem) = catalog.select_machine(kind, name) {
-            rows.push(AccountRow {
-                kind: kind.clone(),
-                name: name.clone(),
-                home: None,
-                machine_default: true,
-                status: "unavailable",
-                problem: Some(problem.to_string()),
-            });
+    let standing = match rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .map_err(anyhow::Error::from)
+        .and_then(|position| AccountStanding::at(&position.project_root, &machine))
+    {
+        Ok(standing) => standing,
+        Err(error) => {
+            writeln!(
+                std::io::stderr().lock(),
+                "rimz: warning: cannot read the account selection here, so no account is marked: {error:#}"
+            )?;
+            AccountStanding::unread(&machine)
         }
+    };
+    if let Some(blocked) = standing.blocked() {
+        writeln!(std::io::stderr().lock(), "rimz: warning: {blocked}")?;
     }
+    let agents = match rimz::room::live_agents_by_login() {
+        Ok(agents) => Some(agents),
+        Err(error) => {
+            writeln!(
+                std::io::stderr().lock(),
+                "rimz: warning: cannot count live agents per account: {error}"
+            )?;
+            None
+        }
+    };
+    let rows = account_rows(
+        &machine.accounts,
+        &catalog,
+        &standing,
+        &rimz::agents::ambient_env(),
+        agents.as_ref(),
+    );
     if json {
         return render::json_pretty(&rows);
     }
-    let mut table = render::Table::new(["KIND", "NAME", "HOME", "STATUS", "NEW ROOMS"]);
-    for row in &rows {
-        let status = render::cell(row.status);
+    let mut out = render::out();
+    render::finish(write_accounts(&mut out, &rows))
+}
+
+/// Every account of each kind that carries named accounts, `default` first,
+/// plus a row for each account some layer selects but nothing declares.
+fn account_rows(
+    accounts: &AccountsConfig,
+    catalog: &LoginCatalog,
+    standing: &AccountStanding,
+    ambient: &BTreeMap<String, String>,
+    agents: Option<&BTreeMap<LoginKey, usize>>,
+) -> Vec<AccountRow> {
+    let row =
+        |kind: &AgentKind, name: &LoginName, home, problem: Option<BirthLoginErr>| AccountRow {
+            kind: kind.clone(),
+            name: name.clone(),
+            home,
+            machine_default: accounts.use_accounts.get(kind).cloned().unwrap_or_default() == *name,
+            status: AccountStatus::of(problem.as_ref()),
+            problem: problem.map(|err| err.to_string()),
+            active: standing.active(kind).as_ref() == Some(name),
+            default_for: standing.scopes(kind, name),
+            agents: agents.map(|agents| {
+                agents
+                    .get(&LoginKey {
+                        kind: kind.clone(),
+                        name: name.clone(),
+                    })
+                    .copied()
+                    .unwrap_or_default()
+            }),
+        };
+    let mut rows: Vec<AccountRow> = catalog
+        .all()
+        .filter(|login| accounts.named(login.kind()).is_some())
+        .map(|login| {
+            let ambient = if login.is_default() {
+                catalog.native_ambient(login.kind(), ambient)
+            } else {
+                ambient.clone()
+            };
+            row(
+                login.kind(),
+                login.name(),
+                login.home_dir(&ambient),
+                login.health(&ambient).err(),
+            )
+        })
+        .collect();
+    for key in standing.selected() {
+        let problem = if standing.machine_selects(&key.kind, &key.name) {
+            catalog.select_machine(&key.kind, &key.name).err()
+        } else {
+            catalog
+                .select(&key.kind, &key.name)
+                .err()
+                .map(BirthLoginErr::from)
+        };
+        if let Some(problem) = problem {
+            rows.push(row(&key.kind, &key.name, None, Some(problem)));
+        }
+    }
+    rows.sort_by(|a, b| {
+        (&a.kind, !a.name.is_default(), &a.name).cmp(&(&b.kind, !b.name.is_default(), &b.name))
+    });
+    rows
+}
+
+fn write_accounts(w: &mut impl std::io::Write, rows: &[AccountRow]) -> std::io::Result<()> {
+    let mut table = render::Table::new([
+        "",
+        "KIND",
+        "NAME",
+        "STATUS",
+        "DEFAULT FOR",
+        "AGENTS",
+        "HOME",
+    ]);
+    let mut previous: Option<&AgentKind> = None;
+    for row in rows {
+        if previous.is_some_and(|kind| *kind != row.kind) {
+            table.blank();
+        }
+        previous = Some(&row.kind);
+        let muted = |cell: render::Cell| {
+            if row.name.is_default() {
+                cell.fg(render::palette::muted())
+            } else {
+                cell
+            }
+        };
         table.row([
-            render::cell(row.kind.as_str()),
-            render::cell(row.name.as_str()),
+            if row.active {
+                render::cell("●").fg(render::palette::accent())
+            } else {
+                render::cell("")
+            },
+            render::cell(row.kind.as_str()).fg(render::palette::identity(row.kind.as_str())),
+            muted(render::cell(row.name.as_str())),
+            render::cell(row.status.as_str()).fg(render::status::account(row.status)),
+            render::cell(row.default_for.label()).dash(),
+            match row.agents {
+                None => render::cell("–").fg(render::palette::faint()),
+                Some(0) => render::cell("-").dash(),
+                Some(count) => render::cell(count.to_string()),
+            },
             row.home.as_ref().map_or_else(
                 || render::cell("-").dash(),
-                |home| render::cell(render::home_relative(&home.display().to_string())),
+                |home| {
+                    muted(render::cell(render::home_relative(
+                        &home.display().to_string(),
+                    )))
+                },
             ),
-            if row.problem.is_some() {
-                status.fg(render::palette::warn())
-            } else {
-                status
-            },
-            render::cell(if row.machine_default { "yes" } else { "-" }),
         ]);
     }
-    let mut out = render::out();
-    render::finish(table.render(&mut out))?;
+    table.render(w)?;
     for problem in rows.iter().filter_map(|row| row.problem.as_deref()) {
-        render::finish(writeln!(
-            out,
-            "{}",
-            render::paint(render::palette::warn(), problem)
-        ))?;
+        writeln!(w, "{}", render::paint(render::palette::warn(), problem))?;
     }
     Ok(())
 }
@@ -520,6 +603,104 @@ mod tests {
         }
         AccountsHarness::try_parse_from(["accounts", "use", "--room", "codex", "work"])
             .expect_err("--room is gone");
+    }
+
+    fn listed(
+        accounts: &str,
+        agents: Option<&BTreeMap<LoginKey, usize>>,
+    ) -> (Vec<AccountRow>, String) {
+        let machine = MachineConfig {
+            accounts: toml::from_str(accounts).unwrap(),
+            ..Default::default()
+        };
+        let catalog = LoginCatalog::from_config(&machine.accounts).unwrap();
+        let standing = AccountStanding::machine_only(&machine);
+        let ambient = BTreeMap::from([("HOME".to_owned(), "/nonexistent/u".to_owned())]);
+        let rows = account_rows(&machine.accounts, &catalog, &standing, &ambient, agents);
+        let mut stream = anstream::StripStream::new(Vec::new());
+        write_accounts(&mut stream, &rows).unwrap();
+        (rows, String::from_utf8(stream.into_inner()).unwrap())
+    }
+
+    #[test]
+    fn list_is_one_table_with_default_first_and_one_marker_per_kind() {
+        let counts = BTreeMap::from([(
+            LoginKey {
+                kind: AgentKind::new_unchecked("codex"),
+                name: "team".parse().unwrap(),
+            },
+            2,
+        )]);
+        let (rows, text) = listed(
+            "[claude.alpha]\nhome = \"/srv/alpha\"\n[codex.team]\nhome = \"/srv/team\"\n[use]\ncodex = \"team\"\n",
+            Some(&counts),
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines.iter().filter(|line| line.contains("KIND")).count(),
+            1,
+            "{text}"
+        );
+        assert!(lines[0].starts_with("   KIND  "), "{text}");
+        assert!(lines[1].contains("claude  default"), "{text}");
+        assert!(lines[2].contains("claude  alpha"), "{text}");
+        assert_eq!(lines[3], "", "{text}");
+        assert!(lines[4].contains("codex   default"), "{text}");
+        assert!(lines[5].starts_with("●  codex   team"), "{text}");
+        assert_eq!(lines.iter().filter(|line| line.is_empty()).count(), 1);
+        for kind in ["claude", "codex"] {
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|line| line.starts_with('●') && line.contains(kind))
+                    .count(),
+                1,
+                "{kind}: {text}"
+            );
+        }
+        assert!(
+            lines.iter().all(|line| line.trim_end() == *line),
+            "{text:?}"
+        );
+        assert!(
+            lines[5].contains("new rooms") && lines[5].contains("  2  "),
+            "{text}"
+        );
+        assert!(lines[1].contains("  -  "), "{text}");
+        assert!(!text.contains("native"), "{text}");
+        let team = serde_json::to_value(&rows[3]).unwrap();
+        assert_eq!(team["active"], true);
+        assert_eq!(team["default_for"], serde_json::json!(["new_rooms"]));
+        assert_eq!(team["agents"], 2);
+    }
+
+    #[test]
+    fn list_marks_unknown_agent_counts_and_undeclared_selections() {
+        let (rows, text) = listed("[use]\ncodex = \"gone\"\n", None);
+        let gone = rows
+            .iter()
+            .find(|row| row.name.as_str() == "gone")
+            .expect("an undeclared selection keeps a row");
+        assert_eq!(gone.status, AccountStatus::Unavailable);
+        assert!(!gone.active, "birth refuses an undeclared selection");
+        assert_eq!(gone.default_for.label(), "new rooms");
+        assert!(text.contains("unavailable"), "{text}");
+        assert!(
+            !text
+                .lines()
+                .any(|line| line.starts_with('●') && line.contains("codex")),
+            "{text}"
+        );
+        assert!(
+            text.lines()
+                .filter(|line| line.trim_start_matches(['●', ' ']).starts_with("codex   "))
+                .all(|line| line.contains("  –  ")),
+            "{text}"
+        );
+        let gone = serde_json::to_value(gone).unwrap();
+        assert_eq!(gone["agents"], serde_json::Value::Null);
+        assert_eq!(gone["status"], "unavailable");
+        assert_eq!(gone["active"], false);
     }
 
     #[test]
