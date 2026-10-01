@@ -149,10 +149,10 @@ pub(crate) fn tmux_cmd(socket: &Path) -> CommandSpec {
         .cwd(MANAGED_SERVER_CWD)
         .env_remove("TMUX")
         .restore_user_tmpdir(
-            std::env::var(super::domain::USER_TMPDIR_ENV)
+            std::env::var(crate::child_process::USER_TMPDIR_ENV)
                 .ok()
                 .as_deref(),
-            std::env::var(super::domain::TEMP_ROOT_KEYS_ENV)
+            std::env::var(crate::child_process::TEMP_ROOT_KEYS_ENV)
                 .ok()
                 .as_deref(),
         )

@@ -223,6 +223,45 @@ pub fn signal_process_term(pid: u32, expected_start: Option<&str>) -> bool {
     }
 }
 
+/// The `TMPDIR` a launch replaced with the agent's temp unit, kept so a child
+/// that outlives the agent's call gets the user's value instead. Present and
+/// empty means the user had none; absent means the process is not in an
+/// agent's tree.
+pub(crate) const USER_TMPDIR_ENV: &str = "RIMZ_USER_TMPDIR";
+
+/// The provider temp-root keys a launch pointed at the agent's temp unit,
+/// space-separated, so the restore can drop them beside `TMPDIR` without
+/// naming any provider.
+pub(crate) const TEMP_ROOT_KEYS_ENV: &str = "RIMZ_TEMP_ROOT_KEYS";
+
+/// The user's temp environment for a child spawned from an agent's tree.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct UserTempEnv<'a> {
+    /// The `TMPDIR` to set; `None` removes it.
+    pub(crate) tmpdir: Option<&'a str>,
+    /// The listed temp-root keys and both save variables, none of which may
+    /// reach the child.
+    pub(crate) removed: Vec<&'a str>,
+}
+
+/// Decide the user's temp environment from the caller's saved `TMPDIR`
+/// ([`USER_TMPDIR_ENV`]) and temp-root key list ([`TEMP_ROOT_KEYS_ENV`]).
+/// `None` means the caller is not in an agent's tree: leave the child alone.
+pub(crate) fn user_temp_env<'a>(
+    saved: Option<&'a str>,
+    temp_root_keys: Option<&'a str>,
+) -> Option<UserTempEnv<'a>> {
+    let saved = saved?;
+    let removed = [USER_TMPDIR_ENV, TEMP_ROOT_KEYS_ENV]
+        .into_iter()
+        .chain(temp_root_keys.unwrap_or_default().split_whitespace())
+        .collect();
+    Some(UserTempEnv {
+        tmpdir: (!saved.is_empty()).then_some(saved),
+        removed,
+    })
+}
+
 /// Build a detached `rimz` command with fresh null stdio, anchored to RimZ-owned
 /// shared disk usage so a deleted launch CWD cannot ENOENT the spawn.
 pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
@@ -446,6 +485,33 @@ mod tests {
 
     const WAIT_TIMEOUT: Duration = Duration::from_secs(3);
     const REAP_WAIT_STEP: Duration = Duration::from_millis(25);
+
+    #[test]
+    fn user_temp_env_follows_the_saved_tmpdir() {
+        assert_eq!(user_temp_env(None, Some("CLAUDE_CODE_TMPDIR")), None);
+        assert_eq!(
+            user_temp_env(
+                Some("/var/folders/t"),
+                Some("CLAUDE_CODE_TMPDIR OTHER_TMPDIR")
+            ),
+            Some(UserTempEnv {
+                tmpdir: Some("/var/folders/t"),
+                removed: vec![
+                    USER_TMPDIR_ENV,
+                    TEMP_ROOT_KEYS_ENV,
+                    "CLAUDE_CODE_TMPDIR",
+                    "OTHER_TMPDIR"
+                ],
+            })
+        );
+        assert_eq!(
+            user_temp_env(Some(""), None),
+            Some(UserTempEnv {
+                tmpdir: None,
+                removed: vec![USER_TMPDIR_ENV, TEMP_ROOT_KEYS_ENV],
+            })
+        );
+    }
 
     #[test]
     fn spawn_fast_child_returns_pid_and_reaps_it() {

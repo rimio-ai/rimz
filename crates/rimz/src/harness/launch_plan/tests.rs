@@ -1271,7 +1271,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         !plan
             .process()
             .env
-            .contains_key(crate::mux::domain::USER_TMPDIR_ENV),
+            .contains_key(crate::child_process::USER_TMPDIR_ENV),
         "a mux child inside the view keeps /tmp"
     );
     assert_eq!(
@@ -1344,10 +1344,10 @@ fn a_launch_saves_the_user_tmpdir_it_replaces() {
         );
         plan.process()
             .env
-            .get(crate::mux::domain::USER_TMPDIR_ENV)
+            .get(crate::child_process::USER_TMPDIR_ENV)
             .cloned()
     };
-    let user = crate::mux::domain::USER_TMPDIR_ENV;
+    let user = crate::child_process::USER_TMPDIR_ENV;
 
     assert_eq!(
         saved(&[("TMPDIR", "/var/folders/t")]).as_deref(),
@@ -1373,7 +1373,7 @@ fn a_provider_temp_root_follows_tmpdir() {
     let id = crate::WorkspaceId::from_project_root(project.path());
     let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
     let state = StatePaths::under(id, project.path()).unwrap();
-    let keys = crate::mux::domain::TEMP_ROOT_KEYS_ENV;
+    let keys = crate::child_process::TEMP_ROOT_KEYS_ENV;
     for (kind, ambient, listed) in [
         ("claude", None, "CLAUDE_CODE_TMPDIR"),
         ("codex", None, ""),

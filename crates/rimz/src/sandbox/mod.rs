@@ -297,8 +297,8 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
     pins.insert("TMPDIR".to_owned(), EnvPin::Set(SANDBOX_TMP.to_owned()));
     // A host TMPDIR may not exist in the view; mux children here keep /tmp.
     for key in [
-        crate::mux::domain::USER_TMPDIR_ENV,
-        crate::mux::domain::TEMP_ROOT_KEYS_ENV,
+        crate::child_process::USER_TMPDIR_ENV,
+        crate::child_process::TEMP_ROOT_KEYS_ENV,
     ] {
         pins.insert(key.to_owned(), EnvPin::Unset);
     }
