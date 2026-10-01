@@ -370,3 +370,68 @@ fn spent_reset_and_available_capacity_use_projected_windows() {
     assert_eq!(available.latest_spent_window_reset(now), None);
     assert!(available.subscription_budget_available(now));
 }
+
+#[test]
+fn window_span_parses_displays_and_refuses_unknown_spans() {
+    for (raw, span) in [("5h", WindowSpan::FiveHour), ("7d", WindowSpan::SevenDay)] {
+        assert_eq!(raw.parse::<WindowSpan>(), Ok(span));
+        assert_eq!(span.to_string(), raw);
+    }
+    assert_eq!(WindowSpan::FiveHour.minutes(), 5 * 60);
+    assert_eq!(WindowSpan::SevenDay.minutes(), 7 * 24 * 60);
+    for raw in ["1h", "5H", "", "300"] {
+        let error = raw.parse::<WindowSpan>().unwrap_err();
+        assert!(error.contains("use 5h or 7d"), "{raw}: {error}");
+    }
+}
+
+#[test]
+fn window_of_span_selects_the_unscoped_window_projected_at_now() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let five_hours = WindowSpan::FiveHour.minutes();
+    let week = WindowSpan::SevenDay.minutes();
+    let mut model = window(now, Some(90), 3_600, Some(five_hours));
+    model.scope = Some(crate::agents::RateLimitWindowScope {
+        id: "model:opus".into(),
+        label: "Opus".into(),
+    });
+    let capacity = ProviderCapacity::from_windows(vec![
+        model,
+        window(now, Some(40), 3_600, Some(five_hours)),
+        window(now, Some(70), -60, Some(week)),
+    ]);
+    let five = capacity.window_of_span(WindowSpan::FiveHour, now).unwrap();
+    assert_eq!(
+        five.used_percentage,
+        Some(40),
+        "the model sub-cap never matches"
+    );
+    assert_eq!(five.resets_at, Some(now + SignedDuration::from_secs(3_600)));
+    let seven = capacity.window_of_span(WindowSpan::SevenDay, now).unwrap();
+    assert_eq!(
+        seven.used_percentage,
+        Some(0),
+        "a passed reset projects to a fresh window"
+    );
+    assert!(seven.not_started(now));
+    let only_five =
+        ProviderCapacity::from_windows(vec![window(now, Some(1), 60, Some(five_hours))]);
+    assert_eq!(only_five.window_of_span(WindowSpan::SevenDay, now), None);
+    assert_eq!(
+        ProviderCapacity::default().window_of_span(WindowSpan::FiveHour, now),
+        None
+    );
+    // Kimi reports two unscoped weekly rows; the span reads the one the
+    // surplus gate's longest-window choice reads, the last.
+    let twin_weeks = ProviderCapacity::from_windows(vec![
+        window(now, Some(25), 3_600, Some(week)),
+        window(now, Some(10), 3_600, Some(week)),
+    ]);
+    assert_eq!(
+        twin_weeks
+            .window_of_span(WindowSpan::SevenDay, now)
+            .unwrap()
+            .used_percentage,
+        Some(10)
+    );
+}
