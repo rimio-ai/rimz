@@ -193,6 +193,9 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     refuse_legacy_only_home()?;
     let machine = crate::cli::machine_config();
     rimz::sandbox::preflight(machine.agents.isolation)?;
+    if let Some(shell) = &machine.agents.shell {
+        rimz::harness::launch::validate_agent_shell(shell)?;
+    }
     validate_agent_plugins()?;
     let workspace = match rimz::WorkspaceResolver::resolve(&args.path, globals.root.clone()) {
         Ok(workspace) => workspace,
@@ -254,6 +257,9 @@ pub(crate) fn ensure_workspace_room_detached(
     refuse_legacy_only_home()?;
     let machine = crate::cli::machine_config();
     rimz::sandbox::preflight(machine.agents.isolation)?;
+    if let Some(shell) = &machine.agents.shell {
+        rimz::harness::launch::validate_agent_shell(shell)?;
+    }
     validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;

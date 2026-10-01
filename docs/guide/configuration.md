@@ -655,7 +655,7 @@ An agent that runs `rimz agents` or `rimz teams` launches independent top-level 
 
 #### Environment at launch
 
-Agents receive their launch cwd and the kind of their pane shell (`zsh`, `bash`) by default, so they can start with their environment in view. Git state is left out: it can change between launch and the agent's first turn, so agents read it themselves. To omit these optional environment bullets for your machine, set this in `~/.rimz/config.toml`:
+Agents receive their launch cwd and the kind of shell their commands run under (`zsh`, `bash`) by default, so they can start with their environment in view. Git state is left out: it can change between launch and the agent's first turn, so agents read it themselves. To omit these optional environment bullets for your machine, set this in `~/.rimz/config.toml`:
 
 ```toml
 [agents]
@@ -663,6 +663,21 @@ env-reminder = false
 ```
 
 A trusted room's `.rimz/config.toml` can set the same key to override the machine value in either direction. Team members still receive cwd and their memory-file listing, and a configured language server still appears. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for the full reminder.
+
+#### Agent shell
+
+Agents launch through your login shell, so its startup files set their PATH and environment. The commands a model writes usually assume bash, though: under zsh, an unquoted `$files` stays one word and an unset list behaves differently, so runs fail or get redone. To run every agent under one shell while your own shell panes keep yours, set this in `~/.rimz/config.toml`:
+
+```toml
+[agents]
+shell = "/bin/bash"
+```
+
+Each launch then runs its wrapper under that shell and sets `SHELL` and `CLAUDE_CODE_SHELL` to the path, so a provider that picks its tool shell from either uses it too. The value must be the absolute path of an installed bash, zsh, fish, or sh-family shell. A relative name, a missing path, `false` or `nologin`, or csh and tcsh refuse at `rimz config set`, at `rimz start`, and at every launch, with the fix, rather than quietly falling back to your shell. Remove the line to go back to your login shell.
+
+Bash runs as an interactive non-login shell (`bash -i -c`), so it reads `~/.bashrc`, not `~/.bash_profile`: put the PATH entries that find your provider CLIs in `~/.bashrc`. A supervised run (`rimz agents -p`) looks the provider up under the configured shell before it starts, so an entry only `~/.bash_profile` sets fails there, naming the provider.
+
+This key is machine-only: project config cannot override it, so a repository cannot choose which shell runs its agents. `rimz agents explain claude --prompt` shows the wrapper, the two keys, and the `- shell:` line before launching.
 
 #### Routine RimZ commands
 

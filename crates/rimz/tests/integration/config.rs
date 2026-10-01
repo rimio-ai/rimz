@@ -142,6 +142,33 @@ fn config_set_host_never_probes_bwrap() {
 }
 
 #[test]
+fn config_set_agent_shell_refuses_an_unusable_path_before_writing() {
+    let env = Env::new();
+    let path = machine_config_path(&env);
+    let seed = "[agents]\nisolation = \"host\"\n";
+    write_machine_file(&path, seed);
+    let missing = env.home_root.join("missing").join("bash");
+    for value in [
+        missing.display().to_string(),
+        format!("\"{}\"", missing.display()),
+    ] {
+        env.rimz()
+            .args(["config", "set", "agents.shell", &value])
+            .assert()
+            .failure()
+            .stderr(contains("[agents] shell"))
+            .stderr(contains("does not exist"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+    }
+    env.rimz()
+        .args(["config", "set", "agents.shell", "/bin/sh"])
+        .assert()
+        .success();
+    let config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(config["agents"]["shell"].as_str(), Some("/bin/sh"));
+}
+
+#[test]
 fn agents_validate_refuses_what_launch_refuses() {
     let env = Env::new();
     write_machine_file(

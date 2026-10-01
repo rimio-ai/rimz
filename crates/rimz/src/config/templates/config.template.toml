@@ -207,6 +207,7 @@ aggressive_resize = true
 # max-chain-length = 3                  # successive agent-to-agent launches allowed from a human-started root
 # env-reminder = true                   # include cwd, shell, and git state in launch reminders
 # allow-routine-rimz = true             # allow routine RimZ coordination in Claude launch settings
+## shell = "/bin/bash"                  # absolute path every agent launch runs under; default = your login shell
 # `rimz agents <spec>` names a team or uses inline cells made from profiles,
 # commands, or built-ins. Built-ins include `term`, agent kinds, and
 # adapter-supported `<kind>-<mode>` variants such as `claude-auto` or
