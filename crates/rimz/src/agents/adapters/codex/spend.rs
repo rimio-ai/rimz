@@ -122,9 +122,7 @@ pub(crate) fn parse_codex_spend(
     let mut out = Vec::with_capacity(events.len());
     let mut unknown_models = BTreeMap::new();
     for event in events {
-        let Some(model) = event.model.as_deref() else {
-            continue;
-        };
+        let model = event.model.as_str();
         let uncached_input = event
             .input_tokens
             .saturating_sub(event.cached_input_tokens)

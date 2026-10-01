@@ -70,7 +70,7 @@ fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].input_tokens, 100);
     assert_eq!(events[0].output_tokens, 50);
-    assert_eq!(events[0].model.as_deref(), Some("gpt-5"));
+    assert_eq!(events[0].model, "gpt-5");
 
     let (_dir, path) = write_session(
         "session-b.jsonl",
@@ -99,7 +99,7 @@ fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].input_tokens, 200);
     assert_eq!(events[0].output_tokens, 80);
-    assert_eq!(events[0].model.as_deref(), Some("gpt-5"));
+    assert_eq!(events[0].model, "gpt-5");
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn forked_rollout_skips_copied_history_and_keeps_its_cumulative_baseline() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].input_tokens, 150);
     assert_eq!(events[0].output_tokens, 50);
-    assert_eq!(events[0].model.as_deref(), Some("gpt-5"));
+    assert_eq!(events[0].model, "gpt-5");
     assert_eq!(events[0].timestamp, "2026-01-01T10:01:00.000Z");
 }
 
@@ -272,7 +272,7 @@ fn implicit_cache_read_billing_preserves_cache_write() {
 fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
     let base = parse::CodexTokenEvent {
         timestamp: "2026-01-01T10:00:00.000Z".to_string(),
-        model: Some("gpt-5".to_string()),
+        model: "gpt-5".to_string(),
         input_tokens: 100,
         cached_input_tokens: 10,
         cache_write_input_tokens: 0,
@@ -282,7 +282,7 @@ fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
         tool_calls: BTreeMap::new(),
     };
     let key = |event: &parse::CodexTokenEvent| {
-        codex_event_dedup_key(&event.timestamp, event.model.as_deref().unwrap(), event)
+        codex_event_dedup_key(&event.timestamp, &event.model, event)
     };
 
     let mut diff_reasoning = base.clone();
