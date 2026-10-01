@@ -578,7 +578,7 @@ fn linger_subagent(
 /// The host-side refusal for a fresh launch of a profile whose definition failed to load. Resume
 /// and fork are left alone: lane resume degrades to a bare resume by design, and restart/fork
 /// refuse at the CLI. A trusted project profile that shadows the failed name launches normally.
-pub(super) fn exec_definition_failure(
+fn exec_definition_failure(
     request: &rimz::harness::launch::ExecRequest,
     machine: &rimz::config::MachineConfig,
     effective: Option<&rimz::config::effective::LaunchAgents>,
@@ -600,7 +600,7 @@ pub(super) fn exec_definition_failure(
     machine.definition_failure_for(profile)
 }
 
-pub(super) fn should_exec_agent_directly(request: &rimz::harness::launch::ExecRequest) -> bool {
+fn should_exec_agent_directly(request: &rimz::harness::launch::ExecRequest) -> bool {
     cfg!(unix)
         && request.run_id.is_none()
         && request.worktree_path.is_none()
@@ -608,20 +608,17 @@ pub(super) fn should_exec_agent_directly(request: &rimz::harness::launch::ExecRe
         && !request.close_pane_on_exit
 }
 
-pub(super) fn should_record_end_trace(request: &rimz::harness::launch::ExecRequest) -> bool {
+fn should_record_end_trace(request: &rimz::harness::launch::ExecRequest) -> bool {
     !request.exit_on_run_completion || request.subagent
 }
 
-pub(super) fn should_drop_to_shell(
-    request: &rimz::harness::launch::ExecRequest,
-    abrupt: bool,
-) -> bool {
+fn should_drop_to_shell(request: &rimz::harness::launch::ExecRequest, abrupt: bool) -> bool {
     (request.close_pane_on_exit || request.worktree_path.is_some())
         && request.run_id.is_none()
         && !abrupt
 }
 
-pub(super) fn relaunch_command(request: &rimz::harness::launch::ExecRequest) -> String {
+fn relaunch_command(request: &rimz::harness::launch::ExecRequest) -> String {
     format!(
         "rimz agents {}",
         rimz::harness::resume::relaunch_spec(
@@ -636,10 +633,7 @@ pub(super) fn relaunch_command(request: &rimz::harness::launch::ExecRequest) -> 
 /// Whether the pane's ended session is one `--resume` can redeem: a real
 /// provider session id whose adapter compiles a resume command for this
 /// directory. The hint then teaches resume; anything else relaunches fresh.
-pub(super) fn exited_session_resumable(
-    ended: Option<&(AgentKind, AgentSessionId)>,
-    cwd: &Path,
-) -> bool {
+fn exited_session_resumable(ended: Option<&(AgentKind, AgentSessionId)>, cwd: &Path) -> bool {
     ended.is_some_and(|(kind, agent_id)| {
         !agent_id.is_provisional()
             && rimz::agents::find_definition(kind.as_str())
@@ -647,7 +641,7 @@ pub(super) fn exited_session_resumable(
     })
 }
 
-pub(super) fn exit_hint(
+fn exit_hint(
     kind: &str,
     status: &ExitStatus,
     startup_failure: bool,
@@ -707,7 +701,7 @@ fn drop_to_shell_after_agent_exit(
 /// Non-abrupt exits are deliberate. Abrupt exits are deliberate only while the
 /// mux session still accepts live pane closes; if the mux is gone or wedged,
 /// skip cleanup so the prior live-roster snapshot can recover the agent.
-pub(super) fn close_is_deliberate(abrupt: bool, session_accepts_close: bool) -> bool {
+fn close_is_deliberate(abrupt: bool, session_accepts_close: bool) -> bool {
     !abrupt || session_accepts_close
 }
 
@@ -897,13 +891,13 @@ impl<'a> ExecInvocationContext<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct RunExecContext {
-    pub(super) run_id: rimz::RunId,
-    pub(super) store: rimz::Store,
-    pub(super) session_name: String,
+struct RunExecContext {
+    run_id: rimz::RunId,
+    store: rimz::Store,
+    session_name: String,
     /// What the fleet digest reporter needs when a parked run repairs its own
     /// lost digest.
-    pub(super) workspace: rimz::ResolvedWorkspace,
+    workspace: rimz::ResolvedWorkspace,
 }
 
 impl RunExecContext {
@@ -1110,7 +1104,7 @@ fn run_exec_context(
     }))
 }
 
-pub(super) fn exec_launch_identity(
+fn exec_launch_identity(
     request: &rimz::harness::launch::ExecRequest,
 ) -> Result<Option<LaunchIdentity>> {
     match (
@@ -1149,7 +1143,7 @@ pub(super) fn exec_launch_identity(
 
 /// The exact durable card an exec wrapper can attach before provider startup.
 /// A fork abstains because its provider-assigned session id is not known yet.
-pub(super) fn exec_attach_target(
+fn exec_attach_target(
     request: &rimz::harness::launch::ExecRequest,
 ) -> Option<(AgentKind, AgentSessionId)> {
     match &request.action {
@@ -1488,7 +1482,7 @@ fn launch_is_still_provisional(
     }
 }
 
-pub(super) fn fail_run_if_child_exited_first(
+fn fail_run_if_child_exited_first(
     context: &RunExecContext,
     globals: &GlobalFlags,
     terminal_grace: Duration,
