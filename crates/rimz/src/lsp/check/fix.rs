@@ -83,7 +83,7 @@ fn defining_file(
     if candidates.len() < 2 {
         return Ok(None);
     }
-    let mut defining = Vec::new();
+    let mut defining = None;
     for path in candidates {
         let Some(file) = context.outline(&path)? else {
             return Ok(None);
@@ -91,11 +91,11 @@ fn defining_file(
         if file.dirty {
             return Ok(None);
         }
-        if !symbol_hits(&file.nodes, chain).is_empty() {
-            defining.push(path);
+        if !symbol_hits(&file.nodes, chain).is_empty() && defining.replace(path).is_some() {
+            return Ok(None);
         }
     }
-    let [path] = defining.as_slice() else {
+    let Some(path) = defining else {
         return Ok(None);
     };
     Ok(path.to_str().map(|full| (range.clone(), full.to_owned())))
