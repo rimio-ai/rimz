@@ -673,7 +673,7 @@ Agents launch through your login shell, so its startup files set their PATH and 
 shell = "/bin/bash"
 ```
 
-Each launch then runs its wrapper under that shell and sets `SHELL` and `CLAUDE_CODE_SHELL` to the path, so a provider that picks its tool shell from either uses it too. The value must be the absolute path of an installed bash, zsh, fish, or sh-family shell. A relative name, a missing path, `false` or `nologin`, or csh and tcsh refuse at `rimz config set`, at `rimz start`, and at every launch, with the fix, rather than quietly falling back to your shell. Remove the line to go back to your login shell.
+Each launch then runs its wrapper under that shell and sets `SHELL` and `CLAUDE_CODE_SHELL` to the path, so a provider that picks its tool shell from either uses it too. Claude Code honours them only for bash or zsh: under fish its tools fall back to zsh or bash ([Claude's tool shell](../externals/agent-adapter/claude-reference.md#tool-shell)). The value must be the absolute path of an installed bash, zsh, fish, or sh-family shell. A relative name, a missing path, `false` or `nologin`, or csh and tcsh refuse at `rimz config set`, at `rimz start`, and at every launch, with the fix, rather than quietly falling back to your shell. Remove the line to go back to your login shell.
 
 Bash runs as an interactive non-login shell (`bash -i -c`), so it reads `~/.bashrc`, not `~/.bash_profile`: put the PATH entries that find your provider CLIs in `~/.bashrc`. A supervised run (`rimz agents -p`) looks the provider up under the configured shell before it starts, so an entry only `~/.bash_profile` sets fails there, naming the provider.
 

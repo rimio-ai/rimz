@@ -493,6 +493,10 @@ The valid range is 100K to 1M tokens, capped at the model's context window. The 
 
 [`skillOverrides`](https://code.claude.com/docs/en/skills) accepts `"user-invocable-only"`, which leaves explicit `/skill` expansion available while removing model invocation. [`--settings`](https://code.claude.com/docs/en/cli-reference) accepts a file or inline JSON. Local probes on 2.1.282 found that keys are skill directory names, only the last `--settings` takes effect, and `*` is not a wildcard.
 
+### Tool shell
+
+The Bash tool picks its shell in this order ([environment variables](https://code.claude.com/docs/en/env-vars#variables)): `CLAUDE_CODE_SHELL` when it names a working bash or zsh, then `$SHELL` when it names bash or zsh, then the first working zsh, then bash, found on `PATH` or in standard install locations. An invalid override is ignored, and other shells are unsupported: "Other shells such as `fish` are not supported." `CLAUDE_CODE_SHELL` arrived in [2.0.65](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2065). `CLAUDE_CODE_SHELL_PREFIX` is a different variable: it wraps commands, hooks, status-line commands, and stdio MCP startup, and does not select the shell.
+
 ## Agent view
 
 `claude agents` opens agent view, one screen for every background session; `claude --bg`, `/background`, or `←` in a session sends a session to the background ([agent view](https://code.claude.com/docs/en/agent-view)). Agent view first shipped in 2.1.139. `--bg` cannot be combined with `-p`.
