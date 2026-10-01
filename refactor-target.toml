@@ -378,8 +378,7 @@ path = "crates/rimz/src/harness"
 # Condition parsing, ordered readings, CI sources, hold state and evidence cross the scheduler/CLI seam (+17).
 # Condition admission and timing presentation share stage validation, state refinement and labels (+3).
 # Live condition scopes cross the harness/sidebar seam to keep pane-free CI probes alive (+1).
-# LaunchLogin::from_ancestry shares the stamped account inheritance rule (+1).
-surface-budget = 622
+surface-budget = 621
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

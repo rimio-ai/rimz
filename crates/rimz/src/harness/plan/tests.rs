@@ -56,7 +56,7 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
             },
         )
         .unwrap();
-        let availability = LaunchAvailability::read(&runtime, &state, &config, now, None);
+        let availability = LaunchAvailability::read(&runtime, &state, &config, now);
         assert_eq!(
             availability.unavailable(kind, alias),
             Some(TierSkipReason::Exhausted { until: Some(reset) }),
@@ -71,25 +71,6 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
         if pin.is_some() {
             assert!(availability.unavailable(kind, "gpt-6-astra").is_none());
         }
-        config.accounts = toml::from_str(&format!("[{kind}.work]\nhome = '/srv/work'\n")).unwrap();
-        let pinned = LaunchAvailability::read(
-            &runtime,
-            &state,
-            &config,
-            now,
-            Some(&LaunchAncestry::Peer {
-                parent_login: crate::ids::LoginKey::new(
-                    AgentKind::new_unchecked(kind),
-                    "work".parse().unwrap(),
-                ),
-                launch_generation: 1,
-                launched_by: None,
-            }),
-        );
-        assert!(
-            pinned.unavailable(kind, alias).is_none(),
-            "a fresh named login must not inherit the default's exhausted window"
-        );
     }
 }
 
@@ -1899,7 +1880,6 @@ fn launch_request_names_and_metadata() {
     }));
 
     let ancestry = LaunchAncestry::Subagent {
-        parent_login: "claude@work".parse().unwrap(),
         parent_agent_id: AgentSessionId::from("root-session"),
         parent_agent_kind: AgentKind::new_unchecked("claude"),
         launch_generation: 2,
@@ -1954,7 +1934,6 @@ fn launch_request_names_and_metadata() {
         None,
         None,
         Some(&LaunchAncestry::Peer {
-            parent_login: "claude@default".parse().unwrap(),
             launch_generation: 2,
             launched_by: Some(crate::agents::LaunchedBy {
                 kind: AgentKind::new_unchecked("claude"),

@@ -1041,7 +1041,7 @@ fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) 
 
 #[cfg(unix)]
 #[test]
-fn subagent_inherits_the_parent_account_after_the_room_switches() {
+fn subagent_uses_the_room_account_after_the_room_switches() {
     assert_subagent_checkout_with_login(false, false, None, true);
 }
 
@@ -1271,7 +1271,7 @@ fn assert_subagent_checkout_with_login(
         assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_launch_id));
         assert_eq!(
             child.login.as_ref().map(|name| name.as_str()),
-            switch.then_some("work")
+            switch.then_some("spare")
         );
     }
     let trace = std::fs::read_to_string(&trace_path).expect("read child pane trace");

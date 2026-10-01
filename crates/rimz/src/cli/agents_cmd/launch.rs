@@ -191,7 +191,7 @@ pub(super) fn launch_layout(
                 workspace,
                 store.runtime_paths(),
                 cell,
-                rimz::store::writer::LaunchLogin::from_ancestry(ancestry.as_ref(), &cell.kind),
+                rimz::store::writer::LaunchLogin::RoomDefault,
                 rimz::config::Isolation::resolve(
                     cell.launch.isolation,
                     cell.isolation_default,
@@ -852,7 +852,7 @@ fn launch_resume_layout(
                     )
                 }
                 rimz::harness::plan::CohortSeed::Fresh => {
-                    rimz::store::writer::LaunchLogin::from_ancestry(ancestry, &cell.kind)
+                    rimz::store::writer::LaunchLogin::RoomDefault
                 }
             },
             rimz::config::Isolation::resolve(

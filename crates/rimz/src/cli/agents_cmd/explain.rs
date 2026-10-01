@@ -174,12 +174,11 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             .expect("one cell yields one identity request")
             .launch;
         // A preview has no allocating batch; resolve its prospective account without writing a launch.
-        let login = rimz::store::writer::LaunchLogin::from_ancestry(ancestry.as_ref(), &cell.kind)
-            .resolve(
-                &cell.kind,
-                &rimz::agents::room_logins(&state.workspace_record)?,
-                &machine.accounts,
-            )?;
+        let login = rimz::store::writer::LaunchLogin::RoomDefault.resolve(
+            &cell.kind,
+            &rimz::agents::room_logins(&state.workspace_record)?,
+            &machine.accounts,
+        )?;
         params.login = (!login.is_default()).then(|| login.name().clone());
         let request = ExecRequest::fresh(
             cell,

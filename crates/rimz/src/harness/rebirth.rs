@@ -313,13 +313,8 @@ fn inspect_at(
     };
 
     let recovery_enabled = !disabled && machine.resume.on_rebirth;
-    let availability = crate::harness::plan::LaunchAvailability::read(
-        &runtime,
-        &paths,
-        machine,
-        Timestamp::now(),
-        None,
-    );
+    let availability =
+        crate::harness::plan::LaunchAvailability::read(&runtime, &paths, machine, Timestamp::now());
     let teams_and_profiles = effective_teams_and_profiles(machine, project_root, &availability);
     let planned = if recovery_enabled && recover_agents {
         plan_recovery(

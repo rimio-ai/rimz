@@ -35,13 +35,12 @@ impl LaunchAvailability {
         state: &StatePaths,
         config: &crate::config::MachineConfig,
         now: jiff::Timestamp,
-        ancestry: Option<&LaunchAncestry>,
     ) -> Self {
         let defaults = crate::agents::room_logins(&state.workspace_record).ok();
         let logins: BTreeMap<_, _> = crate::agents::known_kinds()
             .filter_map(|kind| {
                 let kind = AgentKind::new_unchecked(kind);
-                let login = crate::store::writer::LaunchLogin::from_ancestry(ancestry, &kind)
+                let login = crate::store::writer::LaunchLogin::RoomDefault
                     .resolve(&kind, defaults.as_ref()?, &config.accounts)
                     .ok()?;
                 Some((kind, login.key()))
@@ -366,13 +365,8 @@ pub fn resolve_single_agent_launch(
     let mut launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
     let state = StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = RuntimePaths::for_state(&state)?;
-    let availability = LaunchAvailability::read(
-        &runtime,
-        &state,
-        &machine_config,
-        jiff::Timestamp::now(),
-        None,
-    );
+    let availability =
+        LaunchAvailability::read(&runtime, &state, &machine_config, jiff::Timestamp::now());
     launch.route(
         &machine_config.tiers,
         crate::config::effective::ProfileScope::Agents,
@@ -1077,7 +1071,6 @@ pub fn launch_identity_requests(
         if let Some(ancestry) = ancestry {
             match ancestry {
                 LaunchAncestry::Peer {
-                    parent_login: _,
                     launch_generation,
                     launched_by,
                 } => {
@@ -1085,7 +1078,6 @@ pub fn launch_identity_requests(
                     launch.launched_by = launched_by.clone().map(Box::new);
                 }
                 LaunchAncestry::Subagent {
-                    parent_login: _,
                     parent_agent_id,
                     parent_agent_kind,
                     launch_generation,
@@ -1097,7 +1089,7 @@ pub fn launch_identity_requests(
             }
         }
         requests.push(AgentLaunchRequest {
-            login: crate::store::writer::LaunchLogin::from_ancestry(ancestry, &cell.kind),
+            login: crate::store::writer::LaunchLogin::RoomDefault,
             kind: cell.kind.clone(),
             agent_id: mint_launch_id(),
             name,

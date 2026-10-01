@@ -1563,7 +1563,6 @@ fn materialize_team_restore_tab(
         };
         Some(agent.launch_depth.map(|launch_generation| {
             crate::harness::ancestry::LaunchAncestry::Peer {
-                parent_login: agent.login_key(),
                 launch_generation,
                 launched_by: agent.launched_by.clone(),
             }

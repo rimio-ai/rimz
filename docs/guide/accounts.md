@@ -110,7 +110,7 @@ rimz accounts use --room claude work
 
 The command checks the selected home's hooks, then changes only that provider's launch default in the room record. It leaves machine and project configuration alone and reports how many running agents keep the prior account. Reverse it with `rimz accounts use --room claude default`. Its output confirms the switch immediately; sidebar account information follows on the next refresh.
 
-A session always resumes under the account it started with, even after the room switches or is recovered after a crash. Keep that account declared to resume it. Children and peers of the same provider launched by an existing agent also inherit its account, so they can continue on the old account after the switch. A running [remote-control host](./remote.md#answer-asks-from-your-phone) keeps its account until its next spawn.
+Every new launch uses the room's current account for its provider, including children and peers launched by existing agents and team members. A session always resumes under the account it started with, even after the room switches or is recovered after a crash. Keep that account declared to resume it. A running [remote-control host](./remote.md#answer-asks-from-your-phone) keeps its account until its next spawn.
 
 Inside a room that is already running, `rimz start --account` refuses and points at `rimz accounts use --room`. `rimz reset --account` remains available when you want to tear down and rebuild the room instead.
 

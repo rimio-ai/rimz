@@ -75,7 +75,6 @@ pub(super) fn resume_lane(
                 store.paths(),
                 &machine_config,
                 jiff::Timestamp::now(),
-                None,
             );
             LaneRestoreConfig::load(&machine_config, &workspace.project_root, |kind, model| {
                 availability.unavailable(kind, model)

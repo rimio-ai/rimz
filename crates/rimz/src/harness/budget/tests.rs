@@ -1124,7 +1124,6 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
-        None,
     );
     assert!(
         availability.unavailable("claude", "opus").is_none(),
@@ -1171,7 +1170,6 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
-        None,
     );
     assert!(matches!(
         availability.unavailable("claude", "opus"),
@@ -1210,7 +1208,6 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
-        None,
     );
     assert!(matches!(
         scoped.unavailable("claude", "opus"),
@@ -1237,7 +1234,6 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
-        None,
     );
     assert!(unknown.unavailable("codex", "gpt-6-astra").is_none());
     accounts.logins.get_mut(&key).unwrap().ok = true;
@@ -1252,7 +1248,6 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         &state_paths(&runtime),
         &config,
         now,
-        None,
     );
     assert_eq!(
         logged_out.unavailable("codex", "gpt-6-astra"),
