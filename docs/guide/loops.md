@@ -224,7 +224,7 @@ Each tick projects the cached reading to now, so a window whose reset has passed
 
 The provider is fixed at add: the kind `--agent` or `--wait` resolves to, recorded on the task. Adding reads the current window first and refuses what it cannot read: a check-only task, which has no provider; Qwen, whose account is chosen per launch; and a missing or already-reset reading, which `rimz providers --refresh` or an open sidebar replaces. A window that has not started still reports about 1% used, so it reads `99` and `>=100` rarely holds; ask for `>=95` instead. Window conditions are not available to `--project` tasks. The expression rules are under [conditions](../reference/cli/loop.md#conditions).
 
-When the moment you want is the reset itself, `--after-reset 5h` (or `7d`) fires the task once when that window next resets, then removes it:
+When the moment you want is the reset itself, `--after-reset 5h` (or `7d`) fires the task once when that window next resets, then removes it. Run from an agent pane, this wakes that agent; from a terminal, name the agent (`--wait @planner`):
 
 ```sh
 rimz loop add after-limit --after-reset 5h --wait --prompt 'The 5h window has reset; pick the refactor back up.'
