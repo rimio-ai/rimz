@@ -337,7 +337,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     for key in ["TMPDIR"].iter().chain(adapter.temp_dir_env_keys()) {
         extra_env.insert((*key).to_owned(), tmp.display().to_string());
     }
-    // Save the TMPDIR replaced here for the mux children the agent starts.
+    // Save the TMPDIR replaced here for the children of the agent's tree that
+    // outlive its call (mux servers, detached helpers).
     // Inside an agent's tree the ambient TMPDIR is already a unit, so an
     // inherited save carries forward.
     let user_tmpdir = crate::child_process::USER_TMPDIR_ENV;

@@ -233,7 +233,9 @@ path = "crates/rimz/src/child_process.rs"
 # Loop dispatch shares isolated-program spawning with its cgroup handoff.
 # The temp-environment rule moves here from mux: both save-variable names, the
 # decision type, and its function serve mux, launch compile, and the sandbox (+4).
-surface-budget = 18
+# The `Command` applier serves the browser opener and the synchronous loop run, and
+# the unrestored reaping entry serves the wait watcher alone (+2).
+surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/cli"

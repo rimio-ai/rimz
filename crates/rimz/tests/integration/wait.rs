@@ -41,6 +41,41 @@ fn wait_run_preserves_shell_string_and_runs_both_commands() {
     wait_for_no_wait_instances(&env);
 }
 
+/// A watched command is the agent's own work, so it keeps the agent's temp
+/// unit, where the agent was told its files live.
+#[test]
+fn wait_run_keeps_the_agent_temp_environment() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let unit = env.home_root.join("unit");
+    let user = env.home_root.join("user-tmp");
+    std::fs::create_dir_all(&unit).unwrap();
+    std::fs::create_dir_all(&user).unwrap();
+    let command = "printf '%s|%s|%s' \"${TMPDIR-unset}\" \"${CLAUDE_CODE_TMPDIR-unset}\" \"${RIMZ_USER_TMPDIR-unset}\"";
+    let output = agent_wait(&env)
+        .env("TMPDIR", &unit)
+        .env("RIMZ_USER_TMPDIR", &user)
+        .env("CLAUDE_CODE_TMPDIR", &unit)
+        .env("RIMZ_TEMP_ROOT_KEYS", "CLAUDE_CODE_TMPDIR")
+        .args(["wait", "--run", command])
+        .output()
+        .expect("arm watched wait");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = wait_for_wait_records(&env, 1);
+    let check = records[0].check.as_ref().unwrap();
+    let (unit, user) = (unit.display(), user.display());
+    assert_eq!(
+        std::fs::read_to_string(check.output_path.as_ref().unwrap()).unwrap(),
+        format!("{unit}|{unit}|{user}")
+    );
+    wait_for_no_wait_instances(&env);
+}
+
 #[test]
 fn wait_run_rejects_empty_commands() {
     let env = Env::new();

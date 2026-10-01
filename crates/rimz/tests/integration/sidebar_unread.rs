@@ -146,14 +146,23 @@ fn sidebar_notify_test_spawns_configured_command_with_notify_env() {
     write_machine_config(
         &env,
         r#"[notifications]
-command = '''printf '%s|%s|%s|%s\n' "$RIMZ_NOTIFY_KIND" "$RIMZ_NOTIFY_AGENT" "$RIMZ_NOTIFY_TITLE" "$RIMZ_NOTIFY_BODY" >> "$RIMZ_NOTIFY_TEST_LOG"'''
+command = '''printf '%s|%s|%s|%s|%s|%s|%s\n' "$RIMZ_NOTIFY_KIND" "$RIMZ_NOTIFY_AGENT" "$RIMZ_NOTIFY_TITLE" "$RIMZ_NOTIFY_BODY" "${TMPDIR-unset}" "${CLAUDE_CODE_TMPDIR-unset}" "${RIMZ_USER_TMPDIR-unset}" >> "$RIMZ_NOTIFY_TEST_LOG"'''
 "#,
     );
+    // Run as if from an agent's tree: the handler gets the user's TMPDIR.
+    let unit = env.home_root.join("unit");
+    let user = env.home_root.join("user-tmp");
+    std::fs::create_dir_all(&unit).expect("mkdir unit");
+    std::fs::create_dir_all(&user).expect("mkdir user tmp");
 
     let out = env
         .rimz()
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
         .env("RIMZ_NOTIFY_TEST_LOG", &log_path)
+        .env("TMPDIR", &unit)
+        .env("RIMZ_USER_TMPDIR", &user)
+        .env("CLAUDE_CODE_TMPDIR", &unit)
+        .env("RIMZ_TEMP_ROOT_KEYS", "CLAUDE_CODE_TMPDIR")
         .args([
             "--mux",
             "tmux",
@@ -178,7 +187,11 @@ command = '''printf '%s|%s|%s|%s\n' "$RIMZ_NOTIFY_KIND" "$RIMZ_NOTIFY_AGENT" "$R
 
     let logged = wait_for_text(&log_path, Duration::from_secs(2));
     assert!(
-        logged.contains("success|") && logged.contains("|Test title|Test body"),
+        logged.contains("success|")
+            && logged.contains(&format!(
+                "|Test title|Test body|{}|unset|unset\n",
+                user.display()
+            )),
         "notify command env missing: {logged:?}"
     );
 }

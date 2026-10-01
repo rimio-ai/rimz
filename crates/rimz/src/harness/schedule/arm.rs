@@ -190,7 +190,9 @@ pub fn arm_delivery(
                 .stdout(Stdio::null())
                 .stderr(Stdio::from(output))
                 .process_group(0);
-            crate::child_process::spawn_detached_reaped(&mut command, "wait-watch")?;
+            // The watcher runs the agent's own command, which writes where the
+            // agent was told its temp files live.
+            crate::child_process::spawn_detached_reaped_as_agent(&mut command, "wait-watch")?;
             Ok(())
         };
         if let Err(error) = spawn() {

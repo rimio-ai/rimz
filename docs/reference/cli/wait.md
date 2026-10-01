@@ -111,7 +111,7 @@ The message starts with `waited on file <path>`, adding ``for `<pattern>` `` wit
 
 ### Watched command: `--run`
 
-The `--run` command string runs through `sh -c` with stdin closed, at the root of the checkout it was armed from (a linked worktree's root when armed from one). It runs in a detached watcher in its own process group, so it outlives the turn that armed it. Stdout and stderr go to the [output file](#the-output-file).
+The `--run` command string runs through `sh -c` with stdin closed, at the root of the checkout it was armed from (a linked worktree's root when armed from one). It runs in a detached watcher in its own process group, so it outlives the turn that armed it. It keeps the arming agent's environment, so `$TMPDIR` is the agent's temp directory. Stdout and stderr go to the [output file](#the-output-file).
 
 Quote the whole string so the caller's shell does not split it at `&&`, `|`, or `;`; it runs through POSIX `sh`, not bash.
 

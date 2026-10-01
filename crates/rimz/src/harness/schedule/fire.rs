@@ -648,6 +648,8 @@ pub(super) fn wait_loop_run(
     };
     let mut command = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
     command.args(loop_run_args(project_root, name, encoded.as_deref(), None));
+    // A loop run is not the arming agent's work, as on the detached path.
+    crate::child_process::restore_user_temp_env(&mut command);
     match command.status() {
         Ok(status) if status.success() => {}
         Ok(status) => tracing::warn!(task = name, %status, "watched wait delivery failed"),
