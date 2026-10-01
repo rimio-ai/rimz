@@ -1,6 +1,6 @@
 //! `rimz providers` — account plans, auth state, limits, credits, and spend.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
 use std::time::Duration;
 
@@ -19,7 +19,8 @@ use rimz::agents::spending::{ProviderSpendingCache, read_provider_spending_cache
 use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally};
 use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet, ambient_env};
 use rimz::config::MachineConfig;
-use rimz::ids::{AgentKind, LoginKey, RoomLogins};
+use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
+use rimz::room::{AccountStanding, Deciding, Scopes};
 use rimz::sidebar::enrich::provider_panels_from_caches;
 use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
 use rimz::store::snapshot::{DailyBudgetView, SidebarProviderPanel};
@@ -42,13 +43,26 @@ pub struct ProvidersArgs {
     all: bool,
 }
 
-pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
+pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
     validate_kind(args.kind.as_deref())?;
     let runtime = RuntimePaths::shared();
     runtime
         .ensure_shared_dirs()
         .context("preparing shared provider cache paths")?;
     let config = MachineConfig::load_lenient();
+    let (standing, in_room) = match position_standing(globals, &config) {
+        Ok(standing) => standing,
+        Err(error) => {
+            writeln!(
+                std::io::stderr().lock(),
+                "rimz: warning: cannot read the account selection here, so no account is marked: {error:#}"
+            )?;
+            (AccountStanding::unread(&config), false)
+        }
+    };
+    if let Some(blocked) = standing.blocked() {
+        writeln!(std::io::stderr().lock(), "rimz: warning: {blocked}")?;
+    }
     let spinner = (!args.json && std::io::stdout().is_terminal())
         .then(|| Spinner::delayed("Querying provider accounts", SPINNER_MIN_AGE));
     let catalog = LoginCatalog::from_config(&config.accounts).ok();
@@ -148,7 +162,7 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
             panels.insert(login.key(), panel);
         }
     }
-    let reports = assemble_reports(
+    let mut reports = assemble_reports(
         &logins,
         &accounts,
         panels,
@@ -156,16 +170,38 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
         args.kind.as_deref(),
         args.all,
     );
+    mark_standing(&mut reports, &standing);
     if args.json {
         return render::json_pretty(&reports);
     }
     let mut out = render::out();
-    render::finish(write_pretty(
-        &mut out,
-        &reports,
-        Timestamp::now(),
-        &config.time_zone(),
+    let (now, time_zone) = (Timestamp::now(), config.time_zone());
+    if args.kind.is_some() {
+        return render::finish(write_pretty(&mut out, &reports, now, &time_zone));
+    }
+    let deciding = reports
+        .iter()
+        .filter_map(|report| {
+            let deciding = standing.deciding(&AgentKind::new_unchecked(&report.kind))?;
+            Some((report.kind.clone(), deciding))
+        })
+        .collect();
+    render::finish(write_overview(
+        &mut out, &reports, now, &time_zone, &deciding, in_room,
     ))
+}
+
+/// The standing at the caller's position, and whether the caller runs inside
+/// the room there, where `rimz accounts use` can move it.
+fn position_standing(
+    globals: &GlobalFlags,
+    config: &MachineConfig,
+) -> Result<(AccountStanding, bool)> {
+    let position = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let standing = AccountStanding::at(&position.project_root, config)?;
+    let in_room = super::pinned_room_root()
+        .is_some_and(|pin| pin.canonicalize().ok() == position.project_root.canonicalize().ok());
+    Ok((standing, in_room))
 }
 
 fn validate_kind(kind: Option<&str>) -> Result<()> {
@@ -185,7 +221,7 @@ fn validate_kind(kind: Option<&str>) -> Result<()> {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct ProviderReport {
     kind: String,
-    account: String,
+    account: LoginName,
     product_name: String,
     status: ProviderStatus,
     probed_at: Option<Timestamp>,
@@ -202,6 +238,8 @@ struct ProviderReport {
     spending: Option<SpendTally>,
     day_budget: Option<DailyBudgetView>,
     active_sessions: u32,
+    active: bool,
+    default_for: Scopes,
 }
 
 fn assemble_reports(
@@ -212,11 +250,18 @@ fn assemble_reports(
     filter: Option<&str>,
     all: bool,
 ) -> Vec<ProviderReport> {
+    let named_kinds: BTreeSet<&AgentKind> = logins
+        .iter()
+        .filter(|login| !login.name().is_default())
+        .map(ProviderLogin::kind)
+        .collect();
     let mut reports = Vec::new();
     for login in logins {
         let kind = login.kind().as_str();
         if filter.is_some_and(|filter| filter != kind)
-            || (login.name().is_default() && !include_kind(kind, accounts, provider_spending, all))
+            || (login.name().is_default()
+                && !named_kinds.contains(login.kind())
+                && !include_kind(kind, accounts, provider_spending, all))
         {
             continue;
         }
@@ -263,7 +308,7 @@ fn build_report(
     let raw_plan = account.and_then(|account| account.plan.clone());
     ProviderReport {
         kind: kind.to_owned(),
-        account: login.name().to_string(),
+        account: login.name().clone(),
         product_name: panel
             .map(|panel| panel.product_name.clone())
             .unwrap_or_else(|| {
@@ -295,18 +340,259 @@ fn build_report(
         windows: panel.map_or_else(Vec::new, |panel| panel.windows.clone()),
         extra_credits: panel.and_then(|panel| panel.extra_credits.clone()),
         reset_credits: panel.and_then(|panel| panel.reset_credits.clone()),
-        spending: login
-            .name()
-            .is_default()
-            .then(|| {
-                panel
-                    .and_then(|panel| panel.spending.clone())
-                    .or_else(|| provider_spending.spending.by_provider.get(kind).cloned())
-            })
-            .flatten(),
+        spending: panel.and_then(|panel| panel.spending.clone()).or_else(|| {
+            provider_spending
+                .spending
+                .by_login
+                .get(&login.key())
+                .cloned()
+        }),
         day_budget: panel.and_then(|panel| panel.day_budget),
         active_sessions: panel.map_or(0, |panel| panel.active_sessions),
+        active: false,
+        default_for: Scopes::default(),
     }
+}
+
+/// Mark each report with the account a launch at the position uses and the
+/// layers it is the default of.
+fn mark_standing(reports: &mut [ProviderReport], standing: &AccountStanding) {
+    for report in reports {
+        let kind = AgentKind::new_unchecked(&report.kind);
+        report.active = standing.active(&kind).as_ref() == Some(&report.account);
+        report.default_for = standing.scopes(&kind, &report.account);
+    }
+}
+
+/// Every kind in turn: one comparison table for a kind with named accounts,
+/// today's block for the rest.
+fn write_overview(
+    out: &mut impl Write,
+    reports: &[ProviderReport],
+    now: Timestamp,
+    time_zone: &TimeZone,
+    deciding: &BTreeMap<String, Deciding>,
+    in_room: bool,
+) -> std::io::Result<()> {
+    for (index, group) in reports.chunk_by(|a, b| a.kind == b.kind).enumerate() {
+        if index > 0 {
+            writeln!(out)?;
+        }
+        if group.iter().all(|report| report.account.is_default()) {
+            write_pretty(out, group, now, time_zone)?;
+        } else {
+            // A room's selection moves only from inside that room.
+            let deciding = deciding
+                .get(&group[0].kind)
+                .copied()
+                .filter(|deciding| in_room || *deciding != Deciding::Room);
+            write_comparison(out, group, now, deciding)?;
+        }
+    }
+    Ok(())
+}
+
+/// A rate-limit lane's identity across accounts: its scope id, else its
+/// duration.
+type WindowKey<'a> = (Option<&'a str>, Option<u32>);
+
+fn window_key(window: &RateLimitWindow) -> WindowKey<'_> {
+    match &window.scope {
+        Some(scope) => (Some(scope.id.as_str()), None),
+        None => (None, window.duration_mins),
+    }
+}
+
+fn write_comparison(
+    out: &mut impl Write,
+    reports: &[ProviderReport],
+    now: Timestamp,
+    deciding: Option<Deciding>,
+) -> std::io::Result<()> {
+    let kind = reports[0].kind.as_str();
+    write!(
+        out,
+        "{}",
+        render::paint(
+            render::palette::identity(kind).bold(),
+            &render::palette::identity_name(kind)
+        )
+    )?;
+    match reports.iter().find_map(|report| report.version.as_deref()) {
+        Some(version) => writeln!(out, " · v{}", render::one_line(version))?,
+        None => writeln!(out)?,
+    }
+    let mut windows: Vec<(WindowKey<'_>, String)> = Vec::new();
+    for window in reports.iter().flat_map(|report| &report.windows) {
+        let key = window_key(window);
+        if !windows.iter().any(|(seen, _)| *seen == key) {
+            windows.push((key, rimz::theme::fmt::window_label(window)));
+        }
+    }
+    let extra = reports.iter().any(|report| report.extra_credits.is_some());
+    let credits = reports.iter().any(|report| report.reset_credits.is_some());
+    let mut headers = vec!["".to_owned(), "ACCOUNT".to_owned(), "PLAN".to_owned()];
+    headers.extend(windows.iter().map(|(_, label)| label.clone()));
+    headers.extend(extra.then(|| "EXTRA".to_owned()));
+    headers.extend(credits.then(|| "CREDITS".to_owned()));
+    headers.extend(["SPEND 7d".to_owned(), "DEFAULT FOR".to_owned()]);
+    let mut table = render::Table::new(headers);
+    for report in reports {
+        let mut cells = vec![
+            if report.active {
+                cell("●").fg(render::palette::accent())
+            } else {
+                cell("")
+            },
+            if report.account.is_default() {
+                cell(report.account.as_str()).fg(render::palette::muted())
+            } else {
+                cell(report.account.as_str())
+            },
+            if report.status == ProviderStatus::LoggedIn {
+                value_cell(report.plan_label.as_deref().map(render::one_line))
+            } else {
+                cell(provider_status_label(report.status))
+                    .fg(render::status::provider(report.status))
+            },
+        ];
+        cells.extend(windows.iter().map(|(key, _)| {
+            if report.metered == Some(false) {
+                return cell("∞");
+            }
+            value_cell(
+                report
+                    .windows
+                    .iter()
+                    .find(|window| window_key(window) == *key)
+                    .and_then(|window| window_cell_value(window, now)),
+            )
+        }));
+        if extra {
+            cells.push(extra_cell(report.extra_credits.as_ref()));
+        }
+        if credits {
+            cells.push(credits_cell(report.reset_credits.as_ref(), now));
+        }
+        cells.push(report.spending.as_ref().map_or_else(
+            || cell("-").dash(),
+            |spending| money_cell(spending.week.usd),
+        ));
+        cells.push(cell(report.default_for.label()).dash());
+        table.row(cells);
+    }
+    table.render(out)?;
+    if let Some((reason, command)) = switch_hint(reports, deciding) {
+        writeln!(out)?;
+        writeln!(out, "  {reason}")?;
+        writeln!(out, "    {command}")?;
+    }
+    Ok(())
+}
+
+fn window_cell_value(window: &RateLimitWindow, now: Timestamp) -> Option<String> {
+    if window.lifted {
+        return Some("∞".to_owned());
+    }
+    let used = window.used_percentage?;
+    if window.not_started(now) {
+        return Some(format!("{used}% · ready"));
+    }
+    Some(match window.resets_at {
+        Some(deadline) => format!(
+            "{used}% · {}",
+            rimz::theme::fmt::reset_countdown(deadline, now)
+        ),
+        None => format!("{used}%"),
+    })
+}
+
+fn extra_cell(extra: Option<&ExtraCredits>) -> render::Cell {
+    match extra {
+        Some(ExtraCredits::Disabled) => cell("off"),
+        Some(ExtraCredits::Known {
+            remaining_usd: Some(remaining),
+            ..
+        }) => money_cell(*remaining).suffix("left", render::palette::body()),
+        Some(ExtraCredits::Known {
+            used_usd: Some(used),
+            ..
+        }) => money_cell(*used).suffix("used", render::palette::body()),
+        Some(ExtraCredits::Known { .. }) | None => unknown_cell(),
+    }
+}
+
+fn credits_cell(reset: Option<&ResetCredits>, now: Timestamp) -> render::Cell {
+    let Some(reset) = reset else {
+        return unknown_cell();
+    };
+    if reset.count == 0 {
+        return cell("-").dash();
+    }
+    let soonest = reset
+        .expiries
+        .iter()
+        .min()
+        .copied()
+        .or(reset.soonest_expiry);
+    match soonest {
+        Some(deadline) if deadline <= now => cell(format!("{} · due", reset.count)),
+        Some(deadline) => cell(format!(
+            "{} · {}",
+            reset.count,
+            rimz::theme::fmt::reset_countdown(deadline, now)
+        )),
+        None => cell(reset.count.to_string()),
+    }
+}
+
+/// The sentence and command that move the marker to the logged-in sibling
+/// with the most room, once the active account reads 80% or more on a window
+/// that sibling reads strictly lower. A project-decided kind gets none: no
+/// `accounts use` form moves it.
+fn switch_hint(reports: &[ProviderReport], deciding: Option<Deciding>) -> Option<(String, String)> {
+    let flag = match deciding? {
+        Deciding::Room => "",
+        Deciding::Machine => "--global ",
+        Deciding::Project => return None,
+    };
+    let active = reports.iter().find(|report| report.active)?;
+    let mut hot: Vec<(&RateLimitWindow, u8)> = active
+        .windows
+        .iter()
+        .filter(|window| !window.lifted)
+        .filter_map(|window| Some((window, window.used_percentage?)))
+        .filter(|(_, used)| *used >= 80)
+        .collect();
+    hot.sort_by_key(|(_, used)| std::cmp::Reverse(*used));
+    hot.into_iter().find_map(|(window, used)| {
+        let key = window_key(window);
+        let (roomiest, _) = reports
+            .iter()
+            .filter(|report| !report.active && report.status == ProviderStatus::LoggedIn)
+            .filter_map(|report| {
+                let reading = report
+                    .windows
+                    .iter()
+                    .find(|sibling| !sibling.lifted && window_key(sibling) == key)?
+                    .used_percentage?;
+                (reading < used).then_some((report, reading))
+            })
+            .min_by(|(a, a_used), (b, b_used)| (a_used, &a.account).cmp(&(b_used, &b.account)))?;
+        Some((
+            format!(
+                "{} {} is at {used}% of its {} window; {} has the most room:",
+                active.kind,
+                active.account,
+                rimz::theme::fmt::window_label(window),
+                roomiest.account
+            ),
+            format!(
+                "rimz accounts use {flag}{} {}",
+                active.kind, roomiest.account
+            ),
+        ))
+    })
 }
 
 fn timestamp_from_millis(millis: u64) -> Option<Timestamp> {
@@ -321,24 +607,32 @@ fn write_pretty(
     now: Timestamp,
     time_zone: &TimeZone,
 ) -> std::io::Result<()> {
+    let named_kinds: BTreeSet<&str> = reports
+        .iter()
+        .filter(|report| !report.account.is_default())
+        .map(|report| report.kind.as_str())
+        .collect();
     for (index, report) in reports.iter().enumerate() {
         if index > 0 {
             writeln!(out)?;
         }
+        let named = named_kinds.contains(report.kind.as_str());
+        let mut name = render::palette::identity_name(&report.kind);
+        if named {
+            if report.active {
+                write!(out, "{} ", render::paint(render::palette::accent(), "●"))?;
+            } else {
+                write!(out, "  ")?;
+            }
+            name = format!("{name} · {}", report.account);
+        }
         write!(
             out,
             "{} — ",
-            render::paint(
-                render::palette::identity(&report.kind).bold(),
-                &if report.account == "default" {
-                    render::palette::identity_name(&report.kind)
-                } else {
-                    report.product_name.clone()
-                },
-            )
+            render::paint(render::palette::identity(&report.kind).bold(), &name)
         )?;
         write_optional(out, report.plan_label.as_deref(), "")?;
-        writeln!(
+        write!(
             out,
             " · {}",
             render::paint(
@@ -346,6 +640,11 @@ fn write_pretty(
                 provider_status_label(report.status)
             )
         )?;
+        let scopes = report.default_for.label();
+        if named && scopes != "-" {
+            write!(out, " · {scopes}")?;
+        }
+        writeln!(out)?;
 
         let mut rows = KeyVals::new().indent(2);
         rows.push(
@@ -400,7 +699,7 @@ fn write_pretty(
                     money_cell(spending.month.usd),
                 ],
             );
-        } else if report.account == "default" {
+        } else if report.account.is_default() {
             rows.push("spend", unknown_cell());
         }
         if let Some(budget) = report.day_budget {

@@ -107,7 +107,7 @@ Each panel field has one source:
 | `window_placeholders` | the spec's `expected_windows`, painted as empty tracks before the first reading |
 | `extra_credits`, `reset_credits` | the `credits.json` entry, or a local API spend projection |
 | `redeem_forecast` | [`project_redeem_forecasts`](../../../crates/rimz/src/harness/auto_redeem.rs) over the cached capacity and burn rate, only on a Codex panel carrying `reset_credits` ([Auto-redeem](#auto-redeem)) |
-| `spending` | the kind's [`SpendTally`](./spending.md#what-reads-the-totals) from `provider-spending.json` |
+| `spending` | the login's [`SpendTally`](./spending.md#what-reads-the-totals) (`by_login`) from `provider-spending.json`; `rimz providers` falls back to the same entry when a login has no panel |
 | brand art and color | `AgentSpec` color and name, the embedded emblem catalog, and `[theme.providers.<kind>]` overrides; an unknown kind gets neutral grey ([theme.md](../../guide/theme.md#provider-styling)) |
 
 A color override keeps the catalog's tint runs, while an `ascii_art` override paints its art in the single brand color.
