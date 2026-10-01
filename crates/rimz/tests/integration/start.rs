@@ -124,6 +124,34 @@ fn start_refuses_sandbox_without_bwrap() {
 }
 
 #[test]
+fn start_refuses_a_missing_configured_agent_shell() {
+    let env = Env::new();
+    let config_dir = env.rimz_home();
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    let missing = env.home_root.join("missing").join("bash");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!("[agents]\nshell = \"{}\"\n", missing.display()),
+    )
+    .expect("write agent shell config");
+    let mux_log = env.home_root.join("zellij.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "start", "--no-attach"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
+        .bounded_output()
+        .expect("run start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("[agents] shell") && stderr.contains("does not exist"),
+        "{stderr}"
+    );
+    assert!(!mux_log.exists(), "no multiplexer calls before refusal");
+}
+
+#[test]
 fn start_refuses_a_legacy_only_host_without_creating_the_home() {
     let env = Env::new();
     std::fs::remove_dir_all(env.rimz_home()).expect("remove fixture home");

@@ -135,6 +135,15 @@ fn set(args: SetArgs) -> Result<()> {
     {
         rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
     }
+    if args.key == "agents.shell" {
+        let shell = args
+            .value
+            .parse::<toml_edit::Value>()
+            .ok()
+            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+            .unwrap_or_else(|| args.value.clone());
+        rimz::harness::launch::validate_agent_shell(std::path::Path::new(&shell))?;
+    }
     let transition = remote_control_transition(&args.key, &args.value);
     if let Some((host, true)) = transition {
         rimz::remote_control::preflight_enable(host)?;
