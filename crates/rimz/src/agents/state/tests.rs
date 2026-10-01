@@ -322,11 +322,11 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
         ),
         (
             serde_json::from_value(serde_json::json!({
-                "kind": "subagent", "active_at": now, "settled": "done",
+                "kind": "subagent", "active_at": now, "settled": "completed",
             }))
             .expect("settled subagent wait is part of the agent wire"),
             "subagent",
-            "done, reporting",
+            "completed, reporting",
             None,
             "wakes when calm-fox reports",
         ),

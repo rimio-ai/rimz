@@ -314,7 +314,7 @@ mod tests {
                 armed_at: Some(ts(-7340)),
             },
         );
-        for (name, settled) in [("bright-owl", Some("done")), ("calm-fox", None)] {
+        for (name, settled) in [("bright-owl", Some("completed")), ("calm-fox", None)] {
             agent.pending_waits.insert(
                 0,
                 PendingWait {
@@ -345,7 +345,7 @@ mod tests {
         });
         assert_eq!(
             prompt(&agent, ts(3485)),
-            "Cache keepalive, no action needed. Waiting on:\n- calm-fox: 42m, active 3m ago, deadline in 18m\n- bright-owl: 42m, done, reporting\n- forge#feat-x: 3h, stage Review\n- gate: cargo xtask gate, 58m\n- ci: signal pr.checks\n- nap: timer in 12m, 5m"
+            "Cache keepalive, no action needed. Waiting on:\n- calm-fox: 42m, active 3m ago, deadline in 18m\n- bright-owl: 42m, completed, reporting\n- forge#feat-x: 3h, stage Review\n- gate: cargo xtask gate, 58m\n- ci: signal pr.checks\n- nap: timer in 12m, 5m"
         );
     }
 

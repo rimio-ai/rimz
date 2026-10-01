@@ -37,7 +37,7 @@ pub(super) fn newest_run_by_ref(
 
 pub(super) fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
     use std::io::Write;
-    let status = supervised::output::status_label(run.status);
+    let status = run.status.label();
     writeln!(
         render::out(),
         "{} {} {} {}",

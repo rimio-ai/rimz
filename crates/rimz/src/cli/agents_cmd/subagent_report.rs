@@ -398,7 +398,7 @@ fn compose_answer_row(
     let mut row = format!(
         "- @{}: {} {preposition} {elapsed}",
         child_name(child, run),
-        status_label(status),
+        status.label(),
     );
     if status != RunStatus::Completed
         && let Some(reason) = failure_reason(answer.map_or(run.failure_tail.as_deref(), |answer| {
@@ -468,19 +468,6 @@ fn failure_reason(tail: Option<&str>) -> Option<&str> {
         .rev()
         .find(|line| !line.trim().is_empty())
         .map(str::trim)
-}
-
-fn status_label(status: RunStatus) -> &'static str {
-    match status {
-        RunStatus::Pending => "pending",
-        RunStatus::Running => "running",
-        RunStatus::Completed => "completed",
-        RunStatus::Failed => "failed",
-        RunStatus::VerifyFailed => "verify failed",
-        RunStatus::TimedOut => "timed out",
-        RunStatus::BudgetExceeded => "budget exceeded",
-        RunStatus::Canceled => "canceled",
-    }
 }
 
 #[cfg(test)]

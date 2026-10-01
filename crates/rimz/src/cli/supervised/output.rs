@@ -122,10 +122,7 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
         writeln!(
             err,
             "rimz: run {} (exit {})",
-            render::paint(
-                render::status::run(record.status),
-                status_label(record.status)
-            ),
+            render::paint(render::status::run(record.status), record.status.label()),
             record.status.exit_code()
         )?;
         if let Some(tail) = record
@@ -157,19 +154,6 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
         }
     }
     Ok(())
-}
-
-pub(crate) fn status_label(status: RunStatus) -> &'static str {
-    match status {
-        RunStatus::Pending => "pending",
-        RunStatus::Running => "running",
-        RunStatus::Completed => "completed",
-        RunStatus::Failed => "failed",
-        RunStatus::VerifyFailed => "verify failed",
-        RunStatus::TimedOut => "timed out",
-        RunStatus::BudgetExceeded => "budget exceeded",
-        RunStatus::Canceled => "canceled",
-    }
 }
 
 pub(super) fn verify_status_label(verify: &rimz::store::run::RunVerify) -> String {
