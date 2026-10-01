@@ -719,12 +719,12 @@ impl Env {
         DiagSink::under(state.root, self.workspace_id.clone(), session, None)
     }
 
-    /// `true` when the sandbox forbids binding AF_UNIX datagram sockets; tests
-    /// emit a warning and return early. Ensures `sock_dir` exists first.
+    /// `true`, after recording the self-skip, when the sandbox forbids binding
+    /// AF_UNIX datagram sockets; the test returns early. Ensures `sock_dir` exists first.
     pub fn skip_if_sandboxed(&self) -> bool {
         std::fs::create_dir_all(self.sock_dir()).expect("mkdir sock");
         if af_unix_bind_sandboxed(&self.sock_dir()) {
-            tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+            super::skip(super::AF_UNIX_SANDBOXED);
             return true;
         }
         false
@@ -735,8 +735,8 @@ impl Env {
 /// sockets. Returns `true` when a bind under `dir` fails with `EPERM` /
 /// `EACCES` (`io::ErrorKind::PermissionDenied`) — the shape we see in
 /// hermetic CI sandboxes that block `bind(2)` on Unix sockets. Tests that
-/// would otherwise hard-fail should call this at the top, emit a
-/// `tracing::warn!`, and return early — mirroring the "skip if mux binary
+/// would otherwise hard-fail should call this at the top, record the skip
+/// through [`super::skip`], and return early — mirroring the "skip if mux binary
 /// missing" idiom used by the zellij/tmux backend tests.
 pub fn af_unix_bind_sandboxed(dir: &std::path::Path) -> bool {
     let probe = dir.join("rimz-af-unix-probe.sock");

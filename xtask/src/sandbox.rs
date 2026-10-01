@@ -91,9 +91,19 @@ pub(crate) struct HostSandbox {
 
 impl HostSandbox {
     pub(crate) fn for_tests(workspace_root: &Path) -> Result<Self> {
-        let sandbox = Self::new()?;
+        let mut sandbox = Self::new()?;
         sandbox.trust_workspace_for_git(workspace_root)?;
+        let skip_log = sandbox._root.path().join("skipped-tests");
+        sandbox.env.insert(SKIP_LOG_ENV, skip_log);
         Ok(sandbox)
+    }
+
+    /// The operator's report of the tests that self-skipped during this run,
+    /// read from the records the integration harness appended under
+    /// [`SKIP_LOG_ENV`]; `None` when no test skipped.
+    pub(crate) fn skip_report(&self) -> Option<String> {
+        let records = std::fs::read_to_string(self.env.get(SKIP_LOG_ENV)?).ok()?;
+        skip_report(&records)
     }
 
     fn for_manual_command() -> Result<Self> {
@@ -174,6 +184,40 @@ impl HostSandbox {
     fn root(&self) -> &Path {
         self._root.path()
     }
+}
+
+/// The file a test sandbox names for skip records, one
+/// `<test name>\t<reason>\n` line per self-skip, appended by the integration
+/// harness's skip helper (`crates/rimz/tests/integration/common/skip.rs`).
+const SKIP_LOG_ENV: &str = "RIMZ_TEST_SKIP_LOG";
+
+const SKIP_NAMES_SHOWN: usize = 5;
+
+/// Distinct tests grouped by reason; a test nextest retried appends its record
+/// again and still counts once.
+fn skip_report(records: &str) -> Option<String> {
+    let tests: BTreeMap<&str, &str> = records
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .collect();
+    if tests.is_empty() {
+        return None;
+    }
+    let mut by_reason: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (name, reason) in &tests {
+        by_reason.entry(reason).or_default().push(name);
+    }
+    let plural = if tests.len() == 1 { "" } else { "s" };
+    let mut report = format!("self-skipped {} test{plural}:", tests.len());
+    for (reason, names) in by_reason {
+        let shown = names[..names.len().min(SKIP_NAMES_SHOWN)].join(", ");
+        let more = match names.len().saturating_sub(SKIP_NAMES_SHOWN) {
+            0 => String::new(),
+            more => format!(", +{more} more"),
+        };
+        report.push_str(&format!("\n  {reason} ({}): {shown}{more}", names.len()));
+    }
+    Some(report)
 }
 
 fn sandbox_env(root: &Path) -> BTreeMap<&'static str, PathBuf> {
@@ -624,6 +668,73 @@ mod tests {
         ] {
             assert!(sandbox.env[key].starts_with(sandbox.root()), "{key}");
         }
+    }
+
+    #[test]
+    fn only_a_test_sandbox_names_a_skip_log_and_its_runs_keep_it() {
+        let workspace = TempDir::new().unwrap();
+        let sandbox = HostSandbox::for_tests(workspace.path()).unwrap();
+        let exported = sandbox.command_env();
+        let log = exported
+            .iter()
+            .find_map(|(key, value)| (*key == SKIP_LOG_ENV).then_some(value))
+            .expect("test sandbox exports the skip log");
+        assert!(log.starts_with(sandbox.root()), "{}", log.display());
+        let ambient = [SKIP_LOG_ENV, "RIMZ_RUN_ID"].map(std::ffi::OsString::from);
+        assert_eq!(
+            test_removed_env(ambient.into_iter(), &sandbox.env),
+            ["NO_COLOR", "RIMZ_RUN_ID"]
+        );
+
+        let manual = HostSandbox::for_manual_command().unwrap();
+        assert!(
+            manual
+                .command_env()
+                .iter()
+                .all(|(key, _)| *key != SKIP_LOG_ENV)
+        );
+    }
+
+    #[test]
+    fn skip_records_group_distinct_tests_by_reason() {
+        let records = "\
+journey::sandbox::b\tAF_UNIX bind is forbidden in this sandbox
+backend::tmux::one\ttmux not on PATH
+journey::sandbox::a\tAF_UNIX bind is forbidden in this sandbox
+journey::sandbox::b\tAF_UNIX bind is forbidden in this sandbox
+";
+        assert_eq!(
+            skip_report(records).as_deref(),
+            Some(
+                "self-skipped 3 tests:\n  \
+                 AF_UNIX bind is forbidden in this sandbox (2): journey::sandbox::a, journey::sandbox::b\n  \
+                 tmux not on PATH (1): backend::tmux::one"
+            )
+        );
+        assert_eq!(skip_report(""), None);
+    }
+
+    #[test]
+    fn skip_report_bounds_the_names_per_reason() {
+        let records = (0..8)
+            .map(|index| format!("t{index}\ttmux not on PATH\n"))
+            .collect::<String>();
+        assert_eq!(
+            skip_report(&records).as_deref(),
+            Some("self-skipped 8 tests:\n  tmux not on PATH (8): t0, t1, t2, t3, t4, +3 more")
+        );
+    }
+
+    #[test]
+    fn skip_report_reads_the_sandbox_log_and_tolerates_its_absence() {
+        let workspace = TempDir::new().unwrap();
+        let sandbox = HostSandbox::for_tests(workspace.path()).unwrap();
+        assert_eq!(sandbox.skip_report(), None);
+        std::fs::write(&sandbox.env[SKIP_LOG_ENV], "one\tgit not on PATH\n").unwrap();
+        assert_eq!(
+            sandbox.skip_report().as_deref(),
+            Some("self-skipped 1 test:\n  git not on PATH (1): one")
+        );
     }
 
     #[test]
