@@ -1,5 +1,6 @@
 use super::*;
-use crate::agents::{AgentRateLimits, RateLimitWindow};
+use crate::agents::context::{AgentContext, AgentTurnError, TurnErrorClass};
+use crate::agents::{AgentRateLimits, RateLimitWindow, RedeemEffect};
 use crate::ids::WorkspaceId;
 use jiff::SignedDuration;
 
@@ -35,6 +36,26 @@ fn capacity_started_at(window_start: Timestamp, used_percentage: u8) -> Provider
     }])
 }
 
+/// Opens the window half of the gate without a blocked gain: a spent 5h window
+/// resetting two hours after `now`, nearer than the 12h `min_gain`.
+fn with_spent_five_hour(mut capacity: ProviderCapacity, now: Timestamp) -> ProviderCapacity {
+    capacity.windows.push(RateLimitWindow {
+        used_percentage: Some(100),
+        resets_at: Some(now + Duration::from_secs(2 * 3_600)),
+        duration_mins: Some(300),
+        observed_at: Some(now),
+        ..Default::default()
+    });
+    capacity
+}
+
+fn keeping_schedule(credits: ResetCredits) -> ResetCredits {
+    ResetCredits {
+        effect: RedeemEffect::KeepsSchedule,
+        ..credits
+    }
+}
+
 fn credits(now: Timestamp, expiry: Option<Duration>) -> ResetCredits {
     ResetCredits {
         count: 1,
@@ -55,6 +76,7 @@ fn verdict(
         None,
         Duration::from_secs(12 * 3600),
         true,
+        true,
         now,
     )
 }
@@ -70,8 +92,8 @@ fn verdict_covers_gain_hold_and_missing_data_matrix() {
             &credits(now, Some(Duration::from_secs(25 * 3600))),
             now,
         ),
-        Some(RedeemReason::DoomedCredit),
-        "24h gain plus 1h hold is doomed"
+        Some(RedeemReason::BlockedGain),
+        "a restarting window never redeems as doomed: the 24h gain alone pays"
     );
 
     let blocked_ten_minutes = spent_capacity(now, Duration::from_secs(10 * 60));
@@ -112,8 +134,8 @@ fn verdict_covers_gain_hold_and_missing_data_matrix() {
             &credits(now, Some(Duration::from_secs(4 * 3600))),
             now,
         ),
-        Some(RedeemReason::DoomedCredit),
-        "a 5h-only block redeems only when the credit dies first"
+        None,
+        "a 5h-only block waits even when the credit dies first"
     );
 
     assert_eq!(
@@ -164,21 +186,140 @@ fn limit_redemption_requires_opt_in_but_rescue_does_not() {
             None,
             Duration::from_secs(12 * 3600),
             false,
+            true,
             now,
         ),
         None,
     );
-    assert_eq!(
-        redeem_verdict(
-            Some(&blocked),
-            &credits(now, Some(Duration::from_secs(10 * 60))),
-            None,
-            Duration::from_secs(12 * 3600),
-            false,
+    let dying = credits(now, Some(Duration::from_secs(20 * 60)));
+    for dying in [dying.clone(), keeping_schedule(dying)] {
+        assert_eq!(
+            redeem_verdict(
+                None,
+                &dying,
+                None,
+                Duration::from_secs(12 * 3600),
+                false,
+                false,
+                now,
+            ),
+            Some(RedeemReason::ExpiryRescue),
+            "rescue needs neither the switch, a spent window, nor a paused agent ({:?})",
+            dying.effect
+        );
+    }
+}
+
+#[test]
+fn limit_redemption_waits_for_a_limit_paused_agent() {
+    let now = ts(1_700_000_000);
+    let blocked = spent_capacity(now, Duration::from_secs(3 * 86_400));
+    let restarting = credits(now, Some(Duration::from_secs(10 * 86_400)));
+    for credits in [restarting.clone(), keeping_schedule(restarting)] {
+        for (limit_paused, expected) in [(false, None), (true, Some(RedeemReason::BlockedGain))] {
+            assert_eq!(
+                redeem_verdict(
+                    Some(&blocked),
+                    &credits,
+                    None,
+                    Duration::from_secs(12 * 3600),
+                    true,
+                    limit_paused,
+                    now,
+                ),
+                expected,
+                "limit_paused {limit_paused} ({:?})",
+                credits.effect
+            );
+        }
+    }
+}
+
+#[test]
+fn a_kept_schedule_redeems_doomed_credits_and_never_schedules() {
+    let now = ts(1_700_000_000);
+    let hour = Duration::from_secs(3_600);
+    let kept = |block: Duration, expiry: Duration| {
+        verdict(
+            Some(&spent_capacity(now, block)),
+            &keeping_schedule(credits(now, Some(expiry))),
             now,
-        ),
-        Some(RedeemReason::ExpiryRescue),
+        )
+    };
+    assert_eq!(kept(24 * hour, 25 * hour), Some(RedeemReason::DoomedCredit));
+    assert_eq!(kept(5 * hour, 4 * hour), Some(RedeemReason::DoomedCredit));
+    assert_eq!(
+        kept(3 * 24 * hour, 10 * 24 * hour),
+        Some(RedeemReason::BlockedGain)
     );
+    assert_eq!(kept(4 * hour, 40 * hour), None);
+
+    let (capacity, chain) = due_chain(now);
+    let schedule = |credits: &ResetCredits| {
+        redeem_verdict(
+            Some(&capacity),
+            credits,
+            Some(100.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            true,
+            now,
+        )
+    };
+    assert_eq!(schedule(&chain), Some(RedeemReason::ScheduledRedeem));
+    assert_eq!(schedule(&keeping_schedule(chain)), None);
+}
+
+/// A due chain behind an open gate: the 5h window is spent and resets in 4h
+/// (under `min_gain`), the week is 40% used and resets in three days, and 13
+/// credits expire with the week.
+fn due_chain(now: Timestamp) -> (ProviderCapacity, ResetCredits) {
+    let expiry = now + Duration::from_secs(3 * 86_400);
+    let capacity = ProviderCapacity::from_windows(vec![
+        RateLimitWindow {
+            used_percentage: Some(100),
+            resets_at: Some(now + Duration::from_secs(4 * 3_600)),
+            duration_mins: Some(300),
+            observed_at: Some(now),
+            ..Default::default()
+        },
+        RateLimitWindow {
+            used_percentage: Some(40),
+            resets_at: Some(expiry),
+            duration_mins: Some(10_080),
+            observed_at: Some(now),
+            ..Default::default()
+        },
+    ]);
+    let chain = ResetCredits {
+        count: 13,
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry; 13],
+        effect: RedeemEffect::RestartsWindow,
+    };
+    (capacity, chain)
+}
+
+#[test]
+fn the_schedule_fires_only_behind_the_gate() {
+    let now = ts(1_700_000_000);
+    let (spent, chain) = due_chain(now);
+    let mut unspent = spent.clone();
+    unspent.windows[0].used_percentage = Some(40);
+    let schedule = |capacity: &ProviderCapacity, limit_paused| {
+        redeem_verdict(
+            Some(capacity),
+            &chain,
+            Some(100.0),
+            Duration::from_secs(12 * 3_600),
+            true,
+            limit_paused,
+            now,
+        )
+    };
+    assert_eq!(schedule(&unspent, true), None, "no spent window");
+    assert_eq!(schedule(&spent, false), None, "no limit-paused agent");
+    assert_eq!(schedule(&spent, true), Some(RedeemReason::ScheduledRedeem));
 }
 
 #[test]
@@ -267,23 +408,26 @@ fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
     };
     let deadline = rescue - refill - refill;
     let capacity = capacity_started_at(deadline - refill, 80);
+    let early = deadline - Duration::from_secs(1);
     assert_eq!(
         redeem_verdict(
-            Some(&capacity),
+            Some(&with_spent_five_hour(capacity.clone(), early)),
             &credits,
             Some(20.0),
             Duration::from_secs(12 * 3_600),
             true,
-            deadline - Duration::from_secs(1),
+            true,
+            early,
         ),
         None,
     );
     assert_eq!(
         redeem_verdict(
-            Some(&capacity),
+            Some(&with_spent_five_hour(capacity, deadline)),
             &credits,
             Some(20.0),
             Duration::from_secs(12 * 3_600),
+            true,
             true,
             deadline,
         ),
@@ -302,7 +446,10 @@ fn expired_credit_does_not_suppress_the_live_chain() {
         effect: crate::agents::RedeemEffect::RestartsWindow,
     };
     let deadline = expiry - EXPIRY_RESCUE_LEAD - Duration::from_secs(5 * 86_400);
-    let capacity = capacity_started_at(deadline - Duration::from_secs(5 * 86_400), 80);
+    let capacity = with_spent_five_hour(
+        capacity_started_at(deadline - Duration::from_secs(5 * 86_400), 80),
+        deadline,
+    );
 
     assert_eq!(
         redeem_verdict(
@@ -310,6 +457,7 @@ fn expired_credit_does_not_suppress_the_live_chain() {
             &credits,
             Some(20.0),
             Duration::from_secs(12 * 3_600),
+            true,
             true,
             deadline,
         ),
@@ -330,12 +478,14 @@ fn window_start_paces_a_late_chain_after_every_reset() {
     let fresh = capacity_started_at(now, 0);
 
     assert!(chain_deadline(&credits.expiries, Some(100.0)).unwrap() < now);
+    let later = now + Duration::from_secs(24 * 3_600);
     assert_eq!(
         redeem_verdict(
-            Some(&fresh),
+            Some(&with_spent_five_hour(fresh.clone(), now)),
             &credits,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
+            true,
             true,
             now,
         ),
@@ -344,12 +494,13 @@ fn window_start_paces_a_late_chain_after_every_reset() {
     );
     assert_eq!(
         redeem_verdict(
-            Some(&fresh),
+            Some(&with_spent_five_hour(fresh, later)),
             &credits,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             true,
-            now + Duration::from_secs(24 * 3_600),
+            true,
+            later,
         ),
         Some(RedeemReason::ScheduledRedeem),
     );
@@ -365,7 +516,7 @@ fn slow_burn_does_not_drain_an_overdue_chain_after_the_cooldown() {
         expiries: vec![expiry, expiry],
         effect: crate::agents::RedeemEffect::RestartsWindow,
     };
-    let fresh = capacity_started_at(now, 0);
+    let fresh = with_spent_five_hour(capacity_started_at(now, 0), now + POST_SUCCESS_COOLDOWN);
 
     assert!(chain_deadline(&credits.expiries, Some(2.0)).unwrap() < now);
     assert_eq!(
@@ -374,6 +525,7 @@ fn slow_burn_does_not_drain_an_overdue_chain_after_the_cooldown() {
             &credits,
             Some(2.0),
             Duration::from_secs(12 * 3_600),
+            true,
             true,
             now + POST_SUCCESS_COOLDOWN,
         ),
@@ -402,13 +554,14 @@ fn scheduled_redeem_requires_a_dated_duration_window() {
         ..Default::default()
     }]);
 
-    for capacity in [&missing_reset, &missing_duration] {
+    for capacity in [missing_reset, missing_duration] {
         assert_eq!(
             redeem_verdict(
-                Some(capacity),
+                Some(&with_spent_five_hour(capacity, now)),
                 &credits,
                 Some(100.0),
                 Duration::from_secs(12 * 3_600),
+                true,
                 true,
                 now,
             ),
@@ -421,13 +574,16 @@ fn scheduled_redeem_requires_a_dated_duration_window() {
 fn near_free_reset_defers_only_a_credit_that_comfortably_survives() {
     let now = ts(1_700_000_000);
     let reset = now + Duration::from_secs(60 * 60);
-    let capacity = ProviderCapacity::from_windows(vec![RateLimitWindow {
-        used_percentage: Some(20),
-        resets_at: Some(reset),
-        duration_mins: Some(10_080),
-        observed_at: Some(now),
-        ..Default::default()
-    }]);
+    let capacity = with_spent_five_hour(
+        ProviderCapacity::from_windows(vec![RateLimitWindow {
+            used_percentage: Some(20),
+            resets_at: Some(reset),
+            duration_mins: Some(10_080),
+            observed_at: Some(now),
+            ..Default::default()
+        }]),
+        now,
+    );
     let chain = |expiry| ResetCredits {
         count: 3,
         soonest_expiry: Some(expiry),
@@ -442,6 +598,7 @@ fn near_free_reset_defers_only_a_credit_that_comfortably_survives() {
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             true,
+            true,
             now,
         ),
         None,
@@ -453,6 +610,7 @@ fn near_free_reset_defers_only_a_credit_that_comfortably_survives() {
             &chain(reset + MIN_HOLD - Duration::from_secs(1)),
             Some(100.0),
             Duration::from_secs(12 * 3_600),
+            true,
             true,
             now,
         ),
@@ -480,6 +638,7 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             true,
+            true,
             now,
         ),
         Some(RedeemReason::BlockedGain),
@@ -489,7 +648,7 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
         count: 3,
         soonest_expiry: Some(doomed_expiry),
         expiries: vec![doomed_expiry; 3],
-        effect: crate::agents::RedeemEffect::RestartsWindow,
+        effect: RedeemEffect::KeepsSchedule,
     };
     let short_block = spent_capacity(now, Duration::from_secs(60 * 60));
     assert_eq!(
@@ -499,17 +658,19 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             true,
+            true,
             now,
         ),
         Some(RedeemReason::DoomedCredit),
     );
     assert_eq!(
         redeem_verdict(
-            None,
+            Some(&blocked),
             &chain,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             false,
+            true,
             now,
         ),
         None,
@@ -576,6 +737,40 @@ fn stamp_round_trips_atomically() {
     assert_eq!(read_stamp(&path), Some(stamp));
 }
 
+/// A live root row whose displayed turn error, raised at `now`, has `class`.
+fn limit_parked(kind: &str, agent_id: &str, class: TurnErrorClass, now: Timestamp) -> AgentState {
+    let mut agent = crate::sidebar::test_support::root_agent(kind, agent_id, None);
+    agent.last_activity = now - Duration::from_secs(60);
+    agent.context = Some(AgentContext {
+        turn_error: Some(AgentTurnError {
+            class,
+            at: now,
+            label: None,
+        }),
+        ..Default::default()
+    });
+    agent
+}
+
+#[test]
+fn a_request_round_trips_its_paused_evidence_and_defaults_to_not_paused() {
+    let request = AutoRedeemRequest {
+        workspace_id: WorkspaceId::from_project_root(Path::new("/srv/project")),
+        login: LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND)),
+        reason: RedeemReason::BlockedGain,
+        request_id: uuid::Uuid::now_v7(),
+        limit_paused: true,
+    };
+    let mut payload = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        serde_json::from_value::<AutoRedeemRequest>(payload.clone()).unwrap(),
+        request
+    );
+    payload.as_object_mut().unwrap().remove("limit_paused");
+    let older = serde_json::from_value::<AutoRedeemRequest>(payload).unwrap();
+    assert!(!older.limit_paused);
+}
+
 #[test]
 fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     let now = ts(1_700_000_000);
@@ -607,20 +802,74 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
         auto_redeem: true,
         ..Default::default()
     };
+    let stamp_path = runtime.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
+        crate::ids::AgentKind::new_unchecked(CODEX_KIND),
+    ));
 
+    let mut other_login = limit_parked(CODEX_KIND, "work", TurnErrorClass::PausedRateLimit, now);
+    other_login.login = Some("work".parse().unwrap());
+    let mut budget_parked =
+        limit_parked(CODEX_KIND, "budget", TurnErrorClass::PausedSpendLimit, now);
+    budget_parked.budget_park = Some(crate::agents::BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 5.25,
+        window: crate::agents::BudgetWindow::Day,
+        at: now,
+        scope: crate::agents::BudgetScope::Agent,
+        account_kind: None,
+        resets_at: None,
+    });
+    let mut subagent = limit_parked(CODEX_KIND, "sub", TurnErrorClass::PausedRateLimit, now);
+    subagent.parent_agent_id = Some("root".into());
+    let mut ended = limit_parked(CODEX_KIND, "ended", TurnErrorClass::PausedRateLimit, now);
+    ended.ended_at = Some(now);
+    let closed = [
+        other_login,
+        limit_parked("claude", "claude", TurnErrorClass::PausedRateLimit, now),
+        budget_parked,
+        limit_parked(CODEX_KIND, "busy", TurnErrorClass::PausedOverloaded, now),
+        subagent,
+        ended,
+    ];
     redeem_credits(
         std::slice::from_ref(&panel),
+        &closed,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
         &config,
         now,
     );
-    let first = read_stamp(
-        &runtime.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
-            crate::ids::AgentKind::new_unchecked(CODEX_KIND),
-        )),
-    )
-    .unwrap();
+    assert_eq!(
+        read_stamp(&stamp_path),
+        None,
+        "no row of this room is stopped on the Codex default login's limit"
+    );
+    assert!(
+        read_rate_stamp(
+            &runtime.shared_auto_redeem_rate_path(&crate::ids::LoginKey::default_for(
+                crate::ids::AgentKind::new_unchecked(CODEX_KIND)
+            ))
+        )
+        .is_some(),
+        "the burn-rate cache advances whatever the gate says"
+    );
+
+    let mut open = closed.to_vec();
+    open.push(limit_parked(
+        CODEX_KIND,
+        "root",
+        TurnErrorClass::PausedRateLimit,
+        now,
+    ));
+    redeem_credits(
+        std::slice::from_ref(&panel),
+        &open,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config,
+        now,
+    );
+    let first = read_stamp(&stamp_path).unwrap();
     assert_eq!(first.attempted_at, now);
     assert_eq!(first.reason, RedeemReason::BlockedGain);
     assert_eq!(first.outcome, None);
@@ -640,6 +889,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
 
     redeem_credits(
         std::slice::from_ref(&panel),
+        &open,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
         &config,
@@ -855,8 +1105,8 @@ fn forecast_reads_manual_armed_and_holding_from_a_dry_longest_window() {
     let near = open_capacity(now, 7 * hour);
     assert_eq!(
         forecast(Some(&near), &chain(now + 19 * hour), None, true, now),
-        Some(RedeemForecast::Armed),
-        "a credit expiring 12h after the reset is doomed, so it is spent"
+        Some(RedeemForecast::Holding),
+        "a restarting window holds a credit expiring 12h after a near reset"
     );
     let survivor = chain(now + 7 * hour + 3 * day);
     for rate in [None, Some(20.0)] {
@@ -947,6 +1197,7 @@ fn holding_forecast_stays_firm_until_the_longest_reset() {
                         &credits,
                         rate,
                         Duration::from_secs(12 * 3_600),
+                        true,
                         true,
                         now,
                     ),

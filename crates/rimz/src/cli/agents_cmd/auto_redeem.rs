@@ -18,6 +18,7 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
         &request.login,
         request.reason,
         request.request_id,
+        request.limit_paused,
         &config.resume,
     );
     match result {

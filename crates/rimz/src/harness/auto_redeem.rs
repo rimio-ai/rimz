@@ -1,9 +1,13 @@
 //! Producer-side Codex reset-credit policy and its detached helper action.
 //!
 //! The elected producer evaluates cached provider-neutral capacity and credit
-//! state, then spawns a hidden CLI helper only when a redemption is useful. The
-//! helper serializes account-wide attempts, refreshes both inputs, re-evaluates
-//! the same pure verdict, and performs the provider-specific consume request.
+//! state, gated on an agent of this room stopped on the login's limit, then
+//! spawns a hidden CLI helper only when a redemption is useful. The verdict
+//! branches on what a redemption does to the window's reset (the credit's
+//! `RedeemEffect`), never on the provider. The helper serializes account-wide
+//! attempts, refreshes both inputs, re-evaluates the same pure verdict with the
+//! producer's limit-paused evidence, and performs the provider-specific consume
+//! request.
 //! Elected-producer and one-shot heavy refreshes may both advance the shared
 //! burn-rate cache; atomic replacement plus observation stamps make duplicate
 //! folds idempotent.
@@ -18,7 +22,10 @@ use crate::RuntimePaths;
 use crate::agents::account::{
     ProviderCapacity, RedemptionCode, ResetCreditResult, prepare_reset_credit_redemption,
 };
-use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, RateLimitWindow, ResetCredits};
+use crate::agents::{
+    AccountUsageIdentity, AccountUsageSnapshot, AgentState, RateLimitWindow, RedeemEffect,
+    ResetCredits,
+};
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::assist_log::AssistWindowReset;
@@ -35,12 +42,18 @@ const RATE_FLOOR: f64 = 0.5;
 const T_MIN: Duration = Duration::from_secs(6 * 60 * 60);
 const SECONDS_PER_DAY: f64 = 24.0 * 60.0 * 60.0;
 
+/// The rule a redemption fired under, persisted in assist records and stamps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RedeemReason {
+    /// A credit within 30 minutes of expiry, with or without the opt-in.
     ExpiryRescue,
+    /// A spent window that parked an agent resets at least `min_gain` away.
     BlockedGain,
+    /// A credit that keeps the window's schedule would die within a day of the
+    /// spent window's reset. Never fired for a credit that restarts the window.
     DoomedCredit,
+    /// The paced chain deadline passed while a spent window parked an agent.
     ScheduledRedeem,
 }
 
@@ -50,6 +63,10 @@ pub struct AutoRedeemRequest {
     pub login: LoginKey,
     pub reason: RedeemReason,
     pub request_id: uuid::Uuid,
+    /// Whether the producer saw an agent of this room stopped on this login's
+    /// limit. A payload without it reads as not paused, so only a rescue fires.
+    #[serde(default)]
+    pub limit_paused: bool,
 }
 
 /// Whether auto-redeem has anything to act on here: the Codex CLI, the only
@@ -131,14 +148,17 @@ pub struct Redeemed {
 }
 
 /// Decide whether current provider-neutral capacity and reset credits warrant
-/// one consume attempt. Expiry rescue is unconditional; limit redemption
-/// follows the user's opt-in.
+/// one consume attempt. Expiry rescue is unconditional; every other reason
+/// needs the user's opt-in and the gate: a spent window with a future reset
+/// and an agent of this room stopped on it. What follows depends on what a
+/// redemption does to the window's reset.
 fn redeem_verdict(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
     rate_pct_per_day: Option<f64>,
     min_gain: Duration,
     auto_redeem: bool,
+    limit_paused: bool,
     now: Timestamp,
 ) -> Option<RedeemReason> {
     if credits.count == 0 {
@@ -150,21 +170,38 @@ fn redeem_verdict(
     }) {
         return Some(RedeemReason::ExpiryRescue);
     }
-    if !auto_redeem {
+    if !auto_redeem || !limit_paused {
         return None;
     }
+    let natural_reset = capacity?.latest_spent_window_reset(now)?;
+    let blocked_gain = natural_reset.as_second() - now.as_second() >= duration_seconds(min_gain);
 
-    if let Some(natural_reset) = capacity.and_then(|value| value.latest_spent_window_reset(now)) {
-        if credits.soonest_expiry.is_some_and(|expiry| {
-            expiry.as_second() - natural_reset.as_second() < duration_seconds(MIN_HOLD)
-        }) {
-            return Some(RedeemReason::DoomedCredit);
+    match credits.effect {
+        RedeemEffect::RestartsWindow if blocked_gain => Some(RedeemReason::BlockedGain),
+        RedeemEffect::RestartsWindow => {
+            scheduled_redeem(capacity, credits, rate_pct_per_day, min_gain, now)
         }
-        if natural_reset.as_second() - now.as_second() >= duration_seconds(min_gain) {
-            return Some(RedeemReason::BlockedGain);
+        RedeemEffect::KeepsSchedule
+            if credits.soonest_expiry.is_some_and(|expiry| {
+                expiry.as_second() - natural_reset.as_second() < duration_seconds(MIN_HOLD)
+            }) =>
+        {
+            Some(RedeemReason::DoomedCredit)
         }
+        RedeemEffect::KeepsSchedule => blocked_gain.then_some(RedeemReason::BlockedGain),
     }
+}
 
+/// The paced chain for a credit whose redemption restarts the window: spend
+/// the next credit once its deadline has passed, unless the free reset is near
+/// and the credit comfortably outlives it.
+fn scheduled_redeem(
+    capacity: Option<&ProviderCapacity>,
+    credits: &ResetCredits,
+    rate_pct_per_day: Option<f64>,
+    min_gain: Duration,
+    now: Timestamp,
+) -> Option<RedeemReason> {
     let expiry_count = usize::try_from(credits.count).unwrap_or(usize::MAX);
     let expiries = credits
         .expiries
@@ -184,8 +221,10 @@ fn redeem_verdict(
 }
 
 /// Forecast what the verdict would do if the longest duration window ran dry
-/// now. Holding is a `None` verdict on that hypothetical; without a known
-/// natural reset there is no hold to prove, so auto mode reads armed.
+/// now and parked an agent of this room, so the hypothetical opens the gate on
+/// its own and reads no live agent (`rimz providers` has none to read).
+/// Holding is a `None` verdict on that hypothetical; without a known natural
+/// reset there is no hold to prove, so auto mode reads armed.
 fn redeem_forecast(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
@@ -219,7 +258,15 @@ fn redeem_forecast(
         })
         .collect();
     Some(
-        match redeem_verdict(Some(&dry), credits, rate_pct_per_day, min_gain, true, now) {
+        match redeem_verdict(
+            Some(&dry),
+            credits,
+            rate_pct_per_day,
+            min_gain,
+            true,
+            true,
+            now,
+        ) {
             Some(_) => RedeemForecast::Armed,
             None => RedeemForecast::Holding,
         },
@@ -435,11 +482,24 @@ fn cancel_attempt_reservation(runtime: &RuntimePaths, key: &LoginKey, request_id
     }
 }
 
+/// Whether a live root row of this room is stopped on `key`'s provider limit.
+/// A RimZ dollar-cap park is not a provider limit, so it never counts.
+fn limit_paused_on(agents: &[AgentState], key: &LoginKey) -> bool {
+    agents.iter().any(|agent| {
+        agent.ended_at.is_none()
+            && !agent.is_provider_subagent()
+            && agent.budget_park.is_none()
+            && agent.login_key() == *key
+            && crate::harness::auto_continue::limit_marker_active(agent)
+    })
+}
+
 /// Evaluate the Codex panel and spawn the account-wide helper when due.
 /// Only Codex supports automated redemption; keep that provider choice here
 /// while the verdict above remains provider-neutral.
 pub(crate) fn redeem_credits(
     panels: &[SidebarProviderPanel],
+    agents: &[AgentState],
     runtime: &RuntimePaths,
     logins: &crate::agents::RoomLoginSet,
     config: &ResumeConfig,
@@ -455,12 +515,14 @@ pub(crate) fn redeem_credits(
         let Some(credits) = panel.reset_credits.as_ref() else {
             continue;
         };
+        let limit_paused = limit_paused_on(agents, &key);
         let Some(reason) = redeem_verdict(
             capacity.as_ref(),
             credits,
             rate_pct_per_day,
             config.auto_redeem_min_gain(),
             config.auto_redeem,
+            limit_paused,
             now,
         ) else {
             continue;
@@ -473,7 +535,7 @@ pub(crate) fn redeem_credits(
         if !reserve_attempt(runtime, &key, reason, now, &request_id.to_string()) {
             continue;
         }
-        if !spawn_auto_redeem(runtime, &key, reason, request_id) {
+        if !spawn_auto_redeem(runtime, &key, reason, request_id, limit_paused) {
             cancel_attempt_reservation(runtime, &key, &request_id.to_string());
         }
     }
@@ -525,6 +587,7 @@ pub fn execute_auto_redeem(
     key: &LoginKey,
     requested_reason: RedeemReason,
     request_id: uuid::Uuid,
+    limit_paused: bool,
     config: &ResumeConfig,
 ) -> Result<Option<Redeemed>, AutoRedeemErr> {
     if key.kind.as_str() != CODEX_KIND {
@@ -561,6 +624,7 @@ pub fn execute_auto_redeem(
                 rate_pct_per_day,
                 config.auto_redeem_min_gain(),
                 config.auto_redeem,
+                limit_paused,
                 now,
             )
         },
@@ -695,12 +759,14 @@ fn spawn_auto_redeem(
     key: &LoginKey,
     reason: RedeemReason,
     request_id: uuid::Uuid,
+    limit_paused: bool,
 ) -> bool {
     let request = AutoRedeemRequest {
         workspace_id: runtime.workspace_id.clone(),
         login: key.clone(),
         reason,
         request_id,
+        limit_paused,
     };
     let args = crate::child_process::agent_helper_argv("auto-redeem", &request);
     tracing::info!(

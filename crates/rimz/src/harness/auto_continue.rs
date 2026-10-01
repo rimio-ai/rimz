@@ -147,9 +147,7 @@ pub(crate) fn resume_gate_recovered(
     match resume_park(agent, capacity.as_ref(), now) {
         Some(ResumeArm::Overloaded { .. }) => true,
         Some(ResumeArm::RateLimit { .. }) => false,
-        None => agent.displayed_turn_error().is_some_and(|(class, _)| {
-            class.is_limit() && capacity_recovered(capacity.as_ref(), agent, now)
-        }),
+        None => limit_marker_active(agent) && capacity_recovered(capacity.as_ref(), agent, now),
     }
 }
 
@@ -289,7 +287,9 @@ fn capacity_recovered(
     })
 }
 
-fn limit_marker_active(agent: &AgentState) -> bool {
+/// Whether the row's displayed turn error is a provider limit: the one
+/// definition of "stopped on a limit" auto-continue and auto-redeem share.
+pub(crate) fn limit_marker_active(agent: &AgentState) -> bool {
     agent
         .displayed_turn_error()
         .is_some_and(|(class, _)| class.is_limit())
