@@ -122,6 +122,25 @@ fn hook_ingress_ignores_internal_servers_and_normalizes_daemon_owners() {
 }
 
 #[test]
+fn config_home_prefers_codex_home_then_falls_back_to_home_dot_codex() {
+    let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    };
+    assert_eq!(
+        CodexAdapter.config_home(&env(&[("CODEX_HOME", "/srv/codex"), ("HOME", "/home/u")])),
+        Some(PathBuf::from("/srv/codex"))
+    );
+    assert_eq!(
+        CodexAdapter.config_home(&env(&[("CODEX_HOME", ""), ("HOME", "/home/u")])),
+        Some(PathBuf::from("/home/u/.codex"))
+    );
+    assert_eq!(CodexAdapter.config_home(&env(&[])), None);
+}
+
+#[test]
 fn named_login_scopes_spending_and_session_transcripts() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");

@@ -513,3 +513,51 @@ fn session_meta_cwd_stamps_origin_survives_resume_and_is_none_when_absent() {
     assert_eq!(parsed.entries.len(), 1);
     assert_eq!(parsed.origin, None);
 }
+
+#[test]
+fn hintless_session_prices_as_gpt5_across_a_resume() {
+    let (_dir, path) = write_session("hintless.jsonl", &[TOKEN_COUNT_LINE]);
+    let first = parse_codex_spend(&path, None, &gpt5_book());
+    assert_eq!(first.entries.len(), 1);
+    assert_eq!(first.entries[0].model.as_deref(), Some("gpt-5"));
+
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(
+        f,
+        r#"{{"type":"event_msg","timestamp":"2026-01-01T10:05:00.000Z","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":10,"output_tokens":5}}}}}}}}"#
+    )
+    .unwrap();
+    drop(f);
+    let second = parse_codex_spend(&path, Some(&first.cursor), &gpt5_book());
+    assert_eq!(second.entries.len(), 1);
+    assert_eq!(second.entries[0].model.as_deref(), Some("gpt-5"));
+}
+
+#[test]
+fn cache_tokens_clamp_to_input_and_zero_usage_emits_nothing_in_both_formats() {
+    let (_dir, path) = write_session(
+        "session.jsonl",
+        &[
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":0,"output_tokens":0}}}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:01.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":150,"cache_write_input_tokens":120,"output_tokens":5}}}}"#,
+        ],
+    );
+    let (_dir, headless) = write_session(
+        "exec.jsonl",
+        &[
+            r#"{"model":"gpt-5","timestamp":"2026-01-01T10:00:00.000Z","usage":{"input_tokens":0,"output_tokens":0}}"#,
+            r#"{"model":"gpt-5","timestamp":"2026-01-01T10:00:01.000Z","usage":{"input_tokens":100,"cached_tokens":150,"cache_write_tokens":120,"output_tokens":5}}"#,
+        ],
+    );
+    for path in [path, headless] {
+        let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
+        assert_eq!(events.len(), 1, "{}", path.display());
+        assert_eq!(events[0].input_tokens, 100);
+        assert_eq!(events[0].cached_input_tokens, 100);
+        assert_eq!(events[0].cache_write_input_tokens, 100);
+    }
+}

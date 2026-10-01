@@ -135,4 +135,8 @@ fn timestamp_normalization_keeps_seconds_and_milliseconds_exact() {
     );
     assert_eq!(millis_to_rfc3339(1_000), "1970-01-01T00:00:01.000Z");
     assert_eq!(millis_to_rfc3339(1_042), "1970-01-01T00:00:01.042Z");
+    assert_eq!(
+        millis_to_rfc3339(1_709_251_199_999),
+        "2024-02-29T23:59:59.999Z"
+    );
 }
