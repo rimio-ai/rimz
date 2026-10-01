@@ -483,9 +483,8 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
     let runtime = cleanup.namespace.path();
     // Record the room before the id-only renderer resolves its runtime directory.
     env.record(&env.project_root);
-    let env_runtime = env.runtime_paths();
-    let runtime_paths =
-        rimz::RuntimePaths::under_named(env_runtime.workspace_id, env_runtime.dir_name, runtime);
+    let state = env.state_path_for(&env.project_root);
+    let runtime_paths = rimz::RuntimePaths::for_state_under(&state, runtime);
 
     // Birth a background session whose left pane is a real renderer over the
     // shared store (the self-close layout shape from `backend/zellij.rs`).

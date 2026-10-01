@@ -5323,8 +5323,7 @@ fn write_loop_fire_state(env: &Env, stamps: BTreeMap<String, Timestamp>) {
 fn write_loop_fire_state_for_root(env: &Env, root: &Path, stamps: BTreeMap<String, Timestamp>) {
     let state = env.state_path_for(root);
     let path =
-        rimz::RuntimePaths::under_named(state.workspace_id, state.dir_name, &env.runtime_root)
-            .lane_path("loop-fire.json");
+        rimz::RuntimePaths::for_state_under(&state, &env.runtime_root).lane_path("loop-fire.json");
     std::fs::create_dir_all(path.parent().expect("loop fire parent")).expect("mkdir runtime");
     std::fs::write(path, serde_json::to_vec_pretty(&stamps).expect("json"))
         .expect("write loop fire state");
