@@ -292,10 +292,7 @@ fn write_header(out: &mut impl Write, target: &Target) -> Result<()> {
         writeln!(
             out,
             "--- {instance} ({}) ---",
-            render::paint(
-                render::status::run(status),
-                super::super::supervised::output::status_label(status)
-            ),
+            render::paint(render::status::run(status), status.label()),
         )?;
     }
     Ok(())

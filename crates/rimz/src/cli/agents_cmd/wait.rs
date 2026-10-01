@@ -737,10 +737,7 @@ fn write_wait_header(out: &mut impl Write, outcome: &TargetOutcome) -> Result<()
             out,
             "--- {} ({}) ---",
             render::paint(render::palette::body(), &outcome.name),
-            render::paint(
-                render::status::run(entry.status),
-                supervised::output::status_label(entry.status)
-            ),
+            render::paint(render::status::run(entry.status), entry.status.label()),
         )?;
     }
     Ok(())

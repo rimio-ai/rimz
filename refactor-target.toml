@@ -557,7 +557,8 @@ path = "crates/rimz/src/store"
 # Git-source admission shares the typed trunk signal vocabulary.
 # Explicit launch-login requests and room-default switching share the locked account boundary (+2).
 # Per-login provider panels expose their cache and renderer identity.
-surface-budget = 347
+# `RunStatus::label` is the one human run-status label the CLI tables and pending waits share (pass 31d).
+surface-budget = 348
 
 [[module]]
 path = "crates/rimz/src/theme"

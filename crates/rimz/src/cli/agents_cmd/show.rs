@@ -573,8 +573,7 @@ fn render_run_section(
     kv.push("id", render::cell(run.run_id.to_string()));
     kv.push(
         "status",
-        render::cell(supervised::output::status_label(run.status))
-            .fg(render::status::run(run.status)),
+        render::cell(run.status.label()).fg(render::status::run(run.status)),
     );
     if let Some(parked_at) = run.parked_at {
         kv.push("parked", render::cell(render::rel_age(parked_at, now)));

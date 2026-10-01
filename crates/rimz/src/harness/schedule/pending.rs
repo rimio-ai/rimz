@@ -137,7 +137,7 @@ fn has_launched_work(agents: &[crate::agents::AgentState]) -> bool {
 
 fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) {
     use crate::harness::fleet::{self, FleetRuns};
-    use crate::store::run::{self, RunStatus};
+    use crate::store::run;
 
     if !has_launched_work(&snapshot.agents) {
         return;
@@ -163,13 +163,10 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
                     trigger: PendingWaitTrigger::Subagent {
                         active_at: child.last_activity,
                         deadline_at: run.deadline_at,
-                        settled: run.status.is_terminal().then(|| {
-                            if run.status == RunStatus::Completed {
-                                "done".to_owned()
-                            } else {
-                                run.status.as_str().replace('_', " ")
-                            }
-                        }),
+                        settled: run
+                            .status
+                            .is_terminal()
+                            .then(|| run.status.label().to_owned()),
                     },
                 })
                 .collect();
@@ -352,7 +349,7 @@ mod tests {
             assert_eq!(*deadline_at, Some(now));
             assert_eq!(
                 settled.as_deref(),
-                (wait.name == "@bright-owl").then_some("done")
+                (wait.name == "@bright-owl").then_some("completed")
             );
             assert!(["@calm-fox", "@bright-owl"].contains(&wait.name.as_str()));
         }

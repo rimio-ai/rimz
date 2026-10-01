@@ -276,14 +276,14 @@ fn print_turn_failure(
         writeln!(
             err,
             "rimz: {label} turn {} (exit {})",
-            run_status_label(status),
+            status.label(),
             status.exit_code()
         )?;
     } else {
         writeln!(
             err,
             "rimz: turn {} (exit {})",
-            run_status_label(status),
+            status.label(),
             status.exit_code()
         )?;
     }
@@ -360,19 +360,6 @@ fn next_sleep(deadline: Option<Instant>) -> Duration {
     deadline.map_or(POLL, |deadline| {
         deadline.saturating_duration_since(Instant::now()).min(POLL)
     })
-}
-
-fn run_status_label(status: RunStatus) -> &'static str {
-    match status {
-        RunStatus::Pending => "pending",
-        RunStatus::Running => "running",
-        RunStatus::Completed => "completed",
-        RunStatus::Failed => "failed",
-        RunStatus::VerifyFailed => "verify failed",
-        RunStatus::TimedOut => "timed out",
-        RunStatus::BudgetExceeded => "budget exceeded",
-        RunStatus::Canceled => "canceled",
-    }
 }
 
 fn return_or_exit(status: RunStatus) -> Result<()> {

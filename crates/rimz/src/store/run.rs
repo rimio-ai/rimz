@@ -75,6 +75,19 @@ impl RunStatus {
         }
     }
 
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::VerifyFailed => "verify failed",
+            Self::TimedOut => "timed out",
+            Self::BudgetExceeded => "budget exceeded",
+            Self::Canceled => "canceled",
+        }
+    }
+
     pub const fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -547,6 +560,22 @@ mod tests {
     use crate::agents::PermissionMode;
     use crate::ids::{AgentKind, WorkspaceId};
     use tempfile::tempdir;
+
+    #[test]
+    fn status_label_is_the_wire_form_with_spaces() {
+        for status in [
+            RunStatus::Pending,
+            RunStatus::Running,
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::VerifyFailed,
+            RunStatus::TimedOut,
+            RunStatus::BudgetExceeded,
+            RunStatus::Canceled,
+        ] {
+            assert_eq!(status.label(), status.as_str().replace('_', " "));
+        }
+    }
 
     #[test]
     fn peer_run_codec_and_prompt_origin() {
