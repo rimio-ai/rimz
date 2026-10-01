@@ -36,7 +36,7 @@ Every entry point that can start a sandboxed agent probes bubblewrap first and r
 
 ## The launch plan
 
-`sandbox::plan` reads the environment, paths, skill directories, and skill source bytes into a `SandboxPlan` without creating anything. The plan holds the ordered `MountPlan`, the environment `pins`, the `skipped` skills, and the rewritten `copies` with their content-addressed targets. `sandbox::apply` writes the copies and ensures the private temp unit; `sandbox::prepare` runs both.
+`sandbox::plan` reads the environment, paths, skill directories, and skill source bytes into a `SandboxPlan` without creating anything. The plan holds the ordered `MountPlan`, the environment `pins`, the `skipped` skills, and the rewritten `copies` with their content-addressed targets. `sandbox::apply` writes the copies and ensures the private temp unit; launch planning runs the two separately.
 
 The exec wrapper uses the shared [launch plan](./harness/fleet.md#the-exec-wrapper). `launch_plan::compile` plans a view only for a ready provider process (`AgentProcessStage::Ready`), pins its environment into the compiled process, and lowers the mounts with `sandbox::bwrap_argv`. `launch_plan::apply` creates the launch's temp unit and the room's `shared/`, both mode `0700`, in both isolation modes, then calls `sandbox::apply` on a sandbox launch; `compile` creates nothing. Qwen's login-shell reentry stage runs on the host without a view; its finalized exec is the ready stage that builds one.
 
