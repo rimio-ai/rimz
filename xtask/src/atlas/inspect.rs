@@ -53,7 +53,8 @@ Builds a Markdown dossier for one Rust module from exact SCIP references.
   --top <n>         rows and names shown per section (default 20)
   --all             show shape and guard families below the finding gate
   --brief           the subagent brief: verdict, record, heaviest, surface,
-                    flags, passthroughs, pins at --top 10";
+                    flags, passthroughs, pins at --top 10, plus every
+                    surface item that can narrow";
 
 const SECTIONS: &[&str] = &[
     "verdict",
@@ -99,6 +100,7 @@ struct Args {
     item: Option<String>,
     top: usize,
     all: bool,
+    brief: bool,
     output: OutputArgs,
 }
 
@@ -375,7 +377,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     let rendered = if args.output.json {
         render_json(&report, &args.output)?
     } else {
-        render_markdown(&report, &args.output, args.top)
+        render_markdown(&report, &args.output, args.top, args.brief)
     };
     args.output.emit(&rendered)
 }
@@ -466,6 +468,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         item,
         top: top.unwrap_or(20),
         all,
+        brief,
         output,
     }))
 }
@@ -1180,7 +1183,7 @@ fn render_record(out: &mut String, record: &Record) {
     .expect("writing to a String cannot fail");
 }
 
-fn render_markdown(report: &Report, output: &OutputArgs, top: usize) -> String {
+fn render_markdown(report: &Report, output: &OutputArgs, top: usize, brief: bool) -> String {
     let mut rendered = String::new();
     if output.wants("verdict") {
         render_verdict(&mut rendered, &report.verdict);
@@ -1205,7 +1208,7 @@ fn render_markdown(report: &Report, output: &OutputArgs, top: usize) -> String {
         );
     }
     if output.wants("surface") {
-        render_surface(&mut rendered, &report.surface, top);
+        render_surface(&mut rendered, &report.surface, top, brief);
     }
     if output.wants("pins") {
         surface::render_pins(&mut rendered, &report.pins, top);

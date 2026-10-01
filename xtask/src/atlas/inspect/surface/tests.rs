@@ -73,7 +73,7 @@ fn testkit_readers_floor_surface_without_production_counts() {
             .is_empty()
     );
     let mut rendered = String::new();
-    render_surface(&mut rendered, &surface, 20);
+    render_surface(&mut rendered, &surface, 20, false);
     assert!(rendered.contains("| internal | testkit | tests |"));
 }
 

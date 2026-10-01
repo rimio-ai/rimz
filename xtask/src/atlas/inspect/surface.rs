@@ -543,13 +543,22 @@ fn definition_for_escaping<'a>(
     Some((file, item))
 }
 
-pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: usize) {
+/// Under `brief`, every narrowable row prints past `top`, so the verdict's
+/// "items can narrow" count reads off the table.
+pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: usize, brief: bool) {
     out.push_str("\n# Escaping surface\n\n");
     out.push_str(
         "| item | kind | sloc | reach | narrow to | outside sites | files | internal | testkit | tests | callers |\n",
     );
     out.push_str("|---|---|---:|---|---|---:|---:|---:|---:|---:|---|\n");
-    for row in surface.items.iter().take(top) {
+    let shown = surface
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(index, row)| *index < top || (brief && row.narrow_to != "keep"))
+        .map(|(_, row)| row)
+        .collect::<Vec<_>>();
+    for row in &shown {
         writeln!(
             out,
             "| `{}::{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
@@ -568,9 +577,13 @@ pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: us
         )
         .expect("writing to a String cannot fail");
     }
-    if surface.items.len() > top {
-        writeln!(out, "\n_{} more items omitted._", surface.items.len() - top)
-            .expect("writing to a String cannot fail");
+    if surface.items.len() > shown.len() {
+        writeln!(
+            out,
+            "\n_{} more items omitted._",
+            surface.items.len() - shown.len()
+        )
+        .expect("writing to a String cannot fail");
     }
     writeln!(
         out,
