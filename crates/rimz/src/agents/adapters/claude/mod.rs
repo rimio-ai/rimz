@@ -985,8 +985,8 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
-        let parts = ClaudeLifecycleParts::parse(event_name, payload);
-        let signal = map_claude_lifecycle_signal(self.spec(), event_name, payload, &parts);
+        let hook = ClaudeHook::parse(event_name, payload);
+        let signal = map_claude_lifecycle_signal(self.spec(), payload, &hook);
         let ask_kind = match &signal {
             Some(LifecycleSignal::AwaitingInput { kind, .. }) => Some(*kind),
             _ => None,
@@ -1010,14 +1010,16 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
             )
             .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"])),
         );
-        let questions = parts
-            .pre_tool_use
-            .as_ref()
-            .and_then(|parsed| {
-                ask::question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
-            })
-            .unwrap_or_default();
-        let ask_detail = if event_name == "PermissionRequest" {
+        let questions = match &hook {
+            ClaudeHook::PreToolUse(parsed) => parsed
+                .tool_name
+                .as_deref()
+                .zip(parsed.tool_input.as_ref())
+                .and_then(|(name, input)| ask::question_detail(name, input))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let ask_detail = if matches!(hook, ClaudeHook::PermissionRequest(_)) {
             super::question::permission_detail(payload)
         } else {
             questions
@@ -1027,44 +1029,50 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
                 .filter(|detail| !detail.is_empty())
         };
         decoded.set_ask(questions, ask_detail);
-        decoded.set_native_answers(parts.post_tool_use.as_ref().and_then(|parsed| {
-            ask::answer_detail(parsed.tool_name.as_deref()?, parsed.tool_response.as_ref()?)
-        }));
-        let terminal_tail = (event_name == "Stop")
+        decoded.set_native_answers(match &hook {
+            ClaudeHook::PostToolUse(parsed) => parsed
+                .tool_name
+                .as_deref()
+                .zip(parsed.tool_response.as_ref())
+                .and_then(|(name, response)| ask::answer_detail(name, response)),
+            _ => None,
+        });
+        let terminal_tail = matches!(hook, ClaudeHook::Stop(_))
             .then(|| transcript_tail_from_payload(payload))
             .flatten();
-        let turn_error = parts
-            .stop_failure
-            .as_ref()
-            .and_then(|parsed| {
-                let error = parsed.error.as_deref()?.trim();
-                if error.is_empty() {
-                    return None;
-                }
-                let label = parsed
-                    .last_assistant_message
-                    .as_deref()
-                    .and_then(crate::agents::context::cap_turn_error_label);
-                Some(AgentTurnError {
-                    class: statusline::classify_api_error(Some(error), None, label.as_deref()),
-                    at: Timestamp::now(),
-                    label,
-                })
+        let turn_error = match &hook {
+            ClaudeHook::StopFailure(parsed) => Some(parsed),
+            _ => None,
+        }
+        .and_then(|parsed| {
+            let error = parsed.error.as_deref()?.trim();
+            if error.is_empty() {
+                return None;
+            }
+            let label = parsed
+                .last_assistant_message
+                .as_deref()
+                .and_then(crate::agents::context::cap_turn_error_label);
+            Some(AgentTurnError {
+                class: statusline::classify_api_error(Some(error), None, label.as_deref()),
+                at: Timestamp::now(),
+                label,
             })
-            .or_else(|| {
-                terminal_tail
-                    .as_deref()
-                    .and_then(statusline::detect_turn_error)
-            });
+        })
+        .or_else(|| {
+            terminal_tail
+                .as_deref()
+                .and_then(statusline::detect_turn_error)
+        });
         decoded.set_turn_error(turn_error);
 
         if let Some(signal) = signal
             && let Some((agent_id, parent_agent_id)) =
-                resolve_claude_observation_identity(self.spec().kind, event_name, payload, &parts)
+                resolve_claude_observation_identity(self.spec().kind, event_name, payload, &hook)
         {
             let mut observation =
-                build_claude_observation(payload, &parts, signal, agent_id, parent_agent_id);
-            enrich_root_registration(&mut observation, &parts, || {
+                build_claude_observation(payload, &hook, signal, agent_id, parent_agent_id);
+            enrich_root_registration(&mut observation, &hook, || {
                 oauth_usage::load_account_key(&crate::agents::ambient_env()).ok()
             });
             decoded.attach_lifecycle(observation);
@@ -1362,48 +1370,55 @@ impl crate::agents::capabilities::RuntimeControlCapability for ClaudeAdapter {
     }
 }
 
-struct ClaudeLifecycleParts {
-    session_start: Option<ClaudeSessionStart>,
-    user_prompt: Option<ClaudeUserPromptSubmit>,
-    subagent_start: Option<ClaudeSubagentStart>,
-    subagent_stop: Option<ClaudeSubagentStop>,
-    stop: Option<ClaudeStop>,
-    stop_failure: Option<ClaudeStopFailure>,
-    pre_tool_use: Option<ClaudePreToolUse>,
-    post_tool_use: Option<ClaudePostToolUse>,
-    permission_request: Option<ClaudePermissionRequest>,
-    post_compact: Option<ClaudePostCompact>,
+/// The one typed payload a Claude hook carries, parsed once per event.
+enum ClaudeHook {
+    SessionStart(ClaudeSessionStart),
+    UserPromptSubmit(ClaudeUserPromptSubmit),
+    SubagentStart(ClaudeSubagentStart),
+    SubagentStop(ClaudeSubagentStop),
+    Stop(ClaudeStop),
+    StopFailure(ClaudeStopFailure),
+    PreToolUse(ClaudePreToolUse),
+    PostToolUse(ClaudePostToolUse),
+    PermissionRequest(ClaudePermissionRequest),
+    PreCompact,
+    PostCompact(ClaudePostCompact),
+    SessionEnd,
+    Other,
 }
 
-impl ClaudeLifecycleParts {
+impl ClaudeHook {
     fn parse(event_name: &str, payload: &Value) -> Self {
-        Self {
-            session_start: (event_name == "SessionStart").then(|| parse(payload)),
-            user_prompt: (event_name == "UserPromptSubmit").then(|| parse(payload)),
-            subagent_start: (event_name == "SubagentStart").then(|| parse(payload)),
-            subagent_stop: (event_name == "SubagentStop").then(|| parse(payload)),
-            stop: (event_name == "Stop").then(|| parse(payload)),
-            stop_failure: (event_name == "StopFailure").then(|| parse(payload)),
-            pre_tool_use: (event_name == "PreToolUse").then(|| parse(payload)),
-            post_tool_use: (event_name == "PostToolUse").then(|| parse(payload)),
-            permission_request: (event_name == "PermissionRequest").then(|| parse(payload)),
-            post_compact: (event_name == "PostCompact").then(|| parse(payload)),
+        match event_name {
+            "SessionStart" => Self::SessionStart(parse(payload)),
+            "UserPromptSubmit" => Self::UserPromptSubmit(parse(payload)),
+            "SubagentStart" => Self::SubagentStart(parse(payload)),
+            "SubagentStop" => Self::SubagentStop(parse(payload)),
+            "Stop" => Self::Stop(parse(payload)),
+            "StopFailure" => Self::StopFailure(parse(payload)),
+            "PreToolUse" => Self::PreToolUse(parse(payload)),
+            "PostToolUse" => Self::PostToolUse(parse(payload)),
+            "PermissionRequest" => Self::PermissionRequest(parse(payload)),
+            "PreCompact" => Self::PreCompact,
+            "PostCompact" => Self::PostCompact(parse(payload)),
+            "SessionEnd" => Self::SessionEnd,
+            _ => Self::Other,
         }
     }
 
     fn subagent_common(&self) -> Option<&ClaudeCommon> {
-        self.subagent_start
-            .as_ref()
-            .map(|p| &p.common)
-            .or_else(|| self.subagent_stop.as_ref().map(|p| &p.common))
+        match self {
+            Self::SubagentStart(p) => Some(&p.common),
+            Self::SubagentStop(p) => Some(&p.common),
+            _ => None,
+        }
     }
 }
 
 fn map_claude_lifecycle_signal(
     spec: &AgentSpec,
-    event_name: &str,
     payload: &Value,
-    parts: &ClaudeLifecycleParts,
+    hook: &ClaudeHook,
 ) -> Option<LifecycleSignal> {
     // Claude stamps the same `tool_use_id` on a call's `PreToolUse` and
     // `PostToolUse`, and a distinct one per parallel call, so it is the native
@@ -1413,30 +1428,23 @@ fn map_claude_lifecycle_signal(
     // approved tool's keyed `PostToolUse`, which the sibling guard admits
     // because the guard needs the *open ask* to be keyed.
     let tool_use_id = optional_payload_string(payload, &["tool_use_id"]);
-    match event_name {
-        "SessionStart" => Some(parts.session_start.as_ref()?.source.session_start_signal()),
-        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
-        "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
+    match hook {
+        ClaudeHook::SessionStart(start) => Some(start.source.session_start_signal()),
+        ClaudeHook::UserPromptSubmit(_) => Some(LifecycleSignal::TurnStarted { turn_id: None }),
+        ClaudeHook::SubagentStart(_) => Some(LifecycleSignal::SubagentStarted),
         // The published SubagentStop payload has no outcome or exit-code
         // field, so close the bracket without inventing an error state.
-        "SubagentStop" => Some(LifecycleSignal::SubagentStopped { errored: false }),
-        "Stop" => Some(LifecycleSignal::TurnEnded {
+        ClaudeHook::SubagentStop(_) => Some(LifecycleSignal::SubagentStopped { errored: false }),
+        ClaudeHook::Stop(stop) => Some(LifecycleSignal::TurnEnded {
             errored: stop_payload_errored(payload),
-            parked_on_background: parts.stop.as_ref().is_some_and(|stop| {
-                has_pending_background(
-                    stop.background_tasks.as_deref().unwrap_or_default(),
-                    &stop.session_crons,
-                )
-            }),
+            parked_on_background: has_pending_background(
+                stop.background_tasks.as_deref().unwrap_or_default(),
+                &stop.session_crons,
+            ),
             turn_id: None,
         }),
-        "PermissionRequest" => spec
-            .blocking_tool_kind(
-                parts
-                    .permission_request
-                    .as_ref()
-                    .and_then(|request| request.tool_name.as_deref()),
-            )
+        ClaudeHook::PermissionRequest(request) => spec
+            .blocking_tool_kind(request.tool_name.as_deref())
             .is_none()
             .then_some(LifecycleSignal::AwaitingInput {
                 kind: AskKind::Permission,
@@ -1444,23 +1452,15 @@ fn map_claude_lifecycle_signal(
                 detail: None,
                 native_key: None,
             }),
-        "PostToolUse" => Some(LifecycleSignal::ToolUsed {
+        ClaudeHook::PostToolUse(tool) => Some(LifecycleSignal::ToolUsed {
             mutates: spec.tool_mutates(payload),
             edits: spec.tool_edits_files(payload),
-            name: parts
-                .post_tool_use
-                .as_ref()
-                .and_then(|tool| tool.tool_name.clone()),
+            name: tool.tool_name.clone(),
             native_key: tool_use_id,
             turn_id: None,
         }),
-        "PreToolUse" => {
-            match spec.blocking_tool_kind(
-                parts
-                    .pre_tool_use
-                    .as_ref()
-                    .and_then(|request| request.tool_name.as_deref()),
-            ) {
+        ClaudeHook::PreToolUse(request) => {
+            match spec.blocking_tool_kind(request.tool_name.as_deref()) {
                 Some(kind) => Some(LifecycleSignal::AwaitingInput {
                     kind,
                     ask_id: None,
@@ -1476,16 +1476,13 @@ fn map_claude_lifecycle_signal(
                 }),
             }
         }
-        "PreCompact" => Some(LifecycleSignal::Compacting),
-        "PostCompact" => Some(LifecycleSignal::CompactionEnded {
-            auto: parts
-                .post_compact
-                .as_ref()
-                .and_then(|p| p.trigger.auto_flag()),
+        ClaudeHook::PreCompact => Some(LifecycleSignal::Compacting),
+        ClaudeHook::PostCompact(compact) => Some(LifecycleSignal::CompactionEnded {
+            auto: compact.trigger.auto_flag(),
             failed: false,
         }),
-        "SessionEnd" => Some(LifecycleSignal::Ended),
-        _ => None,
+        ClaudeHook::SessionEnd => Some(LifecycleSignal::Ended),
+        ClaudeHook::StopFailure(_) | ClaudeHook::Other => None,
     }
 }
 
@@ -1498,9 +1495,9 @@ fn resolve_claude_observation_identity(
     kind: &str,
     event_name: &str,
     payload: &Value,
-    parts: &ClaudeLifecycleParts,
+    hook: &ClaudeHook,
 ) -> Option<ObservationIdentity> {
-    let typed_common = parts.subagent_common();
+    let typed_common = hook.subagent_common();
     let payload_agent_id = optional_payload_string(payload, &["agent_id"]);
     let payload_session_id = optional_payload_string(payload, &["session_id"]);
     let child_id = typed_common
@@ -1533,7 +1530,7 @@ fn resolve_claude_observation_identity(
 
 fn enrich_root_registration(
     observation: &mut AgentLifecycleObservation,
-    parts: &ClaudeLifecycleParts,
+    hook: &ClaudeHook,
     load_account_key: impl FnOnce() -> Option<String>,
 ) {
     if observation.parent_agent_id.is_some()
@@ -1542,19 +1539,19 @@ fn enrich_root_registration(
         return;
     }
     observation.account_key = load_account_key();
-    observation.origin = parts
-        .session_start
-        .as_ref()
-        .and_then(|start| match start.source {
-            SessionSource::Startup | SessionSource::Clear => Some(SessionOrigin::Fresh),
-            SessionSource::Fork => Some(SessionOrigin::Forked),
-            SessionSource::Resume | SessionSource::Compact | SessionSource::Unknown => None,
-        });
+    let ClaudeHook::SessionStart(start) = hook else {
+        return;
+    };
+    observation.origin = match start.source {
+        SessionSource::Startup | SessionSource::Clear => Some(SessionOrigin::Fresh),
+        SessionSource::Fork => Some(SessionOrigin::Forked),
+        SessionSource::Resume | SessionSource::Compact | SessionSource::Unknown => None,
+    };
 }
 
 fn build_claude_observation(
     payload: &Value,
-    parts: &ClaudeLifecycleParts,
+    hook: &ClaudeHook,
     signal: LifecycleSignal,
     agent_id: Option<crate::ids::AgentSessionId>,
     parent_agent_id: Option<crate::ids::AgentSessionId>,
@@ -1566,21 +1563,21 @@ fn build_claude_observation(
     // for a child would stamp the parent's newest model and token total onto the
     // child's row, so a child sources usage from its own transcript alone —
     // absent that, usage stays unknown rather than borrowed.
-    let usage_path = match parts.subagent_stop.as_ref() {
-        Some(stop) => stop.agent_transcript_path.clone(),
-        None if parent_agent_id.is_some() => None,
-        None => transcript_path.clone(),
+    let usage_path = match hook {
+        ClaudeHook::SubagentStop(stop) => stop.agent_transcript_path.clone(),
+        _ if parent_agent_id.is_some() => None,
+        _ => transcript_path.clone(),
     };
     let usage = usage_path
         .as_deref()
         .map(Path::new)
         .map(usage_from_transcript)
         .unwrap_or_default();
-    let payload_model = parts
-        .session_start
-        .as_ref()
-        .and_then(|p| p.common.model.clone())
-        .or_else(|| optional_payload_string(payload, &["model"]));
+    let payload_model = match hook {
+        ClaudeHook::SessionStart(start) => start.common.model.clone(),
+        _ => None,
+    }
+    .or_else(|| optional_payload_string(payload, &["model"]));
     let model = payload_model.clone().or(usage.model);
     // Assert a window only when the `[1m]` marker is actually present; a
     // marker-less hook leaves it `None` so the established window carries
@@ -1592,15 +1589,17 @@ fn build_claude_observation(
     // Shells belong to the root session: a subagent's hooks target its child
     // row, and the parent's `Stop` lists every shell the session runs.
     if parent_agent_id.is_none() {
-        observation.background_shells = claude_background_shells(parts, Timestamp::now());
+        observation.background_shells = claude_background_shells(hook, Timestamp::now());
     }
     observation.parent_agent_id = parent_agent_id;
-    observation.task = claude_task(payload, parts.subagent_common());
-    observation.prompt =
-        SanitizedPrompt::new(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
+    observation.task = claude_task(payload, hook.subagent_common());
+    observation.prompt = SanitizedPrompt::new(match hook {
+        ClaudeHook::UserPromptSubmit(submit) => submit.prompt.as_deref(),
+        _ => None,
+    });
     observation.transcript_path = transcript_path;
     observation.launch.model = model;
-    observation.launch.effort = claude_effort(payload, parts);
+    observation.launch.effort = claude_effort(payload, hook);
     observation.usage.context_window = context_window;
     // A child's transcript total covers its last request only, not its run, so
     // a child carries the request split and no total.
@@ -1658,68 +1657,64 @@ fn claude_task(payload: &Value, subagent_common: Option<&ClaudeCommon>) -> Optio
     }
 }
 
-fn claude_effort(payload: &Value, parts: &ClaudeLifecycleParts) -> Option<String> {
-    parts
-        .stop
-        .as_ref()
-        .and_then(|p| p.common.effort.as_ref())
-        .or_else(|| {
-            parts
-                .subagent_stop
-                .as_ref()
-                .and_then(|p| p.common.effort.as_ref())
-        })
-        .and_then(|e| e.level.clone())
-        .or_else(|| optional_payload_string(payload, &["thinking_level"]))
+fn claude_effort(payload: &Value, hook: &ClaudeHook) -> Option<String> {
+    match hook {
+        ClaudeHook::Stop(stop) => stop.common.effort.as_ref(),
+        ClaudeHook::SubagentStop(stop) => stop.common.effort.as_ref(),
+        _ => None,
+    }
+    .and_then(|e| e.level.clone())
+    .or_else(|| optional_payload_string(payload, &["thinking_level"]))
 }
 
 /// What a root hook proves about the session's background shells: a Bash
 /// launch that returned a `backgroundTaskId` (explicit `run_in_background` or
 /// an auto-backgrounded timeout), a `Stop` task list, or a task-notification
 /// prompt for tasks that stopped running.
-fn claude_background_shells(
-    parts: &ClaudeLifecycleParts,
-    now: Timestamp,
-) -> Option<BackgroundShellReport> {
-    if let Some(post) = &parts.post_tool_use {
-        if post.tool_name.as_deref() != Some("Bash") {
-            return None;
+fn claude_background_shells(hook: &ClaudeHook, now: Timestamp) -> Option<BackgroundShellReport> {
+    match hook {
+        ClaudeHook::PostToolUse(post) => {
+            if post.tool_name.as_deref() != Some("Bash") {
+                return None;
+            }
+            let id = post
+                .tool_response
+                .as_ref()?
+                .get("backgroundTaskId")?
+                .as_str()
+                .filter(|id| !id.is_empty())?;
+            let input_text = |key: &str| {
+                post.tool_input
+                    .as_ref()
+                    .and_then(|input| input.get(key))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            };
+            Some(BackgroundShellReport::Started {
+                shell: BackgroundShell {
+                    id: id.to_owned(),
+                    command: input_text("command"),
+                    description: input_text("description"),
+                    started_at: now,
+                },
+            })
         }
-        let id = post
-            .tool_response
-            .as_ref()?
-            .get("backgroundTaskId")?
-            .as_str()
-            .filter(|id| !id.is_empty())?;
-        let input_text = |key: &str| {
-            post.tool_input
-                .as_ref()
-                .and_then(|input| input.get(key))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        };
-        return Some(BackgroundShellReport::Started {
-            shell: BackgroundShell {
-                id: id.to_owned(),
-                command: input_text("command"),
-                description: input_text("description"),
-                started_at: now,
-            },
-        });
+        ClaudeHook::Stop(stop) => {
+            let shells = stop
+                .background_tasks
+                .as_deref()?
+                .iter()
+                .filter(|task| task.is_pending())
+                .filter_map(|task| task.as_shell(now))
+                .collect();
+            Some(BackgroundShellReport::Snapshot { shells })
+        }
+        ClaudeHook::UserPromptSubmit(submit) => {
+            let ids = finished_task_notification_ids(submit.prompt.as_deref()?);
+            (!ids.is_empty()).then_some(BackgroundShellReport::Finished { ids })
+        }
+        _ => None,
     }
-    if let Some(stop) = &parts.stop {
-        let shells = stop
-            .background_tasks
-            .as_deref()?
-            .iter()
-            .filter(|task| task.is_pending())
-            .filter_map(|task| task.as_shell(now))
-            .collect();
-        return Some(BackgroundShellReport::Snapshot { shells });
-    }
-    let prompt = parts.user_prompt.as_ref()?.prompt.as_deref()?;
-    let ids = finished_task_notification_ids(prompt);
-    (!ids.is_empty()).then_some(BackgroundShellReport::Finished { ids })
 }
 
 /// Claude v2.1.145+ parks on nonterminal background tasks or any scheduled wakeup.
