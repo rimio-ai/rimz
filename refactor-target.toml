@@ -2721,22 +2721,22 @@ reason = "Ambient production interface: about 170 one-line sites hold only a wor
 [[verdict]]
 kind = "item"
 key = "disk::paths::StatePaths::under"
-reason = "Explicit-root form for fixtures, doctor's unbudgeted socket probe and the Zellij runtime_dir branch: no socket budget and shared data under the given root; the _under names are what the fixture-home and sidebar-fold invariants tell apart from the ambient forms (pass 31e)."
+reason = "Explicit-home form of for_workspace, which delegates to it; production callers are the Zellij runtime_dir branch and room::session's sidebar-heartbeat lookup, which are handed a home other than the ambient one (pass 31e)."
 
 [[verdict]]
 kind = "item"
 key = "disk::paths::StatePaths::for_project_root_under"
-reason = "Explicit-root form for fixtures, doctor's unbudgeted socket probe and the Zellij runtime_dir branch: no socket budget and shared data under the given root; the _under names are what the fixture-home and sidebar-fold invariants tell apart from the ambient forms (pass 31e)."
+reason = "Explicit-home form of for_project_root, which delegates to it; workspace::resolve_with_home calls it, and the fixture-home invariant's remedy names it, so the ambient/explicit name split stays (pass 31e)."
 
 [[verdict]]
 kind = "item"
 key = "disk::paths::RuntimePaths::for_state_under"
-reason = "Explicit-root form for fixtures, doctor's unbudgeted socket probe and the Zellij runtime_dir branch: no socket budget and shared data under the given root; the _under names are what the fixture-home and sidebar-fold invariants tell apart from the ambient forms (pass 31e)."
+reason = "Explicit runtime root with no socket budget and shared data under that root; production callers are doctor's socket probe, the Zellij runtime_dir branch and room::session's sidebar-heartbeat lookup. It differs from for_state in behaviour, so the two do not merge (pass 31e)."
 
 [[verdict]]
 kind = "item"
 key = "disk::paths::RuntimePaths::under"
-reason = "Explicit-root form for fixtures, doctor's unbudgeted socket probe and the Zellij runtime_dir branch: no socket budget and shared data under the given root; the _under names are what the fixture-home and sidebar-fold invariants tell apart from the ambient forms (pass 31e)."
+reason = "No production caller: builds state and runtime from one root for tests and benches that hold only an id and a root (about 330 test sites, benches/fleet.rs and hotpath.rs); those are separate crates, so it stays pub (pass 31e)."
 
 [[verdict]]
 kind = "item"
