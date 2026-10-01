@@ -156,7 +156,7 @@ When a symbol still exists but its line hint has drifted, refresh the hint inste
 rimz lsp check notes.md --fix
 ```
 
-This rewrites only existing hint digits, then checks the updated notes. When several items match a symbol, the hint must select exactly one within three lines; a unique item can be fixed even when its hint has drifted farther. It preserves hint syntax and leaves hints that cannot select one item, line-only anchors, and files with unsaved editor changes alone. Review the notes diff to keep or undo the changed hints. A second run with no changed hints leaves the file untouched.
+This rewrites only existing hint digits, then checks the updated notes. When several items match a symbol, the hint must select exactly one within three lines; a unique item can be fixed even when its hint has drifted farther, and so can a type whose other matches are its impl blocks. It preserves hint syntax and leaves hints that cannot select one item, line-only anchors, and files with unsaved editor changes alone. Review the notes diff to keep or undo the changed hints. A second run with no changed hints leaves the file untouched.
 
 Anchors written without a line span can get one in the same pass:
 

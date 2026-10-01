@@ -127,19 +127,22 @@ pub(super) fn rewrite(
 }
 
 /// The one item an anchor names. A hinted anchor names the single hit its hint
-/// overlaps, else the sole hit. A hintless anchor names its sole hit, or the one
-/// hit whose own name is the anchor's last segment when every other hit matched
-/// only through its last token, as impl blocks of a type do.
+/// overlaps, else the sole hit. A hintless anchor, or a hinted one whose hint
+/// overlaps no hit, names its sole hit, or the one hit whose own name is the
+/// anchor's last segment when every other hit matched only through its last
+/// token, as impl blocks of a type do. A hint overlapping only an impl block
+/// keeps naming that block: it may point there on purpose.
 fn named<'a>(
     hits: &[&'a Candidate],
     chain: &[String],
     hint: Option<[u32; 2]>,
 ) -> Option<&'a Candidate> {
     if hint.is_some() {
-        return match (hinted(hits, hint).as_slice(), hits) {
-            ([node], _) | (_, [node]) => Some(*node),
-            _ => None,
-        };
+        match (hinted(hits, hint).as_slice(), hits) {
+            ([node], _) | (_, [node]) => return Some(*node),
+            ([], _) => {}
+            _ => return None,
+        }
     }
     let wanted = chain.last()?;
     let mut direct = hits.iter().copied().filter(|node| {
