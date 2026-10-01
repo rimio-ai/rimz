@@ -305,12 +305,9 @@ fn daemon_socket(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
     match login_env.get(CODEX_APP_SERVER_SOCK_ENV) {
         Some(value) if value.is_empty() => None,
         Some(value) => Some(PathBuf::from(value)),
-        None => Some(
-            CodexAdapter
-                .config_home(login_env)?
-                .join("app-server-control")
-                .join("app-server-control.sock"),
-        ),
+        None => Some(daemon::control_socket(
+            &CodexAdapter.config_home(login_env)?,
+        )),
     }
 }
 
