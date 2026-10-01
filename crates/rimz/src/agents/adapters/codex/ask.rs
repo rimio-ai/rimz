@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
+use crate::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply, non_empty_trimmed};
 use crate::pane::keys::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
@@ -167,7 +167,7 @@ pub(super) fn answer_detail(
         let chosen = entry
             .answers
             .into_iter()
-            .filter_map(|answer| non_empty(Some(&answer)))
+            .filter_map(|answer| non_empty_trimmed(&answer))
             .collect::<Vec<_>>();
         if chosen.is_empty() {
             continue;
@@ -185,7 +185,7 @@ pub(super) fn submitted_prompt_answer(prompt: &str) -> Option<Vec<AskAnswer>> {
     if answered_questions(prompt).is_some() {
         return None;
     }
-    let prompt = non_empty(Some(prompt))?;
+    let prompt = non_empty_trimmed(prompt)?;
     let prompt = prompt.chars().take(SUBMITTED_PROMPT_MAX_CHARS).collect();
     Some(vec![AskAnswer {
         question: None,
@@ -275,9 +275,4 @@ fn question_answer_plan(
         steps.push(AnswerStep::Key(NamedKey::Enter));
     }
     Ok(steps)
-}
-
-fn non_empty(text: Option<&str>) -> Option<String> {
-    let text = text?.trim();
-    (!text.is_empty()).then(|| text.to_owned())
 }
