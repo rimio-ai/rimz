@@ -454,6 +454,16 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
         "direct preview skips the list fallback"
     );
 
+    let transport = CannedTransport::new().with(
+        "thread/read",
+        json!({ "thread": { "id": "sess-1", "preview": "  Create a TUI \n", "name": "   " } }),
+    );
+    let mut client = CodexAppServer::new(transport);
+    client.handshake().unwrap();
+    let ctx = client.observe("codex", Some("sess-1"), None, ts()).context;
+    assert_eq!(ctx.session_preview.as_deref(), Some("Create a TUI"));
+    assert_eq!(ctx.session_name, None);
+
     let transport = CannedTransport::new()
         .with(
             "thread/read",
@@ -623,6 +633,42 @@ fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
         other => panic!("broker must come first, got {other:?}"),
     }
     assert_spawn(&attempts[1], APP_SERVER_DEADLINE);
+}
+
+#[test]
+fn daemon_socket_defaults_under_codex_home_and_takes_the_override_verbatim() {
+    let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    };
+    assert_eq!(
+        daemon_socket(&env(&[("CODEX_HOME", "/srv/codex"), ("HOME", "/home/u")])),
+        Some(PathBuf::from(
+            "/srv/codex/app-server-control/app-server-control.sock"
+        ))
+    );
+    assert_eq!(
+        daemon_socket(&env(&[("HOME", "/home/u")])),
+        Some(PathBuf::from(
+            "/home/u/.codex/app-server-control/app-server-control.sock"
+        ))
+    );
+    assert_eq!(
+        daemon_socket(&env(&[
+            (CODEX_APP_SERVER_SOCK_ENV, "/run/custom.sock"),
+            ("CODEX_HOME", "/srv/codex"),
+        ])),
+        Some(PathBuf::from("/run/custom.sock"))
+    );
+    assert_eq!(
+        daemon_socket(&env(&[
+            (CODEX_APP_SERVER_SOCK_ENV, ""),
+            ("HOME", "/home/u")
+        ])),
+        None
+    );
 }
 
 #[test]
