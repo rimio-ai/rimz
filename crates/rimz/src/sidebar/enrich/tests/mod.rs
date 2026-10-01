@@ -63,14 +63,31 @@ fn dashboard_shows_only_the_rooms_current_account_per_provider() {
         toml::from_str("[accounts.codex.team-1]\nhome = \"/srv/rimz-test-team\"\n").unwrap();
     let team: crate::ids::LoginKey = "codex@team-1".parse().unwrap();
     let old = crate::ids::LoginKey::default_for(team.kind.clone());
-    let agents = vec![
+    let mut new = root_agent("codex", "new-1", None);
+    new.login = Some(team.name.clone());
+    let mut agents = vec![
         root_agent("claude", "c1", None),
         root_agent("codex", "old-1", None),
         root_agent("codex", "old-2", None),
+        new,
     ];
+    let panes: Vec<_> = agents
+        .iter_mut()
+        .enumerate()
+        .map(|(idx, agent)| {
+            let live = pane(
+                &format!("terminal_{idx}"),
+                agent.kind.as_str(),
+                "/repo/main",
+            );
+            agent.pane = Some(live.clone());
+            live
+        })
+        .collect();
     let (_dir, runtime, snapshot) = runtime();
     let snapshot =
-        SidebarSnapshot::build_with_agents(snapshot.workspace_id.clone(), agents, snapshot.now);
+        SidebarSnapshot::build_with_agents(snapshot.workspace_id.clone(), agents, snapshot.now)
+            .with_live_panes(panes, None);
     let lanes = crate::sidebar::refresh::RefreshedLanes {
         spending: Default::default(),
         accounts: BTreeMap::from([
@@ -110,12 +127,12 @@ fn dashboard_shows_only_the_rooms_current_account_per_provider() {
 
     assert_eq!(
         panels(&switched),
-        BTreeSet::from([("Claude".to_owned(), 0), ("Codex · team-1".to_owned(), 0)]),
-        "the old account's live agents and probe earn no block"
+        BTreeSet::from([("Claude".to_owned(), 1), ("Codex · team-1".to_owned(), 1)]),
+        "the old account's live agents and probe earn no block and no count"
     );
     assert_eq!(
         panels(&room(Some(Default::default()))),
-        BTreeSet::from([("Claude".to_owned(), 0), ("Codex".to_owned(), 0)])
+        BTreeSet::from([("Claude".to_owned(), 1), ("Codex".to_owned(), 2)])
     );
     assert!(
         panels(&room(None)).is_empty(),
