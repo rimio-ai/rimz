@@ -383,7 +383,8 @@ path = "crates/rimz/src/harness"
 # The account-mismatch refusal is shared by restart, fork, and subagent resume with lane and cohort resume (+1).
 # Tier-fallback recording is shared by fresh and resumed seats (+1).
 # ResumeOverrides shares saved-posture overrides with cohort CLI callers (+1).
-surface-budget = 624
+# resolve_member_posture gives agents restart a team member's role layers (+1).
+surface-budget = 625
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
