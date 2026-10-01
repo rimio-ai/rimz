@@ -1,4 +1,12 @@
 use super::*;
+use clap::Parser;
+use rimz::agents::{LaunchParams, PermissionMode};
+use rimz::config::MachineConfig;
+use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
+use rimz::harness::run_wake::ExpectedRunFrame;
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
+use rimz::store::run::{RunRecord, RunStatus};
+use std::path::{Path, PathBuf};
 
 /// A resumed session is bound to exactly one pane at a time, and the
 /// replacement stamps that binding before it spawns its provider. The
@@ -574,4 +582,675 @@ fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
         context.ready_for_self_cleanup(&context.load_record().unwrap()),
         "terminal run is reclaimed once waiter leaves"
     );
+}
+
+fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let runtime = rimz::RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    let argv = rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), &runtime, input)
+        .expect("render exec argv");
+    let parsed = crate::cli::Cli::try_parse_from(argv).expect("parse rendered exec argv");
+    let Some(crate::cli::Subcmd::Agents(args)) = parsed.subcommand else {
+        panic!("expected agents subcommand");
+    };
+    let Some(AgentsSubcmd::Exec(args)) = args.command else {
+        panic!("expected exec subcommand");
+    };
+    rimz::harness::launch::decode_exec_request(
+        &args.kind,
+        args.worktree_path.as_deref(),
+        &args.request,
+    )
+    .expect("decode exec request")
+}
+
+fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
+    ExecRequest {
+        isolation_default: None,
+        kind: AgentKind::new_unchecked(kind),
+        action,
+        system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
+        team_prompt: None,
+        skills: None,
+        allowed_tools: None,
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        subagent: false,
+        identity: ExecIdentity::default(),
+    }
+}
+
+fn resume_or_fork_contract(action: &ExecAction) -> (&str, &str, &[String]) {
+    use ExecAction::{Fork, Launch, Resume};
+
+    match action {
+        Resume {
+            session_id,
+            extra_args,
+        } => ("resume", session_id, extra_args),
+        Fork {
+            session_id,
+            extra_args,
+        } => ("fork", session_id, extra_args),
+        Launch { .. } => panic!("expected resume or fork"),
+    }
+}
+
+fn bare_exec_args() -> ExecRequest {
+    ExecRequest {
+        isolation_default: None,
+        kind: AgentKind::new_unchecked("codex"),
+        action: ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
+        team_prompt: None,
+        skills: None,
+        allowed_tools: None,
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        subagent: false,
+        identity: ExecIdentity {
+            name: Some("lucid-atlas".to_owned()),
+            launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
+            ..ExecIdentity::default()
+        },
+    }
+}
+
+#[test]
+fn exec_argv_round_trips_identity_actions_and_bindings() {
+    let launch_extra = vec!["--dangerously-skip-permissions".to_owned()];
+    let input_params = LaunchParams {
+        profile: Some("planner".to_owned()),
+        mode: Some(PermissionMode::Yolo),
+        role: Some("coder".to_owned()),
+        model: Some("opus".to_owned()),
+        effort: Some("high".to_owned()),
+        budget: Some("$12.50/day".to_owned()),
+        team: Some("forge".to_owned()),
+        launch_group: Some("launch_group_1".to_owned()),
+        launch_ordinal: Some(2),
+        channel: Some("design".to_owned()),
+        kind_ordinal: None,
+        ..LaunchParams::default()
+    };
+    let input = ExecRequest {
+        isolation_default: None,
+        kind: AgentKind::new_unchecked("claude"),
+        action: ExecAction::Launch {
+            prompt: Some("fix it".to_owned()),
+            extra_args: launch_extra,
+        },
+        system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
+        team_prompt: None,
+        skills: None,
+        allowed_tools: None,
+        provider_account: ProviderAccountState::Unbound,
+        run_id: Some(
+            "run_0123456789abcdef0123456789abcdef"
+                .parse()
+                .expect("run id"),
+        ),
+        worktree_path: Some(PathBuf::from("/repo/worktree")),
+        close_pane_on_exit: true,
+        exit_on_run_completion: true,
+        subagent: true,
+        identity: ExecIdentity {
+            resume_model_override: false,
+            name: Some("swift-otter".to_owned()),
+            name_explicit: true,
+            launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
+            params: input_params,
+        },
+    };
+
+    let actual = parse_exec_request(&input);
+    assert_eq!(
+        (
+            actual.kind.as_str(),
+            actual.run_id.as_ref().map(ToString::to_string),
+            actual.worktree_path.as_deref(),
+            actual.close_pane_on_exit,
+            actual.exit_on_run_completion,
+        ),
+        (
+            "claude",
+            Some("run_0123456789abcdef0123456789abcdef".to_owned()),
+            Some(Path::new("/repo/worktree")),
+            true,
+            true,
+        )
+    );
+    let ExecAction::Launch { prompt, extra_args } = &actual.action else {
+        panic!("expected launch actions");
+    };
+    assert_eq!(
+        (prompt.as_deref(), extra_args.as_slice()),
+        (
+            Some("fix it"),
+            ["--dangerously-skip-permissions".to_owned()].as_slice()
+        )
+    );
+    assert_eq!(
+        (
+            actual.identity.name.as_deref(),
+            actual.identity.name_explicit,
+            actual.identity.launch_id.as_deref(),
+        ),
+        (
+            Some("swift-otter"),
+            true,
+            Some("launch_0123456789abcdef0123456789abcdef"),
+        )
+    );
+    assert_eq!(
+        actual.identity.params,
+        LaunchParams {
+            profile: Some("planner".to_owned()),
+            mode: Some(PermissionMode::Yolo),
+            role: Some("coder".to_owned()),
+            model: Some("opus".to_owned()),
+            effort: Some("high".to_owned()),
+            budget: Some("$12.50/day".to_owned()),
+            team: Some("forge".to_owned()),
+            launch_group: Some("launch_group_1".to_owned()),
+            launch_ordinal: Some(2),
+            channel: Some("design".to_owned()),
+            kind_ordinal: None,
+            ..LaunchParams::default()
+        }
+    );
+
+    let resume_extra = vec!["--verbose".to_owned()];
+    let fork_extra = vec!["--branch".to_owned()];
+    for input in [
+        minimal_exec_request(
+            "claude",
+            ExecAction::Resume {
+                session_id: "sess-1".to_owned(),
+                extra_args: resume_extra,
+            },
+        ),
+        minimal_exec_request(
+            "codex",
+            ExecAction::Fork {
+                session_id: "sess-2".to_owned(),
+                extra_args: fork_extra,
+            },
+        ),
+    ] {
+        let actual = parse_exec_request(&input);
+        assert_eq!(actual.kind, input.kind);
+        assert_eq!(
+            resume_or_fork_contract(&actual.action),
+            resume_or_fork_contract(&input.action)
+        );
+    }
+
+    let mut resume = minimal_exec_request(
+        "codex",
+        ExecAction::Resume {
+            session_id: "sess-resume".to_owned(),
+            extra_args: Vec::new(),
+        },
+    );
+    assert_eq!(
+        exec_attach_target(&resume),
+        Some((
+            AgentKind::new_unchecked("codex"),
+            AgentSessionId::from("sess-resume"),
+        ))
+    );
+    resume.identity.launch_id = Some("sess-resume".to_owned());
+    assert!(
+        exec_launch_identity(&resume)
+            .expect("resume-only launch identity")
+            .is_none(),
+        "a resume id stamps the existing session rather than creating a provisional launch"
+    );
+    for action in [
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        ExecAction::Fork {
+            session_id: "sess-source".to_owned(),
+            extra_args: Vec::new(),
+        },
+    ] {
+        assert!(exec_attach_target(&minimal_exec_request("codex", action)).is_none());
+    }
+
+    let mut orphan = minimal_exec_request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    orphan.identity.launch_id = Some("launch_orphan".to_owned());
+    assert_eq!(
+        exec_launch_identity(&orphan)
+            .expect_err("launch id requires a name")
+            .to_string(),
+        "--launch-id requires --agent-name"
+    );
+
+    let binding = rimz::agents::ProviderAccountBinding::decode(
+        r#"{"scope":{"kind":"sub_provider","provider":"alibaba","variant":"international"},"account_key":"owner"}"#,
+    )
+    .expect("binding");
+    for provider_account in [
+        ProviderAccountState::Pending {
+            binding: binding.clone(),
+        },
+        ProviderAccountState::Finalized { binding },
+    ] {
+        let mut request = minimal_exec_request(
+            "qwen",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: Vec::new(),
+            },
+        );
+        request.provider_account = provider_account;
+        assert_eq!(parse_exec_request(&request), request);
+    }
+}
+
+#[test]
+fn exec_refuses_only_fresh_launches_of_an_unshadowed_failed_profile() {
+    let root = tempfile::tempdir().unwrap();
+    let mut machine = MachineConfig::default();
+    let path = PathBuf::from("/tmp/.agents/agents/worker.md");
+    machine
+        .notices
+        .failed_definitions
+        .insert("worker".to_owned(), [path.clone()].into());
+    machine
+        .notices
+        .definition_errors
+        .push(rimz::config::definitions::DefinitionErr {
+            path,
+            message: "invalid frontmatter".to_owned(),
+            cause: rimz::config::definitions::DefinitionCause::Invalid,
+        });
+    let request = |action| {
+        let mut request = minimal_exec_request("codex", action);
+        request.identity.params.profile = Some("worker".to_owned());
+        request
+    };
+    let launch = request(ExecAction::Launch {
+        prompt: None,
+        extra_args: Vec::new(),
+    });
+    let resume = request(ExecAction::Resume {
+        session_id: "s".to_owned(),
+        extra_args: Vec::new(),
+    });
+    let fork = request(ExecAction::Fork {
+        session_id: "s".to_owned(),
+        extra_args: Vec::new(),
+    });
+    let mut effective =
+        rimz::config::effective::load_with_roots(&machine, root.path(), &root.path().join("home"))
+            .unwrap();
+
+    assert_eq!(
+        exec_definition_failure(&launch, &machine, Some(&effective)).as_deref(),
+        Some("/tmp/.agents/agents/worker.md: invalid frontmatter")
+    );
+    assert!(exec_definition_failure(&launch, &machine, None).is_some());
+    assert_eq!(
+        exec_definition_failure(&resume, &machine, Some(&effective)),
+        None
+    );
+    assert_eq!(
+        exec_definition_failure(&fork, &machine, Some(&effective)),
+        None
+    );
+
+    let shadow: rimz::config::Profile = toml::from_str("agent = 'claude'").unwrap();
+    effective.profiles.0.insert("worker".to_owned(), shadow);
+    assert_eq!(
+        exec_definition_failure(&launch, &machine, Some(&effective)),
+        None
+    );
+}
+
+mod pane_exec {
+    use super::*;
+
+    #[test]
+    fn wrapper_lifetime_policy_preserves_recoverable_sessions() {
+        let mut run_owned = bare_exec_args();
+        run_owned.run_id = Some(rimz::RunId::new());
+        let mut worktree_owned = bare_exec_args();
+        worktree_owned.worktree_path = Some(PathBuf::from("/tmp/rimz-worktree"));
+        let mut completion_owned = bare_exec_args();
+        completion_owned.run_id = Some(rimz::RunId::new());
+        completion_owned.exit_on_run_completion = true;
+        completion_owned.close_pane_on_exit = true;
+        let mut subagent_completion_owned = completion_owned.clone();
+        subagent_completion_owned.subagent = true;
+        let mut close_owned = bare_exec_args();
+        close_owned.close_pane_on_exit = true;
+
+        for (name, args, direct, record_end, drop_to_shell) in [
+            ("bare", bare_exec_args(), cfg!(unix), true, false),
+            ("supervised run", run_owned, false, true, false),
+            ("worktree", worktree_owned, false, true, true),
+            ("completion", completion_owned, false, false, false),
+            (
+                "subagent completion",
+                subagent_completion_owned,
+                false,
+                true,
+                false,
+            ),
+            ("close", close_owned, false, true, true),
+        ] {
+            assert_eq!(should_exec_agent_directly(&args), direct, "{name}");
+            assert_eq!(should_record_end_trace(&args), record_end, "{name}");
+            assert_eq!(should_drop_to_shell(&args, false), drop_to_shell, "{name}");
+            assert!(!should_drop_to_shell(&args, true), "{name}");
+        }
+
+        for (abrupt, accepts_close, expected) in [
+            (false, false, true),
+            (false, true, true),
+            (true, true, true),
+            (true, false, false),
+        ] {
+            assert_eq!(close_is_deliberate(abrupt, accepts_close), expected);
+        }
+    }
+
+    #[test]
+    fn exit_hints_use_best_relaunch_identity() {
+        let mut team = bare_exec_args();
+        team.identity.params.team = Some("trim".to_owned());
+        team.identity.params.role = Some("pruner".to_owned());
+        team.identity.params.profile = Some("codex-plan".to_owned());
+        let mut profile = bare_exec_args();
+        profile.identity.params.profile = Some("codex-plan".to_owned());
+        assert_eq!(relaunch_command(&team), "rimz agents trim.pruner");
+        assert_eq!(relaunch_command(&profile), "rimz agents codex-plan");
+        assert_eq!(relaunch_command(&bare_exec_args()), "rimz agents codex");
+
+        let status = exit_status(0);
+        let message = exit_hint(
+            "codex",
+            &status,
+            false,
+            "rimz agents codex-plan",
+            false,
+            None,
+        );
+        assert_eq!(
+            message,
+            format!(
+                "rimz: agent `codex` exited ({status}); relaunch with `rimz agents codex-plan`\r\n"
+            )
+        );
+    }
+
+    #[test]
+    fn exit_hint_teaches_resume_for_a_redeemable_session() {
+        let status = exit_status(0);
+        let message = exit_hint(
+            "codex",
+            &status,
+            false,
+            "rimz agents forge.coder",
+            true,
+            None,
+        );
+        assert_eq!(
+            message,
+            format!(
+                "rimz: agent `codex` exited ({status}); resume with `rimz agents forge.coder --resume`\r\n"
+            )
+        );
+
+        // A startup failure never advertises resume: there is no conversation.
+        let failed = exit_status(1);
+        let message = exit_hint(
+            "codex",
+            &failed,
+            true,
+            "rimz agents forge.coder",
+            true,
+            None,
+        );
+        assert!(message.contains("failed to start"), "{message}");
+        assert!(!message.contains("--resume"), "{message}");
+    }
+
+    #[test]
+    fn exit_hint_names_the_kept_worktree_on_every_exit() {
+        // The default `../{repo}-worktrees` template reaches the hint unfolded,
+        // so the input carries the `..` the printed line must not.
+        let path = Path::new("/code/query-engine/../query-engine-worktrees/feat-a");
+        let display = crate::cli::render::home_relative("/code/query-engine-worktrees/feat-a");
+        for (startup_failure, resumable, code, action) in [
+            (false, false, 0, "exited"),
+            (false, true, 0, "exited"),
+            (true, true, 1, "failed to start"),
+        ] {
+            let status = exit_status(code);
+            let relaunch = "rimz agents codex-plan";
+            let command = if resumable && !startup_failure {
+                "resume with `rimz agents codex-plan --resume`"
+            } else {
+                "relaunch with `rimz agents codex-plan`"
+            };
+            assert_eq!(
+                exit_hint(
+                    "codex",
+                    &status,
+                    startup_failure,
+                    relaunch,
+                    resumable,
+                    Some(path)
+                ),
+                format!(
+                    "rimz: agent `codex` {action} ({status}); {command}\r\nrimz: worktree {display} kept; `rimz worktree sweep` reclaims it once its work lands\r\n"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn exited_session_resumable_requires_real_id_and_resume_cli() {
+        let cwd = Path::new("/code/feature");
+        let codex = (
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            rimz::ids::AgentSessionId::from("019f796b-f60b-7ab0-9adb-35be6e6904b7"),
+        );
+        assert!(exited_session_resumable(Some(&codex), cwd));
+
+        let provisional = (
+            rimz::ids::AgentKind::new_unchecked("codex"),
+            rimz::ids::AgentSessionId::from("launch_019f2cecea067320b667c5946d266e64"),
+        );
+        assert!(!exited_session_resumable(Some(&provisional), cwd));
+        assert!(!exited_session_resumable(None, cwd));
+    }
+
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+
+            std::process::ExitStatus::from_raw(code << 8)
+        }
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", &format!("exit {code}")])
+                .status()
+                .expect("exit status")
+        }
+    }
+}
+
+mod runs {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
+        #[cfg(unix)]
+        if std::env::var_os("RIMZ_TEST_EXIT_CAPTURE_LOG").is_none() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let bin = tempfile::tempdir().expect("fake mux dir");
+            let tmux = bin.path().join("tmux");
+            std::fs::write(
+                &tmux,
+                "#!/bin/sh\n[ \"$1\" = '-S' ] || exit 1\nshift 2\n[ \"$*\" = 'capture-pane -p -t %7' ] || exit 1\nprintf 'capture\\n' >> \"$RIMZ_TEST_EXIT_CAPTURE_LOG\"\nprintf 'provider failure evidence\\n'\n",
+            )
+            .expect("fake tmux");
+            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755))
+                .expect("executable tmux");
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    concat!(
+                        module_path!(),
+                        "::child_exit_marks_nonterminal_run_failed_and_wakes_waiter"
+                    )
+                    .split_once("::")
+                    .expect("test module has a crate prefix")
+                    .1,
+                    "--nocapture",
+                ])
+                .env("PATH", bin.path())
+                .env("XDG_RUNTIME_DIR", bin.path())
+                .env("TMUX_PANE", "%7")
+                .env("RIMZ_TEST_EXIT_CAPTURE_LOG", bin.path().join("captures"))
+                .output()
+                .expect("isolated capture test");
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                std::fs::read_to_string(bin.path().join("captures")).expect("capture log"),
+                "capture\ncapture\ncapture\ncapture\ncapture\ncapture\n"
+            );
+            return;
+        }
+
+        let state = tempfile::tempdir().expect("state dir");
+        let runtime_root = tempfile::Builder::new()
+            .prefix("rr")
+            .tempdir_in("/tmp")
+            .expect("runtime dir");
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).expect("paths");
+        let runtime =
+            rimz::RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
+        paths.ensure_dirs().expect("state dirs");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let record = RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "summarize".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        let run_id = record.run_id.clone();
+        rimz::harness::run::create(&paths, &record).expect("create run");
+        let context = RunExecContext {
+            run_id: run_id.clone(),
+            store: rimz::Store::open(paths.clone(), runtime).expect("store"),
+            session_name: "rimz-test".to_owned(),
+            workspace: rimz::ResolvedWorkspace {
+                workspace_id: workspace_id.clone(),
+                project_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                cwd_project_root: None,
+                root_class: rimz::workspace::RootClass::Directory,
+                worktree_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                worktree_branch: None,
+                session_name: "rimz-test".to_owned(),
+                mux_hint: None,
+            },
+        };
+        let waiter = rimz::harness::run_wake::RunWaiter::bind(
+            context.store.runtime_paths(),
+            ExpectedRunFrame {
+                workspace_id,
+                run_id: run_id.clone(),
+            },
+            rimz::harness::run::RunCancellation::new(),
+        )
+        .expect("bind run");
+
+        let globals = GlobalFlags {
+            mux: Some(MuxName::Tmux),
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Auto,
+        };
+
+        fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
+
+        let failed = rimz::harness::run::load(&paths, &run_id).expect("load failed run");
+        assert_eq!(failed.status, RunStatus::Failed);
+        let terminal = waiter
+            .wait_terminal(&context.store, Some(Duration::from_secs(1)), None)
+            .await
+            .expect("run wait");
+        assert_eq!(terminal.status, RunStatus::Failed);
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                terminal.failure_tail.as_deref(),
+                Some("provider failure evidence")
+            );
+            for status in [
+                RunStatus::Failed,
+                RunStatus::VerifyFailed,
+                RunStatus::TimedOut,
+                RunStatus::BudgetExceeded,
+                RunStatus::Canceled,
+                RunStatus::Completed,
+            ] {
+                let mut record = terminal.clone();
+                record.status = status;
+                record.failure_tail = None;
+                rimz::harness::run::create(&paths, &record).expect("terminal run without evidence");
+                assert!(
+                    rimz::store::run::run_waiter_is_live(context.store.runtime_paths(), &run_id)
+                        .expect("probe waiter")
+                );
+
+                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
+
+                let captured = rimz::harness::run::load(&paths, &run_id).expect("captured run");
+                assert_eq!(captured.status, status);
+                assert_eq!(
+                    captured.failure_tail.as_deref(),
+                    (status != RunStatus::Completed).then_some("provider failure evidence")
+                );
+                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
+            }
+        }
+    }
 }

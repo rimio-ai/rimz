@@ -668,7 +668,7 @@ surface-budget = 24
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"
-surface-budget = 13
+surface-budget = 1
 
 [[module]]
 path = "crates/rimz/src/cli/transcript"
