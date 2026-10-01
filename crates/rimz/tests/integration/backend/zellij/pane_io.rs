@@ -661,3 +661,134 @@ fn client_view_tracks_the_attached_client() {
         "the attached client focuses the session's lone terminal pane: {focused:?}",
     );
 }
+
+/// `pane send` and `pane capture` on a raw id address the resolved room's
+/// session even when another live session holds the same pane id and the caller
+/// sits outside any pane, and refuse an id the room does not hold before any
+/// write action runs.
+#[test]
+fn pane_send_and_capture_address_the_resolved_room_among_two_sessions() {
+    require_zellij!();
+
+    let env = Env::new();
+    let other_root = env.home_root.join("other");
+    std::fs::create_dir_all(&other_root).expect("mkdir other project");
+    let here = env.resolve_workspace(&env.project_root).session_name;
+    let other = env.resolve_workspace(&other_root).session_name;
+    let room = LiveZellijSession::from_namespace(crate::common::ZellijNamespace::new(), &here);
+    let xdg = room.path();
+    std::fs::write(xdg.join(".zshrc"), "# hermetic test shell\n")
+        .expect("write test shell profile");
+    room.create_background();
+    let created = room
+        .command()
+        .args(["attach", "--create-background", &other])
+        .bounded_output()
+        .expect("create second session");
+    assert!(created.status.success(), "second session");
+    let here_pane = wait_for_pane_count(xdg, &here, 1)[0].pane_id.clone();
+    let other_pane = wait_for_pane_count(xdg, &other, 1)[0].pane_id.clone();
+    assert_eq!(here_pane, other_pane, "both rooms reuse one pane id");
+    let backend = room.backend();
+    poll_until(
+        Duration::from_secs(10),
+        || {
+            backend
+                .capture_pane(&here_pane, Some(&here), None, false)
+                .map_err(|err| err.to_string())
+        },
+        |capture| !capture.raw_text.trim().is_empty(),
+        "shell prompt in the resolved room",
+    );
+
+    let trace = TempDir::new().expect("zellij trace tempdir");
+    let trace_log = trace.path().join("zellij.log");
+    let shim = trace.path().join("zellij");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            trace_log.display(),
+            which::which("zellij").expect("zellij path").display(),
+        ),
+    )
+    .expect("write zellij trace shim");
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod zellij trace shim");
+    let pane = |args: &[&str]| {
+        env.rimz()
+            .env("XDG_RUNTIME_DIR", xdg)
+            .env("XDG_CACHE_HOME", xdg)
+            .env("TMPDIR", xdg)
+            .env("RIMZ_ZELLIJ_BIN", &shim)
+            .arg("pane")
+            .args(args)
+            .bounded_output()
+            .expect("run rimz pane")
+    };
+    let id = here_pane.to_string();
+
+    let send = pane(&["send", "--enter", &id, "echo TWO_ROOM_MARK"]);
+    assert!(
+        send.status.success(),
+        "send: {}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+    let ran = |text: &str| text.lines().any(|line| line.trim() == "TWO_ROOM_MARK");
+    poll_until(
+        Duration::from_secs(10),
+        || {
+            backend
+                .capture_pane(&here_pane, Some(&here), None, false)
+                .map_err(|err| err.to_string())
+        },
+        |capture| ran(&capture.raw_text),
+        "mark delivered into the resolved room",
+    );
+    let other_text = backend
+        .capture_pane(&other_pane, Some(&other), None, false)
+        .expect("capture other room")
+        .raw_text;
+    assert!(!other_text.contains("TWO_ROOM_MARK"), "{other_text}");
+
+    let capture = pane(&["capture", &id]);
+    assert!(
+        capture.status.success(),
+        "capture: {}",
+        String::from_utf8_lossy(&capture.stderr)
+    );
+    assert!(
+        ran(&String::from_utf8_lossy(&capture.stdout)),
+        "capture prints the resolved room's pane: {}",
+        String::from_utf8_lossy(&capture.stdout)
+    );
+
+    std::fs::write(&trace_log, "").expect("reset zellij trace");
+    let absent = PaneId::from_parts(MuxName::Zellij, "terminal_99");
+    let refusal = format!(
+        "pane {absent} is not in room {here}; run `rimz pane list` to see its panes, or pass `--root <project>` to address another room"
+    );
+    for args in [
+        &["send", "--enter", "zellij:terminal_99", "echo ABSENT_MARK"][..],
+        &["capture", "zellij:terminal_99"][..],
+    ] {
+        let output = pane(args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {stderr}");
+        assert!(stderr.contains(&refusal), "{args:?}: {stderr}");
+        assert!(
+            output.stdout.is_empty(),
+            "{args:?} printed {:?}",
+            output.stdout
+        );
+    }
+    let log = std::fs::read_to_string(&trace_log).expect("read zellij trace");
+    assert!(
+        !log.lines().any(|line| {
+            ["write", "write-chars", "dump-screen"]
+                .iter()
+                .any(|verb| line.contains(&format!("action {verb} ")))
+        }),
+        "an absent pane got a pane action:\n{log}"
+    );
+}

@@ -32,9 +32,11 @@ The [global flags](../cli.md#global-flags) apply. Every verb exits `0` on succes
 
 | Target | Example | Resolves to |
 | --- | --- | --- |
-| Pane id | `zellij:terminal_4`, `tmux:%3` | That pane. The prefix picks the backend, whatever the ambient session or `--mux` says. |
+| Pane id | `zellij:terminal_4`, `tmux:%3` | That pane, looked up in the current room. The prefix picks the backend, whatever `--mux` says. |
 | Agent address | `@codex`, `@codex#auth-refresh` | The pane the agent is bound to, in the current room. The grammar is in [Addressing agents](./agents.md#addressing-agents). |
 | `sidebar` | `sidebar` | The sidebar in the calling pane's own tab, else the sidebar in the tab the attached client is viewing, else the first sidebar in the room. |
+
+The current room is the one `--root` names, else the calling pane's room, else the room of the working directory; `--root <project>` addresses another room. `capture` and `send` first check that the room holds the target pane, and touch nothing when it does not: a pane outside the room fails with `pane <id> is not in room <session>; run \`rimz pane list\` to see its panes, or pass \`--root <project>\` to address another room`, and a room whose panes cannot be listed fails with `could not check that pane <id> is in room <session>` and the multiplexer's error. The check applies to agent and `sidebar` targets too, so an agent whose pane has closed is refused rather than written past.
 
 Copy pane ids from `rimz pane list`. A target that fits none of the forms fails with `invalid pane target` and points at `rimz pane list`; an agent with no pane fails with `agent <name> has no bound pane`; a room with no sidebar fails with `session <name> has no sidebar pane`.
 
@@ -111,7 +113,7 @@ Key names are case-insensitive, and `_`, `+`, or a space may stand in for `-`:
 
 ## Focus a pane
 
-`rimz pane focus <TARGET>` moves the attached client to the target pane, switching tabs if needed. It works only in a RimZ room; any other session fails with `pane focus requires a managed RimZ room session`. A pane-id target is looked up in the current room unless `--session-name` names another.
+`rimz pane focus <TARGET>` moves the attached client to the target pane, switching tabs if needed. It works only in a RimZ room; any other session fails with `pane focus requires a managed RimZ room session`. `--session-name` names another room for any target.
 
 | Flag | Meaning |
 | --- | --- |

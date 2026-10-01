@@ -274,3 +274,160 @@ fn send_keys_works_with_presence_watch_as_only_client() {
         "send_keys should work when the presence watch is the only client, got: {capture:?}",
     );
 }
+
+/// Two rooms on one managed server: the fixture project's room `here` and a
+/// sibling project's room `other`, each with one shell pane.
+struct TwoRooms {
+    env: Env,
+    server: TmuxServer,
+    here: String,
+    here_pane: PaneId,
+    other_pane: PaneId,
+}
+
+impl TwoRooms {
+    fn new() -> Self {
+        let env = Env::new();
+        let other_root = env.home_root.join("other");
+        std::fs::create_dir_all(&other_root).expect("mkdir other project");
+        let here = env.resolve_workspace(&env.project_root).session_name;
+        let other = env.resolve_workspace(&other_root).session_name;
+        let server = TmuxServer::in_runtime_root(&env.runtime_root);
+        server.ensure_with_shell(&here);
+        server.ensure_with_shell(&other);
+        let here_pane = list_session_panes(&server, &here)[0].pane_id.clone();
+        let other_pane = list_session_panes(&server, &other)[0].pane_id.clone();
+        Self {
+            env,
+            server,
+            here,
+            here_pane,
+            other_pane,
+        }
+    }
+
+    fn pane(&self, args: &[&str]) -> std::process::Output {
+        self.env
+            .rimz()
+            .arg("pane")
+            .args(args)
+            .bounded_output()
+            .expect("run rimz pane")
+    }
+
+    fn refusal(&self, pane: &PaneId) -> String {
+        format!(
+            "pane {pane} is not in room {}; run `rimz pane list` to see its panes, or pass `--root <project>` to address another room",
+            self.here
+        )
+    }
+}
+
+#[test]
+fn pane_send_and_capture_refuse_a_pane_from_another_room() {
+    require_tmux!();
+    let rooms = TwoRooms::new();
+    let other = rooms.other_pane.to_string();
+
+    let send = rooms.pane(&["send", "--enter", &other, "echo CROSS_ROOM_MARK"]);
+    let capture = rooms.pane(&["capture", &other]);
+
+    for (verb, output) in [("send", &send), ("capture", &capture)] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{verb}: {stderr}");
+        assert!(
+            stderr.contains(&rooms.refusal(&rooms.other_pane)),
+            "{verb} names the resolved room: {stderr}"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{verb} printed {:?}",
+            output.stdout
+        );
+    }
+    thread::sleep(Duration::from_millis(300));
+    let text = rooms
+        .server
+        .backend
+        .capture_pane(&rooms.other_pane, None, None, false)
+        .expect("capture other room")
+        .raw_text;
+    assert!(
+        !text.contains("CROSS_ROOM_MARK"),
+        "other room was written: {text}"
+    );
+}
+
+#[test]
+fn pane_send_delivers_text_keys_then_enter_to_a_pane_in_the_room() {
+    require_tmux!();
+    let rooms = TwoRooms::new();
+    let here = rooms.here_pane.to_string();
+
+    let send = rooms.pane(&[
+        "send",
+        "--key",
+        "backspace",
+        "--enter",
+        &here,
+        "echo ORDER_MARKX",
+    ]);
+    assert!(
+        send.status.success(),
+        "send: {}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+    let ran = |text: &str| text.lines().any(|line| line.trim() == "ORDER_MARK");
+    let text = capture_pane_until(
+        &rooms.server.backend,
+        &rooms.here_pane,
+        "ORDER_MARK\n",
+        Duration::from_secs(2),
+    );
+    assert!(ran(&text), "text, backspace, then Enter: {text:?}");
+
+    let capture = rooms.pane(&["capture", &here]);
+    assert!(
+        capture.status.success(),
+        "capture: {}",
+        String::from_utf8_lossy(&capture.stderr)
+    );
+    assert!(ran(&String::from_utf8_lossy(&capture.stdout)));
+}
+
+#[test]
+fn pane_send_refuses_an_agent_whose_pane_left_the_room() {
+    require_tmux!();
+    let rooms = TwoRooms::new();
+    let gone = PaneId::from_parts(MuxName::Tmux, "%99");
+    let workspace = rooms.env.resolve_workspace(&rooms.env.project_root);
+    rooms
+        .env
+        .store()
+        .append_event(&rimz::EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            rimz::store::event::AgentLaunchPayload {
+                agent_id: rimz::ids::AgentSessionId::from("gone-session"),
+                launch_id: Some(rimz::ids::AgentSessionId::from("gone-launch")),
+                agent_name: "gone".to_owned(),
+                agent_name_explicit: true,
+                launch: rimz::agents::LaunchParams::default(),
+                state: rimz::store::event::AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(gone.clone()),
+                runtime_owner: None,
+                worktree_path: Some(rooms.env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed agent bound to a closed pane");
+
+    let send = rooms.pane(&["send", "--enter", "@gone", "echo GONE_MARK"]);
+    let stderr = String::from_utf8_lossy(&send.stderr);
+    assert_eq!(send.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains(&rooms.refusal(&gone)), "{stderr}");
+}
