@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use super::{HostSandbox, Panes, RoomRecord, Tab};
+use super::{DEV_BINARY_MISSING, HostSandbox, Panes, RoomRecord, Tab};
 
 #[derive(Deserialize)]
 struct Renderer {
@@ -58,10 +58,12 @@ pub(super) fn run(workspace: &Path, args: &[String]) -> Result<()> {
         .filter(|mux| matches!(*mux, "tmux" | "zellij"))
         .context("sandbox room requires --mux <tmux|zellij>")?;
     let binary = std::env::var_os("RIMZ_BIN").map_or_else(
-        || workspace.join("target/debug/rimz"),
+        || super::build_dir(workspace).join("rimz"),
         |path| workspace.join(path),
     );
-    let binary = binary.canonicalize().context("development rimz missing; run cargo build -p rimz --bin rimz --features testkit (or set RIMZ_BIN)")?;
+    let binary = binary
+        .canonicalize()
+        .with_context(|| format!("{DEV_BINARY_MISSING} (or set RIMZ_BIN)"))?;
     let sandbox = HostSandbox::for_manual_command()?;
     let root = sandbox._root.path();
     let home = &sandbox.env["HOME"];

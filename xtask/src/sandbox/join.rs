@@ -393,9 +393,13 @@ fn room_command(
     apply_env(&mut command, &sandbox_env(root), true);
     let inherited_path = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
-        std::iter::once(record.stub_dir.clone()).chain(std::env::split_paths(&inherited_path)),
+        [record.stub_dir.as_path()]
+            .into_iter()
+            .chain(record.binary.parent())
+            .map(Path::to_path_buf)
+            .chain(std::env::split_paths(&inherited_path)),
     )
-    .context("prepending the room stub directory to PATH")?;
+    .context("prepending the room stub and binary directories to PATH")?;
     command.env("PATH", path);
     Ok(command)
 }
@@ -631,8 +635,9 @@ mod tests {
         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
         let paths: Vec<_> = std::env::split_paths(env[OsStr::new("PATH")].unwrap()).collect();
         assert_eq!(paths[0], record.stub_dir);
+        assert_eq!(paths[1], Path::new("/dev"));
         assert_eq!(
-            paths[1..],
+            paths[2..],
             std::env::split_paths(&inherited_path).collect::<Vec<_>>()
         );
         let sandbox = sandbox_env(root);
