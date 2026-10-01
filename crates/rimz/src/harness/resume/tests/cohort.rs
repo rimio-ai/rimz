@@ -1903,3 +1903,348 @@ fn cohort_resume_refuses_a_member_from_another_account() {
         "{err:?}"
     );
 }
+
+#[test]
+fn explicit_resume_mode_beats_recorded_and_profile_modes() {
+    let mut planner = profile("claude");
+    planner.mode = Some(PermissionMode::Auto);
+    planner.args = Some("--verbose".into());
+    let profiles = profiles("planner", planner);
+    let mut agent = agent("claude", "a1", "/repo", 1);
+    agent.profile = Some("planner".into());
+    agent.mode = Some(PermissionMode::Yolo);
+    agent.record = Some(Box::new(crate::agents::LaunchRecord {
+        model: Some("opus".into()),
+        effort: Some("high".into()),
+        agent: None,
+    }));
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+    ));
+    restore_routed_cells(
+        &mut layout,
+        &[CohortSeed::Resume(Box::new(agent))],
+        &profiles,
+        &ResumeOverrides {
+            permission_mode: Some(PermissionMode::Plan),
+            preset: crate::agents::LaunchPreset {
+                model: Some("sonnet".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let cell = layout.agent_cells().next().unwrap();
+    assert_eq!(cell.launch.mode, Some(PermissionMode::Plan));
+    assert_eq!(
+        cell.args,
+        [
+            "--verbose",
+            "--effort",
+            "high",
+            "--permission-mode",
+            "plan",
+            "--model",
+            "sonnet"
+        ]
+    );
+}
+
+#[test]
+fn agent_override_mode_precedence_and_refusals() {
+    let mut planner = profile("claude");
+    planner.mode = Some(PermissionMode::Plan);
+    let mut profiles = profiles("planner", planner);
+    let mut reviewer = profile("claude");
+    reviewer.mode = Some(PermissionMode::Auto);
+    profiles.0.insert("reviewer".into(), reviewer);
+    profiles.0.insert("helper".into(), profile("claude"));
+    let restore = |seed: CohortSeed, base: &str| {
+        let mut cell = crate::harness::spec::profile_cell("planner", &profiles).unwrap();
+        cell.launch.mode = Some(PermissionMode::Yolo);
+        let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(cell));
+        let before = layout.clone();
+        let result = restore_routed_cells(
+            &mut layout,
+            &[seed],
+            &profiles,
+            &ResumeOverrides {
+                agent: Some(base),
+                ..Default::default()
+            },
+        );
+        (before, layout, result)
+    };
+    let resumed = |mode: Option<PermissionMode>, profile: &str| {
+        let mut agent = agent("claude", "a1", "/repo", 1);
+        agent.profile = Some(profile.into());
+        agent.mode = mode;
+        CohortSeed::Resume(Box::new(agent))
+    };
+    for (label, seed, base, mode, args) in [
+        (
+            "a base-declared mode beats the saved mode",
+            resumed(Some(PermissionMode::Yolo), "planner"),
+            "reviewer",
+            PermissionMode::Auto,
+            vec!["--permission-mode", "auto"],
+        ),
+        (
+            "a fresh seat replays its layout cell's mode",
+            CohortSeed::Fresh,
+            "helper",
+            PermissionMode::Yolo,
+            vec!["--dangerously-skip-permissions"],
+        ),
+        (
+            "an unstamped seat falls back to the rebased profile's mode",
+            resumed(None, "planner"),
+            "helper",
+            PermissionMode::Plan,
+            vec!["--permission-mode", "plan"],
+        ),
+        (
+            "a blank base keeps the seat's own profile",
+            resumed(Some(PermissionMode::Yolo), "planner"),
+            "",
+            PermissionMode::Yolo,
+            vec!["--dangerously-skip-permissions"],
+        ),
+    ] {
+        let (_, layout, result) = restore(seed, base);
+        result.unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.launch.mode, Some(mode), "{label}");
+        assert_eq!(cell.args, args, "{label}");
+        assert_eq!(
+            cell.launch.record.as_ref().unwrap().agent.as_deref(),
+            Some(base),
+            "{label}"
+        );
+        assert!(cell.resume_model_override, "{label}");
+    }
+    let unknown = crate::harness::spec::resolve_agent_override(Some("ghost"), &profiles)
+        .unwrap_err()
+        .to_string();
+    let retired = crate::harness::spec::profile_cell("retired", &profiles)
+        .unwrap_err()
+        .to_string();
+    for (seed, base, reason) in [
+        (resumed(None, "planner"), "ghost", unknown),
+        (resumed(None, "retired"), "reviewer", retired),
+    ] {
+        let (before, after, result) = restore(seed, base);
+        assert_eq!(result, Err(PostureDegrade::OverrideRejected { reason }));
+        assert_eq!(after, before);
+    }
+}
+
+#[test]
+fn tier_stamped_legacy_seat_keeps_the_layout_mode() {
+    let mut planner = routed_profile(None);
+    planner
+        .definition_renders
+        .as_mut()
+        .unwrap()
+        .renders
+        .insert("claude".into(), profile("claude"));
+    let profiles = profiles("planner", planner);
+    for (label, tier, record, mode, args) in [
+        (
+            "a stamped seat without a record keeps the layout mode",
+            Some(tier_stamp("opus")),
+            None,
+            PermissionMode::Auto,
+            vec!["--permission-mode", "auto"],
+        ),
+        (
+            "a recorded seat replays its saved mode",
+            Some(tier_stamp("opus")),
+            Some(crate::agents::LaunchRecord::default()),
+            PermissionMode::Yolo,
+            vec!["--dangerously-skip-permissions"],
+        ),
+        (
+            "an unstamped seat keeps the layout mode",
+            None,
+            None,
+            PermissionMode::Auto,
+            vec!["--permission-mode", "auto"],
+        ),
+    ] {
+        let mut cell = crate::harness::spec::profile_cell("planner", &profiles).unwrap();
+        cell.launch.mode = Some(PermissionMode::Auto);
+        let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(cell));
+        let mut agent = agent("claude", "a1", "/repo", 1);
+        agent.profile = Some("planner".into());
+        agent.mode = Some(PermissionMode::Yolo);
+        agent.tier = tier;
+        agent.record = record.map(Box::new);
+        restore_routed_cells(
+            &mut layout,
+            &[CohortSeed::Resume(Box::new(agent))],
+            &profiles,
+            &Default::default(),
+        )
+        .unwrap();
+        let cell = layout.agent_cells().next().unwrap();
+        assert_eq!(cell.launch.mode, Some(mode), "{label}");
+        let permission = [
+            "--permission-mode",
+            "auto",
+            "plan",
+            "--dangerously-skip-permissions",
+        ];
+        assert_eq!(
+            cell.args
+                .iter()
+                .filter(|arg| permission.contains(&arg.as_str()))
+                .collect::<Vec<_>>(),
+            args,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn degraded_stamped_seat_refuses_its_cohort_restore() {
+    let mut profiles = profiles("planner", profile("codex"));
+    profiles.0.insert("helper".into(), profile("claude"));
+    for (label, profile, tier, record) in [
+        (
+            "a tier-stamped seat whose family render is gone",
+            "planner",
+            Some(tier_stamp("astra")),
+            None,
+        ),
+        (
+            "a recorded seat whose profile is gone",
+            "retired",
+            None,
+            Some(Box::new(crate::agents::LaunchRecord::default())),
+        ),
+    ] {
+        let mut seat = agent("codex", "a1", "/repo", 1);
+        seat.profile = Some(profile.into());
+        seat.mode = Some(PermissionMode::Yolo);
+        seat.tier = tier;
+        seat.record = record;
+        let reason = resolve_posture(
+            PostureRequest {
+                record: seat.record.as_deref(),
+                profile: seat.profile.as_deref(),
+                kind: &seat.kind,
+                stamped_mode: seat.mode,
+                stamped_tier: seat.tier.as_deref(),
+            },
+            &profiles,
+        )
+        .degraded
+        .expect(label);
+        let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+            crate::harness::spec::profile_cell("helper", &profiles).unwrap(),
+        ));
+        layout.columns[0]
+            .rows
+            .push(crate::harness::spec::Cell::Agent(
+                crate::harness::spec::profile_cell("planner", &profiles).unwrap(),
+            ));
+        let failing = layout.agent_cells().nth(1).unwrap().clone();
+        let result = restore_routed_cells(
+            &mut layout,
+            &[CohortSeed::Fresh, CohortSeed::Resume(Box::new(seat))],
+            &profiles,
+            &Default::default(),
+        );
+        assert_eq!(result, Err(reason), "{label}");
+        let mut cells = layout.agent_cells();
+        assert!(cells.next().unwrap().launch.record.is_some(), "{label}");
+        assert_eq!(cells.next().unwrap(), &failing, "{label}");
+    }
+
+    let (teams, profiles, commands) = team_configs();
+    let planner = AgentState {
+        profile: Some("claude-plan".to_owned()),
+        tier: Some(tier_stamp("opus")),
+        ..team_agent("claude", "planner", "planner", "/repo/forge", 3)
+    };
+    let (tabs, flat) = split_team_and_flat(
+        std::slice::from_ref(&planner),
+        &NO_LOGINS,
+        &NO_ACCOUNTS,
+        &teams,
+        &profiles,
+        &commands,
+        Some(Path::new("/repo")),
+        &WORKSPACE,
+        |_| true,
+        |_| true,
+        false,
+    );
+    assert!(tabs.is_empty());
+    assert_eq!(flat, [planner]);
+}
+
+#[test]
+fn unrenderable_record_effort_refuses_its_cohort_restore() {
+    let profiles = profiles("worker", profile("kimi"));
+    let mut seat = agent("kimi", "a1", "/repo", 1);
+    seat.profile = Some("worker".into());
+    seat.record = Some(Box::new(crate::agents::LaunchRecord {
+        effort: Some("high".into()),
+        ..Default::default()
+    }));
+    let reason = resolve_posture(
+        PostureRequest {
+            record: seat.record.as_deref(),
+            profile: seat.profile.as_deref(),
+            kind: &seat.kind,
+            stamped_mode: None,
+            stamped_tier: None,
+        },
+        &profiles,
+    )
+    .degraded
+    .unwrap();
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(
+        crate::harness::spec::profile_cell("worker", &profiles).unwrap(),
+    ));
+    let result = restore_routed_cells(
+        &mut layout,
+        &[CohortSeed::Resume(Box::new(seat))],
+        &profiles,
+        &Default::default(),
+    );
+    assert_eq!(result, Err(reason));
+}
+
+#[test]
+fn resumed_seats_clear_auto_compact_and_fresh_seats_keep_it() {
+    let profiles = profiles(
+        "planner",
+        Profile {
+            auto_compact: Some("200k".into()),
+            ..profile("claude")
+        },
+    );
+    let cell = crate::harness::spec::profile_cell("planner", &profiles).unwrap();
+    let declared = cell.auto_compact.clone();
+    assert!(declared.is_some());
+    let mut layout = LayoutSpec::single(crate::harness::spec::Cell::Agent(cell.clone()));
+    layout.columns[0]
+        .rows
+        .push(crate::harness::spec::Cell::Agent(cell));
+    let mut agent = agent("claude", "a1", "/repo", 1);
+    agent.profile = Some("planner".into());
+    restore_routed_cells(
+        &mut layout,
+        &[CohortSeed::Resume(Box::new(agent)), CohortSeed::Fresh],
+        &profiles,
+        &Default::default(),
+    )
+    .unwrap();
+    let mut cells = layout.agent_cells();
+    assert_eq!(cells.next().unwrap().auto_compact, None);
+    assert_eq!(cells.next().unwrap().auto_compact, declared);
+}
