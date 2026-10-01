@@ -671,6 +671,39 @@ fn receiver_end_archives_open_messages() {
     let params = archived.params_value();
     assert_eq!(params["message_id"], message_id);
     assert_eq!(params["reason"], "receiver ended");
+
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "child",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.agent_name = Some("otter".to_owned());
+            observation.launch.parent_agent_id = Some("sess-ended".into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+        },
+    );
+    let child_message_id = queue_add(&env, "@otter", "child task");
+    run_hook(
+        &env,
+        json!({ "hook_event_name": "SessionEnd", "session_id": "child" }),
+        &[],
+    );
+
+    let archived = env
+        .read_events()
+        .into_iter()
+        .find(|event| {
+            event.method == "message.archived"
+                && event.params_value()["message_id"] == child_message_id
+        })
+        .expect("child archived event");
+    assert_eq!(
+        archived.params_value()["reason"],
+        "receiver ended; rimz message @otter#project resumes it"
+    );
 }
 
 #[test]
