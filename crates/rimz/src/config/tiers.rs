@@ -16,7 +16,7 @@ pub enum ModelTier {
 }
 
 impl ModelTier {
-    pub fn from_model(model: &str) -> Option<Self> {
+    pub(super) fn from_model(model: &str) -> Option<Self> {
         model.parse().ok()
     }
 }
@@ -74,7 +74,7 @@ pub struct TierPreference {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TierPick<R> {
+pub(super) struct TierPick<R> {
     pub kind: String,
     pub model: String,
     pub used_tier: Option<ModelTier>,
@@ -217,7 +217,7 @@ impl TierConfig {
         })
     }
 
-    pub fn walk<R>(
+    pub(super) fn walk<R>(
         &self,
         tier: ModelTier,
         preference: &TierPreference,
