@@ -114,12 +114,14 @@ pub fn updater_skew(login_env: &BTreeMap<String, String>) -> Option<UpdaterSkew>
     updater_skew_under(&home)
 }
 
-fn updater_skew_under(home: &Path) -> Option<UpdaterSkew> {
-    if !home
-        .join("app-server-control")
+/// The daemon's control socket under a Codex home.
+pub(super) fn control_socket(home: &Path) -> PathBuf {
+    home.join("app-server-control")
         .join("app-server-control.sock")
-        .exists()
-    {
+}
+
+fn updater_skew_under(home: &Path) -> Option<UpdaterSkew> {
+    if !control_socket(home).exists() {
         return None;
     }
     let updater = read_pid_record(
@@ -376,11 +378,7 @@ struct ProcessSnapshot {
 }
 
 fn recover_stale(home: &Path) -> bool {
-    if home
-        .join("app-server-control")
-        .join("app-server-control.sock")
-        .exists()
-    {
+    if control_socket(home).exists() {
         return false;
     }
     let state_dir = home.join("app-server-daemon");
