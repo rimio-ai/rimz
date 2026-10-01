@@ -273,9 +273,29 @@ type Gate = fn(&Path) -> Result<()>;
 
 type CompactGate<'a> = &'a dyn Fn(&Path, &mut dyn FnMut(&str)) -> Result<GateResult>;
 
+#[derive(Debug, PartialEq, Eq)]
 enum GateResult {
     Pass { note: Option<String> },
     Fail { detail: String },
+}
+
+impl GateResult {
+    /// Rides a test run's self-skip report under the pass note, the way the
+    /// `FLAKY` recap does, or after a failure's detail.
+    fn with_skip_report(self, report: Option<String>) -> Self {
+        let Some(report) = report else {
+            return self;
+        };
+        match self {
+            Self::Pass { note: None } => Self::Pass { note: Some(report) },
+            Self::Pass { note: Some(note) } => Self::Pass {
+                note: Some(format!("{note}\n{report}")),
+            },
+            Self::Fail { detail } => Self::Fail {
+                detail: format!("{detail}\n{report}"),
+            },
+        }
+    }
 }
 
 /// How the gate treats formatting. `Fix` is the authoring default: the gate
@@ -472,14 +492,15 @@ fn gate_test(root: &Path, keep_going: bool, progress: &mut dyn FnMut(&str)) -> R
     let env = sandbox.command_env();
     let removed = sandbox.removed_test_env();
     let no_fail_fast = keep_going.then_some("--no-fail-fast");
-    captured_cargo_gate(
+    let result = captured_cargo_gate(
         root,
         GATE_TEST_ARGS.iter().copied().chain(no_fail_fast),
         &env,
         &str_refs(&removed),
         Some(extract_test_summary),
         progress,
-    )
+    )?;
+    Ok(result.with_skip_report(sandbox.skip_report()))
 }
 
 fn captured_cargo_gate<I, S>(
@@ -495,14 +516,18 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     let captured = run_streamed(root, "cargo", args, envs, removed_envs, progress)?;
+    Ok(captured_result(&captured, note))
+}
+
+fn captured_result(captured: &Captured, note: Option<fn(&str) -> Option<String>>) -> GateResult {
     if captured.status.success() {
-        return Ok(GateResult::Pass {
+        return GateResult::Pass {
             note: note.and_then(|extract| extract(&captured.output)),
-        });
+        };
     }
-    Ok(GateResult::Fail {
+    GateResult::Fail {
         detail: failure_detail(&captured.output),
-    })
+    }
 }
 
 fn capture_cargo_task<I, S>(
@@ -529,22 +554,17 @@ where
     captured
 }
 
-fn finish_cargo_task(
-    name: &str,
-    captured: Captured,
-    note: Option<fn(&str) -> Option<String>>,
-    invocation: &str,
-) -> Result<()> {
-    if captured.status.success() {
-        report_gate_pass(
-            name,
-            note.and_then(|extract| extract(&captured.output))
-                .as_deref(),
-        );
-        return Ok(());
+fn finish_cargo_task(name: &str, result: GateResult, invocation: &str) -> Result<()> {
+    match result {
+        GateResult::Pass { note } => {
+            report_gate_pass(name, note.as_deref());
+            Ok(())
+        }
+        GateResult::Fail { detail } => {
+            report_task_failure(name, &detail, invocation);
+            bail!("{name} failed");
+        }
     }
-    report_task_failure(name, &failure_detail(&captured.output), invocation);
-    bail!("{name} failed");
 }
 
 fn in_process_gate(gate: impl FnOnce() -> Result<()>) -> GateResult {
@@ -698,6 +718,16 @@ fn report_gate_pass(name: &str, note: Option<&str>) {
     eprintln!("✓ {name} ({})", lines.next().unwrap_or_default());
     for line in lines {
         eprintln!("  {line}");
+    }
+}
+
+#[expect(
+    clippy::print_stderr,
+    reason = "xtask prints compact gate progress to the operator's stderr"
+)]
+fn report_skips(report: Option<String>) {
+    if let Some(report) = report {
+        eprintln!("{report}");
     }
 }
 
@@ -873,7 +903,11 @@ pub(crate) fn deps(root: &Path) -> Result<()> {
 
 pub(crate) fn check(root: &Path) -> Result<()> {
     let captured = capture_cargo_task(root, "check", CHECK_ARGS.iter().copied(), &[], &[])?;
-    finish_cargo_task("check", captured, None, "cargo xtask check")
+    finish_cargo_task(
+        "check",
+        captured_result(&captured, None),
+        "cargo xtask check",
+    )
 }
 
 pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
@@ -903,17 +937,22 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
         let streams_output = requests_no_capture(&command.forwarded);
         cargo_args.extend(command.forwarded);
         if streams_output {
-            return run_streaming_tests(root, cargo_args, &env, &removed, &invocation, args);
+            return run_streaming_tests(root, cargo_args, &sandbox, &invocation, args);
         }
         let captured = capture_cargo_task(root, "test", cargo_args, &env, &removed)?;
         if nextest_matched_no_tests(captured.status.code(), &captured.output) {
             report_zero_test_match(args);
             bail!("no tests matched");
         }
-        return finish_cargo_task("test", captured, Some(extract_test_summary), &invocation);
+        let result = captured_result(&captured, Some(extract_test_summary));
+        return finish_cargo_task(
+            "test",
+            result.with_skip_report(sandbox.skip_report()),
+            &invocation,
+        );
     }
 
-    run_named_tests(root, command, &env, &removed, &invocation)
+    run_named_tests(root, command, &sandbox, &invocation)
 }
 
 fn str_refs(keys: &[String]) -> Vec<&str> {
@@ -994,10 +1033,12 @@ fn nextest_args(subcommand: &str) -> Vec<String> {
 fn run_named_tests(
     root: &Path,
     command: TestCommand,
-    env: &[(&str, PathBuf)],
-    removed: &[&str],
+    sandbox: &HostSandbox,
     invocation: &str,
 ) -> Result<()> {
+    let env = &sandbox.command_env();
+    let removed = sandbox.removed_test_env();
+    let removed = &str_refs(&removed);
     let filterset = exact_name_filterset(&command.names);
     let mut list_args = nextest_args("list");
     list_args.extend(nextest_profile_args(&command.forwarded));
@@ -1030,7 +1071,7 @@ fn run_named_tests(
     run_args.extend(command.forwarded);
     if streams_output {
         report_test_selection(&command.names, &matches);
-        run_streaming_tests(root, run_args, env, removed, invocation, &command.names)?;
+        run_streaming_tests(root, run_args, sandbox, invocation, &command.names)?;
         if !matches.unmatched.is_empty() {
             bail!("some requested test names matched no tests");
         }
@@ -1038,7 +1079,12 @@ fn run_named_tests(
     }
     let captured = capture_cargo_task(root, "test", run_args, env, removed)?;
     report_test_selection(&command.names, &matches);
-    finish_cargo_task("test", captured, Some(extract_test_summary), invocation)?;
+    let result = captured_result(&captured, Some(extract_test_summary));
+    finish_cargo_task(
+        "test",
+        result.with_skip_report(sandbox.skip_report()),
+        invocation,
+    )?;
     if !matches.unmatched.is_empty() {
         bail!("some requested test names matched no tests");
     }
@@ -1054,16 +1100,20 @@ fn requests_no_capture(args: &[String]) -> bool {
 }
 
 /// Run the tests on the operator's stdio. Nextest prints its own summary here,
-/// so the gate line is the exit classification alone.
+/// so the gate line is the exit classification alone, after the self-skip
+/// report the captured paths ride under their pass line.
 fn run_streaming_tests(
     root: &Path,
     cargo_args: Vec<String>,
-    env: &[(&str, PathBuf)],
-    removed: &[&str],
+    sandbox: &HostSandbox,
     invocation: &str,
     requested: &[String],
 ) -> Result<()> {
-    let status = crate::runner::run_inherited(root, "cargo", cargo_args, env, removed)?;
+    let env = sandbox.command_env();
+    let removed = sandbox.removed_test_env();
+    let status =
+        crate::runner::run_inherited(root, "cargo", cargo_args, &env, &str_refs(&removed))?;
+    report_skips(sandbox.skip_report());
     if nextest_matched_no_tests(status.code(), "") {
         report_zero_test_match(requested);
         bail!("no tests matched");
@@ -1280,7 +1330,7 @@ pub(crate) fn coverage(root: &Path) -> Result<()> {
     run(root, "cargo", ["llvm-cov", "clean", "--workspace"])?;
     fs::create_dir_all(root.join("target/ci/coverage"))
         .context("creating coverage output directory")?;
-    run_with_env_and_removed(
+    let result = run_with_env_and_removed(
         root,
         "cargo",
         [
@@ -1295,7 +1345,9 @@ pub(crate) fn coverage(root: &Path) -> Result<()> {
         ],
         &env,
         &str_refs(&sandbox.removed_test_env()),
-    )
+    );
+    report_skips(sandbox.skip_report());
+    result
 }
 
 #[cfg(test)]
@@ -1580,6 +1632,31 @@ Summary [   12.3s] 2611 tests run: 2611 passed, 42 skipped
                 "Summary [   0.007s] 1 test run: 1 passed (1 flaky), 0 skipped\n\
                  FLAKY 2/3 [   0.002s] (1/1) fl flaky_one"
             )
+        );
+    }
+
+    #[test]
+    fn skip_report_rides_under_the_test_result() {
+        let summary = "2 tests run: 2 passed, 0 skipped";
+        let report = "self-skipped 1 test:\n  tmux not on PATH (1): one";
+        let pass = || GateResult::Pass {
+            note: Some(summary.to_owned()),
+        };
+        assert_eq!(pass().with_skip_report(None), pass());
+        assert_eq!(
+            pass().with_skip_report(Some(report.to_owned())),
+            GateResult::Pass {
+                note: Some(format!("{summary}\n{report}")),
+            }
+        );
+        assert_eq!(
+            GateResult::Fail {
+                detail: "1 failed".to_owned(),
+            }
+            .with_skip_report(Some(report.to_owned())),
+            GateResult::Fail {
+                detail: format!("1 failed\n{report}"),
+            }
         );
     }
 

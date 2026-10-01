@@ -21,6 +21,7 @@ mod payloads;
 #[cfg(unix)]
 pub(crate) mod room;
 mod shim;
+mod skip;
 #[cfg(unix)]
 pub(crate) use shim::{
     gh_fork_head, gh_same_repo_head, tea_fork_head, tea_same_repo_head, write_gh_pr_head_shim,
@@ -49,6 +50,7 @@ pub use shim::{
     path_with_front, write_env_dump_shim, write_failing_agent_shim, write_fake_bash_shell,
     write_fake_login_shell, write_hook_firing_agent, write_path_shim,
 };
+pub use skip::{AF_UNIX_SANDBOXED, skip};
 pub use zellij::ZellijNamespace;
 
 pub fn write_definition(
