@@ -109,7 +109,7 @@ pub(in crate::sidebar_pane) struct UiState {
     /// agent's provider block instead of snapping to the first-panel default.
     /// Read by `active_dashboard_tab` below the live derivation and re-guarded
     /// against the panel still being on the dashboard.
-    pub(in crate::sidebar_pane) last_agent_login: Option<crate::ids::LoginKey>,
+    pub(in crate::sidebar_pane) last_agent_kind: Option<crate::ids::AgentKind>,
     /// The current pet dashboard view, folded by the serve loop from the latest
     /// snapshot and the renderer-local asset cache before drawing. Render reads
     /// this data only; it never fetches, decodes, or slices pet assets.
@@ -234,7 +234,7 @@ impl SpendRatchet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sidebar_pane) struct DashboardTab {
     pub(in crate::sidebar_pane) login: crate::ids::LoginKey,
-    pub(in crate::sidebar_pane) derived_at_start: Option<crate::ids::LoginKey>,
+    pub(in crate::sidebar_pane) derived_at_start: Option<crate::ids::AgentKind>,
 }
 
 /// Arrow-key browse: pins `pane` WITHOUT moving focus, roaming every visible

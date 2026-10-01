@@ -55,7 +55,7 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
             .unwrap()
             .derived_at_start
             .as_ref()
-            .map(|key| key.kind.as_str()),
+            .map(crate::ids::AgentKind::as_str),
         Some("claude")
     );
 
@@ -89,7 +89,7 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
             .unwrap()
             .derived_at_start
             .as_ref()
-            .map(|key| key.kind.as_str()),
+            .map(crate::ids::AgentKind::as_str),
         Some("claude"),
         "the browse anchor survives every pick"
     );
@@ -170,6 +170,18 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     // Re-deriving the same claude row keeps the pick.
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
     assert!(ui.dashboard_tab.is_some(), "same derived kind: pick holds");
+
+    // The selected card turning out to run on another account of the same
+    // provider keeps the pick: the dashboard follows the card's kind.
+    let mut other_account = tabbed_snapshot(&ws);
+    let mut agent = crate::testkit::agent_state("claude", "agent-1", Timestamp::now());
+    agent.login = Some("work".parse().unwrap());
+    other_account.agents.push(agent);
+    reconcile_selection(&mut ui, &other_account, Some(agent_pane.clone()));
+    assert!(
+        ui.dashboard_tab.is_some(),
+        "same kind on another account: pick holds"
+    );
 
     // A process-row selection derives no kind — the pick survives the hop.
     reconcile_selection(&mut ui, &snapshot, Some(process_pane));
@@ -311,4 +323,28 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
     // row hit-test (and lands nowhere on this chrome line).
     let outcome = handle_mouse_click(24, 30, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
+}
+
+#[test]
+fn a_card_on_an_account_without_a_block_follows_its_provider_block() {
+    let ws = workspace();
+    let mut snapshot = tabbed_snapshot(&ws);
+    let mut work = provider("claude");
+    work.account = "work".parse().unwrap();
+    // The selected claude card runs on `default`; the room's block is `work`.
+    snapshot.providers = vec![provider("codex"), provider("pi"), work];
+    let agent_pane = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let process_pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    let mut ui = UiState::default();
+    let active =
+        |ui: &UiState| render::active_dashboard_tab(&snapshot, ui).map(|key| key.to_string());
+
+    reconcile_selection(&mut ui, &snapshot, Some(agent_pane));
+    assert_eq!(active(&ui).as_deref(), Some("claude@work"));
+    reconcile_selection(&mut ui, &snapshot, Some(process_pane));
+    assert_eq!(
+        active(&ui).as_deref(),
+        Some("claude@work"),
+        "the followed kind holds across a non-agent selection"
+    );
 }
