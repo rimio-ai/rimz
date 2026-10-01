@@ -46,8 +46,9 @@ builds                /home/me/.rimz/builds
 | `workspace id` | The room's identity, `ws_<24hex>`, derived from the project root. Flags, JSON fields, and `RIMZ_WORKSPACE_ID` carry this value. |
 | `workspace dir` | The directory name the room's files live under: the project root's basename and the first hex digits of the id. The name lengthens by two hex digits when another project already holds the shorter one, and it stays fixed once created. |
 | `state dir`, `runtime dir` | The room's durable directory under `home/ws/` and its tmpfs directory under `runtime root/ws/`, both named by `workspace dir`. |
-| `room tmp`, `scratch` | The room's private tmp, and the invoking agent's scratch dir inside it: `agents/<handle>` for a named agent, the shared `scratchpad` otherwise. |
-| `scratch (agent view)` | That scratch dir as the invoking agent sees it: `/tmp/scratchpad` under sandbox isolation, the host path otherwise. |
+| `room tmp` | The room's temp root, holding one `<handle>/` directory per agent and `_unnamed/` for launches without a handle. |
+| `shared` | The room's shared directory, where agents hand each other files. |
+| `out` | Where RimZ writes results: subagent and peer responses and watched-command output, under `out/<reader>/` for the agent that reads them. |
 | `runtime root` | `$XDG_RUNTIME_DIR/rimz`, else `/tmp/rimz-<uid>/rimz`. `~/.rimz/run` links here once a room is born; RimZ itself never reads through the link. The tmux server RimZ rooms run on has its socket here, at `<runtime root>/tmux/server`, which is the `-S` argument for reaching a room's server by hand. |
 | `handoffs` | Reserved for agent hand-off notes. |
 | `accounts` | Provider homes RimZ placed for named accounts, `accounts/<kind>/<name>/`: credentials and transcripts that nothing regenerates and no RimZ command removes. |
@@ -56,7 +57,7 @@ builds                /home/me/.rimz/builds
 
 ## JSON
 
-`--json` prints one object with schema `rimz.paths.v1`. Its keys are `schema`, `home`, `config`, `theme`, `loop_config`, `remote`, `agents_home`, `workspace_id`, `workspace_dir`, `project_root`, `state_dir`, `runtime_dir`, `room_tmp`, `scratch`, `scratch_agent_view`, `handoffs`, `runtime_root`, `logs`, `loops`, `web`, `accounts`, `cache`, `providers_cache`, and `builds`, each a string with the row's meaning above.
+`--json` prints one object with schema `rimz.paths.v2`. Its keys are `schema`, `home`, `config`, `theme`, `loop_config`, `remote`, `agents_home`, `workspace_id`, `workspace_dir`, `project_root`, `state_dir`, `runtime_dir`, `room_tmp`, `shared`, `out`, `handoffs`, `runtime_root`, `logs`, `loops`, `web`, `accounts`, `cache`, `providers_cache`, and `builds`, each a string with the row's meaning above.
 
 ```sh
 cd "$(rimz paths --json | jq -r .state_dir)"

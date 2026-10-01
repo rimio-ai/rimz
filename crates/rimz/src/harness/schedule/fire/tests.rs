@@ -595,18 +595,33 @@ fn signal_tasks_only_arm_while_missing_watchers_fire_after_the_grace() {
         outcome.summary,
         crate::disk::summary::FileSummary::default()
     );
-    let path = super::super::signal::wait_output_path(&paths, NAME);
-    assert_eq!(outcome.output_path, Some(path.clone()));
-    paths.ensure_tmp_dir().unwrap();
-    std::fs::write(&path, "watcher failed before launching command").unwrap();
+    assert_eq!(
+        outcome.output_path,
+        Some(super::super::signal::wait_output_path(
+            &paths,
+            NAME,
+            watch.entry()
+        ))
+    );
     let watch = loaded(TaskEntry {
         wait_meta: Some(crate::config::WaitMeta {
             armed_at: prior,
             delay: None,
+            reader: Some("armer".to_owned()),
         }),
         ..watch.entry().clone()
     });
+    let path = paths
+        .out_reader_dir(Some("armer"))
+        .join(format!("{NAME}.output"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "watcher failed before launching command").unwrap();
     let outcome = lost_watch_outcome(&watch, NAME, stale, now.timestamp()).unwrap();
+    assert_eq!(
+        outcome.output_path.as_deref(),
+        Some(path.as_path()),
+        "the lost-watcher outcome names the file the armer's watcher wrote"
+    );
     assert_eq!(outcome.verdict.elapsed_ms(), 300_000);
     assert_eq!(outcome.output, "watcher failed before launching command");
     assert_eq!(outcome.summary.bytes, 39);

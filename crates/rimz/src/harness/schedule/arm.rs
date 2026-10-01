@@ -75,7 +75,11 @@ pub enum DeliveryPrompt {
 }
 
 pub enum DeliveryProvenance {
-    SelfWait,
+    /// `reader` is the arming agent's handle, whose `out/` directory receives
+    /// a watched command's output.
+    SelfWait {
+        reader: Option<String>,
+    },
     Loop,
     Team(TeamInstanceId),
 }
@@ -163,8 +167,14 @@ pub fn arm_delivery(
     }
     if entry.watch.is_some() {
         let spawn = || -> std::io::Result<()> {
-            paths.ensure_tmp_dir().map_err(std::io::Error::other)?;
-            let path = super::signal::wait_output_path(&paths, &name);
+            let path = super::signal::wait_output_path(&paths, &name, entry);
+            for dir in [
+                paths.out_dir.as_path(),
+                path.parent().unwrap_or(&paths.out_dir),
+            ] {
+                crate::disk::paths::ensure_private_runtime_dir(dir)
+                    .map_err(std::io::Error::other)?;
+            }
             let output = OpenOptions::new()
                 .create(true)
                 .write(true)
@@ -386,7 +396,7 @@ fn build_entry(
     spec: DeliverySpec,
     now: Timestamp,
 ) -> Result<(DeliveryName, LoadedTask), ArmFailure> {
-    let self_wait = matches!(spec.provenance, DeliveryProvenance::SelfWait);
+    let self_wait = matches!(spec.provenance, DeliveryProvenance::SelfWait { .. });
     if self_wait
         && (!matches!(
             spec.trigger,
@@ -422,9 +432,14 @@ fn build_entry(
         max_strikes: spec.max_strikes,
         ..TaskEntry::default()
     };
-    if let DeliveryProvenance::Team(instance) = spec.provenance {
-        entry.team = Some(instance);
-    }
+    let reader = match spec.provenance {
+        DeliveryProvenance::Team(instance) => {
+            entry.team = Some(instance);
+            None
+        }
+        DeliveryProvenance::SelfWait { reader } => reader,
+        DeliveryProvenance::Loop => None,
+    };
     match spec.prompt {
         DeliveryPrompt::None => {}
         DeliveryPrompt::Inline(prompt) => entry.prompt = Some(prompt),
@@ -504,6 +519,7 @@ fn build_entry(
         entry.wait_meta = Some(WaitMeta {
             armed_at: now,
             delay,
+            reader,
         });
     }
     let name = match &spec.name {

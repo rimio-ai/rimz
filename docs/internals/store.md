@@ -70,7 +70,9 @@ Room files have one lifetime class per directory, constructed by `disk/paths.rs`
 | `audit/` | State | Remove files older than 30 days by mtime, then oldest first until at most 64 MiB remains per room. |
 | `cache/` | State | Rebuildable; cleared on reset, no age sweep. |
 | `owned/` | State | Agent unit: 7 days after the latest session using its handle ends, never while its process owner is live or its directory or a direct child is newer than 7 days. Unknown handles use the same mtime grace. Runs: terminal and record mtime older than 7 days. Restorability does not extend the grace. |
-| `tmp/` | State | Room lifetime; unclaimed wait and subagent outputs older than 7 days are also swept. |
+| `tmp/` | State | Agent temp unit `tmp/<handle>/`: the `owned/` agent-unit rule. `tmp/_unnamed/`, shared by handleless launches, stays until the room directory is pruned. |
+| `shared/` | State | Room-wide files agents hand each other; no sweep. Hard reset removes it; otherwise it goes when the room directory is pruned. |
+| `out/` | State | RimZ-written results under `out/<reader>/`; `out/` and each reader directory are created at mode `0700`. A response file goes once it is older than 7 days and no run record names its agent (the stem before the first `.`); a `wait-` file once it is older than 7 days and its watcher is not live. An empty reader directory goes. |
 | `locks/` | State | Try-lock and unlink while held; keep busy files and every subdirectory, since a reopening waiter recreates only the file. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
 | `sock/` | Runtime | Remove sockets whose connect probe is refused, after the sidebar heartbeat TTL startup grace. |
 | `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days); renderer-instance claims also expire by heartbeat liveness. Exception: keep agent telemetry while its room is live, because the external exporter holds its inode open. |
@@ -107,9 +109,10 @@ cache/skills/<sha256>/                        handleless rewritten skills
 owned/agents/<handle>/scratch/                per-handle scratch
 owned/agents/<handle>/skills/<sha256>/         immutable rewritten skills
 owned/runs/<run_id>.json                      supervised-run records
-tmp/{scratchpad,shared}/                      handleless scratch and shared files
-tmp/rimz-subagents/<name>.output              child responses
-tmp/rimz-waits/<name>.output                  watched-command output
+tmp/<handle>/, tmp/_unnamed/                  per-agent temp units
+shared/                                       room-wide shared files
+out/<reader>/<name>[.<n>|.<run_id>].output    child and peer responses
+out/<reader>/<wait-name>.output               watched-command output
 locks/*.lock                                 workspace, publish, subagent-zone, loop-instances,
                                              loop-run-<name>, loop-watch-<name>, message-sweep,
                                              sidebar-launch, snapshot, topology-writer,
@@ -132,8 +135,8 @@ This page owns the log, the caches derived from it, and the workspace record. Th
 | `records/messages/`, `audit/messages/`, `records/channels.json` | [messaging.md](./harness/messaging.md#storage-and-audit) |
 | `audit/transcript/` | [transcript.md](./harness/transcript.md#the-log) |
 | `owned/runs/` | [scripting.md](./harness/scripting.md#the-record) |
-| `records/loop-instances.json`, `tmp/rimz-waits/` | [loops.md](./harness/loops.md#where-tasks-live) |
-| `tmp/`, `owned/agents/` | [sandbox.md](./sandbox.md#room-tmp) |
+| `records/loop-instances.json`, `out/<reader>/wait-*.output` | [loops.md](./harness/loops.md#where-tasks-live) |
+| `tmp/`, `shared/`, `owned/agents/` | [sandbox.md](./sandbox.md#room-tmp) |
 | Audit diagnostics | [diagnostics.md](./diagnostics.md) |
 | Rebirth records and crash archives | [Session death](#session-death) below |
 
@@ -295,7 +298,7 @@ Every disk write falls into one of four classes, and one line sorts them: **dura
 | Class | Files | Discipline | After a power cut |
 | --- | --- | --- | --- |
 | Event log | `log/events.log.jsonl` | One CRC-framed `write()` per record or ordered batch. The off-lock tail issues a group `fdatasync` at most once a second, and rotation syncs before the rename. | Intact through the last group sync. The trailing window can be lost, and the frame CRC turns a torn suffix into deterministic corruption that repair truncates. |
-| Audit appends | `audit/messages/<bucket-start>.jsonl`, `audit/transcript/*.jsonl`, `tmp/rimz-waits/<name>.output` | `O_APPEND`, no per-record fsync. History and transcript append under the workspace lock. A queue transaction commits `messages.jsonl` before it appends history and event frames, so a history append failure warns and never undoes the queue transition ([messaging.md → Storage and audit](./harness/messaging.md#storage-and-audit)). A wait log takes no store lock: `rimz wait` creates it at arm time, and the one watcher holding that wait's `locks/loop-watch-<name>.lock` is its only writer after that. A check watcher truncates and rewrites it for each run, keeping only the latest output ([loops.md → Watched commands](./harness/loops.md#watched-commands)). | Trailing records can be lost. The cost is history completeness, never queue correctness. For wait output, the run record keeps the last 4 KiB, and the delivered message carries the file path, estimated tokens, and line count; a file pattern match also includes a matched-line preview. |
+| Audit appends | `audit/messages/<bucket-start>.jsonl`, `audit/transcript/*.jsonl`, `out/<reader>/<name>.output` | `O_APPEND`, no per-record fsync. History and transcript append under the workspace lock. A queue transaction commits `messages.jsonl` before it appends history and event frames, so a history append failure warns and never undoes the queue transition ([messaging.md → Storage and audit](./harness/messaging.md#storage-and-audit)). A wait log takes no store lock: `rimz wait` creates it at arm time, and the one watcher holding that wait's `locks/loop-watch-<name>.lock` is its only writer after that. A check watcher truncates and rewrites it for each run, keeping only the latest output ([loops.md → Watched commands](./harness/loops.md#watched-commands)). | Trailing records can be lost. The cost is history completeness, never queue correctness. For wait output, the run record keeps the last 4 KiB, and the delivered message carries the file path, estimated tokens, and line count; a file pattern match also includes a matched-line preview. |
 | Cache write | `cache/snapshots/*.json`, `records/live-roster.json`, heartbeats, sidecars, the sidebar's published lanes | Temp file plus atomic rename, no fsync. The roster is the named best-effort records exception, not rebuildable history. | Caches rebuild or refresh; loss of the roster's latest write can narrow recovery. |
 | Durable records | `records/messages/messages.jsonl`, `owned/runs/<run_id>.json`, `workspace.json`, `records/agents-carryover.json`, `records/channels.json`, `records/loop-instances.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. | Survives. |
 
@@ -363,7 +366,7 @@ The recovery flow from roster to repopulated panes is [fleet.md → Resume and r
 
 ## Maintenance
 
-For layout-2 rooms, `rimz reset` cancels active runs, clears the room account selection, stages carryover on a soft reset, and rotates the log. It clears `cache/` (including handleless skill copies) and runtime `sock/`, `live/`, `lanes/`; each runtime directory is renamed before recursive deletion so late writers cannot refill the detached tree. It never removes state `locks/`. Soft reset keeps audit, owned state, tmp, and records, including standing fleet budget choices. `--hard` additionally removes the active log, carryover, `audit/`, `owned/` except `owned/runs/`, and `tmp/`; it keeps the log archive just written. Canceled run records stay loadable for waiters until terminal-run GC reclaims them after its seven-day grace. Provider-owned sessions remain outside this boundary. Ordinary teardown removes tmp and disposable runtime classes but never owned state; the reset birth path uses runtime-only teardown so soft reset does not lose tmp.
+For layout-2 rooms, `rimz reset` cancels active runs, clears the room account selection, stages carryover on a soft reset, and rotates the log. It clears `cache/` (including handleless skill copies) and runtime `sock/`, `live/`, `lanes/`; each runtime directory is renamed before recursive deletion so late writers cannot refill the detached tree. It never removes state `locks/`. Soft reset keeps audit, owned state, `tmp/`, `shared/`, `out/`, and records, including standing fleet budget choices. `--hard` additionally removes the active log, carryover, `audit/`, `owned/` except `owned/runs/`, `tmp/`, `shared/`, and `out/`; it keeps the log archive just written. Canceled run records stay loadable for waiters until terminal-run GC reclaims them after its seven-day grace. Provider-owned sessions remain outside this boundary. Teardown removes disposable runtime classes and no state class: `tmp/`, `shared/`, and `out/` are left for GC. Allocating a handle to a new agent row removes any `tmp/<handle>/` and `out/<handle>/` an earlier holder of that name left behind; the removal runs after the launch commits, outside the workspace lock, and a failure logs a warning rather than failing the launch.
 
 `rimz gc` applies the class table to the current room through `store::gc::collect_room`; `--all` uses `collect_classes` for every known room, after pruning dead workspaces so removed stores get no class block. Text and JSON `rooms[].classes[]` carry per-room/per-class counts and bytes, with top-level `scope`. Both scopes resolve once through `WorkspaceResolver::resolve_participant` and use `open_existing_store`; an absent state root gets no class block or scaffold. A layout-1 current room refuses either scope with the layout error, which names `rimz start` or `rimz reset` as the fix. `--all` removes other layout-1 rooms and their runtime trees as `incompatible_layout`, and `rimz list` omits them. `--dry-run` plans removals without deleting files; locks instead report `locks_would_check`, without acquiring them or claiming removal. `--older-than` controls live and orphan atomic-write temp TTL, not owned or audit retention.
 
@@ -373,7 +376,7 @@ The elected sidebar producer remains the sole automatic trigger, once daily per 
 
 ## What survives what
 
-Soft reset keeps `records/`, `audit/`, `owned/`, `tmp/` and archived logs; hard reset also drops audit, owned state except `owned/runs/`, tmp, and carryover. Both keep state lock inodes. Reboot drops runtime, not state. Teardown drops tmp, not owned state. Age-based GC is independent of these boundaries.
+Soft reset keeps `records/`, `audit/`, `owned/`, `tmp/`, `shared/`, `out/` and archived logs; hard reset also drops audit, owned state except `owned/runs/`, `tmp/`, `shared/`, `out/`, and carryover. Both keep state lock inodes. Reboot drops runtime, not state. Teardown drops runtime, not state. Age-based GC is independent of these boundaries.
 
 | Event | Store | Live sockets and heartbeats | Multiplexer session |
 | --- | --- | --- | --- |

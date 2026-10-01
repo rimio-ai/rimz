@@ -981,7 +981,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
         }
     };
     let reports = wait_reports(1);
-    let first_path = run::peer_response_path(store.paths(), "peer", &first.run_id);
+    let first_path = run::response_path(store.paths(), first).unwrap();
     let first_bytes = std::fs::read(&first_path).unwrap();
     assert!(reports[0].text.contains("first task"));
     assert!(reports[0].text.contains(&first_path.display().to_string()));
@@ -1036,7 +1036,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
         .into_iter()
         .find(|run| run.run_id != first.run_id)
         .unwrap();
-    let second_path = run::peer_response_path(store.paths(), "peer", &second.run_id);
+    let second_path = run::response_path(store.paths(), &second).unwrap();
     assert_ne!(first_path, second_path);
     assert_eq!(std::fs::read(&first_path).unwrap(), first_bytes);
     assert_eq!(

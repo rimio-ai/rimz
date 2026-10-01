@@ -31,6 +31,9 @@ use crate::sock::SockBudget;
 
 const EVENTS_LOG_FILE: &str = "events.log.jsonl";
 const LATEST_SNAPSHOT_FILE: &str = "snapshots/latest.json";
+/// The per-agent directory of a launch or reader without a handle; `_` never
+/// occurs in a handle, so it cannot collide.
+const UNNAMED_DIR: &str = "_unnamed";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathErr {
@@ -129,6 +132,8 @@ pub(crate) enum Class {
     Cache,
     Owned,
     Tmp,
+    Shared,
+    Out,
     Sock,
     Live,
     Lanes,
@@ -136,13 +141,15 @@ pub(crate) enum Class {
 }
 
 impl Class {
-    pub(crate) const STATE: [Self; 7] = [
+    pub(crate) const STATE: [Self; 9] = [
         Self::Log,
         Self::Records,
         Self::Audit,
         Self::Cache,
         Self::Owned,
         Self::Tmp,
+        Self::Shared,
+        Self::Out,
         Self::Locks,
     ];
     pub(crate) const RUNTIME: [Self; 3] = [Self::Sock, Self::Live, Self::Lanes];
@@ -155,6 +162,8 @@ impl Class {
             Self::Cache => "cache",
             Self::Owned => "owned",
             Self::Tmp => "tmp",
+            Self::Shared => "shared",
+            Self::Out => "out",
             Self::Sock => "sock",
             Self::Live => "live",
             Self::Lanes => "lanes",
@@ -184,7 +193,10 @@ pub struct StatePaths {
     pub scratchpad_dir: PathBuf,
     pub agents_dir: PathBuf,
     pub shared_dir: PathBuf,
-    pub subagents_dir: PathBuf,
+    /// The room tier every agent reads and writes: `<state>/shared`.
+    pub room_shared_dir: PathBuf,
+    /// RimZ-written results, one `<reader>/` directory per agent they report to.
+    pub out_dir: PathBuf,
     pub skills_dir: PathBuf,
     pub events_log: PathBuf,
     pub events_archive_dir: PathBuf,
@@ -197,7 +209,6 @@ pub struct StatePaths {
     pub fleet_budget_record: PathBuf,
     pub transcript_dir: PathBuf,
     pub runs_dir: PathBuf,
-    pub waits_dir: PathBuf,
     pub cache_dir: PathBuf,
     /// Runtime lock reference for writers whose durable API takes only state paths.
     pub workspace_lock: PathBuf,
@@ -260,8 +271,8 @@ impl StatePaths {
             scratchpad_dir: tmp_dir.join("scratchpad"),
             agents_dir: owned_dir.join("agents"),
             shared_dir: tmp_dir.join("shared"),
-            subagents_dir: tmp_dir.join("rimz-subagents"),
-            waits_dir: tmp_dir.join("rimz-waits"),
+            room_shared_dir: Class::Shared.path_under(&root),
+            out_dir: Class::Out.path_under(&root),
             skills_dir: cache_dir.join("skills"),
             tmp_dir,
             events_log: history.events_log,
@@ -317,9 +328,27 @@ impl StatePaths {
         ensure_private_runtime_dir(&self.tmp_dir)?;
         mkdir_p(&self.scratchpad_dir)?;
         ensure_private_runtime_dir(&self.agents_dir)?;
-        mkdir_p(&self.shared_dir)?;
-        mkdir_p(&self.waits_dir)?;
-        mkdir_p(&self.subagents_dir)
+        mkdir_p(&self.shared_dir)
+    }
+
+    /// The temp unit an agent and every subagent it launches share:
+    /// `tmp/<owner>/`, or `tmp/_unnamed/` for a launch without a handle.
+    /// Handles are path-safe (`petname::valid_agent_name`) and never start with `_`.
+    pub fn temp_unit_dir(&self, owner: Option<&str>) -> PathBuf {
+        self.tmp_dir.join(owner.unwrap_or(UNNAMED_DIR))
+    }
+
+    /// Where RimZ writes the results it reports to `reader`: `out/<reader>/`,
+    /// or `out/_unnamed/` for a reader without a handle.
+    pub fn out_reader_dir(&self, reader: Option<&str>) -> PathBuf {
+        self.out_dir.join(reader.unwrap_or(UNNAMED_DIR))
+    }
+
+    /// Remove the temp unit and results an earlier holder of `handle` left,
+    /// before the handle goes to a new agent.
+    pub(crate) fn release_handle_dirs(&self, handle: &str) -> Result<()> {
+        remove_tree(&self.temp_unit_dir(Some(handle)))?;
+        remove_tree(&self.out_reader_dir(Some(handle)))
     }
 
     /// The launch's private scratch dir, bound at `/tmp/scratchpad` under
@@ -354,10 +383,6 @@ impl StatePaths {
         let dir = self.scratch_dir(handle);
         mkdir_p(&dir)?;
         Ok(dir)
-    }
-
-    pub fn remove_tmp_dir(&self) -> Result<()> {
-        remove_tree(&self.tmp_dir)
     }
 
     /// Remove the entire room state tree, including incompatible history.

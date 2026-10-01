@@ -138,6 +138,9 @@ pub struct WaitMeta {
     pub armed_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay: Option<String>,
+    /// Handle of the arming agent, whose `out/` directory receives the output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader: Option<String>,
 }
 
 /// What a wait's detached watcher observes. A bare string is a shell command
@@ -555,6 +558,7 @@ mod tests {
             wait_meta: Some(WaitMeta {
                 armed_at: deadline,
                 delay: Some("30m".to_owned()),
+                reader: Some("coder".to_owned()),
             }),
             watch: Some(WatchSpec::Pid { pid: 16776 }),
             prompt: Some("wait".to_owned()),

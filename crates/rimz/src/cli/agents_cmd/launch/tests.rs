@@ -102,20 +102,12 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
     assert_eq!(run.peer.as_ref().unwrap().launch_id, identities[1].agent_id);
     assert!(run.agent_id.is_none());
     assert_eq!(rimz::harness::run::list(store.paths()).unwrap().len(), 1);
-    let view = rimz::sandbox::TmpView::current(
-        Some(rimz::config::Isolation::Sandbox),
-        Some("launcher"),
-        store.paths(),
+    assert_eq!(
+        run.reader, None,
+        "an unresolved launcher leaves the reader to the fallback"
     );
     let mut receipt = Vec::new();
-    write_peer_receipt(
-        &mut receipt,
-        batch.identities(),
-        Some(&run),
-        &view,
-        store.paths(),
-    )
-    .unwrap();
+    write_peer_receipt(&mut receipt, batch.identities(), Some(&run), store.paths()).unwrap();
     let receipt = String::from_utf8(receipt).unwrap();
     assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
     assert!(
@@ -123,7 +115,14 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
         "{receipt}"
     );
     assert!(
-        receipt.contains(&format!("/tmp/rimz-subagents/leader.{}.output", run.run_id)),
+        receipt.contains(
+            &store
+                .paths()
+                .out_reader_dir(Some("leader"))
+                .join(format!("leader.{}.output", run.run_id))
+                .display()
+                .to_string()
+        ),
         "{receipt}"
     );
     rimz::harness::run::fail_peer_run(&store, &peer, "launch failed").unwrap();
@@ -146,85 +145,51 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
 }
 
 #[test]
-fn peer_receipt_uses_launcher_row_or_host_fallback() {
+fn peer_receipt_names_the_host_out_path_under_its_reader() {
     let dir = tempfile::tempdir().unwrap();
     let paths =
         rimz::StatePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path())
             .unwrap();
-    let mut launcher =
-        AgentState::stub("codex", "launcher-session", rimz::agents::AgentStatus::Idle);
-    launcher.launch_id = Some("launcher-launch".into());
-    launcher.name = Some("launcher".into());
-    let mut peer = AgentState::stub("claude", "peer", rimz::agents::AgentStatus::Idle);
-    peer.launched_by = Some(rimz::agents::LaunchedBy {
-        kind: launcher.kind.clone(),
-        agent_id: launcher.launch_id.clone().unwrap(),
-    });
     let mut run = RunRecord::new(
         paths.workspace_id.clone(),
-        peer.kind.clone(),
+        AgentKind::new_unchecked("claude"),
         PermissionMode::Auto,
         "task".into(),
         dir.path().to_owned(),
     );
     run.agent_name = Some("peer".into());
-    let host_path = rimz::harness::run::peer_response_path(&paths, "peer", &run.run_id);
-    let peer_prompt = (peer, run);
-    for (agents, expected) in [
-        (Vec::new(), host_path),
-        (
-            vec![launcher],
-            PathBuf::from(format!(
-                "/tmp/rimz-subagents/peer.{}.output",
-                peer_prompt.1.run_id
-            )),
-        ),
-    ] {
-        let mut receipt = Vec::new();
-        write_placed_peer_receipt(
-            &mut receipt,
-            &[],
-            Some(&peer_prompt),
-            &agents,
-            rimz::config::Isolation::Sandbox,
-            &paths,
-        )
-        .unwrap();
-        let receipt = String::from_utf8(receipt).unwrap();
-        assert!(
-            receipt.contains(&expected.display().to_string()),
-            "{receipt}"
-        );
-        assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
-    }
+    run.peer = Some(rimz::store::run::PeerRun {
+        launch_id: "peer-launch".into(),
+        opened_by: Vec::new(),
+    });
+    run.reader = Some("launcher".into());
+    let expected = paths
+        .out_reader_dir(Some("launcher"))
+        .join(format!("peer.{}.output", run.run_id));
     let mut receipt = Vec::new();
-    write_placed_peer_receipt(
+    write_peer_receipt(&mut receipt, &[], Some(&run), &paths).unwrap();
+    let receipt = String::from_utf8(receipt).unwrap();
+    assert!(
+        receipt.contains(&expected.display().to_string()),
+        "{receipt}"
+    );
+    assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
+    let mut receipt = Vec::new();
+    write_peer_receipt(
         &mut receipt,
         &[launch_identity("claude", "unprompted")],
         None,
-        &[],
-        rimz::config::Isolation::Sandbox,
         &paths,
     )
     .unwrap();
     assert!(receipt.is_empty());
 
-    let (peer, mut run) = peer_prompt;
     run.team = Some(rimz::store::run::TeamRun {
         launch_id: "leader-launch".into(),
         instance: "forge#feat-x".into(),
     });
-    let team_prompt = (peer, run);
     let mut receipt = Vec::new();
-    write_placed_peer_receipt(
-        &mut receipt,
-        &[],
-        Some(&team_prompt),
-        &[],
-        rimz::config::Isolation::Host,
-        &paths,
-    )
-    .unwrap();
+    write_peer_receipt(&mut receipt, &[], Some(&run), &paths).unwrap();
     let receipt = String::from_utf8(receipt).unwrap();
     assert!(
         receipt.starts_with("@peer leads forge#feat-x. When its board reaches Done, a TEAM_REPORT"),

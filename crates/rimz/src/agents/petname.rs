@@ -88,6 +88,8 @@ pub(crate) fn mint_for_session(
 /// Accept one durable agent handle at every allocation, fold, and hook boundary.
 pub fn valid_agent_name(name: &str) -> bool {
     basic_valid_name(name)
+        // Wait outputs share an agent's `out/` directory as `wait-<petname>.output`.
+        && !name.starts_with("wait-")
         && !crate::agents::known_kinds().any(|kind| {
             name == kind
                 || name
@@ -210,6 +212,8 @@ mod tests {
             ("claude-1", false),
             ("codex-12", false),
             ("claudette-1", true),
+            ("wait-x", false),
+            ("await-x", true),
         ] {
             assert_eq!(valid_agent_name(name), valid, "{name}");
         }

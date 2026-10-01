@@ -118,8 +118,6 @@ Room tmp is one directory per workspace, `~/.rimz/ws/<workspace-dir>/tmp/`, crea
 | --- | --- |
 | `scratchpad/` | Scratch files of a launch without a handle (a bare `rimz agents exec`, a pre-launch-id resume). |
 | `shared/` | Files agents in the room exchange on purpose; named to agents as `/tmp/shared` or `$RIMZ_SHARED`, as the [launch reminder](#launch-reminder) instructs. |
-| `rimz-waits/` | Watched-command output ([loops.md](./harness/loops.md#watched-commands)). |
-| `rimz-subagents/` | Settled child responses ([subagents.md](./harness/subagents.md)). |
 
 Three callers ensure the layout. Room birth does so under sandbox policy, `launch_plan::apply` on every launch (with the launch's scratch dir), and the output writers (wait arming in `harness/schedule/arm.rs`, subagent response publication in `harness/run.rs`, also called by the fleet reporter) on demand in either isolation mode. Host mode therefore has room tmp too, for RimZ's own output files.
 
@@ -127,7 +125,7 @@ Three callers ensure the layout. Room birth does so under sandbox policy, `launc
 
 Room tmp is separate from host `/tmp`, not hidden from the host. The host state path stays reachable inside and outside the sandbox, and host processes can read the directory directly. `rimz agents show` prints the host path when the directory exists, and the agent's scratch dir host path when that exists.
 
-Every sandboxed agent and subagent in the room sees the same `shared/`, `rimz-waits/`, and `rimz-subagents/`; `/tmp/scratchpad` is bound separately from `owned/agents/<handle>/scratch/`, keyed by handle, so it survives restart with the handle. Room tmp survives agent restart but is not a store record and carries no fsync guarantee. `room::teardown::teardown_room` removes it after the process sweep, including `rimz uninstall`; dead-workspace GC removes it with the state root. A plain session exit and soft reset leave it in place; hard reset deletes it. Unclaimed output files older than seven days are also GC candidates. Team scratch files are a different mechanism that lives in the worktree ([teams.md](./harness/teams.md#scratch-files)).
+Every sandboxed agent and subagent in the room sees the same `shared/`; RimZ's result files live in the state `out/` class and are printed as host paths; `/tmp/scratchpad` is bound separately from `owned/agents/<handle>/scratch/`, keyed by handle, so it survives restart with the handle. Room tmp survives agent restart but is not a store record and carries no fsync guarantee. Teardown, `rimz uninstall`, a plain session exit and soft reset leave it in place; hard reset deletes it, and dead-workspace GC removes it with the state root. Team scratch files are a different mechanism that lives in the worktree ([teams.md](./harness/teams.md#scratch-files)).
 
 ### Rewritten skill copies
 
@@ -150,7 +148,7 @@ A sandbox launch adds a Files section to the agent's launch reminder. `launch_pl
 
 The section gives the agent two paths and the rule that separates them: `/tmp/scratchpad` is per-handle, so a file a parent names for a child lands in a directory the child cannot see, and `/tmp/shared` is the one directory the whole room reaches. It is room-scoped rather than worktree-scoped, since every worktree of a repo collapses into one workspace, which is why the reminder asks for a task-named subdirectory rather than a bare filename. A harness such as Claude Code injects its own environment block that names a session-specific scratchpad and reserves `/tmp` for an explicit request. The reminder supplies that request and replaces the private path outright, so the agent never has to reconcile two rules from two sources.
 
-The section does not name `rimz-waits/` or `rimz-subagents/`, because every wait message and subagent report carries its own file path. Host launches carry the same two rules in its place, naming the variables rather than the paths:
+The section does not name `out/`, because every wait message and subagent report carries its own file path. Host launches carry the same two rules in its place, naming the variables rather than the paths:
 
 > ### Files
 >

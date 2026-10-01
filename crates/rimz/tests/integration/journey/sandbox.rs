@@ -250,16 +250,16 @@ case "$RIMZ_AGENT_ROLE" in
         "$rimz" --mux tmux wait --run "printf 'wait-file\n'" > /tmp/wait-launch 2>&1
         while IFS= read -r line; do
             case "$line" in
-                *'response: /tmp/rimz-subagents/'*)
+                *'response: '*'/out/'*)
                     response_path=${line#*response: }
                     response_path=${response_path%% (*}
                     test "$(cat "$response_path")" = 'tmp written'
                     case "$line" in *'(<1k tokens, 1 line)'*) ;; *) exit 1 ;; esac
                     printf '%s\n' "$response_path" > /tmp/response-consumed
                     ;;
-                *'output: /tmp/rimz-waits/'*'(<1k tokens, 1 line)'*)
-                    wake_path=${line#*output: /tmp/rimz-waits/}
-                    wake_path=/tmp/rimz-waits/${wake_path%% *}
+                *'output: '*'/out/'*'(<1k tokens, 1 line)'*)
+                    wake_path=${line#*output: }
+                    wake_path=${wake_path%% (*}
                     test "$(cat "$wake_path")" = wait-file
                     printf '%s\n' "$wake_path" > /tmp/wait-consumed
                     ;;

@@ -320,9 +320,10 @@ mod tests {
                 state.ensure_dirs().unwrap();
                 let runtime = paths::RuntimePaths::for_state_under(&state, runtime_home.path());
                 runtime.ensure_dirs().unwrap();
-                fs::create_dir_all(&state.waits_dir).unwrap();
+                let reader = state.out_reader_dir(Some("armer"));
+                fs::create_dir_all(&reader).unwrap();
                 let live = runtime.live_dir.join("stale.json");
-                let wait = state.waits_dir.join("stale.output");
+                let wait = reader.join("wait-stale.output");
                 for file in [&live, &wait] {
                     fs::write(file, b"stale").unwrap();
                     fs::File::open(file)

@@ -14,15 +14,13 @@ fn room_tmp_layout_is_private_and_created_on_demand() {
     paths.ensure_dirs().unwrap();
     assert!(!paths.tmp_dir.exists());
     paths.ensure_tmp_dir().unwrap();
-    for directory in [
-        &paths.scratchpad_dir,
-        &paths.agents_dir,
-        &paths.shared_dir,
-        &paths.waits_dir,
-        &paths.subagents_dir,
-    ] {
+    for directory in [&paths.scratchpad_dir, &paths.agents_dir, &paths.shared_dir] {
         assert!(directory.is_dir());
     }
+    assert!(
+        !paths.out_dir.exists() && !paths.room_shared_dir.exists(),
+        "out/ and shared/ are created by their writers"
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -35,8 +33,6 @@ fn room_tmp_layout_is_private_and_created_on_demand() {
             0o700
         );
     }
-    paths.remove_tmp_dir().unwrap();
-    assert!(!paths.tmp_dir.exists());
 }
 
 #[test]

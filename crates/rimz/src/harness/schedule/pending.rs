@@ -451,6 +451,7 @@ mod tests {
         let meta = crate::config::WaitMeta {
             armed_at,
             delay: Some("30m".into()),
+            reader: None,
         };
         let timer = LoadedTask::new(
             "timer",
@@ -525,6 +526,7 @@ mod tests {
                     wait_meta: armed_at.map(|at| crate::config::WaitMeta {
                         armed_at: at.parse().unwrap(),
                         delay: None,
+                        reader: None,
                     }),
                     ..TaskEntry::default()
                 },

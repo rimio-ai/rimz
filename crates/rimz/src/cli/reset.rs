@@ -64,7 +64,7 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
                  pass --yes to confirm without a terminal"
             );
         }
-        if !super::confirm(&reset_confirmation(&workspace.session_name))? {
+        if !super::confirm(&reset_confirmation(&workspace.session_name, args.hard))? {
             writeln!(std::io::stderr().lock(), "Reset aborted; nothing changed.")?;
             return Ok(());
         }
@@ -107,11 +107,18 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-fn reset_confirmation(session: &str) -> String {
+fn reset_confirmation(session: &str, hard: bool) -> String {
+    let files = if hard {
+        "A hard reset also removes its audit records, per-agent files, and its \
+         tmp/, shared/, and out/ directories."
+    } else {
+        "Agent temp files and the room's shared/ and out/ directories are kept; \
+         --hard removes them."
+    };
     format!(
         "Reset the '{session}' room? This deletes the mux session, purges its \
          resurrection cache, archives its records, clears live coordination \
-         state, signals its orphaned processes, and removes its tmp files. \
+         state, and signals its orphaned processes. {files} \
          The rebuilt room comes back with no agents; its panes are not seeded again."
     )
 }
@@ -122,8 +129,13 @@ mod tests {
 
     #[test]
     fn reset_confirmation_names_the_room_and_empty_rebuild() {
-        let prompt = reset_confirmation("rimz-project");
+        let prompt = reset_confirmation("rimz-project", false);
         assert!(prompt.starts_with("Reset the 'rimz-project' room?"));
         assert!(prompt.contains("comes back with no agents; its panes are not seeded again."));
+        assert!(prompt.contains("temp files and the room's shared/ and out/ directories are kept"));
+        let hard = reset_confirmation("rimz-project", true);
+        assert!(hard.contains(
+            "removes its audit records, per-agent files, and its tmp/, shared/, and out/"
+        ));
     }
 }

@@ -166,6 +166,10 @@ pub struct RunRecord {
     pub agent_id: Option<AgentSessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// Handle of the agent this run reports to (its launcher), whose `out/`
+    /// directory receives the response; absent when no agent launched it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
     /// Spawned provider process owned by the in-pane wrapper.
@@ -355,6 +359,7 @@ impl RunRecord {
             kind,
             agent_id: None,
             agent_name: None,
+            reader: None,
             pane_id: None,
             provider_pid: None,
             provider_process_start: None,

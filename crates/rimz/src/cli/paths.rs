@@ -8,15 +8,13 @@ use serde::Serialize;
 
 use super::GlobalFlags;
 use crate::cli::render::{self, Table, cell};
-use rimz::config::Isolation;
 use rimz::config::MachineConfig;
 use rimz::disk::paths;
 use rimz::remote::aliases::RemoteAliases;
-use rimz::sandbox::TmpView;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{RuntimePaths, StatePaths};
 
-const SCHEMA: &str = "rimz.paths.v1";
+const SCHEMA: &str = "rimz.paths.v2";
 
 #[derive(Debug, Args)]
 pub struct PathsArgs {
@@ -40,10 +38,8 @@ struct PathsReport {
     state_dir: PathBuf,
     runtime_dir: PathBuf,
     room_tmp: PathBuf,
-    scratch: PathBuf,
-    /// The invoking agent's scratch dir as it sees it: `/tmp/scratchpad` under
-    /// sandbox isolation, the host path otherwise.
-    scratch_agent_view: PathBuf,
+    shared: PathBuf,
+    out: PathBuf,
     handoffs: PathBuf,
     runtime_root: PathBuf,
     logs: PathBuf,
@@ -61,11 +57,6 @@ pub fn run(args: PathsArgs, globals: &GlobalFlags) -> Result<()> {
     let state =
         StatePaths::for_project_root(&workspace.project_root).context("resolving state paths")?;
     let runtime = RuntimePaths::for_state(&state).context("resolving runtime paths")?;
-    let handle = std::env::var(rimz::harness::launch::ENV_AGENT_NAME)
-        .ok()
-        .filter(|name| rimz::agents::petname::valid_agent_name(name));
-    let view = TmpView::current(invoking_isolation(), handle.as_deref(), &state);
-    let scratch = state.scratch_dir(handle.as_deref());
     let report = PathsReport {
         schema: SCHEMA,
         home: paths::rimz_home(),
@@ -77,9 +68,9 @@ pub fn run(args: PathsArgs, globals: &GlobalFlags) -> Result<()> {
         workspace_id: state.workspace_id.to_string(),
         workspace_dir: state.dir_name.to_string(),
         project_root: workspace.project_root,
-        scratch_agent_view: view.agent_path(&scratch),
-        scratch,
         room_tmp: state.tmp_dir,
+        shared: state.room_shared_dir,
+        out: state.out_dir,
         state_dir: state.root,
         runtime_dir: runtime.root,
         handoffs: paths::handoffs_dir(),
@@ -99,12 +90,6 @@ pub fn run(args: PathsArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
-/// The isolation the invoking agent runs under, stamped by its launch plan;
-/// outside a launched agent, machine policy decides.
-fn invoking_isolation() -> Option<Isolation> {
-    Isolation::ambient(&rimz::agents::ambient_env())
-}
-
 fn render_table(report: &PathsReport, w: &mut impl std::io::Write) -> std::io::Result<()> {
     let path = |path: &PathBuf| path.display().to_string();
     let mut table = Table::new(["PATH", "LOCATION"]);
@@ -121,8 +106,8 @@ fn render_table(report: &PathsReport, w: &mut impl std::io::Write) -> std::io::R
         ("state dir", path(&report.state_dir)),
         ("runtime dir", path(&report.runtime_dir)),
         ("room tmp", path(&report.room_tmp)),
-        ("scratch", path(&report.scratch)),
-        ("scratch (agent view)", path(&report.scratch_agent_view)),
+        ("shared", path(&report.shared)),
+        ("out", path(&report.out)),
         ("handoffs", path(&report.handoffs)),
         ("runtime root", path(&report.runtime_root)),
         ("logs", path(&report.logs)),

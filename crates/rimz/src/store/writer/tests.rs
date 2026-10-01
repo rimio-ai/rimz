@@ -321,6 +321,89 @@ fn launch_event_builder_omits_blank_text() {
 }
 
 #[test]
+fn allocating_a_handle_clears_its_leftover_tmp_and_out() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+    let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
+    let store = Store::open(paths.clone(), runtime).expect("open store");
+    let leftovers = [
+        paths.temp_unit_dir(Some("reused")).join("note"),
+        paths.out_reader_dir(Some("reused")).join("child.output"),
+    ];
+    let neighbour = paths.temp_unit_dir(Some("neighbour")).join("note");
+    for path in leftovers.iter().chain([&neighbour]) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"earlier owner").unwrap();
+    }
+    store
+        .begin_agent_launch_batch(
+            &[AgentLaunchRequest {
+                login: crate::store::writer::LaunchLogin::RoomDefault,
+                kind: AgentKind::new_unchecked("codex"),
+                agent_id: AgentSessionId::from("launch_reused"),
+                name: AgentLaunchName::Explicit("reused".to_owned()),
+                launch: LaunchParams::default(),
+                run_id: None,
+                prompt: None,
+            }],
+            AgentLaunchScope {
+                session_name: "rimz-test".to_owned(),
+                cwd: dir.path().to_path_buf(),
+                branch: None,
+                description: None,
+            },
+        )
+        .expect("begin launch batch");
+    for path in &leftovers {
+        assert!(!path.parent().unwrap().exists(), "{}", path.display());
+    }
+    assert!(neighbour.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unremovable_leftover_unit_does_not_fail_the_launch() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+    let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
+    let store = Store::open(paths.clone(), runtime).expect("open store");
+    let stuck = paths.temp_unit_dir(Some("reused")).join("stuck");
+    std::fs::create_dir_all(&stuck).unwrap();
+    std::fs::write(stuck.join("note"), b"earlier owner").unwrap();
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o500)).unwrap();
+    // Permissions do not bind root, so there is nothing to prove.
+    if std::fs::write(stuck.join("probe"), b"").is_ok() {
+        return;
+    }
+    let batch = store.begin_agent_launch_batch(
+        &[AgentLaunchRequest {
+            login: crate::store::writer::LaunchLogin::RoomDefault,
+            kind: AgentKind::new_unchecked("codex"),
+            agent_id: AgentSessionId::from("launch_reused"),
+            name: AgentLaunchName::Explicit("reused".to_owned()),
+            launch: LaunchParams::default(),
+            run_id: None,
+            prompt: None,
+        }],
+        AgentLaunchScope {
+            session_name: "rimz-test".to_owned(),
+            cwd: dir.path().to_path_buf(),
+            branch: None,
+            description: None,
+        },
+    );
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        batch.expect("launch survives").identities()[0].name,
+        "reused"
+    );
+}
+
+#[test]
 fn launch_batch_keeps_request_and_follow_up_order() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());

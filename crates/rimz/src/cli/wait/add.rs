@@ -104,7 +104,9 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             target: target.clone(),
             trigger,
             prompt: DeliveryPrompt::None,
-            provenance: DeliveryProvenance::SelfWait,
+            provenance: DeliveryProvenance::SelfWait {
+                reader: agent.name.clone(),
+            },
             check: None,
             deadline: None,
             max_strikes: None,

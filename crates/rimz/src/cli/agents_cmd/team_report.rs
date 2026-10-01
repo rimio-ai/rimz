@@ -12,7 +12,6 @@ use rimz::harness::run;
 use rimz::ids::{AgentSessionId, MessageId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
 use rimz::message::synthetic::SyntheticMessage;
-use rimz::sandbox::TmpView;
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
 use rimz::store::run::{RunRecord, RunStatus};
 use rimz::workspace::ResolvedWorkspace;
@@ -129,18 +128,13 @@ fn report_team(
     };
 
     let published = run::publish_response(store.paths(), record)?;
-    let view = TmpView::current(
-        Some(launcher.runs_in(crate::cli::machine_config().agents.isolation)),
-        launcher.name.as_deref(),
-        store.paths(),
-    );
     let response = match published {
         Some(path) => Some(ResponseFile {
             summary: FileSummary::measure(&path).map_err(|source| ReportErr::Response {
                 path: path.clone(),
                 source,
             })?,
-            path: view.agent_path(&path),
+            path,
         }),
         None => None,
     };
@@ -161,7 +155,7 @@ fn report_team(
     let text = format!(
         "Team {instance} {outcome}; its leader reports:\n{}\nMemory: {}",
         compose_digest_row(leader, &settled, response.as_ref()),
-        view.agent_path(board).display()
+        board.display()
     );
     let pane_id = launcher.pane.as_ref().map(|pane| &pane.pane_id);
     let message = SyntheticMessage {

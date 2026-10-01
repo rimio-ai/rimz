@@ -292,6 +292,7 @@ allowed-dependencies = [
 # Pane writers share one user-scoped lock path across workspace boundaries.
 # Model alias resolution shares per-login persistent catalog and runtime lock paths (+2).
 # Room lifecycle owns private tmp and rewritten-skill directory creation and removal.
+# Per-agent temp units and per-reader `out/` dirs derive from one accessor each, shared by launch, results, GC and handle allocation (+2).
 # Wait and subagent reports share streaming output-file measurements.
 # Stage flips share a canonical-worktree board lock across rooms.
 # Output-file summaries estimate tokens through `utils::tokens` and expose `is_empty` for the wait and digest renderers.
@@ -315,7 +316,7 @@ allowed-dependencies = [
 # Sidebar workers lease account-global pixel slots through one classed lock accessor.
 # Assist logging exposes the checked rotating append for launch-time warnings (+1).
 # The trunk signal lane owns a separate classed runtime cache path.
-surface-budget = 206
+surface-budget = 208
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -2683,11 +2684,6 @@ reason = "Both path owners are constructed and ensured by the separate binary, i
 kind = "item"
 key = "disk::paths::RuntimePaths::ensure_dirs"
 reason = "Both path owners are constructed and ensured by the separate binary, integration fixtures and benches/fleet.rs and hotpath.rs. (pass 19b)."
-
-[[verdict]]
-kind = "item"
-key = "disk::paths::remove_tmp_dir"
-reason = "tests/integration/output_files.rs exercises room-output cleanup through the public StatePaths method. (pass 19b)."
 
 [[verdict]]
 kind = "item"

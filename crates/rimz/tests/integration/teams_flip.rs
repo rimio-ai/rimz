@@ -1477,6 +1477,7 @@ fn agent_launched_team_death_reports_once_and_respects_a_racing_done() {
         let record = run::create_peer_prompt(
             store.paths(),
             &leader,
+            None,
             rimz::agents::registry::definition_by_kind("claude").unwrap(),
             "Ship the feature.",
             &fixture.env.project_root,
@@ -1554,10 +1555,7 @@ fn agent_launched_team_death_reports_once_and_respects_a_racing_done() {
             assert!(messages[0].text.contains("failed in "));
             assert!(messages[0].text.contains("cohort ended before Done"));
         }
-        let response = store
-            .paths()
-            .subagents_dir
-            .join(format!("coder.{}.output", record.run_id));
+        let response = rimz::harness::run::response_path(store.paths(), &record).unwrap();
         assert_eq!(
             std::fs::read_to_string(&response).unwrap(),
             "Last answer.\n"
@@ -1592,6 +1590,7 @@ fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
     let run = rimz::harness::run::create_peer_prompt(
         store.paths(),
         &leader,
+        None,
         adapter,
         "Ship the feature.",
         &fixture.env.project_root,
@@ -1648,10 +1647,7 @@ fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
     );
     assert_eq!(report.agent_id.as_str(), "boss");
     assert_eq!(report.gate, DeliveryGate::Done);
-    let response = store
-        .paths()
-        .subagents_dir
-        .join(format!("coder.{}.output", run.run_id));
+    let response = rimz::harness::run::response_path(store.paths(), &run).unwrap();
     assert_eq!(
         std::fs::read_to_string(&response).unwrap(),
         "Shipped: PR #1.\n"

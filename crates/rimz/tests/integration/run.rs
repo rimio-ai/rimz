@@ -266,8 +266,10 @@ fn hidden_timeout_helper_harvests_last_assistant_and_preserves_existing_response
             let expected = existing.unwrap_or("last answer");
             assert_eq!(settled.last_message.as_deref(), Some(expected));
             assert_eq!(
-                std::fs::read_to_string(store.paths().subagents_dir.join("deadline-child.output"))
-                    .unwrap(),
+                std::fs::read_to_string(
+                    rimz::harness::run::response_path(store.paths(), &settled).unwrap()
+                )
+                .unwrap(),
                 format!("{expected}\n")
             );
         }
@@ -4263,10 +4265,11 @@ fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
             )
             .unwrap();
             let request = json!({"workspace_id": env.workspace_id, "parent_agent_id": parent_id});
+            let host_path = rimz::harness::run::response_path(store.paths(), &record).unwrap();
+            let reader_dir = host_path.parent().unwrap();
             if isolation == "host" && message == Some("first\n\nlast") {
-                store.paths().ensure_tmp_dir().unwrap();
-                std::fs::remove_dir(&store.paths().subagents_dir).unwrap();
-                std::fs::write(&store.paths().subagents_dir, "blocked output directory").unwrap();
+                std::fs::create_dir_all(reader_dir.parent().unwrap()).unwrap();
+                std::fs::write(reader_dir, "blocked output directory").unwrap();
                 let output = env
                     .rimz()
                     .args([
@@ -4285,7 +4288,7 @@ fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
                         .report_message_id
                         .is_none()
                 );
-                std::fs::remove_file(&store.paths().subagents_dir).unwrap();
+                std::fs::remove_file(reader_dir).unwrap();
             }
             let output = env
                 .rimz()
@@ -4306,7 +4309,6 @@ fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
             assert_eq!(messages.len(), 1);
             let report = &messages[0].text;
             assert!(report.contains("task: \"inspect the wait path\""));
-            let host_path = store.paths().subagents_dir.join("quiet-fox.output");
             if let Some(message) = message.filter(|message| !message.is_empty()) {
                 let expected = if message.ends_with('\n') {
                     message.to_owned()
@@ -4314,11 +4316,6 @@ fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
                     format!("{message}\n")
                 };
                 assert_eq!(std::fs::read_to_string(&host_path).unwrap(), expected);
-                let visible = if isolation == "sandbox" {
-                    std::path::Path::new("/tmp/rimz-subagents/quiet-fox.output")
-                } else {
-                    &host_path
-                };
                 let lines = if message == "first\n\nlast" {
                     "3 lines"
                 } else {
@@ -4327,7 +4324,7 @@ fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
                 assert!(
                     report.contains(&format!(
                         "response: {} (<1k tokens, {lines})",
-                        visible.display()
+                        host_path.display()
                     )),
                     "{report}"
                 );

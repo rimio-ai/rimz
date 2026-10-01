@@ -917,9 +917,23 @@ fn watched_failure_preserves_full_output_and_delivers_its_summary() {
         path,
         &env.store()
             .paths()
-            .waits_dir
-            .join(format!("{}.output", records[0].task))
+            .out_reader_dir(Some("planner"))
+            .join(format!("{}.output", records[0].task)),
+        "the output lands in the arming agent's out/ directory"
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o700,
+            "the reader's out/ directory is private"
+        );
+    }
     let full = std::fs::read_to_string(path).expect("full watch output");
     assert_eq!(
         full,
@@ -1004,8 +1018,9 @@ fn watched_wait_survives_the_arming_process_group_exiting() {
 fn missing_watcher_row_reports_its_error_to_the_wait_output() {
     let env = Env::new();
     let store = env.store();
-    store.paths().ensure_tmp_dir().unwrap();
-    let path = store.paths().waits_dir.join("wait-missing.output");
+    let dir = store.paths().out_reader_dir(None);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("wait-missing.output");
     let output = std::fs::File::create(&path).unwrap();
     let status = env
         .rimz()
@@ -1033,7 +1048,10 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap();
     let store = env.store();
-    let path = store.paths().waits_dir.join(format!("{name}.output"));
+    let path = store
+        .paths()
+        .out_reader_dir(Some("planner"))
+        .join(format!("{name}.output"));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let watcher = loop {
         if std::fs::read_to_string(&path).is_ok_and(|output| output == "started") {

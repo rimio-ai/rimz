@@ -828,16 +828,16 @@ fn background_receipt_names_the_report_or_the_wait_command() {
     };
 
     assert_eq!(
-        receipt(&["otter"], Some("/tmp/rimz-subagents/otter.output"), true),
-        "@otter runs in the background. Each subagent's captured response lands at /tmp/rimz-subagents/otter.output when that subagent settles. When every subagent you launched has settled, one SUBAGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: rimz subagents wait @otter\n"
+        receipt(&["otter"], Some("/state/out/planner/otter.output"), true),
+        "@otter runs in the background. Each subagent's captured response lands at /state/out/planner/otter.output when that subagent settles. When every subagent you launched has settled, one SUBAGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: rimz subagents wait @otter\n"
     );
     assert_eq!(
         receipt(
             &["otter", "fox"],
-            Some("/tmp/rimz-subagents/otter.output"),
+            Some("/state/out/planner/otter.output"),
             false
         ),
-        "@otter, @fox run in the background. Each agent's captured response lands at /tmp/rimz-subagents/<name>.output when that agent settles. When every agent you launched has settled, one AGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: rimz agents wait otter fox\n"
+        "@otter, @fox run in the background. Each agent's captured response lands at /state/out/planner/<name>.output when that agent settles. When every agent you launched has settled, one AGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: rimz agents wait otter fox\n"
     );
     assert_eq!(
         receipt(&["otter"], None, false),

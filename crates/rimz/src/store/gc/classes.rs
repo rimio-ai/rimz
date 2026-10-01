@@ -42,8 +42,12 @@ pub(super) fn collect_state(
                 Some(agents) => collect_owned(paths, agents, &mut sweep, &mut report),
                 None => Ok(()),
             },
-            Class::Tmp => {
-                let result = collect_tmp(paths, watcher_is_live, &mut sweep, &mut report);
+            Class::Tmp => match &agents {
+                Some(agents) => collect_tmp(paths, agents, &mut sweep, &mut report),
+                None => Ok(()),
+            },
+            Class::Out => {
+                let result = collect_out(paths, watcher_is_live, &mut sweep, &mut report);
                 waits_removed = report.wait_outputs_removed;
                 result
             }
@@ -106,16 +110,19 @@ fn owned_expired(
         .is_some_and(|ended| expired(ended.into(), now, retention::OWNED_GRACE))
 }
 
-fn collect_owned(
-    paths: &crate::StatePaths,
+/// Remove each per-handle directory under `dir` by [`owned_expired`] against
+/// the newest row holding that handle; `keep` is never a candidate.
+fn collect_units(
+    dir: &Path,
+    keep: Option<&Path>,
     agents: &[crate::agents::AgentState],
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
     let now = SystemTime::now();
-    for entry in read_dir_if_exists(&paths.agents_dir)?.into_iter().flatten() {
+    for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
         let entry = entry.map_err(|source| GcErr::ReadDir {
-            path: paths.agents_dir.clone(),
+            path: dir.to_owned(),
             source,
         })?;
         let path = entry.path();
@@ -123,7 +130,7 @@ fn collect_owned(
             path: path.clone(),
             source,
         })?;
-        if !metadata.is_dir() {
+        if !metadata.is_dir() || keep == Some(path.as_path()) {
             continue;
         }
         let name = entry.file_name();
@@ -154,6 +161,16 @@ fn collect_owned(
             sweep.remove_tree(&path, files, report)?;
         }
     }
+    Ok(())
+}
+
+fn collect_owned(
+    paths: &crate::StatePaths,
+    agents: &[crate::agents::AgentState],
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<()> {
+    collect_units(&paths.agents_dir, None, agents, sweep, report)?;
     let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
     for run in crate::store::run::list(&paths.runs_dir)? {
         let path = crate::store::run::run_path(&paths.runs_dir, &run.run_id);
@@ -169,7 +186,20 @@ fn collect_owned(
     Ok(())
 }
 
+/// Temp units by the owned rule; the handleless unit goes only with the room.
 fn collect_tmp(
+    paths: &crate::StatePaths,
+    agents: &[crate::agents::AgentState],
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<()> {
+    let unnamed = paths.temp_unit_dir(None);
+    collect_units(&paths.tmp_dir, Some(&unnamed), agents, sweep, report)
+}
+
+/// Result files past the grace: a wait's once its watcher is gone, a
+/// response once no run record names its agent; then empty reader dirs.
+fn collect_out(
     paths: &crate::StatePaths,
     watcher_is_live: &impl Fn(&str) -> std::io::Result<bool>,
     sweep: &mut Sweep,
@@ -179,52 +209,41 @@ fn collect_tmp(
         let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
         crate::store::run::list(&paths.runs_dir)?
     };
-    for dir in [&paths.waits_dir, &paths.subagents_dir] {
-        for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
-            let entry = entry.map_err(|source| GcErr::ReadDir {
-                path: dir.to_owned(),
-                source,
-            })?;
-            let path = entry.path();
-            let file_type = entry.file_type().map_err(|source| GcErr::Io {
+    let now = SystemTime::now();
+    for (path, modified, _) in sweep.files_under(&paths.out_dir)? {
+        if path
+            .extension()
+            .is_none_or(|extension| extension != "output")
+            || !expired(modified, now, retention::OWNED_GRACE)
+        {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let is_wait = name.starts_with("wait-");
+        let live = if is_wait {
+            watcher_is_live(name).map_err(|source| GcErr::Io {
                 path: path.clone(),
                 source,
-            })?;
-            if !file_type.is_file()
-                || path
-                    .extension()
-                    .is_none_or(|extension| extension != "output")
-                || !super::collect::is_older_than(&path, retention::OWNED_GRACE)?
-            {
-                continue;
-            }
-            let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            let is_wait = dir == &paths.waits_dir;
-            let live = if is_wait {
-                watcher_is_live(name).map_err(|source| GcErr::Io {
-                    path: path.clone(),
-                    source,
-                })?
-            } else {
-                let name = name.split_once('.').map_or(name, |(owner, _)| owner);
-                runs.iter()
-                    .any(|run| !run.status.is_terminal() && run.agent_name.as_deref() == Some(name))
-            };
-            if !live {
-                sweep.remove_file_if_exists(
-                    &path,
-                    |report| {
-                        report.sidecar_files_removed += 1;
-                        report.wait_outputs_removed += usize::from(is_wait);
-                    },
-                    report,
-                )?;
-            }
+            })?
+        } else {
+            let agent = name.split_once('.').map_or(name, |(agent, _)| agent);
+            runs.iter()
+                .any(|run| run.agent_name.as_deref() == Some(agent))
+        };
+        if !live {
+            sweep.remove_file_if_exists(
+                &path,
+                |report| {
+                    report.sidecar_files_removed += 1;
+                    report.wait_outputs_removed += usize::from(is_wait);
+                },
+                report,
+            )?;
         }
     }
-    Ok(())
+    sweep.remove_empty_dirs(&paths.out_dir, None, report)
 }
 
 #[cfg(test)]
@@ -242,12 +261,13 @@ mod tests {
         )
         .unwrap();
         paths.ensure_dirs().unwrap();
-        fs::create_dir_all(&paths.waits_dir).unwrap();
+        let reader = paths.out_reader_dir(Some("armer"));
+        fs::create_dir_all(&reader).unwrap();
         let pane_lock = paths.lock_path("pane-write/free.lock");
         let held_path = paths.lock_path("sidebar-launch.lock");
         let held = crate::disk::lock::WorkspaceLock::acquire(&held_path).unwrap();
         drop(crate::disk::lock::WorkspaceLock::acquire(&pane_lock).unwrap());
-        let output = paths.waits_dir.join("old.output");
+        let output = reader.join("wait-old.output");
         fs::File::create(&output)
             .unwrap()
             .set_modified(SystemTime::now() - Duration::from_secs(8 * 86_400))
@@ -273,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn tmp_outputs_keep_recent_and_live_owners_and_preview_expiry() {
+    fn out_files_keep_recent_live_and_recorded_owners_and_preview_expiry() {
         let temp = tempfile::tempdir().unwrap();
         let paths = crate::StatePaths::under(
             crate::WorkspaceId::from_project_root(temp.path()),
@@ -281,20 +301,31 @@ mod tests {
         )
         .unwrap();
         let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
-        for dir in [&paths.waits_dir, &paths.subagents_dir] {
-            fs::create_dir_all(dir).unwrap();
-            for name in [
-                "old.output",
-                "recent.output",
-                "live.output",
-                "unrelated.txt",
-            ] {
-                let file = fs::File::create(dir.join(name)).unwrap();
-                if name != "recent.output" {
-                    file.set_modified(old).unwrap();
-                }
+        let reader = paths.out_reader_dir(Some("parent"));
+        let emptied = paths.out_reader_dir(Some("gone"));
+        fs::create_dir_all(&reader).unwrap();
+        fs::create_dir_all(&emptied).unwrap();
+        let file = |dir: &Path, name: &str, aged: bool| {
+            let path = dir.join(name);
+            let file = fs::File::create(&path).unwrap();
+            if aged {
+                file.set_modified(old).unwrap();
             }
-        }
+            path
+        };
+        let kept = [
+            file(&reader, "wait-recent.output", false),
+            file(&reader, "wait-live.output", true),
+            file(&reader, "fresh.output", false),
+            file(&reader, "recorded.output", true),
+            file(&reader, "recorded.2.output", true),
+            file(&reader, "unrelated.txt", true),
+        ];
+        let removed = [
+            file(&reader, "wait-old.output", true),
+            file(&reader, "orphan.output", true),
+            file(&emptied, "orphan.1234.output", true),
+        ];
         let mut run = crate::store::run::RunRecord::new(
             paths.workspace_id.clone(),
             crate::ids::AgentKind::new_unchecked("claude"),
@@ -302,28 +333,73 @@ mod tests {
             String::new(),
             temp.path().to_owned(),
         );
-        run.agent_name = Some("live".to_owned());
-        let follow_up = paths.subagents_dir.join("live.2.output");
-        fs::File::create(&follow_up)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        run.agent_name = Some("recorded".to_owned());
+        run.status = crate::store::run::RunStatus::Completed;
         crate::store::run::write(&paths.runs_dir, &run).unwrap();
-        let watcher = |name: &str| Ok(name == "live");
+        let watcher = |name: &str| Ok(name == "wait-live");
         let mut preview = GcReport::default();
-        collect_tmp(&paths, &watcher, &mut Sweep::new(true), &mut preview).unwrap();
-        assert_eq!(preview.sidecar_files_removed, 2);
-        assert!(paths.waits_dir.join("old.output").exists());
+        collect_out(&paths, &watcher, &mut Sweep::new(true), &mut preview).unwrap();
+        assert_eq!(preview.sidecar_files_removed, 3);
+        assert_eq!(preview.wait_outputs_removed, 1);
+        assert_eq!(preview.dirs_removed, 1);
+        assert!(removed.iter().all(|path| path.exists()));
         let mut actual = GcReport::default();
-        collect_tmp(&paths, &watcher, &mut Sweep::new(false), &mut actual).unwrap();
+        collect_out(&paths, &watcher, &mut Sweep::new(false), &mut actual).unwrap();
         assert_eq!(preview, actual);
-        assert!(follow_up.exists());
-        for dir in [&paths.waits_dir, &paths.subagents_dir] {
-            assert!(!dir.join("old.output").exists());
-            for name in ["recent.output", "live.output", "unrelated.txt"] {
-                assert!(dir.join(name).exists());
-            }
-        }
+        assert!(kept.iter().all(|path| path.exists()));
+        assert!(removed.iter().all(|path| !path.exists()));
+        assert!(!emptied.exists(), "an emptied reader dir goes");
+        assert!(reader.exists());
+    }
+
+    #[test]
+    fn tmp_units_follow_the_owned_rule_and_keep_the_unnamed_unit() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::StatePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
+        let unit = |owner: Option<&str>| {
+            let dir = paths.temp_unit_dir(owner);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("note"), b"temp").unwrap();
+            fs::File::open(dir.join("note"))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            fs::File::open(&dir).unwrap().set_modified(old).unwrap();
+            dir
+        };
+        let (ended, live, orphan, unnamed) = (
+            unit(Some("ended")),
+            unit(Some("live")),
+            unit(Some("orphan")),
+            unit(None),
+        );
+        let recent = paths.temp_unit_dir(Some("recent"));
+        fs::create_dir_all(&recent).unwrap();
+        let mut ended_row = crate::testkit::agent_state("claude", "ended", jiff::Timestamp::now());
+        ended_row.name = Some("ended".to_owned());
+        ended_row.ended_at = Some(jiff::Timestamp::try_from(old).unwrap());
+        let mut live_row = ended_row.clone();
+        live_row.name = Some("live".to_owned());
+        live_row.runtime_owner = Some(crate::store::runtime::current_process_owner(
+            crate::pane::RuntimeOwnerKind::Agent,
+            "live",
+        ));
+        let mut report = GcReport::default();
+        collect_tmp(
+            &paths,
+            &[ended_row, live_row],
+            &mut Sweep::new(false),
+            &mut report,
+        )
+        .unwrap();
+        assert!(!ended.exists() && !orphan.exists());
+        assert!(live.exists(), "a live owner keeps its unit past the grace");
+        assert!(unnamed.exists() && recent.exists());
     }
 
     #[test]
