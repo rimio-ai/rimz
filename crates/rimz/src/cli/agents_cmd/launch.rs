@@ -834,6 +834,7 @@ fn launch_resume_layout(
     let spec = args.launch.spec.as_deref().unwrap_or("<spec>");
     let scope = worktree_filter.and_then(worktree_scope_label);
     let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let team = team_name.as_deref().and_then(|name| teams.0.get(name));
     let mut plan = rimz::harness::resume::plan_cohort_resume(
         &agents,
         &logins,
@@ -857,7 +858,7 @@ fn launch_resume_layout(
         &plan.seeds,
         profiles,
         &rimz::harness::resume::ResumeOverrides {
-            team: team_name.as_deref().and_then(|name| teams.0.get(name)),
+            team,
             permission_mode: interactive_permission_mode_from_flags(
                 args.launch.overrides.ask,
                 args.launch.overrides.yolo,
@@ -904,7 +905,7 @@ fn launch_resume_layout(
         .clone()
         .context("cohort resume matched no working directory")?;
     crate::cli::lsp_admission::admit(&cwd, machine_config)?;
-    if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
+    if let Some(team) = team {
         rimz::worktree::exclude_team_scratch(&cwd, &team.scratch_patterns());
     }
     let channel = rimz::harness::spec::resolve_room_channel(
@@ -950,10 +951,7 @@ fn launch_resume_layout(
         None,
         None,
         team_name.as_deref(),
-        team_name
-            .as_deref()
-            .and_then(|name| teams.0.get(name))
-            .map(|team| team.roles.as_slice()),
+        team.map(|team| team.roles.as_slice()),
         channel.as_deref(),
         None,
         Some(&plan),
@@ -989,9 +987,18 @@ fn launch_resume_layout(
             fallback_channel: channel.as_deref(),
         },
     )?;
-    let team = team_name.as_deref().and_then(|name| teams.0.get(name));
     panes.focused_pane = team_leader_pane(&layout, team);
     let leader = team.and_then(|team| team.leader.as_deref());
+    let write_receipt = || {
+        write_resume_receipt(
+            &mut render::out(),
+            &plan,
+            team_name.as_deref(),
+            channel.as_deref(),
+            launch_batch.identities(),
+            leader,
+        )
+    };
     if let Some(prompt) = args
         .launch
         .prompt
@@ -1009,14 +1016,7 @@ fn launch_resume_layout(
         rimz::message::deliver::register_message_wake(workspace, store)?;
     }
     if in_place {
-        write_resume_receipt(
-            &mut render::out(),
-            &plan,
-            team_name.as_deref(),
-            channel.as_deref(),
-            launch_batch.identities(),
-            leader,
-        )?;
+        write_receipt()?;
     }
     super::placement::execute(
         backend,
@@ -1051,14 +1051,7 @@ fn launch_resume_layout(
         },
     )?;
     if !in_place {
-        write_resume_receipt(
-            &mut render::out(),
-            &plan,
-            team_name.as_deref(),
-            channel.as_deref(),
-            launch_batch.identities(),
-            leader,
-        )?;
+        write_receipt()?;
     }
     Ok(())
 }
