@@ -365,7 +365,7 @@ mod tests {
             "catalog contains a row without a GlyphRole"
         );
         for (index, &role) in GlyphRole::ALL.iter().enumerate() {
-            let name = role.namespaced_name();
+            let name = format!("{}.{}", role.namespace(), role.name());
             assert_eq!(
                 GLYPH_CATALOG[index].role, role,
                 "catalog row for {name} is out of discriminant order"
@@ -451,9 +451,10 @@ mod tests {
                     || EXCEPTIONS.iter().any(|&(exception, _)| exception == glyph);
                 assert!(
                     covered,
-                    "{} uses U+{:04X} outside the fallback-covered blocks; swap the glyph \
+                    "{}.{} uses U+{:04X} outside the fallback-covered blocks; swap the glyph \
                      or add a justified exception",
-                    row.role.namespaced_name(),
+                    row.role.namespace(),
+                    row.role.name(),
                     u32::from(glyph),
                 );
             }
@@ -519,8 +520,9 @@ mod tests {
             assert_eq!(
                 nerd_font_glyph(role),
                 None,
-                "{} keeps its Unicode default in the Nerd Font preset",
-                role.namespaced_name()
+                "{}.{} keeps its Unicode default in the Nerd Font preset",
+                role.namespace(),
+                role.name()
             );
         }
     }
@@ -643,8 +645,9 @@ mod tests {
             assert_eq!(
                 from_template.glyph(role),
                 default.glyph(role),
-                "active template default for {} equals the Unicode preset",
-                role.namespaced_name()
+                "active template default for {}.{} equals the Unicode preset",
+                role.namespace(),
+                role.name()
             );
         }
 
@@ -663,8 +666,9 @@ mod tests {
             assert_eq!(
                 from_template.glyph(role),
                 expected.glyph(role),
-                "active template default for {} equals the Nerd Font preset",
-                role.namespaced_name()
+                "active template default for {}.{} equals the Nerd Font preset",
+                role.namespace(),
+                role.name()
             );
         }
     }
