@@ -1156,6 +1156,17 @@ pub enum TurnErrorClass {
     Failed,
 }
 
+/// Cap on provider error text surfaced on the agent card. Upstream messages are
+/// one short line; the cap only guards a pathological entry.
+const TURN_ERROR_LABEL_MAX: usize = 80;
+
+/// The provider error text an agent card shows: trimmed, `None` when blank,
+/// else its first [`TURN_ERROR_LABEL_MAX`] chars.
+pub(in crate::agents) fn cap_turn_error_label(text: &str) -> Option<String> {
+    let text = super::payload::non_empty_trimmed(text)?;
+    Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
+}
+
 impl TurnErrorClass {
     /// Whether provider capacity paused the turn instead of failing it.
     pub(crate) fn pauses_turn(self) -> bool {

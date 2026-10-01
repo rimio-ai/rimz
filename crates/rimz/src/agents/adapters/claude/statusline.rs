@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
-    AgentTurnError, RateLimitWindow, TurnErrorClass, WindowSource, clamp_pct,
+    AgentTurnError, RateLimitWindow, TurnErrorClass, WindowSource, cap_turn_error_label, clamp_pct,
 };
 use crate::agents::{
     sanitize_user_prompt,
@@ -139,18 +139,6 @@ fn parse_rate_window(
 
 fn current_usage(field: Option<AgentCurrentUsage>) -> Option<AgentCurrentUsage> {
     field.filter(|usage| !usage.is_zero())
-}
-
-/// Cap on the surfaced error text. The upstream message is one short line
-/// ("API Error: Overloaded"); the cap only guards a pathological entry.
-pub(crate) const TURN_ERROR_LABEL_MAX: usize = 80;
-
-pub(crate) fn cap_turn_error_label(text: &str) -> Option<String> {
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-    Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
 }
 
 /// Classify one Claude API-error turn from its structured fields and label.

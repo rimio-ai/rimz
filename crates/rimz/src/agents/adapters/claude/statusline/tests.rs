@@ -518,7 +518,7 @@ fn turn_error_labels_are_capped_and_accept_flat_content() {
         r#"{{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T02:56:32.919Z","message":{{"content":[{{"type":"text","text":"{long}"}}]}}}}"#
     );
     let error = detect_turn_error(&entry).expect("detected");
-    assert_eq!(error.label.unwrap().chars().count(), TURN_ERROR_LABEL_MAX);
+    assert_eq!(error.label.unwrap().chars().count(), 80);
 
     // Tolerate a flat-string `message.content` alongside the block array.
     let entry = r#"{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T02:56:32.919Z","message":{"content":"API Error: Overloaded"}}"#;
