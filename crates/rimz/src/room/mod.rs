@@ -92,6 +92,24 @@ pub fn select_birth_logins(
     select_birth_logins_with_frozen(project_root, machine_config, requested, was_live, frozen)
 }
 
+/// Select the accounts a room is entered under, then require every one of them
+/// usable before anything launches into the room.
+pub fn resolve_birth_logins(
+    project_root: &Path,
+    machine_config: &MachineConfig,
+    requested: &crate::ids::RoomLogins,
+    was_live: bool,
+) -> Result<crate::ids::RoomLogins> {
+    let logins = select_birth_logins(project_root, machine_config, requested, was_live)?;
+    let ambient = crate::agents::ambient_env();
+    for login in
+        crate::agents::LoginCatalog::from_config(&machine_config.accounts)?.room(&logins)?
+    {
+        login.preflight(&ambient)?;
+    }
+    Ok(logins)
+}
+
 fn select_birth_logins_with_frozen(
     project_root: &Path,
     machine_config: &MachineConfig,
