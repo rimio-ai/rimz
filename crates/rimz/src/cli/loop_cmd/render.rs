@@ -504,7 +504,8 @@ fn has_agent_runs_section(task: &LoadedTask) -> bool {
 
 pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let Some(task) = load_task(&args.name, globals)? else {
-        if let Some((root, in_flight)) = in_flight_without_row(&args.name, globals)? {
+        // A failed lookup falls through to `logs`, whose own lookup warns once.
+        if let Ok(Some((root, in_flight))) = in_flight_without_row(&args.name, globals) {
             return show_in_flight(&args, &root, &in_flight);
         }
         return logs(
@@ -534,7 +535,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         project_root_for_globals(globals).as_deref(),
     );
     let show_agent_runs = has_agent_runs_section(&task);
-    let in_flight = in_flight_run(&args.name, &root)?;
+    let in_flight = displayed_in_flight(in_flight_run(&args.name, &root));
 
     let mut out = ui::out();
     write_show_headline(&mut out, &args.name, &timing, now)?;
@@ -622,7 +623,8 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     );
     let in_flight = match entry {
         Some(_) => None,
-        None => in_flight_without_row(&args.name, globals)?.map(|(_, in_flight)| in_flight),
+        None => displayed_in_flight(in_flight_without_row(&args.name, globals))
+            .map(|(_, in_flight)| in_flight),
     };
     if entry.is_none() && records.is_empty() && in_flight.is_none() {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
@@ -684,6 +686,19 @@ fn write_log_records(
         run_report::write_record_forensics(out, entry, record, prose)?;
     }
     Ok(())
+}
+
+/// The in-flight lookup as `show` and `logs` use it: the active run is
+/// enrichment there, so a failed lookup warns and costs only that line.
+fn displayed_in_flight<T>(lookup: Result<Option<T>>) -> Option<T> {
+    lookup.unwrap_or_else(|error| {
+        let _ = writeln!(
+            ui::err(),
+            "{} cannot read the loop run lock, so no active run is shown: {error:#}",
+            ui::paint(ui::palette::warn().bold(), "warning:")
+        );
+        None
+    })
 }
 
 /// The one rendering of a run in flight, shared by `show` and `logs`.

@@ -5085,6 +5085,56 @@ fn loop_commands_reject_an_unknown_name_with_a_free_lock() {
 }
 
 #[test]
+fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "probe", "--check", "true", "--every", "1h"],
+    );
+    loop_ok(&env, &["loop", "fire", "probe"]);
+    // A directory where the run lock file belongs makes opening the lock fail.
+    for name in ["probe", "ghost"] {
+        let lock = loop_run_lock_path(&env, name);
+        let _ = std::fs::remove_file(&lock);
+        std::fs::create_dir_all(&lock).unwrap();
+    }
+    let display = |command: &str| {
+        let output = env
+            .rimz()
+            .args(["loop", command, "probe"])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "loop {command}: {stderr}");
+        assert_eq!(
+            stderr.matches("cannot read the loop run lock").count(),
+            1,
+            "loop {command}: {stderr}"
+        );
+        assert!(!stdout.contains("run in progress"), "{stdout}");
+        stdout
+    };
+
+    let show = display("show");
+    assert!(
+        show.contains("every 1h") && show.contains("manual"),
+        "{show}"
+    );
+    loop_ok(&env, &["loop", "remove", "probe"]);
+    for command in ["show", "logs"] {
+        let history = display(command);
+        assert!(history.contains("manual"), "{history}");
+    }
+    let (_stdout, error) = loop_fail(&env, &["loop", "logs", "ghost"]);
+    assert!(
+        error.contains("cannot read the loop run lock")
+            && error.contains("no loop task named `ghost`"),
+        "{error}"
+    );
+}
+
+#[test]
 fn loop_add_persists_machine_and_project_signal_triggers() {
     let env = Env::new();
     let added = loop_ok(
