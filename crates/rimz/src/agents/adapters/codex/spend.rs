@@ -70,11 +70,19 @@ pub(super) fn codex_homes(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> 
     }
 }
 
+/// Whether the legacy whole-home walk may enter or count `path`, relative to
+/// a Codex home. Codex resumes a rollout wherever it already sits, so the walk
+/// stays open by default; it skips the session trees (scanned on their own)
+/// and the directories Codex fills with copied repository content (plugin
+/// checkouts and caches, managed worktrees, helper temp files) or diagnostic
+/// logs, none of which hold rollouts.
 pub(super) fn legacy_spend_relative(path: &Path) -> bool {
     path.components().next().is_none_or(|component| {
         !matches!(
             component.as_os_str().to_str(),
-            Some("sessions" | "archived_sessions")
+            Some(
+                "sessions" | "archived_sessions" | ".tmp" | "tmp" | "plugins" | "worktrees" | "log"
+            )
         )
     })
 }
