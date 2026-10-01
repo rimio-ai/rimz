@@ -349,19 +349,23 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         .cloned()
         .unwrap_or_default();
     extra_env.insert(user_tmpdir.to_owned(), saved);
-    // List the temp-root keys pointed at a unit, inherited ones included, so
-    // the mux restore drops them without knowing any provider.
+    // List the temp-root keys this launch points at its unit, so a restore
+    // drops them without knowing any provider. An inherited listed key names
+    // the parent's unit; unless this adapter owns it, the launch unsets it.
     let keys_env = crate::child_process::TEMP_ROOT_KEYS_ENV;
-    let temp_root_keys: std::collections::BTreeSet<&str> = inputs
+    let own_keys: std::collections::BTreeSet<&str> =
+        adapter.temp_dir_env_keys().iter().copied().collect();
+    let inherited_keys: Vec<String> = inputs
         .ambient_env
         .get(keys_env)
         .into_iter()
         .flat_map(|list| list.split_whitespace())
-        .chain(adapter.temp_dir_env_keys().iter().copied())
+        .filter(|key| !own_keys.contains(key))
+        .map(str::to_owned)
         .collect();
     extra_env.insert(
         keys_env.to_owned(),
-        temp_root_keys.into_iter().collect::<Vec<_>>().join(" "),
+        own_keys.into_iter().collect::<Vec<_>>().join(" "),
     );
     extra_env.insert(ENV_SHARED.to_owned(), shared.display().to_string());
     // zellij derives its socket base from TMPDIR when nothing pins it; keep
@@ -386,10 +390,19 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         &extra_env,
         &reminders,
     )?;
-    let process = match &stage {
+    let process = match &mut stage {
         AgentProcessStage::Ready(process)
         | AgentProcessStage::LoginShellReentry { process, .. } => process,
     };
+    let unset: BTreeMap<String, sandbox::EnvPin> = inherited_keys
+        .into_iter()
+        .filter(|key| !process.env.contains_key(key))
+        .map(|key| (key, sandbox::EnvPin::Unset))
+        .collect();
+    if !unset.is_empty() {
+        process.pin_env(unset);
+    }
+    let process = &*process;
     let mut env = inputs.ambient_env.clone();
     if process.host_skills == Some(crate::agents::skills::HostSkillPlan::Unenforced) {
         warnings.push(LaunchPlanWarning::HostSkillsUnenforced {
