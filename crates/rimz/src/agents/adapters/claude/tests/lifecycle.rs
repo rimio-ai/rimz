@@ -816,17 +816,17 @@ fn background_shell_reports_follow_launch_stop_and_notification() {
 fn root_registration_stamps_birth_account_key_only_on_registration() {
     for source in ["startup", "resume"] {
         let payload = json!({ "session_id": "sess-1", "source": source });
-        let parts = ClaudeLifecycleParts::parse("SessionStart", &payload);
+        let hook = ClaudeHook::parse("SessionStart", &payload);
         let mut observation = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("sess-1")),
             LifecycleSignal::Registered,
         );
-        enrich_root_registration(&mut observation, &parts, || Some("fixture-key".to_owned()));
+        enrich_root_registration(&mut observation, &hook, || Some("fixture-key".to_owned()));
         assert_eq!(observation.account_key.as_deref(), Some("fixture-key"));
     }
 
     let compact_payload = json!({ "session_id": "sess-1", "source": "compact" });
-    let compact_parts = ClaudeLifecycleParts::parse("SessionStart", &compact_payload);
+    let compact_hook = ClaudeHook::parse("SessionStart", &compact_payload);
     let mut compact = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-1")),
         LifecycleSignal::CompactionEnded {
@@ -834,19 +834,19 @@ fn root_registration_stamps_birth_account_key_only_on_registration() {
             failed: false,
         },
     );
-    enrich_root_registration(&mut compact, &compact_parts, || {
+    enrich_root_registration(&mut compact, &compact_hook, || {
         Some("fixture-key".to_owned())
     });
     assert_eq!(compact.account_key, None);
 
     let startup_payload = json!({ "session_id": "child", "source": "startup" });
-    let startup_parts = ClaudeLifecycleParts::parse("SessionStart", &startup_payload);
+    let startup_hook = ClaudeHook::parse("SessionStart", &startup_payload);
     let mut subagent = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("child")),
         LifecycleSignal::Registered,
     );
     subagent.parent_agent_id = Some(AgentSessionId::from("parent"));
-    enrich_root_registration(&mut subagent, &startup_parts, || {
+    enrich_root_registration(&mut subagent, &startup_hook, || {
         Some("fixture-key".to_owned())
     });
     assert_eq!(subagent.account_key, None);
