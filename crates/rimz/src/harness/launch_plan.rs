@@ -335,6 +335,17 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
     extra_env.insert("TMPDIR".to_owned(), tmp.display().to_string());
+    // Save the TMPDIR replaced here for the mux children the agent starts.
+    // Inside an agent's tree the ambient TMPDIR is already a unit, so an
+    // inherited save carries forward.
+    let user_tmpdir = crate::mux::domain::USER_TMPDIR_ENV;
+    let saved = inputs
+        .ambient_env
+        .get(user_tmpdir)
+        .or_else(|| inputs.ambient_env.get("TMPDIR"))
+        .cloned()
+        .unwrap_or_default();
+    extra_env.insert(user_tmpdir.to_owned(), saved);
     extra_env.insert(ENV_SHARED.to_owned(), shared.display().to_string());
     // zellij derives its socket base from TMPDIR when nothing pins it; keep
     // the endpoint the wrapper's own environment resolves.

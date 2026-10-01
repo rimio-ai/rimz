@@ -373,6 +373,87 @@ fn reset_refuses_an_unbirthable_default_rebirth_before_teardown() {
     );
 }
 
+/// A room started from an agent's tree, whose `TMPDIR` is the agent's temp
+/// unit, gives its panes the `TMPDIR` the launch saved, or none.
+#[test]
+fn a_room_started_from_an_agent_gives_panes_the_user_tmpdir() {
+    for saved in ["user-tmp", ""] {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let unit = scratch.path().join("unit");
+        let user = scratch.path().join(saved);
+        std::fs::create_dir_all(&unit).expect("mkdir unit");
+        std::fs::create_dir_all(&user).expect("mkdir user tmp");
+        let saved = if saved.is_empty() {
+            String::new()
+        } else {
+            user.display().to_string()
+        };
+        let extra = [
+            ("TMPDIR", unit.to_str().expect("utf8 unit")),
+            ("RIMZ_USER_TMPDIR", saved.as_str()),
+        ];
+        let expected = if saved.is_empty() {
+            "unset|unset".to_owned()
+        } else {
+            format!("{saved}|unset")
+        };
+        let script = |marker: &Path| {
+            format!(
+                "printf '%s|%s' \"${{TMPDIR-unset}}\" \"${{RIMZ_USER_TMPDIR-unset}}\" > '{}'; sleep 60",
+                marker.display()
+            )
+        };
+
+        if let Some(room) = TmuxRoom::start_with(&extra) {
+            let marker = scratch.path().join("tmux-pane");
+            let output = tmux_output(
+                &room.env.runtime_root,
+                &[
+                    "new-window",
+                    "-d",
+                    "-t",
+                    &room.session_name,
+                    &script(&marker),
+                ],
+            );
+            assert!(output.status.success(), "tmux new-window failed");
+            assert_eq!(wait_for_marker(&marker), expected, "tmux, saved {saved:?}");
+        }
+        if let Some(room) = ZellijRoom::start_with(&extra) {
+            let marker = scratch.path().join("zellij-pane");
+            let status = room
+                .zellij()
+                .args(["--session", &room.session_name, "run", "--"])
+                .args(["sh", "-c", &script(&marker)])
+                .bounded_status()
+                .expect("zellij run");
+            assert!(status.success(), "zellij run failed");
+            assert_eq!(
+                wait_for_marker(&marker),
+                expected,
+                "zellij, saved {saved:?}"
+            );
+        }
+    }
+}
+
+fn wait_for_marker(marker: &Path) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if let Ok(seen) = std::fs::read_to_string(marker)
+            && seen.contains('|')
+        {
+            return seen;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pane never wrote {}",
+            marker.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 struct TmuxRoom {
     env: Env,
     session_name: String,
@@ -381,6 +462,11 @@ struct TmuxRoom {
 
 impl TmuxRoom {
     fn start() -> Option<Self> {
+        Self::start_with(&[])
+    }
+
+    /// Start the room from a process carrying `extra` over the fixture env.
+    fn start_with(extra: &[(&str, &str)]) -> Option<Self> {
         if which::which("tmux").is_err() {
             eprintln!("tmux not on PATH; skipping single-backend room test");
             return None;
@@ -395,6 +481,7 @@ impl TmuxRoom {
             let mut cmd = env.rimz();
             cmd.args(["--mux", "tmux", "start"])
                 .env("TMUX_TMPDIR", &tmux_tmpdir)
+                .envs(extra.iter().copied())
                 .bounded_output()
                 .expect("run tmux start")
         };
@@ -450,6 +537,11 @@ struct ZellijRoom {
 
 impl ZellijRoom {
     fn start() -> Option<Self> {
+        Self::start_with(&[])
+    }
+
+    /// Start the room from a process carrying `extra` over the fixture env.
+    fn start_with(extra: &[(&str, &str)]) -> Option<Self> {
         if which::which("zellij").is_err() {
             eprintln!("zellij not on PATH; skipping zellij auto-backend room test");
             return None;
@@ -469,6 +561,7 @@ impl ZellijRoom {
             pin_zellij_shared_env(&env, &mut cmd);
             cmd.args(["--mux", "zellij", "start"])
                 .env("TMUX_TMPDIR", &tmux_tmpdir)
+                .envs(extra.iter().copied())
                 .bounded_output()
                 .expect("run zellij start")
         };

@@ -1267,6 +1267,13 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         plan.process().env.get("TMPDIR").map(String::as_str),
         Some("/tmp")
     );
+    assert!(
+        !plan
+            .process()
+            .env
+            .contains_key(crate::mux::domain::USER_TMPDIR_ENV),
+        "a mux child inside the view keeps /tmp"
+    );
     assert_eq!(
         plan.process().env.get("RIMZ_SHARED").map(PathBuf::from),
         Some(state.room_shared_dir.clone())
@@ -1298,6 +1305,64 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         Some(&crate::sandbox::EnvPin::Set(
             home.to_string_lossy().into_owned()
         ))
+    );
+}
+
+#[test]
+fn a_launch_saves_the_user_tmpdir_it_replaces() {
+    let project = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    let other_unit = state.temp_unit_dir(Some("otter")).display().to_string();
+    let saved = |ambient: &[(&str, &str)]| {
+        let ambient = ambient
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            agent_shell: None,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+        })
+        .unwrap();
+        assert_eq!(
+            plan.process().env.get("TMPDIR").map(PathBuf::from),
+            Some(state.temp_unit_dir(None))
+        );
+        plan.process()
+            .env
+            .get(crate::mux::domain::USER_TMPDIR_ENV)
+            .cloned()
+    };
+    let user = crate::mux::domain::USER_TMPDIR_ENV;
+
+    assert_eq!(
+        saved(&[("TMPDIR", "/var/folders/t")]).as_deref(),
+        Some("/var/folders/t")
+    );
+    assert_eq!(saved(&[]).as_deref(), Some(""), "present and empty is none");
+    assert_eq!(saved(&[("TMPDIR", "")]).as_deref(), Some(""));
+    assert_eq!(
+        saved(&[(user, "/var/folders/t"), ("TMPDIR", &other_unit)]).as_deref(),
+        Some("/var/folders/t"),
+        "a launch inside an agent's tree carries the user's value forward"
+    );
+    assert_eq!(
+        saved(&[(user, ""), ("TMPDIR", &other_unit)]).as_deref(),
+        Some("")
     );
 }
 
