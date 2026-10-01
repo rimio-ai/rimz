@@ -304,10 +304,9 @@ fn kimi_turn_error(event_name: &str, parsed: &payloads::KimiHookPayload) -> Opti
     (event_name == "StopFailure").then(|| {
         let label = parsed
             .error_message
-            .clone()
-            .or_else(|| parsed.error_type.clone())
-            .and_then(|value| non_empty_trimmed(&value))
-            .map(|value| value.chars().take(80).collect::<String>());
+            .as_deref()
+            .or(parsed.error_type.as_deref())
+            .and_then(crate::agents::context::cap_turn_error_label);
         AgentTurnError {
             class: TurnErrorClass::classify_label(label.as_deref()),
             at: Timestamp::now(),
