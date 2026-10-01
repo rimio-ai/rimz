@@ -274,7 +274,7 @@ mod tests {
             missing["problem"]
                 .as_str()
                 .unwrap()
-                .contains("rimz accounts use claude default")
+                .contains("rimz accounts use --global claude default")
         );
     }
 

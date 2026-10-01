@@ -204,7 +204,7 @@ fn rebirth_skips_a_session_stamped_with_another_account() {
     assert_eq!(
         plan.warnings,
         [
-            "@warm-drift's session belongs to claude account `personal`; this room now launches claude on `default`. Run `rimz accounts use --room claude personal` to resume it, then switch back."
+            "@warm-drift's session belongs to claude account `personal`; this room now launches claude on `default`. Run `rimz accounts use claude personal` to resume it, then switch back."
         ]
     );
 }

@@ -24,11 +24,11 @@ pub struct AccountsArgs {
 
 #[derive(Debug, Subcommand)]
 enum AccountsSubcmd {
-    /// Select the account for new rooms, or future launches here with --room.
+    /// Select this room's account for future launches, or new rooms' with --global.
     Use {
-        /// Change this room's default for future launches.
+        /// Set the machine default for new rooms instead of this room's.
         #[arg(long)]
-        room: bool,
+        global: bool,
         /// Provider kind: claude or codex.
         kind: String,
         /// Declared account name, or `default` for the provider's own home.
@@ -67,11 +67,11 @@ pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
         AccountsSubcmd::Add { kind, name, home } => add(&account_kind(&kind)?, name, home),
         AccountsSubcmd::List { json } => list(json),
         AccountsSubcmd::Remove { kind, name } => remove(&account_kind(&kind)?, &name),
-        AccountsSubcmd::Use { kind, name, room } => {
-            if room {
-                use_room_account(globals, &account_kind(&kind)?, &name)
-            } else {
+        AccountsSubcmd::Use { kind, name, global } => {
+            if global {
                 use_account(&kind, &name)
+            } else {
+                use_room_account(globals, &account_kind(&kind)?, &name)
             }
         }
     }
@@ -188,7 +188,7 @@ fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
         .join(" ");
     render::finish(writeln!(
         out,
-        "{kind} account `{name}` lives at {}\n  log in once   {home_override} {kind}\n  use at birth  rimz start --account {kind}={name}\n  this room     rimz accounts use --room {kind} {name}\n  new rooms     rimz accounts use {kind} {name}",
+        "{kind} account `{name}` lives at {}\n  log in once   {home_override} {kind}\n  use at birth  rimz start --account {kind}={name}\n  this room     rimz accounts use {kind} {name}\n  new rooms     rimz accounts use --global {kind} {name}",
         render::home_relative(&home.display().to_string())
     ))
 }
@@ -203,13 +203,13 @@ fn use_room_account(globals: &GlobalFlags, kind: &AgentKind, name: &LoginName) -
         .zip(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT))
         .and_then(|(id, root)| rimz::workspace::verify_pin(&id, &PathBuf::from(root)));
     let root = pin.context(
-        "--room needs a running room; run it inside one, or drop --room to set the machine default",
+        "`rimz accounts use` changes the running room it is run inside; run it inside one, or pass --global to set the machine default for new rooms",
     )?;
     if let Some(override_root) = &globals.root
         && override_root.canonicalize()? != root
     {
         bail!(
-            "--room switches the current room at `{}`; --root `{}` names another room; drop --root or run the command inside that room",
+            "`rimz accounts use` switches the current room at `{}`; --root `{}` names another room; drop --root or run the command inside that room",
             root.display(),
             override_root.display()
         );
@@ -266,12 +266,12 @@ fn use_account(raw_kind: &str, name: &LoginName) -> Result<()> {
     if name.is_default() {
         render::finish(writeln!(
             out,
-            "new rooms now use {kind}'s own home (`default`); a running room keeps its account until `rimz accounts use --room {kind} {name}` runs inside it"
+            "new rooms now use {kind}'s own home (`default`); existing rooms, running or stopped, keep their recorded account until `rimz accounts use {kind} {name}` runs inside each"
         ))?;
     } else {
         render::finish(writeln!(
             out,
-            "new rooms now use {kind} account `{name}`; a running room keeps its account until `rimz accounts use --room {kind} {name}` runs inside it"
+            "new rooms now use {kind} account `{name}`; existing rooms, running or stopped, keep their recorded account until `rimz accounts use {kind} {name}` runs inside each"
         ))?;
     }
     if let Some(Err(error)) = login.map(|login| login.preflight(&rimz::agents::ambient_env())) {
@@ -443,7 +443,7 @@ fn live_rooms_selecting(kind: &AgentKind, name: &LoginName) -> Vec<String> {
 /// What `remove` prints, given the account, its displayed home, and the live rooms still selecting it.
 fn removed_notice(kind: &AgentKind, name: &LoginName, home: &str, live: &[String]) -> String {
     let mut notice = format!(
-        "removed {kind} account `{name}`; its home {home} and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use --room {kind} default` for future launches"
+        "removed {kind} account `{name}`; its home {home} and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use {kind} default` for future launches"
     );
     if !live.is_empty() {
         let (room, verb) = if live.len() == 1 {
@@ -452,7 +452,7 @@ fn removed_notice(kind: &AgentKind, name: &LoginName, home: &str, live: &[String
             ("rooms", "select")
         };
         notice.push_str(&format!(
-            "\nwarning: {room} {} {verb} it as the default for new {kind} launches; add the account back or run `rimz accounts use --room {kind} default` inside each room",
+            "\nwarning: {room} {} {verb} it as the default for new {kind} launches; add the account back or run `rimz accounts use {kind} default` inside each room",
             live.join(", ")
         ));
     }
@@ -498,6 +498,29 @@ pub(crate) fn requested_logins(flags: &[AccountFlag]) -> Result<RoomLogins> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[derive(Debug, Parser)]
+    struct AccountsHarness {
+        #[command(flatten)]
+        args: AccountsArgs,
+    }
+
+    #[test]
+    fn use_targets_the_room_unless_global() {
+        for (argv, room) in [
+            (vec!["accounts", "use", "codex", "work"], true),
+            (vec!["accounts", "use", "--global", "codex", "work"], false),
+        ] {
+            let parsed = AccountsHarness::try_parse_from(&argv).expect("parse use");
+            let AccountsSubcmd::Use { global, .. } = parsed.args.command else {
+                panic!("{argv:?} parsed as another subcommand");
+            };
+            assert_eq!(!global, room, "{argv:?}");
+        }
+        AccountsHarness::try_parse_from(["accounts", "use", "--room", "codex", "work"])
+            .expect_err("--room is gone");
+    }
 
     #[test]
     fn removed_notice_without_live_rooms_matches_reference() {
@@ -508,7 +531,7 @@ mod tests {
                 "~/.rimz/accounts/claude/work",
                 &[]
             ),
-            "removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use --room claude default` for future launches"
+            "removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use claude default` for future launches"
         );
     }
 
@@ -517,11 +540,11 @@ mod tests {
         for (live, warning) in [
             (
                 vec!["rimz-one".to_owned()],
-                "warning: room rimz-one selects it as the default for new claude launches; add the account back or run `rimz accounts use --room claude default` inside each room",
+                "warning: room rimz-one selects it as the default for new claude launches; add the account back or run `rimz accounts use claude default` inside each room",
             ),
             (
                 vec!["rimz-one".to_owned(), "rimz-two".to_owned()],
-                "warning: rooms rimz-one, rimz-two select it as the default for new claude launches; add the account back or run `rimz accounts use --room claude default` inside each room",
+                "warning: rooms rimz-one, rimz-two select it as the default for new claude launches; add the account back or run `rimz accounts use claude default` inside each room",
             ),
         ] {
             let notice = removed_notice(

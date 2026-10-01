@@ -70,7 +70,7 @@ pub struct WorkspaceRecord {
     /// The default provider account for new launches of each kind.
     /// `None` is an unselected room — a record written before the field
     /// existed, or one cleared by `rimz reset`. Birth records it and
-    /// `rimz accounts use --room` moves it per kind. Generic re-records preserve it.
+    /// `rimz accounts use` moves it per kind. Generic re-records preserve it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logins: Option<RoomLogins>,
     pub updated_at: Timestamp,

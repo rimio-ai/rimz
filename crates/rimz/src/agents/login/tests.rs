@@ -293,7 +293,7 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
         .unwrap_err();
     assert_eq!(
         refused.to_string(),
-        "this room uses claude account `work`, not `personal`; switch it with `rimz accounts use --room claude personal`"
+        "this room uses claude account `work`, not `personal`; switch it with `rimz accounts use claude personal`"
     );
 
     let unknown = RoomLogins::from([(kind("claude"), name("travel"))]);
@@ -410,7 +410,7 @@ fn deciding_machine_selection_refuses_unknown_names_and_unsupported_kinds() {
             "{error}"
         );
         assert!(
-            error.contains(&format!("rimz accounts use {provider} default")),
+            error.contains(&format!("rimz accounts use --global {provider} default")),
             "{error}"
         );
         assert!(
@@ -502,7 +502,7 @@ fn exported_provider_home_naming_an_account_is_refused() {
         .unwrap_err()
         .to_string();
     assert!(
-        message.contains("rimz accounts use codex rimio"),
+        message.contains("rimz accounts use --global codex rimio"),
         "{message}"
     );
 

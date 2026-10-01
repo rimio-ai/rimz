@@ -613,7 +613,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "@x's session belongs to claude account `personal`; this room now launches claude \
-             on `work`. Run `rimz accounts use --room claude personal` to resume it, then switch \
+             on `work`. Run `rimz accounts use claude personal` to resume it, then switch \
              back."
         );
 

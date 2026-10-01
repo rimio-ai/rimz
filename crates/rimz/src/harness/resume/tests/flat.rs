@@ -548,7 +548,7 @@ fn skips_a_session_from_another_account_and_resumes_the_rest() {
     );
     assert_eq!(plan.warnings.len(), 1);
     assert!(
-        plan.warnings[0].contains("rimz accounts use --room claude personal"),
+        plan.warnings[0].contains("rimz accounts use claude personal"),
         "{}",
         plan.warnings[0]
     );

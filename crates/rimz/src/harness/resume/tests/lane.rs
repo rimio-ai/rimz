@@ -976,6 +976,6 @@ fn lane_refuses_a_closed_member_from_another_account() {
     assert_eq!(
         error.to_string(),
         "@x's session belongs to claude account `default`; this room now launches claude on \
-         `work`. Run `rimz accounts use --room claude default` to resume it, then switch back."
+         `work`. Run `rimz accounts use claude default` to resume it, then switch back."
     );
 }

@@ -2,12 +2,13 @@
 
 `rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials, sessions, and transcripts stay apart; `add` links settings to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
-The commands work inside or outside a room, except `use --room`, which requires running inside one. `add`, bare `use`, and `remove` write the machine `config.toml`; `add` also writes into the account home. `use --room` writes only the room's launch default for that provider, leaving running agents and machine and project configuration unchanged. A room initially picks its defaults at birth ([Accounts at start](./getting-started.md#accounts)). Inside its own multiplexer session, `start --account` refuses and names `accounts use --room` instead. The workflow is in the [accounts guide](../../guide/accounts.md).
+The commands work inside or outside a room, except bare `use`, which requires running inside one. Bare `use` writes only the current room's launch default for that provider, leaving running agents and machine and project configuration unchanged. `add`, `use --global`, and `remove` write the machine `config.toml`; `add` also writes into the account home. A room picks its defaults at birth and keeps them across restarts ([Accounts at start](./getting-started.md#accounts)), so the machine selection reaches only rooms born after it. Inside its own multiplexer session, `start --account` refuses and names `accounts use` instead. The workflow is in the [accounts guide](../../guide/accounts.md).
 
 ```sh
 rimz accounts add claude work                        # declare, share settings, install hooks
 rimz accounts add codex personal --home ~/codex-me   # place the home yourself
-rimz accounts use codex personal                     # machine selection for new rooms
+rimz accounts use codex personal                     # this room's account for future launches
+rimz accounts use --global codex personal            # machine selection for new rooms
 rimz accounts list                                   # every account and whether a room can use it
 rimz accounts list --json
 rimz accounts remove claude work                     # forget the entry; the home stays on disk
@@ -65,8 +66,8 @@ linked settings to /home/me/.claude: settings.json, settings.local.json, CLAUDE.
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
   use at birth  rimz start --account claude=work
-  this room     rimz accounts use --room claude work
-  new rooms     rimz accounts use claude work
+  this room     rimz accounts use claude work
+  new rooms     rimz accounts use --global claude work
 ```
 
 RimZ writes no credentials. Credentials, sessions, and transcripts remain per account; the entries above are shared by links, not copied. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`; trust hooks with `/hooks` once per account path (see `hooks untrusted` under [`list`](#list)).
@@ -88,20 +89,21 @@ Rerunning `add` leaves the config entry alone, creates the home if missing, migr
 ## `use`
 
 ```sh
-rimz accounts use [--room] <KIND> <NAME>
+rimz accounts use [--global] <KIND> <NAME>
 rimz accounts use codex personal
-rimz accounts use codex default
+rimz accounts use --global codex personal
+rimz accounts use --global codex default
 ```
 
-`use` writes `[accounts.use] <KIND> = "<NAME>"` in the machine `config.toml`, preserving comments and sibling tables. The name must be declared for that kind; an unknown name refuses with the configured names and `rimz accounts add <kind> <name>`. A missing home or missing or untrusted hooks produces a warning but does not prevent selection: birth checks those preconditions again.
+Bare `use` changes the current room's launch default for that provider. The selection must pass the home and hook checks before the room record changes. An unknown account names `rimz accounts add`; a missing home or missing or untrusted hooks refuses with its fix rather than merely warning. The command does not read project configuration. It prints the new default and the count of running root agents on the prior account; those agents keep it until they end. Restart, resume, and fork of a session from the prior account refuse with the `rimz accounts use` command that reopens it; crash recovery skips it as `different account`. A repeated selection reports that the room already launches on that account. Outside a room it refuses rather than touching the machine configuration: `` `rimz accounts use` changes the running room it is run inside; run it inside one, or pass --global to set the machine default for new rooms ``.
 
-Without `--room`, the output names `rimz accounts use --room <kind> <name>` as the way to change a running room. Explicit birth flags and trusted project selections still take precedence ([Accounts at start](./getting-started.md#accounts)). `use <kind> default` removes that provider's machine entry and says new rooms use the provider's own home. It accepts any provider, so it also clears a hand-set entry for one without named accounts; an empty `[accounts.use]` table is removed, and clearing an absent entry succeeds without a write.
+`use --global` writes `[accounts.use] <KIND> = "<NAME>"` in the machine `config.toml`, preserving comments and sibling tables, and leaves every room record alone. The name must be declared for that kind; an unknown name refuses with the configured names and `rimz accounts add <kind> <name>`. A missing home or missing or untrusted hooks produces a warning but does not prevent selection: birth checks those preconditions again.
 
-With `--room`, selection must pass the home and hook checks before the room record changes. An unknown account names `rimz accounts add`; a missing home or missing or untrusted hooks refuses with its fix rather than merely warning. The command does not read project configuration. It prints the new default and the count of running root agents on the prior account; those agents keep it until they end. Restart, resume, and fork of a session from the prior account refuse with the `rimz accounts use --room` command that reopens it; crash recovery skips it as `different account`. A repeated selection reports that the room already launches on that account. Outside a room it refuses with `--room needs a running room; run it inside one, or drop --room to set the machine default`.
+The machine selection reaches only rooms born after it: an existing room, running or stopped, keeps its recorded account, and the output names `rimz accounts use <kind> <name>` inside the room as the way to move it. Explicit birth flags and trusted project selections still take precedence ([Accounts at start](./getting-started.md#accounts)). `use --global <kind> default` removes that provider's machine entry and says new rooms use the provider's own home. It accepts any provider, so it also clears a hand-set entry for one without named accounts; an empty `[accounts.use]` table is removed, and clearing an absent entry succeeds without a write.
 
 ```console
-$ rimz accounts use claude work
-new rooms now use claude account `work`; a running room keeps its account until `rimz accounts use --room claude work` runs inside it
+$ rimz accounts use --global claude work
+new rooms now use claude account `work`; existing rooms, running or stopped, keep their recorded account until `rimz accounts use claude work` runs inside each
 ```
 
 ## `list`
@@ -144,7 +146,7 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
 | `problem` | The problem line with its fix. Present only when the account has a problem. |
 
-`NEW ROOMS` marks the machine selection. A dangling machine selection adds a problem row with the commands to declare or clear it. `rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use`, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` also marks named machine selections in its ACCOUNTS section, alongside the ones the current room uses; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
+`NEW ROOMS` marks the machine selection. A dangling machine selection adds a problem row with the commands to declare or clear it. `rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use --global`, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` also marks named machine selections in its ACCOUNTS section, alongside the ones the current room uses; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
 
 ## `remove`
 
@@ -157,10 +159,10 @@ rimz accounts remove <KIND> <NAME>
 ```console
 $ rimz accounts remove claude work
 cleared the machine selection; new rooms now use claude account `default`
-removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use --room claude default` for future launches
+removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use claude default` for future launches
 ```
 
-A room selecting the removed account keeps that default, so its next launch fails with the account's declaration fix. Add the account again, or run `rimz accounts use --room <KIND> default` inside the room for future launches. Old sessions still require their account to be declared, and selected in the room, to resume. `rimz reset --account <KIND>=<NAME>` remains a destructive alternative that rebuilds the room.
+A room selecting the removed account keeps that default, so its next launch fails with the account's declaration fix. Add the account again, or run `rimz accounts use <KIND> default` inside the room for future launches. Old sessions still require their account to be declared, and selected in the room, to resume. `rimz reset --account <KIND>=<NAME>` remains a destructive alternative that rebuilds the room.
 
 If a live room still selects the account as its launch default, removal proceeds and warns with the room's name and the add-or-switch fixes. The warning reads room records only; it does not enumerate older account stamps on running agents.
 
