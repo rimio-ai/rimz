@@ -4751,6 +4751,16 @@ reason = "Distinct lane outcomes pinned by the lane tests; restore config stays 
 
 [[verdict]]
 kind = "item"
+key = "harness::resume::restore_routed_cells"
+reason = "The residual is a table of distinct resume outcomes: posture from the replacement base, durable replay, or the layout; the --agent same-kind check; the same-row --tier pick; record versus legacy mode precedence. Pinned by the cohort and posture tests (pass 32d)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::resolve_posture_with_role"
+reason = "The residual is a table of distinct resume outcomes: stamped-family render, recorded base, kind change, record replay with tier consistency, prompt validation, mode replay. Pinned by the cohort and posture tests (pass 32d)."
+
+[[verdict]]
+kind = "item"
 key = "cli::agents_cmd::launch::launch_layout"
 reason = "Ordered preconditions remain after room and sandbox admission moved behind their providers: launch tests pin refusal before worktree, pane and provisional-store side effects. Fresh and resume tails differ in batch failure handling and receipt timing, so sharing them would need mode flags (pass 28f)."
 
