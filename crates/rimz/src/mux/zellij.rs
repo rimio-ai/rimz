@@ -461,8 +461,10 @@ impl ZellijBackend {
             .unwrap_or_else(|| "zellij".to_owned());
         #[cfg(not(test))]
         let program = env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
-        let mut spec = CommandSpec::new(program)
-            .restore_user_tmpdir(env::var(super::domain::USER_TMPDIR_ENV).ok().as_deref());
+        let mut spec = CommandSpec::new(program).restore_user_tmpdir(
+            env::var(super::domain::USER_TMPDIR_ENV).ok().as_deref(),
+            env::var(super::domain::TEMP_ROOT_KEYS_ENV).ok().as_deref(),
+        );
         if let Some(dir) = &self.runtime_dir {
             let dir = dir.to_string_lossy().into_owned();
             spec = spec

@@ -127,6 +127,7 @@ The spec's `LaunchSpec` and `LaunchCapability` render every Claude launch:
 | compaction command | `/compact <brief>` |
 | `rimz subagents` child | `--disallowedTools` gains `Agent`, merged with any tools the profile already denies, so a child cannot spawn Task-tool children |
 | skills home | `<config home>/skills` |
+| temp root | `CLAUDE_CODE_TMPDIR` set to the launch's `TMPDIR` (`temp_dir_env_keys`), so Claude's internal temp files land in the agent's temp unit on macOS too, where Claude ignores `TMPDIR` ([upstream](../../externals/agent-adapter/claude-reference.md#temp-root)). Under the sandbox the value is `/tmp`. |
 | routine RimZ commands | By default, one merged `--settings` adds curated Bash rules and exact `Skill(<name>)` rules for installed `rimz-*` directories, tmp/shared `permissions.additionalDirectories`, and `autoMode.environment` with `$defaults`. Applies to every permission mode, both isolations, and child/resume/fork launches. |
 | listed skill permissions | Exact `Skill(<directory name>)` rules in `permissions.allow`, independent of the routine switch and permission mode, under both isolations. Names containing `*` receive no rule. |
 | definition permission rules | `allowed-tools` adds validated rules to `permissions.allow`, independent of the routine switch and under both isolations. |

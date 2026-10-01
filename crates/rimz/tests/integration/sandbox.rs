@@ -1553,6 +1553,12 @@ fn sandbox_skills_under_host_use_provider_switches() {
                     .any(|line| line == format!("TMPDIR={}", unit.display())),
                 "host launch exports its temp unit's host path for {kind}"
             );
+            assert_eq!(
+                dump.lines()
+                    .any(|line| line == format!("CLAUDE_CODE_TMPDIR={}", unit.display())),
+                kind == "claude",
+                "only Claude's own temp root follows the unit, {kind}"
+            );
             assert!(unit.is_dir());
             std::fs::remove_file(&probe).unwrap();
             assert!(!env.store().paths().skills_dir.exists());

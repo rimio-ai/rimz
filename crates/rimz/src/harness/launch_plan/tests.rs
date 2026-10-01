@@ -1367,6 +1367,55 @@ fn a_launch_saves_the_user_tmpdir_it_replaces() {
 }
 
 #[test]
+fn a_provider_temp_root_follows_tmpdir() {
+    let project = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(id, project.path()).unwrap();
+    let keys = crate::mux::domain::TEMP_ROOT_KEYS_ENV;
+    for (kind, ambient, listed) in [
+        ("claude", None, "CLAUDE_CODE_TMPDIR"),
+        ("codex", None, ""),
+        ("codex", Some("CLAUDE_CODE_TMPDIR"), "CLAUDE_CODE_TMPDIR"),
+        (
+            "claude",
+            Some("CLAUDE_CODE_TMPDIR X_TMPDIR"),
+            "CLAUDE_CODE_TMPDIR X_TMPDIR",
+        ),
+    ] {
+        let request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+        let ambient = ambient
+            .map(|list| BTreeMap::from([(keys.to_owned(), list.to_owned())]))
+            .unwrap_or_default();
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            agent_shell: None,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+        })
+        .unwrap();
+        let env = &plan.process().env;
+        let expected = (kind == "claude").then(|| env["TMPDIR"].clone());
+        assert_eq!(env.get("CLAUDE_CODE_TMPDIR").cloned(), expected, "{kind}");
+        assert_eq!(
+            env.get(keys).map(String::as_str),
+            Some(listed),
+            "{kind} over {ambient:?}"
+        );
+    }
+}
+
+#[test]
 fn a_launched_child_shares_its_parent_unit_across_restart() {
     let project = tempfile::tempdir().unwrap();
     let machine = crate::config::MachineConfig::default();

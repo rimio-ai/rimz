@@ -334,7 +334,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     {
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
-    extra_env.insert("TMPDIR".to_owned(), tmp.display().to_string());
+    for key in ["TMPDIR"].iter().chain(adapter.temp_dir_env_keys()) {
+        extra_env.insert((*key).to_owned(), tmp.display().to_string());
+    }
     // Save the TMPDIR replaced here for the mux children the agent starts.
     // Inside an agent's tree the ambient TMPDIR is already a unit, so an
     // inherited save carries forward.
@@ -346,6 +348,20 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         .cloned()
         .unwrap_or_default();
     extra_env.insert(user_tmpdir.to_owned(), saved);
+    // List the temp-root keys pointed at a unit, inherited ones included, so
+    // the mux restore drops them without knowing any provider.
+    let keys_env = crate::mux::domain::TEMP_ROOT_KEYS_ENV;
+    let temp_root_keys: std::collections::BTreeSet<&str> = inputs
+        .ambient_env
+        .get(keys_env)
+        .into_iter()
+        .flat_map(|list| list.split_whitespace())
+        .chain(adapter.temp_dir_env_keys().iter().copied())
+        .collect();
+    extra_env.insert(
+        keys_env.to_owned(),
+        temp_root_keys.into_iter().collect::<Vec<_>>().join(" "),
+    );
     extra_env.insert(ENV_SHARED.to_owned(), shared.display().to_string());
     // zellij derives its socket base from TMPDIR when nothing pins it; keep
     // the endpoint the wrapper's own environment resolves.

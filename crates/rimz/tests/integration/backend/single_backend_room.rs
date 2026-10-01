@@ -374,7 +374,8 @@ fn reset_refuses_an_unbirthable_default_rebirth_before_teardown() {
 }
 
 /// A room started from an agent's tree, whose `TMPDIR` is the agent's temp
-/// unit, gives its panes the `TMPDIR` the launch saved, or none.
+/// unit, gives its panes the `TMPDIR` the launch saved, or none, and drops
+/// the provider temp roots that launch pointed at the unit.
 #[test]
 fn a_room_started_from_an_agent_gives_panes_the_user_tmpdir() {
     for saved in ["user-tmp", ""] {
@@ -391,15 +392,17 @@ fn a_room_started_from_an_agent_gives_panes_the_user_tmpdir() {
         let extra = [
             ("TMPDIR", unit.to_str().expect("utf8 unit")),
             ("RIMZ_USER_TMPDIR", saved.as_str()),
+            ("CLAUDE_CODE_TMPDIR", unit.to_str().expect("utf8 unit")),
+            ("RIMZ_TEMP_ROOT_KEYS", "CLAUDE_CODE_TMPDIR"),
         ];
         let expected = if saved.is_empty() {
-            "unset|unset".to_owned()
+            "unset|unset|unset|unset".to_owned()
         } else {
-            format!("{saved}|unset")
+            format!("{saved}|unset|unset|unset")
         };
         let script = |marker: &Path| {
             format!(
-                "printf '%s|%s' \"${{TMPDIR-unset}}\" \"${{RIMZ_USER_TMPDIR-unset}}\" > '{}'; sleep 60",
+                "printf '%s|%s|%s|%s' \"${{TMPDIR-unset}}\" \"${{RIMZ_USER_TMPDIR-unset}}\" \"${{CLAUDE_CODE_TMPDIR-unset}}\" \"${{RIMZ_TEMP_ROOT_KEYS-unset}}\" > '{}'; sleep 60",
                 marker.display()
             )
         };
