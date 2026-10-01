@@ -22,31 +22,32 @@ const AMBIENT_SESSION_PREFIXES: [&str; 3] = ["RIMZ_", "ZELLIJ", "TMUX"];
 /// branch keeps its own unit coverage in `cli::loop_timer`.
 const AMBIENT_SESSION_KEYS: [&str; 1] = ["INVOCATION_ID"];
 
+/// Provider state and config paths outside the home key each adapter declares
+/// through `config_home_env_keys`, which [`provider_home_keys`] reads directly.
+const PROVIDER_SIDECAR_KEYS: [&str; 8] = [
+    "AMP_DATA_DIR",
+    "COPILOT_OTEL_FILE_EXPORTER_PATH",
+    "GROK_AUTH_PATH",
+    "PI_AGENT_DIR",
+    "PI_CODING_AGENT_SESSION_DIR",
+    "QWEN_CODE_SYSTEM_DEFAULTS_PATH",
+    "QWEN_CODE_SYSTEM_SETTINGS_PATH",
+    "QWEN_RUNTIME_DIR",
+];
+
 /// Provider home and config locations the adapters resolve ahead of `HOME`. An
 /// agent launched on a named account runs with, say, `CODEX_HOME` pointing at
 /// that account, and its `cargo xtask test` children inherit it: without this
 /// scrub every spawned `rimz` installs and uninstalls hooks in, and starts real
 /// agents against, the developer's real account instead of the fixture `HOME`.
-/// `RIMZ_*` overrides such as `RIMZ_ANTIGRAVITY_HOME` are covered by the prefix.
-pub(super) const PROVIDER_HOME_KEYS: [&str; 17] = [
-    "AMP_DATA_DIR",
-    "CLAUDE_CONFIG_DIR",
-    "CODEX_HOME",
-    "COPILOT_HOME",
-    "COPILOT_OTEL_FILE_EXPORTER_PATH",
-    "CURSOR_CONFIG_DIR",
-    "GROK_AUTH_PATH",
-    "GROK_HOME",
-    "KIMI_CODE_HOME",
-    "KIRO_HOME",
-    "PI_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-    "PI_CODING_AGENT_SESSION_DIR",
-    "QWEN_CODE_SYSTEM_DEFAULTS_PATH",
-    "QWEN_CODE_SYSTEM_SETTINGS_PATH",
-    "QWEN_HOME",
-    "QWEN_RUNTIME_DIR",
-];
+/// Each adapter's own home keys come from its definition, so a new adapter is
+/// covered without touching this file. `RIMZ_*` overrides such as
+/// `RIMZ_ANTIGRAVITY_HOME` are covered by the prefix.
+pub(super) fn provider_home_keys() -> impl Iterator<Item = &'static str> {
+    rimz::agents::all_definitions()
+        .flat_map(|definition| definition.config_home_env_keys().iter().copied())
+        .chain(PROVIDER_SIDECAR_KEYS)
+}
 
 /// The ambient environment keys [`ScrubSessionEnvExt::scrub_session_env`]
 /// drops from a child.
@@ -60,7 +61,7 @@ fn ambient_session_keys() -> impl Iterator<Item = String> {
                 .then_some(key)
         })
         .chain(AMBIENT_SESSION_KEYS.into_iter().map(str::to_owned))
-        .chain(PROVIDER_HOME_KEYS.into_iter().map(str::to_owned))
+        .chain(provider_home_keys().map(str::to_owned))
 }
 
 /// Drop every ambient RimZ/mux session variable from a child's environment, so
