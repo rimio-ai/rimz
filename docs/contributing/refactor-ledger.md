@@ -4,7 +4,7 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `3eb2bd522`, pass 31c: 4765 scoped commits (pace window 1192), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys. Outside pass 31c and left open: the pending restamps of the pass 31d rows (`agents/attribution`, `config/definitions`, `config/glyphs`, `config/tiers`, `sandbox`, `store/run`) and the pass 31e `disk` row (`survey --restamp` writes them), and one open shape family, `crates/rimz/src/agents/adapters/copilot/install.rs::uninstall_with` with `crates/rimz/src/agents/adapters/cursor/install.rs::uninstall_pair`.
+- **Survey:** base `bd5df2fbf`, pass 32d: 4780 scoped commits (pace window 1195), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys. Outside pass 32d and left open: the pending restamps of the pass 31c `agents/adapters/codex` row, the pass 31d rows (`agents/attribution`, `config/definitions`, `config/glyphs`, `config/tiers`, `sandbox`, `store/run`) and the pass 31e `disk` row (`survey --restamp` writes them), and one open shape family, `crates/rimz/src/agents/adapters/copilot/install.rs::uninstall_with` with `crates/rimz/src/agents/adapters/cursor/install.rs::uninstall_pair`.
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Reopened:** none.
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
@@ -122,7 +122,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `disk` | holds; landed pass-31e | `15003b3b4` | 30 | the constructor family holds as ambient and explicit-root pairs; the raw runtime builder is private. |
 | `harness` | landed pass-5; pass-7; pass-8; pass-14; pass-20a; pass-23b; pass-25 | — | — | policy reaching down; never reaches `sidebar`: usage refresh returns, its CLI entry publishes. |
 | `harness/schedule` | holds; landed pass-14; pass-23b; pass-28e | `38acd72cb` | 30 | one arming rule and one check gate with `run_command`, `team_lifecycle_signals` and `build_entry` inherent by verdict. |
-| `harness/resume` | holds | `f4084e548` | 30 | distinct lane outcomes preserve lazy restore-config loading. |
+| `harness/resume` | holds; landed pass-32d | `43e27d355` | 30 | the resolver core is fallible with one degrade policy, and cohort restore has one arm per posture source. |
 | `harness/plan` | holds; landed pass-28f | `f4084e548` | 30 | posture owns exec-request construction for every relaunch doorway. |
 | `harness/launch` | holds | `f4084e548` | 30 | fresh requests and the private pane-identity key table keep the exec wire unchanged. |
 | `harness/spec` | holds; landed pass-20a | `4d7889261` | 30 | layout parse family stays `pub`. |
@@ -302,6 +302,7 @@ Refactor candidates a pass judged real but could not land, each with its concret
 - `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
 - `agents/adapters/claude`: `crates/rimz/src/agents/adapters/claude/mod.rs::ClaudeLifecycleParts` is the Options-struct shape codex's former `CodexLifecycleParts` had (one payload set per event name, re-opened per arm); a one-of enum with one generic parse, as codex now has, is ready for a pass owning `agents/adapters/claude`.
 - `agents/adapters/kimi` and `agents/adapters/qwen`: `crates/rimz/src/agents/adapters/kimi/mod.rs::kimi_turn_error` and qwen's `StopFailure` arm in `crates/rimz/src/agents/adapters/qwen/mod.rs::QwenAdapter::decode_hook` trim and take 80 chars, the rule `agents::context::cap_turn_error_label` owns; the helper is `pub(in crate::agents)`, so either adapter can call it. Ready for a pass owning either adapter.
+- `harness/resume` ↔ `config/tiers`: the resume `--tier` row pick duplicates `TierConfig::walk` bounded to one row, and the stamp-effort rule (definition effort, else model default) has three spellings, two in resume and one in `config/effective`; sharing needs `config::tiers` to export a row-bounded pick (two escaping items, `walk` and `TierPick`, and a row bound in `walk` today). Waits for a pass that owns `config::tiers`.
 - `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
