@@ -770,31 +770,42 @@ fn execute_attempt(
     let launch_identity = launch_batch.single_identity()?;
     record.agent_name = Some(launch_identity.name.clone());
     record.reader.clone_from(&prepared.reader);
-    let pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
-        runtime: prepared.store.runtime_paths(),
-        adapter: prepared.adapter,
-        run_id: &run_id,
-        agent_name: Some(&launch_identity.name),
-        agent_name_explicit: launch_identity.name_explicit,
-        launch: &launch_identity.launch,
-        launch_id: Some(&launch_identity.agent_id),
-        cwd: &prepared.launch.cwd,
-        prompt,
-        cleanup_worktree: prepared.launch.owns_checkout_lifecycle() && retries == 0,
-        permission_args: &agent_cell.args,
-        system_prompt_file: agent_cell.system_prompt_file.as_ref(),
-        append_system_prompt_files: &agent_cell.append_system_prompt_files,
-        team_prompt: agent_cell.team_prompt.as_ref(),
-        skills: agent_cell.skills.as_deref(),
-        allowed_tools: agent_cell.allowed_tools.as_deref(),
-        isolation_default: agent_cell.isolation_default,
-        self_cleanup_on_completion: request.self_cleanup_on_completion && !request.keep,
+    let (close_pane_on_exit, exit_on_run_completion) =
+        supervised::run_exit_policy(request.self_cleanup_on_completion && !request.keep);
+    let worktree_path = (prepared.launch.owns_checkout_lifecycle() && retries == 0)
+        .then(|| prepared.launch.cwd.clone());
+    let exec_request = rimz::harness::launch::ExecRequest {
+        kind: prepared.kind.clone(),
+        action: rimz::harness::launch::ExecAction::Launch {
+            prompt: Some(prompt.to_owned()),
+            extra_args: agent_cell.args.clone(),
+        },
+        provider_account: prepared.managed_launch.binding().map_or(
+            rimz::harness::launch::ProviderAccountState::Unbound,
+            |binding| rimz::harness::launch::ProviderAccountState::Pending {
+                binding: binding.clone(),
+            },
+        ),
+        run_id: Some(run_id.clone()),
+        exit_on_run_completion,
         subagent: request.subagent,
-        provider_account_binding: prepared.managed_launch.binding(),
-    })
-    .inspect_err(|_| {
-        let _ = prepared.store.fail_agent_launch_batch(&launch_batch);
-    })?;
+        ..rimz::harness::launch::ExecRequest::fresh(
+            agent_cell,
+            rimz::harness::launch::ExecIdentity {
+                resume_model_override: false,
+                name: Some(launch_identity.name.clone()),
+                name_explicit: launch_identity.name_explicit,
+                launch_id: Some(launch_identity.agent_id.to_string()),
+                params: launch_identity.launch.clone(),
+            },
+            worktree_path,
+            close_pane_on_exit,
+        )
+    };
+    let pane = supervised::run_pane_cmd(prepared.store.runtime_paths(), &exec_request)
+        .inspect_err(|_| {
+            let _ = prepared.store.fail_agent_launch_batch(&launch_batch);
+        })?;
     let waiter = if request.background {
         None
     } else {
