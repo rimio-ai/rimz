@@ -117,10 +117,10 @@ fn open_sidebar_births_native_layout_and_template() {
     client.wait_until_focused(&work_pane, "birth work pane");
     client.assert_input_reaches(&work_pane, "birth work pane");
     backend
-        .send_keys(&work_pane, copilot.to_string_lossy().as_ref())
+        .send_keys(&work_pane, None, copilot.to_string_lossy().as_ref())
         .expect("type direct copilot shim");
     backend
-        .send_key(&work_pane, rimz::pane::keys::NamedKey::Enter)
+        .send_key(&work_pane, None, rimz::pane::keys::NamedKey::Enter)
         .expect("run direct copilot shim");
     let expected_marker = format!("{}\nfalse\n", runtime.copilot_otel_path().display());
     let marker_text = poll_until(
@@ -130,7 +130,7 @@ fn open_sidebar_births_native_layout_and_template() {
         "direct copilot shim marker",
     );
     let capture = backend
-        .capture_pane(&work_pane, Some(20), false)
+        .capture_pane(&work_pane, None, Some(20), false)
         .expect("capture direct copilot pane");
     assert!(
         marker.exists(),

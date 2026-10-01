@@ -135,7 +135,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
             Duration::from_secs(20),
             || {
                 backend
-                    .capture_pane(&pane_id, Some(100), false)
+                    .capture_pane(&pane_id, None, Some(100), false)
                     .map(|capture| capture.raw_text)
                     .map_err(|err| err.to_string())
             },

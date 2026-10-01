@@ -492,6 +492,15 @@ impl ZellijBackend {
         ])
     }
 
+    /// `zellij [--session <name>] action`; without a session Zellij infers it
+    /// from `ZELLIJ_SESSION_NAME` or the sole live session.
+    fn session_action(&self, session: Option<&str>) -> CommandSpec {
+        match session {
+            Some(session) => self.zellij_action(session),
+            None => self.cmd().arg("action"),
+        }
+    }
+
     pub(super) fn go_to_tab(&self, session: &str, index: u32) -> Result<()> {
         self.zellij_action(session)
             .args(["go-to-tab".to_owned(), index.to_string()])

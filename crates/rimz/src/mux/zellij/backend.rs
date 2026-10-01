@@ -999,10 +999,7 @@ impl MuxBackend for ZellijBackend {
         let target = opts.target;
         let session_name = target.session_name();
         let target_pane = target.pane_id();
-        let mut spec = match session_name {
-            Some(session) => self.zellij_action(session).arg("new-pane"),
-            None => self.cmd().args(["action", "new-pane"]),
-        };
+        let mut spec = self.session_action(session_name).arg("new-pane");
         if let Some(target_pane) = target_pane {
             ensure_pane_backend(target_pane, MuxName::Zellij)?;
             let pane_id = ZellijPaneId::try_from(target_pane)
@@ -1144,10 +1141,7 @@ impl MuxBackend for ZellijBackend {
             .action_target();
         // `focus-pane-id <raw>` first ships in Zellij 0.44.1, one reason the
         // floor sits above 0.44.0.
-        let spec = match session {
-            Some(session) => self.zellij_action(session).arg("focus-pane-id"),
-            None => self.cmd().args(["action", "focus-pane-id"]),
-        };
+        let spec = self.session_action(session).arg("focus-pane-id");
         spec.arg(target).run().map(|_| ())
     }
 
@@ -1240,12 +1234,18 @@ impl MuxBackend for ZellijBackend {
         Ok(())
     }
 
-    fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
+    fn capture_pane(
+        &self,
+        pane: &PaneId,
+        session: Option<&str>,
+        lines: Option<u16>,
+        ansi: bool,
+    ) -> Result<PaneCapture> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let target = ZellijPaneId::try_from(pane)
             .map_err(output_error)?
             .action_target();
-        let mut spec = self.cmd().args(["action", "dump-screen"]);
+        let mut spec = self.session_action(session).arg("dump-screen");
         if ansi {
             spec = spec.arg("-a");
         }
@@ -1266,31 +1266,31 @@ impl MuxBackend for ZellijBackend {
         })
     }
 
-    fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()> {
+    fn send_keys(&self, pane: &PaneId, session: Option<&str>, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let target = ZellijPaneId::try_from(pane)
             .map_err(output_error)?
             .action_target();
-        self.cmd()
-            .args(["action", "write-chars", "--pane-id", &target, "--", text])
+        self.session_action(session)
+            .args(["write-chars", "--pane-id", &target, "--", text])
             .run()
             .map(|_| ())
     }
 
-    fn send_key(&self, pane: &PaneId, key: NamedKey) -> Result<()> {
+    fn send_key(&self, pane: &PaneId, session: Option<&str>, key: NamedKey) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let target = ZellijPaneId::try_from(pane)
             .map_err(output_error)?
             .action_target();
         let bytes = key.write_bytes().iter().map(u8::to_string);
-        self.cmd()
-            .args(["action", "write", "--pane-id", &target])
+        self.session_action(session)
+            .args(["write", "--pane-id", &target])
             .args(bytes)
             .run()
             .map(|_| ())
     }
 
-    fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()> {
+    fn paste_text(&self, pane: &PaneId, session: Option<&str>, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let payload = paste_payload(text);
         let target = ZellijPaneId::try_from(pane)
@@ -1304,14 +1304,14 @@ impl MuxBackend for ZellijBackend {
             .collect::<Vec<_>>();
         for chunk in bytes.chunks(super::ZELLIJ_WRITE_CHUNK) {
             if let Err(err) = self
-                .cmd()
-                .args(["action", "write", "--pane-id", &target])
+                .session_action(session)
+                .args(["write", "--pane-id", &target])
                 .args(chunk.iter().map(u8::to_string))
                 .run()
             {
                 let _ = self
-                    .cmd()
-                    .args(["action", "write", "--pane-id", &target])
+                    .session_action(session)
+                    .args(["write", "--pane-id", &target])
                     .args(BRACKET_PASTE_CLOSE.bytes().map(|byte| byte.to_string()))
                     .run();
                 return Err(err);

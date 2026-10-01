@@ -478,7 +478,13 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
-    fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
+    fn capture_pane(
+        &self,
+        pane: &PaneId,
+        _session: Option<&str>,
+        lines: Option<u16>,
+        ansi: bool,
+    ) -> Result<PaneCapture> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         let mut spec = self.cmd().args(["capture-pane", "-p", "-t", pane.raw()]);
         if let Some(n) = lines {
@@ -497,7 +503,7 @@ impl MuxBackend for TmuxBackend {
         })
     }
 
-    fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()> {
+    fn send_keys(&self, pane: &PaneId, _session: Option<&str>, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         self.cmd()
             .args(["send-keys", "-l", "-t", pane.raw(), "--", text])
@@ -505,7 +511,7 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
-    fn send_key(&self, pane: &PaneId, key: NamedKey) -> Result<()> {
+    fn send_key(&self, pane: &PaneId, _session: Option<&str>, key: NamedKey) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         self.cmd()
             .args(["send-keys", "-t", pane.raw(), key.tmux_name()])
@@ -513,7 +519,7 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
-    fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()> {
+    fn paste_text(&self, pane: &PaneId, _session: Option<&str>, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         let payload = paste_payload(text);
         static NEXT_BUFFER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

@@ -136,7 +136,7 @@ pub(super) fn capture_pane_until(
     let deadline = Instant::now() + budget;
     let mut last = String::new();
     loop {
-        if let Ok(capture) = backend.capture_pane(pane_id, None, false) {
+        if let Ok(capture) = backend.capture_pane(pane_id, None, None, false) {
             last = capture.raw_text;
             if last.contains(needle) {
                 return last;
@@ -160,7 +160,7 @@ pub(super) fn find_pane_with_capture_until(
     loop {
         last.clear();
         for pane_id in pane_ids {
-            match backend.capture_pane(pane_id, None, false) {
+            match backend.capture_pane(pane_id, None, None, false) {
                 Ok(capture) => {
                     if capture.raw_text.contains(needle) {
                         return (pane_id.clone(), capture.raw_text);

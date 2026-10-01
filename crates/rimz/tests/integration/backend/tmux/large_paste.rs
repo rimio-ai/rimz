@@ -33,7 +33,10 @@ fn large_tmux_paste_delivers_exact_bytes_and_deletes_buffers() {
         thread::sleep(Duration::from_millis(10));
     }
     // Repeated calls exercise buffer lifetime and invocation-local naming.
-    server.backend.paste_text(&pane, "").expect("empty paste");
+    server
+        .backend
+        .paste_text(&pane, None, "")
+        .expect("empty paste");
     for in_copy_mode in [false, true] {
         if in_copy_mode {
             server.tmux(&["copy-mode", "-t", pane.raw()]);
@@ -41,7 +44,7 @@ fn large_tmux_paste_delivers_exact_bytes_and_deletes_buffers() {
         }
         server
             .backend
-            .paste_text(&pane, &text)
+            .paste_text(&pane, None, &text)
             .expect("large paste");
     }
     assert_eq!(server.display(pane.raw(), "#{pane_in_mode}"), "1");
@@ -89,7 +92,7 @@ fn failed_tmux_paste_deletes_buffer_for_dead_target() {
     server.tmux(&["kill-pane", "-t", pane.raw()]);
     server
         .backend
-        .paste_text(&pane, "private message body")
+        .paste_text(&pane, None, "private message body")
         .expect_err("dead target rejects paste");
     let output = server.output(&["list-buffers"]);
     assert!(

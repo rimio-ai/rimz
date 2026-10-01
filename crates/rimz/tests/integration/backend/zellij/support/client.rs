@@ -373,7 +373,7 @@ impl AttachedClient {
                     Err(error) => last_view_error = error,
                 }
             }
-            match backend.capture_pane(want, Some(MARKER_CAPTURE_LINES), false) {
+            match backend.capture_pane(want, None, Some(MARKER_CAPTURE_LINES), false) {
                 Ok(capture) => {
                     if capture.raw_text.contains(&markers[marker_index]) {
                         if marker_index + 1 == markers.len() {

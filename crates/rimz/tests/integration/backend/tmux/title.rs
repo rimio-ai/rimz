@@ -215,13 +215,13 @@ fn attached_terminal_title_ignores_shell_osc_title() {
     server
         .backend
         .send_keys(
-            &work_pane,
+            &work_pane, None,
             r#"printf '\033]2;marvin@evil:~/leak\007'; printf '\124\111\124\114\105\137\104\117\116\105\012'"#,
         )
         .expect("type title payload");
     server
         .backend
-        .send_key(&work_pane, NamedKey::Enter)
+        .send_key(&work_pane, None, NamedKey::Enter)
         .expect("run title payload");
     let capture = capture_pane_until(
         &server.backend,
