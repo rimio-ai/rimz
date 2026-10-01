@@ -71,6 +71,9 @@ enum Command {
         /// Rewrite existing hints for uniquely resolved saved symbols.
         #[arg(long)]
         fix: bool,
+        /// With --fix, insert a hint on every symbol anchor that names one item.
+        #[arg(long, requires = "fix")]
+        hints: bool,
     },
     /// List the current room's shared servers.
     List {
@@ -201,14 +204,24 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             }
             return Ok(());
         }
-        Command::Check { file, json, fix } => {
+        Command::Check {
+            file,
+            json,
+            fix,
+            hints,
+        } => {
+            let mode = match (fix, hints) {
+                (false, _) => check::Mode::Check,
+                (true, false) => check::Mode::Fix,
+                (true, true) => check::Mode::FixHints,
+            };
             let context = query_context(globals)?;
             let report = match check::run(
                 &file,
                 &context.root,
                 &context.entries,
                 &context.servers,
-                fix,
+                mode,
             ) {
                 Ok(report) => report,
                 Err(error) => return query_error(error),

@@ -13,12 +13,20 @@ mod fix;
 mod show;
 pub use show::show;
 
+/// What `run` does to the notes before checking them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Check,
+    Fix,
+    FixHints,
+}
+
 pub fn run(
     notes: &Path,
     root: &Path,
     entries: &[registry::Entry],
     servers: &BTreeMap<String, crate::config::LspServerConfig>,
-    fix: bool,
+    mode: Mode,
 ) -> Result<Report, query::QueryErr> {
     let source = std::fs::read_to_string(notes)
         .map_err(|error| {
@@ -29,16 +37,17 @@ pub fn run(
         })
         .map_err(LspErr::from)?;
     let mut context = Context::new(root, entries, servers)?;
-    let (source, fixes) = if fix {
-        let (updated, fixes) = fix::rewrite(&source, &mut context)?;
+    let (source, fixes, ambiguous) = if mode == Mode::Check {
+        (source, None, None)
+    } else {
+        let hints = mode == Mode::FixHints;
+        let (updated, fixes, ambiguous) = fix::rewrite(&source, &mut context, hints)?;
         if !fixes.is_empty() {
             let target = std::fs::canonicalize(notes).map_err(LspErr::from)?;
             crate::disk::atomic::write_bytes_atomically(&target, updated.as_bytes())
                 .map_err(LspErr::from)?;
         }
-        (updated, Some(fixes))
-    } else {
-        (source, None)
+        (updated, Some(fixes), hints.then_some(ambiguous))
     };
     let mut lengths = BTreeMap::new();
     let mut verdicts = Vec::new();
@@ -73,6 +82,7 @@ pub fn run(
     }
     let mut report = Report::new(notes, root, verdicts);
     report.fixes = fixes;
+    report.ambiguous = ambiguous;
     Ok(report)
 }
 
@@ -234,6 +244,7 @@ struct Anchor {
     hint: Option<[u32; 2]>,
     hint_text: Option<std::ops::Range<usize>>,
     hint_source: Option<std::ops::Range<usize>>,
+    span_end: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -285,6 +296,8 @@ pub struct Report {
     summary: Summary,
     #[serde(skip_serializing_if = "Option::is_none")]
     fixes: Option<Vec<fix::Fix>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ambiguous: Option<Vec<fix::Ambiguous>>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -319,6 +332,7 @@ impl Report {
             anchors,
             summary,
             fixes: None,
+            ambiguous: None,
         }
     }
 
@@ -340,6 +354,15 @@ impl Report {
                 fix.after
             ));
         }
+        for anchor in self.ambiguous.iter().flatten() {
+            text.push_str(&format!(
+                "{}:{}  ambiguous-symbol  {}  {}\n",
+                self.notes.display(),
+                anchor.line,
+                anchor.text,
+                anchor.detail
+            ));
+        }
         for anchor in &self.anchors {
             let status = match anchor.status {
                 Status::Ok | Status::External => continue,
@@ -356,6 +379,13 @@ impl Report {
                 anchor.text,
                 anchor.detail
             ));
+        }
+        match self.ambiguous.as_ref().map_or(0, Vec::len) {
+            0 => {}
+            1 => text.push_str("1 anchor left without a hint: several items match\n"),
+            count => text.push_str(&format!(
+                "{count} anchors left without a hint: several items match\n"
+            )),
         }
         text.push_str(&format!(
             "{} anchors in {}: {} ok, {} failed, {} unchecked, {} external\n",
@@ -413,6 +443,7 @@ fn extract(notes: &str) -> Vec<Anchor> {
         );
         let mapped = content.get(padding..content.len() - padding) == Some(code.as_ref());
         if mapped && anchor.qualifier.is_none() {
+            anchor.span_end = Some(offset.end);
             let start = offset.start + delimiter + padding;
             anchor.hint_source = anchor
                 .hint_text
@@ -498,6 +529,7 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
         hint,
         hint_text,
         hint_source: None,
+        span_end: None,
     })
 }
 

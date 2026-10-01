@@ -89,7 +89,8 @@ path = "crates/rimz/src/lsp"
 # CrashCause, shared spawn/ownership, and initialization parameters serve doctor probes.
 # Doctor exposes the startup check entry, result, and outcome through broker::probe.
 # Pass 26a: internal helpers narrowed; ledger reopens after 30 scoped commits.
-surface-budget = 80
+# check::Mode carries `--fix [--hints]` from the CLI into check::run (+1).
+surface-budget = 81
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
