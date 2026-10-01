@@ -3,11 +3,14 @@ name: CI
 on:
   workflow_dispatch:
   pull_request:
+  # The main ruleset's merge queue waits for the required checks on its own
+  # merge-group commit; without this trigger every queued PR times out.
+  merge_group:
   push:
     branches: [main, master]
 
-# PRs key on the PR ref, so a newer push cancels stale work. Pushes key on the
-# commit, so every landed default-branch commit verifies.
+# PRs key on the PR ref, so a newer push cancels stale work. Pushes and merge
+# groups key on the commit, so every landed default-branch commit verifies.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
