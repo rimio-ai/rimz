@@ -87,6 +87,8 @@ $ rimz start --account claude=work
 error: RimZ hooks are missing for claude account `work` at `/home/me/.rimz/accounts/claude/work`; run `rimz accounts add claude work`
 ```
 
+A supervised launch (`rimz subagents`, `rimz agents -p`) checks only the account it launches under. A broken account of another provider never stops it; that account refuses when something launches under it.
+
 RimZ sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME` on each provider process from that agent's account. Every fresh launch takes the room's current account for its provider: human launches, loop tasks, and the children and peers an agent launches alike. A restart, resume, or fork reopens a session only on the account it started on ([switching](#change-a-rooms-account)). `rimz agents explain @coder` prints the account that agent launches under, as `claude@work`. Every other provider has only `default` and launches as it always has.
 
 ## What the account changes

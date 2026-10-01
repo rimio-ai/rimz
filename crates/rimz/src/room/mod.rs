@@ -77,9 +77,9 @@ fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> LiveRoo
 
 /// Decide the provider accounts a room is born under: its recorded defaults win,
 /// then the explicit request, then the trusted project's `[accounts]`, then
-/// the machine's `[accounts.use]`, and every selected account must be usable
-/// before anything launches.
-pub fn resolve_birth_logins(
+/// the machine's `[accounts.use]`. Their health is the caller's to judge: room
+/// entry checks every selected account, a supervised launch only its own.
+pub fn select_birth_logins(
     project_root: &Path,
     machine_config: &MachineConfig,
     requested: &crate::ids::RoomLogins,
@@ -89,10 +89,10 @@ pub fn resolve_birth_logins(
     let frozen = record::read_optional(&state.workspace_record)
         .context("reading the room's accounts")?
         .and_then(|record| record.logins);
-    resolve_birth_logins_with_frozen(project_root, machine_config, requested, was_live, frozen)
+    select_birth_logins_with_frozen(project_root, machine_config, requested, was_live, frozen)
 }
 
-fn resolve_birth_logins_with_frozen(
+fn select_birth_logins_with_frozen(
     project_root: &Path,
     machine_config: &MachineConfig,
     requested: &crate::ids::RoomLogins,
@@ -130,12 +130,7 @@ fn resolve_birth_logins_with_frozen(
             }
         },
     };
-    let logins = catalog.birth_selection(frozen.as_ref(), requested, &project, machine)?;
-    let ambient = crate::agents::ambient_env();
-    for login in catalog.room(&logins)? {
-        login.preflight(&ambient)?;
-    }
-    Ok(logins)
+    Ok(catalog.birth_selection(frozen.as_ref(), requested, &project, machine)?)
 }
 
 /// Build the room identity pin carried by a pane opened in a managed session.
@@ -625,7 +620,7 @@ mod tests {
             .notices
             .unreadable_files
             .insert(path.clone(), "broken TOML".to_owned());
-        let error = resolve_birth_logins_with_frozen(root.path(), &config, &empty, false, None)
+        let error = select_birth_logins_with_frozen(root.path(), &config, &empty, false, None)
             .unwrap_err()
             .to_string();
         assert!(
@@ -639,7 +634,7 @@ mod tests {
             "missing".parse().unwrap(),
         );
         assert!(
-            resolve_birth_logins_with_frozen(
+            select_birth_logins_with_frozen(
                 root.path(),
                 &config,
                 &empty,
@@ -648,12 +643,12 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(resolve_birth_logins_with_frozen(root.path(), &config, &empty, true, None).is_ok());
+        assert!(select_birth_logins_with_frozen(root.path(), &config, &empty, true, None).is_ok());
         let frozen_named = crate::ids::RoomLogins::from([(
             crate::ids::AgentKind::new_unchecked("codex"),
             "rimio".parse().unwrap(),
         )]);
-        let error = resolve_birth_logins_with_frozen(
+        let error = select_birth_logins_with_frozen(
             root.path(),
             &config,
             &empty,
@@ -667,7 +662,7 @@ mod tests {
             "{error}"
         );
         config.notices.unreadable_files.clear();
-        let error = resolve_birth_logins_with_frozen(root.path(), &config, &empty, false, None)
+        let error = select_birth_logins_with_frozen(root.path(), &config, &empty, false, None)
             .unwrap_err()
             .to_string();
         assert!(error.contains("[accounts.use]"), "{error}");
@@ -678,9 +673,7 @@ mod tests {
                 .unreadable_files
                 .insert(path.with_file_name(file), "broken TOML".to_owned());
         }
-        assert!(
-            resolve_birth_logins_with_frozen(root.path(), &config, &empty, false, None).is_ok()
-        );
+        assert!(select_birth_logins_with_frozen(root.path(), &config, &empty, false, None).is_ok());
     }
 
     fn workspace() -> ResolvedWorkspace {

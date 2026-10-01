@@ -589,7 +589,7 @@ fn prepare_supervised(
     };
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
-    let logins = rimz::room::resolve_birth_logins(
+    let logins = rimz::room::select_birth_logins(
         &workspace.project_root,
         &machine_config,
         &rimz::ids::RoomLogins::new(),
@@ -601,6 +601,7 @@ fn prepare_supervised(
         &machine_config.accounts,
     )?;
     preflight_launch.login = (!login.is_default()).then(|| login.name().clone());
+    login.preflight(&rimz::agents::ambient_env())?;
     let launch_invocation = rimz::harness::launch::ExecRequest {
         action: rimz::harness::launch::ExecAction::Launch {
             prompt: Some(prompt.to_string()),
@@ -956,7 +957,7 @@ pub(in crate::cli) fn run_supervised(
     });
     // A live room answers from its record, not the cold-birth resolution.
     let logins = if was_live {
-        rimz::room::resolve_birth_logins(
+        rimz::room::select_birth_logins(
             &prepared.workspace.project_root,
             &prepared.machine_config,
             &rimz::ids::RoomLogins::new(),

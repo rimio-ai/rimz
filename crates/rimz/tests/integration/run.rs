@@ -867,6 +867,17 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     std::fs::create_dir_all(project_config.parent().expect("project config dir"))
         .expect("mkdir .rimz");
     std::fs::write(&project_config, "[accounts]\ncodex = \"default\"\n").expect("project config");
+    // The room selects a Claude account whose home is gone; a Codex launch
+    // judges only its own account.
+    let claude_home = env.home_root.join("accounts/claude-work");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[accounts.use]\nclaude = \"work\"\n[accounts.claude.work]\nhome = \"{}\"\n",
+            claude_home.display()
+        ),
+    )
+    .expect("machine config");
     let untrusted = env
         .rimz()
         .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
@@ -918,8 +929,13 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     .expect("workspace record json");
     assert_eq!(
         record["logins"],
-        serde_json::json!({"claude": "default", "codex": "default"}),
+        serde_json::json!({"claude": "work", "codex": "default"}),
         "supervised birth freezes the room's accounts"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("claude account"),
+        "a codex launch says nothing about claude's account:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
     assert!(
         !heartbeat_path.exists(),
@@ -952,6 +968,39 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     assert!(
         create < presence,
         "session/sidebar creation must precede presence:\n{trace}"
+    );
+
+    // Into the live room, a launch re-reads its accounts from the record.
+    let live = env
+        .rimz()
+        .args([
+            "--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg",
+        ])
+        .env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]))
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
+        .env("ZELLIJ_PANE_ID", "1")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+        )
+        .bounded_output()
+        .expect("run background supervised launch into the live room");
+    assert!(
+        live.status.success(),
+        "live-room launch failed:\n{}",
+        String::from_utf8_lossy(&live.stderr)
+    );
+    assert_eq!(
+        rimz::harness::run::list(env.store().paths())
+            .expect("list runs")
+            .len(),
+        2
     );
 }
 
@@ -1378,6 +1427,49 @@ fn supervised_codex_without_project_trust_refuses_before_launch() {
             .is_empty()
     );
     assert!(store.snapshot().expect("snapshot").agents.is_empty());
+    assert!(!trace_path.exists(), "preflight must not invoke the mux");
+}
+
+#[cfg(unix)]
+#[test]
+fn supervised_launch_refuses_its_own_unusable_named_account() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let home = env.home_root.join("accounts/codex-work");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[accounts.use]\ncodex = \"work\"\n[accounts.codex.work]\nhome = \"{}\"\n",
+            home.display()
+        ),
+    )
+    .expect("machine config");
+    let agent_bin = write_failing_agent_shim(&env, "codex", 1);
+    let trace_path = env.project_root.join("own-account.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
+        .bounded_output()
+        .expect("refuse the launched account");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "codex account `work` home `{}` is not a directory; run `rimz accounts add codex work`",
+            home.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        rimz::harness::run::list(env.store().paths())
+            .expect("list runs")
+            .is_empty()
+    );
     assert!(!trace_path.exists(), "preflight must not invoke the mux");
 }
 
