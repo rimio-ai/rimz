@@ -780,6 +780,67 @@ fn ended_pause_sets_the_effective_fire_edge() {
 }
 
 #[test]
+fn fire_at_fires_once_at_or_after_its_instant_through_a_pause() {
+    let at = zdt(2026, 6, 24, 8, 0, 0);
+    let instant = &loaded(TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("do it".to_owned()),
+        root: PathBuf::from("/repo"),
+        fire_at: Some(at.timestamp()),
+        ..TaskEntry::default()
+    });
+    let early = zdt(2026, 6, 24, 7, 0, 0);
+    let late = zdt(2026, 6, 24, 8, 1, 0);
+    assert_eq!(
+        Tick::default().run(instant, &late),
+        fire(late.timestamp()),
+        "first sight past the instant fires"
+    );
+    assert_eq!(
+        Tick::default().run(instant, &early),
+        arm(early.timestamp()),
+        "first sight before the instant arms"
+    );
+    let armed = || Tick::armed(early.timestamp());
+    assert_eq!(
+        armed().run(instant, &zdt(2026, 6, 24, 7, 59, 59)),
+        carry(early.timestamp()),
+        "not yet"
+    );
+    assert_eq!(
+        armed().run(instant, &at),
+        fire(at.timestamp()),
+        "fires at the instant"
+    );
+    assert_eq!(
+        Tick::armed(at.timestamp()).run(instant, &late),
+        carry(at.timestamp()),
+        "never again once stamped"
+    );
+
+    let pause_end = zdt(2026, 6, 24, 9, 0, 0);
+    let paused = || armed().held(until(pause_end.timestamp()));
+    assert_eq!(
+        paused().run(instant, &late),
+        carry(early.timestamp()),
+        "held while paused"
+    );
+    let woke = zdt(2026, 6, 24, 9, 1, 0);
+    assert_eq!(
+        paused().run(instant, &woke),
+        fire(woke.timestamp()),
+        "paused through the instant fires at the pause end"
+    );
+    assert_eq!(
+        Tick::default()
+            .held(until(pause_end.timestamp()))
+            .run(instant, &late),
+        (None, None),
+        "first sight past the instant while paused waits unstamped"
+    );
+}
+
+#[test]
 fn project_task_stays_held_until_enable_and_does_not_replay() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let prior = seconds_before(now.timestamp(), 600);

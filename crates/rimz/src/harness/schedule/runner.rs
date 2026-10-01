@@ -871,6 +871,13 @@ impl<'a> TaskFire<'a> {
         if let Some(at) = at {
             record.at = at;
         }
+        // A `fire-at` row gets one scheduled attempt, whatever its result.
+        if self.mode == LoopRunMode::Scheduled
+            && self.entry.fire_at.is_some()
+            && let Err(err) = self.remove_schedule()
+        {
+            tracing::warn!(task = %self.name, error = %format!("{err:#}"), "failed to remove a fired fire-at task");
+        }
         let transition = run_log::record_transition(&self.task, &record);
         self.finished = true;
         TaskFireFinished {
@@ -1016,6 +1023,34 @@ pub enum WindowRefusal {
     NoReading { kind: String, span: WindowSpan },
     #[error("{kind} has no {span} window")]
     NoWindow { kind: String, span: WindowSpan },
+    #[error(
+        "{kind} is not enforcing its {span} window, so it has no reset to wait for; use --after-reset {other}"
+    )]
+    Lifted {
+        kind: String,
+        span: WindowSpan,
+        other: WindowSpan,
+    },
+    #[error(
+        "the {span} window is {kind}'s longest, so at its reset the window has not started and --surplus would always skip; drop --surplus and --surplus-after, or use --after-reset {other}"
+    )]
+    SurplusAtLongestReset {
+        kind: String,
+        span: WindowSpan,
+        other: WindowSpan,
+    },
+}
+
+/// When an `--after-reset` task fires: its provider's window as add read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AfterReset {
+    pub kind: AgentKind,
+    pub span: WindowSpan,
+    pub left: Option<u8>,
+    pub resets_at: Timestamp,
+    /// A window that has not started fires now rather than a full span away.
+    pub started: bool,
+    pub fire_at: Timestamp,
 }
 
 /// A provider's window of one span as `rimz loop add` reads it.
@@ -1024,6 +1059,8 @@ struct WindowAtAdd {
     pub kind: AgentKind,
     pub span: WindowSpan,
     pub window: RateLimitWindow,
+    /// The span is the provider's longest window, the one `--surplus` reads.
+    pub longest: bool,
 }
 
 /// The provider a task's `window.*` terms read, once add can read each window
@@ -1098,7 +1135,7 @@ fn window_at_add(
             kind: owned(),
             span,
         })?;
-    if window.resets_at.is_some_and(|reset| reset <= now) {
+    if !window.lifted && window.resets_at.is_some_and(|reset| reset <= now) {
         return Err(WindowRefusal::NoReading {
             kind: owned(),
             span,
@@ -1108,6 +1145,73 @@ fn window_at_add(
         kind: AgentKind::new_unchecked(kind),
         span,
         window,
+        longest: capacity
+            .longest_window_observation(now)
+            .is_some_and(|longest| longest.duration_mins == Some(span.minutes())),
+    })
+}
+
+/// Resolve `--after-reset <span>`: refused as a window term is, then for a
+/// lifted window, a window without a reset, and a surplus gate that the reset
+/// would always close.
+pub fn after_reset(
+    span: WindowSpan,
+    kind: Option<&str>,
+    surplus: bool,
+    root: &Path,
+    runtime: &RuntimePaths,
+    now: Timestamp,
+) -> Result<AfterReset, WindowRefusal> {
+    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+    after_reset_in(span, kind, surplus, root, runtime, &logins, now)
+}
+
+fn after_reset_in(
+    span: WindowSpan,
+    kind: Option<&str>,
+    surplus: bool,
+    root: &Path,
+    runtime: &RuntimePaths,
+    logins: &crate::agents::RoomLoginSet,
+    now: Timestamp,
+) -> Result<AfterReset, WindowRefusal> {
+    let WindowAtAdd {
+        kind,
+        span,
+        window,
+        longest,
+    } = window_at_add(kind, span, root, runtime, logins, now)?;
+    let other = match span {
+        WindowSpan::FiveHour => WindowSpan::SevenDay,
+        WindowSpan::SevenDay => WindowSpan::FiveHour,
+    };
+    let refused_kind = || kind.as_str().to_owned();
+    if window.lifted {
+        return Err(WindowRefusal::Lifted {
+            kind: refused_kind(),
+            span,
+            other,
+        });
+    }
+    let resets_at = window.resets_at.ok_or_else(|| WindowRefusal::NoReading {
+        kind: refused_kind(),
+        span,
+    })?;
+    if surplus && longest {
+        return Err(WindowRefusal::SurplusAtLongestReset {
+            kind: refused_kind(),
+            span,
+            other,
+        });
+    }
+    let started = !window.not_started(now);
+    Ok(AfterReset {
+        left: super::when::percent_left(&window),
+        resets_at,
+        started,
+        fire_at: if started { resets_at } else { now },
+        kind,
+        span,
     })
 }
 

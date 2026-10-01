@@ -240,6 +240,7 @@ fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
         || entry.deadline.is_some()
         || entry.once == Some(true)
         || entry.watch.is_some()
+        || entry.fire_at.is_some()
 }
 
 const WEEK: [Weekday; 7] = [
@@ -298,12 +299,14 @@ impl IntervalSpec {
     }
 }
 
-/// A parsed schedule: calendar time, interval, or a raw cron escape hatch.
+/// A parsed schedule: calendar time, interval, a raw cron escape hatch, or
+/// the absolute instant of a `fire-at` row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Schedule {
     Calendar(CalendarSpec),
     Interval(IntervalSpec),
     RawCron(String),
+    Instant(Timestamp),
 }
 
 impl Schedule {
@@ -324,6 +327,10 @@ impl Schedule {
                 format!("every {days} at {:02}:{:02}", spec.hour, spec.minute)
             }
             Schedule::Interval(spec) => format!("every {}", format_minutes(spec.minutes)),
+            Schedule::Instant(at) => at
+                .to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
+                .strftime("once at %Y-%m-%d %H:%M")
+                .to_string(),
         }
     }
 
@@ -338,6 +345,7 @@ impl Schedule {
             Schedule::RawCron(expr) => {
                 cron_matches(expr, now) && minute_bucket(last_fire) < minute_bucket(now.timestamp())
             }
+            Schedule::Instant(at) => last_fire < *at && *at <= now.timestamp(),
         }
     }
 
@@ -351,6 +359,16 @@ impl Schedule {
                 .ok(),
             Schedule::Calendar(spec) => calendar_next_after(spec, last_fire, now),
             Schedule::RawCron(expr) => cron_next_after(expr, last_fire, now),
+            Schedule::Instant(at) => (last_fire < *at).then_some(*at),
+        }
+    }
+
+    /// The instant of an absolute one-shot, which fires past due on first
+    /// sight and ignores the pause and enable edges.
+    const fn instant(&self) -> Option<Timestamp> {
+        match self {
+            Schedule::Instant(at) => Some(*at),
+            _ => None,
         }
     }
 }
@@ -580,6 +598,19 @@ impl TaskTiming {
         let scheduled_next = match (&parsed, last_fire) {
             (
                 Ok(ParsedTrigger {
+                    trigger:
+                        Trigger::Schedule(ParsedSchedule {
+                            schedule: Schedule::Instant(at),
+                            ..
+                        }),
+                    ..
+                }),
+                last_fire,
+            ) => last_fire
+                .is_none_or(|last_fire| last_fire < *at)
+                .then_some(*at),
+            (
+                Ok(ParsedTrigger {
                     trigger: Trigger::Schedule(parsed),
                     ..
                 }),
@@ -615,8 +646,8 @@ impl TaskTiming {
                         }),
                         _,
                     ) => TaskTimingState::Watching { spec: spec.clone() },
-                    (Ok(_), None) => TaskTimingState::Unarmed,
-                    (Ok(_), Some(_)) => match scheduled_next {
+                    (Ok(_), None) if scheduled_next.is_none() => TaskTimingState::Unarmed,
+                    (Ok(_), _) => match scheduled_next {
                         Some(next) if next <= now.timestamp() => TaskTimingState::Due(next),
                         Some(next) => TaskTimingState::Upcoming(next),
                         None => TaskTimingState::NoOccurrence,
@@ -752,6 +783,7 @@ fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, Sched
                 weekdays: Vec::new(),
             })
         }
+        TimingFields::Instant(at) => Schedule::Instant(at),
         TimingFields::Missing => {
             return Err(ScheduleErr::NoTime {
                 name: name.to_owned(),
@@ -766,7 +798,10 @@ fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, Sched
 
 /// Parse and validate the single trigger encoded by a task row.
 pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, ScheduleErr> {
-    let has_schedule = entry.at.is_some() || entry.every.is_some() || entry.cron.is_some();
+    let has_schedule = entry.at.is_some()
+        || entry.every.is_some()
+        || entry.cron.is_some()
+        || entry.fire_at.is_some();
     let has_signal = entry.signal.is_some();
     let has_watch = entry.watch.is_some();
     let has_when = entry.when.is_some();
@@ -929,11 +964,19 @@ enum TimingFields<'a> {
     Cron(&'a str),
     Every { every: &'a str, at: Option<&'a str> },
     Once(&'a str),
+    Instant(Timestamp),
     Missing,
 }
 
 impl<'a> TimingFields<'a> {
     fn classify(entry: &'a TaskEntry) -> Self {
+        if let Some(at) = entry.fire_at {
+            return if entry.cron.is_some() || entry.every.is_some() || entry.at.is_some() {
+                Self::Conflict
+            } else {
+                Self::Instant(at)
+            };
+        }
         match (
             entry.cron.as_deref(),
             entry.every.as_deref(),

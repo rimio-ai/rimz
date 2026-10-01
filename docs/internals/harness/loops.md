@@ -91,7 +91,7 @@ An untrusted project row with no same-named base row still enters the runnable m
 
 | Trigger | Entry | Fired by |
 | --- | --- | --- |
-| `Schedule` | `at`, `every`, or `cron` | the elder tick or the external tick, when `due` says so |
+| `Schedule` | `at`, `every`, `cron`, or `fire-at` | the elder tick or the external tick, when `due` says so |
 | `Signal` | `signal = "<selector>"`, optional `match = { k = "v" }` | the process that emits a matching signal |
 | `Watch` | `watch` as a command string or a PID, check, or file spec | the detached `rimz wait watch` process, or the elder's watch-lost rule |
 | `Condition` | `when = ["team.stage=Done", "ci=passed"]`, optional `for = "30m"`; `provider = "claude"` when a term reads a window | the clock planner, once per true period, or once total with `once` |
@@ -112,7 +112,7 @@ Validation rejects the shapes that cannot mean anything:
 | `BadCheckWatch` | an invalid or zero check interval, or check polarity `any` |
 | `ObsoleteCiSignal` | `ci.finished`, or a `conclusion` match on a `ci` selector; the message names `ci.passed` and `ci.failed` |
 
-A `Watch` row is always one-shot, and a `Signal` row is one-shot only with `once = true`. `ephemeral_lifetime` names the rows that retire themselves: any row with no repeating trigger, plus any row carrying a `deadline`, `once = true`, or a `watch` spec.
+A `Watch` row is always one-shot, and a `Signal` row is one-shot only with `once = true`. `ephemeral_lifetime` names the rows that retire themselves: any row with no repeating trigger, plus any row carrying a `deadline`, `once = true`, a `watch` spec, or a `fire-at` instant.
 
 `Trigger::resolve` is the whole matching rule, with three outcomes:
 
@@ -129,6 +129,7 @@ A `match` key compares a JSON string payload value to the raw text and any other
 | Shape | Entry | Due when |
 | --- | --- | --- |
 | One-shot | bare `at = "07:00"`, or `rimz loop add --in 30m` | its calendar time arrives; the task then removes itself |
+| Absolute one-shot | `fire-at = "<RFC 3339>"`, written by `rimz loop add --after-reset` | the stamp is before the instant and the instant is at or before now; the task then removes itself whatever the fire's result |
 | Interval | `every = "15m"` | elapsed time since the last arm or fire reaches the interval |
 | Calendar | `every = "weekday"` plus `at = "07:00"` | the first tick at or after the wall-clock time on a matching day, at most once that day |
 | Raw cron | `cron = "*/15 * * * *"` | the in-process five-field matcher matches the current minute, and the last fire was in an earlier minute |
@@ -166,6 +167,7 @@ The plan decides each task from its stamp, first matching row wins:
 
 | State | Action |
 | --- | --- |
+| no stamp, `fire-at` at or before now | fire when live (record now); otherwise keep no stamp |
 | no stamp | arm: record now, do not fire |
 | stamped, disabled or pause active | keep the stamp unchanged |
 | stamped, schedule due | fire: record now |
@@ -173,6 +175,8 @@ The plan decides each task from its stamp, first matching row wins:
 | stamped, not due | keep the stamp |
 
 Because state is written before any runner spawns, a fire is at-most-once per occurrence even when ticks are hot.
+
+A `fire-at` row is the exception to arm-then-fire: it has no later occurrence, so arming it past due would strand it. It fires on its first live sight past the instant, and its due check reads the raw stamp rather than `effective_last_fire`, so a pause or disable through the instant fires at the next live tick instead of skipping it. `--after-reset` resolves the instant at add through `runner::after_reset`, which runs `window_at_add`'s refusals and then refuses a lifted window, a window with no reset, and `--surplus` on the provider's longest window; a window that has not started resolves to the add instant.
 
 ### Condition planning
 
@@ -240,7 +244,7 @@ The run lock is `locks/loop-run-<name>.lock`, separate from `lanes/loop-fire.jso
 3. Send SIGTERM to the holder and wait five seconds more. Only this step appends a `canceled` row from the stop path itself.
 4. A holder that still owns the lock is not escalated to SIGKILL; the error names its PID and the lock path.
 
-An ephemeral task removes its own row before its supervised run starts, so a one-shot that then fails to launch is not retried. A delivery removes the row once dispatch returns, whether it succeeded or errored, so the wake's message record exists before its row disappears and turn-completion waits never see the agent rested in between ([messaging.md § Reply waits](./messaging.md#reply-waits)). A crash between dispatch and removal leaves the row to fire again. A poll-until row also removes itself when its check fires the action, and expires without delivery once its deadline passes. A watch check-in is nonterminal and leaves the row in place; the final outcome consumes it.
+An ephemeral task removes its own row before its supervised run starts, so a one-shot that then fails to launch is not retried. A delivery removes the row once dispatch returns, whether it succeeded or errored, so the wake's message record exists before its row disappears and turn-completion waits never see the agent rested in between ([messaging.md § Reply waits](./messaging.md#reply-waits)). A crash between dispatch and removal leaves the row to fire again. A scheduled fire of a `fire-at` row removes the row in `TaskFire::finish_record`, whatever its result, so a gate skip, an overlap, or a check skip ends it too; a manual `rimz loop run` leaves it, and a spawn that never starts records `start failed` without reaching the runner. A poll-until row also removes itself when its check fires the action, and expires without delivery once its deadline passes. A watch check-in is nonterminal and leaves the row in place; the final outcome consumes it.
 
 ### Where a scheduled run lands
 

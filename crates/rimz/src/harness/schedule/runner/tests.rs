@@ -492,6 +492,42 @@ fn check_only_terminals_consume_only_one_shots() {
     }
 }
 
+#[test]
+fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root(dir.path()).unwrap();
+    for (name, fire_at, mode, kept) in [
+        ("after-reset", true, LoopRunMode::Scheduled, false),
+        ("bare-at", false, LoopRunMode::Scheduled, true),
+        ("manual-run", true, LoopRunMode::Manual, true),
+    ] {
+        let entry = TaskEntry {
+            check: Some("true".to_owned()),
+            root: dir.path().to_path_buf(),
+            at: (!fire_at).then(|| "07:00".to_owned()),
+            fire_at: fire_at.then_some(Timestamp::UNIX_EPOCH),
+            ..TaskEntry::default()
+        };
+        crate::harness::schedule::instances::insert(&state, name, &entry).unwrap();
+        let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+        let mut fire = skipped_fire(name, &catalog, None);
+        fire.mode = mode;
+        let finished = fire.record_gate(LoopRunResult::SurplusSkipped, "no surplus".to_owned());
+        assert_eq!(
+            finished.record.result,
+            LoopRunResult::SurplusSkipped,
+            "{name}"
+        );
+        assert_eq!(
+            crate::harness::schedule::instances::load_from(&state.root)
+                .0
+                .contains_key(name),
+            kept,
+            "{name}"
+        );
+    }
+}
+
 fn skipped_fire<'a>(
     name: &str,
     catalog: &'a TaskCatalog,
@@ -1035,6 +1071,99 @@ fn window_triggers_refuse_at_add_in_order() {
     };
     publish_windows(&runtime, "codex", vec![lifted.clone()]);
     assert_eq!(at_add(Some("codex"), five, &native).unwrap().window, lifted);
+    let lifted_past_reset = RateLimitWindow {
+        lifted: true,
+        ..window(Some(30), -60, five)
+    };
+    publish_windows(&runtime, "codex", vec![lifted_past_reset.clone()]);
+    assert_eq!(
+        at_add(Some("codex"), five, &native).unwrap().window,
+        lifted_past_reset,
+        "a lifted window passes the reading check whatever its stale reset"
+    );
+}
+
+#[test]
+fn after_reset_fires_at_the_reset_or_now_and_refuses_what_has_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = Timestamp::now();
+    let native = crate::agents::RoomLoginSet::new(
+        Some(Default::default()),
+        None,
+        std::collections::BTreeMap::new(),
+    );
+    let five = WindowSpan::FiveHour;
+    let seven = WindowSpan::SevenDay;
+    let window = |used, resets_in: Option<i64>, span: WindowSpan| RateLimitWindow {
+        used_percentage: used,
+        resets_at: resets_in.map(|secs| now + jiff::SignedDuration::from_secs(secs)),
+        duration_mins: Some(span.minutes()),
+        ..RateLimitWindow::default()
+    };
+    let resolve = |span, surplus| {
+        after_reset_in(
+            span,
+            Some("claude"),
+            surplus,
+            dir.path(),
+            &runtime,
+            &native,
+            now,
+        )
+    };
+    assert_eq!(
+        after_reset_in(five, None, false, dir.path(), &runtime, &native, now),
+        Err(WindowRefusal::NoProvider)
+    );
+    let week = window(Some(10), Some(86_400), seven);
+    publish_windows(
+        &runtime,
+        "claude",
+        vec![window(Some(30), Some(3_600), five), week.clone()],
+    );
+    let started = resolve(five, true).unwrap();
+    assert_eq!(
+        started.fire_at,
+        now + jiff::SignedDuration::from_secs(3_600)
+    );
+    assert_eq!((started.left, started.started), (Some(70), true));
+    let refusal = resolve(seven, true).unwrap_err();
+    assert!(
+        matches!(refusal, WindowRefusal::SurplusAtLongestReset { .. }),
+        "{refusal}"
+    );
+    assert_eq!(
+        resolve(seven, false).unwrap().fire_at,
+        week.resets_at.unwrap()
+    );
+
+    let fresh = window(Some(0), Some(i64::from(five.minutes()) * 60), five);
+    publish_windows(&runtime, "claude", vec![fresh.clone(), week.clone()]);
+    let not_started = resolve(five, false).unwrap();
+    assert_eq!((not_started.fire_at, not_started.started), (now, false));
+    assert_eq!(not_started.resets_at, fresh.resets_at.unwrap());
+
+    let lifted = RateLimitWindow {
+        lifted: true,
+        ..window(None, None, five)
+    };
+    publish_windows(&runtime, "claude", vec![lifted, week.clone()]);
+    let refusal = resolve(five, false).unwrap_err();
+    assert!(
+        refusal.to_string().contains("--after-reset 7d"),
+        "{refusal}"
+    );
+    publish_windows(&runtime, "claude", vec![window(Some(30), None, five)]);
+    assert!(matches!(
+        resolve(five, false),
+        Err(WindowRefusal::NoReading { .. })
+    ));
 }
 
 #[test]

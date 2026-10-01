@@ -1426,6 +1426,7 @@ rimz loop
 
 rimz loop add
     <name>  [action=set takes=1..=1 required]
+    --after-reset <5h|7d>  [action=set takes=1..=1]
     --agent <AGENT>  [action=set takes=1..=1]
     --at <AT>  [action=set takes=1..=1]
     --budget <AMOUNT[/day]>  [action=set takes=1..=1]

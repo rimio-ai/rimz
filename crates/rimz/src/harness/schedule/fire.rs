@@ -308,7 +308,19 @@ fn plan(
         let key = task.key(name);
         let arming = arming_entries.get(&key);
         let arm_state = ArmState::resolve(arming, task.source(), now.timestamp());
+        let instant = match &parsed.trigger {
+            Trigger::Schedule(schedule) => schedule.schedule.instant(),
+            _ => None,
+        };
         match state.get(name).copied() {
+            // An absolute one-shot has no later occurrence, so arming it past
+            // due would strand it: it fires on its first live sight instead.
+            None if instant.is_some_and(|at| at <= now.timestamp()) => {
+                if arm_state == ArmState::Live {
+                    actions.push((name.clone(), Action::Fire));
+                    next_state.insert(name.clone(), now.timestamp());
+                }
+            }
             None => {
                 actions.push((name.clone(), Action::Arm));
                 next_state.insert(name.clone(), now.timestamp());
@@ -352,7 +364,11 @@ fn plan(
             }
             Some(last_fire)
                 if matches!(&parsed.trigger, Trigger::Schedule(schedule) if schedule.schedule.due(
-                    arming::effective_last_fire(last_fire, arming, now.timestamp()),
+                    if instant.is_some() {
+                        last_fire
+                    } else {
+                        arming::effective_last_fire(last_fire, arming, now.timestamp())
+                    },
                     now,
                 )) =>
             {

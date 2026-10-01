@@ -48,7 +48,10 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
                 return None;
             }
             let anchor = armed_at.map(|at| at.to_zoned(now.time_zone().clone()));
-            let due = parsed.next_after(anchor.as_ref().unwrap_or(now))?;
+            let due = match schedule.schedule.instant() {
+                Some(at) => at,
+                None => parsed.next_after(anchor.as_ref().unwrap_or(now))?,
+            };
             PendingWaitTrigger::Timer {
                 due,
                 delay: meta.and_then(|meta| meta.delay.clone()),
@@ -537,5 +540,31 @@ mod tests {
                 },
             );
         }
+    }
+
+    #[test]
+    fn fire_at_due_is_its_instant_even_when_armed_at_it() {
+        let now = "2026-06-02T10:00:00Z[UTC]".parse().unwrap();
+        let at: jiff::Timestamp = "2026-06-02T10:00:00Z".parse().unwrap();
+        let task = LoadedTask::new(
+            "reset",
+            TaskEntry {
+                fire_at: Some(at),
+                wait_meta: Some(crate::config::WaitMeta {
+                    armed_at: at,
+                    delay: None,
+                    reader: None,
+                }),
+                ..TaskEntry::default()
+            },
+            TaskSource::Instance,
+        );
+        assert_eq!(
+            pending_wait("reset", &task, &now).unwrap().trigger,
+            PendingWaitTrigger::Timer {
+                due: at,
+                delay: None,
+            },
+        );
     }
 }
