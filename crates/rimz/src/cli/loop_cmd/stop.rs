@@ -4,11 +4,13 @@ use super::*;
 use rimz::harness::schedule::runner::{StopOutcome, stop_task};
 
 pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
-    let task = task_catalog(globals)?
-        .for_run(name)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
-    match stop_task(name, &task, |workspace, paths, record| {
+    let root = match task_catalog(globals)?.for_run(name) {
+        Some(task) => task.entry().resolved_root(),
+        None => in_flight_without_row(name, globals)?
+            .map(|(root, _)| root)
+            .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?,
+    };
+    match stop_task(name, &root, |workspace, paths, record| {
         let runtime = RuntimePaths::for_state(&paths)?;
         let store = rimz::Store::open(paths, runtime)?;
         match (workspace, record) {

@@ -31,9 +31,9 @@ use rimz::harness::schedule::run_log::{
     RunTransition,
 };
 use rimz::harness::schedule::runner::{
-    AfterReset, CheckEcho, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
-    after_reset as resolve_after_reset, newest_active_run_for_entry, parse_mode,
-    parse_task_timeout, preflight_entry, probe_run_lock, window_condition_provider,
+    AfterReset, CheckEcho, InFlightRun, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
+    after_reset as resolve_after_reset, in_flight_run, parse_mode, parse_task_timeout,
+    preflight_entry, probe_run_lock, window_condition_provider,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
@@ -43,7 +43,6 @@ use rimz::harness::schedule::{
 };
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::store::message::DeliveryGate;
-use rimz::store::run::RunRecord;
 use rimz::trust::{self, TrustState};
 use rimz::workspace::WorkspaceResolver;
 
@@ -416,6 +415,18 @@ fn project_root_for_globals(globals: &GlobalFlags) -> Option<PathBuf> {
         }
     };
     Some(workspace.project_root)
+}
+
+/// The caller's project root and the run in flight there for `name`, a task with
+/// no row: a fired one-shot whose row its run consumed.
+fn in_flight_without_row(
+    name: &str,
+    globals: &GlobalFlags,
+) -> Result<Option<(PathBuf, InFlightRun)>> {
+    let Some(root) = project_root_for_globals(globals) else {
+        return Ok(None);
+    };
+    Ok(in_flight_run(name, &root)?.map(|in_flight| (root, in_flight)))
 }
 
 fn task_catalog(globals: &GlobalFlags) -> Result<TaskCatalog> {

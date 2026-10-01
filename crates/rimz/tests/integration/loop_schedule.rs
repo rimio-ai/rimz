@@ -4797,6 +4797,293 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
     assert_eq!(record.error.as_deref(), Some("stopped by rimz loop stop"));
 }
 
+/// A scheduled `--in` spawn one-shot whose runner holds its lock with a Running
+/// run record, after the fire consumed its instance row.
+#[cfg(unix)]
+struct ConsumedSpawn {
+    shell: std::path::PathBuf,
+    agent_bin: std::path::PathBuf,
+    pane_fixture: std::path::PathBuf,
+    session_name: String,
+}
+
+#[cfg(unix)]
+impl ConsumedSpawn {
+    fn command(&self, env: &Env) -> Command {
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij"])
+            .env("SHELL", &self.shell)
+            .env("PATH", path_with_front(&self.agent_bin))
+            .env("RIMZ_TEST_PANE_LIST", &self.pane_fixture)
+            .env(
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("spawn.log"))
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env("ZELLIJ_PANE_ID", "1")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", self.session_name),
+            );
+        command
+    }
+}
+
+#[cfg(unix)]
+fn start_consumed_spawn(env: &Env, name: &str) -> (ConsumedSpawn, std::process::Child, RunRecord) {
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(env);
+    trust_codex_project(env, &env.project_root);
+    let pane_fixture = env.project_root.join("panes.json");
+    std::fs::write(&pane_fixture, "[]").unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        Vec::new(),
+    );
+    let fixture = ConsumedSpawn {
+        shell: write_fake_login_shell(env, "rimz-test-sh", &[]),
+        agent_bin: crate::common::write_failing_agent_shim(env, "codex", 1),
+        pane_fixture,
+        session_name: workspace.session_name.to_string(),
+    };
+    loop_ok(
+        env,
+        &[
+            "loop", "add", name, "--agent", "codex", "--prompt", "fix it", "--in", "30m",
+        ],
+    );
+    assert!(read_loop_instances(env).0.contains_key(name));
+    let paths = env.state_path_for(&env.project_root);
+    let mut runner = fixture
+        .command(env)
+        .args(["loop", "run", name])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn loop runner");
+    wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(env, name));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let run = loop {
+        let records = rimz::harness::run::list(&paths).expect("list runs");
+        if let Some(record) = records.first() {
+            if record.status == RunStatus::Running {
+                break record.clone();
+            }
+            // The trace mux opens no provider process, so supply its startup hook.
+            if record.status == RunStatus::Pending {
+                let mut hook = env.hook_command("codex");
+                hook.env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str())
+                    .env(
+                        rimz::harness::launch::ENV_AGENT_NAME,
+                        record.agent_name.as_ref().unwrap().as_str(),
+                    );
+                let output = env
+                    .spawn_payload(
+                        hook,
+                        &json!({
+                            "hook_event_name": "SessionStart",
+                            "session_id": "loop-spawn-session",
+                            "cwd": env.project_root,
+                        })
+                        .to_string(),
+                    )
+                    .wait_with_output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+        if let Some(status) = runner.try_wait().expect("poll loop runner") {
+            let output = runner.wait_with_output().unwrap();
+            panic!(
+                "loop runner exited {status}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for Running run"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(run.loop_task.as_deref(), Some(name));
+    assert!(!read_loop_instances(env).0.contains_key(name));
+    (fixture, runner, run)
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_show_and_logs_find_a_consumed_one_shot_while_its_run_is_in_flight() {
+    let env = Env::new();
+    let (_fixture, mut runner, run) = start_consumed_spawn(&env, "later");
+    let run_id = run.run_id.to_string();
+
+    let show = loop_ok(&env, &["loop", "show", "later"]);
+    assert!(
+        show.contains("run in progress")
+            && show.contains(&run_id)
+            && show.contains("stop with `rimz loop stop later`")
+            && !show.contains("no loop task")
+            && !show.contains("rimz loop fire"),
+        "{show}"
+    );
+    let logs = loop_ok(&env, &["loop", "logs", "later"]);
+    assert!(
+        logs.contains("run in progress")
+            && logs.contains(&run_id)
+            && !logs.contains("no loop task"),
+        "{logs}"
+    );
+    let failed = loop_ok(&env, &["loop", "logs", "later", "--failed"]);
+    assert!(
+        failed.contains("no failed runs recorded") && !failed.contains("run in progress"),
+        "{failed}"
+    );
+    runner.kill().unwrap();
+    runner.wait().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_stop_reaches_a_consumed_one_shot_run() {
+    let env = Env::new();
+    let (fixture, mut runner, run) = start_consumed_spawn(&env, "later");
+    let paths = env.state_path_for(&env.project_root);
+
+    let stopped = fixture
+        .command(&env)
+        .args(["loop", "stop", "later"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&stopped.stdout);
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert!(
+        stdout.contains("loop `later`: stopped") && stdout.contains(run.run_id.as_str()),
+        "{stdout}"
+    );
+    assert_eq!(
+        rimz::harness::run::load(&paths, &run.run_id)
+            .unwrap()
+            .status,
+        RunStatus::Canceled
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while runner.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "stopped runner did not exit");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let released = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(loop_run_lock_path(&env, "later"))
+        .unwrap();
+    released.try_lock().expect("loop lock released");
+    drop(released);
+    let record = last_loop_record(&env);
+    assert_eq!(record.task, "later");
+    assert_eq!(record.result, LoopRunResult::Canceled);
+    assert!(!read_loop_instances(&env).0.contains_key("later"));
+    let show = loop_ok(&env, &["loop", "show", "later"]);
+    assert!(
+        show.contains("canceled") && !show.contains("run in progress"),
+        "{show}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_commands_follow_the_lock_before_a_consumed_one_shot_has_a_run_record() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "stuck",
+            "--check",
+            "touch check-ready; parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done",
+            "--in",
+            "30m",
+        ],
+    );
+    let mut runner = env
+        .rimz()
+        .args(["loop", "run", "stuck"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stuck loop runner");
+    wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "stuck"));
+    wait_for_path(&env.project_root.join("check-ready"));
+    let mut instances = read_loop_instances(&env);
+    assert!(instances.0.remove("stuck").is_some());
+    write_loop_instances(&env, instances);
+
+    let show = loop_ok(&env, &["loop", "show", "stuck"]);
+    assert!(
+        show.contains("run in progress")
+            && !show.contains("run run_")
+            && show.contains("stop with `rimz loop stop stuck`"),
+        "{show}"
+    );
+    let logs = loop_ok(&env, &["loop", "logs", "stuck"]);
+    assert!(
+        logs.contains("run in progress") && !logs.contains("run run_"),
+        "{logs}"
+    );
+    let stopped = loop_ok(&env, &["loop", "stop", "stuck"]);
+    assert!(
+        stopped.contains("stopped") && stopped.contains("SIGTERM"),
+        "{stopped}"
+    );
+    assert!(!runner.wait().expect("wait for stopped runner").success());
+    let record = last_loop_record(&env);
+    assert_eq!(record.task, "stuck");
+    assert_eq!(record.result, LoopRunResult::Canceled);
+    assert_eq!(record.error.as_deref(), Some("stopped by rimz loop stop"));
+    let show = loop_ok(&env, &["loop", "show", "stuck"]);
+    assert!(
+        show.contains("stopped by rimz loop stop") && !show.contains("run in progress"),
+        "{show}"
+    );
+}
+
+#[test]
+fn loop_commands_reject_an_unknown_name_with_a_free_lock() {
+    let env = Env::new();
+    for command in ["show", "logs", "stop"] {
+        let (_stdout, error) = loop_fail(&env, &["loop", command, "ghost"]);
+        assert!(error.contains("no loop task named `ghost`"), "{error}");
+    }
+    let paths = env.state_path_for(&env.project_root);
+    paths.ensure_dirs().unwrap();
+    let mut run = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        env.project_root.clone(),
+    );
+    run.status = RunStatus::Running;
+    run.loop_task = Some("ghost".to_owned());
+    rimz::harness::run::create(&paths, &run).unwrap();
+    for command in ["show", "logs", "stop"] {
+        let (_stdout, error) = loop_fail(&env, &["loop", command, "ghost"]);
+        assert!(error.contains("no loop task named `ghost`"), "{error}");
+    }
+}
+
 #[test]
 fn loop_add_persists_machine_and_project_signal_triggers() {
     let env = Env::new();
