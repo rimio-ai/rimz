@@ -203,6 +203,15 @@ fn main() {
             "textDocument/documentSymbol"
                 if message["params"]["textDocument"]["uri"]
                     .as_str()
+                    .is_some_and(|uri| uri.ends_with("/one/dup.rs")) =>
+            {
+                let range =
+                    json!({"start":{"line":0,"character":0},"end":{"line":1,"character":1}});
+                json!([{"name":"defined","kind":12,"range":range,"selectionRange":range,"children":[]}])
+            }
+            "textDocument/documentSymbol"
+                if message["params"]["textDocument"]["uri"]
+                    .as_str()
                     .is_some_and(|uri| uri.ends_with("/lib.rs")) =>
             {
                 let symbol = |name, kind, start, end, children| {

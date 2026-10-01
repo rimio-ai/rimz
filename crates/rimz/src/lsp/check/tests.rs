@@ -14,6 +14,21 @@ fn rewrite_with(
     dirty: bool,
     hints: bool,
 ) -> (String, Vec<fix::Fix>, Vec<fix::Ambiguous>) {
+    rewrite_in(source, vec![("a.rs", fixed_symbols(), dirty)], hints)
+}
+
+fn fixed_symbols() -> Vec<Candidate> {
+    let mut nodes = symbols();
+    nodes[3].selection.start.line = 11;
+    nodes[3].selection.start.character = 4;
+    nodes
+}
+
+fn rewrite_in(
+    source: &str,
+    files: Vec<(&str, Vec<Candidate>, bool)>,
+    hints: bool,
+) -> (String, Vec<fix::Fix>, Vec<fix::Ambiguous>) {
     let servers = BTreeMap::from([(
         "rust".into(),
         serde_json::from_value(json!({
@@ -21,17 +36,120 @@ fn rewrite_with(
         }))
         .unwrap(),
     )]);
-    let mut nodes = symbols();
-    nodes[3].selection.start.line = 11;
-    nodes[3].selection.start.character = 4;
     let mut context = Context {
         checkout: Path::new("/checkout"),
         entries: &[],
         servers: &servers,
-        files: vec!["a.rs".into()],
-        outlines: BTreeMap::from([("a.rs".into(), FileOutline { nodes, dirty })]),
+        files: files.iter().map(|(path, ..)| path.into()).collect(),
+        outlines: files
+            .into_iter()
+            .map(|(path, nodes, dirty)| (path.into(), FileOutline { nodes, dirty }))
+            .collect(),
     };
     fix::rewrite(source, &mut context, hints).unwrap()
+}
+
+/// Three `lib.rs` files: `two/` defines `Type::method` at 11-16, `three/`
+/// (when `twice`) defines it at 201-206, and `one/` never does.
+fn complete(source: &str, dirty: [bool; 3], twice: bool, hints: bool) -> (String, Vec<fix::Fix>) {
+    let other = || outline(json!([node("Other", 23, 0, 2, json!([]))])).unwrap();
+    let elsewhere = outline(json!([node(
+        "impl Type",
+        19,
+        199,
+        230,
+        json!([node("method", 6, 200, 205, json!([]))])
+    )]))
+    .unwrap();
+    let files = vec![
+        ("one/lib.rs", other(), dirty[0]),
+        ("two/lib.rs", fixed_symbols(), dirty[1]),
+        (
+            "three/lib.rs",
+            if twice { elsewhere } else { other() },
+            dirty[2],
+        ),
+    ];
+    let (updated, fixes, _) = rewrite_in(source, files, hints);
+    (updated, fixes)
+}
+
+#[test]
+fn fix_completes_a_short_path_one_file_defines() {
+    let clean = [false; 3];
+    for (source, expected, hints) in [
+        (
+            "`lib.rs::Type::method`",
+            "`two/lib.rs::Type::method`",
+            false,
+        ),
+        (
+            "`lib.rs::Type::method ~90`",
+            "`two/lib.rs::Type::method ~11`",
+            false,
+        ),
+        (
+            "`lib.rs::Type::method` (~90-95)",
+            "`two/lib.rs::Type::method` (~11-16)",
+            true,
+        ),
+        (
+            "`lib.rs::Type::method`",
+            "`two/lib.rs::Type::method` (11-16)",
+            true,
+        ),
+        (
+            "é `` lib.rs::Type::method `` tail\r\n",
+            "é `` two/lib.rs::Type::method `` tail\r\n",
+            false,
+        ),
+        (
+            "x\né ``lib.rs::Type::method()`` (~99-100)\n",
+            "x\né ``two/lib.rs::Type::method()`` (~11-16)\n",
+            false,
+        ),
+    ] {
+        let (updated, fixes) = complete(source, clean, false, hints);
+        assert_eq!(updated, expected, "{source}");
+        assert_eq!(fixes.len(), 1, "{source}");
+        let fix = &fixes[0];
+        let span = |text: &str| {
+            let anchor = extract(text).remove(0);
+            anchor.text
+        };
+        assert_eq!(fix.line, source.lines().count(), "{source}");
+        assert_eq!(fix.before, span(source));
+        assert_eq!(fix.after, span(expected));
+        let (again, fixes) = complete(expected, clean, false, hints);
+        assert_eq!(again, expected);
+        assert!(fixes.is_empty(), "{expected}");
+    }
+}
+
+#[test]
+fn fix_leaves_a_short_path_no_one_file_settles() {
+    let clean = [false; 3];
+    for (source, dirty, twice) in [
+        // Two defining files, even when the hint overlaps only one of them.
+        ("`lib.rs::Type::method`", clean, true),
+        ("`lib.rs::Type::method ~11`", clean, true),
+        // No defining file.
+        ("`lib.rs::absent`", clean, false),
+        // No symbol to decide by.
+        ("`lib.rs:~10`", clean, false),
+        // An unsaved candidate, defining or not.
+        ("`lib.rs::Type::method`", [false, true, false], false),
+        ("`lib.rs::Type::method`", [true, false, false], false),
+        // Qualified and unmappable spans.
+        ("`o/r@v1:lib.rs::Type::method`", clean, false),
+        ("`lib.rs::Type::method\n`", clean, false),
+    ] {
+        for hints in [false, true] {
+            let (updated, fixes) = complete(source, dirty, twice, hints);
+            assert_eq!(updated, source);
+            assert!(fixes.is_empty(), "{source}");
+        }
+    }
 }
 
 fn insert_hints(source: &str) -> String {
