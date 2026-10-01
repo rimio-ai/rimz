@@ -4,7 +4,7 @@ Use this before hand-off for a renderer, pipeline line, consumer path, or click-
 
 ## Hold a room and join it
 
-Build the testkit binary first:
+Build the testkit binary first; without it `sandbox room` refuses with `development rimz missing`:
 
 ```sh
 cargo build -p rimz --bin rimz --features testkit
@@ -15,6 +15,16 @@ cargo build -p rimz --bin rimz --features testkit
 `cargo xtask sandbox in <root> [--cwd <dir>] [--as <@handle> | --as-ancestor <@handle>] [--] <command>` runs one command inside that held room. `--as` uses the agent's launch environment; `--as-ancestor` runs beneath its stub with no agent or pane keys, exercising caller detection by ancestry. Both need Linux. The cwd and identity flags may come in either order before the command. Use a qualified handle (`@coder#probe`) if the short form (`@coder`) is ambiguous.
 
 Every command on the card spells that verb `target/debug/xtask` instead: the held room's own `cargo xtask` owns the target-directory lock for as long as it runs, so a joined `cargo` command waits for it rather than doing anything. Use the ready-to-paste commands from your own card; the cards below record real runs, so their roots, pane IDs, and the long absolute `rimz` path (one machine's resolved `target/debug/rimz`) are not reusable.
+
+A check that needs two rooms, such as a pane id addressed across rooms, starts the second inside the same sandbox. With `$BIN` the card's `rimz` path and `<mux>` the room's backend:
+
+```sh
+mkdir "$ROOT/home/probe2"
+target/debug/xtask sandbox in "$ROOT" --cwd "$ROOT/home/probe2" -- git init -q .
+target/debug/xtask sandbox in "$ROOT" --cwd "$ROOT/home/probe2" -- "$BIN" --<mux> start "$ROOT/home/probe2" --no-attach
+```
+
+A command run with `--cwd "$ROOT/home/probe2"` resolves the second room. Plain `sandbox in` scrubs the Zellij and tmux session keys, so a raw Zellij action from outside a pane picks no session once two are live; name one with `env ZELLIJ_SESSION_NAME=<session>` ahead of the command.
 
 ## Room cards
 
