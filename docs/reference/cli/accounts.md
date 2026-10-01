@@ -136,7 +136,7 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `this project` | The trusted project's selection for its kind. |
 | `new rooms` | The machine's `[accounts.use]` selection, or `default` when the machine selects nothing for its kind. |
 
-`AGENTS` counts the live agents on the account across every live room, `-` for none. When the rooms cannot be listed, the column reads `–` and a warning on stderr names the cause.
+`AGENTS` counts the live agents on the account across every live room, `-` for none. When the rooms cannot be listed, or one live room's agents cannot be read, the column reads `–` and a warning on stderr names the cause.
 
 `HOME` for a `default` row is the directory the provider resolves from your environment, so a `CLAUDE_CONFIG_DIR` or `CODEX_HOME` you have exported shows there, unless it names a declared account's home, as it does in a pane born on that account; then the row shows the provider's own home. `STATUS` is one of:
 
@@ -162,7 +162,7 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `status` | The `STATUS` word in snake case: `ready`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. |
 | `active` | `true` on the account marked `●`. |
 | `default_for` | Always present: the `DEFAULT FOR` words in snake case (`this_room`, `this_project`, `new_rooms`), or `[]`. |
-| `agents` | The `AGENTS` count, `0` for none, or `null` when the rooms could not be listed. |
+| `agents` | The `AGENTS` count, `0` for none, or `null` when the rooms or one live room's agents could not be read. |
 
 `rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use --global`, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` lists named accounts and the current room's selections in its ACCOUNTS section with the same `DEFAULT FOR` words; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
 

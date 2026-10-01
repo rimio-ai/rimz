@@ -232,13 +232,19 @@ pub(super) fn blocked_project_logins(state: crate::trust::TrustState) -> String 
 pub fn live_agents_by_login() -> Result<BTreeMap<LoginKey, usize>, super::LiveRoomErr> {
     let mut counts = BTreeMap::new();
     for room in super::session::room_inventory()?.live {
+        // A live room whose agents cannot be read could hold any account, so
+        // every count is unknown rather than short by that room.
+        let unreadable = || super::LiveRoomErr::RoomAgents {
+            session_name: room.session_name.clone(),
+            project_root: room.project_root.clone(),
+        };
         let agents = StatePaths::for_workspace(room.workspace_id.clone())
             .ok()
-            .zip(RuntimePaths::for_workspace(room.workspace_id).ok())
+            .zip(RuntimePaths::for_workspace(room.workspace_id.clone()).ok())
             .and_then(|(paths, runtime)| Store::open_existing(paths, runtime))
             .and_then(|store| store.snapshot_cached().ok())
-            .map(|snapshot| snapshot.agents)
-            .unwrap_or_default();
+            .ok_or_else(unreadable)?
+            .agents;
         count_live_logins(&mut counts, &agents);
     }
     Ok(counts)

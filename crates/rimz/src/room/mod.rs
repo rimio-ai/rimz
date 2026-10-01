@@ -39,6 +39,11 @@ pub enum LiveRoomErr {
         #[source]
         source: std::io::Error,
     },
+    #[error("reading the agents of live room `{session_name}` at {}", project_root.display())]
+    RoomAgents {
+        session_name: String,
+        project_root: PathBuf,
+    },
     #[error(transparent)]
     Mux(#[from] MuxErr),
 }
