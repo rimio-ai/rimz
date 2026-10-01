@@ -1,5 +1,6 @@
-//! Refresh uniquely resolved hints, and insert missing ones on request, using
-//! offsets into the original notes.
+//! Complete short paths one file's outline singles out, refresh uniquely
+//! resolved hints, and insert missing ones on request, using offsets into the
+//! original notes.
 
 use super::*;
 
@@ -27,103 +28,169 @@ pub(super) fn rewrite(
     let mut edits = Vec::new();
     let mut fixes = Vec::new();
     let mut ambiguous = Vec::new();
-    for (index, anchor) in extract(source).into_iter().enumerate() {
-        let insert_at = anchor.span_end.filter(|_| hints && anchor.hint.is_none());
-        if anchor.symbol.is_none() || (anchor.hint_source.is_none() && insert_at.is_none()) {
+    for (index, mut anchor) in extract(source).into_iter().enumerate() {
+        if anchor.symbol.is_none() {
             continue;
         }
-        let Ok((anchor, path)) = context.resolve(anchor) else {
-            continue;
-        };
-        let Some(file) = context.outline(&path)? else {
-            continue;
-        };
-        if file.dirty {
-            continue;
+        let before = anchor.text.clone();
+        let mut changed = false;
+        if let Some((range, full)) = defining_file(context, &anchor)? {
+            let shift = |at: usize| at - anchor.path.len() + full.len();
+            anchor.text.replace_range(..anchor.path.len(), &full);
+            anchor.hint_text = anchor
+                .hint_text
+                .map(|hint| shift(hint.start)..shift(hint.end));
+            anchor.path = full.clone();
+            edits.push((range, full));
+            changed = true;
         }
-        let Some(chain) = &anchor.symbol else {
-            continue;
-        };
-        let hits = symbol_hits(&file.nodes, chain);
-        let Some(node) = named(&hits, chain, anchor.hint) else {
-            if insert_at.is_some() && hits.len() > 1 {
-                let hits = hits.into_iter().cloned().collect();
-                let (candidates, detail) = candidate_details(&file.nodes, chain, hits);
-                ambiguous.push(Ambiguous {
-                    line: anchor.line,
-                    text: anchor.text,
-                    candidates,
-                    detail,
-                });
-            }
-            continue;
-        };
-        if let Some(at) = insert_at {
-            let [start, end] = node.range;
-            let hint = if start == end {
-                format!("({start})")
-            } else {
-                format!("({start}-{end})")
-            };
-            let mut trial = source.to_owned();
-            trial.insert_str(at, &format!(" {hint}"));
-            let reads_back = extract(&trial)
-                .get(index)
-                .is_some_and(|read| read.hint == Some(node.range) && read.hint_source.is_some());
-            if !reads_back {
-                continue;
-            }
-            fixes.push(Fix {
-                line: anchor.line,
-                after: format!("{} {hint}", anchor.text),
-                before: anchor.text,
-            });
-            edits.push((at..at, format!(" {hint}")));
-            continue;
-        }
-        let (Some(source_range), Some(text_range)) = (anchor.hint_source, anchor.hint_text) else {
-            continue;
-        };
-        let hint = &source[source_range.clone()];
-        let values = if hint
-            .trim_start_matches(|ch: char| !ch.is_ascii_digit())
-            .contains(':')
-        {
-            [
-                node.selection.start.line + 1,
-                node.selection.start.character + 1,
-            ]
-        } else {
-            node.range
-        };
-        let mut replacement = String::new();
-        let mut tail = hint;
-        let mut index = 0;
-        while let Some(start) = tail.find(|ch: char| ch.is_ascii_digit()) {
-            replacement.push_str(&tail[..start]);
-            let end = tail[start..].bytes().take_while(u8::is_ascii_digit).count();
-            replacement.push_str(&values[index].to_string());
-            index += 1;
-            tail = &tail[start + end..];
-        }
-        replacement.push_str(tail);
-        if replacement == hint {
-            continue;
-        }
+        let line = anchor.line;
         let mut after = anchor.text.clone();
-        after.replace_range(text_range, &replacement);
-        fixes.push(Fix {
-            line: anchor.line,
-            before: anchor.text,
-            after,
-        });
-        edits.push((source_range, replacement));
+        if let Some((range, replacement, text)) =
+            hint_edit(source, index, context, anchor, hints, &mut ambiguous)?
+        {
+            edits.push((range, replacement));
+            after = text;
+            changed = true;
+        }
+        if changed {
+            fixes.push(Fix {
+                line,
+                before,
+                after,
+            });
+        }
     }
     let mut updated = source.to_owned();
     for (range, replacement) in edits.into_iter().rev() {
         updated.replace_range(range, &replacement);
     }
     Ok((updated, fixes, ambiguous))
+}
+
+/// The source range of a symbol anchor's short path and the one checkout file
+/// it completes to: the only file among those the path names whose outline
+/// matches the symbol, when none of them has unsaved changes. The hint never
+/// picks between two defining files, since a drifted hint would pick wrong.
+fn defining_file(
+    context: &mut Context<'_>,
+    anchor: &Anchor,
+) -> Result<Option<(std::ops::Range<usize>, String)>, query::QueryErr> {
+    let (Some(chain), Some(range)) = (&anchor.symbol, &anchor.path_source) else {
+        return Ok(None);
+    };
+    let candidates = resolve(context.checkout, &context.files, &anchor.path);
+    if candidates.len() < 2 {
+        return Ok(None);
+    }
+    let mut defining = Vec::new();
+    for path in candidates {
+        let Some(file) = context.outline(&path)? else {
+            return Ok(None);
+        };
+        if file.dirty {
+            return Ok(None);
+        }
+        if !symbol_hits(&file.nodes, chain).is_empty() {
+            defining.push(path);
+        }
+    }
+    let [path] = defining.as_slice() else {
+        return Ok(None);
+    };
+    Ok(path.to_str().map(|full| (range.clone(), full.to_owned())))
+}
+
+/// The hint refresh, or with `hints` the hint insertion, for one anchor: the
+/// source range, its replacement, and the anchor text after the change.
+fn hint_edit(
+    source: &str,
+    index: usize,
+    context: &mut Context<'_>,
+    anchor: Anchor,
+    hints: bool,
+    ambiguous: &mut Vec<Ambiguous>,
+) -> Result<Option<(std::ops::Range<usize>, String, String)>, query::QueryErr> {
+    let insert_at = anchor.span_end.filter(|_| hints && anchor.hint.is_none());
+    if anchor.hint_source.is_none() && insert_at.is_none() {
+        return Ok(None);
+    }
+    let Ok((anchor, path)) = context.resolve(anchor) else {
+        return Ok(None);
+    };
+    let Some(file) = context.outline(&path)? else {
+        return Ok(None);
+    };
+    if file.dirty {
+        return Ok(None);
+    }
+    let Some(chain) = &anchor.symbol else {
+        return Ok(None);
+    };
+    let hits = symbol_hits(&file.nodes, chain);
+    let Some(node) = named(&hits, chain, anchor.hint) else {
+        if insert_at.is_some() && hits.len() > 1 {
+            let hits = hits.into_iter().cloned().collect();
+            let (candidates, detail) = candidate_details(&file.nodes, chain, hits);
+            ambiguous.push(Ambiguous {
+                line: anchor.line,
+                text: anchor.text,
+                candidates,
+                detail,
+            });
+        }
+        return Ok(None);
+    };
+    if let Some(at) = insert_at {
+        let [start, end] = node.range;
+        let hint = if start == end {
+            format!("({start})")
+        } else {
+            format!("({start}-{end})")
+        };
+        let mut trial = source.to_owned();
+        trial.insert_str(at, &format!(" {hint}"));
+        let reads_back = extract(&trial)
+            .get(index)
+            .is_some_and(|read| read.hint == Some(node.range) && read.hint_source.is_some());
+        if !reads_back {
+            return Ok(None);
+        }
+        let after = format!("{} {hint}", anchor.text);
+        return Ok(Some((at..at, format!(" {hint}"), after)));
+    }
+    let (Some(source_range), Some(text_range)) = (anchor.hint_source, anchor.hint_text) else {
+        return Ok(None);
+    };
+    let hint = &source[source_range.clone()];
+    let values = if hint
+        .trim_start_matches(|ch: char| !ch.is_ascii_digit())
+        .contains(':')
+    {
+        [
+            node.selection.start.line + 1,
+            node.selection.start.character + 1,
+        ]
+    } else {
+        node.range
+    };
+    let mut replacement = String::new();
+    let mut tail = hint;
+    let mut index = 0;
+    while let Some(start) = tail.find(|ch: char| ch.is_ascii_digit()) {
+        replacement.push_str(&tail[..start]);
+        let end = tail[start..].bytes().take_while(u8::is_ascii_digit).count();
+        replacement.push_str(&values[index].to_string());
+        index += 1;
+        tail = &tail[start + end..];
+    }
+    replacement.push_str(tail);
+    if replacement == hint {
+        return Ok(None);
+    }
+    let mut after = anchor.text;
+    after.replace_range(text_range, &replacement);
+    Ok(Some((source_range, replacement, after)))
 }
 
 /// The one item an anchor names. A hinted anchor names the single hit its hint

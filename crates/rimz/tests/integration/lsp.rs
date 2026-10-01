@@ -959,6 +959,26 @@ fn lsp_check_fixes_hints_without_rewriting_other_notes() {
         std::fs::metadata(&notes).unwrap().modified().unwrap(),
         modified
     );
+    std::fs::write(&notes, "`dup.rs::defined`\n").unwrap();
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "notes.md", "--fix"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "notes.md:1  fixed  dup.rs::defined  one/dup.rs::defined\n1 anchors in notes.md: 1 ok, 0 failed, 0 unchecked, 0 external\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&notes).unwrap(),
+        "`one/dup.rs::defined`\n"
+    );
     let skipped = "`show.rs:999`\n`gone.rs::x ~99`\n`dup.rs::x ~99`\n`show.rs::absent ~99`\n`show.rs::child ~4-208`\n`show.rs::child ~100`\n`o/r@v1:show.rs::Parent ~99`\n`notes.py::x ~99`\n`show.rs::Parent`\n";
     std::fs::write(&notes, format!("{source}`show.rs::child ~4`\n{skipped}")).unwrap();
     let output = env

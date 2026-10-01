@@ -244,6 +244,7 @@ struct Anchor {
     hint: Option<[u32; 2]>,
     hint_text: Option<std::ops::Range<usize>>,
     hint_source: Option<std::ops::Range<usize>>,
+    path_source: Option<std::ops::Range<usize>>,
     span_end: Option<usize>,
 }
 
@@ -445,6 +446,7 @@ fn extract(notes: &str) -> Vec<Anchor> {
         if mapped && anchor.qualifier.is_none() {
             anchor.span_end = Some(offset.end);
             let start = offset.start + delimiter + padding;
+            anchor.path_source = Some(start..start + anchor.path.len());
             anchor.hint_source = anchor
                 .hint_text
                 .as_ref()
@@ -525,6 +527,7 @@ fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
         hint,
         hint_text,
         hint_source: None,
+        path_source: None,
         span_end: None,
     })
 }

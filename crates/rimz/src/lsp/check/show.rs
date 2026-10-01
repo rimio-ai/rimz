@@ -98,6 +98,7 @@ fn parse_argument(argument: &str) -> super::super::Result<(Anchor, Option<Positi
                 hint: None,
                 hint_text: None,
                 hint_source: None,
+                path_source: None,
                 span_end: None,
             },
             Some(position),
