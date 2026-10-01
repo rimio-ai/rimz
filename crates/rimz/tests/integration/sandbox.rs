@@ -1633,6 +1633,64 @@ fn sandbox_skills_under_host_use_provider_switches() {
     }
 }
 
+/// A launch inside another agent's tree unsets the temp root that agent listed
+/// unless it owns the key, so a nested provider never writes into the parent's
+/// unit. `SHELL` is set, so the unset also survives shell startup.
+#[test]
+fn a_nested_launch_drops_a_parent_temp_root_it_does_not_own() {
+    let env = Env::new();
+    let shell = write_fake_login_shell(&env, "nested-temp-shell", &[]);
+    let probe = env.home_root.join("provider-env");
+    let parent = env.home_root.join("parent-unit");
+    std::fs::create_dir_all(&parent).unwrap();
+    for kind in ["codex", "claude"] {
+        let shim_dir = write_env_dump_shim(&env, kind);
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+        request.identity.name = Some(format!("nested-{kind}"));
+        let unit = env
+            .store()
+            .paths()
+            .temp_unit_dir(request.identity.name.as_deref());
+        let output = env
+            .rimz()
+            .args(exec_args(&env, &request))
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&shim_dir))
+            .env("RIMZ_TEST_AGENT_ENV_DUMP", &probe)
+            .env("CLAUDE_CODE_TMPDIR", &parent)
+            .env("RIMZ_TEMP_ROOT_KEYS", "CLAUDE_CODE_TMPDIR")
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{kind}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let dump = std::fs::read_to_string(&probe).unwrap();
+        let line = |key: &str| {
+            dump.lines()
+                .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+                .map(str::to_owned)
+        };
+        if kind == "codex" {
+            assert_eq!(line("CLAUDE_CODE_TMPDIR"), None, "{dump}");
+            assert_eq!(line("RIMZ_TEMP_ROOT_KEYS").as_deref(), Some(""), "{dump}");
+        } else {
+            assert_eq!(
+                line("CLAUDE_CODE_TMPDIR"),
+                Some(unit.display().to_string()),
+                "{dump}"
+            );
+            assert_eq!(
+                line("RIMZ_TEMP_ROOT_KEYS").as_deref(),
+                Some("CLAUDE_CODE_TMPDIR"),
+                "{dump}"
+            );
+        }
+        std::fs::remove_file(&probe).unwrap();
+    }
+}
+
 #[test]
 fn launch_warnings_reach_agents_show_and_clean_relaunch_clears_them() {
     let env = Env::new();

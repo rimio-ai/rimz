@@ -1248,6 +1248,10 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         ambient_env: &BTreeMap::from([
             ("HOME".to_owned(), project.path().display().to_string()),
             ("SCCACHE_CLIENT_SIDE".to_owned(), "0".to_owned()),
+            (
+                crate::child_process::TEMP_ROOT_KEYS_ENV.to_owned(),
+                "CLAUDE_CODE_TMPDIR".to_owned(),
+            ),
         ]),
         agent_shell: None,
     })
@@ -1273,6 +1277,10 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
             .env
             .contains_key(crate::child_process::USER_TMPDIR_ENV),
         "a mux child inside the view keeps /tmp"
+    );
+    assert!(
+        plan.process().unset.contains("CLAUDE_CODE_TMPDIR"),
+        "a parent's temp root stays unset after the sandbox pins"
     );
     assert_eq!(
         plan.process().env.get("RIMZ_SHARED").map(PathBuf::from),
@@ -1374,14 +1382,20 @@ fn a_provider_temp_root_follows_tmpdir() {
     let runtime = RuntimePaths::under(id.clone(), project.path()).unwrap();
     let state = StatePaths::under(id, project.path()).unwrap();
     let keys = crate::child_process::TEMP_ROOT_KEYS_ENV;
-    for (kind, ambient, listed) in [
-        ("claude", None, "CLAUDE_CODE_TMPDIR"),
-        ("codex", None, ""),
-        ("codex", Some("CLAUDE_CODE_TMPDIR"), "CLAUDE_CODE_TMPDIR"),
+    for (kind, ambient, listed, unset) in [
+        ("claude", None, "CLAUDE_CODE_TMPDIR", &[][..]),
+        ("codex", None, "", &[]),
+        (
+            "codex",
+            Some("CLAUDE_CODE_TMPDIR"),
+            "",
+            &["CLAUDE_CODE_TMPDIR"],
+        ),
         (
             "claude",
             Some("CLAUDE_CODE_TMPDIR X_TMPDIR"),
-            "CLAUDE_CODE_TMPDIR X_TMPDIR",
+            "CLAUDE_CODE_TMPDIR",
+            &["X_TMPDIR"],
         ),
     ] {
         let request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
@@ -1410,6 +1424,15 @@ fn a_provider_temp_root_follows_tmpdir() {
         assert_eq!(
             env.get(keys).map(String::as_str),
             Some(listed),
+            "{kind} over {ambient:?}"
+        );
+        assert_eq!(
+            plan.process()
+                .unset
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            unset,
             "{kind} over {ambient:?}"
         );
     }
