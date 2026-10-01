@@ -148,24 +148,11 @@ pub struct CodexPostCompact {
 
 // ── Parse helpers ──────────────────────────────────────────────────────────
 
-macro_rules! parse_fn {
-    ($fn_name:ident, $ty:ty) => {
-        pub fn $fn_name(payload: &Value) -> $ty {
-            serde_json::from_value(payload.clone()).unwrap_or_default()
-        }
-    };
+/// Parse one typed hook payload, defaulting every field when the payload does
+/// not fit the type.
+pub(super) fn parse<T: serde::de::DeserializeOwned + Default>(payload: &Value) -> T {
+    serde_json::from_value(payload.clone()).unwrap_or_default()
 }
-
-parse_fn!(parse_session_start, CodexSessionStart);
-parse_fn!(parse_user_prompt_submit, CodexUserPromptSubmit);
-parse_fn!(parse_subagent_start, CodexSubagentStart);
-parse_fn!(parse_pre_tool_use, CodexPreToolUse);
-parse_fn!(parse_permission_request, CodexPermissionRequest);
-parse_fn!(parse_post_tool_use, CodexPostToolUse);
-parse_fn!(parse_subagent_stop, CodexSubagentStop);
-parse_fn!(parse_stop, CodexStop);
-parse_fn!(parse_pre_compact, CodexPreCompact);
-parse_fn!(parse_post_compact, CodexPostCompact);
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -180,24 +167,24 @@ mod tests {
     fn wire_catalog_parses_flatten_depth_enums_and_tolerates_drift() {
         // The doubly-flattened common fields reach through `common.common`, an
         // unknown future field is ignored, and the session-source enum maps.
-        let session = parse_session_start(&json!({
+        let session: CodexSessionStart = parse(&json!({
             "session_id": "s1",
             "source": "startup",
             "future_openai_field": true,
         }));
         assert_eq!(session.source, SessionSource::Startup);
         assert_eq!(
-            parse_session_start(&json!({"source": "compact"})).source,
+            parse::<CodexSessionStart>(&json!({"source": "compact"})).source,
             SessionSource::Compact
         );
 
         // `#[serde(default)]` makes a sparse payload deserialize cleanly.
-        let sparse = parse_stop(&json!({}));
+        let sparse: CodexStop = parse(&json!({}));
         assert_eq!(sparse.last_assistant_message, None);
 
         // The richer tool/subagent/compaction catalog entries pick up their
         // enrichment fields and map the compaction-trigger enum.
-        let subagent = parse_subagent_stop(&json!({
+        let subagent: CodexSubagentStop = parse(&json!({
             "agent_id": "child-1",
             "agent_type": "code-reviewer",
             "agent_transcript_path": "/tmp/child.jsonl",
@@ -213,7 +200,7 @@ mod tests {
         assert_eq!(subagent.stop_hook_active, Some(true));
         assert_eq!(subagent.last_assistant_message.as_deref(), Some("done"));
         assert!(
-            parse_permission_request(&json!({
+            parse::<CodexPermissionRequest>(&json!({
                 "session_id": "root",
                 "agent_id": "child-1",
                 "agent_type": "reviewer",
@@ -223,7 +210,7 @@ mod tests {
             .tool_input
             .is_some()
         );
-        let prompt = parse_user_prompt_submit(&json!({
+        let prompt: CodexUserPromptSubmit = parse(&json!({
             "session_id": "root",
             "agent_id": "child-1",
             "agent_type": "reviewer",
@@ -231,7 +218,7 @@ mod tests {
         }));
         assert_eq!(prompt.child.agent_id.as_deref(), Some("child-1"));
         assert_eq!(
-            parse_post_compact(&json!({"trigger": "manual"})).trigger,
+            parse::<CodexPostCompact>(&json!({"trigger": "manual"})).trigger,
             CompactTrigger::Manual
         );
 
