@@ -467,7 +467,8 @@ upward-dependencies = [
     "agents::registry",
 ]
 # The kernel tree high-water reader has Linux and non-Linux definitions.
-surface-budget = 104
+# `USER_SHELL_ENV` is the stamp launch writes and `user_shell` reads.
+surface-budget = 105
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
