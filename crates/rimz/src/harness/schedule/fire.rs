@@ -88,6 +88,7 @@ fn fire_tasks(
     let state = read_state(&path);
     let arming = arming::load();
     let when_states = last_when_states(runtime);
+    let windows = when::WindowReadings::new(Some(runtime), now.timestamp());
     let verdicts = tasks
         .iter()
         .filter_map(|(name, task)| {
@@ -100,7 +101,13 @@ fn fire_tasks(
             match &task.trigger().as_ref().ok()?.trigger {
                 Trigger::Condition { expr, .. } => Some((
                     name.clone(),
-                    when::evaluate(expr, &task.entry().run_dir(), ci_source),
+                    when::evaluate(
+                        expr,
+                        &task.entry().run_dir(),
+                        ci_source,
+                        task.entry().provider.as_ref(),
+                        &windows,
+                    ),
                 )),
                 Trigger::Schedule(_) | Trigger::Signal { .. } | Trigger::Watch(_) => None,
             }

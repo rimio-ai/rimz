@@ -501,9 +501,24 @@ fn parse_trigger_rejects_conflicting_fields() {
                 name: "task".to_owned(),
             },
         ),
+        (
+            TaskEntry {
+                when: Some(vec!["ci=passed || window.5h.left>=40".to_owned()]),
+                ..spawn_entry()
+            },
+            ScheduleErr::WindowWithoutProvider {
+                name: "task".to_owned(),
+            },
+        ),
     ] {
         assert_eq!(parse_trigger("task", &entry), Err(expected), "{entry:?}");
     }
+    let windowed = TaskEntry {
+        when: Some(vec!["window.5h.left>=40".to_owned()]),
+        provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
+        ..spawn_entry()
+    };
+    assert!(parse_trigger("task", &windowed).is_ok());
 }
 
 #[test]

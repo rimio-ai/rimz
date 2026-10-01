@@ -32,7 +32,7 @@ use rimz::harness::schedule::run_log::{
 };
 use rimz::harness::schedule::runner::{
     CheckEcho, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, newest_active_run_for_entry,
-    parse_mode, parse_task_timeout, preflight_entry, probe_run_lock,
+    parse_mode, parse_task_timeout, preflight_entry, probe_run_lock, window_condition_provider,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,

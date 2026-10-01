@@ -131,6 +131,9 @@ pub struct TaskEntry {
     pub once: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<Timestamp>,
+    /// The provider whose windows the row's `window.*` terms read, recorded at add.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<crate::ids::AgentKind>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

@@ -53,16 +53,20 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         action => action,
     };
     let provider_kind = action.provider_kind().map(ToOwned::to_owned);
-    let (entry, resolved_for_preflight) = build_task_entry(&args, action, &workspace)?;
+    let (mut entry, resolved_for_preflight) = build_task_entry(&args, action, &workspace)?;
+    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+    entry.provider = window_condition_provider(
+        &args.when,
+        provider_kind.as_deref(),
+        &entry.resolved_root(),
+        &runtime,
+        Timestamp::now(),
+    )?;
     // Compile once before writing, so validation and feedback share one shape.
     let shape = schedule::TaskShape::compile(&args.name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
     let task_action = shape.action().map_err(Clone::clone)?;
-    preflight_entry(
-        task_action,
-        resolved_for_preflight.as_ref(),
-        &rimz::RuntimePaths::for_project_root(&workspace.project_root)?,
-    )?;
+    preflight_entry(task_action, resolved_for_preflight.as_ref(), &runtime)?;
     let catalog = TaskCatalog::load(Some(&project_root))?;
     let project_pre_state = args
         .project
@@ -124,6 +128,13 @@ fn add_delivery(
                 when: Some(args.when.clone()),
                 hold: args.hold.clone(),
                 once: args.once.then_some(true),
+                provider: window_condition_provider(
+                    &args.when,
+                    Some(target.kind.as_str()),
+                    &workspace.worktree_root,
+                    &rimz::RuntimePaths::for_project_root(&workspace.project_root)?,
+                    Timestamp::now(),
+                )?,
                 ..TaskEntry::default()
             },
         )?;
