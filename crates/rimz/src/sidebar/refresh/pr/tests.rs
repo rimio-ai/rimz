@@ -1351,6 +1351,38 @@ fn reconcile_prunes_stale_branch_ci_paths() {
 }
 
 #[test]
+fn condition_scope_without_pane_survives_reconcile() {
+    let scope = tempfile::tempdir().unwrap();
+    let path = scope.path().display().to_string();
+    let snapshot = SidebarSnapshot::build(
+        crate::ids::WorkspaceId::from_project_root(scope.path()),
+        vec![],
+        jiff::Timestamp::now(),
+    );
+    let cache = PrStateCache {
+        branch_ci: BTreeMap::from([(path.clone(), WorktreeCi::Passing)]),
+        ..PrStateCache::default()
+    };
+    let needed = needed_worktree_paths(&snapshot, BTreeSet::from([path.clone()]));
+    let cache = reconcile_target_bookkeeping(
+        cache,
+        &needed,
+        &DiffStatsCache::default(),
+        &BTreeSet::from([path.clone()]),
+        1_000,
+    );
+    assert_eq!(cache.branch_ci.get(&path), Some(&WorktreeCi::Passing));
+    let cache = reconcile_target_bookkeeping(
+        cache,
+        &[],
+        &DiffStatsCache::default(),
+        &BTreeSet::new(),
+        2_000,
+    );
+    assert!(cache.branch_ci.is_empty());
+}
+
+#[test]
 fn unsupported_cached_path_does_not_reassemble_on_head_nudge() {
     let mut cache = PrStateCache::default();
     cache

@@ -178,6 +178,8 @@ Because state is written before any runner spawns, a fire is at-most-once per oc
 
 Conditions use the same planner pass. `fire_tasks` evaluates readings before the pure planner; the elder supplies `CiSource`, and the external tick supplies none. Scope is `TaskEntry::run_dir()`. Board stages come from `scratch::board_stage`; CI uses the cache's exact path key: an Open or Merged PR with CI wins, then branch CI, then unknown. The elder keeps last-known-good CI on failed probes. There is no signal-driven evaluation. Grammar and unknown/negation semantics are in [Conditions](../../reference/cli/loop.md#conditions).
 
+`when::ci_scopes` reads the runnable catalog and arming overlay to select existing directories of Live condition tasks naming `ci`. Both git-fact and PR producers union these scopes with pane-derived paths, using the same path keys. A scope without a pane stays on the idle refresh tier and survives target reconciliation while its task is live; removing the task releases the probe. Hot and focused tiers remain pane-driven.
+
 `lanes/loop-when.json` is a runtime-class map from task name to `{fingerprint, since, fired}`, retained only while true (or held by arming policy), rebuilt from runnable rows each pass. The fingerprint holds the canonical expression, parsed hold duration, and run directory; a missing or mismatched fingerprint starts a new true period. First sight creates only the fire stamp. A standing condition is not an ephemeral task; `once` makes it ephemeral.
 
 | Stamp / arming | Verdict / hold state | Action |

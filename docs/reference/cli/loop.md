@@ -80,7 +80,7 @@ Expressions accept `!`, `&&`, `||`, and parentheses, in that precedence order. A
 | Key | Values | Reading |
 | --- | --- | --- |
 | `team.stage` | `Done` and stages declared by any team in the effective configuration, case-sensitive | The scoped checkout's `blackboard.md` Stage line. |
-| `ci` | `passed`, `failed`, `pending` | The room sidebar's last-known CI result. Without a fresh sidebar it is unknown, including under the external timer. |
+| `ci` | `passed`, `failed`, `pending` | The room sidebar's last-known CI result. A live runnable condition keeps its checkout in the sidebar's probe set, with or without a pane; removing the task releases it. Without a fresh sidebar it is unknown, including under the external timer. |
 
 An unknown reading makes its term false, but `!` is boolean NOT: `!ci=failed` is true when CI is unknown. Use `ci=passed,pending` for known and not failed. A failed CI probe leaves the sidebar's last-known reading in place.
 

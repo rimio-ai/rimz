@@ -163,7 +163,7 @@ rimz loop add open-pr --when 'team.stage=Done && ci=passed' --for 30m --once --a
 rimz loop show open-pr
 ```
 
-The receipt names the checkout being observed. The sidebar checks its board and CI each tick: `waiting` becomes `holding`, and either reading turning false restarts the 30 minutes. Once ready, RimZ opens a fresh supervised agent pane with the prompt and removes the one-shot task. CI comes from the room's sidebar, so leave that room open. Cancel before it fires with `rimz loop remove open-pr`; [conditions](../reference/cli/loop.md#conditions) lists the expression rules and unknown readings.
+The receipt names the checkout being observed. The sidebar checks its board and CI each tick: `waiting` becomes `holding`, and either reading turning false restarts the 30 minutes. Once ready, RimZ opens a fresh supervised agent pane with the prompt and removes the one-shot task. The room's sidebar probes that checkout while the task is live, even after its agent panes close; removing the task releases that probe. Without a room sidebar, CI is unknown. Cancel before it fires with `rimz loop remove open-pr`; [conditions](../reference/cli/loop.md#conditions) lists the expression rules and unknown readings.
 
 ## Guard a turn with a check
 

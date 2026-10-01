@@ -376,7 +376,8 @@ path = "crates/rimz/src/harness"
 # Fresh launches share checkout and channel holds, including the holder's checkout.
 # Condition parsing, ordered readings, CI sources, hold state and evidence cross the scheduler/CLI seam (+17).
 # Condition admission and timing presentation share stage validation, state refinement and labels (+3).
-surface-budget = 620
+# Live condition scopes cross the harness/sidebar seam to keep pane-free CI probes alive (+1).
+surface-budget = 621
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

@@ -203,7 +203,9 @@ pub(super) fn refresh_diff_stats_for(
     let now_ms = unix_now_ms();
     // Focus tiers edit-sensitive facts first; activity still keeps recently
     // worked background worktrees on the hot TTL while the rest decay to idle.
-    let needed = needed_worktree_paths(snapshot);
+    let condition_scopes =
+        crate::harness::schedule::when::ci_scopes(runtime, snapshot.project_root.as_deref());
+    let needed = needed_worktree_paths(snapshot, condition_scopes);
     let focused = focused_worktree_paths(snapshot);
     let hot = hot_worktree_paths(snapshot);
     let _ = refresh_diff_stats(
@@ -240,9 +242,12 @@ pub(in crate::sidebar) fn worktree_group_path_fields<'a>(
 
 /// The live worktree paths this snapshot needs git facts for: a git-backed
 /// group whose recovered path is a live directory, de-duplicated so two
-/// branch-split groups for one dir share a single git read.
-pub(super) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
-    let mut needed: Vec<String> = Vec::new();
+/// branch-split groups and live CI conditions for one dir share a single git read.
+pub(super) fn needed_worktree_paths(
+    snapshot: &SidebarSnapshot,
+    condition_scopes: BTreeSet<String>,
+) -> Vec<String> {
+    let mut needed: Vec<String> = condition_scopes.into_iter().collect();
     for group in &snapshot.worktree_groups {
         let Some(path) = git_backed_worktree_path(group) else {
             continue;
