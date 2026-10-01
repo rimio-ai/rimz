@@ -417,6 +417,7 @@ fn hidden_helper_requests_round_trip_through_cli() {
         login: rimz::ids::LoginKey::default_for(kind.clone()),
         reason: RedeemReason::ScheduledRedeem,
         request_id: "018f7f2e-7b3a-7cc0-8ec1-000000000001".parse().unwrap(),
+        limit_paused: true,
     };
     let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
         "auto-redeem",

@@ -384,7 +384,8 @@ path = "crates/rimz/src/harness"
 # Tier-fallback recording is shared by fresh and resumed seats (+1).
 # ResumeOverrides shares saved-posture overrides with cohort CLI callers (+1).
 # resolve_member_posture gives agents restart a team member's role layers (+1).
-surface-budget = 625
+# auto_continue::limit_marker_active is the one limit-park predicate auto-redeem's gate shares (+1).
+surface-budget = 626
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

@@ -276,6 +276,7 @@ pub(super) fn refresh_heavy_lanes(
     crate::harness::cache_keepalive::keepalive_agents(base, runtime, &config.harness);
     crate::harness::auto_redeem::redeem_credits(
         &panels.providers,
+        &base.agents,
         runtime,
         &logins,
         &config.resume,

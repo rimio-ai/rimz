@@ -196,9 +196,9 @@ Subagent children are never restored. A child's open run cut off by the crash re
 - An overload or transient API-error park (a stalled stream, a timeout, a dropped connection) fires on the retry ramp. `auto_continue_backoff_secs = [180, 300]` sends the first retry three minutes after the failure, then one every five minutes.
 - Every park type stops after `auto_continue_max_retries` (default 12, about an hour on the default ramp) and stays parked for you.
 
-**A Codex reset credit about to go to waste.** A Codex plan grants credits that refill a spent usage window on the spot, and they expire. `auto_redeem = true` lets RimZ spend one for you when spending it buys real time, by [four rules](./loops.md#auto-redeem) that the assist record names afterwards. One of those rules, rescuing a credit within thirty minutes of its expiry, runs whether or not you turn the key on, because the capacity is already paid for.
+**A Codex reset credit about to go to waste.** A Codex plan grants credits that refill a spent usage window on the spot, and they expire. `auto_redeem = true` lets RimZ spend one for you when spending it buys real time and a Codex agent in this room is stopped on the spent window, by [three rules](./loops.md#auto-redeem) that the assist record names afterwards. One of those rules, rescuing a credit within thirty minutes of its expiry, runs whether or not you turn the key on, because the capacity is already paid for.
 
-`auto_redeem_min_gain` is the threshold the main rule uses: RimZ redeems into a spent window when its natural reset is at least this far away, since that is how much blocked time the credit recovers. It takes `s`, `m`, `h`, or `d` and defaults to `12h`. Raise it to redeem only when a window would otherwise block most of a day.
+`auto_redeem_min_gain` is the threshold the main rule uses: RimZ redeems into a spent window that has parked an agent when its natural reset is at least this far away, since that is how much blocked time the credit recovers. It takes `s`, `m`, `h`, or `d` and defaults to `12h`. Raise it to redeem only when a window would otherwise block most of a day.
 
 `rimz setup` offers `auto_continue`, `auto_redeem` (when Codex is installed), and `idle_compact` together as one consent question; idle compaction starts on, and answering no sets it to `off` ([set up your machine](./setup.md)).
 

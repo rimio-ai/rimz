@@ -68,11 +68,13 @@ pub struct ResumeConfig {
     /// on. Sent as a bracketed paste plus a submit Enter, the same pane-send path
     /// `message --steer` uses.
     pub auto_continue_text: String,
-    /// Spend a Codex reset credit automatically when a usage window is spent.
-    /// Expiry rescue remains enabled independently of this opt-in.
+    /// Spend a Codex reset credit automatically when a usage window is spent
+    /// and a Codex agent in this room is stopped on it. Expiry rescue remains
+    /// enabled independently of this opt-in.
     pub auto_redeem: bool,
     /// Minimum blocked time an automatic redemption must recover. A credit that
-    /// would expire shortly after the natural reset redeems regardless.
+    /// keeps the window's schedule (not a Codex credit) and would expire shortly
+    /// after the natural reset redeems regardless.
     #[serde(deserialize_with = "deserialize_auto_redeem_min_gain")]
     pub auto_redeem_min_gain: String,
 }

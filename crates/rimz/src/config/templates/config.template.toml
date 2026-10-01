@@ -176,8 +176,8 @@ aggressive_resize = true
 # auto_continue_backoff_secs = [180, 300] # retry delays after the first and subsequent transient parks
 # auto_continue_max_retries = 12      # stop attempting after this many auto-continue tries
 # auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
-# auto_redeem = false                 # spend a Codex reset credit automatically when a usage window is spent
-# auto_redeem_min_gain = "12h"        # redeem only when it buys at least this much blocked time (doomed credits redeem regardless)
+# auto_redeem = false                 # spend a Codex reset credit when a spent usage window has stopped a Codex agent in this room
+# auto_redeem_min_gain = "12h"        # redeem only when it buys at least this much blocked time
 
 [gc]
 # auto = true                         # sweep stale state once a day from every open room

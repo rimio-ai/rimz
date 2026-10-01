@@ -18,7 +18,8 @@ pub struct DailyBudgetView {
     pub parked: bool,
 }
 
-/// What auto-redeem would do if the longest Codex window ran dry right now.
+/// What auto-redeem would do if the longest Codex window ran dry and parked an
+/// agent right now. A hypothetical, so it reads no live agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RedeemForecast {
@@ -26,7 +27,9 @@ pub enum RedeemForecast {
     Manual,
     /// A credit would be spent, or no natural reset is known to wait for.
     Armed,
-    /// Nothing would fire: the fleet would park until the natural reset.
+    /// Nothing would fire: the fleet would park until the natural reset. Firm
+    /// until that reset only when it is nearer than `auto_redeem_min_gain` and
+    /// the nearest credit outlives it by a day.
     Holding,
 }
 
