@@ -53,34 +53,55 @@ pub(super) use provider::{
 };
 pub(super) use worktree::{WorktreeRenderContext, worktree_group_lines_projected};
 
-/// Whether selection opens this row's full card shape. The selected row always
-/// opens; a sibling opens only when both rows belong to the same projected
-/// non-external group and share a named team.
-pub(super) fn row_expanded_by_selection(
+/// How far selection reaches a row: the selected row itself, a named teammate
+/// opened alongside it, or neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SelectionReach {
+    Selected,
+    Teammate,
+    Unreached,
+}
+
+impl SelectionReach {
+    /// Selection opens the full card shape for the selected row and its
+    /// teammates alike.
+    pub(super) fn opens_card(self) -> bool {
+        self != Self::Unreached
+    }
+}
+
+/// How selection reaches this row. A sibling is a teammate only when both rows
+/// belong to the same projected non-external group and share a named team.
+pub(super) fn row_selection_reach(
     roster: &VisibleRoster<'_>,
     group: &VisibleGroup<'_>,
     row_index: usize,
     selected_index: usize,
-) -> bool {
+) -> SelectionReach {
     let range = group.range();
     if !range.contains(&row_index) {
-        return false;
+        return SelectionReach::Unreached;
     }
     if row_index == selected_index {
-        return true;
+        return SelectionReach::Selected;
     }
     if group.source().kind == SidebarWorktreeKind::External || !range.contains(&selected_index) {
-        return false;
+        return SelectionReach::Unreached;
     }
     let Some(selected_team) = roster.row(selected_index).and_then(SidebarRow::team) else {
-        return false;
+        return SelectionReach::Unreached;
     };
-    roster.row(row_index).and_then(SidebarRow::team) == Some(selected_team)
+    if roster.row(row_index).and_then(SidebarRow::team) == Some(selected_team) {
+        SelectionReach::Teammate
+    } else {
+        SelectionReach::Unreached
+    }
 }
 
-/// What a card opens: the full card shape follows selection alone, while the
-/// delegation section's entries follow the sticky header override when one is
-/// set and otherwise open under selection or `expanded` density.
+/// What a card opens: the full card shape follows selection, teammates
+/// included, while the delegation section's entries follow the sticky header
+/// override when one is set and otherwise open for the selected row alone or
+/// under `expanded` density.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct CardExpansion {
     pub(super) by_selection: bool,
@@ -95,17 +116,17 @@ impl CardExpansion {
         history: &BTreeMap<String, Option<Timestamp>>,
         density: CardDensityMode,
         row: &SidebarRow,
-        by_selection: bool,
+        reach: SelectionReach,
     ) -> Self {
         let delegation = overrides
             .get(&row.id)
             .copied()
-            .unwrap_or(by_selection || density == CardDensityMode::Expanded);
+            .unwrap_or(reach == SelectionReach::Selected || density == CardDensityMode::Expanded);
         let history = row
             .as_agent()
             .is_some_and(|agent| history.get(&row.id) == Some(&agent.user_turn_started_at));
         Self {
-            by_selection,
+            by_selection: reach.opens_card(),
             delegation,
             history,
         }

@@ -677,7 +677,7 @@ fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
 }
 
 #[test]
-fn selecting_named_team_member_expands_every_teammate_only() {
+fn selecting_named_team_member_folds_teammate_entries() {
     let mut planner = agent(
         "planner",
         "claude",
@@ -764,8 +764,12 @@ fn selecting_named_team_member_expands_every_teammate_only() {
     );
 
     assert!(
-        rendered.contains("map the renderer") && rendered.contains("pin the frame"),
-        "both named teammates expand:\n{rendered}"
+        rendered.contains("map the renderer"),
+        "the selected card lists its entries:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("pin the frame"),
+        "a named teammate folds its entries behind the summary line:\n{rendered}"
     );
     assert!(
         !rendered.contains("stay collapsed"),
@@ -785,7 +789,7 @@ fn selecting_named_team_member_expands_every_teammate_only() {
             .is_some_and(|line| line.starts_with('▎')),
         "the expanded teammate keeps the lane gutter:\n{rendered}"
     );
-    assert_snapshot("named_team_selection_expands_teammates", rendered);
+    assert_snapshot("named_team_selection_folds_teammate_entries", rendered);
 }
 
 #[test]

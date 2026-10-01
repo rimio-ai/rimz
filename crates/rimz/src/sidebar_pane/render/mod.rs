@@ -349,7 +349,8 @@ fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) 
             .range()
             .zip(group.rows(&roster).iter().copied())
             .any(|(row_index, row)| {
-                sections::row_expanded_by_selection(&roster, group, row_index, ui.selected_index)
+                sections::row_selection_reach(&roster, group, row_index, ui.selected_index)
+                    .opens_card()
                     && sections::awaiting_first_prompt_affordance(row)
             })
     })
@@ -372,12 +373,7 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
                     &ui.delegation_history,
                     density,
                     row,
-                    sections::row_expanded_by_selection(
-                        &roster,
-                        group,
-                        row_index,
-                        ui.selected_index,
-                    ),
+                    sections::row_selection_reach(&roster, group, row_index, ui.selected_index),
                 );
                 sections::delegation_motion(row, density, expansion)
             })

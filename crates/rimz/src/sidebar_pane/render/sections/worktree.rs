@@ -141,7 +141,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
             ctx.delegation_history,
             ctx.card_density,
             row,
-            super::row_expanded_by_selection(roster, visible_group, this_row, ctx.selected_index),
+            super::row_selection_reach(roster, visible_group, this_row, ctx.selected_index),
         );
         let gutter = if selected { Gutter::Selected } else { lane };
         let cost_usd = super::agent_card::agent_card_cost_usd(group, row);
