@@ -296,9 +296,9 @@ pub struct ResumeSkip {
 /// The planner's launch posture a relaunched session replays, with the reason it degraded when its stored profile no longer applies.
 ///
 /// A profile is durable, named configuration, so a session that launched as
-/// `@planner` comes back as a planner. One-off `--model` / `--effort` flags
-/// typed at the original launch stay out: they were a single invocation's
-/// choice. A resume may pass its own `--model`, `--effort`, and `--ask` /
+/// `@planner` comes back as a planner. A launch with a durable record replays
+/// the record's model and effort verbatim; without one, one-off `--model` /
+/// `--effort` flags typed at the original launch stay out. A resume may pass its own `--model`, `--effort`, and `--ask` /
 /// `--yolo` for that run only; `--isolation` is the one resume override the
 /// exec wrapper records.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -2324,7 +2324,8 @@ pub fn plan_cohort_resume(
     })
 }
 
-/// Overrides applied after durable posture replay, before stamping the next launch record.
+/// Overrides applied after durable posture replay, before stamping the next
+/// launch record; `agent` replaces that replay with the rebased profile.
 #[derive(Default)]
 pub struct ResumeOverrides<'a> {
     pub team: Option<&'a crate::config::Team>,
@@ -2361,12 +2362,39 @@ pub fn restore_routed_cells(
                 .find(|role| cell.launch.role.as_deref() == Some(role.role.as_str()))
         });
         // Legacy unstamped members retain the resolved layout, including role prompt layers.
-        let mut posture = if overrides.agent.is_some() {
-            let mode = match seed {
+        let mut posture = if let Some(base_name) = overrides.agent {
+            let base = crate::harness::spec::resolve_agent_override(Some(base_name), profiles)
+                .map_err(|err| error(err.to_string()))?;
+            let rebased = crate::harness::spec::profile_cell_with_base_override(
+                profile.as_deref().unwrap_or(kind.as_str()),
+                profiles,
+                base.as_ref(),
+                role,
+            )
+            .map_err(|err| error(err.to_string()))?;
+            if rebased.kind != kind {
+                return Err(error(format!(
+                    "this session is {kind}, but --agent {base_name} is {}; resume with a same-kind profile or launch fresh",
+                    rebased.kind
+                )));
+            }
+            let saved_mode = match seed {
                 CohortSeed::Resume(agent) => agent.mode,
                 CohortSeed::Fresh => cell.launch.mode,
             };
-            bare_posture(mode, &kind)
+            ResumeLaunchPosture {
+                mode: base
+                    .as_ref()
+                    .and_then(|base| base.launch.mode)
+                    .or(saved_mode)
+                    .or(rebased.launch.mode),
+                record: Some(Box::new(crate::agents::LaunchRecord {
+                    model: rebased.launch.model.clone(),
+                    effort: rebased.launch.effort.clone(),
+                    agent: Some(base_name.to_owned()),
+                })),
+                ..ResumeLaunchPosture::from(&rebased)
+            }
         } else if let CohortSeed::Resume(agent) = seed
             && (agent.record.is_some() || agent.tier.is_some())
         {
@@ -2384,35 +2412,6 @@ pub fn restore_routed_cells(
         } else {
             ResumeLaunchPosture::from(&*cell)
         };
-        if let Some(base_name) = overrides.agent {
-            let base = crate::harness::spec::resolve_agent_override(Some(base_name), profiles)
-                .map_err(|err| error(err.to_string()))?;
-            let rebased = crate::harness::spec::profile_cell_with_base_override(
-                profile.as_deref().unwrap_or(kind.as_str()),
-                profiles,
-                base.as_ref(),
-                role,
-            )
-            .map_err(|err| error(err.to_string()))?;
-            if rebased.kind != kind {
-                return Err(error(format!(
-                    "this session is {kind}, but --agent {base_name} is {}; resume with a same-kind profile or launch fresh",
-                    rebased.kind
-                )));
-            }
-            let mode = base
-                .as_ref()
-                .and_then(|base| base.launch.mode)
-                .or(posture.mode)
-                .or(rebased.launch.mode);
-            posture = ResumeLaunchPosture::from(&rebased);
-            posture.mode = mode;
-            posture.record = Some(Box::new(crate::agents::LaunchRecord {
-                model: posture.model.clone(),
-                effort: posture.effort.clone(),
-                agent: Some(base_name.to_owned()),
-            }));
-        }
         if let Some((tier, tiers)) = overrides.tier {
             let definition = profile
                 .as_deref()
@@ -2499,18 +2498,6 @@ pub fn restore_routed_cells(
         } else {
             cell.launch.mode.or(posture.mode)
         });
-        if let Some(mode) = mode
-            && let Some(adapter) = find_definition(kind.as_str())
-        {
-            adapter
-                .spec()
-                .launch
-                .strip_permission_args(&mut posture.args);
-            posture
-                .args
-                .extend(adapter.spec().launch.permission_args(mode));
-            posture.mode = Some(mode);
-        }
         cell.kind = kind;
         cell.resume_model_override =
             preset.model.is_some() || overrides.tier.is_some() || overrides.agent.is_some();
@@ -2535,7 +2522,7 @@ pub fn restore_routed_cells(
             cell,
             crate::harness::plan::LaunchFinalizeOptions {
                 agent_base: None,
-                permission_mode: None,
+                permission_mode: mode.map(crate::harness::plan::PermissionModeChoice::Explicit),
                 isolation: None,
                 preset,
                 passthrough: &[],
