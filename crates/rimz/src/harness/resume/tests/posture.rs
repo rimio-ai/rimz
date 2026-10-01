@@ -37,6 +37,22 @@ fn recorded_posture_replays_verbatim_model_without_observed_switch() {
         assert_eq!(posture.launch.effort, record.effort);
         assert!(posture.launch.tier.is_none());
     }
+    let matching = crate::agents::LaunchRecord {
+        model: Some(stamp.model.clone()),
+        ..record
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&matching),
+            profile: Some("planner"),
+            kind: &AgentKind::new_unchecked("claude"),
+            stamped_mode: None,
+            stamped_tier: Some(&stamp),
+        },
+        &profiles,
+    );
+    assert!(posture.degraded.is_none(), "{:?}", posture.degraded);
+    assert_eq!(posture.launch.tier, Some(stamp));
 }
 
 #[test]
@@ -447,6 +463,17 @@ fn resume_replays_the_stamped_mode_when_the_profile_declares_none() {
     let request = decode_exec_request(&single_pane_argv(&plan));
     assert_eq!(request.action.extra_args(), yolo_argv("claude"));
     assert_eq!(request.identity.params.mode, Some(PermissionMode::Yolo));
+
+    // A legacy row (no record) under a profile that declares no mode replays the stamp too.
+    let posture = posture_for(
+        "claude",
+        Some("planner"),
+        Some(PermissionMode::Yolo),
+        &profiles("planner", profile("claude")),
+    );
+    assert_eq!(posture.degraded, None);
+    assert_eq!(posture.launch.mode, Some(PermissionMode::Yolo));
+    assert_eq!(posture.launch.args, yolo_argv("claude"));
 }
 
 #[test]
@@ -579,13 +606,63 @@ fn posture_reports_a_provider_switch_rather_than_refusing() {
     // way the resolver reports rather than fails.
     let profiles = profiles("planner", profile("codex"));
 
-    let posture = posture_for("claude", Some("planner"), None, &profiles);
+    let posture = posture_for(
+        "claude",
+        Some("planner"),
+        Some(PermissionMode::Yolo),
+        &profiles,
+    );
 
-    assert!(posture.launch.args.is_empty());
-    assert!(matches!(
-        posture.degraded,
-        Some(PostureDegrade::KindChanged { .. })
-    ));
+    // The bare fallback carries the stamped mode and its argv, nothing else.
+    assert_eq!(
+        posture,
+        ResumePosture {
+            launch: ResumeLaunchPosture {
+                args: yolo_argv("claude"),
+                mode: Some(PermissionMode::Yolo),
+                ..Default::default()
+            },
+            degraded: Some(PostureDegrade::KindChanged {
+                profile: "planner".into(),
+                was: AgentKind::new_unchecked("claude"),
+                now: AgentKind::new_unchecked("codex"),
+            }),
+        }
+    );
+}
+
+#[test]
+fn unrenderable_record_effort_degrades_to_the_bare_posture() {
+    let profiles = profiles("worker", profile("kimi"));
+    let record = crate::agents::LaunchRecord {
+        effort: Some("high".into()),
+        ..Default::default()
+    };
+    let posture = resolve_posture(
+        PostureRequest {
+            record: Some(&record),
+            profile: Some("worker"),
+            kind: &AgentKind::new_unchecked("kimi"),
+            stamped_mode: Some(PermissionMode::Yolo),
+            stamped_tier: None,
+        },
+        &profiles,
+    );
+    assert_eq!(
+        posture,
+        ResumePosture {
+            launch: ResumeLaunchPosture {
+                args: yolo_argv("kimi"),
+                mode: Some(PermissionMode::Yolo),
+                ..Default::default()
+            },
+            degraded: Some(PostureDegrade::Unresolved {
+                profile: "worker".into(),
+                reason: "kimi does not support --effort; remove it or put provider-specific flags in `args`"
+                    .into(),
+            }),
+        }
+    );
 }
 
 #[test]
@@ -603,4 +680,23 @@ fn stamped_resume_degrades_when_the_profile_loses_its_family_render() {
     assert!(plan.warnings[0].contains("this session is codex"));
     let request = decode_exec_request(&single_pane_argv(&plan));
     assert_eq!(request.identity.params.model, None);
+    let stamp = tier_stamp("astra");
+    let posture = resolve_posture(
+        PostureRequest {
+            record: None,
+            profile: Some("planner"),
+            kind: &AgentKind::new_unchecked("codex"),
+            stamped_mode: None,
+            stamped_tier: Some(&stamp),
+        },
+        &profiles,
+    );
+    assert_eq!(
+        posture.degraded,
+        Some(PostureDegrade::KindChanged {
+            profile: "planner".into(),
+            was: AgentKind::new_unchecked("codex"),
+            now: AgentKind::new_unchecked("codex"),
+        })
+    );
 }
