@@ -50,7 +50,7 @@ impl TmpView {
     }
 
     /// The path the agent sees for a host path.
-    pub fn agent_path(&self, host: &Path) -> PathBuf {
+    pub(crate) fn agent_path(&self, host: &Path) -> PathBuf {
         match host.strip_prefix(&self.unit_dir) {
             Ok(rest) if self.sandboxed => Path::new(SANDBOX_TMP).join(rest).components().collect(),
             _ => host.to_path_buf(),
@@ -256,12 +256,6 @@ pub fn diagnose() -> SandboxDiagnostic {
         version: None,
         error: Some(SandboxErr::UnsupportedOs.to_string()),
     }
-}
-
-pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
-    let planned = plan(inputs)?;
-    apply(&planned)?;
-    Ok(planned)
 }
 
 pub fn apply(plan: &SandboxPlan) -> Result<(), SandboxErr> {

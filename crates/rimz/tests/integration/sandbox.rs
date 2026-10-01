@@ -187,7 +187,7 @@ fn skill_prepare(
     skills: SkillInputs<'_>,
 ) -> Result<SandboxPlan, SandboxErr> {
     let state = env.store();
-    rimz::sandbox::prepare(&SandboxInputs {
+    let plan = rimz::sandbox::plan(&SandboxInputs {
         env: vars,
         cwd: &env.project_root,
         project_root: &env.project_root,
@@ -197,7 +197,9 @@ fn skill_prepare(
         provider_home: None,
         provider_home_env_keys: &[],
         skills,
-    })
+    })?;
+    rimz::sandbox::apply(&plan)?;
+    Ok(plan)
 }
 
 fn skill_argv(
@@ -867,7 +869,8 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
             callable: Some(&callable),
         },
     };
-    let plan = rimz::sandbox::prepare(&inputs).unwrap();
+    let plan = rimz::sandbox::plan(&inputs).unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
     assert_eq!(plan.pins["CODEX_HOME"], rimz::sandbox::EnvPin::Unset);
     assert!(!plan.pins.contains_key("CLAUDE_CONFIG_DIR"));
     assert_eq!(
@@ -910,7 +913,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
     assert!(!argv.iter().any(|arg| arg.ends_with("/broken")));
     let unknown = ["absent".parse().unwrap()];
     inputs.skills.callable = Some(&unknown);
-    let err = rimz::sandbox::prepare(&inputs).err().unwrap();
+    let err = rimz::sandbox::plan(&inputs).err().unwrap();
     assert!(matches!(err, SandboxErr::UnknownSkill { .. }));
     assert!(err.to_string().contains(root.to_str().unwrap()));
 }
@@ -1127,7 +1130,8 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
             callable: None,
         },
     };
-    let plan = rimz::sandbox::prepare(&inputs).unwrap();
+    let plan = rimz::sandbox::plan(&inputs).unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
     let argv = rimz::sandbox::bwrap_argv(Path::new("/usr/bin/bwrap"), &plan.plan, inputs.cwd, &[]);
     assert!(argv.windows(3).any(|args| args
         == [
@@ -1137,7 +1141,8 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
         ]));
     let var_tmp = tempfile::tempdir_in("/var/tmp").unwrap();
     inputs.cwd = var_tmp.path();
-    let plan = rimz::sandbox::prepare(&inputs).unwrap();
+    let plan = rimz::sandbox::plan(&inputs).unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
     let argv = rimz::sandbox::bwrap_argv(Path::new("/usr/bin/bwrap"), &plan.plan, inputs.cwd, &[]);
     let cwd = var_tmp.path().to_str().unwrap();
     assert!(
@@ -1147,7 +1152,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
     for mount in ["/tmp", "/var/tmp"] {
         inputs.cwd = Path::new(mount);
         assert!(matches!(
-            rimz::sandbox::prepare(&inputs),
+            rimz::sandbox::plan(&inputs),
             Err(SandboxErr::TmpCollision { path }) if path == Path::new(mount)
         ));
     }
@@ -1987,7 +1992,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
     std::os::unix::fs::symlink(&real, &root).unwrap();
     let vars = environment(&env);
     let state = env.store();
-    let plan = rimz::sandbox::prepare(&SandboxInputs {
+    let plan = rimz::sandbox::plan(&SandboxInputs {
         env: &vars,
         cwd: &env.project_root,
         project_root: &env.project_root,
@@ -2004,6 +2009,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
         },
     })
     .unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
     let argv = rimz::sandbox::bwrap_argv(
         &rimz::sandbox::preflight(Isolation::Sandbox)
             .unwrap()
