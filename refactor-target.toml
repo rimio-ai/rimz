@@ -3969,6 +3969,16 @@ reason = "The bundle every adapter implements and AgentDefinition holds as a tra
 
 [[verdict]]
 kind = "item"
+key = "agents::definition::HookContextReply"
+reason = "Floored pub by the public Capabilities::hook_context field the binary reads (cli/hooks/lifecycle/mod.rs and harness/deadline.rs::stop_channel call .is_some()); the binary never names the type, so it is not re-exported from agents (pass 32a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::definition::AgentDefinition::attach_hook_context"
+reason = "The one writer of the spec-declared hook-context reply, called by the binary's lifecycle hook on a due rung; an inherent method replaces the HookCapability trait method so no adapter can restate the reply shape (pass 32a)."
+
+[[verdict]]
+kind = "item"
 key = "agents::hook_types::HookOutput::context_agent_id"
 reason = "The binary crate calls it on the publicly re-exported HookOutput (cli/hooks/lifecycle/mod.rs:148,537,542, context.rs:59,441), so pub is its floor; worktree_path has the same floor (cli/hooks/lifecycle/transcript.rs:25,109). The adapter tests under agents/adapters are descendants and floor nothing (pass 24b, corrected in review)."
 
