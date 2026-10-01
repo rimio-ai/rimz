@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "@x's session belongs to codex account `work`; this room now launches codex on \
-             `personal`. Run `rimz accounts use --room codex work` to resume it, then switch back."
+             `personal`. Run `rimz accounts use codex work` to resume it, then switch back."
         );
     }
 

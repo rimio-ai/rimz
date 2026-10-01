@@ -38,17 +38,31 @@ fn room_account_switch_changes_only_the_room_default() {
     let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     let config = env.rimz_home().join("config.toml");
-    let before = std::fs::read(&config).unwrap();
-    let switch = || {
+    let switch_with = |flags: &[&str]| {
         env.rimz()
             .envs(rimz::workspace::pin_env(
                 &workspace.workspace_id,
                 &workspace.project_root,
             ))
-            .args(["accounts", "use", "--room", "claude", "work"])
+            .args(["accounts", "use"])
+            .args(flags)
+            .args(["claude", "work"])
             .output()
             .unwrap()
     };
+    let global = succeeded(&switch_with(&["--global"]));
+    assert!(
+        global.contains("new rooms now use claude account `work`"),
+        "{global}"
+    );
+    assert!(
+        rimz::workspace::record::read(&store.paths().workspace_record)
+            .unwrap()
+            .logins
+            .is_none()
+    );
+    let before = std::fs::read(&config).unwrap();
+    let switch = || switch_with(&[]);
     let output = succeeded(&switch());
     assert!(output.contains("this room now launches claude on account `work`; no running claude agent is on `default`"), "{output}");
     assert_eq!(std::fs::read(&config).unwrap(), before);
@@ -85,7 +99,7 @@ fn room_account_switch_refuses_a_missing_home() {
             &workspace.workspace_id,
             &workspace.project_root,
         ))
-        .args(["accounts", "use", "--room", "claude", "work"])
+        .args(["accounts", "use", "claude", "work"])
         .output()
         .unwrap();
     assert!(failed(&output).contains("rimz accounts add claude work"));
@@ -100,9 +114,9 @@ fn room_account_switch_refuses_a_missing_home() {
 #[test]
 fn room_account_switch_refuses_outside_a_room() {
     let env = Env::new();
-    let output = accounts(&env, &["use", "--room", "claude", "default"]);
+    let output = accounts(&env, &["use", "claude", "default"]);
     assert!(failed(&output).contains(
-        "--room needs a running room; run it inside one, or drop --room to set the machine default"
+        "`rimz accounts use` changes the running room it is run inside; run it inside one, or pass --global to set the machine default for new rooms"
     ));
 }
 
@@ -275,15 +289,17 @@ fn accounts_add_adopts_existing_settings_without_discarding_them() {
 #[test]
 fn machine_account_switch_and_removal_preserve_declared_accounts() {
     let env = Env::new();
-    let missing = failed(&accounts(&env, &["use", "codex", "missing"]));
+    let missing = failed(&accounts(&env, &["use", "--global", "codex", "missing"]));
     assert!(
         missing.contains("rimz accounts add codex missing"),
         "{missing}"
     );
     succeeded(&accounts(&env, &["add", "claude", "work"]));
-    let used = succeeded(&accounts(&env, &["use", "claude", "work"]));
+    let used = succeeded(&accounts(&env, &["use", "--global", "claude", "work"]));
     assert!(
-        used.contains("new rooms") && used.contains("rimz accounts use --room claude work"),
+        used.contains("new rooms")
+            && used.contains("existing rooms, running or stopped")
+            && used.contains("`rimz accounts use claude work`"),
         "{used}"
     );
     let listed: Value =
@@ -309,7 +325,7 @@ fn machine_account_switch_and_removal_preserve_declared_accounts() {
         .find(|row| row["kind"] == "claude" && row["name"] == "default")
         .unwrap();
     assert_eq!(native["machine_default"], true);
-    succeeded(&accounts(&env, &["use", "claude", "default"]));
+    succeeded(&accounts(&env, &["use", "--global", "claude", "default"]));
 
     // A hand-set entry for a kind without named accounts is cleared by the
     // fix its refusal names.
@@ -319,7 +335,7 @@ fn machine_account_switch_and_removal_preserve_declared_accounts() {
         .output()
         .expect("run rimz config set");
     succeeded(&set);
-    succeeded(&accounts(&env, &["use", "grok", "default"]));
+    succeeded(&accounts(&env, &["use", "--global", "grok", "default"]));
     let listed: Value =
         serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
     assert!(

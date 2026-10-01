@@ -73,7 +73,7 @@ pub enum LoginConfigErr {
         home: PathBuf,
     },
     #[error(
-        "`{env_key}` is exported as `{home}`, the home of {kind} account `{name}`, so the `default` account launches into it too; unset `{env_key}` and run `rimz accounts use {kind} {name}` to start new rooms on it"
+        "`{env_key}` is exported as `{home}`, the home of {kind} account `{name}`, so the `default` account launches into it too; unset `{env_key}` and run `rimz accounts use --global {kind} {name}` to start new rooms on it"
     )]
     ExportedHome {
         kind: AgentKind,
@@ -447,7 +447,7 @@ impl LoginCatalog {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BirthLoginErr {
     #[error(
-        "unknown {kind} account `{name}` selected by [accounts.use] in {path}; configured: {}; run `rimz accounts add {kind} {name}` or `rimz accounts use {kind} default`",
+        "unknown {kind} account `{name}` selected by [accounts.use] in {path}; configured: {}; run `rimz accounts add {kind} {name}` or `rimz accounts use --global {kind} default`",
         render_names(configured)
     )]
     MachineUnknown {
@@ -457,7 +457,7 @@ pub enum BirthLoginErr {
         path: PathBuf,
     },
     #[error(
-        "[accounts.use] in {path} selects {kind} account `{name}`, but {kind} has no named accounts; run `rimz accounts use {kind} default`"
+        "[accounts.use] in {path} selects {kind} account `{name}`, but {kind} has no named accounts; run `rimz accounts use --global {kind} default`"
     )]
     MachineUnsupported {
         kind: AgentKind,
@@ -465,7 +465,7 @@ pub enum BirthLoginErr {
         path: PathBuf,
     },
     #[error(
-        "this room uses {kind} account `{current}`, not `{requested}`; switch it with `rimz accounts use --room {kind} {requested}`"
+        "this room uses {kind} account `{current}`, not `{requested}`; switch it with `rimz accounts use {kind} {requested}`"
     )]
     Frozen {
         kind: AgentKind,

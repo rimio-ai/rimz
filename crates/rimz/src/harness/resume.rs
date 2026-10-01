@@ -2974,7 +2974,7 @@ fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
 /// than the one the room now launches its kind on.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "{agent}'s session belongs to {kind} account `{session_login}`; this room now launches {kind} on `{room_login}`. Run `rimz accounts use --room {kind} {session_login}` to resume it, then switch back."
+    "{agent}'s session belongs to {kind} account `{session_login}`; this room now launches {kind} on `{room_login}`. Run `rimz accounts use {kind} {session_login}` to resume it, then switch back."
 )]
 pub struct LoginMismatch {
     /// `@name`, or the session id of an unnamed session.

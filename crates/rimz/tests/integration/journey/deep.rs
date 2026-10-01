@@ -2357,7 +2357,7 @@ fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() 
         "a live room keeps its account: {stderr}"
     );
     assert!(
-        stderr.contains("rimz accounts use --room claude default"),
+        stderr.contains("rimz accounts use claude default"),
         "{stderr}"
     );
 
@@ -2393,7 +2393,7 @@ fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() 
         String::from_utf8_lossy(&reborn.stderr)
     );
     assert!(reborn.status.success(), "rebirth failed: {output}");
-    let mismatch = "@account-worker's session belongs to claude account `work`; this room now launches claude on `default`. Run `rimz accounts use --room claude work` to resume it, then switch back.";
+    let mismatch = "@account-worker's session belongs to claude account `work`; this room now launches claude on `default`. Run `rimz accounts use claude work` to resume it, then switch back.";
     assert!(
         output.contains(mismatch) && output.contains("(different account)"),
         "rebirth warns and skips: {output}"
@@ -2428,7 +2428,7 @@ fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() 
             &workspace.workspace_id,
             &workspace.project_root,
         ))
-        .args(["accounts", "use", "--room", "claude", "work"])
+        .args(["accounts", "use", "claude", "work"])
         .bounded_output_within(Duration::from_secs(30))
         .expect("switch the room back to work");
     assert!(

@@ -642,7 +642,7 @@ pub struct StartArgs {
     #[arg(long)]
     pub refresh_ms: Option<u16>,
     /// Launch this provider's agents under a named account (repeatable).
-    /// For a running room, use `rimz accounts use --room` instead.
+    /// For a running room, use `rimz accounts use` instead.
     #[arg(long, value_name = "KIND=NAME", value_parser = accounts::parse_account_flag)]
     pub account: Vec<accounts::AccountFlag>,
 }

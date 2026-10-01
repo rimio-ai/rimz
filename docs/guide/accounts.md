@@ -21,8 +21,8 @@ linked settings to /home/me/.claude: settings.json, settings.local.json, CLAUDE.
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
   use at birth  rimz start --account claude=work
-  this room     rimz accounts use --room claude work
-  new rooms     rimz accounts use claude work
+  this room     rimz accounts use claude work
+  new rooms     rimz accounts use --global claude work
 ```
 
 What it does on your machine:
@@ -63,7 +63,7 @@ A room picks one account per provider when it is born:
 rimz start --account claude=work --account codex=personal
 ```
 
-To use the same account in every new room without repeating the flag, run `rimz accounts use codex personal` once. It writes the machine's `[accounts.use]` selection while keeping the account declarations and comments. Reverse it with `rimz accounts use codex default`. Running rooms keep their launch defaults until you [switch them inside the room](#change-a-rooms-account).
+To use the same account in every new room without repeating the flag, run `rimz accounts use --global codex personal` once. It writes the machine's `[accounts.use]` selection while keeping the account declarations and comments. Reverse it with `rimz accounts use --global codex default`. Existing rooms, running or stopped, keep their launch defaults until you [switch them inside the room](#change-a-rooms-account).
 
 A room keeps its recorded launch defaults across starts. For each provider in a new room, `--account` wins over the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`. The project selection lives in `<repo>/.rimz/config.toml`:
 
@@ -105,14 +105,14 @@ A room on `work` parks when `work` has spent $100 today, whatever `default` has 
 When you want future launches to use another account without interrupting running work, switch the default from a shell inside the room:
 
 ```sh
-rimz accounts use --room claude work
+rimz accounts use claude work
 ```
 
-The command checks the selected home's hooks, then changes only that provider's launch default in the room record. It leaves machine and project configuration alone and reports how many running agents keep the prior account. Reverse it with `rimz accounts use --room claude default`. Its output confirms the switch immediately; sidebar account information follows on the next refresh.
+The command checks the selected home's hooks, then changes only that provider's launch default in the room record. It leaves machine and project configuration alone and reports how many running agents keep the prior account. Reverse it with `rimz accounts use claude default`. Its output confirms the switch immediately; sidebar account information follows on the next refresh. Outside a room the command refuses and names `--global`, which sets the machine selection for new rooms instead.
 
-Every new launch uses the room's current account for its provider, including children and peers launched by existing agents and team members. Resuming, restarting, or forking a session also runs on the room's current account, so RimZ refuses to reopen a session that started on another one: the conversation lives in that account's home. The refusal names both accounts and the fix, for example `rimz accounts use --room claude default` to resume the session, then switch back. Recovery after a crash skips such sessions and lists each as `different account`. Keep an account declared to resume its sessions. A running [remote-control host](./remote.md#answer-asks-from-your-phone) keeps its account until its next spawn.
+Every new launch uses the room's current account for its provider, including children and peers launched by existing agents and team members. Resuming, restarting, or forking a session also runs on the room's current account, so RimZ refuses to reopen a session that started on another one: the conversation lives in that account's home. The refusal names both accounts and the fix, for example `rimz accounts use claude default` to resume the session, then switch back. Recovery after a crash skips such sessions and lists each as `different account`. Keep an account declared to resume its sessions. A running [remote-control host](./remote.md#answer-asks-from-your-phone) keeps its account until its next spawn.
 
-Inside a room that is already running, `rimz start --account` refuses and points at `rimz accounts use --room`. `rimz reset --account` remains available when you want to tear down and rebuild the room instead.
+Inside a room that is already running, `rimz start --account` refuses and points at `rimz accounts use`. `rimz reset --account` remains available when you want to tear down and rebuild the room instead.
 
 ## Remove an account
 

@@ -244,7 +244,7 @@ Your agents' own session files and the room's archived records stay on disk. A p
 | `--hard` | Also delete prior-agent carryover, audit history (transcripts, messages, diagnostics), owned state except run records, and room tmp. Canceled run records and the rotated log archive remain. |
 | `--account <KIND=NAME>` | Rebuild the room under this [provider account](./accounts.md), with no agents. Repeatable. Cannot be combined with `--no-start`. |
 
-`rimz accounts use --room` moves a running room's launch default in place; `reset --account` rebuilds the room under a different account instead.
+`rimz accounts use` moves a running room's launch default in place; `reset --account` rebuilds the room under a different account instead.
 
 Reset refuses before prompting or changing anything when `--mux` names a backend other than the one the room runs on. Without `--yes` and without a terminal it fails with `` `rimz reset` deletes the session and sweeps its processes; pass --yes to confirm without a terminal ``. Answering anything but `y` prints `Reset aborted; nothing changed.` and exits 0.
 

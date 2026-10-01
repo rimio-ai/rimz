@@ -96,16 +96,16 @@ After a reboot the first line reads `rimz: machine rebooted since this room was 
 
 ### Accounts
 
-`--account <KIND=NAME>` (for example `--account claude=work`) selects that provider's launch default from accounts declared with [`rimz accounts`](./accounts.md); `default` names the provider's own home. An existing room keeps its recorded selection; for each provider in a new room, the flag wins over the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`. Move a running room's future launches with `rimz accounts use --room`, without changing existing agents' accounts. `start` refuses, before building the room, in these cases:
+`--account <KIND=NAME>` (for example `--account claude=work`) selects that provider's launch default from accounts declared with [`rimz accounts`](./accounts.md); `default` names the provider's own home. An existing room keeps its recorded selection; for each provider in a new room, the flag wins over the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`. Move a running room's future launches with `rimz accounts use`, without changing existing agents' accounts. `start` refuses, before building the room, in these cases:
 
 | Case | Fix it names |
 | --- | --- |
-| `--account` differs from the room's recorded accounts | `rimz accounts use --room <KIND> <NAME>` inside the room |
-| Any `--account`, when you run `start` from inside the room's own multiplexer session | `rimz accounts use --room <KIND> <NAME>` |
+| `--account` differs from the room's recorded accounts | `rimz accounts use <KIND> <NAME>` inside the room |
+| Any `--account`, when you run `start` from inside the room's own multiplexer session | `rimz accounts use <KIND> <NAME>` |
 | The project sets `[accounts]` but is untrusted or its trust is stale | Review with `rimz trust`, then `rimz trust grant` |
 | The machine `config.toml` is unreadable, for a new room or a room selecting a named account | Correct the file; `rimz config get` shows the strict error. A room selecting only `default` accounts still starts. |
-| A deciding `[accounts.use]` entry names an undeclared account | `rimz accounts add <kind> <name>`, or clear it with `rimz accounts use <kind> default` |
-| A deciding `[accounts.use]` entry names an account for a provider without named accounts | `rimz accounts use <kind> default` |
+| A deciding `[accounts.use]` entry names an undeclared account | `rimz accounts add <kind> <name>`, or clear it with `rimz accounts use --global <kind> default` |
+| A deciding `[accounts.use]` entry names an account for a provider without named accounts | `rimz accounts use --global <kind> default` |
 | The account is not declared | `rimz accounts add <kind> <name>` |
 | The account's home is missing or lacks RimZ hooks | `rimz accounts add <kind> <name>` |
 | The account's hooks are installed but the agent has not trusted them | The agent-specific step the error prints |
