@@ -21,7 +21,7 @@ pub fn sender_handle(role: Option<&str>, name: Option<&str>, kind: &AgentKind) -
     format!("@{base}")
 }
 
-/// Profile or kind, omitted when it repeats the handle base.
+/// Profile or kind, omitted when it or its team role repeats the handle base.
 pub(crate) fn sender_label<'a>(
     handle: &str,
     profile: Option<&'a str>,
@@ -32,7 +32,12 @@ pub(crate) fn sender_label<'a>(
         .unwrap_or_else(|| kind.as_str());
     let base = handle.strip_prefix('@').unwrap_or(handle);
     let base = base.split_once('#').map_or(base, |(base, _)| base);
-    (label != base).then_some(label)
+    // Team names cannot contain dots, but role names can. Split at the first dot,
+    // as TeamsConfig::role_spec does, without requiring live team configuration.
+    let role = profile
+        .and_then(|profile| profile.split_once('.'))
+        .map(|(_, role)| role);
+    (label != base && role != Some(base)).then_some(label)
 }
 
 const ADJECTIVES: &[&str] = &[
@@ -161,6 +166,15 @@ mod tests {
         for (handle, profile, expected) in [
             ("@writer", Some("planner"), Some("planner")),
             ("@planner#docs", Some("planner"), None),
+            ("@planner", Some("recon.planner"), None),
+            ("@planner#docs", Some("recon.planner"), None),
+            ("@writer", Some("recon.planner"), Some("recon.planner")),
+            ("@sub.planner", Some("recon.sub.planner"), None),
+            (
+                "@planner",
+                Some("recon.sub.planner"),
+                Some("recon.sub.planner"),
+            ),
             ("@calm-fox", None, Some("claude")),
             ("@claude#docs", Some(""), None),
         ] {
