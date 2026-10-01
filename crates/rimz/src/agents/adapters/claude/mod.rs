@@ -54,8 +54,8 @@ use super::AskKind;
 use super::RemoteControlStatus;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{BackgroundTask, HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -111,7 +111,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         ],
     },
     capabilities: Capabilities {
-        hook_context: true,
+        hook_context: Some(HookContextReply::HookSpecificOutput { event_name: true }),
         prompt_context: true,
         native_ask_ui: true,
         transcript_tail_context: false,
@@ -971,17 +971,6 @@ fn deny_native_tool(extra_args: &mut Vec<String>, denied_tool: &str) {
 impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
     fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
         hook_ingress_decision(pid, remote_control::spawned_by_remote_control())
-    }
-
-    fn attach_hook_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
-        if decoded.event_name() != "PostToolUse" {
-            return false;
-        }
-        decoded.merge_reply_object([(
-            "hookSpecificOutput".to_owned(),
-            serde_json::json!({"hookEventName": "PostToolUse", "additionalContext": text}),
-        )]);
-        true
     }
 
     fn attach_prompt_context(&self, decoded: &mut HookOutput, text: &str) -> bool {

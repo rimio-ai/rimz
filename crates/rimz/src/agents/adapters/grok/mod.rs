@@ -17,8 +17,8 @@ use serde_json::Value;
 
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, SamePaneSessionPolicy,
-    ThreadKey, ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
+    SamePaneSessionPolicy, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal};
@@ -58,7 +58,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[],
     },
     capabilities: Capabilities {
-        hook_context: true,
+        hook_context: Some(HookContextReply::HookSpecificOutput { event_name: false }),
         prompt_context: false,
         native_ask_ui: true,
         transcript_tail_context: true,
@@ -361,17 +361,6 @@ impl crate::agents::capabilities::LaunchCapability for GrokAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for GrokAdapter {
-    fn attach_hook_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
-        if decoded.event_name() != "PostToolUse" {
-            return false;
-        }
-        decoded.merge_reply_object([(
-            "hookSpecificOutput".to_owned(),
-            serde_json::json!({"additionalContext": text}),
-        )]);
-        true
-    }
-
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let canonical = canonical_event_name(event_name);
         let parsed = payloads::parse(payload);

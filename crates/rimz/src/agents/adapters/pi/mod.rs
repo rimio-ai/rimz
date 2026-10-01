@@ -97,7 +97,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[("ask_user_question", AskKind::Question)],
     },
     capabilities: Capabilities {
-        hook_context: false,
+        hook_context: None,
         prompt_context: false,
         // Pi itself runs tools unasked; the rpiv questionnaire extension owns
         // a native blocking question UI on the same awaited `tool_call` gate.

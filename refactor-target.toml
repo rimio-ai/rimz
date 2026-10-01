@@ -155,7 +155,8 @@ upward-dependencies = ["address"]
 # Adapters name the history directories a shared account links before either home holds them (+1).
 # Native prompt-submit context attachment crosses the adapter/CLI hook seam (+1).
 # AgentState::attach_context is the one sidecar join the store's attach sites share (+1).
-surface-budget = 961
+# Pass 32a: HookContextReply declares the hook-context reply on the spec; AgentDefinition::attach_hook_context is its one writer, replacing the trait method (+1).
+surface-budget = 962
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

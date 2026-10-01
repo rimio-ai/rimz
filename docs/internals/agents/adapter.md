@@ -60,6 +60,7 @@ The launch block is data so that one registry entry is enough to light up `<kind
 
 | Field | What it governs |
 | --- | --- |
+| `hook_context` | the reply shape (`HookSpecificOutput` or a `TopLevel` key) in which a native post-tool hook reply carries additive model context such as a deadline rung; `AgentDefinition::attach_hook_context` is its one writer, and `None` sends the stop through the pane |
 | `native_ask_ui` | the agent draws its own permission and question prompts, so RimZ can mark the row waiting and route you to the pane; every built-in declares it, and a process plugin may not |
 | `transcript_tail_context` | a local transcript tail is a live context source, refreshable on a producer tick |
 | `registers_lazily` | a session can exist before its pane stamp does, so binding goes through the [recovery ladder](./instances.md#binding-a-session) |

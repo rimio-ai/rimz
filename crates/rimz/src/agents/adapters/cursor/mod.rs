@@ -26,8 +26,8 @@ use serde_json::{Value, json};
 
 use super::definition::{
     AgentSpec, BinIdentity, Brand, Capabilities, CapabilityLevel, ConcernCoverage,
-    CoverageAnnotations, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
-    ThreadKey, ToolClassification, UserCoverage,
+    CoverageAnnotations, HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -63,7 +63,9 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[],
     },
     capabilities: Capabilities {
-        hook_context: true,
+        hook_context: Some(HookContextReply::TopLevel {
+            key: "additional_context",
+        }),
         prompt_context: false,
         native_ask_ui: true,
         transcript_tail_context: true,
@@ -352,14 +354,6 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
                 std::env::var_os("CURSOR_PROJECT_DIR").as_deref(),
             ),
         })
-    }
-
-    fn attach_hook_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
-        if decoded.event_name() != "postToolUse" {
-            return false;
-        }
-        decoded.merge_reply_object([("additional_context".to_owned(), serde_json::json!(text))]);
-        true
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {

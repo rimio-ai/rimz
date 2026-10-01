@@ -195,7 +195,7 @@ pub(super) fn handle_lifecycle_hook(
             run_id.as_ref(),
         );
         if root_tool_used
-            && agent.spec().capabilities.hook_context
+            && agent.spec().capabilities.hook_context.is_some()
             && let Some(run_id) = run_id.as_ref()
             && let Err(error) = rimz::harness::run::claim_rung(
                 store.paths(),
