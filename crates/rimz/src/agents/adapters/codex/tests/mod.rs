@@ -159,6 +159,38 @@ fn named_login_scopes_spending_and_session_transcripts() {
 }
 
 #[test]
+fn spending_discovery_skips_copied_content_and_keeps_relocated_rollouts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let active = home.join("sessions/2026/01/01/rollout-2026-01-01T00-00-00-a.jsonl");
+    let relocated = home.join("rollout.jsonl");
+    let copied = [
+        ".tmp/plugins/plugins/plugin-eval/fixtures/observed-usage/responses.jsonl",
+        "plugins/cache/market/plugin/1.0.0/fixtures/usage.jsonl",
+        "worktrees/repo/fixtures/usage.jsonl",
+        "tmp/arg0/usage.jsonl",
+        "log/session-2026-01-01T00-00-00Z.jsonl",
+    ];
+    for path in [active.clone(), relocated.clone()]
+        .into_iter()
+        .chain(copied.iter().map(|relative| home.join(relative)))
+    {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    let env = std::collections::BTreeMap::from([(
+        "CODEX_HOME".to_owned(),
+        home.to_string_lossy().into_owned(),
+    )]);
+    let files = CodexAdapter
+        .spending_sources(&env)
+        .into_iter()
+        .flat_map(|source| source.complete_files())
+        .collect::<Vec<_>>();
+    assert_eq!(files, vec![active, relocated]);
+}
+
+#[test]
 fn codex_commands_and_permission_args_match_run_posture() {
     let preset = crate::agents::LaunchPreset {
         auto_compact: Some("200000".to_owned()),
