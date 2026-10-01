@@ -1,6 +1,7 @@
 //! Child process lifecycle helpers. Long-lived RimZ processes hand
 //! fire-and-forget children to the global reaper and supervise foreground
-//! children with event-driven exit and signal waits.
+//! children with event-driven exit and signal waits. A child that outlives an
+//! agent's call gets the user's temp environment back, not the agent's unit.
 
 use std::ffi::OsStr;
 use std::io;
@@ -262,6 +263,30 @@ pub(crate) fn user_temp_env<'a>(
     })
 }
 
+/// Give `cmd` the user's temp environment, as `user_temp_env` decides from
+/// this process's save variables, so a child that outlives the agent's call
+/// never carries the agent's temp unit, which GC removes after its owner ends.
+pub fn restore_user_temp_env(cmd: &mut Command) {
+    apply_user_temp_env(
+        cmd,
+        std::env::var(USER_TMPDIR_ENV).ok().as_deref(),
+        std::env::var(TEMP_ROOT_KEYS_ENV).ok().as_deref(),
+    );
+}
+
+fn apply_user_temp_env(cmd: &mut Command, saved: Option<&str>, temp_root_keys: Option<&str>) {
+    let Some(restore) = user_temp_env(saved, temp_root_keys) else {
+        return;
+    };
+    for key in restore.removed {
+        cmd.env_remove(key);
+    }
+    match restore.tmpdir {
+        Some(tmpdir) => cmd.env("TMPDIR", tmpdir),
+        None => cmd.env_remove("TMPDIR"),
+    };
+}
+
 /// Build a detached `rimz` command with fresh null stdio, anchored to RimZ-owned
 /// shared disk usage so a deleted launch CWD cannot ENOENT the spawn.
 pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
@@ -350,8 +375,20 @@ pub(crate) fn spawn_detached_program(
 /// Spawn `cmd` detached and hand its `Child` to the global reaper thread so the
 /// exited helper is `wait()`ed and never lingers as a zombie under a long-lived
 /// parent. Fire-and-forget: callers null stdio and set their own argv/timeouts.
-/// `label` is a static tag for tracing. Returns the spawned pid.
+/// `label` is a static tag for tracing. Returns the spawned pid. The child
+/// gets the user's temp environment ([`restore_user_temp_env`]), since it
+/// outlives the call that starts it.
 pub fn spawn_detached_reaped(cmd: &mut Command, label: &'static str) -> io::Result<u32> {
+    restore_user_temp_env(cmd);
+    spawn_detached_reaped_as_agent(cmd, label)
+}
+
+/// [`spawn_detached_reaped`] without the temp restore, for a child that runs
+/// the agent's own command and so keeps the agent's temp unit.
+pub(crate) fn spawn_detached_reaped_as_agent(
+    cmd: &mut Command,
+    label: &'static str,
+) -> io::Result<u32> {
     let sender = reaper_sender()?;
     let child = cmd.spawn()?;
     let pid = child.id();
@@ -510,6 +547,46 @@ mod tests {
                 tmpdir: None,
                 removed: vec![USER_TMPDIR_ENV, TEMP_ROOT_KEYS_ENV],
             })
+        );
+    }
+
+    #[test]
+    fn restoring_a_command_applies_the_user_temp_env() {
+        let envs = |saved, keys| {
+            let mut cmd = Command::new("true");
+            apply_user_temp_env(&mut cmd, saved, keys);
+            cmd.get_envs()
+                .map(|(key, value)| {
+                    (
+                        key.to_str().unwrap().to_owned(),
+                        value.map(|value| value.to_str().unwrap().to_owned()),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let expect = |pairs: &[(&str, Option<&str>)]| {
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), value.map(str::to_owned)))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        assert_eq!(envs(None, Some("CLAUDE_CODE_TMPDIR")), expect(&[]));
+        assert_eq!(
+            envs(Some("/var/folders/t"), Some("CLAUDE_CODE_TMPDIR")),
+            expect(&[
+                ("TMPDIR", Some("/var/folders/t")),
+                (USER_TMPDIR_ENV, None),
+                (TEMP_ROOT_KEYS_ENV, None),
+                ("CLAUDE_CODE_TMPDIR", None),
+            ])
+        );
+        assert_eq!(
+            envs(Some(""), None),
+            expect(&[
+                ("TMPDIR", None),
+                (USER_TMPDIR_ENV, None),
+                (TEMP_ROOT_KEYS_ENV, None),
+            ])
         );
     }
 

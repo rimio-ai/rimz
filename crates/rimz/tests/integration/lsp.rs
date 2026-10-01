@@ -1540,6 +1540,61 @@ fn lsp_attach_bridge_resolves_admits_and_versions() {
     );
 }
 
+/// A broker an agent's `rimz` starts outlives that agent and serves others, so
+/// its language server gets the user's temp environment, not the agent's unit.
+#[test]
+fn lsp_broker_started_from_an_agent_gives_its_server_the_user_tmpdir() {
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    for saved in ["user-tmp", ""] {
+        let env = Env::new();
+        let unit = env.home_root.join("unit");
+        let user = env.home_root.join("user-tmp");
+        std::fs::create_dir_all(&unit).unwrap();
+        std::fs::create_dir_all(&user).unwrap();
+        let (saved, expected) = if saved.is_empty() {
+            (String::new(), "unset|unset|unset".to_owned())
+        } else {
+            let user = user.display().to_string();
+            (user.clone(), format!("{user}|unset|unset"))
+        };
+        let marker = env.home_root.join("server-env");
+        let wrapper = format!(
+            "printf '%s|%s|%s' \"${{TMPDIR-unset}}\" \"${{CLAUDE_CODE_TMPDIR-unset}}\" \"${{RIMZ_USER_TMPDIR-unset}}\" > {}; exec {}",
+            shlex::try_quote(marker.to_str().unwrap()).unwrap(),
+            shlex::try_quote(stub.to_str().unwrap()).unwrap()
+        );
+        std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+        std::fs::write(env.rimz_home().join("config.toml"), format!("[lsp]\nreserve-percent = 0\nreserve-min = '0'\nkill-floor-percent = 0\n[lsp.servers.rust]\ncommand = ['sh', '-c', {}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\nmemory-estimate = '1M'\n", serde_json::to_string(&wrapper).unwrap())).unwrap();
+        let mut child = env
+            .rimz()
+            .args(["lsp", "attach", "--server", "rust"])
+            .env("TMPDIR", &unit)
+            .env("RIMZ_USER_TMPDIR", &saved)
+            .env("CLAUDE_CODE_TMPDIR", &unit)
+            .env("RIMZ_TEMP_ROOT_KEYS", "CLAUDE_CODE_TMPDIR")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        rimz::lsp::protocol::write_frame(&mut input, &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":url::Url::from_directory_path(&env.project_root).unwrap().to_string()}})).unwrap();
+        assert_eq!(
+            rimz::lsp::protocol::read_frame(&mut output).unwrap()["id"],
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            expected,
+            "saved {saved:?}"
+        );
+        drop(input);
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+}
+
 #[test]
 fn lsp_attach_refuses_an_optional_server_that_never_starts() {
     let env = Env::new();

@@ -81,12 +81,14 @@ pub(crate) fn open_browser_best_effort(url: &str) {
     if which::which(opener).is_err() {
         return;
     }
-    let _ = std::process::Command::new(opener)
+    let mut command = std::process::Command::new(opener);
+    command
         .arg(url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+        .stderr(std::process::Stdio::null());
+    rimz::child_process::restore_user_temp_env(&mut command);
+    let _ = command.spawn();
 }
 
 /// Render a command failure at the binary boundary.
