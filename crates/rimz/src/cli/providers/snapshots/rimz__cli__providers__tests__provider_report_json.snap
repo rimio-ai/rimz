@@ -90,6 +90,8 @@ expression: json
       "spend_usd": 8.1,
       "parked": false
     },
-    "active_sessions": 2
+    "active_sessions": 2,
+    "active": false,
+    "default_for": []
   }
 ]

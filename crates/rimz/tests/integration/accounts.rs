@@ -413,7 +413,10 @@ fn a_broken_project_config_warns_and_marks_no_account() {
     std::fs::write(project.join("config.toml"), "[accounts").unwrap();
     let empty_path = env.home_root.join("empty-path");
     std::fs::create_dir_all(&empty_path).unwrap();
-    for args in [&["accounts", "list", "--json"][..]] {
+    for args in [
+        &["accounts", "list", "--json"][..],
+        &["providers", "--json", "--all"][..],
+    ] {
         let output = env
             .rimz()
             .env_remove("CLAUDE_CONFIG_DIR")

@@ -2,6 +2,7 @@ use super::*;
 use jiff::SignedDuration;
 use jiff::tz::TimeZone;
 use rimz::agents::{AgentAccount, SpendWindow};
+use rimz::config::MachineConfig;
 use rimz::store::snapshot::{RemoteControlBadge, SidebarProviderPanel};
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
@@ -182,8 +183,56 @@ fn report_assembly_covers_auth_states_raw_accounts_filters_and_all() {
     assert_eq!(all.len(), rimz::agents::known_kinds().count());
 }
 
+fn week(usd: f64) -> SpendTally {
+    SpendTally {
+        week: SpendWindow {
+            usd,
+            sessions: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn machine_using(kind: &str, name: &str) -> MachineConfig {
+    MachineConfig {
+        accounts: toml::from_str(&format!(
+            "[{kind}.{name}]\nhome = \"/accounts/{name}\"\n[use]\n{kind} = \"{name}\"\n"
+        ))
+        .unwrap(),
+        ..Default::default()
+    }
+}
+
 #[test]
-fn named_accounts_have_separate_reports_without_provider_spend() {
+fn undeclared_or_unread_selections_mark_no_report_active() {
+    let logins = vec![ProviderLogin::default_for(AgentKind::new_unchecked(
+        "claude",
+    ))];
+    let mut machine = MachineConfig::default();
+    machine
+        .accounts
+        .use_accounts
+        .insert(AgentKind::new_unchecked("claude"), "gone".parse().unwrap());
+    for standing in [
+        AccountStanding::machine_only(&machine),
+        AccountStanding::unread(&MachineConfig::default()),
+    ] {
+        let mut reports = assemble_reports(
+            &logins,
+            &AccountsCache::default(),
+            BTreeMap::new(),
+            &ProviderSpendingCache::default(),
+            None,
+            true,
+        );
+        mark_standing(&mut reports, &standing);
+        assert!(reports.iter().all(|report| !report.active), "{standing:?}");
+    }
+}
+
+#[test]
+fn named_accounts_carry_their_own_spend_and_default_never_reads_kind_wide() {
     let kind = AgentKind::new_unchecked("claude");
     let logins = vec![
         ProviderLogin::default_for(kind.clone()),
@@ -202,7 +251,6 @@ fn named_accounts_have_separate_reports_without_provider_spend() {
         spend_usd: 3.0,
         parked: false,
     });
-    named_panel.spending = Some(SpendTally::default());
     let panels = BTreeMap::from([
         (logins[0].key(), panel("claude")),
         (logins[1].key(), named_panel.clone()),
@@ -211,8 +259,13 @@ fn named_accounts_have_separate_reports_without_provider_spend() {
     spending
         .spending
         .by_provider
-        .insert("claude".to_owned(), SpendTally::default());
-    let reports = assemble_reports(&logins, &accounts, panels, &spending, Some("claude"), false);
+        .insert("claude".to_owned(), week(99.0));
+    spending
+        .spending
+        .by_login
+        .insert(logins[1].key(), week(12.0));
+    let mut reports =
+        assemble_reports(&logins, &accounts, panels, &spending, Some("claude"), false);
     assert_eq!(
         reports
             .iter()
@@ -220,14 +273,20 @@ fn named_accounts_have_separate_reports_without_provider_spend() {
             .collect::<Vec<_>>(),
         [("claude", "default"), ("claude", "work")]
     );
-    assert!(
-        reports
-            .iter()
-            .all(|report| report.status == ProviderStatus::LoggedIn)
-    );
-    assert_eq!(reports[1].product_name, "Claude · work");
-    assert_eq!(reports[1].spending, None);
+    assert_eq!(reports[0].spending, None, "default never reads by_provider");
+    assert_eq!(reports[1].spending, Some(week(12.0)));
     assert_eq!(reports[1].day_budget, named_panel.day_budget);
+
+    mark_standing(
+        &mut reports,
+        &AccountStanding::machine_only(&machine_using("claude", "work")),
+    );
+    assert!(!reports[0].active && reports[1].active);
+    let json = serde_json::to_value(&reports).unwrap();
+    assert_eq!(json[0]["default_for"], serde_json::json!([]));
+    assert_eq!(json[1]["default_for"], serde_json::json!(["new_rooms"]));
+    assert_eq!(json[1]["active"], true);
+
     let mut out = anstream::StripStream::new(Vec::new());
     write_pretty(
         &mut out,
@@ -239,7 +298,7 @@ fn named_accounts_have_separate_reports_without_provider_spend() {
     let pretty = String::from_utf8(out.into_inner()).unwrap();
     assert_eq!(
         pretty,
-        "Claude — Claude Max · logged in\n  version: v1.2.3\n  usage:   –\n  spend:   7d $0.00 · 30d $0.00\n\nClaude · work — Claude Max · logged in\n  version: v1.2.3\n  usage:   –\n  budget:  $3.00 of $20.00/day\n"
+        "  Claude · default — Claude Max · logged in\n  version: v1.2.3\n  usage:   –\n  spend:   –\n\n● Claude · work — Claude Max · logged in · new rooms\n  version: v1.2.3\n  usage:   –\n  spend:   7d $12.00 · 30d $0.00\n  budget:  $3.00 of $20.00/day\n"
     );
     let unprobed = assemble_reports(
         &logins,
@@ -249,8 +308,236 @@ fn named_accounts_have_separate_reports_without_provider_spend() {
         None,
         false,
     );
-    assert_eq!(unprobed.len(), 1);
-    assert_eq!(unprobed[0].product_name, "Claude · work");
+    assert_eq!(
+        unprobed
+            .iter()
+            .map(|report| report.account.as_str())
+            .collect::<Vec<_>>(),
+        ["default", "work"],
+        "a kind with named accounts always reports its default"
+    );
+}
+
+fn window(minutes: u32, used: u8, resets_in: Option<i64>, now: Timestamp) -> RateLimitWindow {
+    RateLimitWindow {
+        used_percentage: Some(used),
+        resets_at: resets_in.map(|secs| now + SignedDuration::from_secs(secs)),
+        duration_mins: Some(minutes),
+        observed_at: Some(now),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn overview_compares_a_kind_with_named_accounts_in_one_table() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let claude = AgentKind::new_unchecked("claude");
+    let named = |name: &str| {
+        ProviderLogin::named(
+            claude.clone(),
+            name.parse().unwrap(),
+            format!("/accounts/{name}").into(),
+        )
+        .unwrap()
+    };
+    let logins = vec![
+        ProviderLogin::default_for(claude.clone()),
+        named("spare"),
+        named("work"),
+        ProviderLogin::default_for(AgentKind::new_unchecked("pi")),
+    ];
+    let accounts = AccountsCache {
+        logins: BTreeMap::from([
+            (
+                logins[0].key(),
+                record(1_000, true, Some(account("max", true))),
+            ),
+            (logins[1].key(), record(1_000, true, None)),
+            (
+                logins[2].key(),
+                record(1_000, true, Some(account("max", true))),
+            ),
+            (
+                logins[3].key(),
+                record(1_000, true, Some(account("openai-oauth", false))),
+            ),
+        ]),
+    };
+    let mut default_panel = panel("claude");
+    default_panel.version = Some("2.1.274".to_owned());
+    default_panel.windows = vec![
+        window(5 * 60, 62, Some(83 * 60), now),
+        window(7 * 24 * 60, 14, Some(4 * 86_400 + 2 * 3_600), now),
+    ];
+    default_panel.extra_credits = Some(ExtraCredits::known(Some(12.4), Some(37.6), Some(50.0)));
+    default_panel.reset_credits = Some(ResetCredits {
+        count: 2,
+        soonest_expiry: Some(now + SignedDuration::from_secs(3 * 86_400)),
+        expiries: Vec::new(),
+        effect: rimz::agents::RedeemEffect::KeepsSchedule,
+    });
+    let mut work_panel = panel("claude");
+    work_panel.version = None;
+    work_panel.windows = vec![
+        window(7 * 24 * 60, 30, Some(86_400), now),
+        RateLimitWindow {
+            scope: Some(rimz::agents::RateLimitWindowScope {
+                id: "fable".to_owned(),
+                label: "Fable".to_owned(),
+            }),
+            ..window(7 * 24 * 60, 31, None, now)
+        },
+    ];
+    work_panel.extra_credits = Some(ExtraCredits::Disabled);
+    let panels = BTreeMap::from([
+        (logins[0].key(), default_panel),
+        (logins[2].key(), work_panel),
+    ]);
+    let mut spending = ProviderSpendingCache::default();
+    spending
+        .spending
+        .by_login
+        .insert(logins[0].key(), week(2_742.9));
+    spending
+        .spending
+        .by_login
+        .insert(logins[2].key(), week(12.0));
+    let mut reports = assemble_reports(&logins, &accounts, panels, &spending, None, false);
+    mark_standing(
+        &mut reports,
+        &AccountStanding::machine_only(&machine_using("claude", "work")),
+    );
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_overview(
+        &mut out,
+        &reports,
+        now,
+        &TimeZone::UTC,
+        &BTreeMap::new(),
+        false,
+    )
+    .unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "Claude · v2.1.274", "{text}");
+    assert_eq!(
+        lines.iter().filter(|line| line.contains("ACCOUNT")).count(),
+        1,
+        "{text}"
+    );
+    assert!(lines[2].starts_with("   default"), "{text}");
+    assert!(
+        lines[3].contains("spare") && lines[3].contains("logged out"),
+        "{text}"
+    );
+    assert!(lines[4].starts_with("●  work"), "{text}");
+    assert!(
+        lines.iter().all(|line| line.trim_end() == *line),
+        "{text:?}"
+    );
+    assert!(
+        text.contains("\nPi — "),
+        "single-account kind keeps its block: {text}"
+    );
+    insta::assert_snapshot!("provider_overview", text);
+}
+
+fn hinted(
+    active_used: u8,
+    siblings: &[(&str, u8)],
+    deciding: Option<Deciding>,
+    in_room: bool,
+) -> String {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let codex = AgentKind::new_unchecked("codex");
+    let mut logins = vec![ProviderLogin::default_for(codex.clone())];
+    logins.extend(siblings.iter().map(|(name, _)| {
+        ProviderLogin::named(
+            codex.clone(),
+            name.parse().unwrap(),
+            format!("/accounts/{name}").into(),
+        )
+        .unwrap()
+    }));
+    let accounts = AccountsCache {
+        logins: logins
+            .iter()
+            .map(|login| (login.key(), record(1_000, true, Some(account("pro", true)))))
+            .collect(),
+    };
+    let week_window = |used| window(7 * 24 * 60, used, Some(86_400), now);
+    let mut panels = BTreeMap::new();
+    let mut default_panel = panel("codex");
+    default_panel.windows = vec![week_window(active_used)];
+    panels.insert(logins[0].key(), default_panel);
+    for (login, (_, used)) in logins[1..].iter().zip(siblings) {
+        let mut sibling = panel("codex");
+        sibling.windows = vec![week_window(*used)];
+        panels.insert(login.key(), sibling);
+    }
+    let mut reports = assemble_reports(
+        &logins,
+        &accounts,
+        panels,
+        &ProviderSpendingCache::default(),
+        None,
+        false,
+    );
+    reports[0].active = true;
+    let deciding = deciding
+        .map(|deciding| BTreeMap::from([("codex".to_owned(), deciding)]))
+        .unwrap_or_default();
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_overview(&mut out, &reports, now, &TimeZone::UTC, &deciding, in_room).unwrap();
+    String::from_utf8(out.into_inner()).unwrap()
+}
+
+#[test]
+fn hint_names_the_roomiest_sibling_once_the_active_account_runs_hot() {
+    let text = hinted(
+        92,
+        &[("team-2", 31), ("team-1", 5), ("team-0", 5)],
+        Some(Deciding::Room),
+        true,
+    );
+    assert!(
+        text.ends_with(
+            "\n  codex default is at 92% of its 7d window; team-0 has the most room:\n    rimz accounts use codex team-0\n"
+        ),
+        "{text}"
+    );
+    let global = hinted(80, &[("team-1", 5)], Some(Deciding::Machine), false);
+    assert!(
+        global.contains("    rimz accounts use --global codex team-1\n"),
+        "{global}"
+    );
+    for (text, why) in [
+        (
+            hinted(79, &[("team-1", 5)], Some(Deciding::Room), true),
+            "below 80%",
+        ),
+        (
+            hinted(
+                92,
+                &[("team-1", 92), ("team-2", 95)],
+                Some(Deciding::Room),
+                true,
+            ),
+            "no lower sibling",
+        ),
+        (
+            hinted(92, &[("team-1", 5)], Some(Deciding::Project), true),
+            "project decides",
+        ),
+        (
+            hinted(92, &[("team-1", 5)], Some(Deciding::Room), false),
+            "room decides but the caller is outside it",
+        ),
+        (hinted(92, &[("team-1", 5)], None, true), "nothing decides"),
+    ] {
+        assert!(text.contains("team-1"), "{why}: table rendered: {text}");
+        assert!(!text.contains("most room"), "{why}: {text}");
+    }
 }
 
 #[test]
