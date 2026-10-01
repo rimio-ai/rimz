@@ -99,7 +99,7 @@ fn wakeup_fixture() -> Option<WakeupFixture> {
     let workspace_id = WorkspaceId::from_project_root(&project_root);
     let state =
         StatePaths::for_project_root_under(&project_root, &state_root).expect("state paths");
-    let runtime = RuntimePaths::under_named(workspace_id.clone(), state.dir_name, &runtime_root);
+    let runtime = RuntimePaths::for_state_under(&state, &runtime_root);
     runtime.ensure_dirs().expect("ensure runtime dirs");
     if crate::common::af_unix_bind_sandboxed(&runtime.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");

@@ -613,9 +613,9 @@ impl RuntimePaths {
     }
 
     /// Runtime paths for `workspace_id` in the dir `dir_name` under
-    /// `runtime_root`, without the socket budget. Uses that root as the state home
-    /// for isolated fixtures; callers holding state use [`Self::for_state_under`].
-    pub fn under_named(
+    /// `runtime_root`, without the socket budget. Locks root under that root's
+    /// state tree until a caller binds the room's state.
+    fn under_named(
         workspace_id: WorkspaceId,
         dir_name: WorkspaceDirName,
         runtime_root: &Path,

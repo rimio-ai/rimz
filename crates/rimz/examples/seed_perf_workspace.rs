@@ -27,8 +27,7 @@ fn main() -> Result<()> {
         StatePaths::for_project_root_under(&project_root, &rimz_home).context("building paths")?;
     paths.ensure_dirs().context("creating state dirs")?;
 
-    let mut runtime =
-        RuntimePaths::under_named(workspace_id.clone(), paths.dir_name.clone(), &runtime_root);
+    let mut runtime = RuntimePaths::for_state_under(&paths, &runtime_root);
     runtime.persistent_shared_root = rimz_home.join("shared");
     runtime.ensure_dirs().context("creating runtime dirs")?;
     let codex_home = scratch_root.join("codex-home");
@@ -250,11 +249,7 @@ fn seed_spending_scopes(
             paths
                 .ensure_dirs()
                 .context("creating spending scope state dirs")?;
-            let mut runtime = RuntimePaths::under_named(
-                workspace.workspace_id.clone(),
-                paths.dir_name.clone(),
-                runtime_root,
-            );
+            let mut runtime = RuntimePaths::for_state_under(&paths, runtime_root);
             runtime.persistent_shared_root = rimz_home.join("shared");
             runtime
                 .ensure_dirs()
