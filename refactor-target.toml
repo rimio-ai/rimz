@@ -872,7 +872,8 @@ allowed-dependencies = [
 # Checkout and channel holds share board-stage parsing and the fleet's Done predicate.
 # Restart, fork, and subagent resume share the account-mismatch refusal with lane and cohort resume.
 # ResumeOverrides shares saved-posture overrides with cohort CLI callers.
-surface-budget = 57
+# resolve_member_posture gives agents restart a team member's role layers.
+surface-budget = 58
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
@@ -2791,6 +2792,11 @@ reason = "Returned or carried by pub finalize/resolve signatures the CLI matches
 kind = "item"
 key = "harness::resume::resolve_posture"
 reason = "The one relaunch posture seam shared by rebirth, lane, cohort, restart and fork; degradation is asymmetric by design (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::resolve_member_posture"
+reason = "The posture seam with a team member's role layers, for agents restart in the CLI; team resume resolves the same binding in-module."
 
 [[verdict]]
 kind = "item"

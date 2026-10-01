@@ -306,7 +306,7 @@ fn restart_posture(
     {
         launch.block_failed_reference(agent.profile.as_deref(), None)?;
     }
-    let posture = rimz::harness::resume::resolve_posture(
+    let posture = rimz::harness::resume::resolve_member_posture(
         rimz::harness::resume::PostureRequest {
             record: agent.record.as_deref(),
             profile: agent.profile.as_deref(),
@@ -315,6 +315,9 @@ fn restart_posture(
             stamped_tier: agent.tier.as_deref(),
         },
         &launch.profiles,
+        &launch.teams,
+        agent.team.as_deref(),
+        agent.role.as_deref(),
     );
     match &posture.degraded {
         Some(reason @ PostureDegrade::KindChanged { .. }) => {
