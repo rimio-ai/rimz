@@ -222,6 +222,10 @@ fn fix_uses_the_single_hit_selected_by_a_hint() {
     for (source, expected) in [
         ("`a.rs::Type ~4-5`", "`a.rs::Type ~1-3`"),
         ("`a.rs::load ~93`", "`a.rs::load ~91`"),
+        // A type hint that drifted past every item returns to the type itself.
+        ("`a.rs::Type (200-210)`", "`a.rs::Type (1-3)`"),
+        // A hint on one impl block keeps naming that block.
+        ("`a.rs::Type ~12`", "`a.rs::Type ~10`"),
     ] {
         assert_eq!(rewrite_hints(source, false), expected);
         assert_eq!(rewrite_hints(expected, false), expected);
