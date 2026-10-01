@@ -10,7 +10,7 @@ use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::run_wake::RunWaiter;
 use rimz::store::run::RunRecord;
 
-pub(crate) fn stream_blocking_run(
+pub(super) fn stream_blocking_run(
     waiter: &RunWaiter,
     store: &rimz::Store,
     adapter: &AgentDefinition,
