@@ -64,24 +64,11 @@ pub(super) fn resolve_finalized_layout(
     let spec = qualified_spec.as_deref().or(spec);
     let mut effective = effective.clone();
     let availability = room.map(|(runtime, state)| {
-        let ancestry = rimz::Store::open_existing(state.clone(), runtime.clone())
-            .and_then(|store| store.runtime_projection(rimz::RuntimeScope::Audit).ok())
-            .and_then(|projection| {
-                // Availability is advisory; launch_layout owns caller refusals.
-                rimz::harness::ancestry::resolve_launch_ancestry_here(
-                    &projection.agents,
-                    false,
-                    machine_config.agents.max_chain_length,
-                )
-                .ok()
-                .flatten()
-            });
         rimz::harness::plan::LaunchAvailability::read(
             runtime,
             state,
             machine_config,
             jiff::Timestamp::now(),
-            ancestry.as_ref(),
         )
     });
     let routed = effective.route(

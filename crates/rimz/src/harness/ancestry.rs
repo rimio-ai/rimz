@@ -32,13 +32,11 @@ impl LaunchFocus {
 pub enum LaunchAncestry {
     /// A top-level peer that participates in an agent-launch chain.
     Peer {
-        parent_login: crate::ids::LoginKey,
         launch_generation: u8,
         launched_by: Option<crate::agents::LaunchedBy>,
     },
     /// A pane-backed child created through `rimz subagents`.
     Subagent {
-        parent_login: crate::ids::LoginKey,
         parent_agent_id: AgentSessionId,
         parent_agent_kind: AgentKind,
         launch_generation: u8,
@@ -46,17 +44,6 @@ pub enum LaunchAncestry {
 }
 
 impl crate::store::writer::LaunchLogin {
-    /// Same-provider work inherits its parent's stamp; other launches use the room default.
-    pub fn from_ancestry(ancestry: Option<&LaunchAncestry>, kind: &AgentKind) -> Self {
-        match ancestry {
-            Some(
-                LaunchAncestry::Peer { parent_login, .. }
-                | LaunchAncestry::Subagent { parent_login, .. },
-            ) if parent_login.kind == *kind => Self::Pinned(parent_login.name.clone()),
-            _ => Self::RoomDefault,
-        }
-    }
-
     /// Resolve a launch selection against the room defaults and machine accounts.
     pub fn resolve(
         &self,
@@ -257,7 +244,6 @@ pub fn resolve_launch_ancestry(
         .unwrap_or_else(|| caller.agent_id.clone());
     if subagent {
         return Ok(Some(LaunchAncestry::Subagent {
-            parent_login: caller.login_key(),
             parent_agent_id: caller_id,
             parent_agent_kind: caller.kind.clone(),
             launch_generation: generation.saturating_add(1),
@@ -270,7 +256,6 @@ pub fn resolve_launch_ancestry(
         });
     }
     Ok(Some(LaunchAncestry::Peer {
-        parent_login: caller.login_key(),
         launch_generation: generation.saturating_add(1),
         launched_by: Some(crate::agents::LaunchedBy {
             kind: caller.kind.clone(),
@@ -344,34 +329,6 @@ mod tests {
     use crate::agents::AgentStatus;
 
     #[test]
-    fn launch_ancestry_carries_the_parent_account_for_peers_and_children() {
-        use crate::store::writer::LaunchLogin;
-        let mut parent = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
-        parent.login = Some("work".parse().unwrap());
-        for child in [false, true] {
-            let ancestry = resolve_launch_ancestry(Some(&parent), child, 3).unwrap();
-            assert_eq!(
-                LaunchLogin::from_ancestry(ancestry.as_ref(), &parent.kind),
-                LaunchLogin::Pinned("work".parse().unwrap())
-            );
-            assert_eq!(
-                LaunchLogin::from_ancestry(ancestry.as_ref(), &AgentKind::new_unchecked("codex")),
-                LaunchLogin::RoomDefault
-            );
-        }
-        parent.login = None;
-        let ancestry = resolve_launch_ancestry(Some(&parent), false, 3).unwrap();
-        assert_eq!(
-            LaunchLogin::from_ancestry(ancestry.as_ref(), &parent.kind),
-            LaunchLogin::Pinned(Default::default())
-        );
-        assert_eq!(
-            LaunchLogin::from_ancestry(None, &parent.kind),
-            LaunchLogin::RoomDefault
-        );
-    }
-
-    #[test]
     fn launch_focus_preserves_agent_and_background_callers() {
         let caller = CallerIdentity {
             kind: AgentKind::new_unchecked("claude"),
@@ -433,7 +390,6 @@ mod tests {
         assert_eq!(
             resolve_launch_ancestry(Some(&root), false, 3).unwrap(),
             Some(LaunchAncestry::Peer {
-                parent_login: root.login_key(),
                 launch_generation: 1,
                 launched_by: Some(crate::agents::LaunchedBy {
                     kind: AgentKind::new_unchecked("claude"),
@@ -444,7 +400,6 @@ mod tests {
         assert_eq!(
             resolve_launch_ancestry(Some(&root), true, 0).unwrap(),
             Some(LaunchAncestry::Subagent {
-                parent_login: root.login_key(),
                 parent_agent_id: AgentSessionId::from("root"),
                 parent_agent_kind: AgentKind::new_unchecked("claude"),
                 launch_generation: 1,
@@ -462,7 +417,6 @@ mod tests {
         assert_eq!(
             resolve_launch_ancestry(Some(&peer), true, 3).unwrap(),
             Some(LaunchAncestry::Subagent {
-                parent_login: peer.login_key(),
                 parent_agent_id: AgentSessionId::from("peer"),
                 parent_agent_kind: AgentKind::new_unchecked("codex"),
                 launch_generation: 4,
@@ -577,7 +531,6 @@ mod tests {
             assert_eq!(
                 resolve_launch_ancestry(Some(caller), true, 3).unwrap(),
                 Some(LaunchAncestry::Subagent {
-                    parent_login: caller.login_key(),
                     parent_agent_id: AgentSessionId::from("launch-parent"),
                     parent_agent_kind: identity.kind.clone(),
                     launch_generation: 1,

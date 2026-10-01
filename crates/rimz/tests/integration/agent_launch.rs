@@ -3484,7 +3484,7 @@ fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
     }
 }
 #[test]
-fn inherited_account_tier_routing_ignores_exhausted_room_default() {
+fn agent_launched_tier_routing_uses_exhausted_room_default() {
     let env = Env::new();
     std::fs::create_dir_all(env.rimz_home()).unwrap();
     std::fs::write(env.rimz_home().join("config.toml"),
@@ -3560,11 +3560,13 @@ fn inherited_account_tier_routing_ignores_exhausted_room_default() {
     );
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        report["kind"], "claude",
-        "inherited work account is available"
+        report["kind"], "codex",
+        "the exhausted room account routes to the next provider despite the caller's work account"
     );
     assert!(
-        report["tier_skipped"].as_array().is_none_or(Vec::is_empty),
+        report["tier_skipped"]
+            .as_array()
+            .is_some_and(|skipped| !skipped.is_empty()),
         "{report}"
     );
 }
