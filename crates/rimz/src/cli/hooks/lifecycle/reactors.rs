@@ -85,12 +85,28 @@ fn archive_ended(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
             "lifecycle: failed to archive messages watching ended agent",
         );
     }
+    let reason = ctx
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .ok()
+        .and_then(|snapshot| {
+            let receiver = find_agent(&snapshot.agents, &event.kind, &event.agent_id)?;
+            let peers: Vec<_> = snapshot
+                .agents
+                .iter()
+                .filter(|agent| !agent.is_provider_subagent())
+                .collect();
+            Some(rimz::message::deliver::ended_receiver_reason(
+                receiver, None, &peers,
+            ))
+        })
+        .unwrap_or_else(|| "receiver ended".to_owned());
     if let Err(err) = ctx.store.archive_messages_for_card(
         &event.kind,
         &event.agent_id,
         event.agent_name.as_deref(),
         None,
-        "receiver ended",
+        &reason,
         &ctx.workspace.session_name,
     ) {
         warn!(

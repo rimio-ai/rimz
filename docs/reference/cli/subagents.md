@@ -226,7 +226,7 @@ A child is addressable as `@<petname>` for `rimz message` and `rimz pane`. The p
 
 A provider that registers before its first turn, such as Claude, initially reports the message as `queued` because the child `is resuming`. Delivery follows its registration, with a fallback after 30 seconds by default if registration never arrives. Providers that register lazily, such as Codex, keep immediate delivery.
 
-A message still queued when its child ends is archived rather than left waiting for a vanished pane, and `rimz message show` reports `receiver ended`. When the end came without the provider's own end hook (the provider exited or was reaped), the reason adds `; rimz message @<handle> resumes it`. Either way the parent resends with `rimz message @<handle>`, which resumes the child.
+A message still queued when its child ends is archived rather than left waiting for a vanished pane, and `rimz message show` reports `receiver ended; rimz message @<handle> resumes it`. The parent resends with `rimz message @<handle>`, which resumes the child.
 
 Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory, conversation, login, profile and provider resume support to remain usable; otherwise the miss names the reason. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
 

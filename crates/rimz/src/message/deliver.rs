@@ -427,6 +427,24 @@ pub(super) fn execute_attempt(
     }
 }
 
+/// Archive reason for the open messages of an ended receiver: a launched
+/// child's names the `rimz message` that resumes it, addressed as `address`
+/// when the sender gave one.
+pub fn ended_receiver_reason(
+    receiver: &AgentState,
+    address: Option<&str>,
+    peers: &[&AgentState],
+) -> String {
+    if !receiver.is_launched_child() {
+        return "receiver ended".to_owned();
+    }
+    let target = address.map_or_else(
+        || crate::address::agent_handle(receiver, peers, true),
+        str::to_owned,
+    );
+    format!("receiver ended; rimz message {target} resumes it")
+}
+
 pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>) -> Result<()> {
     let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
     let Some(_guard) = try_start_sweep(&runtime)? else {
@@ -498,18 +516,11 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
                     _ => None,
                 };
                 if let Some(receiver) = ended_receiver {
-                    let reason = if receiver.is_launched_child() {
-                        let target = head.address.clone().unwrap_or_else(|| {
-                            crate::address::agent_handle(
-                                &receiver,
-                                &crate::address::addressable_agents(snapshot),
-                                true,
-                            )
-                        });
-                        format!("receiver ended; rimz message {target} resumes it")
-                    } else {
-                        "receiver ended".to_owned()
-                    };
+                    let reason = ended_receiver_reason(
+                        &receiver,
+                        head.address.as_deref(),
+                        &crate::address::addressable_agents(snapshot),
+                    );
                     store.archive_messages_watching_card(
                         &receiver.kind,
                         &receiver.agent_id,
