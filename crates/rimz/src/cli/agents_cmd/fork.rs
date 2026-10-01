@@ -47,11 +47,9 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let focus = LaunchFocus::resolve(args.bg, resolve_caller(&snapshot.agents).as_ref());
     let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
     let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
-    if let Some(mismatch) = rimz::harness::resume::login_mismatch(&source, &logins) {
-        return Err(mismatch.into());
-    }
     let mut seed = validate_fork_source(
         &source,
+        &logins,
         rimz::harness::resume::resume_session_present,
         Path::is_dir,
     )?;
@@ -274,9 +272,13 @@ fn resolve_fork_source(
 
 fn validate_fork_source(
     agent: &AgentState,
+    logins: &rimz::ids::RoomLogins,
     session_backed: impl FnOnce(&AgentState) -> bool,
     worktree_exists: impl FnOnce(&Path) -> bool,
 ) -> Result<ForkSeed> {
+    if let Some(mismatch) = rimz::harness::resume::login_mismatch(agent, logins) {
+        return Err(mismatch.into());
+    }
     if agent.is_provider_subagent() {
         bail!(
             "agent `{}` is a subagent; fork its parent instead",
@@ -345,6 +347,28 @@ mod tests {
     use super::*;
     use rimz::agents::AgentStatus;
     use rimz::config::{Profile, ProfilesConfig};
+
+    static NO_LOGINS: rimz::ids::RoomLogins = rimz::ids::RoomLogins::new();
+
+    fn room(kind: &str, name: &str) -> rimz::ids::RoomLogins {
+        rimz::ids::RoomLogins::from([(AgentKind::new_unchecked(kind), name.parse().unwrap())])
+    }
+
+    #[test]
+    fn fork_validation_refuses_a_source_from_another_account() {
+        let mut agent = source("session-1");
+        agent.name = Some("x".to_owned());
+        agent.login = Some("work".parse().unwrap());
+
+        let err = validate_fork_source(&agent, &room("codex", "personal"), |_| true, |_| true)
+            .expect_err("account mismatch");
+
+        assert_eq!(
+            err.to_string(),
+            "@x's session belongs to codex account `work`; this room now launches codex on \
+             `personal`. Run `rimz accounts use --room codex work` to resume it, then switch back."
+        );
+    }
 
     fn source(id: &str) -> AgentState {
         let mut agent = AgentState::stub("codex", id, AgentStatus::Success);
@@ -460,7 +484,8 @@ mod tests {
         let mut agent = source("session-1");
         agent.parent_agent_id = Some(AgentSessionId::from("parent-1"));
 
-        let err = validate_fork_source(&agent, |_| true, |_| true).expect_err("subagent");
+        let err =
+            validate_fork_source(&agent, &NO_LOGINS, |_| true, |_| true).expect_err("subagent");
 
         assert!(err.to_string().contains("fork its parent"));
     }
@@ -469,7 +494,8 @@ mod tests {
     fn fork_validation_refuses_provisional_sessions() {
         let agent = source("launch_123");
 
-        let err = validate_fork_source(&agent, |_| true, |_| true).expect_err("provisional");
+        let err =
+            validate_fork_source(&agent, &NO_LOGINS, |_| true, |_| true).expect_err("provisional");
 
         assert!(err.to_string().contains("has not registered"));
     }
@@ -478,7 +504,8 @@ mod tests {
     fn fork_validation_refuses_missing_session_file() {
         let agent = source("session-1");
 
-        let err = validate_fork_source(&agent, |_| false, |_| true).expect_err("session file");
+        let err = validate_fork_source(&agent, &NO_LOGINS, |_| false, |_| true)
+            .expect_err("session file");
 
         assert!(err.to_string().contains("conversation file is gone"));
     }
@@ -487,12 +514,13 @@ mod tests {
     fn fork_validation_refuses_missing_worktree() {
         let mut unrecorded = source("session-1");
         unrecorded.worktree_path = None;
-        let err =
-            validate_fork_source(&unrecorded, |_| true, |_| true).expect_err("recorded worktree");
+        let err = validate_fork_source(&unrecorded, &NO_LOGINS, |_| true, |_| true)
+            .expect_err("recorded worktree");
         assert!(err.to_string().contains("no recorded worktree"));
 
         let missing = source("session-1");
-        let err = validate_fork_source(&missing, |_| true, |_| false).expect_err("worktree path");
+        let err = validate_fork_source(&missing, &NO_LOGINS, |_| true, |_| false)
+            .expect_err("worktree path");
         assert!(
             err.to_string()
                 .contains("worktree `/repo/worktree` is gone")
@@ -515,7 +543,8 @@ mod tests {
         }));
 
         agent.login = Some("work".parse().unwrap());
-        let seed = validate_fork_source(&agent, |_| true, |_| true).expect("valid fork");
+        let seed = validate_fork_source(&agent, &room("codex", "work"), |_| true, |_| true)
+            .expect("valid fork");
 
         assert_eq!(seed.launch.login, agent.login);
         assert_eq!(seed.source_session_id, AgentSessionId::from("session-1"));
