@@ -2347,7 +2347,7 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
 
     // Like run::WaitResolutionWatch, this needs open notifications, which kqueue lacks.
     if !cfg!(target_os = "linux") {
-        tracing::warn!("skipping: observing the wrapper's run reads requires Linux inotify");
+        crate::common::skip("observing the wrapper's run reads requires Linux inotify");
         return;
     }
     let env = Env::new();
@@ -2874,6 +2874,7 @@ fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
 fn unreadable_machine_config_blocks_worktree_launch_before_store_events() {
     let env = Env::new();
     if !init_launch_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
         return;
     }
     env.install_agent_hooks("claude");
@@ -2912,6 +2913,7 @@ fn unreadable_machine_config_blocks_worktree_launch_before_store_events() {
 fn failed_created_hook_blocks_launch_before_store_events() {
     let env = Env::new();
     if !init_launch_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
         return;
     }
     env.install_agent_hooks("claude");
@@ -2949,6 +2951,7 @@ fn fresh_launch_requires_a_named_worktree_before_side_effects() {
 fn supervised_unmanaged_worktree_requires_terminal_confirmation() {
     let env = Env::new();
     if !init_launch_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
         return;
     }
     let path = env.home_root.join("project-worktrees/review");
@@ -2981,7 +2984,7 @@ fn supervised_cross_repo_worktree_refuses_non_terminal_input() {
     let env = Env::new();
     let current_root = env.home_root.join("current");
     if !init_launch_repo(&env.project_root) || !init_launch_repo(&current_root) {
-        tracing::warn!("skipping: git unavailable");
+        crate::common::skip("git unavailable");
         return;
     }
     let room_root = canonical(&env.project_root);

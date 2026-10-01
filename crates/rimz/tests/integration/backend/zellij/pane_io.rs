@@ -392,6 +392,7 @@ fn doctor_kitty_probe_completes_inside_a_live_zellij_pane() {
         })
         .expect("numeric Zellij major.minor version");
     if parsed < (0, 45) {
+        crate::common::skip("zellij below 0.45");
         return;
     }
 

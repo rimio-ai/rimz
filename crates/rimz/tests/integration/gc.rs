@@ -15,6 +15,7 @@ use rimz::{MuxName, SidebarInstanceId, StatePaths};
 use serde_json::json;
 
 use crate::common::Env;
+use crate::common::git::git_missing;
 
 fn stale_room_files(env: &Env, root: &Path) -> [std::path::PathBuf; 3] {
     env.record(root);
@@ -1105,10 +1106,6 @@ fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {
         "hook failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn git_missing() -> bool {
-    Command::new("git").arg("--version").output().is_err()
 }
 
 fn init_repo(path: &Path) {

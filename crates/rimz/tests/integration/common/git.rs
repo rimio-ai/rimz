@@ -4,8 +4,14 @@ use super::Env;
 use std::path::Path;
 use std::process::Command;
 
+/// `true`, with the self-skip recorded, when no `git` runs; every caller
+/// returns early on it.
 pub(crate) fn git_missing() -> bool {
-    Command::new("git").arg("--version").output().is_err()
+    let missing = Command::new("git").arg("--version").output().is_err();
+    if missing {
+        super::skip("git not on PATH");
+    }
+    missing
 }
 
 pub(crate) fn init_repo(path: &Path) {

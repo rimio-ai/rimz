@@ -1092,10 +1092,6 @@ fn worktree_remove_survives_history_append_failure() {
 
 #[cfg(unix)]
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "test skip without a tracing subscriber"
-)]
 fn worktree_remove_reports_live_queue_write_failure_after_removal() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -1119,7 +1115,7 @@ fn worktree_remove_reports_live_queue_write_failure_after_removal() {
     let probe = messages_dir.join("write-probe");
     if std::fs::write(&probe, b"").is_ok() {
         std::fs::set_permissions(&messages_dir, permissions).expect("restore permissions");
-        eprintln!("skipping: this user bypasses directory write permissions");
+        crate::common::skip("this user bypasses directory write permissions");
         return;
     }
     let output = env.rimz().args(["worktree", "remove", "demo"]).output();
@@ -2388,6 +2384,7 @@ fn worktree_status_rebase_landed_with_shifted_context_is_landed() {
         &env.project_root,
         &["merge-tree", "--write-tree", "HEAD", "HEAD"],
     ) {
+        crate::common::skip("git lacks merge-tree --write-tree");
         return;
     }
     commit_file(
@@ -2498,6 +2495,7 @@ fn gc_sweeps_rewritten_worktree_whose_tip_tree_landed() {
         &env.project_root,
         &["merge-tree", "--write-tree", "HEAD", "HEAD"],
     ) {
+        crate::common::skip("git lacks merge-tree --write-tree");
         return;
     }
     env.rimz()
@@ -2633,6 +2631,7 @@ fn gc_keeps_unlanded_worktree_whose_tip_tree_is_only_shared_history() {
         &env.project_root,
         &["merge-tree", "--write-tree", "HEAD", "HEAD"],
     ) {
+        crate::common::skip("git lacks merge-tree --write-tree");
         return;
     }
     let shared_history_tree = git_stdout(&env.project_root, &["rev-parse", "HEAD^{tree}"]);

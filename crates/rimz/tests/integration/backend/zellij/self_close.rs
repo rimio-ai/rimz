@@ -32,11 +32,11 @@ fn sidebar_self_closes_when_its_tab_empties() {
 
     let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
     if !rimz.exists() {
-        eprintln!("rimz binary not built; skipping self-close test");
+        crate::common::skip("rimz binary not built");
         return;
     }
     let Some(wasm) = presence_wasm_artifact() else {
-        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
         return;
     };
     match zellij::capabilities() {
@@ -45,7 +45,7 @@ fn sidebar_self_closes_when_its_tab_empties() {
                 .parsed_version
                 .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
         _ => {
-            eprintln!("zellij below the presence-plugin floor; skipping test");
+            crate::common::skip("zellij below the presence-plugin floor");
             return;
         }
     }
@@ -232,7 +232,7 @@ fn with_stale_roster_room(
 
     let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
     if !rimz.exists() {
-        eprintln!("rimz binary not built; skipping self-close test");
+        crate::common::skip("rimz binary not built");
         return;
     }
 

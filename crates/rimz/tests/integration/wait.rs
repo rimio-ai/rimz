@@ -503,6 +503,7 @@ fn canceling_pid_wait_leaves_the_existing_process_running() {
 fn wait_pid_refuses_a_process_it_cannot_observe() {
     if nix::sys::signal::kill(nix::unistd::Pid::from_raw(1), None) != Err(nix::errno::Errno::EPERM)
     {
+        crate::common::skip("pid 1 is not signal-protected from this user");
         return;
     }
     let env = Env::new();
@@ -823,7 +824,7 @@ fn watched_wait_runs_in_the_arming_worktree() {
         .current_dir(&env.project_root)
         .status();
     if !initialized.is_ok_and(|status| status.success()) {
-        tracing::warn!("skipping: git unavailable");
+        crate::common::skip("git unavailable");
         return;
     }
     let commit = std::process::Command::new("git")

@@ -2283,7 +2283,7 @@ fn exec_wrapper_without_its_own_pane_binding_ends_nothing() {
 fn failed_supervised_run_retries_with_failure_context() {
     let env = Env::new();
     if !init_git_repo(&env.project_root) {
-        tracing::warn!("skipping: git unavailable");
+        crate::common::skip("git unavailable");
         return;
     }
     let store = env.store();
@@ -2983,7 +2983,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
     match status {
         Ok(status) if status.success() => {}
         _ => {
-            tracing::warn!("skipping: git unavailable");
+            crate::common::skip("git unavailable");
             return;
         }
     }

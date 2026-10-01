@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Command;
 
+use crate::common::git::git_missing;
 use crate::common::{Env, zellij_trace_shim};
 
 #[test]
@@ -322,10 +323,6 @@ fn init_repo(path: &Path) {
     git(path, &["config", "user.email", "rimz@example.com"]);
     git(path, &["config", "user.name", "RimZ Test"]);
     commit_file(path, "README.md", "fixture\n", "initial");
-}
-
-fn git_missing() -> bool {
-    Command::new("git").arg("--version").output().is_err()
 }
 
 fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {

@@ -1,6 +1,7 @@
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 use super::support::*;
+use crate::common::git::git_missing;
 use rimz::agents::{AgentStatus, LaunchParams};
 use rimz::mux::tab_name::TabNameIntent;
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
@@ -46,7 +47,7 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
         if isolation == "sandbox"
             && let Err(err) = rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)
         {
-            eprintln!("skipping sandbox tab-title case: {err}");
+            crate::common::skip(&format!("bubblewrap unusable: {err}"));
             continue;
         }
         let env = Env::new();
@@ -593,10 +594,6 @@ fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
         |path| path.is_dir(),
         |_| true,
     )
-}
-
-fn git_missing() -> bool {
-    Command::new("git").arg("--version").output().is_err()
 }
 
 fn init_repo(path: &Path) {

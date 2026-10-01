@@ -73,7 +73,7 @@ fn attribution_scopes_to_the_checkout_branch() {
         .output()
         .is_err()
     {
-        tracing::warn!("skipping: git unavailable");
+        crate::common::skip("git unavailable");
         return;
     }
     let env = Env::new();
@@ -804,6 +804,7 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
         .output()
         .is_err()
     {
+        crate::common::skip("git not on PATH");
         return;
     }
     let env = Env::new();

@@ -14,7 +14,7 @@
 macro_rules! require_zellij {
     () => {
         if which::which("zellij").is_err() {
-            eprintln!("zellij not on PATH; skipping test");
+            crate::common::skip("zellij not on PATH");
             return;
         }
     };
