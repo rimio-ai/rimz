@@ -131,6 +131,9 @@ pub struct TaskEntry {
     pub once: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<Timestamp>,
+    /// The instant of an absolute one-shot, written by `rimz loop add --after-reset`.
+    #[serde(rename = "fire-at", skip_serializing_if = "Option::is_none")]
+    pub fire_at: Option<Timestamp>,
     /// The provider whose windows the row's `window.*` terms read, recorded at add.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<crate::ids::AgentKind>,

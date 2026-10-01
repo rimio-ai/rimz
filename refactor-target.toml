@@ -395,7 +395,8 @@ path = "crates/rimz/src/harness"
 # `agents show` resolves an agent's temp unit through the launch owner rule (+1).
 # The `[agents] shell` refusal is shared by launch compile, room start, and config set (+2).
 # Window conditions: the lazy window reading both evaluation callers build, and the add-time resolver with its refusals (+4).
-surface-budget = 633
+# `--after-reset`: its add-time resolver and the reset it reports to both `loop add` paths (+2).
+surface-budget = 635
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1029,7 +1030,8 @@ allowed-dependencies = [
 # Check-launch conversion shares ownership lookup and supervised-run shaping.
 # The hidden runner accepts typed condition evidence alongside signal evidence.
 # The add-time window resolver and its refusals serve both `loop add` paths (+2).
-surface-budget = 42
+# `--after-reset` resolves its instant here for both `loop add` paths (+2).
+surface-budget = 44
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

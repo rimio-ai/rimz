@@ -83,6 +83,108 @@ fn condition_rows_validate_describe_and_have_standing_lifetimes() {
     );
 }
 
+#[test]
+fn fire_at_rows_are_ephemeral_absolute_one_shots() {
+    let at = zdt(2026, 6, 24, 13, 0, 0);
+    let entry = TaskEntry {
+        fire_at: Some(at.timestamp()),
+        ..spawn_entry()
+    };
+    let parsed = parse_trigger("reset", &entry).unwrap();
+    let Trigger::Schedule(schedule) = &parsed.trigger else {
+        panic!("a fire-at row is a clock trigger: {parsed:?}");
+    };
+    assert!(schedule.once);
+    assert!(ephemeral_lifetime(&entry));
+    let local = at
+        .timestamp()
+        .to_zoned(crate::config::MachineConfig::load_lenient().time_zone());
+    assert_eq!(
+        parsed.describe(),
+        local.strftime("once at %Y-%m-%d %H:%M").to_string()
+    );
+    for field in ["at", "every", "cron"] {
+        let mut conflict = entry.clone();
+        match field {
+            "at" => conflict.at = Some("07:00".to_owned()),
+            "every" => conflict.every = Some("5m".to_owned()),
+            "cron" => conflict.cron = Some("0 * * * *".to_owned()),
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                parse_trigger("reset", &conflict),
+                Err(ScheduleErr::TimeConflict { .. })
+            ),
+            "{field}"
+        );
+    }
+    for field in ["signal", "when", "watch"] {
+        let mut conflict = entry.clone();
+        match field {
+            "signal" => conflict.signal = Some("ci.passed".to_owned()),
+            "when" => conflict.when = Some(vec!["ci=passed".to_owned()]),
+            "watch" => conflict.watch = Some(WatchSpec::Command("true".to_owned())),
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                parse_trigger("reset", &conflict),
+                Err(ScheduleErr::TriggerConflict { .. })
+            ),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn fire_at_is_due_and_next_exactly_at_its_instant() {
+    let at = zdt(2026, 6, 24, 13, 0, 0);
+    let entry = TaskEntry {
+        fire_at: Some(at.timestamp()),
+        ..spawn_entry()
+    };
+    let schedule = schedule_of(&entry);
+    let early = zdt(2026, 6, 24, 12, 59, 59);
+    let armed = before(&at, 3600);
+    assert!(!schedule.due(armed, &early), "before the instant");
+    assert!(schedule.due(armed, &at), "at the instant");
+    assert!(
+        !schedule.due(at.timestamp(), &after_zoned(&at, 60)),
+        "stamped at the instant"
+    );
+    assert_eq!(schedule.next_after(armed, &early), Some(at.timestamp()));
+    assert_eq!(schedule.next_after(at.timestamp(), &at), None);
+
+    let parsed = parse_trigger("reset", &entry);
+    let timing = |last_fire, now: &Zoned| {
+        TaskTiming::evaluate(&parsed, catalog::TaskSource::Config, last_fire, None, now).state()
+    };
+    assert_eq!(
+        timing(None, &early),
+        TaskTimingState::Upcoming(at.timestamp()),
+        "unseen rows show the instant"
+    );
+    assert_eq!(
+        timing(None, &at),
+        TaskTimingState::Due(at.timestamp()),
+        "unseen past-due rows are due"
+    );
+    assert_eq!(
+        timing(Some(armed), &at),
+        TaskTimingState::Due(at.timestamp())
+    );
+    assert_eq!(
+        timing(Some(at.timestamp()), &after_zoned(&at, 60)),
+        TaskTimingState::NoOccurrence,
+        "a fired instant has no next fire"
+    );
+}
+
+fn after_zoned(now: &Zoned, seconds: i64) -> Zoned {
+    after(now, seconds).to_zoned(now.time_zone().clone())
+}
+
 pub(super) fn zdt(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> Zoned {
     date(year, month, day)
         .at(hour, minute, second, 0)

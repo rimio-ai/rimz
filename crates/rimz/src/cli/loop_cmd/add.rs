@@ -62,6 +62,20 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         &runtime,
         Timestamp::now(),
     )?;
+    let after_reset = args
+        .after_reset
+        .map(|span| {
+            resolve_after_reset(
+                span,
+                provider_kind.as_deref(),
+                args.surplus.is_some() || args.surplus_after.is_some(),
+                &entry.resolved_root(),
+                &runtime,
+                Timestamp::now(),
+            )
+        })
+        .transpose()?;
+    entry.fire_at = after_reset.as_ref().map(|reset| reset.fire_at);
     // Compile once before writing, so validation and feedback share one shape.
     let shape = schedule::TaskShape::compile(&args.name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
@@ -93,6 +107,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         parsed,
         task_action,
         provider_kind.as_deref(),
+        after_reset.as_ref(),
     )?;
     writeln!(
         out,
@@ -121,6 +136,20 @@ fn add_delivery(
     matches: BTreeMap<String, String>,
 ) -> Result<()> {
     let timing = resolve_add_timing(args)?;
+    let after_reset = args
+        .after_reset
+        .map(|span| {
+            resolve_after_reset(
+                span,
+                Some(target.kind.as_str()),
+                args.surplus.is_some() || args.surplus_after.is_some(),
+                &workspace.worktree_root,
+                &rimz::RuntimePaths::for_project_root(&workspace.project_root)?,
+                Timestamp::now(),
+            )
+            .map_err(anyhow::Error::from)
+        })
+        .transpose()?;
     let trigger = if !args.when.is_empty() {
         let parsed = schedule::parse_trigger(
             &args.name,
@@ -167,6 +196,7 @@ fn add_delivery(
                 at: timing.at,
                 every: args.every.clone(),
                 cron: args.cron.clone(),
+                fire_at: after_reset.as_ref().map(|reset| reset.fire_at),
                 ..TaskEntry::default()
             },
         )?;
@@ -233,6 +263,7 @@ fn add_delivery(
         task.trigger().as_ref().map_err(Clone::clone)?,
         task.action().map_err(Clone::clone)?,
         entry.wait.as_ref().map(|target| target.kind.as_str()),
+        after_reset.as_ref(),
     )?;
     writeln!(
         out,
@@ -250,6 +281,10 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     schedule::validate_name(&args.name)?;
     let project_error = args.project.then(|| {
         [
+            (
+                args.after_reset.is_some(),
+                "--project tasks cannot use --after-reset; its reset instant is machine state",
+            ),
             (!args.when.is_empty(), "--project tasks cannot use --when yet; add it without --project"),
             (
                 args.wait.is_some(),
@@ -305,6 +340,9 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         && !matches.contains_key("session")
     {
         bail!(self_wait_guard_message());
+    }
+    if !action_kind.has_effect() && args.after_reset.is_some() {
+        bail!("--after-reset requires --agent or --wait");
     }
     if !action_kind.has_effect() && (args.surplus.is_some() || args.surplus_after.is_some()) {
         bail!("--surplus and --surplus-after require --agent or --wait");
@@ -760,6 +798,7 @@ fn write_add_feedback(
     parsed: &schedule::ParsedTrigger,
     action: &TaskAction,
     action_kind: Option<&str>,
+    after_reset: Option<&AfterReset>,
 ) -> Result<()> {
     match action {
         TaskAction::Spawn(agent) => {
@@ -781,7 +820,13 @@ fn write_add_feedback(
         }
     }
     let suffix = if parsed.once { "; then removed" } else { "" };
-    if matches!(parsed.trigger, schedule::Trigger::Condition { .. }) {
+    if let Some(reset) = after_reset {
+        writeln!(
+            out,
+            "trigger: fires once after the next {} {} reset",
+            reset.kind, reset.span
+        )?;
+    } else if matches!(parsed.trigger, schedule::Trigger::Condition { .. }) {
         writeln!(out, "trigger: {}{suffix}", parsed.describe())?;
         condition::write_receipt(out, entry, parsed)?;
     } else {
@@ -796,13 +841,41 @@ fn write_add_feedback(
             .unwrap_or(1.0);
         let mut segments = Vec::new();
         if let Some(after) = entry.surplus_after.as_deref() {
-            segments.push(format!("after {after} into the {kind} 7d window"));
+            segments.push(format!("after {after} into the {kind} longest window"));
         }
         segments.push(format!("surplus ≥ {threshold:.1}x"));
         writeln!(out, "gate: {}", segments.join(" · "))?;
     }
+    let zone = MachineConfig::load_lenient().time_zone();
+    if let Some(reset) = after_reset {
+        let left = reset.left.map_or_else(
+            || "usage unknown".to_owned(),
+            |left| format!("{left}% left"),
+        );
+        if !reset.started {
+            writeln!(
+                out,
+                "window: {} {} · not started · {left}",
+                reset.kind, reset.span
+            )?;
+            writeln!(
+                out,
+                "next fire: the next scheduler tick, since the window has not started"
+            )?;
+            return Ok(());
+        }
+        writeln!(
+            out,
+            "window: {} {} · {left} · resets {}",
+            reset.kind,
+            reset.span,
+            reset
+                .resets_at
+                .to_zoned(zone.clone())
+                .strftime("%Y-%m-%d %H:%M")
+        )?;
+    }
     if let Some(next) = first_next_fire(parsed) {
-        let zone = MachineConfig::load_lenient().time_zone();
         let local = next.to_zoned(zone);
         writeln!(
             out,

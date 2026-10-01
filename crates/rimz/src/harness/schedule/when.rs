@@ -7,7 +7,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{ProviderCapacity, RoomLoginSet, WindowSpan};
+use crate::agents::{ProviderCapacity, RateLimitWindow, RoomLoginSet, WindowSpan};
 use crate::forge::pr_state::PrStateCache;
 use crate::ids::AgentKind;
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
@@ -82,12 +82,7 @@ impl<'a> WindowReadings<'a> {
             .get_or_init(|| self.read())
             .get(kind)?
             .window_of_span(span, self.now)?;
-        let left = if window.lifted {
-            100
-        } else {
-            100 - window.used_percentage?.min(100)
-        };
-        Some(left.to_string())
+        Some(percent_left(&window)?.to_string())
     }
 
     fn read(&self) -> BTreeMap<AgentKind, ProviderCapacity> {
@@ -101,6 +96,14 @@ impl<'a> WindowReadings<'a> {
             .map(|(key, capacity)| (key.kind, capacity))
             .collect()
     }
+}
+
+/// Percent of a window left; a lifted window has no limit.
+pub(super) fn percent_left(window: &RateLimitWindow) -> Option<u8> {
+    if window.lifted {
+        return Some(100);
+    }
+    Some(100 - window.used_percentage?.min(100))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -856,8 +859,6 @@ mod tests {
 
     #[test]
     fn window_terms_read_percent_left_at_the_boundaries() {
-        use crate::agents::RateLimitWindow;
-
         let scope = tempfile::tempdir().unwrap();
         let now = Timestamp::now();
         let window = |used, resets_in: i64, span: WindowSpan| RateLimitWindow {

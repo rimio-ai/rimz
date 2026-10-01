@@ -495,6 +495,7 @@ fn build_entry(
         }
         DeliveryTrigger::Clock(parsed) => {
             match parsed.schedule {
+                Schedule::Instant(at) => entry.fire_at = Some(at),
                 Schedule::RawCron(cron) => entry.cron = Some(cron),
                 Schedule::Interval(interval) => {
                     entry.every = Some(format!("{}m", interval.minutes))

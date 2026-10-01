@@ -243,6 +243,7 @@ mod tests {
             watch: None,
             once: Some(true),
             deadline: Some(jiff::Timestamp::UNIX_EPOCH),
+            fire_at: Some(jiff::Timestamp::UNIX_EPOCH),
             provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
         };
 
@@ -258,6 +259,7 @@ mod tests {
         assert!(machine.contains_key("max-attempts"));
         assert!(machine.contains_key("budget-per-day"));
         assert!(machine.contains_key("system-prompt-file"));
+        assert!(machine.contains_key("fire-at"));
         assert!(machine_text.contains("[tasks.full.wait]"));
         assert!(machine_text.contains("[tasks.full.match]"));
         assert!(machine_text.contains("branch = \"feature\""));

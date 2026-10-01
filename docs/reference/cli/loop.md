@@ -51,6 +51,7 @@ Every command takes the [global flags](../cli.md#global-flags). No `loop` comman
 | Shape | Flags | Repeats |
 | --- | --- | --- |
 | One-shot | `--at HH:MM`, or `--in <DUR>` | Fires once, then the task removes itself. |
+| After a window reset | `--after-reset 5h\|7d` | Fires once at the next reset of the task provider's window, then the task removes itself; see [after a reset](#after-a-reset). |
 | Interval | `--every <DUR>`, measured from the last fire | Yes. |
 | Calendar | `--every <DAYS> --at HH:MM` | On each matching day. |
 | Raw cron | `--cron "<5 fields>"` | Per the expression. |
@@ -70,6 +71,12 @@ The trigger values follow these rules:
 | `--until` | A duration in `s`, `m`, `h`, or `d`, resolved at add time to a deadline. Requires `--check`, `--every`, and `--agent` or `--wait`; refused with `--in`. |
 
 `--every 1d` fires a day after the last fire and drifts with it; `--every day --at 07:00` fires at 07:00. Calendar times, `--in`, and `--until` resolve in the top-level `timezone` setting, or the system zone when it is unset. A clock task arms the first time a clock sees it and fires on the next occurrence after that, so a late room or a new timer never replays missed fires.
+
+### After a reset
+
+`--after-reset <5h|7d>` fires once at the next reset of that window of the task's provider, the `--agent` or `--wait` kind. Add reads the window from the provider's cache and writes its reset instant to the row as `fire-at`; a window that has not started fires on the next scheduler tick instead. An instant that passed before any clock saw the task, or while it was paused, fires on the first tick it is live. The task gets one attempt: a fire, a gate skip, an overlap, a check skip, or an error all remove it, while `rimz loop run` by hand leaves it.
+
+Add refuses what a [window condition](#conditions) refuses, and also a window the provider is not enforcing (use the other span), a window with no reset time, and `--surplus` or `--surplus-after` on the provider's longest window, whose gate is always closed at its reset. `--after-reset` requires `--agent` or `--wait`, conflicts with `--at`, `--every`, `--cron`, `--in`, `--signal`, `--when`, and `--until`, and is refused with `--project`. Listings describe the task as `once at <YYYY-MM-DD HH:MM>` in the configured zone and show that instant as its next fire.
 
 ### Conditions
 
@@ -133,6 +140,16 @@ live while a room for /home/you/code/app is open
 no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one
 ```
 
+An `--after-reset` task replaces the trigger and next-fire lines:
+
+```console
+trigger: fires once after the next claude 5h reset
+window: claude 5h · 70% left · resets 2026-09-05 14:00
+next fire: 2026-09-05 14:00 (in 2h)
+```
+
+A window that has not started reads `window: claude 5h · not started · 100% left` and `next fire: the next scheduler tick, since the window has not started`.
+
 A `--wait` action reads ``action: waits @planner — pinned to claude session `<id>` now; skipped and removed if that session exits``, a check-only task `action: runs check in <dir>`, and a surplus gate adds a `gate:` line. The last line reads `the loop timer will keep time` when the timer is active.
 
 ## Where tasks are stored
@@ -142,14 +159,14 @@ Each task lives in one of three stores, which `rimz loop list` names in its SOUR
 | Store | File | Holds | SOURCE |
 | --- | --- | --- | --- |
 | Machine | `~/.rimz/loop.toml` | Repeating `--agent` and check-only tasks added without `--project`. | `machine` |
-| State | `~/.rimz/ws/<workspace-dir>/records/loop-instances.json` | Every `--wait` task, plus one-shots (`--at`, `--in`), `--until`, and `--once` tasks. Rows retire themselves. | `state`, or `team <instance>` for a team binding |
+| State | `~/.rimz/ws/<workspace-dir>/records/loop-instances.json` | Every `--wait` task, plus one-shots (`--at`, `--in`, `--after-reset`), `--until`, and `--once` tasks. Rows retire themselves. | `state`, or `team <instance>` for a team binding |
 | Project | `<root>/.rimz/config.toml`, `[tasks.<name>]` | Tasks added with `--project`. | `project`, or `project · untrusted` / `project · stale` while trust is missing |
 
 `loop list`, `enable --all`, and `disable --all` cover machine tasks plus the state and project tasks of the project resolved from the current directory or `--root`. Enable, disable, pause, and strike state belong to this machine: machine-wide for machine tasks, per project for state and project tasks.
 
 ### Project tasks
 
-`--project` writes a task that ships with the repository. It needs `--every`, `--cron`, or `--signal`, and refuses `--wait`, `--until`, `--once`, and `--when`. Hand-written project tasks also reject `when` and `for`. `--root` must lie inside the project of the current directory. A project task stores no `root` or `dir` and always runs at the project root.
+`--project` writes a task that ships with the repository. It needs `--every`, `--cron`, or `--signal`, and refuses `--wait`, `--until`, `--once`, `--when`, and `--after-reset`. Hand-written project tasks also reject `when` and `for`. `--root` must lie inside the project of the current directory. A project task stores no `root` or `dir` and always runs at the project root.
 
 A project task runs unattended only when both hold:
 
@@ -253,7 +270,7 @@ The room, account, and quota caps are checked again when the agent launches and 
 
 `--surplus <RATIO>` fires an `--agent` or `--wait` action only while the provider's longest budget window has that much headroom: the share of budget left divided by the share of time left. `1.0x` is the sustainable pace, and `--surplus 1.5x` needs half again as much. `--surplus-after <DUR>` (`m`, `h`, or `d`) first requires that much of the window to have elapsed; alone it implies `--surplus 1.0x`.
 
-A missing, incomplete, expired, or not-started window keeps the gate closed, so an API-key account without window readings always skips. A managed Qwen `--agent` task paces against its account's 7-day window, and a Qwen `--wait` task always skips. A closed gate records `surplus skipped`, and `loop show` prints the gate and the recorded reason. The headroom model with a worked example is [budgets → the surplus gate](../../guide/budget.md#the-surplus-gate).
+A missing, incomplete, expired, or not-started window keeps the gate closed (which is why `--after-reset` on the longest window refuses a surplus gate), so an API-key account without window readings always skips. A managed Qwen `--agent` task paces against its account's 7-day window, and a Qwen `--wait` task always skips. A closed gate records `surplus skipped`, and `loop show` prints the gate and the recorded reason. The headroom model with a worked example is [budgets → the surplus gate](../../guide/budget.md#the-surplus-gate).
 
 ### Strikes
 
