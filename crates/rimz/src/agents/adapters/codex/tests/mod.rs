@@ -167,7 +167,10 @@ fn spending_discovery_skips_copied_content_and_keeps_relocated_rollouts() {
     let copied = [
         ".tmp/plugins/plugins/plugin-eval/fixtures/observed-usage/responses.jsonl",
         "plugins/cache/market/plugin/1.0.0/fixtures/usage.jsonl",
+        "skills/cloned-skill/fixtures/usage.jsonl",
         "worktrees/repo/fixtures/usage.jsonl",
+        "packages/standalone/current/usage.jsonl",
+        "cache/codex_app_directory/usage.jsonl",
         "tmp/arg0/usage.jsonl",
         "log/session-2026-01-01T00-00-00Z.jsonl",
     ];
