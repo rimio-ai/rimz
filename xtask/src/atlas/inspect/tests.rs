@@ -356,6 +356,47 @@ fn inspect_brief_presets_sections_and_top_unless_given() {
     assert!(error.contains("mutually exclusive"), "{error}");
 }
 
+#[test]
+fn inspect_brief_surface_lists_every_narrowable_item_past_top() {
+    let row = |name: &str, narrow_to: &str| surface::SurfaceRow {
+        module: "store".into(),
+        name: name.into(),
+        kind: "fn".into(),
+        reach: "pub".into(),
+        narrow_to: narrow_to.into(),
+        path: PathBuf::from("src/store.rs"),
+        line: 1,
+        end_line: 1,
+        sloc: 1,
+        outside_sites: 0,
+        outside_files: 0,
+        callers: Vec::new(),
+        internal_sites: 0,
+        testkit_sites: 0,
+        test_sites: 0,
+        reexport_of: None,
+        definition: (PathBuf::new(), String::new(), String::new(), 0),
+    };
+    let surface = SurfaceSection {
+        items: vec![
+            row("first", "keep"),
+            row("late_keep", "keep"),
+            row("late_narrow", "pub(crate)"),
+        ],
+        ..SurfaceSection::default()
+    };
+    let mut rendered = String::new();
+    render_surface(&mut rendered, &surface, 1, true);
+    assert!(rendered.contains("`store::late_narrow`"), "{rendered}");
+    assert!(!rendered.contains("`store::late_keep`"), "{rendered}");
+    assert!(rendered.contains("_1 more items omitted._"), "{rendered}");
+
+    let mut rendered = String::new();
+    render_surface(&mut rendered, &surface, 1, false);
+    assert!(!rendered.contains("`store::late_narrow`"), "{rendered}");
+    assert!(rendered.contains("_2 more items omitted._"), "{rendered}");
+}
+
 fn verdicts(verdicts: &[(VerdictKind, &str)]) -> Target {
     Target {
         version: 5,
