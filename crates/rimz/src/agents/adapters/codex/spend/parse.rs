@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::spending::origin_path;
-use crate::agents::transcript_fs::{deserialize_optional_object_lossy, read_transcript_lines};
+use crate::agents::transcript_fs::{
+    bytes_contains, deserialize_optional_object_lossy, read_transcript_lines,
+};
 
 use super::super::rollout::{
     CodexModelMetadata, CodexRawUsage, CodexTimestamp, RolloutKind, RolloutRecord, decode_line,
@@ -136,20 +138,16 @@ pub(super) enum CodexLineKind {
 ///
 /// Returns `None` for lines that contain no relevant token-usage information.
 pub(super) fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
-    fn has(hay: &[u8], needle: &[u8]) -> bool {
-        hay.windows(needle.len()).any(|w| w == needle)
-    }
-
-    if has(line, br#""type":"session_meta""#) {
+    if bytes_contains(line, br#""type":"session_meta""#) {
         return Some(CodexLineKind::SessionMeta);
     }
-    if has(line, br#""type":"response_item""#) {
+    if bytes_contains(line, br#""type":"response_item""#) {
         return Some(CodexLineKind::ResponseItem);
     }
 
-    let has_turn_ctx = has(line, br#""type":"turn_context""#);
-    let has_event_msg = has(line, br#""type":"event_msg""#);
-    let has_token_count = has(line, br#""type":"token_count""#);
+    let has_turn_ctx = bytes_contains(line, br#""type":"turn_context""#);
+    let has_event_msg = bytes_contains(line, br#""type":"event_msg""#);
+    let has_token_count = bytes_contains(line, br#""type":"token_count""#);
 
     if has_turn_ctx || (has_event_msg && has_token_count) {
         return Some(CodexLineKind::Session);
@@ -158,9 +156,9 @@ pub(super) fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
     // Headless format: usage object or individual token-count fields with no
     // event_msg wrapper.
     if !has_event_msg
-        && (has(line, br#""usage":"#)
-            || has(line, br#""input_tokens":"#)
-            || has(line, br#""prompt_tokens":"#))
+        && (bytes_contains(line, br#""usage":"#)
+            || bytes_contains(line, br#""input_tokens":"#)
+            || bytes_contains(line, br#""prompt_tokens":"#))
     {
         return Some(CodexLineKind::Headless);
     }
@@ -294,8 +292,8 @@ fn probe_replay(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut prefix = [0_u8; 16 * 1024];
     let read = file.read(&mut prefix).ok()?;
-    let replay = crate::agents::transcript_fs::bytes_contains(&prefix[..read], b"thread_spawn")
-        || crate::agents::transcript_fs::bytes_contains(&prefix[..read], b"forked_from_id");
+    let replay = bytes_contains(&prefix[..read], b"thread_spawn")
+        || bytes_contains(&prefix[..read], b"forked_from_id");
     if !replay {
         return None;
     }

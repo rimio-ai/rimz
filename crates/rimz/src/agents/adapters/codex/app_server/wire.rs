@@ -10,7 +10,7 @@ use crate::agents::adapters::codex::account::{
     UsageCredits, UsageWindow, normalize_credits, normalize_usage, parse_balance,
 };
 use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits, WindowSource};
-use crate::agents::{AccountUsageSnapshot, RedeemEffect, ResetCredits};
+use crate::agents::{AccountUsageSnapshot, RedeemEffect, ResetCredits, non_empty_trimmed};
 
 use super::transport::AppServerErr;
 
@@ -226,15 +226,9 @@ pub(super) fn thread_matches_session(thread: &RawThreadSummary, session_id: &str
 }
 
 pub(super) fn thread_summary_from_raw(thread: RawThreadSummary) -> Option<ThreadSummary> {
-    let preview = nonempty_trimmed(thread.preview);
-    let name = nonempty_trimmed(thread.name);
+    let preview = thread.preview.as_deref().and_then(non_empty_trimmed);
+    let name = thread.name.as_deref().and_then(non_empty_trimmed);
     (preview.is_some() || name.is_some()).then_some(ThreadSummary { preview, name })
-}
-
-fn nonempty_trimmed(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 /// Project the gathered read-only parts onto the transport-agnostic record.
