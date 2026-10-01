@@ -35,6 +35,9 @@ pub struct LaunchPlanInputs<'a> {
     /// handle, or why they could not be read.
     pub agents: Result<&'a [crate::agents::AgentState], &'a str>,
     pub ambient_env: &'a BTreeMap<String, String>,
+    /// The machine's `[agents] shell`, read from machine config directly since
+    /// `effective` is absent when the effective config fails to load.
+    pub agent_shell: Option<&'a Path>,
 }
 
 pub struct LaunchPlan {
@@ -279,12 +282,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     }
     reminders.sandbox = inputs.bwrap.is_some();
     reminders.settings = Some((inputs.runtime.prompt_dir(), inputs.ambient_env.clone()));
-    if inputs
+    reminders.env = inputs
         .effective
-        .is_none_or(|effective| effective.env_reminder)
-    {
-        reminders.env = Some(super::launch_env::read());
-    }
+        .is_none_or(|effective| effective.env_reminder);
+    reminders.agent_shell = inputs.agent_shell.map(Path::to_path_buf);
     let login = crate::agents::session_login(
         &request.kind,
         request.identity.params.login.as_ref(),
@@ -609,6 +610,7 @@ pub mod testkit {
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
+            agent_shell: None,
         })
         .unwrap();
         assert_eq!(plan.login.name().as_str(), expected.unwrap_or("default"));

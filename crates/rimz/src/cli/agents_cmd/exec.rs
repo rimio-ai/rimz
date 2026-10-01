@@ -180,6 +180,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         bwrap: bwrap.as_deref(),
         agents: agents.as_deref().map_err(String::as_str),
         ambient_env: &ambient_env,
+        agent_shell: machine_config.agents.shell.as_deref(),
     })
     .inspect_err(|_| fail())?;
     for warning in &plan.warnings {
@@ -210,10 +211,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let process = plan.process();
     if let Some(adapter) = adapter
         && adapter.min_version().is_some()
-        && let Ok(Some(path)) = rimz::harness::launch::resolve_program_after_shell_rc(
-            &process.env,
-            &process.provider_program,
-        )
+        && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
     {
         rimz::agents::version::check_launch_version_floor(adapter, &path)
             .inspect_err(|_| fail())?;

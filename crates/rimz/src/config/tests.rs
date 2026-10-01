@@ -516,6 +516,20 @@ fn env_reminder_defaults_on_and_parses_override() {
 }
 
 #[test]
+fn agents_shell_defaults_absent_and_parses_a_path() {
+    let dir = tempdir().expect("tempdir");
+    let defaulted = load_no_fragments(&write_named(&dir, "config.toml", "")).unwrap();
+    assert_eq!(defaulted.agents.shell, None);
+    let tuned = load_no_fragments(&write_named(
+        &dir,
+        "config.toml",
+        "[agents]\nshell = \"/bin/bash\"\n",
+    ))
+    .unwrap();
+    assert_eq!(tuned.agents.shell.as_deref(), Some(Path::new("/bin/bash")));
+}
+
+#[test]
 fn retired_git_reminder_names_env_reminder() {
     let dir = tempdir().unwrap();
     match load_no_fragments(&write_named(

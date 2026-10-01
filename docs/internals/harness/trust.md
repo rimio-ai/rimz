@@ -43,7 +43,7 @@ Everything else in the file deserializes leniently and never touches the hash. T
 
 Some tables are refused outright. [`check_project_config_removed_tables`](../../../crates/rimz/src/trust.rs) fails the read when the project config carries a `[layout]` table (which includes `[[layout.initial_panes]]` and `[layout.tmux]`), naming what replaced it rather than another file to move it to, since per-machine config has no `[layout]` either, or a retired key that [`retired_agents_key`](../../../crates/rimz/src/config/agents.rs) names with its replacement. Project task fields that describe machine state fail to load; [loops.md § Where tasks live](./loops.md#where-tasks-live) owns that list.
 
-Machine policy stays outside the hash because a repository cannot set it. Per-machine `[[notifications.handler]]` and `[notifications].command`, per-machine profiles, subagent profiles, and teams, per-machine loop `check` commands, and `agents.isolation` all live under `~/.rimz/` and are never trust-tracked. A repository profile in either scope that sets `isolation` is refused with `RepoProfileSetsIsolation`, even after trust is granted; declare the default in a machine Markdown definition or pass `--isolation`. A repository therefore cannot choose host or sandbox isolation, and the [sandbox mount view](../sandbox.md) is no substitute for trust: profile skill views do not make untrusted commands safe.
+Machine policy stays outside the hash because a repository cannot set it. Per-machine `[[notifications.handler]]` and `[notifications].command`, per-machine profiles, subagent profiles, and teams, per-machine loop `check` commands, `agents.isolation`, and `agents.shell` all live under `~/.rimz/` and are never trust-tracked. A repository profile in either scope that sets `isolation` is refused with `RepoProfileSetsIsolation`, even after trust is granted; declare the default in a machine Markdown definition or pass `--isolation`. A repository therefore cannot choose host or sandbox isolation, and the [sandbox mount view](../sandbox.md) is no substitute for trust: profile skill views do not make untrusted commands safe.
 
 The hashed surface is closed. A repo profile may inherit only repo profiles or built-in kinds (`RepoProfileEscapesTrust` otherwise), a repo team role binds only repo profiles, and a repo task always runs at the project root. A launch described by the project config therefore runs only hashed definitions, in a directory the project controls.
 
@@ -71,13 +71,13 @@ A trusted project task still needs its own arming: trust approves the config con
 
 ### Env application
 
-[`compose_agent_env`](../../../crates/rimz/src/harness/launch.rs) layers the launch env, and the login-shell wrapper ([`login_shell_argv`](../../../crates/rimz/src/harness/launch.rs)) delivers it: the wrapper runs the user's shell startup files, then execs `/usr/bin/env` with RimZ's launch env as `KEY=VALUE` arguments, so the launch env wins over anything the rc files set. Precedence, lowest to highest:
+[`compose_agent_env`](../../../crates/rimz/src/harness/launch.rs) layers the launch env, and the login-shell wrapper ([`login_shell_argv_with`](../../../crates/rimz/src/harness/launch.rs)) delivers it: the wrapper runs the launch shell's startup files, then execs `/usr/bin/env` with RimZ's launch env as `KEY=VALUE` arguments, so the launch env wins over anything the rc files set. Precedence, lowest to highest:
 
 1. pane env
 2. shell rc and profile env
 3. trusted project `[[agents]]` env
 4. adapter launch built-ins ([`LaunchCapability::launch_env`](../../../crates/rimz/src/agents/capabilities.rs))
-5. launch-plan env: the materialized system-prompt env, the account-home override, `RIMZ_ISOLATION` (`ENV_ISOLATION`: `sandbox` when the plan wraps the provider in bubblewrap, `host` otherwise), `TMPDIR` (the launch's temp unit; the sandbox pin layer replaces it with `/tmp`), `RIMZ_SHARED` (`ENV_SHARED`: the host path of the room's shared dir, in both modes), and `ZELLIJ_SOCKET_DIR` (the socket base the exec wrapper resolved)
+5. launch-plan env, with the agent shell keys on top: the materialized system-prompt env, the account-home override, `RIMZ_ISOLATION` (`ENV_ISOLATION`: `sandbox` when the plan wraps the provider in bubblewrap, `host` otherwise), `TMPDIR` (the launch's temp unit; the sandbox pin layer replaces it with `/tmp`), `RIMZ_SHARED` (`ENV_SHARED`: the host path of the room's shared dir, in both modes), `ZELLIJ_SOCKET_DIR` (the socket base the exec wrapper resolved), and, only when the machine sets `[agents] shell`, `SHELL` and `CLAUDE_CODE_SHELL` (the configured path) and `RIMZ_USER_SHELL` (`proc::USER_SHELL_ENV`: the user's own shell, which `proc::user_shell` prefers over `$SHELL` so shell panes a nested `rimz` opens stay the user's)
 6. launch identity from `exec_identity_env`: `RIMZ_AGENT_KIND`, `RIMZ_AGENT_ID`, `RIMZ_RUN_ID`, `RIMZ_AGENT_NAME`, and the env-backed launch parameters (`RIMZ_AGENT_ROLE`, `RIMZ_TEAM`, `RIMZ_LAUNCH_GROUP`, `RIMZ_LAUNCH_ORDINAL`, `RIMZ_CHANNEL`, `RIMZ_AGENT_PROFILE`, `RIMZ_AGENT_MODEL`, `RIMZ_AGENT_EFFORT`, `RIMZ_AGENT_BUDGET`)
 7. subagent lockdown env, for supervised children (`AgentDefinition::lockdown_subagent_env`)
 8. `RIMZ_LAUNCH_REMINDERS` (`ENV_LAUNCH_REMINDERS`), the rendered launch reminders for adapters whose extension carries them (`SystemTextChannel::ExtensionEnv`)
@@ -85,7 +85,7 @@ A trusted project task still needs its own arming: trust approves the config con
 
 Layers 4 and above beat the project env, so a trusted config can tune an agent's launch but cannot override the adapter's launch contract, the account binding, or RimZ identity.
 
-The wrapper is skipped, and the provider argv runs directly with no shell rc env (layer 2), when the user has no launchable shell, `/usr/bin/env` is missing, a key cannot be written as an `env(1)` assignment, or the shell is csh-family. [`invalid_env_key`](../../../crates/rimz/src/harness/launch.rs) separately refuses the launch at compile time when any key is empty, contains `=`, or starts with `-`.
+The wrapper is skipped, and the provider argv runs directly with no shell rc env (layer 2), when no `[agents] shell` is configured and the user has no launchable shell, `/usr/bin/env` is missing, a key cannot be written as an `env(1)` assignment, or the user's shell is csh-family. A configured `[agents] shell` never skips it: [`validate_agent_shell`](../../../crates/rimz/src/harness/launch.rs) refuses the launch at compile time when the path is relative, missing, `false` or `nologin`, or csh-family. [`invalid_env_key`](../../../crates/rimz/src/harness/launch.rs) separately refuses the launch at compile time when any key is empty, contains `=`, or starts with `-`.
 
 ### Secret redaction
 

@@ -76,6 +76,11 @@ pub struct AgentsConfig {
     /// Allow routine RimZ coordination through provider launch settings.
     #[serde(rename = "allow-routine-rimz")]
     pub allow_routine_rimz: bool,
+    /// The shell every agent launch runs under in place of the user's own;
+    /// validated at use, since a lenient load would turn a bad path into a
+    /// silent fallback.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<PathBuf>,
     pub worktree: WorktreeConfig,
     pub attention: AttentionConfig,
     #[serde(default)]
@@ -96,6 +101,7 @@ impl Default for AgentsConfig {
             max_chain_length: default_max_chain_length(),
             env_reminder: true,
             allow_routine_rimz: true,
+            shell: None,
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
             subagents: SubagentsConfig::default(),

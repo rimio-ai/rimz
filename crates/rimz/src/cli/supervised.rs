@@ -132,7 +132,8 @@ pub(super) fn preflight_program(
     process: &rimz::harness::launch::CompiledAgentProcess,
 ) -> Result<()> {
     let program = &process.provider_program;
-    let path = rimz::harness::launch::resolve_program_after_shell_rc(&process.env, program)
+    let path = process
+        .resolve_program_after_shell_rc()
         .with_context(|| format!("checking `{program}` after shell startup"))?;
     let Some(path) = path else {
         bail!("finding `{program}` on PATH after shell startup");

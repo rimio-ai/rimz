@@ -391,7 +391,8 @@ path = "crates/rimz/src/harness"
 # resolve_member_posture gives agents restart a team member's role layers (+1).
 # auto_continue::limit_marker_active is the one limit-park predicate auto-redeem's gate shares (+1).
 # `agents show` resolves an agent's temp unit through the launch owner rule (+1).
-surface-budget = 627
+# The `[agents] shell` refusal is shared by launch compile, room start, and config set (+2).
+surface-budget = 629
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -467,8 +468,9 @@ upward-dependencies = [
     "agents::registry",
 ]
 # The kernel tree high-water reader has Linux and non-Linux definitions.
-# `USER_SHELL_ENV` is the stamp launch writes and `user_shell` reads.
-surface-budget = 105
+# `USER_SHELL_ENV` is the stamp launch writes and `user_shell` reads;
+# launch validates a configured shell with `launchable_shell`.
+surface-budget = 106
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
@@ -905,7 +907,8 @@ allowed-dependencies = [
 # Mount-input pins are reapplied through the compiled shell wrapper.
 # Fresh requests and selectively redacted process plans serve launch inspection.
 # Argument rejection uses the existing action accessor (+1).
-surface-budget = 43
+# `validate_agent_shell` and its error serve room start and config set (+2).
+surface-budget = 45
 
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"
@@ -918,7 +921,6 @@ allowed-dependencies = [
     "disk::atomic",
     "disk::paths",
     "harness::launch",
-    "harness::launch_env",
     "harness::launch_reminders",
     "harness::prompt_compose",
     "harness::subagent_policy",

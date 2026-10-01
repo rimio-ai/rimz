@@ -181,6 +181,7 @@ fn model_alias_resolution_at_the_process_boundary() {
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
+            agent_shell: None,
         })
         .unwrap();
         assert_eq!(
@@ -307,6 +308,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         bwrap: sandboxed.then_some(Path::new("/bin/bwrap")),
                         agents: Ok(&[]),
                         ambient_env: &ambient,
+                        agent_shell: None,
                     })
                     .unwrap();
                     let settings = plan
@@ -399,6 +401,7 @@ fn sandbox_settings_artifact_is_written_only_on_apply() {
         bwrap: Some(Path::new("/bin/bwrap")),
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
+        agent_shell: None,
     })
     .unwrap();
     let args = &plan.process().provider_argv;
@@ -438,6 +441,7 @@ fn allowed_tools_warn_on_unsupported_kind_without_changing_argv() {
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
+            agent_shell: None,
         })
         .unwrap()
     };
@@ -505,6 +509,7 @@ fn host_settings_are_private_artifacts_written_only_on_apply() {
         bwrap: None,
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
+        agent_shell: None,
     })
     .unwrap();
     let process = plan.process();
@@ -898,6 +903,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
+            agent_shell: None,
         })
         .unwrap();
         assert!(!root.exists(), "{kind} compilation must not write");
@@ -989,6 +995,7 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
                     bwrap: None,
                     agents: Ok(&[]),
                     ambient_env: &BTreeMap::new(),
+                    agent_shell: None,
                 })
                 .unwrap();
                 assert_eq!(
@@ -1072,6 +1079,7 @@ fn the_stamped_account_sets_the_provider_home_after_the_room_switches() {
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
+            agent_shell: None,
         })
         .expect("compile");
 
@@ -1113,6 +1121,7 @@ fn the_default_account_leaves_the_provider_home_to_the_provider() {
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
+            agent_shell: None,
         })
         .expect("compile");
 
@@ -1155,6 +1164,7 @@ fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
         bwrap: None,
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
+        agent_shell: None,
     });
 
     let error = match error {
@@ -1211,6 +1221,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
                 "HOME".to_owned(),
                 project.path().display().to_string(),
             )]),
+            agent_shell: None,
         })
         .expect("compile cwd");
         assert_eq!(plan.cwd, cwd);
@@ -1238,6 +1249,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
             ("HOME".to_owned(), project.path().display().to_string()),
             ("SCCACHE_CLIENT_SIDE".to_owned(), "0".to_owned()),
         ]),
+        agent_shell: None,
     })
     .expect("compile");
 
@@ -1319,6 +1331,7 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
             effective: Some(&effective),
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            agent_shell: None,
             bwrap: None,
             agents,
             ambient_env: &ambient,

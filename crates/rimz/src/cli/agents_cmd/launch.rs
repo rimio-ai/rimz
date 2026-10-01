@@ -777,10 +777,7 @@ fn preflight_cell(
         (isolation == rimz::config::Isolation::Host).then_some(runtime),
     )?;
     if adapter.min_version().is_some()
-        && let Ok(Some(path)) = rimz::harness::launch::resolve_program_after_shell_rc(
-            &process.env,
-            &process.provider_program,
-        )
+        && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
     {
         rimz::agents::version::check_launch_version_floor(adapter, &path)?;
     }
