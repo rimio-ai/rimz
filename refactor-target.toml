@@ -145,7 +145,8 @@ upward-dependencies = ["address"]
 # Session login resolution, its facade export, and live-login sets share stamped account identity with consumers (+5).
 # LaunchRecord preserves verbatim launch posture across store and relaunch boundaries.
 # LaunchRecord::replay_or_new shares record fallback construction across relaunch paths.
-surface-budget = 932
+# Account status, display health, the native ambient for `default`, the shared birth fold, and live login keys serve the account standing (+8).
+surface-budget = 940
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -228,7 +229,8 @@ surface-budget = 14
 [[module]]
 path = "crates/rimz/src/cli"
 # Both worktree entrypoints share the PR branch choice prompt.
-surface-budget = 27
+# `accounts use` and the `providers` hint share the verified-pin room check.
+surface-budget = 28
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -496,7 +498,8 @@ upward-dependencies = [
     "sidebar::body_filter",
 ]
 # ReplacedRoom and replace_incompatible_room share replacement between start and reset.
-surface-budget = 52
+# The account standing, its scopes and deciding layer, and live agents per account serve accounts list, providers, and doctor (+5).
+surface-budget = 57
 
 [[module]]
 path = "crates/rimz/src/sidebar"

@@ -80,6 +80,54 @@ fn room_account_switch_changes_only_the_room_default() {
         succeeded(&switch()).trim(),
         "this room already launches claude on `work`"
     );
+
+    let claude_rows = |command: &mut std::process::Command| -> Vec<Value> {
+        let output = command
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .args(["accounts", "list", "--json"])
+            .output()
+            .unwrap();
+        let rows: Value = serde_json::from_str(&succeeded(&output)).unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["kind"] == "claude")
+            .cloned()
+            .collect()
+    };
+    let in_room = || {
+        let mut command = env.rimz();
+        command.envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &workspace.project_root,
+        ));
+        claude_rows(&mut command)
+    };
+    let row = |rows: &[Value], name: &str| {
+        rows.iter()
+            .find(|row| row["name"] == name)
+            .cloned()
+            .unwrap()
+    };
+    let rows = in_room();
+    assert_eq!(row(&rows, "work")["active"], true);
+    assert_eq!(
+        row(&rows, "work")["default_for"],
+        json!(["this_room", "new_rooms"])
+    );
+    succeeded(&accounts(&env, &["use", "--global", "claude", "default"]));
+    let rows = in_room();
+    assert_eq!(row(&rows, "work")["active"], true);
+    assert_eq!(row(&rows, "work")["default_for"], json!(["this_room"]));
+    assert_eq!(row(&rows, "default")["active"], false);
+    assert_eq!(row(&rows, "default")["default_for"], json!(["new_rooms"]));
+
+    let elsewhere = env.home_root.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let rows = claude_rows(env.rimz().current_dir(&elsewhere));
+    assert_eq!(row(&rows, "default")["active"], true);
+    assert_eq!(row(&rows, "work")["active"], false);
+    assert_eq!(row(&rows, "work")["default_for"], json!([]));
 }
 
 #[test]
@@ -248,7 +296,16 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
         .expect("work row");
     assert_eq!(
         work,
-        &json!({"kind": "claude", "name": "work", "home": home_arg, "machine_default": false})
+        &json!({
+            "kind": "claude",
+            "name": "work",
+            "home": home_arg,
+            "machine_default": false,
+            "status": "ready",
+            "active": false,
+            "default_for": [],
+            "agents": 0
+        })
     );
 
     let removed = succeeded(&accounts(&env, &["remove", "claude", "work"]));
@@ -346,4 +403,45 @@ fn machine_account_switch_and_removal_preserve_declared_accounts() {
             .all(|row| row["kind"] != "grok"),
         "{listed}"
     );
+}
+
+#[test]
+fn a_broken_project_config_warns_and_marks_no_account() {
+    let env = Env::new();
+    let project = env.project_root.join(".rimz");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("config.toml"), "[accounts").unwrap();
+    let empty_path = env.home_root.join("empty-path");
+    std::fs::create_dir_all(&empty_path).unwrap();
+    for args in [&["accounts", "list", "--json"][..]] {
+        let output = env
+            .rimz()
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .env("PATH", &empty_path)
+            .env("RIMZ_OAUTH_USAGE_OFFLINE", "1")
+            .args(args)
+            .output()
+            .expect("run rimz");
+        let rows: Value = serde_json::from_str(&succeeded(&output)).expect("json rows");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stderr.matches("warning").count(), 1, "{args:?}: {stderr}");
+        assert!(stderr.contains("config.toml"), "{args:?}: {stderr}");
+        let rows = rows.as_array().unwrap();
+        assert!(
+            rows.iter().all(|row| row["active"] == false),
+            "{args:?}: no account is marked: {rows:?}"
+        );
+        let claude_default = rows
+            .iter()
+            .find(|row| {
+                row["kind"] == "claude" && (row["name"] == "default" || row["account"] == "default")
+            })
+            .unwrap_or_else(|| panic!("{args:?}: no claude default row in {rows:?}"));
+        assert_eq!(
+            claude_default["default_for"],
+            json!(["new_rooms"]),
+            "{args:?}: machine scopes stay"
+        );
+    }
 }

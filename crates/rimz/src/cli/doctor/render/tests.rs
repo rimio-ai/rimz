@@ -611,6 +611,7 @@ fn accounts_section_alarms_only_for_the_room_account_it_cannot_launch_into() {
         home: (name != "default").then(|| format!("/srv/{name}")),
         room,
         machine_default: false,
+        default_for: rimz::room::Scopes::default(),
         problem: problem.map(str::to_owned),
     };
     let accounts = Probe::Ready(Accounts {
@@ -643,6 +644,33 @@ fn accounts_section_alarms_only_for_the_room_account_it_cannot_launch_into() {
         )
     });
     assert!(quiet.is_empty(), "no accounts, no section:\n{quiet}");
+}
+
+#[test]
+fn accounts_section_speaks_the_accounts_list_vocabulary() {
+    let accounts = Probe::Ready(Accounts {
+        rows: vec![AccountRow {
+            kind: "codex".to_owned(),
+            name: "team".to_owned(),
+            home: Some("/srv/team".to_owned()),
+            room: true,
+            machine_default: true,
+            default_for: rimz::room::Scopes::default(),
+            problem: None,
+        }],
+    });
+    let out = strip(|w| render_accounts(w, &accounts, &mut Tally::default()));
+    let header = out.lines().find(|line| line.contains("KIND"));
+    assert!(
+        header.is_some_and(|line| line.ends_with("STATUS  DEFAULT FOR")),
+        "{out}"
+    );
+    let row = out.lines().find(|line| line.contains("team"));
+    assert!(row.is_some_and(|line| line.ends_with("ready   -")), "{out}");
+    assert!(
+        !out.contains("launch default") && !out.contains("yes"),
+        "{out}"
+    );
 }
 
 #[test]

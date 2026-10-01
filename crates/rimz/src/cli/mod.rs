@@ -938,6 +938,15 @@ fn emit_worktree_created(
     );
 }
 
+/// The project root of the room this process runs inside, from its verified
+/// pane pin; `None` outside any room.
+pub(crate) fn pinned_room_root() -> Option<PathBuf> {
+    std::env::var(rimz::workspace::ENV_WORKSPACE_ID)
+        .ok()
+        .zip(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT))
+        .and_then(|(id, root)| rimz::workspace::verify_pin(&id, &PathBuf::from(root)))
+}
+
 fn check_launch_room(globals: &GlobalFlags) -> Result<()> {
     let Some(root) = globals.root.as_ref() else {
         return Ok(());

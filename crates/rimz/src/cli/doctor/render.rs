@@ -1522,13 +1522,12 @@ fn render_accounts(
         }
     };
     section(w, tally, "ACCOUNTS")?;
-    let mut table = Table::new(["", "KIND", "NAME", "HOME", "STATUS", "NEW ROOMS"]);
+    let mut table = Table::new(["", "KIND", "NAME", "HOME", "STATUS", "DEFAULT FOR"]);
     for row in &accounts.rows {
         let (health, status) = match (&row.problem, row.room) {
             (Some(problem), true) => (Health::Alarm, problem.as_str()),
             (Some(problem), false) => (Health::Warn, problem.as_str()),
-            (None, true) => (Health::Ok, "this room's launch default"),
-            (None, false) => (Health::Ok, "ready"),
+            (None, _) => (Health::Ok, rimz::agents::AccountStatus::Ready.as_str()),
         };
         table.row([
             badge(tally, health),
@@ -1541,7 +1540,7 @@ fn render_accounts(
             )
             .dash(),
             cell(status).fg(style_of(health)),
-            cell(if row.machine_default { "yes" } else { "-" }),
+            cell(row.default_for.label()).dash(),
         ]);
     }
     table.render(w)

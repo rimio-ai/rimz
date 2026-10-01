@@ -2,6 +2,7 @@
 
 mod birth;
 pub mod session;
+mod standing;
 pub mod teardown;
 
 use std::collections::BTreeMap;
@@ -25,6 +26,7 @@ use crate::{RuntimePaths, StatePaths, Store, workspace::record::WorkspaceRecord}
 pub use birth::{
     AttendedRecovery, BirthOutcome, NormalRebirth, ResetRecoveryError, RoomBirth, RoomResetReport,
 };
+pub use standing::{AccountStanding, Deciding, Scope, Scopes, live_agents_by_login};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LiveRoomErr {
@@ -118,11 +120,9 @@ fn resolve_birth_logins_with_frozen(
         None => match crate::trust::project_logins(project_root)? {
             crate::trust::ProjectLogins::Unconfigured => empty.clone(),
             crate::trust::ProjectLogins::Apply(logins) => logins,
-            crate::trust::ProjectLogins::Blocked(state) => anyhow::bail!(
-                "project account selections in .rimz/config.toml are {}; {}",
-                state.as_str(),
-                crate::trust::blocked_fix(state)
-            ),
+            crate::trust::ProjectLogins::Blocked(state) => {
+                anyhow::bail!(standing::blocked_project_logins(state))
+            }
         },
     };
     let logins = catalog.birth_selection(frozen.as_ref(), requested, &project, machine)?;

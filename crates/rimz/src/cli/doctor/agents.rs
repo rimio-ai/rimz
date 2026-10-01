@@ -71,19 +71,38 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
         .map_err(|err| err.to_string())
         .and_then(|config| {
             rimz::agents::LoginCatalog::from_config(&config.accounts)
-                .map(|catalog| (catalog, config.accounts.use_accounts))
+                .map(|catalog| (catalog, config))
                 .map_err(|err| err.to_string())
         });
     let room = ws.map(room_logins).transpose();
     match (catalog, room) {
-        (Ok((catalog, machine)), Ok(room)) => Probe::Ready(Accounts {
-            rows: account_rows(
+        (Ok((catalog, config)), Ok(room)) => {
+            let standing = match ws {
+                Some(ws) => rimz::room::AccountStanding::at(&ws.project_root, &config),
+                None => Ok(rimz::room::AccountStanding::machine_only(&config)),
+            };
+            let standing = match standing {
+                Ok(standing) => standing,
+                Err(error) => {
+                    return Probe::Unavailable {
+                        error: format!("{error:#}"),
+                    };
+                }
+            };
+            let mut rows = account_rows(
                 &catalog,
                 room.flatten().as_ref(),
                 &rimz::agents::ambient_env(),
-                &machine,
-            ),
-        }),
+                &config.accounts.use_accounts,
+            );
+            for row in &mut rows {
+                if let Ok(name) = row.name.parse() {
+                    row.default_for =
+                        standing.scopes(&rimz::ids::AgentKind::new_unchecked(&row.kind), &name);
+                }
+            }
+            Probe::Ready(Accounts { rows })
+        }
         (Err(error), _) | (_, Err(error)) => Probe::Unavailable { error },
     }
 }
@@ -116,6 +135,7 @@ fn account_rows(
             home: login.home().map(|home| home.display().to_string()),
             room: in_room(login.kind(), login.name()),
             machine_default: machine.get(login.kind()) == Some(login.name()),
+            default_for: rimz::room::Scopes::default(),
             // A pane born on this account exports its home by design.
             problem: (!in_room(login.kind(), login.name()))
                 .then(|| login.check_exported_home(ambient).err())
@@ -136,6 +156,7 @@ fn account_rows(
             home: None,
             room: true,
             machine_default: !name.is_default() && machine.get(kind) == Some(name),
+            default_for: rimz::room::Scopes::default(),
             problem,
         });
     }
@@ -155,6 +176,7 @@ fn account_rows(
                 home: None,
                 room: false,
                 machine_default: true,
+                default_for: rimz::room::Scopes::default(),
                 problem,
             });
         }

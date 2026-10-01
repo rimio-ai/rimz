@@ -525,6 +525,9 @@ pub(super) struct AccountRow {
     /// The current room launches this kind under this account.
     pub(super) room: bool,
     pub(super) machine_default: bool,
+    /// The layers this account is the default of, as `rimz accounts list` words them.
+    #[serde(skip)]
+    pub(super) default_for: rimz::room::Scopes,
     /// Why a room cannot launch into this account, with the fix.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) problem: Option<String>,
