@@ -108,7 +108,7 @@ The enforcement is small enough to hold in your head:
 
 1. The room's sidebar process re-checks the agent, turn, room, and account caps on every refresh it makes while the room is open, against the same transcript-derived spend that [Token Insight](./insight.md#how-the-numbers-are-calculated) reads. A loop task's own daily cap is checked separately, when its next fire is prepared.
 2. When a running turn crosses a cap, RimZ presses Esc in that agent's pane (the same interrupt you would type) and records the park.
-3. The card reads `⏸` and names the cap that stopped it: `budget: $5.04 of $5.00`, or `fleet budget: $50.21 of $50.00/day`. A crossed room or account cap also turns the cockpit or provider row alarm-red and repeats the numbers there as `$50.21 of $50/day`.
+3. The card reads `⏸` and names the cap that stopped it: `budget: $5.04 of $5.00`, or `fleet budget: $50.21 of $50.00/day`. A crossed room cap, or an account cap on the account the room launches under, also turns the cockpit or provider row alarm-red and repeats the numbers there as `$50.21 of $50/day`. An agent parked on another account's cap shows it on its card only, since the dashboard does not show that account.
 
 Agents already at rest keep their lifecycle status, and a waiting agent keeps its ask visible until the answered turn runs again; a cap interrupts spending, not conversation. Nothing exits: the CLI stays in its pane, the session files stay where the provider put them, and whatever the turn wrote before the interrupt is already in the transcript.
 

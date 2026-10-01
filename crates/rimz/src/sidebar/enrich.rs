@@ -897,6 +897,7 @@ fn fold_machine_config(
         &spending.provider.spending.by_login,
         remote_control_health,
         logins,
+        PanelScope::Current,
     );
     // Every fold merges the producer-published account windows read-only. The
     // refresh lane owns writes.
@@ -929,6 +930,7 @@ pub fn provider_panels_from_caches(
         &provider_spending.spending.by_login,
         RemoteControlServerHealth::default(),
         logins,
+        PanelScope::Current,
     );
     apply_cached_rate_limits(&mut snapshot, runtime, logins);
     apply_credits_cache(&mut snapshot, runtime, &config.accounts, logins);
@@ -949,9 +951,19 @@ pub fn provider_panels_from_caches(
     snapshot.providers
 }
 
+/// Which of the room's logins earn a provider block in one fold.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum PanelScope {
+    /// The account each kind launches under: what the dashboard shows.
+    Current,
+    /// Every login a live agent or the room default uses: what the producer
+    /// fuses rate limits, usage, and credits for.
+    InUse,
+}
+
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
-/// the per-provider `⇅ rc` flags, the dashboard aggregates, and each agent
-/// row's context-severity verdict.
+/// the per-provider `⇅ rc` flags, the dashboard aggregates for `scope`'s
+/// logins, and each agent row's context-severity verdict.
 pub(super) fn fold_machine_config_with(
     mut snapshot: SidebarSnapshot,
     config: &crate::config::MachineConfig,
@@ -959,6 +971,7 @@ pub(super) fn fold_machine_config_with(
     provider_spending: &BTreeMap<crate::ids::LoginKey, crate::agents::SpendTally>,
     remote_control_health: RemoteControlServerHealth,
     logins: &crate::agents::RoomLoginSet,
+    scope: PanelScope,
 ) -> SidebarSnapshot {
     snapshot.apply_machine_config(config);
 
@@ -992,12 +1005,11 @@ pub(super) fn fold_machine_config_with(
         );
     }
 
-    snapshot.with_provider_aggregates(
-        &accounts,
-        &remote_control_flags,
-        provider_spending,
-        &logins.keys_in_use(),
-    )
+    let shown = match scope {
+        PanelScope::Current => logins.current_keys(),
+        PanelScope::InUse => logins.keys_in_use(),
+    };
+    snapshot.with_provider_aggregates(&accounts, &remote_control_flags, provider_spending, &shown)
 }
 
 /// Derive the rc badge from enablement and the managed-server probe. An absent

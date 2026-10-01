@@ -719,7 +719,9 @@ pub fn room_logins(record: &Path) -> Result<RoomLogins, RoomLoginErr> {
 /// The logins a room reads provider state under, resolved once per refresh
 /// pass or fold over one ambient snapshot. A kind whose account cannot be
 /// resolved answers `None`, so callers skip it rather than read another
-/// account's state.
+/// account's state. Two views answer "which logins": the current one per kind
+/// (`current_keys`, what the dashboard shows) and every one in use
+/// (`keys_in_use`, what producer state is kept for).
 #[derive(Clone, Debug)]
 pub struct RoomLoginSet {
     /// `None` when the room's record could not be read.
@@ -764,6 +766,22 @@ impl RoomLoginSet {
 
     /// The resolvable logins this room currently uses across all kinds.
     pub fn keys_in_use(&self) -> BTreeSet<LoginKey> {
+        self.kinds()
+            .flat_map(|kind| self.in_use(kind.as_str()))
+            .map(|login| login.key())
+            .collect()
+    }
+
+    /// The login each kind launches under in this room; a kind whose account
+    /// does not resolve contributes none.
+    pub fn current_keys(&self) -> BTreeSet<LoginKey> {
+        self.kinds()
+            .filter_map(|kind| self.default_key(kind.as_str()))
+            .collect()
+    }
+
+    /// Registered kinds, live agents' kinds, and the kinds the room selects.
+    fn kinds(&self) -> impl Iterator<Item = AgentKind> + '_ {
         super::known_kinds()
             .map(AgentKind::new_unchecked)
             .chain(self.live_logins.iter().map(|key| key.kind.clone()))
@@ -772,9 +790,6 @@ impl RoomLoginSet {
                     .iter()
                     .flat_map(|selection| selection.keys().cloned()),
             )
-            .flat_map(|kind| self.in_use(kind.as_str()))
-            .map(|login| login.key())
-            .collect()
     }
 
     pub fn new(

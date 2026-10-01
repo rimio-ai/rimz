@@ -55,7 +55,8 @@ use self::rate_limits::refresh_rate_limits;
 use self::sessions::refresh_live_sessions;
 use self::usage::refresh_account_usage;
 use super::enrich::{
-    RemoteControlServerHealth, fold_machine_config_with, read_auto_continue_resume_messages,
+    PanelScope, RemoteControlServerHealth, fold_machine_config_with,
+    read_auto_continue_resume_messages,
 };
 use crate::utils::time::unix_now_ms;
 
@@ -246,6 +247,7 @@ pub(super) fn refresh_heavy_lanes(
         // This scoped fold is not returned as the final snapshot.
         RemoteControlServerHealth::default(),
         &logins,
+        PanelScope::InUse,
     );
     refresh_rate_limits(&mut panels, runtime, &logins);
     // `with_provider_aggregates` rebuilds panels with empty credit fields; the

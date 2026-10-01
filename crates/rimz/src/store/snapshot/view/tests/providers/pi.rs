@@ -24,7 +24,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         &probed,
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["codex", "pi"]),
     );
     let pi_panel = snapshot
         .providers
@@ -43,7 +43,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
         &probed,
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["codex", "pi"]),
     );
     let pi_panel = snapshot
         .providers

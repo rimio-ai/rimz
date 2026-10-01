@@ -1314,7 +1314,7 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &Default::default(),
+            &std::collections::BTreeSet::from([default_key.clone(), work_key.clone()]),
         );
     let mut provider = ProviderSpendingCache {
         day_cutoff_secs: cutoff,

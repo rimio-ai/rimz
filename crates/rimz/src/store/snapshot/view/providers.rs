@@ -15,8 +15,11 @@ use crate::theme::{
 use super::{RemoteControlBadge, SidebarProviderPanel, SidebarSnapshot};
 
 impl SidebarSnapshot {
-    /// Fold live root logins, in-use defaults, and substantive account probes into per-login dashboard blocks.
-    /// An account-only block needs a metered login, a non-empty identity, or recorded spend, so the dashboard shows substantive accounts and budgets between turns.
+    /// Fold each login in `logins` into its dashboard block; a live agent or a
+    /// probed account on any other login earns none. The caller names the set:
+    /// the room's current login per kind for display, every in-use login for
+    /// the producer's cache writes.
+    /// A login in the set needs a session on it or a substantive probed account; an account-only block needs a metered login, a non-empty identity, or recorded spend, so the dashboard shows substantive accounts and budgets between turns.
     /// Sums each login's spend, tokens, and edited lines; takes the plan and version
     /// from the freshest session, and rate-limit windows from sessions speaking
     /// for one birth account. `probed_accounts` carries out-of-band
@@ -35,32 +38,18 @@ impl SidebarSnapshot {
     /// block, so it shows every discovered provider. An explicit
     /// `provider_list` overrides the shown set and order, with `all` expanding
     /// the remaining discovered providers in usage-rank order and
-    /// bypassing the cap. Producer-only: the pure reducer leaves `providers`
-    /// empty.
+    /// bypassing the cap. Ordering, cap, and tabs see only the set's blocks.
+    /// The machine-config fold calls this on producer and consumer alike; the
+    /// pure reducer leaves `providers` empty.
     pub(crate) fn with_provider_aggregates(
         mut self,
         probed_accounts: &BTreeMap<LoginKey, AgentAccount>,
         remote_control: &BTreeMap<String, RemoteControlBadge>,
         provider_spending: &BTreeMap<LoginKey, SpendTally>,
-        in_use: &BTreeSet<LoginKey>,
+        logins: &BTreeSet<LoginKey>,
     ) -> Self {
-        let mut keys = in_use.clone();
-        keys.extend(
-            self.agents
-                .iter()
-                .filter(|agent| !agent.is_provider_subagent() && agent.ended_at.is_none())
-                .map(AgentState::login_key),
-        );
-        keys.extend(
-            probed_accounts
-                .iter()
-                .filter(|(key, account)| {
-                    account_creates_provider_panel(account, provider_spending.get(*key))
-                })
-                .map(|(key, _)| key.clone()),
-        );
         let mut panels = Vec::new();
-        for key in keys {
+        for key in logins.iter().cloned() {
             let kind = key.kind.to_string();
             let sessions: Vec<&AgentState> = self
                 .agents

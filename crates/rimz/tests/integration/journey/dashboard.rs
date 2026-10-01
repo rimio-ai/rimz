@@ -12,7 +12,7 @@ use super::{RoomHarness, SETTLE, session_start_at, user_prompt_submit};
 use crate::common::Env;
 
 #[test]
-fn dashboard_renders_both_logins_after_a_room_switch() {
+fn dashboard_shows_only_the_current_login_after_a_room_switch() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
@@ -51,16 +51,19 @@ fn dashboard_renders_both_logins_after_a_room_switch() {
             Some("main"),
         ),
     );
+    let before = room.wait_for(|screen| screen.contains("Claude v2.1.158"), SETTLE);
+    assert!(before.contains("Claude v2.1.158"), "{before}");
     let workspace = env.resolve_workspace(&env.project_root);
     store
         .switch_room_login(&workspace, &work.kind, &work.name)
         .unwrap();
+    // The agent still runs on `default`; only the room's current login shows.
     let screen = room.wait_for(
-        |screen| screen.contains("Claude · work") && screen.contains("Claude v2.1.158"),
+        |screen| screen.contains("Claude · work") && !screen.contains("Claude v2.1.158"),
         SETTLE,
     );
     assert!(screen.contains("Claude · work"), "{screen}");
-    assert!(screen.contains("Claude v2.1.158"), "{screen}");
+    assert!(!screen.contains("Claude v2.1.158"), "{screen}");
 }
 
 #[test]

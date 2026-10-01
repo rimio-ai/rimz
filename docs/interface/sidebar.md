@@ -503,7 +503,7 @@ Expanding the group restores the pipeline line. The order of cards and groups fo
 
 ## The provider dashboard
 
-Provider budgets belong to an account, and every session of that provider shares them, so they sit in a fixed panel at the bottom instead of on the cards. A provider whose account has metered budgets or recorded usage keeps its block even when none of its sessions runs in this room, and RimZ refreshes its budgets between turns.
+Provider budgets belong to an account, and every session of that provider shares them, so they sit in a fixed panel at the bottom instead of on the cards. Each provider gets one block, for the account the room launches under; sessions still running on another account count toward none. A provider whose account has metered budgets or recorded usage keeps its block even when none of its sessions runs in this room, and RimZ refreshes its budgets between turns.
 
 ```
  ─── Claude ──── Codex ────────────────────────────────

@@ -15,7 +15,7 @@ fn every_provider_paints_its_own_session_window() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &Default::default(),
+        &shown(&["opencode", "claude"]),
     );
 
     let panel = |kind: &str| {
@@ -42,7 +42,7 @@ fn claude_panel(agents: Vec<AgentState>) -> SidebarProviderPanel {
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
-            &Default::default(),
+            &shown(&["claude"]),
         )
         .providers
         .into_iter()
