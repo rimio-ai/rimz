@@ -16,6 +16,7 @@ use super::rollout::{
     CodexTaskComplete, RolloutError, RolloutKind, RolloutRecord, decode_line, read_rollout_header,
 };
 use super::spend::{live_fold_needs_token_counter_backfill, resume_live_fold};
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettle,
     TurnSettleOutcome, cap_turn_error_label,
@@ -355,11 +356,9 @@ fn codex_sessions_root(login_env: &std::collections::BTreeMap<String, String>) -
     {
         return Some(PathBuf::from(raw));
     }
-    super::codex_home_from(
-        login_env.get("CODEX_HOME").map(AsRef::as_ref),
-        login_env.get("HOME").map(AsRef::as_ref),
-    )
-    .map(|home| home.join("sessions"))
+    super::CodexAdapter
+        .config_home(login_env)
+        .map(|home| home.join("sessions"))
 }
 
 /// Locate the rollout JSONL for a Codex session by its `session_id`. Codex

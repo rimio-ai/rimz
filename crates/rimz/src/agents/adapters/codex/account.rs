@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::account::AccountProbe;
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::context::{
     AgentAccount, AgentRateLimits, RateLimitWindow, RateLimitWindowScope, WindowSource,
 };
@@ -119,10 +120,7 @@ pub(crate) fn parse_balance(value: &Value) -> Option<f64> {
 /// A readable file remains authoritative; an unexpected file IO error is the
 /// transient `Unavailable` arm.
 pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
-    let Some(home) = super::codex_home_from(
-        login_env.get("CODEX_HOME").map(std::ffi::OsStr::new),
-        login_env.get("HOME").map(std::ffi::OsStr::new),
-    ) else {
+    let Some(home) = super::CodexAdapter.config_home(login_env) else {
         return AccountProbe::LoggedOut;
     };
     let path = home.join("auth.json");

@@ -10,6 +10,7 @@ use jiff::{Timestamp, civil::Date};
 use uuid::Uuid;
 
 use super::rollout::{CodexRolloutHeader, read_rollout_header};
+use crate::agents::capabilities::LaunchCapability;
 #[cfg(test)]
 use crate::agents::local_session_cache::ValueRefreshKind;
 use crate::agents::local_session_cache::{
@@ -58,10 +59,7 @@ pub(super) fn discover(
     workspaces: &[&Path],
     login_env: &std::collections::BTreeMap<String, String>,
 ) -> Vec<LocalSessionObservation> {
-    let Some(home) = super::codex_home_from(
-        login_env.get("CODEX_HOME").map(AsRef::as_ref),
-        login_env.get("HOME").map(AsRef::as_ref),
-    ) else {
+    let Some(home) = super::CodexAdapter.config_home(login_env) else {
         return Vec::new();
     };
     let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
