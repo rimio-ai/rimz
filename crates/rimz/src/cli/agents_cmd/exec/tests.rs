@@ -1,7 +1,6 @@
 use super::*;
 use clap::Parser;
 use rimz::agents::{LaunchParams, PermissionMode};
-use rimz::config::MachineConfig;
 use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 use rimz::harness::run_wake::ExpectedRunFrame;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
@@ -868,66 +867,6 @@ fn exec_argv_round_trips_identity_actions_and_bindings() {
         request.provider_account = provider_account;
         assert_eq!(parse_exec_request(&request), request);
     }
-}
-
-#[test]
-fn exec_refuses_only_fresh_launches_of_an_unshadowed_failed_profile() {
-    let root = tempfile::tempdir().unwrap();
-    let mut machine = MachineConfig::default();
-    let path = PathBuf::from("/tmp/.agents/agents/worker.md");
-    machine
-        .notices
-        .failed_definitions
-        .insert("worker".to_owned(), [path.clone()].into());
-    machine
-        .notices
-        .definition_errors
-        .push(rimz::config::definitions::DefinitionErr {
-            path,
-            message: "invalid frontmatter".to_owned(),
-            cause: rimz::config::definitions::DefinitionCause::Invalid,
-        });
-    let request = |action| {
-        let mut request = minimal_exec_request("codex", action);
-        request.identity.params.profile = Some("worker".to_owned());
-        request
-    };
-    let launch = request(ExecAction::Launch {
-        prompt: None,
-        extra_args: Vec::new(),
-    });
-    let resume = request(ExecAction::Resume {
-        session_id: "s".to_owned(),
-        extra_args: Vec::new(),
-    });
-    let fork = request(ExecAction::Fork {
-        session_id: "s".to_owned(),
-        extra_args: Vec::new(),
-    });
-    let mut effective =
-        rimz::config::effective::load_with_roots(&machine, root.path(), &root.path().join("home"))
-            .unwrap();
-
-    assert_eq!(
-        exec_definition_failure(&launch, &machine, Some(&effective)).as_deref(),
-        Some("/tmp/.agents/agents/worker.md: invalid frontmatter")
-    );
-    assert!(exec_definition_failure(&launch, &machine, None).is_some());
-    assert_eq!(
-        exec_definition_failure(&resume, &machine, Some(&effective)),
-        None
-    );
-    assert_eq!(
-        exec_definition_failure(&fork, &machine, Some(&effective)),
-        None
-    );
-
-    let shadow: rimz::config::Profile = toml::from_str("agent = 'claude'").unwrap();
-    effective.profiles.0.insert("worker".to_owned(), shadow);
-    assert_eq!(
-        exec_definition_failure(&launch, &machine, Some(&effective)),
-        None
-    );
 }
 
 mod pane_exec {

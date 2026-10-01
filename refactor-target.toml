@@ -421,7 +421,8 @@ path = "crates/rimz/src/harness"
 # The preview says recovery was switched off, and a live settlement opens its tabs through the room (+2).
 # Deferred consent scopes a fresh live inspection to offered identities (+3).
 # Birth calls rebirth::park_roster before session creation so parking can refuse (+1).
-surface-budget = 656
+# The exec wrapper decides its launch through one harness entry and its outcome type, `launch_plan::prepare_exec` (+1).
+surface-budget = 657
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -978,7 +979,8 @@ allowed-dependencies = [
 # Compile probes the provider cwd's shell and git state read-only for the launch reminder.
 # The exec wrapper resolves model aliases before the read-only compiler (+1).
 # Compile resolves the temp-unit owner from the parent's launch row (`address`) and pins the wrapper's Zellij socket base (`mux::domain`); `agents show` shares the owner rule (+1).
-surface-budget = 9
+# The exec wrapper decides its launch through `prepare_exec` and its `ExecPreparation` outcome; `resolve_model` stays harness-visible for resume tests (+2).
+surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
