@@ -271,6 +271,18 @@ impl ProviderCapacity {
             .map(move |window| window.projected_at(now))
     }
 
+    /// The unscoped window of `span`, projected at `now`.
+    /// Model sub-caps share their parent's duration and never match; of two
+    /// unscoped windows with one span, the last is read, as the longest-window
+    /// choice reads it.
+    pub fn window_of_span(&self, span: WindowSpan, now: Timestamp) -> Option<RateLimitWindow> {
+        self.windows
+            .iter()
+            .rfind(|window| window.scope.is_none() && window.duration_mins == Some(span.minutes()))
+            .cloned()
+            .map(|window| window.projected_at(now))
+    }
+
     /// Current observation of the longest duration-bearing window.
     pub(crate) fn longest_window_observation(&self, now: Timestamp) -> Option<RateLimitWindow> {
         Some(self.duration_window()?.clone().projected_at(now))
@@ -445,6 +457,43 @@ fn window_duration_label(mins: u32) -> String {
         format!("{}h", mins / 60)
     } else {
         format!("{mins}m")
+    }
+}
+
+/// A subscription window length that loop triggers name: `5h` or `7d`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WindowSpan {
+    FiveHour,
+    SevenDay,
+}
+
+impl WindowSpan {
+    pub const fn minutes(self) -> u32 {
+        match self {
+            Self::FiveHour => 5 * 60,
+            Self::SevenDay => 7 * 24 * 60,
+        }
+    }
+}
+
+impl std::fmt::Display for WindowSpan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::FiveHour => "5h",
+            Self::SevenDay => "7d",
+        })
+    }
+}
+
+impl std::str::FromStr for WindowSpan {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "5h" => Ok(Self::FiveHour),
+            "7d" => Ok(Self::SevenDay),
+            other => Err(format!("unknown window span `{other}`; use 5h or 7d")),
+        }
     }
 }
 

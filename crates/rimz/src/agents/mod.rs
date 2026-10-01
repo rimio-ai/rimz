@@ -69,7 +69,7 @@ pub(crate) use account::WindowSurplus;
 pub use account::provider_budget_gate;
 pub use account::{
     AccountUsageIdentity, ManagedLaunchState, ProviderAccountBinding, ProviderCapacity,
-    RateLimitCacheEntry, RateLimitsCache,
+    RateLimitCacheEntry, RateLimitsCache, WindowSpan,
 };
 pub use background_shell::{BackgroundShell, BackgroundShellReport};
 pub use capabilities::ManualSkill;
