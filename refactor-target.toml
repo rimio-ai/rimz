@@ -263,7 +263,7 @@ upward-dependencies = [
 # ToolRule carries validated definition permission rules across launch boundaries (+1).
 # MachineConfig::require_readable_core shares birth/worktree refusal; ConfigEditor::use_account preserves machine selection edits (+2).
 # MachineConfig::model_alias exposes machine pins to the launch wrapper (+1).
-surface-budget = 186
+surface-budget = 183
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -493,7 +493,7 @@ allowed-dependencies = ["agents", "config", "disk", "ids", "mux", "utils"]
 # Exec presents typed skill omissions returned by sandbox preparation.
 # Inspection shares read-only mount/copy plans and explicit application with exec.
 # Explicit launch cwd resolution and prompt-file resolution reverse the caller's tmp view through TmpView::host_path.
-surface-budget = 23
+surface-budget = 22
 
 [[module]]
 path = "crates/rimz/src/room"
@@ -623,7 +623,7 @@ surface-budget = 60
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
 path = "crates/rimz/src/cli/supervised"
-surface-budget = 48
+surface-budget = 47
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
@@ -4529,18 +4529,13 @@ reason = "Queue outcome remains distinct from policy and the memory fit predicat
 
 [[verdict]]
 kind = "shape"
-key = "kind+path+std::fs::read_dir"
-reason = "The four share only a missing root read as empty; each maps errors into its own type (SkillErr, anyhow, SandboxErr, io::Error) and keeps its own entry policy: agents::skills keys SKILL.md dirs first-root-wins, room::session warns past unreadable records to match a session, sandbox::skills canonicalizes and skips broken links with an optional preserved symlink, workspace dedups parsed WorkspaceDirName records. A disk helper needs a per-caller error mapper and saves no lines (pass 26c)."
+key = "BTreeMap::new+canonicalize+kind+path+std::fs::read_dir+to_str"
+reason = "The two share only a missing root read as empty and a per-entry I/O error map; each keeps its own error type (SkillErr, SandboxErr) and entry policy: agents::skills walks two roots first-wins and keeps only filtered SKILL.md directories, skipping non-UTF-8 names, while sandbox::skills lists every entry of one root, rejects non-UTF-8 names as InvalidPath, and optionally preserves the symlink kind for the mount view. One owner needs a per-caller error mapper and an entry-policy callback and saves no lines (pass 31d, re-keyed from the pass 26c four-scanner row)."
 
 [[verdict]]
 kind = "guard"
 key = "$0.status!=RunStatus::Completed"
 reason = "Four decisions on one terminal status: reply prints a turn-failure line, supervised output prints run forensics, supervised run skips the verify loop, harness::run returns RunStoreErr::InvalidStatus. A shared predicate would rename equality and hide none of them (pass 28a)."
-
-[[verdict]]
-kind = "guard"
-key = "$0.status==RunStatus::Completed"
-reason = "Three decisions on one terminal status: agents wait prints its header without a status suffix, the supervised verify loop retries only while the run stays Completed, harness::schedule::pending labels a settled wait done. A shared predicate would rename equality and hide none; the done label duplicating the two cli status_label tables is an open deferral (pass 31a)."
 
 [[verdict]]
 kind = "shape"
@@ -4641,8 +4636,3 @@ reason = "Distinct Zellij log shapes retain neighbor-aware disconnect pairing, l
 kind = "item"
 key = "cli::doctor::mux_log::scan_tail"
 reason = "After mirror types and duplicate bookkeeping are deleted, the ordered read, assemble, cutoff, group and cap pipeline remains. Pins preserve first and last dated occurrences, last-occurrence ordering, first sample and truncation accumulation; further single-use splits delete nothing (pass 29c)."
-
-[[verdict]]
-kind = "shape"
-key = "PendingWrite::optional+report_files+settings_json::commit_pair+settings_json::read_optional_bytes+settings_json::render_json"
-reason = "The read, render and two-file commit transaction already live once in settings_json; the uninstalls keep provider policy: copilot strips the statusline and removes hooks through a callback that rolls settings back on failure, cursor rewrites hooks and config in place and removes the shared statusline state record only after the last config file restores the displaced statusline. A shared sequence needs a closure per step and saves no lines (round-31 prep; key live again, pass 31b)."

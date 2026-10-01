@@ -4,13 +4,13 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `a5b528fd2`, pass 31b: 4701 scoped commits (pace window 1176), 24 admission intents, 239 holds; no parse failures, ledger problems, pending restamps, or stale or ambiguous verdict keys. The one open shape family it found, the synthetic-message delivery workflow, landed in pass 31a; the residual synthetic-message family is held by verdict.
+- **Survey:** base `f10952c94`, pass 31d: 4744 scoped commits (pace window 1186), 24 admission intents, 239 holds; no parse failures, ledger problems, pending restamps, stale or ambiguous verdict keys, or open shape or guard families. The skills directory-scanner pair is held by verdict.
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
-- **Reopened:** `agents/adapters/codex` (scoped churn past its row's count; not reviewed in pass 31b).
+- **Reopened:** `agents/adapters/codex` (scoped churn past its row's count; not reviewed in pass 31d).
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles. The survey also lists same-layer `harness ↔ worktree`.
-- **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 48, `cli/agents_cmd/mod.rs` 24, `cli/transcript` 18, `cli/agents_cmd/exec.rs` 13, `cli/room` 12); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
+- **CLI edge:** `cli` submodule surface budgets sit at their measured values (`cli/supervised` 47, `cli/agents_cmd/mod.rs` 24, `cli/transcript` 18, `cli/agents_cmd/exec.rs` 13, `cli/room` 12); each pass that rehomes logic out of `cli` lowers the ones it closes. `cli/render` has no rule: it is the shared presentation hub, and view-model splits widen it by design.
 
 ## Module verdicts
 
@@ -20,11 +20,11 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | --- | --- | --- | --- | --- |
 | `address` | holds; landed pass-14 | `b269429c2` | 30 | grammar, renderer, pane binding and launch lineage at L4; one channel reconciler. |
 | `agents` | holds; landed pass-18a | `045e858e8` | 30 | root exports only outside-spelled names; hook representation private; install defaults stay trait defaults. |
-| `agents/(root)` | holds; landed pass-31b | `a5b528fd2` | 30 | outside-spelled facade with signature-floor exceptions and private internal helpers. |
-| `agents/state` | holds; landed pass-31b | `a5b528fd2` | 30 | one prompt rule and error-marker projection with direct current-layout decoding. |
-| `agents/folder_trust` | holds; landed pass-31b | `a5b528fd2` | 30 | room-login rows require the known repo root while adapter decisions remain optional-root. |
-| `agents/account_links` | holds; landed pass-31b | `a5b528fd2` | 30 | guarded settings sharing with signature-floored error and report types. |
-| `agents/provider_file` | holds; landed pass-31b | `a5b528fd2` | 30 | symlink-following writer also serves pricing snapshots under the provider-file invariant. |
+| `agents/(root)` | holds; landed pass-31b | `ac8b4038a` | 30 | outside-spelled facade with signature-floor exceptions and private internal helpers. |
+| `agents/state` | holds; landed pass-31b | `ac8b4038a` | 30 | one prompt rule and error-marker projection with direct current-layout decoding. |
+| `agents/folder_trust` | holds; landed pass-31b | `ac8b4038a` | 30 | room-login rows require the known repo root while adapter decisions remain optional-root. |
+| `agents/account_links` | holds; landed pass-31b | `ac8b4038a` | 30 | guarded settings sharing with signature-floored error and report types. |
+| `agents/provider_file` | holds; landed pass-31b | `ac8b4038a` | 30 | symlink-following writer also serves pricing snapshots under the provider-file invariant. |
 | `agents/context` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
 | `agents/definition` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
 | `agents/adapters` | landed pass-2 | — | — | sibling families are provider policy over shared helpers; interiors are per-adapter rows. |
@@ -44,7 +44,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/adapters/droid` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/kiro` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/amp` | holds; landed pass-21c | `dde310cbf` | 30 | registry adapter only; tolerant `parse_payload` holds. |
-| `agents/attribution` | holds | `ca23feb3b` | 30 | binary attribution tests build the report types directly (see deferrals). |
+| `agents/attribution` | holds | `f10952c94` | 30 | report types stay `pub`: the binary's renderer reads their fields in production. |
 | `agents/lifecycle` | holds; landed pass-22c | `ca23feb3b` | 30 | `step` crate-private; signal vocabulary and state types public by signature. |
 | `agents/pricing` | holds; landed pass-22c | `ca23feb3b` | 30 | rate model private; `PriceBook` and cached-book entries public for binary, bench and integration. |
 | `agents/spending` | holds; landed pass-13 | `8e9477b57` | 30 | one writer per cache, one engine election; wire, walker, fold and cache records hold. |
@@ -93,13 +93,13 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `config/attention` | holds | `2a9ec66e5` | 30 | `MachineConfig` field type. |
 | `config/color` | holds; landed pass-24a | `2a9ec66e5` | 30 | `Semantic::DEFAULT` test-gated; production reads the embedded catalog. |
 | `config/daemon` | holds | `2a9ec66e5` | 30 | `MachineConfig` field type. |
-| `config/definitions` | holds; landed pass-24a | `2a9ec66e5` | 30 | loader already `pub(super)`; constructor deepen deferred. |
+| `config/definitions` | holds; landed pass-24a; pass-31d | `f10952c94` | 30 | one private load scope feeds every resolver; one safe-name predicate. |
 | `config/diagnosis` | holds; landed pass-24a | `2a9ec66e5` | 30 | two test-gated accessors pin `1862840`. |
 | `config/display` | holds; landed pass-24a | `2a9ec66e5` | 30 | section record; `is_unset` is a live serde predicate. |
 | `config/edit` | holds; landed pass-24a | `2a9ec66e5` | 30 | comment-preserving writer and template merge hold. |
 | `config/effective` | holds; landed pass-24a | `2a9ec66e5` | 30 | project-task parse and error types floored by `load`. |
 | `config/gc` | holds | `2a9ec66e5` | 30 | `MachineConfig` field type. |
-| `config/glyphs` | holds; landed pass-24a | `2a9ec66e5` | 30 | `GlyphRole` names stay `pub` for `theme/glyphs.rs`. |
+| `config/glyphs` | holds; landed pass-24a; pass-31d | `f10952c94` | 30 | `GlyphRole` names stay `pub` for `theme/glyphs.rs`. |
 | `config/harness` | holds; landed pass-26c | `38b487c52` | 30 | `DayCap`/`TurnCap` verdicts hold; owns the prompt-cache margin its TTL parse validates against. |
 | `config/loop_` | holds; landed pass-24a | `2a9ec66e5` | 30 | `Tasks` and `LoopConfig` stay `pub` for the integration crate. |
 | `config/lsp` | holds; landed pass-26a | `1ec086301` | 30 | one root-marker predicate on the server config; façade controls reach. |
@@ -113,7 +113,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `config/sidebar` | holds; landed pass-24a | `2a9ec66e5` | 30 | section record. |
 | `config/skills` | holds; landed pass-24a | `2a9ec66e5` | 30 | skill-list validator at crate reach for sandbox and agents. |
 | `config/theme` | holds | `2a9ec66e5` | 30 | `MachineConfig` field type; predicates are live serde predicates. |
-| `config/tiers` | holds | `8169df102` | 30 | tier table and resolver; `family_tiers` narrowing deferred. |
+| `config/tiers` | holds; landed pass-31d | `f10952c94` | 30 | tier table and resolver; walking stays inside `config`. |
 | `config/tool_rules` | holds | `8169df102` | 30 | one validated rule newtype; `ToolRuleErr` stays `pub` as `FromStr::Err`. |
 | `config/web` | holds | `2a9ec66e5` | 30 | `WebPrefs` left the façade. |
 | `config/worktree` | holds; landed pass-24a | `2a9ec66e5` | 30 | base parse errors left the façade. |
@@ -156,7 +156,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
 | `lsp` | holds; landed pass-26a | `1ec086301` | 30 | one sweep, memory measure, parsed target and lease list; domain presentation and broker RAII hold. |
-| `message` | holds; landed pass-31a | `57dd68a57` | 30 | synthetic-message delivery owned by `synthetic.rs`; compact, reply machine and dispatch modes hold; approved SLOC ceiling +23 for request type and struct-literal composition at seven call sites. |
+| `message` | holds; landed pass-31a | `d4db61e64` | 30 | synthetic-message delivery owned by `synthetic.rs`; compact, reply machine and dispatch modes hold; approved SLOC ceiling +23 for request type and struct-literal composition at seven call sites. |
 | `mux` | holds; landed pass-18c | `9ba3585b9` | 30 | planner verdicts private; `SplitPaneOptions::from_command` owns the pane-command projection. |
 | `mux/(root)` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
 | `mux/tmux` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
@@ -182,7 +182,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `remote` | holds; landed pass-21a; pass-29d | `85448a2f5` | 30 | pure transitions here, drivers in `cli/remote`; recovery frame owns the panel's row model. |
 | `remote_control` | holds; landed pass-15c | `944c8120e` | 30 | one enable preflight; typed snapshot and batch toggle. |
 | `room` | holds; landed pass-28f | `f4084e548` | 30 | owns live-tab admission and managed birth with source-specific ownership. |
-| `sandbox` | holds; landed pass-28f | `f4084e548` | 30 | launch preflight admits skills before probing isolation. |
+| `sandbox` | holds; landed pass-28f; pass-31d | `f10952c94` | 30 | launch preflight admits skills before probing isolation; callers run `plan` then `apply`. |
 | `sidebar` | landed pass-4 | — | — | election, fusion, refresh lanes, own cadences; interiors have rows. |
 | `sidebar/(root)` | holds; landed pass-23c | `1830bd0c6` | 30 | one data plane; `pub` items are binary, bench or integration reached, or signature floors. |
 | `sidebar/refresh` | holds; landed pass-29e | `eb03b2204` | 30 | one rate-limit transaction and one `pub` account-cache publish entry, sharing keyed fusion behind one producer/login boundary. |
@@ -238,7 +238,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `store/follow` | holds | `250f10820` | 30 | floored by the follower signatures. |
 | `store/agent_context` | holds; landed pass-25 | `4a82d6b28` | 30 | rest-certificate guard is store-owned and `pub`. |
 | `store/subagent_context` | holds | `250f10820` | 30 | reached by integration and sidebar enrichment. |
-| `store/run` | holds | `250f10820` | 30 | `WakeupFrame` is the pinned run-wake wire. |
+| `store/run` | holds; landed pass-31d | `f10952c94` | 30 | `WakeupFrame` is the pinned run-wake wire; `RunStatus` owns the one human label. |
 | `store/active_time` | holds | `250f10820` | 30 | floored by `read_for_keys`. |
 | `theme` | holds; landed pass-22b | `339310452` | 30 | every re-export has an outside reader; OKLab blends private. |
 | `transcript` | holds; landed pass-24a; pass-29g | `0df251b8a` | 30 | `SectionOrigin` and its entry encoding sit beside `origin()`. |
@@ -297,21 +297,15 @@ One row per intended upward edge, `` `from` → `to` `` with an optional `to::{a
 
 Refactor candidates a pass judged real but could not land, each with its concrete blocker. Pace is not a blocker: a candidate in a module under feature work is picked, and its conflicts are resolved at merge. Compiler-refused narrowings (atlas caveat 13) are never deferrals; do not re-plan them from `inspect`'s `narrow to` column.
 
-- `harness/schedule/pending` and `cli`: the human `RunStatus` label is spelled twice in `cli` (`crates/rimz/src/cli/supervised/output.rs::status_label`, `crates/rimz/src/cli/agents_cmd/subagent_report.rs::status_label`, both `completed`) and once more in `crates/rimz/src/harness/schedule/pending.rs` as `done`; one owner on `store::run::RunStatus` needs the user to pick `done` or `completed`, which is user-visible wording.
 - `harness/team_stage` ↔ `cli/teams`: trusted team loading remains duplicated; sharing it needs a typed harness error and a pass owning the CLI flip caller.
 - `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
 - `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
 - `agents/adapters/codex`: `cap_turn_error_label` and `TURN_ERROR_LABEL_MAX` copy Claude's `statusline` pair word for word; a shared helper beside `TurnErrorClass::classify_label` in `agents/context` lands with a pass owning codex or `agents/context`.
-- `config/definitions`: one load context for the seven-argument `Resolver::new` and the `SeatLoader` repack, plus one safe-name predicate (about −20 SLOC). Ready for a pass owning `config/definitions`.
-- `config::tiers::TierConfig::family_tiers`: `harness::plan` is its only reader, so it narrows to `pub(crate)`; the other `narrow to` rows sit in a public signature or field (caveat 13). Ready for a pass owning `config/tiers`.
 - `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
-- `agents/attribution`: a `testkit` fixture builder would let five report types narrow. Ready for a pass owning `agents/attribution`.
 - `disk`: the `StatePaths`/`RuntimePaths` constructor family (5 + 8, ~460 test sites on `under`/`under_named`) → `for_project_root(root, home)`, `for_workspace(id, home)`, `RuntimePaths::for_state(state, runtime_root)`. Ready; it touches about 460 test sites across the crate, so it runs as its own pass and merges last in its round.
 - `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Waits for a `store/snapshot` or `disk` pass that takes cache identity in scope.
 - `ids::ViewId::as_str`: no production reader, `dead_code` blocks narrowing, tests hold it. Wait for a pass on `sidebar/produce`.
-- `sandbox::prepare`: no production caller; only the integration tests call it (six sites in `tests/integration/sandbox.rs`), for `plan` then `apply`. Deleting it and having those tests call the pair drops one escaping item. Ready for a pass owning `sandbox`.
-- `config::glyphs::GlyphRole::namespaced_name`: no production caller; only the `theme::glyphs` tests read it (five sites), and they can format `namespace` and `name` themselves. Ready for a pass owning `config/glyphs`.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
 - Reported, not fixed: Codex transcript lookup ignores `CODEX_HOME`, substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.
