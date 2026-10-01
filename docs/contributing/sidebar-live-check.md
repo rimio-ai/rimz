@@ -444,6 +444,22 @@ awk -F 'result=' '/result=/ && $2 !~ /^OK/ { n[$2]++ } END { for (e in n) print 
 
 The first build compiles Ghostty's test binary (1 minute 46 seconds on a machine whose zig package cache was already warm, longer when it must fetch Ghostty's dependencies); a rerun on another capture reuses it and takes seconds. Replay a capture from the base branch and one from your change, and compare the two `SUMMARY` lines: a clean replay reads `errors=0`. The harness parses a byte stream in one pass, so it covers Ghostty's parser and image storage, not the app's rendering, and it pins one Ghostty tag. Newer Ghostty can differ (on `main` a delete also cancels a half-received chunked image), so name the tag you replayed against.
 
+## Check against a real provider login
+
+A held sandbox room replaces `HOME`, so a check that needs a real Claude or Codex turn runs in a host room started from the branch binary. Every `rimz` that room spawns has to be the branch build: the sender's shell, the provider hooks (`rimz hooks feed` resolves from the agent's inherited `PATH`), and the sidebar elder (which reads `RIMZ_BIN`). Start it from a host shell; `rimz start` refuses inside a RimZ sandbox, so an agent cannot start this room for you.
+
+```sh
+cargo build -p rimz --bin rimz
+mkdir -p /var/tmp/rimz-livecheck/bin /var/tmp/rimz-livecheck/ws
+cp target/debug/rimz /var/tmp/rimz-livecheck/bin/
+export RIMZ_BIN=/var/tmp/rimz-livecheck/bin/rimz PATH=/var/tmp/rimz-livecheck/bin:$PATH
+cd /var/tmp/rimz-livecheck/ws
+rimz trust grant --agents claude,codex
+rimz start --tmux
+```
+
+Before you read any timing, confirm from the shell that sends the messages that `command -v rimz` prints the staged path and `rimz --version` prints the branch build. If a login shell's rc (a `~/.zshrc` that prepends `~/.cargo/bin`, say) puts the installed `rimz` back first on `PATH`, the check silently runs the released binary. Once, that read as a false park miss.
+
 ## Traps
 
 - A live check of anything the elder, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check.
