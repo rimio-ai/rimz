@@ -39,17 +39,17 @@ enum Command {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
-    /// Find a definition by position or exact symbol name.
+    /// Find a definition by position, exact symbol name, or path::Symbol.
     Def(Query),
-    /// Find references by position or exact symbol name.
+    /// Find references by position, exact symbol name, or path::Symbol.
     Refs(ReferencesQuery),
-    /// Show type and documentation at a position or symbol.
+    /// Show type and documentation at a position, symbol, or path::Symbol.
     Hover(Query),
-    /// Find implementations of a trait or interface.
+    /// Find implementations of a trait or interface, by name or path::Symbol.
     Impl(ListQuery),
-    /// Find functions calling this symbol.
+    /// Find functions calling this symbol, by name or path::Symbol.
     Callers(ReferencesQuery),
-    /// Find functions called by this symbol.
+    /// Find functions called by this symbol, by name or path::Symbol.
     Callees(ListQuery),
     /// Show a file's outline.
     Symbols(Query),

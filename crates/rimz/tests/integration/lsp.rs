@@ -1577,23 +1577,31 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         ("callers", "textDocument/prepareCallHierarchy"),
         ("callees", "textDocument/prepareCallHierarchy"),
     ] {
-        env.rimz()
-            .args(["lsp", verb, "Type::field"])
-            .assert()
-            .success();
-        let trace = query("requests");
-        let requests = trace["result"]["requests"].as_array().unwrap();
-        let navigation = &requests[requests.len() - 2];
-        assert_eq!(navigation["method"], method);
-        assert_eq!(
-            navigation["params"]["position"],
-            json!({"line":1,"character":0})
-        );
-        assert_eq!(
-            navigation["params"]["textDocument"]["uri"],
-            format!("file://{}/lib.rs", env.project_root.display())
-        );
+        for target in ["Type::field", "lib.rs::Type::field"] {
+            env.rimz().args(["lsp", verb, target]).assert().success();
+            let trace = query("requests");
+            let requests = trace["result"]["requests"].as_array().unwrap();
+            let navigation = &requests[requests.len() - 2];
+            assert_eq!(navigation["method"], method, "{target}");
+            assert_eq!(
+                navigation["params"]["position"],
+                json!({"line":1,"character":0})
+            );
+            assert_eq!(
+                navigation["params"]["textDocument"]["uri"],
+                format!("file://{}/lib.rs", env.project_root.display())
+            );
+        }
     }
+    env.rimz()
+        .args(["lsp", "def", "a/lib.rs::TwinType::field"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["lsp", "def", "empty.rs::Type::field"])
+        .assert()
+        .code(5)
+        .stdout("not found: empty.rs::Type::field\n");
     for name in ["Type::nosuch", "Type::method", "Wrong::field", "field"] {
         env.rimz()
             .args(["lsp", "def", name])

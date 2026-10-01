@@ -73,7 +73,8 @@ impl Target {
     pub fn path(&self) -> Option<&Path> {
         match self {
             Self::Position { path, .. } | Self::File(path) => Some(path),
-            Self::Symbol(_) | Self::Find(_) => None,
+            Self::Symbol(name) => file_qualified(name).map(|(file, _)| Path::new(file)),
+            Self::Find(_) => None,
         }
     }
 }
@@ -318,6 +319,74 @@ fn name_segments(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether an anchor's head names a file: no whitespace, and an extension of ASCII
+/// alphanumerics with at least one letter.
+pub(super) fn is_file_head(path: &str) -> bool {
+    let Some(extension) = Path::new(path).extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    !path.chars().any(char::is_whitespace)
+        && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        && extension.bytes().any(|byte| byte.is_ascii_alphabetic())
+}
+
+/// Splits a `path::Name` target at its first `::` when the head names a file.
+fn file_qualified(raw: &str) -> Option<(&str, &str)> {
+    let (file, name) = raw.split_once("::")?;
+    is_file_head(file).then_some((file, name))
+}
+
+/// An anchor path made checkout-relative with `.` components dropped; `None` when it leaves the
+/// checkout.
+pub(super) fn checkout_relative(root: &Path, path: &Path) -> Option<PathBuf> {
+    let path = if path.is_absolute() {
+        path.strip_prefix(root).ok()?
+    } else {
+        path
+    };
+    if path
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    Some(
+        path.components()
+            .filter(|part| !matches!(part, std::path::Component::CurDir))
+            .collect(),
+    )
+}
+
+/// The checkout files a file-qualified target's path names, as `check` resolves an anchor: the
+/// exact file when it exists, else every file the path is a component-wise suffix of.
+enum NamedFiles {
+    Exact(PathBuf),
+    Suffix(PathBuf),
+    Outside,
+}
+
+impl NamedFiles {
+    fn new(root: &Path, written: &Path) -> Self {
+        match checkout_relative(root, written) {
+            None => Self::Outside,
+            Some(path) if root.join(&path).is_file() => Self::Exact(path),
+            Some(path) => Self::Suffix(path),
+        }
+    }
+
+    fn contains(&self, root: &Path, uri: &str) -> Result<bool> {
+        let file = file_path(uri)?;
+        let Ok(relative) = file.strip_prefix(root) else {
+            return Ok(false);
+        };
+        Ok(match self {
+            Self::Exact(path) => relative == path,
+            Self::Suffix(path) => relative.ends_with(path),
+            Self::Outside => false,
+        })
+    }
+}
+
 fn module_path(root: &Path, uri: &str) -> Result<Vec<String>> {
     let file = file_path(uri)?;
     let Ok(relative) = file.strip_prefix(root) else {
@@ -357,7 +426,12 @@ fn symbol_path(root: &Path, symbol: &SymbolInformation) -> Result<Vec<String>> {
         .collect())
 }
 
+/// A file-qualified `name` keeps only matches located in a file its head names; the
+/// `Missing` candidates stay every exact-name symbol.
 fn resolve_symbol(root: &Path, name: &str, result: Value) -> Result<SymbolResolution> {
+    let (files, name) = file_qualified(name).map_or((None, name), |(file, name)| {
+        (Some(NamedFiles::new(root, Path::new(file))), name)
+    });
     let mut qualifier = name_segments(name);
     let name = qualifier.pop().unwrap_or_default();
     let symbols: Vec<SymbolInformation> = if result.is_null() {
@@ -371,6 +445,11 @@ fn resolve_symbol(root: &Path, name: &str, result: Value) -> Result<SymbolResolu
         .collect();
     let mut matches = Vec::new();
     for symbol in &candidates {
+        if let Some(files) = &files
+            && !files.contains(root, &symbol.location.uri)?
+        {
+            continue;
+        }
         let path = symbol_path(root, symbol)?;
         let mut segments = path.iter();
         if qualifier

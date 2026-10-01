@@ -18,12 +18,12 @@ rimz lsp find MuxBackend --server rust --json
 
 | Verb | Target | Result |
 | --- | --- | --- |
-| `def` | position or exact symbol name | definition locations |
-| `refs` | position or exact symbol name | reference locations, inside the checkout by default |
-| `hover` | position or exact symbol name | type and documentation |
-| `impl` | position or exact symbol name | implementation locations, inside the checkout by default |
-| `callers` | position or exact symbol name | incoming call hierarchy items, inside the checkout by default |
-| `callees` | position or exact symbol name | outgoing call hierarchy items, inside the checkout by default |
+| `def` | position, exact symbol name, or `path::Symbol` | definition locations |
+| `refs` | position, exact symbol name, or `path::Symbol` | reference locations, inside the checkout by default |
+| `hover` | position, exact symbol name, or `path::Symbol` | type and documentation |
+| `impl` | position, exact symbol name, or `path::Symbol` | implementation locations, inside the checkout by default |
+| `callers` | position, exact symbol name, or `path::Symbol` | incoming call hierarchy items, inside the checkout by default |
+| `callees` | position, exact symbol name, or `path::Symbol` | outgoing call hierarchy items, inside the checkout by default |
 | `symbols` | file path | document symbol outline |
 | `find` | search string | workspace symbols matching the server's search, inside the checkout by default |
 | `check` | Markdown notes file | anchor verdicts and coverage summary |
@@ -37,7 +37,7 @@ All five list verbs (`refs`, `impl`, `callers`, `callees`, `find`) show at most 
 
 `refs` and `callers` accept `--no-tests` to hide test-code locations before counting and limiting results. Test code means a path component, a file stem, or a module in the server's document symbols that is named `tests`, `testkit`, or `test_support`, or ends in `_tests`. The rule is by name, not by `#[cfg(test)]`, so it also hides the `testkit` modules compiled outside tests: the `testkit`-feature fixtures and the test-only counters that integration and performance tests read. When test locations are hidden, a final footer reports `N test references hidden; drop --no-tests to show them` (`callers` for that verb). Without the flag, test locations remain included. `--no-tests` conflicts with `--json`, which always preserves the complete server answer.
 
-Symbol names strip a trailing `()`, leading `crate`, `self`, and `super` segments, and generic arguments (`<…>`) from each segment. The last `::` segment is matched exactly against workspace symbols. The remaining segments must occur in order in the candidate's checkout-relative file path and container, but may skip intermediate segments: `launch_reminders::render`, `harness::launch_reminders::render`, and `rimz::harness::launch_reminders::render` can identify the same function. File extensions, `src` components, and final `mod`, `lib`, or `main` file stems do not contribute segments. Outside-checkout candidates contribute only their container. Wrong qualifiers never fall back to a bare-name match.
+Symbol names strip a trailing `()`, leading `crate`, `self`, and `super` segments, and generic arguments (`<…>`) from each segment. The last `::` segment is matched exactly against workspace symbols. The remaining segments must occur in order in the candidate's checkout-relative file path and container, but may skip intermediate segments: `launch_reminders::render`, `harness::launch_reminders::render`, and `rimz::harness::launch_reminders::render` can identify the same function. File extensions, `src` components, and final `mod`, `lib`, or `main` file stems do not contribute segments. Outside-checkout candidates contribute only their container. Wrong qualifiers never fall back to a bare-name match. A name may start with a file, as a notes anchor writes it (`crates/rimz/src/store/mod.rs::Store::open`): when the text before the first `::` has a file extension and no whitespace, the rest resolves as above among the symbols located in a file that path names, as `show` resolves an anchor's path: the checkout file at exactly that path when it exists, else every checkout file the path is a component-wise suffix of; `.` components are dropped, and a path outside the checkout or through `..` names nothing. The filter also applies to the member fallback's qualifier, and the file's extension picks the server. A named file without the symbol is not found, listing the exact-name candidates from every file; a path naming several files that each hold it is ambiguous.
 
 When a qualified name has no workspace-symbol match, its qualifier is resolved through workspace symbols and its outline's direct children are searched. This accepts fields (`Type::field`), variant fields (`Enum::Variant::field`), and inline-module items (`query::tests::foo`) when the qualifier is indexed and the server supplies a hierarchical outline. The qualifier itself gets no outline fallback. Several matching qualifiers are searched together, up to 20; distinct members remain ambiguous. A qualifier matching more than 20 symbols, such as a bare `tests`, skips the fallback and reports not found: add a path segment (`memory::tests::foo`). Existing workspace-symbol matches take precedence, so a method of the same name wins over a field; use the field's position in that case.
 
