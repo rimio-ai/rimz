@@ -1240,7 +1240,9 @@ impl MuxBackend for ZellijBackend {
             .map(|listed| {
                 listed
                     .into_iter()
-                    .map(|raw| PaneId::from(PaneTopologyPane::from(raw).native_id()))
+                    .map(PaneTopologyPane::from)
+                    .filter(PaneTopologyPane::holds_terminal)
+                    .map(|pane| PaneId::from(pane.native_id()))
             });
         crate::mux::require_held_pane(pane, session, held)
     }
