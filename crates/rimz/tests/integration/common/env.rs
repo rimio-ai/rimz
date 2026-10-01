@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use super::command::{PROVIDER_HOME_KEYS, ScrubSessionEnvExt};
+use super::command::{ScrubSessionEnvExt, provider_home_keys};
 use super::zellij::HERMETIC_CONFIG_KDL;
 use rimz::diag::DiagSink;
 use rimz::diag::record::DiagEnvelope;
@@ -778,7 +778,9 @@ fn rimz_command_pins_persistent_roots_and_both_mux_namespaces() {
     let mut pty = portable_pty::CommandBuilder::new("rimz");
     pty.env("CODEX_HOME", "/ambient/codex");
     env.pin_pty_command(&mut pty);
-    for key in PROVIDER_HOME_KEYS {
+    let scrubbed: Vec<_> = provider_home_keys().collect();
+    assert!(scrubbed.contains(&"CODEX_HOME") && scrubbed.contains(&"CLAUDE_CONFIG_DIR"));
+    for key in scrubbed {
         assert!(
             command
                 .get_envs()
