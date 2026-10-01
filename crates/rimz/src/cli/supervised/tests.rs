@@ -750,28 +750,54 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     )
     .expect("provider binding");
     let worktree = Path::new("/tmp/child-worktree");
-    let pane = run_pane_cmd(RunPaneCmdArgs {
+    let cell = rimz::harness::spec::AgentCell {
+        resume_model_override: false,
         isolation_default: Some(rimz::config::Isolation::Sandbox),
-        runtime: &runtime,
-        adapter: rimz::agents::definition_by_kind("codex").unwrap(),
-        run_id: &run_id,
-        agent_name: Some("child"),
-        agent_name_explicit: true,
-        launch: &launch,
-        launch_id: Some(&launch_id),
-        cwd: worktree,
-        prompt: "work",
-        cleanup_worktree: true,
-        permission_args: &permission_args,
-        system_prompt_file: Some(&system_prompt),
-        append_system_prompt_files: &appended,
-        team_prompt: Some(&team_prompt),
-        skills: Some(&skills),
-        allowed_tools: Some(&allowed_tools),
-        self_cleanup_on_completion: true,
-        subagent: true,
-        provider_account_binding: Some(&binding),
-    })
+        kind: rimz::agents::definition_by_kind("codex")
+            .unwrap()
+            .spec()
+            .kind_id(),
+        args: permission_args.to_vec(),
+        auto_compact: None,
+        system_prompt_file: Some(system_prompt.clone()),
+        append_system_prompt_files: appended.to_vec(),
+        team_prompt: Some(team_prompt.clone()),
+        skills: Some(skills.to_vec()),
+        allowed_tools: Some(allowed_tools.to_vec()),
+        launch: LaunchParams::default(),
+    };
+    let (close_pane_on_exit, exit_on_run_completion) = run_exit_policy(true);
+    let pane = run_pane_cmd(
+        &runtime,
+        &rimz::harness::launch::ExecRequest {
+            kind: rimz::agents::definition_by_kind("codex")
+                .unwrap()
+                .spec()
+                .kind_id(),
+            action: rimz::harness::launch::ExecAction::Launch {
+                prompt: Some("work".to_owned()),
+                extra_args: cell.args.clone(),
+            },
+            provider_account: rimz::harness::launch::ProviderAccountState::Pending {
+                binding: binding.clone(),
+            },
+            run_id: Some(run_id.clone()),
+            exit_on_run_completion,
+            subagent: true,
+            ..rimz::harness::launch::ExecRequest::fresh(
+                &cell,
+                rimz::harness::launch::ExecIdentity {
+                    resume_model_override: false,
+                    name: Some("child".to_owned()),
+                    name_explicit: true,
+                    launch_id: Some(launch_id.to_string()),
+                    params: launch.clone(),
+                },
+                Some(worktree.to_path_buf()),
+                close_pane_on_exit,
+            )
+        },
+    )
     .unwrap();
     assert_eq!(pane.name.as_deref(), Some("codex"));
     let request = rimz::harness::launch::decode_exec_request(

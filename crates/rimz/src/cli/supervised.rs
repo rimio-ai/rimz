@@ -171,72 +171,14 @@ pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Res
     Ok(())
 }
 
-struct RunPaneCmdArgs<'a> {
-    runtime: &'a rimz::RuntimePaths,
-    adapter: &'a AgentDefinition,
-    run_id: &'a rimz::RunId,
-    agent_name: Option<&'a str>,
-    agent_name_explicit: bool,
-    launch: &'a rimz::agents::LaunchParams,
-    launch_id: Option<&'a rimz::ids::AgentSessionId>,
-    cwd: &'a Path,
-    prompt: &'a str,
-    cleanup_worktree: bool,
-    permission_args: &'a [String],
-    system_prompt_file: Option<&'a rimz::config::PromptSource>,
-    append_system_prompt_files: &'a [rimz::config::PromptSource],
-    team_prompt: Option<&'a rimz::harness::team_prompt::TeamPrompt>,
-    skills: Option<&'a [rimz::config::SkillName]>,
-    allowed_tools: Option<&'a [rimz::config::ToolRule]>,
-    isolation_default: Option<rimz::config::Isolation>,
-    self_cleanup_on_completion: bool,
-    subagent: bool,
-    provider_account_binding: Option<&'a rimz::agents::ProviderAccountBinding>,
-}
-
-fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
-    let (close_pane_on_exit, exit_on_run_completion) =
-        run_exit_policy(args.self_cleanup_on_completion);
-    let rimz_bin = rimz::proc::rimz_exe();
-    let name = args.adapter.spec().kind_id();
-    let argv = rimz::harness::launch::exec_argv(
-        &rimz_bin,
-        args.runtime,
-        &rimz::harness::launch::ExecRequest {
-            kind: name.clone(),
-            action: rimz::harness::launch::ExecAction::Launch {
-                prompt: Some(args.prompt.to_owned()),
-                extra_args: args.permission_args.to_vec(),
-            },
-            system_prompt_file: args.system_prompt_file.cloned(),
-            append_system_prompt_files: args.append_system_prompt_files.to_vec(),
-            team_prompt: args.team_prompt.cloned(),
-            skills: args.skills.map(<[_]>::to_vec),
-            allowed_tools: args.allowed_tools.map(<[_]>::to_vec),
-            isolation_default: args.isolation_default,
-            provider_account: args.provider_account_binding.map_or(
-                rimz::harness::launch::ProviderAccountState::Unbound,
-                |binding| rimz::harness::launch::ProviderAccountState::Pending {
-                    binding: binding.clone(),
-                },
-            ),
-            run_id: Some(args.run_id.clone()),
-            worktree_path: args.cleanup_worktree.then(|| args.cwd.to_path_buf()),
-            close_pane_on_exit,
-            exit_on_run_completion,
-            subagent: args.subagent,
-            identity: rimz::harness::launch::ExecIdentity {
-                resume_model_override: false,
-                name: args.agent_name.map(ToOwned::to_owned),
-                name_explicit: args.agent_name_explicit,
-                launch_id: args.launch_id.map(ToString::to_string),
-                params: args.launch.clone(),
-            },
-        },
-    )?;
+fn run_pane_cmd(
+    runtime: &rimz::RuntimePaths,
+    request: &rimz::harness::launch::ExecRequest,
+) -> Result<PaneCmd> {
+    let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), runtime, request)?;
     Ok(PaneCmd {
         argv,
-        name: Some(name.to_string()),
+        name: Some(request.kind.to_string()),
     })
 }
 
