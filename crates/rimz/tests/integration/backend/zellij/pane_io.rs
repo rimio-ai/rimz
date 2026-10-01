@@ -792,3 +792,110 @@ fn pane_send_and_capture_address_the_resolved_room_among_two_sessions() {
         "an absent pane got a pane action:\n{log}"
     );
 }
+
+/// A room pane whose command has exited stays in the session while Zellij
+/// holds it, so `pane capture` still reads its last screen even though
+/// `pane list` omits it.
+#[test]
+fn pane_capture_reads_a_held_pane_that_pane_list_omits() {
+    require_zellij!();
+
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let here = workspace.session_name;
+    record_known_workspace_session(
+        &env.rimz_home(),
+        &workspace.workspace_id,
+        &env.project_root,
+        &here,
+    );
+    let room = LiveZellijSession::from_namespace(crate::common::ZellijNamespace::new(), &here);
+    let xdg = room.path();
+    std::fs::write(xdg.join(".zshrc"), "# hermetic test shell\n")
+        .expect("write test shell profile");
+    room.create_background();
+    let opened = room
+        .command()
+        .args(["--session", &here, "action", "new-pane", "--"])
+        .args(["sh", "-c", "echo HELD_MARK"])
+        .bounded_output()
+        .expect("open a pane whose command exits");
+    assert!(
+        opened.status.success(),
+        "new-pane: {}",
+        String::from_utf8_lossy(&opened.stderr)
+    );
+    let held = poll_until(
+        Duration::from_secs(10),
+        || {
+            list_panes(xdg, &here).map(|snapshot| {
+                snapshot.panes.into_iter().find(|pane| {
+                    pane.is_held
+                        && pane
+                            .terminal_command
+                            .as_deref()
+                            .is_some_and(|command| command.contains("HELD_MARK"))
+                })
+            })
+        },
+        Option::is_some,
+        "the exited command's pane held",
+    )
+    .map(|pane| PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id)))
+    .expect("held pane");
+
+    room.backend()
+        .require_pane_in_session(&held, &here)
+        .expect("a held pane is in the room");
+    let pane = |args: &[&str]| {
+        env.rimz()
+            .env("XDG_RUNTIME_DIR", xdg)
+            .env("XDG_CACHE_HOME", xdg)
+            .env("TMPDIR", xdg)
+            .arg("pane")
+            .args(args)
+            .bounded_output()
+            .expect("run rimz pane")
+    };
+    let capture = pane(&["capture", &held.to_string()]);
+    assert!(
+        capture.status.success(),
+        "capture: {}",
+        String::from_utf8_lossy(&capture.stderr)
+    );
+    let text = String::from_utf8_lossy(&capture.stdout);
+    assert!(
+        text.lines().any(|line| line.trim() == "HELD_MARK"),
+        "capture prints the exited command's output: {text}"
+    );
+
+    write_topology_cache_from_list_panes(xdg, &workspace.workspace_id, &here);
+    let list = env
+        .rimz()
+        .env("XDG_RUNTIME_DIR", xdg)
+        .env("XDG_CACHE_HOME", xdg)
+        .env("TMPDIR", xdg)
+        .args(["--mux", "zellij", "pane", "list"])
+        .bounded_output()
+        .expect("run rimz pane list");
+    let listed = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        list.status.success(),
+        "list: {}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let lists = |pane: &PaneId| {
+        listed
+            .split_whitespace()
+            .any(|word| word == pane.to_string())
+    };
+    let shell = expect_list_panes(xdg, &here).pane_refs()[0].pane_id.clone();
+    assert!(
+        lists(&shell),
+        "pane list shows the live shell {shell}:\n{listed}"
+    );
+    assert!(
+        !lists(&held),
+        "pane list omits the held pane {held}:\n{listed}"
+    );
+}

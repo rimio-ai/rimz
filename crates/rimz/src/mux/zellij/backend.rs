@@ -1234,6 +1234,17 @@ impl MuxBackend for ZellijBackend {
         Ok(())
     }
 
+    fn require_pane_in_session(&self, pane: &PaneId, session: &str) -> Result<()> {
+        let held = self
+            .raw_listed_panes(Some(session), super::super::COMMAND_TIMEOUT)
+            .map(|listed| {
+                listed
+                    .into_iter()
+                    .map(|raw| PaneId::from(PaneTopologyPane::from(raw).native_id()))
+            });
+        crate::mux::require_held_pane(pane, session, held)
+    }
+
     fn capture_pane(
         &self,
         pane: &PaneId,

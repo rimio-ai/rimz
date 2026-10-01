@@ -929,26 +929,18 @@ pub trait MuxBackend: Send + Sync {
     /// Fail unless `session`'s authoritative listing holds `pane`. Zellij exits
     /// 0 for an absent `--pane-id` and tmux ids reach every session on the
     /// server, so neither write proves the pane is in the room; an explicit
-    /// pane read or write checks first.
+    /// pane read or write checks first. A pane counts in any state the
+    /// session still holds it, so Zellij overrides this to include held and
+    /// exited panes, which its pane listing omits.
     fn require_pane_in_session(&self, pane: &PaneId, session: &str) -> Result<()> {
-        let listing = self
+        let held = self
             .list_panes(PaneListOptions {
                 session_name: Some(session.to_owned()),
                 consistency: PaneReadConsistency::RequireAuthoritative,
                 ..Default::default()
             })
-            .map_err(|source| MuxErr::PaneRoomUnchecked {
-                pane: pane.clone(),
-                session: session.to_owned(),
-                source: Box::new(source),
-            })?;
-        if listing.panes.iter().any(|listed| listed.pane_id == *pane) {
-            return Ok(());
-        }
-        Err(MuxErr::PaneNotInRoom {
-            pane: pane.clone(),
-            session: session.to_owned(),
-        })
+            .map(|listing| listing.panes.into_iter().map(|listed| listed.pane_id));
+        require_held_pane(pane, session, held)
     }
     /// Pane reads and writes take the pane's session like [`Self::focus_pane`]:
     /// Zellij addresses `Some(session)` explicitly and lets `None` resolve from
@@ -1141,6 +1133,27 @@ pub(crate) fn ensure_pane_backend(pane: &PaneId, expected: MuxName) -> Result<()
         });
     }
     Ok(())
+}
+
+/// Decide [`MuxBackend::require_pane_in_session`] from the panes `session`
+/// holds, or from the error that kept them from being read.
+fn require_held_pane(
+    pane: &PaneId,
+    session: &str,
+    held: Result<impl IntoIterator<Item = PaneId>>,
+) -> Result<()> {
+    let held = held.map_err(|source| MuxErr::PaneRoomUnchecked {
+        pane: pane.clone(),
+        session: session.to_owned(),
+        source: Box::new(source),
+    })?;
+    if held.into_iter().any(|held_pane| held_pane == *pane) {
+        return Ok(());
+    }
+    Err(MuxErr::PaneNotInRoom {
+        pane: pane.clone(),
+        session: session.to_owned(),
+    })
 }
 
 #[cfg(test)]
