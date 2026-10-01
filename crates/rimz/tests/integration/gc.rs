@@ -16,23 +16,31 @@ use serde_json::json;
 
 use crate::common::Env;
 
-fn stale_room_files(env: &Env, root: &Path) -> [std::path::PathBuf; 2] {
+fn stale_room_files(env: &Env, root: &Path) -> [std::path::PathBuf; 3] {
     env.record(root);
     let state = env.state_path_for(root);
     let runtime = rimz::RuntimePaths::for_state_under(&state, &env.runtime_root);
     runtime.ensure_dirs().unwrap();
-    state.ensure_tmp_dir().unwrap();
+    let stale_unit = state.temp_unit_dir(Some("gone"));
+    std::fs::create_dir_all(state.out_reader_dir(None)).unwrap();
+    std::fs::create_dir_all(&stale_unit).unwrap();
     let files = [
         runtime.heartbeat_dir.join("stale.json"),
-        state.waits_dir.join("old.output"),
+        state.out_reader_dir(None).join("wait-old.output"),
+        stale_unit.join("note"),
     ];
+    let stale = SystemTime::now() - Duration::from_secs(15 * 86_400);
     for file in &files {
         std::fs::write(file, b"stale").unwrap();
         std::fs::File::open(file)
             .unwrap()
-            .set_modified(SystemTime::now() - Duration::from_secs(15 * 86_400))
+            .set_modified(stale)
             .unwrap();
     }
+    std::fs::File::open(&stale_unit)
+        .unwrap()
+        .set_modified(stale)
+        .unwrap();
     files
 }
 
@@ -379,8 +387,10 @@ fn gc_prunes_wait_outputs_despite_another_projects_invalid_config() {
     )
     .unwrap();
     let paths = env.state_path_for(&other);
-    paths.ensure_tmp_dir().unwrap();
-    let log = paths.waits_dir.join("wait-retired.output");
+    std::fs::create_dir_all(paths.out_reader_dir(Some("armer"))).unwrap();
+    let log = paths
+        .out_reader_dir(Some("armer"))
+        .join("wait-retired.output");
     std::fs::write(&log, "old command output").unwrap();
     std::fs::File::open(&log)
         .unwrap()
@@ -390,9 +400,8 @@ fn gc_prunes_wait_outputs_despite_another_projects_invalid_config() {
     let damaged = env.home_root.join("damaged-project");
     env.record(&damaged);
     let damaged_paths = env.state_path_for(&damaged);
-    damaged_paths.ensure_tmp_dir().unwrap();
-    std::fs::remove_dir(&damaged_paths.waits_dir).unwrap();
-    std::fs::write(&damaged_paths.waits_dir, "not a directory").unwrap();
+    damaged_paths.ensure_dirs().unwrap();
+    std::fs::write(&damaged_paths.out_dir, "not a directory").unwrap();
 
     let gone = env.home_root.join("gone-project");
     env.record(&gone);
@@ -408,7 +417,7 @@ fn gc_prunes_wait_outputs_despite_another_projects_invalid_config() {
         "retired log is pruned without loading project config"
     );
     assert!(
-        damaged_paths.waits_dir.is_file(),
+        damaged_paths.out_dir.is_file(),
         "unreadable wait area is kept"
     );
     assert!(
@@ -416,6 +425,11 @@ fn gc_prunes_wait_outputs_despite_another_projects_invalid_config() {
         "later workspace sweep still runs"
     );
 
+    assert!(
+        !log.parent().unwrap().exists(),
+        "the emptied reader dir goes"
+    );
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
     std::fs::write(&log, "another retired log").unwrap();
     std::fs::File::open(&log)
         .unwrap()

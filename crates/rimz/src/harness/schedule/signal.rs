@@ -18,11 +18,10 @@ use super::runner::{
     CheckEcho, CheckOutcome, WatchDeadline, check_record, run_command, task_timeout,
 };
 use crate::RuntimePaths;
-use crate::config::{CheckOn, FileMark, WatchSpec};
+use crate::config::{CheckOn, FileMark, TaskEntry, WatchSpec};
 use crate::disk::paths::StatePaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::schedule::runner::RunLockInfo;
-use crate::sandbox::TmpView;
 use crate::store::Store;
 use crate::store::event::{
     MAX_SIGNAL_NAME_BYTES, SignalEventPayload, SignalName, SignalNameErr, SignalSource,
@@ -187,27 +186,22 @@ pub struct WatchOutcome {
     pub verdict: WatchVerdict,
     #[serde(default)]
     pub output: String,
-    /// The agent-visible path to the full output file.
+    /// The host path to the full output file.
     pub output_path: Option<PathBuf>,
     #[serde(default)]
     pub summary: FileSummary,
 }
 
 impl WatchOutcome {
-    pub(super) fn measured(
-        verdict: WatchVerdict,
-        output: String,
-        host_path: &Path,
-        view: &TmpView,
-    ) -> Self {
-        let summary = FileSummary::measure(host_path).unwrap_or_else(|err| {
-            tracing::warn!(path = %host_path.display(), error = %err, "measuring wait output");
+    pub(super) fn measured(verdict: WatchVerdict, output: String, path: &Path) -> Self {
+        let summary = FileSummary::measure(path).unwrap_or_else(|err| {
+            tracing::warn!(path = %path.display(), error = %err, "measuring wait output");
             FileSummary::default()
         });
         Self {
             verdict,
             output,
-            output_path: Some(view.agent_path(host_path)),
+            output_path: Some(path.to_path_buf()),
             summary,
         }
     }
@@ -226,8 +220,13 @@ impl WatchOutcome {
     }
 }
 
-pub(super) fn wait_output_path(paths: &StatePaths, name: &str) -> PathBuf {
-    paths.waits_dir.join(format!("{name}.output"))
+/// Host path of wait `name`'s output, in its arming agent's `out/` directory.
+pub(super) fn wait_output_path(paths: &StatePaths, name: &str, entry: &TaskEntry) -> PathBuf {
+    let reader = entry
+        .wait_meta
+        .as_ref()
+        .and_then(|meta| meta.reader.as_deref());
+    paths.out_reader_dir(reader).join(format!("{name}.output"))
 }
 
 pub(super) fn read_wait_tail(path: &Path) -> std::io::Result<String> {
@@ -335,8 +334,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         anyhow::bail!("wait {name} has no watch");
     };
     let timeout = task_timeout(task.entry())?;
-    let output_path = wait_output_path(store.paths(), name);
-    let view = TmpView::current(None, None, store.paths());
+    let output_path = wait_output_path(store.paths(), name, task.entry());
     let file = OpenOptions::new()
         .append(true)
         .open(&output_path)
@@ -349,7 +347,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
                 .expect("generated wait signal name is valid"),
             payload: Map::new(),
             source: SignalSource::Watch,
-            watch: Some(WatchOutcome::measured(verdict, output, &output_path, &view)),
+            watch: Some(WatchOutcome::measured(verdict, output, &output_path)),
         };
         if let Err(err) = store.append_signal(&workspace.session_name, (&signal).into()) {
             tracing::warn!(task = name, error = %err, "appending wait signal");
@@ -896,7 +894,7 @@ mod tests {
             let outcome = WatchOutcome {
                 verdict,
                 output: "actual tail".to_owned(),
-                output_path: Some(PathBuf::from("/tmp/rimz-waits/wait.output")),
+                output_path: Some(PathBuf::from("/state/out/planner/wait.output")),
                 summary: FileSummary {
                     bytes: 11,
                     lines: 1,

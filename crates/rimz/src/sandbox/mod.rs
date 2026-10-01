@@ -584,8 +584,8 @@ mod tests {
         let view = TmpView::new(Isolation::Sandbox, Some("otter"), &state);
         assert_eq!(view.agent_path(&state.shared_dir), Path::new("/tmp/shared"));
         assert_eq!(
-            view.agent_path(&state.subagents_dir.join("child.output")),
-            Path::new("/tmp/rimz-subagents/child.output")
+            view.agent_path(&state.tmp_dir.join("child.output")),
+            Path::new("/tmp/child.output")
         );
     }
 
@@ -596,7 +596,7 @@ mod tests {
             Path::new("/state"),
         )
         .unwrap();
-        let output = paths.waits_dir.join("wait-test.output");
+        let output = paths.tmp_dir.join("rimz-waits/wait-test.output");
         let own = paths.scratch_dir(Some("otter")).join("f");
         let other = paths.scratch_dir(Some("fox")).join("f");
         let sandbox = TmpView::new(Isolation::Sandbox, Some("otter"), &paths);

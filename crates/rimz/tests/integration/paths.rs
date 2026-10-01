@@ -40,7 +40,7 @@ fn paths_names_one_workspace_dir_in_both_trees() {
     let state = env.state_path_for(&env.project_root);
 
     let report = paths_json(&mut env.rimz());
-    assert_eq!(report["schema"], "rimz.paths.v1");
+    assert_eq!(report["schema"], "rimz.paths.v2");
     assert_eq!(path_of(&report, "home"), env.rimz_home());
     assert_eq!(report["workspace_id"], env.workspace_id.as_str());
     let name = report["workspace_dir"].as_str().expect("workspace dir");
@@ -54,25 +54,10 @@ fn paths_names_one_workspace_dir_in_both_trees() {
         path_of(&report, "runtime_dir"),
         env.runtime_root.join("rimz/ws").join(name)
     );
-    assert_eq!(report["scratch_agent_view"], report["scratch"]);
-
-    let sandboxed = paths_json(env.rimz().env(rimz::config::Isolation::ENV, "sandbox"));
-    assert_eq!(sandboxed["scratch_agent_view"], "/tmp/scratchpad");
-    assert_eq!(
-        path_of(&sandboxed, "scratch"),
-        state.root.join("tmp/scratchpad")
-    );
-    let named = paths_json(
-        env.rimz()
-            .env(rimz::config::Isolation::ENV, "sandbox")
-            .env(rimz::harness::launch::ENV_AGENT_NAME, "otter"),
-    );
-    assert_eq!(named["schema"], "rimz.paths.v1");
-    assert_eq!(
-        path_of(&named, "scratch"),
-        state.root.join("owned/agents/otter/scratch")
-    );
-    assert_eq!(named["scratch_agent_view"], "/tmp/scratchpad");
+    assert_eq!(path_of(&report, "room_tmp"), state.root.join("tmp"));
+    assert_eq!(path_of(&report, "shared"), state.root.join("shared"));
+    assert_eq!(path_of(&report, "out"), state.root.join("out"));
+    assert!(report.get("scratch").is_none());
 
     env.rimz()
         .arg("paths")

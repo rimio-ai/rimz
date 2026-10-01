@@ -18,15 +18,17 @@ pub fn peer_can_report(adapter: &AgentDefinition) -> bool {
     hooks.turn_started.is_native() && hooks.turn_ended.is_native()
 }
 
+/// `reader` is the launcher's handle, whose `out/` directory receives the response.
 pub fn create_peer_prompt(
     paths: &StatePaths,
     peer: &AgentState,
+    reader: Option<&str>,
     adapter: &AgentDefinition,
     prompt: &str,
     cwd: &Path,
 ) -> Result<Option<RunRecord>> {
     if peer.is_team_seat() {
-        return super::team::create_team_run(paths, peer, adapter, prompt, cwd);
+        return super::team::create_team_run(paths, peer, reader, adapter, prompt, cwd);
     }
     let Some(launch_id) = peer_launch_id(peer) else {
         return Ok(None);
@@ -38,7 +40,7 @@ pub fn create_peer_prompt(
     if let Some(record) = open_peer_run(paths, peer)? {
         return Ok(Some(record));
     }
-    let record = new_peer_record(paths, peer, launch_id, prompt.to_owned(), cwd);
+    let record = new_peer_record(paths, peer, reader, launch_id, prompt.to_owned(), cwd);
     crate::store::run::write(&paths.runs_dir, &record)?;
     Ok(Some(record))
 }
@@ -108,7 +110,11 @@ pub fn record_run_delivery(
                 .map(|record| record.text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            let mut record = new_peer_record(paths, peer, launch_id, prompt, cwd);
+            let reader = openers.iter().find_map(|record| match &record.sender {
+                MessageSender::Agent { name, .. } => name.as_deref(),
+                _ => None,
+            });
+            let mut record = new_peer_record(paths, peer, reader, launch_id, prompt, cwd);
             record.agent_id = Some(peer.agent_id.clone());
             record.status = RunStatus::Running;
             record
@@ -212,6 +218,7 @@ fn peer_launch_id(peer: &AgentState) -> Option<&AgentSessionId> {
 fn new_peer_record(
     paths: &StatePaths,
     peer: &AgentState,
+    reader: Option<&str>,
     launch_id: &AgentSessionId,
     prompt: String,
     cwd: &Path,
@@ -226,6 +233,7 @@ fn new_peer_record(
             .map_or_else(|| cwd.to_path_buf(), Into::into),
     );
     record.agent_name = peer.name.clone();
+    record.reader = reader.map(str::to_owned);
     record.peer = Some(PeerRun {
         launch_id: launch_id.clone(),
         opened_by: Vec::new(),

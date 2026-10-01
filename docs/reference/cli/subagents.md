@@ -120,7 +120,7 @@ A launch that fails partway stops the remaining launches. The error names the ch
 
 ## The fleet report
 
-Launcher-opened turns of persistent interactive peers also join this fleet. Every unreported turn retains its own response at `rimz-subagents/<name>.<run_id>.output`, with that turn's prompt as its task and its own elapsed time. Two rows can name the same peer. An open peer run delays the whole fleet report; a user-typed turn without an open peer run does not. These rows use the `background agent` heading and never close the peer's pane.
+Launcher-opened turns of persistent interactive peers also join this fleet. Every unreported turn retains its own response at `out/<launcher>/<name>.<run_id>.output`, with that turn's prompt as its task and its own elapsed time. Two rows can name the same peer. An open peer run delays the whole fleet report; a user-typed turn without an open peer run does not. These rows use the `background agent` heading and never close the peer's pane.
 
 A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet; a fleet containing any solo agent run gets `AGENT_REPORT` instead. The message is parked and delivered at the parent's next turn boundary:
 
@@ -129,9 +129,9 @@ Type: SUBAGENT_REPORT
 From: @rimz
 Content:
 All 3 subagents settled, responses total ~5.1k tokens, 96 lines:
-- @naming: completed in 4m12s, task: "map spec/profile surfaces", response: /tmp/rimz-subagents/naming.output (~4.2k tokens, 84 lines)
+- @naming: completed in 4m12s, task: "map spec/profile surfaces", response: /home/me/.rimz/ws/myrepo-f89e/out/planner/naming.output (~4.2k tokens, 84 lines)
 - @runtime: completed in 5m3s, task: "inspect runtime behavior", no response
-- @slow-reviewer: timed out after 33m; provider did not stop, task: "review correctness", partial response: /tmp/rimz-subagents/slow-reviewer.output (<1k tokens, 12 lines)
+- @slow-reviewer: timed out after 33m; provider did not stop, task: "review correctness", partial response: /home/me/.rimz/ws/myrepo-f89e/out/planner/slow-reviewer.output (<1k tokens, 12 lines)
 ```
 
 The report lists status and where each answer is, and asks for nothing: reading the response files is the parent's call. It never carries a child's answer text; `rimz subagents wait <names>` prints the answers, and `--json` gives structured results.
@@ -144,10 +144,10 @@ The report lists status and where each answer is, and asks for nothing: reading 
 | `in` / `after` | `after` for a timed-out answer, `in` for every other status; elapsed time is compact (`4m12s`) and starts at that answer's turn, not the child's launch |
 | Reason | The last non-empty line of the answer's failure tail, for a status other than completed |
 | Task | The launch answer uses `--description`, falling back to the prompt. Follow-ups use the shortened first line of their own stored prompt, omitted when unknown. Peer turns use their own prompt preview |
-| Response | The child's first answer in `rimz-subagents/<name>.output` under room tmp, then `<name>.2.output`, `<name>.3.output`, and so on for follow-ups; available when that turn settles. `no response` when the message is empty or absent, with no file for that turn; earlier files remain |
+| Response | The child's first answer in `out/<parent>/<name>.output` under the room's state directory, then `<name>.2.output`, `<name>.3.output`, and so on for follow-ups; available when that turn settles. `no response` when the message is empty or absent, with no file for that turn; earlier files remain |
 | Size | `{tokens} tokens, {lines}`: an estimated token count (`<1k`, `~1.2k`, `~22k`, `~1.2M`) from OpenAI's public `o200k_base` tokenizer, which only approximates Claude's, then the line count (`1 line`, `{N} lines`, blank lines included) |
 
-Rows follow launch order, with a child's earlier answers before its current answer. Each unreported, unjoined answer gets a row; the heading counts rows, so one child can contribute several. Under sandbox isolation the first response path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. The files are removed when the room closes, and opening one does not count as reading the result.
+Rows follow launch order, with a child's earlier answers before its current answer. Each unreported, unjoined answer gets a row; the heading counts rows, so one child can contribute several. Every path is the host path, in every isolation; the host state path is reachable from a sandboxed pane. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. Closing the room keeps the files; `rimz gc` removes one once it is 7 days old and no run record names its agent, and `rimz reset --hard` removes them all. Opening one does not count as reading the result.
 
 A fleet is every child launched before the report is composed. A child launched while its siblings still run joins that fleet; one launched after composition starts belongs to the next. No report is sent when the parent has ended.
 

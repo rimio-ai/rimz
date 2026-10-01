@@ -571,12 +571,10 @@ pub(super) fn launch_layout(
                 terminal_width: render::terminal_columns(100),
             },
         )?;
-        write_placed_peer_receipt(
+        write_peer_receipt(
             &mut render::out(),
             launch_batch.identities(),
-            peer_prompt.as_ref(),
-            &projection.agents,
-            machine_config.agents.isolation,
+            peer_prompt.as_ref().map(|(_, run)| run),
             store.paths(),
         )?;
     }
@@ -630,66 +628,42 @@ fn prepare_peer_prompt(
     if !rimz::harness::run::peer_can_report(adapter) {
         return Ok(None);
     }
-    let peer = store
-        .runtime_projection(rimz::RuntimeScope::Audit)?
-        .agents
-        .into_iter()
+    let agents = store.runtime_projection(rimz::RuntimeScope::Audit)?.agents;
+    let peer = agents
+        .iter()
         .find(|peer| {
             peer.kind == identity.kind && peer.launch_id.as_ref() == Some(&identity.agent_id)
         })
         .context("launched peer has no provisional row")?;
+    let launcher = peer
+        .launcher()
+        .and_then(|(kind, id)| rimz::address::launch_row(&agents, kind, id));
+    if launcher.is_none() {
+        tracing::warn!(
+            "agent launched, but its launcher could not be resolved; its response lands under its own name"
+        );
+    }
     let run = rimz::harness::run::create_peer_prompt(
         store.paths(),
-        &peer,
+        peer,
+        launcher.and_then(|launcher| launcher.name.as_deref()),
         adapter,
         identity.prompt.as_deref().unwrap_or_default(),
         cwd,
     )?;
-    Ok(run.map(|run| (peer, run)))
-}
-
-fn write_placed_peer_receipt(
-    w: &mut impl Write,
-    identities: &[AgentLaunchIdentity],
-    peer_prompt: Option<&(AgentState, rimz::store::run::RunRecord)>,
-    agents: &[AgentState],
-    isolation: rimz::config::Isolation,
-    paths: &rimz::StatePaths,
-) -> Result<()> {
-    let launcher = peer_prompt.and_then(|(peer, _)| {
-        let launcher = peer
-            .launcher()
-            .and_then(|(kind, id)| rimz::address::launch_row(agents, kind, id));
-        if launcher.is_none() {
-            tracing::warn!("agent launched, but its launcher could not be resolved; response path uses the host view");
-        }
-        launcher
-    });
-    let view = rimz::sandbox::TmpView::current(
-        Some(launcher.map_or(rimz::config::Isolation::Host, |agent| {
-            agent.runs_in(isolation)
-        })),
-        launcher.and_then(|agent| agent.name.as_deref()),
-        paths,
-    );
-    write_peer_receipt(w, identities, peer_prompt.map(|(_, run)| run), &view, paths)
+    Ok(run.map(|run| (peer.clone(), run)))
 }
 
 fn write_peer_receipt(
     w: &mut impl Write,
     identities: &[AgentLaunchIdentity],
     run: Option<&rimz::store::run::RunRecord>,
-    view: &rimz::sandbox::TmpView,
     paths: &rimz::StatePaths,
 ) -> Result<()> {
     if let Some(run) = run
         && let Some(name) = run.agent_name.as_deref()
+        && let Some(response) = rimz::harness::run::response_path(paths, run)
     {
-        let response = view.agent_path(&rimz::harness::run::peer_response_path(
-            paths,
-            name,
-            &run.run_id,
-        ));
         if let Some(team) = run.team.as_ref() {
             writeln!(
                 w,

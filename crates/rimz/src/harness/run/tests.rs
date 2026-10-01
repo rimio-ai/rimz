@@ -185,6 +185,7 @@ fn delivery_stamps_subagent_answer_from_confirmed_conversation() {
 fn peer_responses_preserve_each_turn() {
     let (_dir, paths, mut first) = setup();
     first.agent_name = Some("peer".into());
+    first.reader = Some("launcher".into());
     first.last_message = Some("first answer".into());
     let mut value = serde_json::to_value(&first).unwrap();
     value["peer"] = serde_json::json!({"launch_id": "peer-launch"});
@@ -196,7 +197,7 @@ fn peer_responses_preserve_each_turn() {
         create(&paths, record).unwrap();
         cancel(&paths, &record.run_id).unwrap();
         let path = paths
-            .subagents_dir
+            .out_reader_dir(Some("launcher"))
             .join(format!("peer.{}.output", record.run_id));
         assert!(
             path.exists(),
@@ -206,14 +207,28 @@ fn peer_responses_preserve_each_turn() {
     }
     for record in [&first, &second] {
         let path = paths
-            .subagents_dir
+            .out_reader_dir(Some("launcher"))
             .join(format!("peer.{}.output", record.run_id));
         assert_eq!(
             std::fs::read_to_string(path).unwrap(),
             format!("{}\n", record.last_message.as_ref().unwrap())
         );
     }
-    assert!(!paths.subagents_dir.join("peer.output").exists());
+    assert!(
+        !paths
+            .out_reader_dir(Some("child"))
+            .join("peer.output")
+            .exists()
+    );
+    #[cfg(unix)]
+    for dir in [
+        paths.out_dir.clone(),
+        paths.out_reader_dir(Some("launcher")),
+    ] {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{} is private", dir.display());
+    }
 }
 
 #[test]
@@ -259,7 +274,7 @@ fn responses_follow_each_terminal_transition() {
                     .unwrap();
                 }
             }
-            let path = paths.subagents_dir.join("child.output");
+            let path = paths.out_reader_dir(Some("child")).join("child.output");
             assert_eq!(path.exists(), subagent, "{ending}");
             if subagent {
                 assert_eq!(std::fs::read_to_string(path).unwrap(), "answer\n");
@@ -273,6 +288,7 @@ fn response_lands_before_the_terminal_record() {
     let (_dir, paths, mut record) = setup();
     record.subagent = true;
     record.agent_name = Some("child".into());
+    record.reader = Some("parent".into());
     record.last_message = Some("answer".into());
     create(&paths, &record).unwrap();
     let record_path = paths.runs_dir.join(format!("{}.json", record.run_id));
@@ -287,7 +303,7 @@ fn response_lands_before_the_terminal_record() {
 
     assert!(result.is_err(), "the record write must fail");
     assert_eq!(
-        std::fs::read_to_string(paths.subagents_dir.join("child.output")).unwrap(),
+        std::fs::read_to_string(paths.out_reader_dir(Some("parent")).join("child.output")).unwrap(),
         "answer\n"
     );
 }
@@ -316,7 +332,7 @@ fn reopened_response_preserves_previous_answers() {
             || None,
         )
         .unwrap();
-        let path = paths.subagents_dir.join("child.output");
+        let path = paths.out_reader_dir(Some("child")).join("child.output");
         assert!(
             path.exists(),
             "terminal lifecycle must publish before returning"
@@ -343,7 +359,7 @@ fn reopened_response_preserves_previous_answers() {
         .unwrap();
         for ordinal in [2, 3] {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "first answer\n");
-            let second = paths.subagents_dir.join("child.2.output");
+            let second = paths.out_reader_dir(Some("child")).join("child.2.output");
             if message.is_some_and(|message| !message.is_empty()) {
                 assert_eq!(std::fs::read_to_string(second).unwrap(), "second answer\n");
             } else {
@@ -351,7 +367,10 @@ fn reopened_response_preserves_previous_answers() {
             }
             if ordinal == 3 {
                 assert_eq!(
-                    std::fs::read_to_string(paths.subagents_dir.join("child.3.output")).unwrap(),
+                    std::fs::read_to_string(
+                        paths.out_reader_dir(Some("child")).join("child.3.output")
+                    )
+                    .unwrap(),
                     "third answer\n"
                 );
                 break;
@@ -599,7 +618,8 @@ fn kill_harvest_is_write_once_and_published_only_after_grace() {
         let expected = existing.unwrap_or("partial answer");
         assert_eq!(settled.last_message.as_deref(), Some(expected));
         assert_eq!(
-            std::fs::read_to_string(paths.subagents_dir.join("child.output")).unwrap(),
+            std::fs::read_to_string(paths.out_reader_dir(Some("child")).join("child.output"))
+                .unwrap(),
             format!("{expected}\n")
         );
     }
@@ -1449,6 +1469,7 @@ fn team_record(paths: &StatePaths, instance: &str) -> RunRecord {
         Path::new("/tmp/rimz-run").to_path_buf(),
     );
     record.agent_name = Some("lead".into());
+    record.reader = Some("launcher".into());
     record.team = Some(crate::store::run::TeamRun {
         launch_id: "lead-launch".into(),
         instance: instance.to_owned(),
@@ -1547,7 +1568,7 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
             .is_none()
     );
     let response = paths
-        .subagents_dir
+        .out_reader_dir(Some("launcher"))
         .join(format!("lead.{}.output", first.run_id));
     assert_eq!(std::fs::read_to_string(response).unwrap(), "done\n");
     assert!(open_team_run_for(&paths, "forge#x").unwrap().is_none());
@@ -1558,6 +1579,7 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
     assert_ne!(reopened.run_id, first.run_id);
     assert_eq!(reopened.team, first.team);
     assert_eq!(reopened.prompt, first.prompt);
+    assert_eq!(reopened.reader.as_deref(), Some("launcher"));
     assert_eq!(reopened.last_message, None);
     assert_eq!(
         open_team_run_for(&paths, "forge#x")

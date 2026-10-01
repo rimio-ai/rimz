@@ -87,7 +87,7 @@ fn digest_lists_a_single_result_without_a_trailing_command() {
     result.last_message = Some("Done.\n\nTwo paragraphs.\n".to_owned());
     let child = child("naming", Some("map spec/profile surfaces"));
     let response = ResponseFile {
-        path: PathBuf::from("/tmp/rimz-subagents/naming.output"),
+        path: PathBuf::from("/state/out/planner/naming.output"),
         summary: FileSummary {
             bytes: 23,
             lines: 3,
@@ -98,7 +98,7 @@ fn digest_lists_a_single_result_without_a_trailing_command() {
     assert_eq!(
         compose_digest(&[(&child, &result, None, Some(&response))], true),
         "Your subagent settled:\n\
-         - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (<1k tokens, 3 lines)"
+         - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /state/out/planner/naming.output (<1k tokens, 3 lines)"
     );
 }
 
@@ -114,7 +114,7 @@ fn digest_sizes_non_completed_results_and_appends_reason() {
     let runtime = child("runtime", None);
     let reviewer = child("slow-reviewer", Some("review correctness"));
     let response = ResponseFile {
-        path: PathBuf::from("/tmp/rimz-subagents/naming.output"),
+        path: PathBuf::from("/state/out/planner/naming.output"),
         summary: FileSummary {
             bytes: 19,
             lines: 2,
@@ -122,7 +122,7 @@ fn digest_sizes_non_completed_results_and_appends_reason() {
         },
     };
     let partial = ResponseFile {
-        path: PathBuf::from("/tmp/rimz-subagents/slow-reviewer.output"),
+        path: PathBuf::from("/state/out/planner/slow-reviewer.output"),
         summary: FileSummary {
             bytes: 15,
             lines: 1,
@@ -140,9 +140,9 @@ fn digest_sizes_non_completed_results_and_appends_reason() {
             true
         ),
         "All 3 subagents settled, responses total ~22k tokens, 3 lines:\n\
-         - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (~1.2k tokens, 2 lines)\n\
+         - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /state/out/planner/naming.output (~1.2k tokens, 2 lines)\n\
          - @runtime: completed in 4m12s, task: \"map it\", no response\n\
-         - @slow-reviewer: timed out after 4m12s; provider did not stop, task: \"review correctness\", partial response: /tmp/rimz-subagents/slow-reviewer.output (~21k tokens, 1 line)"
+         - @slow-reviewer: timed out after 4m12s; provider did not stop, task: \"review correctness\", partial response: /state/out/planner/slow-reviewer.output (~21k tokens, 1 line)"
     );
 }
 
@@ -310,7 +310,7 @@ fn fleet_reports_each_answer_after_a_sibling_settles() {
         ("a.2.output", "second answer\n"),
         ("b.output", "b answer\n"),
     ] {
-        let path = store.paths().subagents_dir.join(name);
+        let path = store.paths().out_reader_dir(Some(&name[..1])).join(name);
         assert!(digest.contains(path.to_str().unwrap()), "{digest}");
         assert_eq!(std::fs::read_to_string(path).unwrap(), answer);
     }
@@ -489,7 +489,7 @@ fn reopening_keeps_a_queued_digest_until_its_answer_is_joined() {
         .collect::<Vec<_>>();
     assert_eq!(rows.len(), 1, "{digest}");
     assert!(rows[0].starts_with("- @a:"), "{digest}");
-    let path = store.paths().subagents_dir.join("a.2.output");
+    let path = store.paths().out_reader_dir(Some("a")).join("a.2.output");
     assert!(rows[0].contains(path.to_str().unwrap()), "{digest}");
     assert!(!digest.contains("/a.output"), "{digest}");
     assert!(!digest.contains("/b.output"), "{digest}");
@@ -767,8 +767,8 @@ fn two_peer_turns_survive_a_running_sibling_and_share_one_digest() {
         report_settled_child(&workspace, &store, &second).unwrap(),
         ReportOutcome::SiblingsRunning
     );
-    let first_path = run::peer_response_path(store.paths(), "peer", &first.run_id);
-    let second_path = run::peer_response_path(store.paths(), "peer", &second.run_id);
+    let first_path = response_path(store.paths(), &first).unwrap();
+    let second_path = response_path(store.paths(), &second).unwrap();
     assert_eq!(
         std::fs::read_to_string(&first_path).unwrap(),
         "first answer\n"
@@ -827,7 +827,7 @@ fn settled_background_peer_reports_to_its_launcher_only() {
         report_settled_child(&workspace, &store, &peer).unwrap(),
         ReportOutcome::SiblingsRunning
     );
-    let path = response_path(store.paths(), "peer", 1);
+    let path = response_path(store.paths(), &peer).unwrap();
     assert!(path.exists(), "running siblings must not delay publication");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "peer answer\n");
     std::fs::File::open(&path)
@@ -851,7 +851,7 @@ fn settled_background_peer_reports_to_its_launcher_only() {
     assert!(messages[0].text.contains("@child"));
     assert!(!messages[0].text.contains("@shell-peer"));
     assert_eq!(
-        std::fs::read_to_string(response_path(store.paths(), "peer", 1)).unwrap(),
+        std::fs::read_to_string(response_path(store.paths(), &peer).unwrap()).unwrap(),
         "peer answer\n"
     );
     assert_eq!(
@@ -894,11 +894,11 @@ fn dismissed_child_is_not_reported() {
     assert!(messages[0].text.contains("@first"));
     assert!(!messages[0].text.contains("@second"));
     assert!(
-        response_path(store.paths(), "receipt-name", 1).exists(),
+        response_path(store.paths(), &second).unwrap().exists(),
         "joined rows still publish at the run's name"
     );
     assert_eq!(
-        std::fs::read_to_string(response_path(store.paths(), "receipt-name", 1)).unwrap(),
+        std::fs::read_to_string(response_path(store.paths(), &second).unwrap()).unwrap(),
         "joined answer\n"
     );
 }

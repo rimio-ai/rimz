@@ -250,9 +250,9 @@ Reset refuses before prompting or changing anything when `--mux` names a backend
 
 The report goes to stderr before the rebuild:
 
-The report names the session deletion, process sweep, preserved temporary files, archive path, canceled runs, removed cache entries, and whether the prior-agent rollup was kept. Hard reset additionally removes audit, owned state, and tmp.
+The report names the session deletion, process sweep, preserved temporary files, archive path, canceled runs, removed cache entries, and whether the prior-agent rollup was kept. Hard reset additionally removes audit, owned state, `tmp/`, `shared/`, and `out/`.
 
-For a room written by an older RimZ, reset instead removes the whole room and its runtime tree, without carrying over history. Otherwise, soft reset keeps transcripts, message history, run records, agent scratch and handled skill copies, room tmp, and standing fleet budget choices. Both resets clear handleless skill copies in `cache/skills/`. `--hard` deletes `audit/`, `owned/` except `owned/runs/`, `tmp/`, the active log and carryover; the rotated log archive remains. Run waiters can read Canceled after reset; terminal run records are reclaimed after the owned GC grace. Neither reset of a current room removes state `locks/`.
+For a room written by an older RimZ, reset instead removes the whole room and its runtime tree, without carrying over history. Otherwise, soft reset keeps transcripts, message history, run records, agent scratch and handled skill copies, agent temp files, the room's `shared/` and `out/` directories, and standing fleet budget choices. Both resets clear handleless skill copies in `cache/skills/`. `--hard` deletes `audit/`, `owned/` except `owned/runs/`, `tmp/`, `shared/`, `out/`, the active log and carryover; the rotated log archive remains. Run waiters can read Canceled after reset; terminal run records are reclaimed after the owned GC grace. Neither reset of a current room removes state `locks/`.
 
 What reset does to the store is in [store internals](../../internals/store.md#maintenance).
 

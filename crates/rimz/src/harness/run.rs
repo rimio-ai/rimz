@@ -41,8 +41,6 @@ type Result<T> = std::result::Result<T, RunStoreErr>;
 #[derive(Debug, thiserror::Error)]
 pub enum ResponsePublishErr {
     #[error(transparent)]
-    Paths(#[from] crate::disk::paths::PathErr),
-    #[error(transparent)]
     Atomic(#[from] crate::disk::atomic::AtomicErr),
     #[error("accessing subagent response {path}: {source}")]
     Io {
@@ -52,20 +50,40 @@ pub enum ResponsePublishErr {
     },
 }
 
-/// Host path promised by the launch receipt for this run's response.
-pub fn response_path(paths: &StatePaths, agent_name: &str, ordinal: u32) -> PathBuf {
-    let name = if ordinal == 1 {
-        format!("{agent_name}.output")
-    } else {
-        format!("{agent_name}.{ordinal}.output")
-    };
-    paths.subagents_dir.join(name)
+/// Host path of this run's current-turn response, in its reader's `out/`
+/// directory: the launcher's, or the run's own agent's when none launched it.
+pub fn response_path(paths: &StatePaths, record: &RunRecord) -> Option<PathBuf> {
+    let name = record.agent_name.as_deref()?;
+    if record.peer.is_some() || record.team.is_some() {
+        return Some(response_file(
+            paths,
+            record,
+            name,
+            &format!("{name}.{}", record.run_id),
+        ));
+    }
+    earlier_response_path(paths, record, record.follow_ups + 1)
 }
 
-pub fn peer_response_path(paths: &StatePaths, agent_name: &str, run_id: &RunId) -> PathBuf {
+/// Host path of this subagent run's response to turn `ordinal` (1 is the first).
+pub fn earlier_response_path(
+    paths: &StatePaths,
+    record: &RunRecord,
+    ordinal: u32,
+) -> Option<PathBuf> {
+    let name = record.agent_name.as_deref()?;
+    let stem = if ordinal == 1 {
+        name.to_owned()
+    } else {
+        format!("{name}.{ordinal}")
+    };
+    Some(response_file(paths, record, name, &stem))
+}
+
+fn response_file(paths: &StatePaths, record: &RunRecord, name: &str, stem: &str) -> PathBuf {
     paths
-        .subagents_dir
-        .join(format!("{agent_name}.{run_id}.output"))
+        .out_reader_dir(Some(record.reader.as_deref().unwrap_or(name)))
+        .join(format!("{stem}.output"))
 }
 
 /// Ensure the captured response, leaving identical files untouched and removing stale empty answers.
@@ -73,14 +91,8 @@ pub fn publish_response(
     paths: &StatePaths,
     record: &RunRecord,
 ) -> std::result::Result<Option<PathBuf>, ResponsePublishErr> {
-    paths.ensure_tmp_dir()?;
-    let Some(name) = record.agent_name.as_deref() else {
+    let Some(path) = response_path(paths, record) else {
         return Ok(None);
-    };
-    let path = if record.peer.is_some() || record.team.is_some() {
-        peer_response_path(paths, name, &record.run_id)
-    } else {
-        response_path(paths, name, record.follow_ups + 1)
     };
     let io_error = |source| ResponsePublishErr::Io {
         path: path.clone(),
@@ -107,6 +119,13 @@ pub fn publish_response(
         Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(io_error(err)),
+    }
+    for dir in [
+        paths.out_dir.as_path(),
+        path.parent().unwrap_or(&paths.out_dir),
+    ] {
+        crate::disk::paths::ensure_private_runtime_dir(dir)
+            .map_err(|err| io_error(std::io::Error::other(err)))?;
     }
     crate::disk::atomic::write_bytes_atomically(&path, &bytes)?;
     Ok(Some(path))
@@ -218,7 +237,7 @@ pub enum SupervisedRunOutcome {
         agent_name: String,
         run_id: RunId,
         /// Where the launching agent's fleet report will write the captured
-        /// final response, as that agent sees the path. `None` when no agent
+        /// final response, as a host path. `None` when no agent
         /// launched the run, so nothing reports back.
         response_path: Option<std::path::PathBuf>,
     },

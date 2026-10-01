@@ -325,7 +325,7 @@ Type: TEAM_REPORT
 From: @rimz
 Content:
 Team forge#feat-rate-limits reached Done; its leader reports:
-- @planner: completed in 2h14m, task: "Add rate limiting to the public API", response: /tmp/rimz-subagents/planner.<run_id>.output (~1.2k tokens, 31 lines)
+- @planner: completed in 2h14m, task: "Add rate limiting to the public API", response: /home/me/.rimz/ws/myrepo-f89e/out/boss/planner.<run_id>.output (~1.2k tokens, 31 lines)
 Memory: /home/me/proj-worktrees/feat-rate-limits/blackboard.md
 ```
 

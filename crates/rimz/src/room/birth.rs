@@ -373,7 +373,7 @@ impl RoomContext {
     ) -> Result<RoomResetReport> {
         let paths = StatePaths::for_project_root(&self.workspace.project_root)
             .context("preparing store paths for reset")?;
-        let teardown = crate::room::teardown::teardown_runtime(
+        let teardown = crate::room::teardown::teardown_room(
             self.backend.as_ref(),
             &self.workspace.workspace_id,
             &self.workspace.session_name,

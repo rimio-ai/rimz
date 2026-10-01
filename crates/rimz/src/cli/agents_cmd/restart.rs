@@ -473,6 +473,7 @@ mod tests {
         let record = rimz::harness::run::create_peer_prompt(
             store.paths(),
             &peer,
+            None,
             adapter,
             "task",
             dir.path(),

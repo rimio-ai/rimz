@@ -224,7 +224,7 @@ fn lost_watch_outcome(
     now: Timestamp,
 ) -> anyhow::Result<super::signal::WatchOutcome> {
     let paths = StatePaths::for_project_root(&task.entry().resolved_root())?;
-    let path = super::signal::wait_output_path(&paths, name);
+    let path = super::signal::wait_output_path(&paths, name, task.entry());
     let armed_at = task
         .entry()
         .wait_meta
@@ -247,7 +247,6 @@ fn lost_watch_outcome(
         },
         output,
         &path,
-        &crate::sandbox::TmpView::current(None, None, &paths),
     ))
 }
 

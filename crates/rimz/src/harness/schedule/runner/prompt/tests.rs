@@ -19,6 +19,7 @@ fn meta(_handle: &str) -> WaitMeta {
     WaitMeta {
         armed_at: "2026-01-01T14:02:00Z".parse().unwrap(),
         delay: None,
+        reader: None,
     }
 }
 
@@ -40,7 +41,7 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
         watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
         ..task()
     };
-    for output_path in [None, Some("/tmp/rimz-waits/wait-test.output".into())] {
+    for output_path in [None, Some("/state/out/planner/wait-test.output".into())] {
         for output in ["", "  last line\nnext line  \n"] {
             let signal = Signal {
                 watch: Some(WatchOutcome {
@@ -63,7 +64,7 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
                 (None, _) => "",
                 (Some(_), true) => " · no output",
                 (Some(_), false) => {
-                    " · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 2 lines)"
+                    " · output: /state/out/planner/wait-test.output (<1k tokens, 2 lines)"
                 }
             };
             assert_eq!(
@@ -192,14 +193,14 @@ fn polled_waits_name_their_spec_and_never_claim_no_output() {
                 (0, ""),
                 (
                     20,
-                    " · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 1 line)",
+                    " · output: /state/out/planner/wait-test.output (<1k tokens, 1 line)",
                 ),
             ] {
                 let signal = Signal {
                     watch: Some(WatchOutcome {
                         verdict: verdict.clone(),
                         output: String::new(),
-                        output_path: Some("/tmp/rimz-waits/wait-test.output".into()),
+                        output_path: Some("/state/out/planner/wait-test.output".into()),
                         summary: FileSummary {
                             bytes,
                             lines: bytes.min(1),
@@ -241,7 +242,7 @@ fn file_grep_wait_inlines_the_matched_line() {
                 line: Some("listening on :3000".to_owned()),
             },
             output: "listening on :3000".to_owned(),
-            output_path: Some("/tmp/rimz-waits/wait-test.output".into()),
+            output_path: Some("/state/out/planner/wait-test.output".into()),
             summary: FileSummary {
                 bytes: 19,
                 lines: 1,
@@ -259,7 +260,7 @@ fn file_grep_wait_inlines_the_matched_line() {
             "",
             now()
         ),
-        "waited on file /repo/app.log for `listening`\nmet after 42s: `listening on :3000` · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 1 line) [wait-test]"
+        "waited on file /repo/app.log for `listening`\nmet after 42s: `listening on :3000` · output: /state/out/planner/wait-test.output (<1k tokens, 1 line) [wait-test]"
     );
 }
 
@@ -278,7 +279,7 @@ fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
                         elapsed_ms: 1_800_000,
                     },
                     output: output.to_owned(),
-                    output_path: Some("/tmp/rimz-waits/wait-test.output".into()),
+                    output_path: Some("/state/out/planner/wait-test.output".into()),
                     summary: if output.is_empty() {
                         FileSummary::default()
                     } else {
@@ -297,7 +298,7 @@ fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
             let path = if output.is_empty() {
                 " · no output"
             } else {
-                " · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 1 line)"
+                " · output: /state/out/planner/wait-test.output (<1k tokens, 1 line)"
             };
             assert_eq!(
                 compose_wait(

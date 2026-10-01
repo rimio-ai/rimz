@@ -732,6 +732,7 @@ fn peer_launch_hook_claims_prompt_but_later_identical_human_turn_does_not() {
     let run = rimz::harness::run::create_peer_prompt(
         store.paths(),
         &peer,
+        None,
         rimz::agents::definition_by_kind("claude").unwrap(),
         "inspect the infra",
         &workspace().worktree_root,
@@ -758,7 +759,7 @@ fn peer_launch_hook_claims_prompt_but_later_identical_human_turn_does_not() {
     );
     let done = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
     assert_eq!(done.status, rimz::store::run::RunStatus::Completed);
-    let response = rimz::harness::run::peer_response_path(store.paths(), "peer", &done.run_id);
+    let response = rimz::harness::run::response_path(store.paths(), &done).unwrap();
     let bytes = std::fs::read(&response).unwrap();
     feed_peer_hook(
         &store,

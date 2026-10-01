@@ -312,6 +312,7 @@ fn peer_launch_prompt_is_pending_and_failure_is_terminal() {
     let record = run::create_peer_prompt(
         h.store.paths(),
         &peer,
+        Some("launcher"),
         adapter,
         "launch task",
         Path::new("/repo"),
@@ -319,6 +320,7 @@ fn peer_launch_prompt_is_pending_and_failure_is_terminal() {
     .unwrap()
     .unwrap();
     assert_eq!(record.status, RunStatus::Pending);
+    assert_eq!(record.reader.as_deref(), Some("launcher"));
     assert!(record.peer.as_ref().unwrap().opened_by.is_empty());
     assert!(
         record.agent_id.is_none(),
@@ -328,6 +330,7 @@ fn peer_launch_prompt_is_pending_and_failure_is_terminal() {
         run::create_peer_prompt(
             h.store.paths(),
             &peer,
+            None,
             adapter,
             "duplicate",
             Path::new("/repo")
@@ -354,9 +357,16 @@ fn peer_launch_prompt_is_pending_and_failure_is_terminal() {
     );
     peer.launched_by = None;
     assert!(
-        run::create_peer_prompt(h.store.paths(), &peer, adapter, "human", Path::new("/repo"))
-            .unwrap()
-            .is_none()
+        run::create_peer_prompt(
+            h.store.paths(),
+            &peer,
+            None,
+            adapter,
+            "human",
+            Path::new("/repo")
+        )
+        .unwrap()
+        .is_none()
     );
     assert_eq!(run::list(h.store.paths()).unwrap(), vec![failed]);
 }
@@ -371,6 +381,7 @@ fn team_seat_launch_prompt_opens_a_team_run_and_no_peer_turns() {
     let record = run::create_peer_prompt(
         h.store.paths(),
         &leader,
+        None,
         adapter,
         "build the feature",
         Path::new("/repo"),

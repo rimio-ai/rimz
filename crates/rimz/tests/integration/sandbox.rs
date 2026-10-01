@@ -1204,8 +1204,6 @@ test -c /dev/null
 test "$RIMZ_SCRATCH" = /tmp/scratchpad
 test "$RIMZ_SHARED" = /tmp/shared
 test -d /tmp/shared
-test -d /tmp/rimz-waits
-test -d /tmp/rimz-subagents
 printf parent > /tmp/scratchpad/same-name
 test "$(cat "$HOME/.codex/config.toml")" = sandbox-test
 if touch "$HOME/.agents/skills/b/changed" 2>/dev/null; then exit 1; fi

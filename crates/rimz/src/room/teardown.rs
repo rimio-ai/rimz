@@ -47,7 +47,7 @@ pub fn replace_incompatible_room(
     let recorded = std::fs::read(&state.workspace_record)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<RecordedSession>(&bytes).ok());
-    teardown_runtime(
+    teardown_room(
         backend,
         &workspace.workspace_id,
         &workspace.session_name,
@@ -56,7 +56,7 @@ pub fn replace_incompatible_room(
     if let Some(recorded) = recorded
         && recorded.session_name != workspace.session_name
     {
-        teardown_runtime(
+        teardown_room(
             backend,
             &workspace.workspace_id,
             &recorded.session_name,
@@ -77,21 +77,8 @@ pub fn replace_incompatible_room(
 /// and independent — a failure in one never blocks the others — so a later
 /// rebirth always starts from the cleanest state reachable.
 ///
-/// Beside the runtime report comes the outcome of removing room tmp and
-/// rewritten skill copies (already gone is `Ok`), which only this full
-/// teardown attempts.
+/// Room state (temp units, `shared/`, `out/`) is left for GC.
 pub fn teardown_room(
-    backend: &dyn MuxBackend,
-    workspace_id: &WorkspaceId,
-    session_name: &str,
-    runtime: &RuntimePaths,
-    state: &StatePaths,
-) -> (TeardownReport, Result<(), PathErr>) {
-    let report = teardown_runtime(backend, workspace_id, session_name, runtime);
-    (report, state.remove_tmp_dir())
-}
-
-pub(super) fn teardown_runtime(
     backend: &dyn MuxBackend,
     workspace_id: &WorkspaceId,
     session_name: &str,

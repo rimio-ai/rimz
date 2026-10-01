@@ -25,6 +25,7 @@ fn team_instance(seat: &AgentState) -> Option<String> {
 pub(super) fn create_team_run(
     paths: &StatePaths,
     leader: &AgentState,
+    reader: Option<&str>,
     adapter: &AgentDefinition,
     prompt: &str,
     cwd: &Path,
@@ -52,6 +53,7 @@ pub(super) fn create_team_run(
             .map_or_else(|| cwd.to_path_buf(), Into::into),
     );
     record.agent_name = leader.name.clone();
+    record.reader = reader.map(str::to_owned);
     record.team = Some(TeamRun {
         launch_id: launch_id.clone(),
         instance,
@@ -127,6 +129,7 @@ pub fn reopen_team_run(paths: &StatePaths, instance: &str) -> Result<Option<RunR
     );
     record.agent_id.clone_from(&newest.agent_id);
     record.agent_name.clone_from(&newest.agent_name);
+    record.reader.clone_from(&newest.reader);
     record.transcript_path.clone_from(&newest.transcript_path);
     record.team.clone_from(&newest.team);
     record.status = RunStatus::Running;

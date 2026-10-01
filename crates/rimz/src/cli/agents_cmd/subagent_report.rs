@@ -16,7 +16,6 @@ use rimz::harness::run;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
 use rimz::message::synthetic::SyntheticMessage;
-use rimz::sandbox::TmpView;
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
 use rimz::store::run::{EarlierAnswer, RunRecord, RunStatus, RunStoreErr};
 use rimz::workspace::ResolvedWorkspace;
@@ -132,19 +131,11 @@ fn report_fleet_with_kind(
         return Ok(ReportOutcome::NothingToReport);
     }
 
-    let view = TmpView::current(
-        Some(parent.runs_in(crate::cli::machine_config().agents.isolation)),
-        parent.name.as_deref(),
-        store.paths(),
-    );
     let responses = rows
         .iter()
         .map(|(_, record, answer)| {
             let path = match answer {
-                Some(answer) => record
-                    .agent_name
-                    .as_deref()
-                    .map(|name| run::response_path(store.paths(), name, answer.ordinal)),
+                Some(answer) => run::earlier_response_path(store.paths(), record, answer.ordinal),
                 None => published
                     .get(&record.run_id)
                     .and_then(Option::as_ref)
@@ -160,10 +151,7 @@ fn report_fleet_with_kind(
                 }
                 Err(source) => return Err(ReportErr::Response { path, source }),
             };
-            Ok(Some(ResponseFile {
-                path: view.agent_path(&path),
-                summary,
-            }))
+            Ok(Some(ResponseFile { path, summary }))
         })
         .collect::<Result<Vec<_>, ReportErr>>()?;
     let digest_rows = rows

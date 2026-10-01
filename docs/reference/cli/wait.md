@@ -143,14 +143,14 @@ A final command verdict:
 
 ```text
 waited on `cargo test`
-exit 1 after 12m · output: /tmp/rimz-waits/wait-solid-pixel.output (~14k tokens, 1210 lines) [wait-solid-pixel]
+exit 1 after 12m · output: /home/me/.rimz/ws/myrepo-f89e/out/planner/wait-solid-pixel.output (~14k tokens, 1210 lines) [wait-solid-pixel]
 ```
 
 A check-in adds `· still watching` immediately after the verdict and the follow-up commands. `Another check-in` repeats the wait's recorded `--timeout` value; running it arms a separate timer that neither restarts nor stops the command:
 
 ```text
 waited on `cargo build`
-still running after 30m · still watching · output: /tmp/rimz-waits/wait-solid-pixel.output (~3.4k tokens, 340 lines) [wait-solid-pixel]
+still running after 30m · still watching · output: /home/me/.rimz/ws/myrepo-f89e/out/planner/wait-solid-pixel.output (~3.4k tokens, 340 lines) [wait-solid-pixel]
 
 Stop it: rimz wait cancel wait-solid-pixel
 Another check-in: rimz wait --in 30m
@@ -169,9 +169,9 @@ A silent command reads `· no output` after its verdict and names no file. A `--
 
 ### The output file
 
-The watcher writes combined stdout and stderr to `~/.rimz/ws/<workspace-dir>/tmp/rimz-waits/<name>.output` as they arrive, along with its own startup errors. A check truncates it before each run; a file pattern watch writes its matched line. The message shows `/tmp/rimz-waits/<name>.output` when the machine's `agents.isolation` is sandbox and the host path otherwise; an agent launched with a different per-launch isolation can see the form that does not match its own view.
+The watcher writes combined stdout and stderr to `~/.rimz/ws/<workspace-dir>/out/<reader>/<name>.output` as they arrive, along with its own startup errors, where `<reader>` is the handle of the agent that armed the wait. A check truncates it before each run; a file pattern watch writes its matched line. The message shows that host path in every isolation.
 
-Closing the room removes the file. In a long-lived room, `rimz gc` removes it once the wait is gone, no watcher runs, and the file has not been written for 14 days. The last 4 KiB of output stay in the loop history for [`rimz loop logs <name>`](./loop.md#loop-logs).
+Closing the room keeps the file. `rimz gc` removes it once no watcher runs and the file has not been written for 7 days; `rimz reset --hard` removes it at once. The last 4 KiB of output stay in the loop history for [`rimz loop logs <name>`](./loop.md#loop-logs).
 
 ## While a wait is pending
 

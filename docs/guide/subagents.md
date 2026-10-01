@@ -16,7 +16,7 @@ A parent's `rimz subagents codex "map the auth call path"` uses the supervised b
 2. It writes a durable run record under `~/.rimz/ws/<workspace-dir>/owned/runs/`.
 3. It opens a pane running the child's own CLI, by default in the parent's checkout and channel, whatever directory the parent's shell has moved to. The first child splits to the right of the parent's pane and later ones stack beside it; a team member's children open in a `<view> subagents` tab after its own, eight to a tab in two equal-width columns.
 4. It prints the child's petname, such as `calm-fox`, and returns. The parent keeps working.
-5. When the child's work ends, its pane closes. If it reaches its deadline, RimZ tells it to stop and report, allows three more minutes by default, then stops it and preserves its last available assistant message as a partial response. RimZ writes the first turn's non-empty response to `rimz-subagents/<petname>.output` in the room's tmp directory as that child settles, even while siblings still run. Follow-up turns use `<petname>.2.output`, `<petname>.3.output`, and so on, so earlier answers stay readable. Once every child the parent launched has settled, RimZ parks one report for the parent's next turn boundary ([how results come back](#how-results-come-back)).
+5. When the child's work ends, its pane closes. If it reaches its deadline, RimZ tells it to stop and report, allows three more minutes by default, then stops it and preserves its last available assistant message as a partial response. RimZ writes the first turn's non-empty response to `out/<parent>/<petname>.output` in the room's state directory as that child settles, even while siblings still run. Follow-up turns use `<petname>.2.output`, `<petname>.3.output`, and so on, so earlier answers stay readable. Once every child the parent launched has settled, RimZ parks one report for the parent's next turn boundary ([how results come back](#how-results-come-back)).
 
 Nothing else moves. The child's session file lands where its CLI always writes it, and `rimz agents show @calm-fox` and `rimz transcript @calm-fox` read the run back after the pane is gone.
 
@@ -100,12 +100,12 @@ Type: SUBAGENT_REPORT
 From: @rimz
 Content:
 All 3 subagents settled, responses total ~5.1k tokens, 96 lines:
-- @naming: completed in 4m12s, task: "map spec/profile surfaces", response: /tmp/rimz-subagents/naming.output (~4.2k tokens, 84 lines)
+- @naming: completed in 4m12s, task: "map spec/profile surfaces", response: /home/me/.rimz/ws/myrepo-f89e/out/planner/naming.output (~4.2k tokens, 84 lines)
 - @runtime: completed in 5m3s, task: "inspect runtime behavior", no response
-- @slow-reviewer: timed out after 33m; provider did not stop, task: "review correctness", partial response: /tmp/rimz-subagents/slow-reviewer.output (<1k tokens, 12 lines)
+- @slow-reviewer: timed out after 33m; provider did not stop, task: "review correctness", partial response: /home/me/.rimz/ws/myrepo-f89e/out/planner/slow-reviewer.output (<1k tokens, 12 lines)
 ```
 
-The report carries status and a file path per answer, never the answers themselves, so the parent decides how much of each to read into its window. Follow-up answers get their own rows and elapsed times; an earlier answer is not lost when a child answers again before its siblings finish. A parent that needs an answer sooner joins with `rimz subagents wait <petname>`: only the answer it prints drops out of the report, while stopping a child dismisses all its answers. The path above is the sandbox view; under host isolation the report names the host path of the room's tmp directory. Every field of the report is in the [reference](../reference/cli/subagents.md#the-fleet-report).
+The report carries status and a file path per answer, never the answers themselves, so the parent decides how much of each to read into its window. Follow-up answers get their own rows and elapsed times; an earlier answer is not lost when a child answers again before its siblings finish. A parent that needs an answer sooner joins with `rimz subagents wait <petname>`: only the answer it prints drops out of the report, while stopping a child dismisses all its answers. The path is the host path under every isolation; a sandboxed parent reaches it too. Every field of the report is in the [reference](../reference/cli/subagents.md#the-fleet-report).
 
 While the parent rests waiting for that report, RimZ [keeps its prompt cache warm](./loops.md#wake-a-running-agent) with facts-only pings.
 
@@ -127,7 +127,7 @@ Stopping a parent, with `rimz agents stop` or `rimz teams stop`, stops its live 
 
 A child launched with `--keep` is the exception. Its pane stays open after it finishes and after its parent exits, for you to read; it closes when the parent runs `rimz subagents stop`, when you stop the parent, or when you close the pane by hand.
 
-What remains after a child ends is its run record under `~/.rimz/ws/<workspace-dir>/owned/runs/` and the session file its CLI wrote, so `rimz agents show` and the parent's `rimz subagents wait` still read the outcome. The `rimz-subagents/` answer files go when the room closes. A child has no restart or resume: to retry, the parent launches the same profile and prompt again. [Rebirth recovery](./configuration.md#resume) restores root agents but not children, and reports a child whose run was cut off as canceled to its parent.
+What remains after a child ends is its run record under `~/.rimz/ws/<workspace-dir>/owned/runs/` and the session file its CLI wrote, so `rimz agents show` and the parent's `rimz subagents wait` still read the outcome. The answer files outlive the room; `rimz gc` removes one once it is 7 days old and no run record names its agent, and `rimz reset --hard` at once. A child has no restart or resume: to retry, the parent launches the same profile and prompt again. [Rebirth recovery](./configuration.md#resume) restores root agents but not children, and reports a child whose run was cut off as canceled to its parent.
 
 ## Children cannot delegate
 

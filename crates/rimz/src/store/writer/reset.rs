@@ -163,6 +163,8 @@ impl Store {
                 for class in [
                     crate::disk::paths::Class::Audit,
                     crate::disk::paths::Class::Tmp,
+                    crate::disk::paths::Class::Out,
+                    crate::disk::paths::Class::Shared,
                 ] {
                     state_entries_removed +=
                         remove_dir_counting_entries(&class.path_under(&paths.root))?;
@@ -229,10 +231,12 @@ mod tests {
             .log_path()
             .unwrap();
             let owned = paths.agents_dir.join("retired/scratch/note");
-            let tmp = paths.tmp_dir.join("note");
+            let tmp = paths.temp_unit_dir(Some("retired")).join("note");
+            let out = paths.out_reader_dir(Some("retired")).join("child.output");
+            let shared = paths.room_shared_dir.join("task/note");
             let cache = paths.cache_dir.join("obsolete.json");
             let record = paths.channels_record.clone();
-            for path in [&audit, &owned, &tmp, &cache, &record] {
+            for path in [&audit, &owned, &tmp, &out, &shared, &cache, &record] {
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 fs::write(path, b"retained").unwrap();
             }
@@ -240,6 +244,8 @@ mod tests {
             assert_eq!(audit.exists(), !hard, "audit retention follows reset mode");
             assert_eq!(owned.exists(), !hard);
             assert_eq!(tmp.exists(), !hard);
+            assert_eq!(out.exists(), !hard);
+            assert_eq!(shared.exists(), !hard);
             assert!(!cache.exists());
             assert!(record.exists());
         }

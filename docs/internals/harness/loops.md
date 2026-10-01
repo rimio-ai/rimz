@@ -449,7 +449,7 @@ For terminal outcomes, `to_check_outcome` folds the verdict into the check machi
 
 `TaskEntry.watch` is an untagged `WatchSpec`: a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. A file mark records size, modification time, device, and inode; no mark means absent at arm time. `WatchSpec::describe` owns trigger text and `headline` owns the delivered first line.
 
-`arm_delivery` ensures the private room tmp layout, creates `tmp/rimz-waits/<name>.output`, and spawns a detached `rimz wait watch <name>` with null stdin and stdout, the output file as stderr, and `process_group(0)`. A spawn failure rolls the row back.
+`arm_delivery` stores the arming agent's handle as `WaitMeta.reader`, creates `out/<reader>/<name>.output` with its directory, and spawns a detached `rimz wait watch <name>` with null stdin and stdout, the output file as stderr, and `process_group(0)`. A spawn failure rolls the row back.
 
 `signal::run_watcher` takes `loop-watch-<name>.lock` in the workspace runtime directory before it reloads and checks the catalog row, which closes the race with a cancel that lands before the watcher starts. The lock holds `{pid, started_at}`, and a second watcher for the same task exits without running the command.
 
@@ -463,7 +463,7 @@ A file watch compares existence, size, modification time, and identity (`dev`, `
 
 Cancel removes the row first, then `stop_watcher` sends SIGTERM to the lock holder's process group, stopping the watcher and its command together. Non-positive PIDs are rejected, and an absent process counts as stopped. If a watcher dies without firing, the elder's watch-lost rule fires the `Lost` verdict after the 30-second grace, with the output file's tail as evidence.
 
-`signal::wait_output_path` derives `<StatePaths.tmp_dir>/rimz-waits/<name>.output` for arming, watching, and lost-watcher evidence. `WatchOutcome::measured` records the file's byte size, line count, and estimated tokens (`utils::tokens::estimate` over at most the first 1 MiB, scaled by length beyond it), and maps the host path through `sandbox::TmpView::current` (machine policy, since no recipient is known yet) to the agent-visible `output_path`: `/tmp/rimz-waits/<name>.output` under sandbox isolation, the host path otherwise. A failed measurement warns and records a zero summary, which renders as `· no output` for command watches and no output segment for polled watches, like an empty file. Room teardown removes the file; in a long-lived room gc prunes it only when there is no running watcher and no write in the seven-day grace. The run record keeps the tail for `rimz loop logs`.
+`signal::wait_output_path` derives `StatePaths::out_reader_dir(wait_meta.reader)/<name>.output` (`out/_unnamed/` for a row with no reader) for arming, watching, and lost-watcher evidence. `WatchOutcome::measured` records the file's byte size, line count, and estimated tokens (`utils::tokens::estimate` over at most the first 1 MiB, scaled by length beyond it), and records the host path as `output_path` in every isolation. A failed measurement warns and records a zero summary, which renders as `· no output` for command watches and no output segment for polled watches, like an empty file. Teardown keeps the file; gc prunes it only when there is no running watcher and no write in the seven-day grace. The run record keeps the tail for `rimz loop logs`.
 
 ## Waits
 

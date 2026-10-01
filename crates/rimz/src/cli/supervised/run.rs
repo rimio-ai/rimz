@@ -232,8 +232,10 @@ struct PreparedRun {
     stream_text: bool,
     managed_launch: rimz::agents::ManagedLaunchState,
     ancestry: Option<rimz::harness::ancestry::LaunchAncestry>,
-    /// The launching agent's view of room tmp, when an agent launched the run.
-    caller_tmp: Option<rimz::sandbox::TmpView>,
+    /// An agent launched the run, so its receipt names the response path.
+    agent_launched: bool,
+    /// The launching agent's handle, whose `out/` directory receives the response.
+    reader: Option<String>,
     /// The room's accounts as a cold birth would freeze them.
     logins: rimz::ids::RoomLogins,
 }
@@ -474,13 +476,8 @@ fn prepare_supervised(
         request.subagent,
         machine_config.agents.max_chain_length,
     )?;
-    let caller_tmp = caller.map(|caller| {
-        rimz::sandbox::TmpView::current(
-            Some(caller.runs_in(machine_config.agents.isolation)),
-            caller.name.as_deref(),
-            store.paths(),
-        )
-    });
+    let agent_launched = caller.is_some();
+    let reader = caller.and_then(|caller| caller.name.clone());
     // The room pin keeps the store and effective config on the same project root.
     let workspace = supervised::anchor_subagent_workspace(workspace, request, caller, globals)?;
     let scope = if request.subagent {
@@ -665,7 +662,8 @@ fn prepare_supervised(
         stream_text: presentation.stream_text,
         managed_launch,
         ancestry,
-        caller_tmp,
+        agent_launched,
+        reader,
         logins,
     }))
 }
@@ -748,6 +746,7 @@ fn execute_attempt(
     )?;
     let launch_identity = launch_batch.single_identity()?;
     record.agent_name = Some(launch_identity.name.clone());
+    record.reader.clone_from(&prepared.reader);
     let pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
         runtime: prepared.store.runtime_paths(),
         adapter: prepared.adapter,
@@ -794,13 +793,10 @@ fn execute_attempt(
     rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
     if request.background {
         return Ok(AttemptOutcome::Background {
-            response_path: prepared.caller_tmp.as_ref().map(|view| {
-                view.agent_path(&rimz::harness::run::response_path(
-                    prepared.store.paths(),
-                    &launch_identity.name,
-                    1,
-                ))
-            }),
+            response_path: prepared
+                .agent_launched
+                .then(|| rimz::harness::run::response_path(prepared.store.paths(), &record))
+                .flatten(),
             agent_name: launch_identity.name.clone(),
             run_id,
         });

@@ -596,6 +596,7 @@ mod tests {
             wait_meta: Some(crate::config::WaitMeta {
                 armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
                 delay: None,
+                reader: None,
             }),
             ..command.clone()
         };
@@ -803,6 +804,7 @@ mod tests {
         entry.wait_meta = Some(crate::config::WaitMeta {
             armed_at: jiff::Timestamp::UNIX_EPOCH,
             delay: None,
+            reader: None,
         });
         assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
         assert_eq!(TaskSource::from_entry(&entry), TaskSource::Instance);

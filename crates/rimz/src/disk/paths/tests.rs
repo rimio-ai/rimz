@@ -11,7 +11,8 @@ impl StatePaths {
             self.scratchpad_dir.clone(),
             self.agents_dir.clone(),
             self.shared_dir.clone(),
-            self.subagents_dir.clone(),
+            self.room_shared_dir.clone(),
+            self.out_dir.clone(),
             self.skills_dir.clone(),
             self.events_log.clone(),
             self.events_archive_dir.clone(),
@@ -24,7 +25,6 @@ impl StatePaths {
             self.fleet_budget_record.clone(),
             self.transcript_dir.clone(),
             self.runs_dir.clone(),
-            self.waits_dir.clone(),
             self.cache_dir.clone(),
             self.workspace_record.clone(),
             self.room_bin.clone(),
@@ -117,15 +117,11 @@ fn room_tree_removal_tolerates_absence_and_names_failures() {
     let id = WorkspaceId::from_project_root(dir.path());
     let state = StatePaths::under(id.clone(), dir.path()).unwrap();
     let runtime = RuntimePaths::under(id, dir.path()).unwrap();
-    state.remove_tmp_dir().unwrap();
     state.remove_root().unwrap();
     runtime.remove_root().unwrap();
 
     fs::create_dir_all(&state.scratchpad_dir).unwrap();
     fs::create_dir_all(&runtime.live_dir).unwrap();
-    state.remove_tmp_dir().unwrap();
-    assert!(!state.tmp_dir.exists());
-    assert!(state.root.exists());
     state.remove_root().unwrap();
     assert!(!state.root.exists());
     runtime.remove_root().unwrap();
@@ -637,8 +633,18 @@ fn state_paths_resolve_under_the_home() {
     assert_eq!(paths.rollup_cache.file_name().unwrap(), "rollup.json");
     assert!(paths.rollup_cache.starts_with(&paths.snapshots_dir));
     assert_eq!(paths.runs_dir.file_name().unwrap(), "runs");
-    assert_eq!(paths.waits_dir, paths.tmp_dir.join("rimz-waits"));
-    assert_eq!(paths.subagents_dir, paths.tmp_dir.join("rimz-subagents"));
+    assert_eq!(paths.room_shared_dir, paths.root.join("shared"));
+    assert_eq!(paths.out_dir, paths.root.join("out"));
+    assert_eq!(
+        paths.temp_unit_dir(Some("otter")),
+        paths.tmp_dir.join("otter")
+    );
+    assert_eq!(paths.temp_unit_dir(None), paths.tmp_dir.join("_unnamed"));
+    assert_eq!(
+        paths.out_reader_dir(Some("otter")),
+        paths.out_dir.join("otter")
+    );
+    assert_eq!(paths.out_reader_dir(None), paths.out_dir.join("_unnamed"));
     assert_eq!(paths.scratchpad_dir, paths.tmp_dir.join("scratchpad"));
     assert_eq!(paths.agents_dir, paths.root.join("owned/agents"));
     assert_eq!(paths.shared_dir, paths.tmp_dir.join("shared"));

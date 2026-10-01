@@ -1588,11 +1588,7 @@ fn tmux_settled_subagent_reports_to_parent() {
             .contains(&format!("@{second_name}: canceled"))
     );
     assert!(!fleet_digest.text.contains("rimz subagents wait"));
-    let response_path = env
-        .store()
-        .paths()
-        .subagents_dir
-        .join(format!("{first_name}.output"));
+    let response_path = rimz::harness::run::response_path(env.store().paths(), &first_run).unwrap();
     let response = std::fs::read_to_string(&response_path).expect("published child response");
     assert_eq!(
         response.trim_end_matches('\n'),

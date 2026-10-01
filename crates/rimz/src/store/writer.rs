@@ -9,6 +9,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use tracing::warn;
+
 use crate::agents::LaunchParams;
 use crate::disk::{lock, paths::StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, EventId, RunId, WorkspaceId};
@@ -390,7 +392,7 @@ impl Store {
         requests: &[AgentLaunchRequest],
         scope: AgentLaunchScope,
     ) -> Result<AgentLaunchBatch> {
-        self.commit(|txn| {
+        let batch = self.commit(|txn| {
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
             let logins = record::read_optional(&txn.paths.workspace_record)?.and_then(|r| r.logins);
             let identities =
@@ -413,7 +415,16 @@ impl Store {
                 txn.append(event)?;
             }
             Ok(AgentLaunchBatch { identities, scope })
-        })
+        })?;
+        // No retained row held an allocated name, so whatever its directories
+        // hold belongs to an earlier, pruned agent. The committed row reserves
+        // the name, so the removal runs outside the workspace lock.
+        for identity in &batch.identities {
+            if let Err(err) = self.inner.paths.release_handle_dirs(&identity.name) {
+                warn!(error = %err, handle = %identity.name, "could not remove an earlier holder's temp and out dirs");
+            }
+        }
+        Ok(batch)
     }
 
     /// Mark every identity in a same-process launch batch failed. Each identity
