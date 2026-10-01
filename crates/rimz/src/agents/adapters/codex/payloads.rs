@@ -1,8 +1,8 @@
 //! Typed input structs for the Codex hook protocol.
 //!
 //! Structs contain only fields RimZ consumes. All use `#[serde(default)]` so
-//! sparse payloads deserialize cleanly; `parse_*` functions are adapter entry
-//! points.
+//! sparse payloads deserialize cleanly; the adapter reads each hook through
+//! the one generic [`parse`].
 
 use serde::Deserialize;
 use serde_json::Value;

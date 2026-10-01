@@ -4,9 +4,9 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `15003b3b4`, pass 31e: 4740 scoped commits (pace window 1185), 24 admission intents, 239 holds; no parse failures, ledger problems, pending restamps, or ambiguous verdict keys. Its one stale verdict key, `shape:kind+path+std::fs::read_dir`, was re-keyed in pass 31d to the skills directory-scanner pair, held by verdict.
+- **Survey:** base `3eb2bd522`, pass 31c: 4765 scoped commits (pace window 1192), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys. Outside pass 31c and left open: the pending restamps of the pass 31d rows (`agents/attribution`, `config/definitions`, `config/glyphs`, `config/tiers`, `sandbox`, `store/run`) and the pass 31e `disk` row (`survey --restamp` writes them), and one open shape family, `crates/rimz/src/agents/adapters/copilot/install.rs::uninstall_with` with `crates/rimz/src/agents/adapters/cursor/install.rs::uninstall_pair`.
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
-- **Reopened:** `agents/adapters/codex` (scoped churn past its row's count; not reviewed in pass 31d).
+- **Reopened:** none.
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
 - **Unreviewed admissions:** none; no unadmitted upward sites.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`. Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles. The survey also lists same-layer `harness ↔ worktree`.
@@ -31,7 +31,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/adapters/(root)` | holds | `4a82d6b28` | 30 | module declarations and the registry; nothing escapes `agents`. |
 | `agents/adapters/install_report` | holds | `4a82d6b28` | 30 | `report_files` is `pub(super)` for the sibling installers. |
 | `agents/adapters/claude` | holds; landed pass-9; pass-27a | `ba3ca4dfa` | 30 | one ask decision and payload parser, proc-owned ancestry, three distinct home rules, child-cost fold, remote trio, and `deny_native_tool` (multi-value `--disallowedTools`, either denial order, 696a4d504). |
-| `agents/adapters/codex` | holds; landed pass-9 | `7af6d9f74` | 30 | one framed transport and handshake; rollout presence and pane-confirmation seam hold. |
+| `agents/adapters/codex` | holds; landed pass-9; pass-31c | `3eb2bd522` | 30 | one-of hook payload, `config_home` as the one home rule, one spend emission tail; one framed transport and handshake. |
 | `agents/adapters/kimi` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/qwen` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
 | `agents/adapters/copilot` | holds; landed pass-20c | `e55c49fd4` | 30 | registry adapter is the sole escaping item; payload types floored (caveat 13). |
@@ -300,7 +300,8 @@ Refactor candidates a pass judged real but could not land, each with its concret
 - `harness/team_stage` ↔ `cli/teams`: trusted team loading remains duplicated; sharing it needs a typed harness error and a pass owning the CLI flip caller.
 - `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
 - `agents/adapters`: `attach_hook_context` is identical in claude, codex and qwen (droid and grok omit only `hookEventName`) while `Capabilities::hook_context` restates it; declaring the reply shape in the spec would delete the impls and the agreement test (about −37). Waits for a seam pass over `agents/definition` and the adapters.
-- `agents/adapters/codex`: `cap_turn_error_label` and `TURN_ERROR_LABEL_MAX` copy Claude's `statusline` pair word for word; a shared helper beside `TurnErrorClass::classify_label` in `agents/context` lands with a pass owning codex or `agents/context`.
+- `agents/adapters/claude`: `crates/rimz/src/agents/adapters/claude/mod.rs::ClaudeLifecycleParts` is the Options-struct shape codex's former `CodexLifecycleParts` had (one payload set per event name, re-opened per arm); a one-of enum with one generic parse, as codex now has, is ready for a pass owning `agents/adapters/claude`.
+- `agents/adapters/kimi` and `agents/adapters/qwen`: `crates/rimz/src/agents/adapters/kimi/mod.rs::kimi_turn_error` and qwen's `StopFailure` arm in `crates/rimz/src/agents/adapters/qwen/mod.rs::QwenAdapter::decode_hook` trim and take 80 chars, the rule `agents::context::cap_turn_error_label` owns; the helper is `pub(in crate::agents)`, so either adapter can call it. Ready for a pass owning either adapter.
 - `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
@@ -308,4 +309,4 @@ Refactor candidates a pass judged real but could not land, each with its concret
 - `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Waits for a `store/snapshot` or `disk` pass that takes cache identity in scope.
 - `ids::ViewId::as_str`: no production reader, `dead_code` blocks narrowing, tests hold it. Wait for a pass on `sidebar/produce`.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
-- Reported, not fixed: Codex transcript lookup ignores `CODEX_HOME`, substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.
+- Reported, not fixed: substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.
