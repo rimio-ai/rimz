@@ -514,9 +514,18 @@ fn remove_tree_bounded(root: &Path) {
     }
 }
 
+const DEV_BINARY_MISSING: &str =
+    "development rimz missing; run cargo build -p rimz --bin rimz --features testkit";
+
+/// Where `cargo build` puts this checkout's development `rimz`.
+fn build_dir(workspace: &Path) -> PathBuf {
+    crate::files::target_dir(workspace).join("debug")
+}
+
 /// Run an arbitrary contributor command with disposable HOME, XDG, tmux, and
 /// Zellij roots. The command inherits terminal I/O and runs from the workspace
-/// root, so it is suitable for interactive `target/debug/rimz` smoke runs.
+/// root, with the checkout's build directory first on `PATH`, so a bare `rimz`
+/// is this checkout's build rather than the installed release.
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     let args = match args.first().map(String::as_str) {
         Some("in") => return join::run(root, &args[1..]),
@@ -524,28 +533,48 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         Some("--") => &args[1..],
         _ => args,
     };
-    let Some((program, program_args)) = args.split_first() else {
-        bail!(
-            "sandbox requires a command; for example: cargo xtask sandbox -- target/debug/rimz --zellij doctor"
-        );
-    };
+    let mut command = manual_command(root, &build_dir(root), args)?;
     let sandbox = HostSandbox::for_manual_command()?;
-    let program_path = Path::new(program);
-    let resolved_program = if program_path.is_relative() && program_path.components().count() > 1 {
-        root.join(program_path)
-    } else {
-        program_path.to_path_buf()
-    };
-    let mut command = Command::new(&resolved_program);
-    command.args(program_args).current_dir(root);
     sandbox.apply_to(&mut command, true);
+    let program = command.get_program().to_string_lossy().into_owned();
     let status = command
         .status()
-        .with_context(|| format!("running sandboxed command `{}`", resolved_program.display()))?;
+        .with_context(|| format!("running sandboxed command `{program}`"))?;
     if !status.success() {
         bail!("sandboxed command `{program}` exited with {status}");
     }
     Ok(())
+}
+
+fn manual_command(root: &Path, build_dir: &Path, args: &[String]) -> Result<Command> {
+    let Some((program, program_args)) = args.split_first() else {
+        bail!(
+            "sandbox requires a command; for example: cargo xtask sandbox -- rimz --zellij doctor"
+        );
+    };
+    if program == "rimz" && !build_dir.join("rimz").is_file() {
+        bail!(
+            "{DEV_BINARY_MISSING}; `rimz` in the sandbox resolves to {}",
+            build_dir.join("rimz").display()
+        );
+    }
+    let program = Path::new(program);
+    let program = if program.is_relative() && program.components().count() > 1 {
+        root.join(program)
+    } else {
+        program.to_path_buf()
+    };
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(build_dir.to_path_buf()).chain(std::env::split_paths(&inherited)),
+    )
+    .context("prepending the build directory to PATH")?;
+    let mut command = Command::new(program);
+    command
+        .args(program_args)
+        .current_dir(root)
+        .env("PATH", path);
+    Ok(command)
 }
 
 #[cfg(test)]
@@ -682,6 +711,57 @@ mod tests {
             env.iter()
                 .any(|(key, value)| *key == "HOME" && value.starts_with(sandbox.root()))
         );
+    }
+
+    fn args(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn manual_command_puts_the_build_dir_first_on_path() {
+        let build = TempDir::new().unwrap();
+        std::fs::write(build.path().join("rimz"), "").unwrap();
+        let command = manual_command(
+            Path::new("/workspace"),
+            build.path(),
+            &args(&["rimz", "--version"]),
+        )
+        .unwrap();
+        assert_eq!(command.get_program(), "rimz");
+        assert_eq!(command.get_current_dir(), Some(Path::new("/workspace")));
+        let path = command
+            .get_envs()
+            .find(|(key, _)| *key == "PATH")
+            .and_then(|(_, value)| value)
+            .unwrap();
+        let paths: Vec<_> = std::env::split_paths(path).collect();
+        assert_eq!(paths[0], build.path());
+        assert_eq!(
+            paths[1..],
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bare_rimz_without_a_build_refuses_with_the_build_command() {
+        let build = TempDir::new().unwrap();
+        let error = manual_command(Path::new("/workspace"), build.path(), &args(&["rimz"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cargo build -p rimz --bin rimz --features testkit"),
+            "{error}"
+        );
+        for (program, resolved) in [
+            ("sh", "sh"),
+            ("target/debug/rimz", "/workspace/target/debug/rimz"),
+            ("/opt/rimz", "/opt/rimz"),
+        ] {
+            let command =
+                manual_command(Path::new("/workspace"), build.path(), &args(&[program])).unwrap();
+            assert_eq!(command.get_program(), resolved);
+        }
     }
 
     #[cfg(target_os = "linux")]
