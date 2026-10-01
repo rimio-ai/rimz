@@ -178,10 +178,6 @@ impl GlyphRole {
         self.role_entry().1
     }
 
-    pub fn namespaced_name(self) -> String {
-        format!("{}.{}", self.namespace(), self.name())
-    }
-
     pub fn from_namespaced(namespace: &str, name: &str) -> Option<Self> {
         Self::ALL
             .iter()
