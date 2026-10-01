@@ -4,7 +4,7 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `f10952c94`, pass 31d: 4744 scoped commits (pace window 1186), 24 admission intents, 239 holds; no parse failures, ledger problems, pending restamps, stale or ambiguous verdict keys, or open shape or guard families. The skills directory-scanner pair is held by verdict.
+- **Survey:** base `15003b3b4`, pass 31e: 4740 scoped commits (pace window 1185), 24 admission intents, 239 holds; no parse failures, ledger problems, pending restamps, or ambiguous verdict keys. Its one stale verdict key, `shape:kind+path+std::fs::read_dir`, was re-keyed in pass 31d to the skills directory-scanner pair, held by verdict.
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Reopened:** `agents/adapters/codex` (scoped churn past its row's count; not reviewed in pass 31d).
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
@@ -119,7 +119,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `config/worktree` | holds; landed pass-24a | `2a9ec66e5` | 30 | base parse errors left the façade. |
 | `daemon_view` | holds; landed pass-15c | `944c8120e` | 30 | loop-panel acquisition is one operation; both cycles held by intent. |
 | `diag` | holds; landed pass-16 | `b90a229cb` | 30 | evidence vocabulary and append mechanics at L3 below store; one sink admission point. |
-| `disk` | holds; landed pass-27d | `7742c8a3e` | 30 | durability classes, filenames and lock identity hold; the class partition lives only in `Class::STATE`/`RUNTIME`. |
+| `disk` | holds; landed pass-31e | `15003b3b4` | 30 | the constructor family holds as ambient and explicit-root pairs; the raw runtime builder is private. |
 | `harness` | landed pass-5; pass-7; pass-8; pass-14; pass-20a; pass-23b; pass-25 | — | — | policy reaching down; never reaches `sidebar`: usage refresh returns, its CLI entry publishes. |
 | `harness/schedule` | holds; landed pass-14; pass-23b; pass-28e | `38acd72cb` | 30 | one arming rule and one check gate with `run_command`, `team_lifecycle_signals` and `build_entry` inherent by verdict. |
 | `harness/resume` | holds | `f4084e548` | 30 | distinct lane outcomes preserve lazy restore-config loading. |
@@ -304,7 +304,7 @@ Refactor candidates a pass judged real but could not land, each with its concret
 - `store/writer` ↔ `harness/rebirth`: `record_agents_ended` repeats reap's `append_ended_sessions`; batching them changes partial-failure shape. Waits for a rebirth pass that owns both.
 - `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
-- `disk`: the `StatePaths`/`RuntimePaths` constructor family (5 + 8, ~460 test sites on `under`/`under_named`) → `for_project_root(root, home)`, `for_workspace(id, home)`, `RuntimePaths::for_state(state, runtime_root)`. Ready; it touches about 460 test sites across the crate, so it runs as its own pass and merges last in its round.
+- `disk`: `PathErr` and `StatePaths::under_named` measure as narrowable to `pub(crate)` (`inspect --brief`); a `disk` pass that takes visibility in scope checks the integration and bench reach first.
 - `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Waits for a `store/snapshot` or `disk` pass that takes cache identity in scope.
 - `ids::ViewId::as_str`: no production reader, `dead_code` blocks narrowing, tests hold it. Wait for a pass on `sidebar/produce`.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.

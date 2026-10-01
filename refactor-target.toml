@@ -318,7 +318,7 @@ allowed-dependencies = [
 # Sidebar workers lease account-global pixel slots through one classed lock accessor.
 # Assist logging exposes the checked rotating append for launch-time warnings (+1).
 # The trunk signal lane owns a separate classed runtime cache path.
-surface-budget = 206
+surface-budget = 205
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -2692,6 +2692,61 @@ reason = "Both path owners are constructed and ensured by the separate binary, i
 kind = "item"
 key = "disk::paths::RuntimePaths::ensure_dirs"
 reason = "Both path owners are constructed and ensured by the separate binary, integration fixtures and benches/fleet.rs and hotpath.rs. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::for_project_root"
+reason = "Ambient production interface: about 170 one-line sites hold only a workspace or an id and no home; an explicit-root fold was priced at +325 to +625 production SLOC plus a runtime-root policy enum (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::for_workspace"
+reason = "Ambient production interface: about 170 one-line sites hold only a workspace or an id and no home; an explicit-root fold was priced at +325 to +625 production SLOC plus a runtime-root policy enum (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::for_state"
+reason = "Ambient production interface: about 170 one-line sites hold only a workspace or an id and no home; an explicit-root fold was priced at +325 to +625 production SLOC plus a runtime-root policy enum (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::for_workspace"
+reason = "Ambient production interface: about 170 one-line sites hold only a workspace or an id and no home; an explicit-root fold was priced at +325 to +625 production SLOC plus a runtime-root policy enum (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::for_project_root"
+reason = "Ambient production interface: about 170 one-line sites hold only a workspace or an id and no home; an explicit-root fold was priced at +325 to +625 production SLOC plus a runtime-root policy enum (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::under"
+reason = "Explicit-root form for fixtures, doctor's unbudgeted socket probe and the Zellij runtime_dir branch: no socket budget and shared data under the given root; the _under names are what the fixture-home and sidebar-fold invariants tell apart from the ambient forms (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::for_project_root_under"
+reason = "Explicit-root form for fixtures, doctor's unbudgeted socket probe and the Zellij runtime_dir branch: no socket budget and shared data under the given root; the _under names are what the fixture-home and sidebar-fold invariants tell apart from the ambient forms (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::for_state_under"
+reason = "Explicit-root form for fixtures, doctor's unbudgeted socket probe and the Zellij runtime_dir branch: no socket budget and shared data under the given root; the _under names are what the fixture-home and sidebar-fold invariants tell apart from the ambient forms (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::under"
+reason = "Explicit-root form for fixtures, doctor's unbudgeted socket probe and the Zellij runtime_dir branch: no socket budget and shared data under the given root; the _under names are what the fixture-home and sidebar-fold invariants tell apart from the ambient forms (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::under_named"
+reason = "Scanners already hold the dir name; building through the id lookup would rescan ws/ per room and can fail ambiguous (pass 31e)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::for_sibling_workspace"
+reason = "One caller in agents::spending; keeps the owner's runtime and shared roots for a validated sibling id, which no other constructor does (pass 31e)."
 
 [[verdict]]
 kind = "item"
