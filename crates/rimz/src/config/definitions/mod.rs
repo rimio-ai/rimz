@@ -205,6 +205,23 @@ pub(super) fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// The inputs every resolver and seat loader in one [`load`] shares.
+#[derive(Clone, Copy)]
+struct LoadScope<'a> {
+    home: &'a Path,
+    bases: &'a BTreeSet<String>,
+    skills: &'a SkillCatalog<'a>,
+    tiers: &'a super::tiers::TierConfig,
+}
+
+/// Non-empty, and only ASCII alphanumerics, `_`, and `-`.
+fn is_safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
 /// `commands` are the `[agents.commands]` names a `subagents:` list may also allow.
 pub fn load(
     agents_home: &Path,
@@ -213,7 +230,6 @@ pub fn load(
     tiers: &super::tiers::TierConfig,
 ) -> LoadedDefinitions {
     let catalog = SkillCatalog::new(skills);
-    let skills = &catalog;
     let mut loaded = LoadedDefinitions::default();
     let mut agents = Namespace::default();
     let mut subagents = Namespace::default();
@@ -268,11 +284,7 @@ pub fn load(
                 if let Ok(fm) = serde_saphyr::from_str::<Name>(yaml) {
                     name = fm.name.unwrap_or_else(|| stem.clone());
                 }
-                if name.is_empty()
-                    || !name
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-                {
+                if !is_safe_name(&name) {
                     return Err(DefinitionErr::new(
                         &path,
                         format!("has unsafe definition name {name:?}"),
@@ -357,17 +369,15 @@ pub fn load(
             subagents.failed.insert(name.clone());
         }
     }
+    let scope = LoadScope {
+        home: agents_home,
+        bases: &bases,
+        skills: &catalog,
+        tiers,
+    };
     // Children resolve first so an agent's `subagents:` checks against what loaded.
     agent::resolve_namespace(
-        agent::Resolver::new(
-            agents_home,
-            "subagents",
-            [&subagents, &agents],
-            &bases,
-            skills,
-            &BTreeSet::new(),
-            tiers,
-        ),
+        agent::Resolver::new(scope, "subagents", [&subagents, &agents], &BTreeSet::new()),
         &mut loaded,
     );
     let children: BTreeSet<String> = loaded
@@ -378,26 +388,10 @@ pub fn load(
         .cloned()
         .collect();
     agent::resolve_namespace(
-        agent::Resolver::new(
-            agents_home,
-            "agents",
-            [&agents, &subagents],
-            &bases,
-            skills,
-            &children,
-            tiers,
-        ),
+        agent::Resolver::new(scope, "agents", [&agents, &subagents], &children),
         &mut loaded,
     );
-    team::load(
-        agents_home,
-        [&agents, &subagents],
-        &bases,
-        skills,
-        &children,
-        tiers,
-        &mut loaded,
-    );
+    team::load(scope, [&agents, &subagents], &children, &mut loaded);
     loaded.failed.retain(|name, _| {
         !loaded.agent_profiles.0.contains_key(name)
             && !loaded.subagent_profiles.0.contains_key(name)
