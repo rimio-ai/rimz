@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::provider_file;
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
@@ -68,15 +69,13 @@ pub(super) fn codex_config_path(login_env: &BTreeMap<String, String>) -> Result<
     if let Some(raw) = login_env.get("RIMZ_CODEX_CONFIG").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(raw));
     }
-    super::codex_home_from(
-        login_env.get("CODEX_HOME").map(std::ffi::OsStr::new),
-        login_env.get("HOME").map(std::ffi::OsStr::new),
-    )
-    .map(|home| home.join("config.toml"))
-    .ok_or_else(|| AgentErr::Install {
-        agent: "codex",
-        reason: "$CODEX_HOME and $HOME are not set; cannot resolve Codex config".to_owned(),
-    })
+    super::CodexAdapter
+        .config_home(login_env)
+        .map(|home| home.join("config.toml"))
+        .ok_or_else(|| AgentErr::Install {
+            agent: "codex",
+            reason: "$CODEX_HOME and $HOME are not set; cannot resolve Codex config".to_owned(),
+        })
 }
 
 pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {

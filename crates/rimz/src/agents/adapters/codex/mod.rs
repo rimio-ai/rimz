@@ -90,18 +90,6 @@ use super::{
 };
 use crate::transcript::{AskOption, AskQuestion};
 
-/// Codex's shared config, credentials, and control-socket home.
-fn codex_home_from(
-    configured: Option<&std::ffi::OsStr>,
-    home: Option<&std::ffi::OsStr>,
-) -> Option<PathBuf> {
-    if let Some(raw) = configured.filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(raw));
-    }
-    home.filter(|v| !v.is_empty())
-        .map(|home| PathBuf::from(home).join(".codex"))
-}
-
 /// Per-hook timeout written into the Codex config (seconds). Hooks write a
 /// Waiting state and return neutral immediately, so the value is a short guard
 /// for local I/O failures rather than an answer window.
@@ -916,11 +904,15 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         &["CODEX_HOME"]
     }
 
+    /// Codex's shared config, credentials, and control-socket home: a
+    /// non-empty `CODEX_HOME`, else `$HOME/.codex`.
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
-        codex_home_from(
-            env.get("CODEX_HOME").map(std::ffi::OsStr::new),
-            env.get("HOME").map(std::ffi::OsStr::new),
-        )
+        if let Some(raw) = env.get("CODEX_HOME").filter(|v| !v.is_empty()) {
+            return Some(PathBuf::from(raw));
+        }
+        env.get("HOME")
+            .filter(|v| !v.is_empty())
+            .map(|home| PathBuf::from(home).join(".codex"))
     }
 
     fn manual_skill(&self) -> ManualSkill {
