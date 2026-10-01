@@ -1152,6 +1152,36 @@ fn message_header_falls_back_to_stored_identity_when_sender_is_absent() {
 }
 
 #[test]
+fn message_header_omits_redundant_team_profile() {
+    let mut live = agent("claude", "session-sender", Some("docs"), "terminal_1");
+    live.name = Some("calm-fox".to_owned());
+    live.role = Some("planner".to_owned());
+    live.profile = Some("recon.planner".to_owned());
+    let sender = MessageSender::Agent {
+        agent_id: None,
+        kind: AgentKind::new_unchecked("claude"),
+        name: live.name.clone(),
+        profile: live.profile.clone(),
+        role: live.role.clone(),
+        channel: Some("docs".to_owned()),
+    };
+
+    for peers in [vec![], vec![&live]] {
+        for (channel, handle) in [("docs", "@planner"), ("main", "@planner#docs")] {
+            let header = message_header(&sender, &peers, Some(channel)).unwrap();
+            assert_eq!(
+                header,
+                format!("Type: AGENT_MESSAGE\nFrom: {handle}\nContent:\n")
+            );
+            assert_eq!(
+                parse_message_header(&(header + "hello")),
+                Some((HeaderKind::Agent, handle.to_owned(), "hello".to_owned()))
+            );
+        }
+    }
+}
+
+#[test]
 fn message_header_uses_live_petname_and_profile_label() {
     let mut snapshot = empty_snapshot();
     let mut other_planner = agent("claude", "session-other", Some("auth"), "terminal_2");

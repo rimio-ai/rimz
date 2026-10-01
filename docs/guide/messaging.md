@@ -265,7 +265,7 @@ Content:
 read plan.md and start
 ```
 
-The first token after `From:` is the reply address: here, reply with `rimz message @swift-otter "got it"`. The parenthesized label identifies the sender's profile, or its agent kind when it has no profile; a label that repeats the handle is omitted.
+The first token after `From:` is the reply address: here, reply with `rimz message @swift-otter "got it"`. The parenthesized label identifies the sender's profile, or its agent kind when it has no profile; a label that repeats the handle is omitted. A team profile such as `recon.planner` is also omitted when the handle is `@planner`, including when it has a channel suffix.
 
 Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come from `@rimz`, with the `Type` naming what produced them:
 
