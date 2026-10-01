@@ -275,6 +275,23 @@ fn lossy_tail(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// `cargo xtask sandbox` cannot link the `rimz` crate, so it keeps its own
+    /// copy of these keys; a new adapter home key must reach that list too.
+    #[test]
+    fn xtask_sandbox_scrubs_every_provider_home_key() {
+        let sandbox = include_str!("../../../../../xtask/src/sandbox.rs");
+        let (_, list) = sandbox
+            .split_once("const PROVIDER_HOME_ENV")
+            .expect("PROVIDER_HOME_ENV in xtask/src/sandbox.rs");
+        let (list, _) = list.split_once("];").expect("end of PROVIDER_HOME_ENV");
+        for key in provider_home_keys() {
+            assert!(
+                list.contains(&format!("\"{key}\"")),
+                "{key} missing from PROVIDER_HOME_ENV in xtask/src/sandbox.rs"
+            );
+        }
+    }
+
     #[test]
     fn bounded_output_timeout_kills_reaps_and_keeps_both_output_streams() {
         let tempdir = tempfile::TempDir::new().expect("tempdir");

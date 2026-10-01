@@ -350,9 +350,40 @@ fn cleanup_sandbox(root: &Path, env: &BTreeMap<&'static str, PathBuf>) {
     remove_tree_bounded(root);
 }
 
+/// Provider home and state locations the adapters resolve ahead of `HOME`. An
+/// agent on a named account runs with, say, `CODEX_HOME` pointing at that
+/// account, so a sandboxed command that inherited it would install hooks in and
+/// start agents against the real account rather than the sandbox `HOME`. This
+/// mirrors the integration harness's scrub (each adapter's
+/// `config_home_env_keys` plus `PROVIDER_SIDECAR_KEYS` in
+/// `crates/rimz/tests/integration/common/command.rs`); xtask does not link the
+/// `rimz` crate, so a new adapter home key is added here by hand.
+const PROVIDER_HOME_ENV: [&str; 17] = [
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+    "COPILOT_HOME",
+    "CURSOR_CONFIG_DIR",
+    "GROK_HOME",
+    "KIMI_CODE_HOME",
+    "KIRO_HOME",
+    "PI_CODING_AGENT_DIR",
+    "QWEN_HOME",
+    "AMP_DATA_DIR",
+    "COPILOT_OTEL_FILE_EXPORTER_PATH",
+    "GROK_AUTH_PATH",
+    "PI_AGENT_DIR",
+    "PI_CODING_AGENT_SESSION_DIR",
+    "QWEN_CODE_SYSTEM_DEFAULTS_PATH",
+    "QWEN_CODE_SYSTEM_SETTINGS_PATH",
+    "QWEN_RUNTIME_DIR",
+];
+
 fn session_key(key: &OsStr) -> bool {
     let key = key.to_string_lossy();
-    key.starts_with("RIMZ_") || key.starts_with("TMUX") || key.starts_with("ZELLIJ")
+    key.starts_with("RIMZ_")
+        || key.starts_with("TMUX")
+        || key.starts_with("ZELLIJ")
+        || PROVIDER_HOME_ENV.contains(&key.as_ref())
 }
 
 /// `crates/rimz/build.rs` inputs that share the `RIMZ_` prefix with room
@@ -586,6 +617,9 @@ mod tests {
             "ZELLIJ_CONFIG_DIR",
             "RIMZ_PRICING_JSON_PATH",
             "RIMZ_BUILD_VERSION_OVERRIDE",
+            "CODEX_HOME",
+            "CLAUDE_CONFIG_DIR",
+            "PI_CODING_AGENT_SESSION_DIR",
             "PATH",
         ]
         .map(std::ffi::OsString::from);
@@ -597,6 +631,9 @@ mod tests {
                 "RIMZ_WORKSPACE_ID",
                 "TMUX_PANE",
                 "ZELLIJ_SESSION_NAME",
+                "CODEX_HOME",
+                "CLAUDE_CONFIG_DIR",
+                "PI_CODING_AGENT_SESSION_DIR",
             ]
         );
     }
