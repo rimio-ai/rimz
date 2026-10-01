@@ -2,7 +2,7 @@
 //!
 //! The refresh lane probes daemon PIDs and Codex's loaded-thread list when daemon-hooked sessions need reaping or the remote-control badge needs a health signal. Readers accept publications beyond the producer's re-probe TTL so replacement probes overlap the previous evidence. The fold applies the published inputs without proc scans or app-server reads.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -68,6 +68,24 @@ pub(super) fn refresh_codex_daemon_reap_cache(
     now_ms: u64,
     codex_rc_enabled: bool,
 ) {
+    refresh_codex_daemon_reap_cache_with(
+        agents,
+        runtime,
+        logins,
+        now_ms,
+        codex_rc_enabled,
+        |login_env| crate::agents::session::daemon_session_evidence("codex", login_env),
+    );
+}
+
+fn refresh_codex_daemon_reap_cache_with(
+    agents: &[AgentState],
+    runtime: &RuntimePaths,
+    logins: &crate::agents::RoomLoginSet,
+    now_ms: u64,
+    codex_rc_enabled: bool,
+    evidence: impl Fn(&BTreeMap<String, String>) -> crate::agents::session::DaemonSessionEvidence,
+) {
     // Re-probe before the reader's stale bound so replacement probes overlap the previous publication.
     let current = crate::disk::atomic::read_json_cache(&codex_daemon_reap_path(runtime));
     if !should_probe_codex_daemon_reap(agents, codex_rc_enabled)
@@ -85,8 +103,7 @@ pub(super) fn refresh_codex_daemon_reap_cache(
         loaded: Some(BTreeSet::new()),
     };
     for login in selected {
-        let evidence =
-            crate::agents::session::daemon_session_evidence("codex", &logins.env(&login));
+        let evidence = evidence(&logins.env(&login));
         inputs.daemon_pids.extend(evidence.pids);
         match (&mut inputs.loaded, evidence.loaded_session_ids) {
             (Some(all), Some(loaded)) => all.extend(loaded),
@@ -179,8 +196,6 @@ mod tests {
         let workspace = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
-        let state = crate::StatePaths::under(workspace.clone(), dir.path()).unwrap();
-        state.ensure_dirs().unwrap();
 
         let mut agent = root_agent("codex", "live-thread", None);
         agent.runtime_owner = Some(RuntimeOwner::new(
@@ -217,16 +232,29 @@ mod tests {
             "due publication reaps the intermediate base"
         );
 
-        let _ = super::super::refresh_heavy_lanes(
-            &base,
+        let logins = crate::agents::RoomLoginSet::new(
+            Some(crate::ids::RoomLogins::new()),
+            None,
+            Default::default(),
+        );
+        let probes = std::cell::Cell::new(0);
+        let probe = |_: &BTreeMap<String, String>| {
+            probes.set(probes.get() + 1);
+            crate::agents::session::DaemonSessionEvidence::default()
+        };
+        let now_ms = crate::utils::time::unix_now_ms();
+        refresh_codex_daemon_reap_cache_with(&base.agents, &runtime, &logins, now_ms, false, probe);
+        assert_eq!(probes.get(), 0, "the reaped base alone never probes");
+        refresh_codex_daemon_reap_cache_with(
             &pre_reap.agents,
-            &state,
             &runtime,
-            &crate::config::MachineConfig::default(),
-            crate::agents::spending::service::SpendingServiceStartup::OneShot,
-            &mut Default::default(),
+            &logins,
+            now_ms,
+            false,
+            probe,
         );
 
+        assert_eq!(probes.get(), 1);
         assert_ne!(
             read_codex_daemon_reap(&runtime, crate::utils::time::unix_now_ms())
                 .expect("codex reap cache")

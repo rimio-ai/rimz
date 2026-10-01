@@ -342,11 +342,11 @@ fn http_get(url: &str, token: &str) -> Result<String> {
 }
 
 fn claude_code_user_agent() -> String {
-    user_agent(
-        crate::agents::version::probe_cli_version("claude")
-            .as_deref()
-            .unwrap_or(USER_AGENT_FALLBACK_VERSION),
-    )
+    claude_code_user_agent_from(crate::agents::version::probe_cli_version("claude").as_deref())
+}
+
+fn claude_code_user_agent_from(probed: Option<&str>) -> String {
+    user_agent(probed.unwrap_or(USER_AGENT_FALLBACK_VERSION))
 }
 
 fn user_agent(version: &str) -> String {
