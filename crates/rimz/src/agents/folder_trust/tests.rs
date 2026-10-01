@@ -258,7 +258,7 @@ fn rows_require_detection_and_a_model_and_use_the_room_login() {
             jiff::Timestamp::UNIX_EPOCH,
         );
         let mixed = logins.with_agents(&[native]);
-        let rows = rows_with_locator(&mixed, dir.path(), None, |spec| {
+        let rows = rows_with_locator(&mixed, dir.path(), dir.path(), |spec| {
             (spec.kind == "codex").then(|| "/detected".into())
         });
         assert_eq!(
