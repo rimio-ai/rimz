@@ -233,13 +233,16 @@ pub fn execute(
             let mut unresolved = 0;
             let resolution = match resolution {
                 SymbolResolution::Missing { candidates } => {
-                    let mut qualifier = name_segments(name);
+                    let (file, chain) = file_qualified(name)
+                        .map_or((None, name.as_str()), |(file, chain)| (Some(file), chain));
+                    let mut qualifier = name_segments(chain);
                     let member = qualifier.pop().unwrap_or_default();
                     let mut members = Vec::new();
                     if !qualifier.is_empty() {
+                        let container = qualifier.join("::");
                         let containers = resolve_symbol(
                             &entry.root,
-                            &qualifier.join("::"),
+                            &file.map_or(container.clone(), |file| format!("{file}::{container}")),
                             request(
                                 entry,
                                 "workspace/symbol",

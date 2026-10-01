@@ -1362,6 +1362,94 @@ fn editor_positions_are_one_based_and_symbols_are_not_guessed() {
 }
 
 #[test]
+fn file_qualified_targets_split_at_the_first_separator() {
+    for (raw, file, name) in [
+        ("src/lib.rs::Type::method", "src/lib.rs", "Type::method"),
+        ("lib.rs::method", "lib.rs", "method"),
+    ] {
+        assert_eq!(
+            Target::parse(Verb::Def, raw).unwrap(),
+            Target::Symbol(raw.into())
+        );
+        assert_eq!(file_qualified(raw), Some((file, name)));
+        assert_eq!(
+            Target::parse(Verb::Def, raw).unwrap().path(),
+            Some(Path::new(file))
+        );
+    }
+    for raw in ["Type::method", "crate::deep::pathed", "rimz::store::Store"] {
+        assert_eq!(file_qualified(raw), None, "{raw}");
+        assert_eq!(Target::parse(Verb::Def, raw).unwrap().path(), None);
+    }
+    assert!(matches!(
+        Target::parse(Verb::Def, "src/lib.rs:2:3").unwrap(),
+        Target::Position { .. }
+    ));
+}
+
+#[test]
+fn file_qualified_names_resolve_among_the_named_files() {
+    let root = Path::new("/checkout");
+    let symbols = json!(["/checkout/a/lib.rs", "/checkout/b/lib.rs", "/outside/a/lib.rs"].map(|file| json!({"name": "method", "containerName": "Type", "kind": 6, "location": {"uri": format!("file://{file}"), "range": range()}})));
+    let unique = |name| match resolve_symbol(root, name, symbols.clone()).unwrap() {
+        SymbolResolution::Unique(symbol) => symbol.location.uri,
+        _ => panic!("{name} must be unique"),
+    };
+    assert!(matches!(
+        resolve_symbol(root, "Type::method", symbols.clone()).unwrap(),
+        SymbolResolution::Ambiguous(found) if found.len() == 3
+    ));
+    for name in [
+        "a/lib.rs::Type::method",
+        "a/lib.rs::method",
+        "/checkout/a/lib.rs::Type::method",
+    ] {
+        assert_eq!(unique(name), "file:///checkout/a/lib.rs", "{name}");
+    }
+    assert_eq!(
+        unique("b/lib.rs::Type::method"),
+        "file:///checkout/b/lib.rs"
+    );
+    assert!(matches!(
+        resolve_symbol(root, "lib.rs::Type::method", symbols.clone()).unwrap(),
+        SymbolResolution::Ambiguous(found) if found.len() == 2
+    ));
+    let SymbolResolution::Missing { candidates } =
+        resolve_symbol(root, "c.rs::Type::method", symbols.clone()).unwrap()
+    else {
+        panic!("a file without the symbol must miss")
+    };
+    assert_eq!(candidates.len(), 3);
+
+    let checkout = tempfile::tempdir().unwrap();
+    let root = checkout.path();
+    std::fs::create_dir(root.join("a")).unwrap();
+    for file in ["lib.rs", "a/lib.rs"] {
+        std::fs::write(root.join(file), "").unwrap();
+    }
+    let uri = |file| {
+        url::Url::from_file_path(root.join(file))
+            .unwrap()
+            .to_string()
+    };
+    let symbols = json!(["lib.rs", "a/lib.rs"].map(|file| json!({"name": "method", "containerName": "Type", "kind": 6, "location": {"uri": uri(file), "range": range()}})));
+    for (name, file) in [
+        ("lib.rs::Type::method", "lib.rs"),
+        ("./a/lib.rs::Type::method", "a/lib.rs"),
+    ] {
+        assert!(
+            matches!(resolve_symbol(root, name, symbols.clone()).unwrap(),
+                SymbolResolution::Unique(symbol) if symbol.location.uri == uri(file)),
+            "{name}"
+        );
+    }
+    assert!(matches!(
+        resolve_symbol(root, "../a/lib.rs::Type::method", symbols).unwrap(),
+        SymbolResolution::Missing { .. }
+    ));
+}
+
+#[test]
 fn outline_members_find_a_container_whose_range_is_the_whole_declaration() {
     let span = |line, start, end| json!({"start":{"line":line,"character":start},"end":{"line":line,"character":end}});
     let node = |name, kind, line, start, children| json!({"name":name,"kind":kind,"range":span(line, 0, 30),"selectionRange":span(line, start, start + 7),"children":children});

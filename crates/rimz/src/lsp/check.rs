@@ -468,11 +468,7 @@ fn extract(notes: &str) -> Vec<Anchor> {
 
 fn parse_anchor(code: &str, line: usize) -> Option<Anchor> {
     let (path, rest) = code.split_once(':')?;
-    let extension = Path::new(path).extension()?.to_str()?;
-    if path.chars().any(char::is_whitespace)
-        || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        || !extension.bytes().any(|byte| byte.is_ascii_alphabetic())
-    {
+    if !query::is_file_head(path) {
         return None;
     }
     let (symbol, hint, hint_text) = if let Some(raw) = rest.strip_prefix(':') {
@@ -588,25 +584,9 @@ fn segments(name: &str) -> Vec<String> {
 }
 
 fn resolve(root: &Path, files: &[PathBuf], path: &str) -> Vec<PathBuf> {
-    let path = Path::new(path);
-    let path = if path.is_absolute() {
-        let Ok(path) = path.strip_prefix(root) else {
-            return Vec::new();
-        };
-        path
-    } else {
-        path
-    };
-    if path
-        .components()
-        .any(|part| matches!(part, std::path::Component::ParentDir))
-    {
+    let Some(path) = query::checkout_relative(root, Path::new(path)) else {
         return Vec::new();
-    }
-    let path: PathBuf = path
-        .components()
-        .filter(|part| !matches!(part, std::path::Component::CurDir))
-        .collect();
+    };
     if files.contains(&path) {
         return vec![path];
     }

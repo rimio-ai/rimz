@@ -65,7 +65,7 @@ Claude's native `LSP` tool is switched off whenever a server is configured, even
 
 ## Ask the server yourself
 
-The same command works from your shell, in the checkout, and it is the fastest way to check what the agents are getting. A target is a position (`path:line:col`, one-based) or an exact symbol name. Write `Store::open` for a method, `Type::field` for a field, `launch_reminders::render` for a module function, or `rimz::store::Store` for a crate-qualified name. A method of the same name wins over a field; use the field's position in that case. You can leave intermediate segments out, but incorrect segments are refused rather than guessed. A trailing `()` is accepted too.
+The same command works from your shell, in the checkout, and it is the fastest way to check what the agents are getting. A target is a position (`path:line:col`, one-based) or an exact symbol name. Write `Store::open` for a method, `Type::field` for a field, `launch_reminders::render` for a module function, or `rimz::store::Store` for a crate-qualified name. A method of the same name wins over a field; use the field's position in that case. You can leave intermediate segments out, but incorrect segments are refused rather than guessed. A trailing `()` is accepted too. A name may also start with its file, the way a code anchor in notes does: `crates/rimz/src/store/mod.rs::Store::open` looks for `Store::open` only in that file, and a shorter path such as `store/mod.rs::Store::open` names every file ending with it unless a file sits at exactly that path.
 
 ```sh
 rimz lsp def MuxBackend                      # where it is defined
