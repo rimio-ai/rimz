@@ -73,8 +73,8 @@ use super::AskKind;
 use super::context::AgentContext;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -165,7 +165,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[("request_user_input", AskKind::Question)],
     },
     capabilities: Capabilities {
-        hook_context: true,
+        hook_context: Some(HookContextReply::HookSpecificOutput { event_name: true }),
         prompt_context: true,
         native_ask_ui: true,
         transcript_tail_context: true,
@@ -659,17 +659,6 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
             spawned_as_internal_app_server(),
             pid.is_some_and(process::pid_is_codex_daemon),
         )
-    }
-
-    fn attach_hook_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
-        if decoded.event_name() != "PostToolUse" {
-            return false;
-        }
-        decoded.merge_reply_object([(
-            "hookSpecificOutput".to_owned(),
-            serde_json::json!({"hookEventName": "PostToolUse", "additionalContext": text}),
-        )]);
-        true
     }
 
     fn attach_prompt_context(&self, decoded: &mut HookOutput, text: &str) -> bool {

@@ -91,7 +91,7 @@ enum StopChannel {
 
 fn stop_channel(kind: &str) -> StopChannel {
     if crate::agents::definition_by_kind(kind)
-        .is_ok_and(|agent| agent.spec().capabilities.hook_context)
+        .is_ok_and(|agent| agent.spec().capabilities.hook_context.is_some())
     {
         StopChannel::Hook
     } else {

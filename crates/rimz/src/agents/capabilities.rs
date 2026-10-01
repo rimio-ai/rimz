@@ -41,11 +41,6 @@ pub trait CoreCapability: Send + Sync {
 
 #[doc(hidden)]
 pub trait HookCapability: CoreCapability {
-    /// Attach additive model context when this native event accepts it.
-    fn attach_hook_context(&self, _decoded: &mut HookOutput, _text: &str) -> bool {
-        false
-    }
-
     /// Attach additive model context when this native event is the provider's
     /// prompt submit and its reply accepts it.
     fn attach_prompt_context(&self, _decoded: &mut HookOutput, _text: &str) -> bool {

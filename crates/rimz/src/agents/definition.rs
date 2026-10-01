@@ -543,6 +543,29 @@ impl AgentDefinition {
     pub fn capability_level(&self, capability: UserCapability) -> CapabilityLevel {
         self.core.spec().user_coverage.get(capability)
     }
+
+    /// Attach additive model context when the decoded native event accepts it,
+    /// in the reply shape the spec declares.
+    pub fn attach_hook_context(&self, decoded: &mut super::HookOutput, text: &str) -> bool {
+        let field = match self.spec().capabilities.hook_context {
+            Some(HookContextReply::HookSpecificOutput { event_name })
+                if decoded.event_name() == "PostToolUse" =>
+            {
+                let output = if event_name {
+                    serde_json::json!({"hookEventName": "PostToolUse", "additionalContext": text})
+                } else {
+                    serde_json::json!({"additionalContext": text})
+                };
+                ("hookSpecificOutput".to_owned(), output)
+            }
+            Some(HookContextReply::TopLevel { key }) if decoded.event_name() == "postToolUse" => {
+                (key.to_owned(), Value::from(text))
+            }
+            _ => return false,
+        };
+        decoded.merge_reply_object([field]);
+        true
+    }
 }
 
 /// Every capability method reaches the adapter directly. The trait default in
@@ -1021,11 +1044,22 @@ impl LifecycleAnnotations {
     }
 }
 
+/// How a native post-tool hook reply carries additive model context.
+#[derive(Clone, Copy, Debug)]
+pub enum HookContextReply {
+    /// `PostToolUse` nests the text under `hookSpecificOutput.additionalContext`,
+    /// echoing `hookEventName` when the agent requires it.
+    HookSpecificOutput { event_name: bool },
+    /// `postToolUse` carries the text at the top level under `key`.
+    TopLevel { key: &'static str },
+}
+
 /// Operational policy that cannot be derived from integration coverage.
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
-    /// Accepts additive model context in a native post-tool hook reply.
-    pub hook_context: bool,
+    /// The reply shape when the agent accepts additive model context in a
+    /// native post-tool hook reply; `None` when it has no such channel.
+    pub hook_context: Option<HookContextReply>,
     /// Accepts additive model context in a native prompt-submit hook reply.
     pub prompt_context: bool,
     /// Renders its own ask UI in the pane — permission prompts, plan

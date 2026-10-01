@@ -22,19 +22,13 @@ use crate::agents::AgentStatus;
 use crate::agents::AskKind;
 use crate::transcript::{AskOption, AskQuestion};
 
+/// A declared reply variant must match an event the adapter really decodes: a
+/// wrong variant, or `Some` on an agent without that event, would route stops
+/// to the hook channel and never attach.
 #[test]
-fn hook_context_capability_agrees_with_native_reply_support() {
+fn declared_hook_context_reply_attaches_on_a_decoded_event() {
     for adapter in BUILTINS {
         let kind = adapter.spec().kind;
-        let supported = matches!(
-            kind,
-            "claude" | "codex" | "copilot" | "cursor" | "droid" | "grok" | "qwen"
-        );
-        assert_eq!(
-            adapter.spec().capabilities.hook_context,
-            supported,
-            "{kind}"
-        );
         let mut attached = false;
         for sample in adapter.conformance().classification {
             let mut decoded = adapter
@@ -43,7 +37,6 @@ fn hook_context_capability_agrees_with_native_reply_support() {
             let before = decoded.reply().clone();
             if adapter.attach_hook_context(&mut decoded, "deadline context") {
                 attached = true;
-                assert!(supported, "{kind}");
                 let mut prompt = adapter
                     .decode_hook(sample.event_name, &sample.payload)
                     .unwrap();
@@ -59,7 +52,11 @@ fn hook_context_capability_agrees_with_native_reply_support() {
                 assert_eq!(decoded.reply(), &before, "{kind}");
             }
         }
-        assert_eq!(attached, supported, "{kind}");
+        assert_eq!(
+            attached,
+            adapter.spec().capabilities.hook_context.is_some(),
+            "{kind}"
+        );
     }
 }
 

@@ -31,8 +31,8 @@ use serde_json::json;
 
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
-    HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification, UserCoverage,
+    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -72,7 +72,9 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[("ask_user", AskKind::Question)],
     },
     capabilities: Capabilities {
-        hook_context: true,
+        hook_context: Some(HookContextReply::TopLevel {
+            key: "additionalContext",
+        }),
         prompt_context: false,
         native_ask_ui: true,
         transcript_tail_context: true,
@@ -358,14 +360,6 @@ impl crate::agents::capabilities::CoreCapability for CopilotAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for CopilotAdapter {
-    fn attach_hook_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
-        if decoded.event_name() != "postToolUse" {
-            return false;
-        }
-        decoded.merge_reply_object([("additionalContext".to_owned(), serde_json::json!(text))]);
-        true
-    }
-
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let parsed = payloads::parse_payload(payload);
         let tools = parsed.normalized_tool_calls();
