@@ -28,7 +28,7 @@ pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
         rimz::harness::budget::read_ledger(store.runtime_paths(), &request.kind, &request.agent_id)
             .and_then(|ledger| ledger.parked.map(|park| park.at_cost))
     });
-    let interrupted = PaneWriter::open(store.runtime_paths(), &request.pane_id)
+    let interrupted = PaneWriter::open(store.runtime_paths(), &request.pane_id, None)
         .and_then(|writer| writer.press(NamedKey::Escape));
 
     for record in rimz::harness::run::list(store.paths())? {

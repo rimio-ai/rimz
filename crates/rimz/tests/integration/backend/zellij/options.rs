@@ -92,7 +92,7 @@ fn check_frames(baseline: bool, frames: Option<bool>, reapply: bool) {
         .expect("rename focused work pane");
     assert!(renamed.status.success(), "{renamed:?}");
     room.backend()
-        .send_keys(&work, &format!("printf '{CONTENT_MARKER}\\n'\n"))
+        .send_keys(&work, None, &format!("printf '{CONTENT_MARKER}\\n'\n"))
         .expect("print content marker");
     poll_until(
         Duration::from_secs(10),

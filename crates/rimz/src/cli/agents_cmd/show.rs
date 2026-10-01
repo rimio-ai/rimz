@@ -80,7 +80,7 @@ fn collect_show_report(
         Some(
             backend
                 // rimz-invariant: explicit-agent-show-capture
-                .capture_pane(&pane.pane_id, None, ansi)
+                .capture_pane(&pane.pane_id, None, None, ansi)
                 .context("capturing agent pane")?,
         )
     } else {

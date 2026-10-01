@@ -5118,13 +5118,13 @@ fn pane_writer_lock_is_shared_across_workspaces_and_released_on_drop() {
     let pane = PaneId::parse("tmux:%3").unwrap();
     let other = PaneId::parse("tmux:%4").unwrap();
     assert_eq!(first.pane_write_lock(&pane), second.pane_write_lock(&pane));
-    let writer = PaneWriter::open(&first, &pane).unwrap();
+    let writer = PaneWriter::open(&first, &pane, None).unwrap();
     assert!(
         WorkspaceLock::try_acquire(&second.pane_write_lock(&pane))
             .unwrap()
             .is_none()
     );
-    let other_writer = PaneWriter::open(&second, &other).unwrap();
+    let other_writer = PaneWriter::open(&second, &other, None).unwrap();
     drop(writer);
     assert!(
         WorkspaceLock::try_acquire(&second.pane_write_lock(&pane))

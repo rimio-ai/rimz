@@ -561,7 +561,7 @@ fn capture(
     json: bool,
     ansi: bool,
 ) -> Result<()> {
-    let capture = backend.capture_pane(pane, lines, ansi)?;
+    let capture = backend.capture_pane(pane, None, lines, ansi)?;
     if json {
         render::json_pretty(&capture)?;
     } else {
@@ -738,7 +738,7 @@ fn send(
     if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
         bail!("expected text, --key, or --enter");
     }
-    let writer = PaneWriter::open(runtime, pane)?;
+    let writer = PaneWriter::open(runtime, pane, None)?;
     if let Some(text) = text.filter(|text| !text.is_empty()) {
         writer.type_text(text)?;
     }

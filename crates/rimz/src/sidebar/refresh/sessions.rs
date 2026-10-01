@@ -289,9 +289,9 @@ pub fn confirm_codex_turn_death_from_pane(
     }
     if let Some(pane) = pane {
         let backend = crate::mux::backend_for(pane.mux());
+        let lines = Some(CODEX_TURN_DEATH_CAPTURE_LINES);
         // rimz-invariant: codex-turn-death-confirmation
-        if let Ok(capture) = backend.capture_pane(pane, Some(CODEX_TURN_DEATH_CAPTURE_LINES), false)
-        {
+        if let Ok(capture) = backend.capture_pane(pane, None, lines, false) {
             crate::agents::session::refine_turn_death_from_frame("codex", error, &capture.raw_text);
         }
     }

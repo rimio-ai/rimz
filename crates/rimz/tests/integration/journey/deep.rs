@@ -587,7 +587,7 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
         "sidebar frame at the automatic width",
     );
 
-    backend.send_keys(&pane, "d").expect("send wider key");
+    backend.send_keys(&pane, None, "d").expect("send wider key");
     let wider = wait_for_rendered_sidebar_width(
         &mut client,
         |width| width > initial,
@@ -601,7 +601,9 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
         "the wider sidebar frame reverted after the convergence settle window\n{diag}",
     );
 
-    backend.send_keys(&pane, "a").expect("send narrower key");
+    backend
+        .send_keys(&pane, None, "a")
+        .expect("send narrower key");
     let narrower = wait_for_rendered_sidebar_width(
         &mut client,
         |width| width < held_wider,

@@ -518,7 +518,7 @@ pub(crate) fn capture_failure_tail(
     pane_id: &PaneId,
 ) -> Option<String> {
     // rimz-invariant: run-failure-capture
-    let capture = match backend.capture_pane(pane_id, None, false) {
+    let capture = match backend.capture_pane(pane_id, None, None, false) {
         Ok(capture) => capture,
         Err(err) => {
             tracing::debug!(
