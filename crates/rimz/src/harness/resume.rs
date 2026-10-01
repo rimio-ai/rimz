@@ -379,6 +379,28 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
     resolve_posture_with_role(request, profiles, None)
 }
 
+/// [`resolve_posture`] for a team member reopened on its own, as `agents
+/// restart` does: the member's role in its recorded team layers its prompts
+/// and args the way a team resume does. A team or role no longer configured
+/// resolves as a solo agent.
+pub fn resolve_member_posture(
+    request: PostureRequest<'_>,
+    profiles: &ProfilesConfig,
+    teams: &TeamsConfig,
+    team: Option<&str>,
+    role: Option<&str>,
+) -> ResumePosture {
+    let binding = team.zip(role).and_then(|(team, role)| {
+        teams
+            .0
+            .get(team)?
+            .roles
+            .iter()
+            .find(|binding| binding.role == role)
+    });
+    resolve_posture_with_role(request, profiles, binding)
+}
+
 fn resolve_posture_with_role(
     request: PostureRequest<'_>,
     profiles: &ProfilesConfig,

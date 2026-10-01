@@ -57,6 +57,51 @@ fn recorded_team_restore_keeps_role_layers() {
 }
 
 #[test]
+fn member_posture_keeps_role_layers_for_a_restart() {
+    let (mut teams, profiles, _) = team_configs();
+    let binding = &mut teams.0.get_mut("forge").unwrap().roles[0];
+    binding.args = Some("--verbose".into());
+    binding.system_prompt_file = Some(crate::config::PromptSource::Text {
+        origin: "/role.md".into(),
+        text: "Role".into(),
+    });
+    let expected = binding.system_prompt_file.clone();
+    let mut planner = team_agent("claude", "planner", "planner", "/repo/forge", 1);
+    planner.profile = Some("claude-plan".into());
+    planner.record = Some(Box::new(crate::agents::LaunchRecord {
+        model: Some("opus".into()),
+        ..Default::default()
+    }));
+    let request = PostureRequest {
+        record: planner.record.as_deref(),
+        profile: planner.profile.as_deref(),
+        kind: &planner.kind,
+        stamped_mode: planner.mode,
+        stamped_tier: None,
+    };
+
+    let posture = resolve_member_posture(
+        request,
+        &profiles,
+        &teams,
+        planner.team.as_deref(),
+        planner.role.as_deref(),
+    );
+    assert_eq!(posture.degraded, None);
+    assert!(
+        posture.launch.args.contains(&"--verbose".into()),
+        "{:?}",
+        posture.launch.args
+    );
+    assert_eq!(posture.launch.system_prompt_file, expected);
+    assert_eq!(posture.launch.model.as_deref(), Some("opus"));
+
+    let roleless = resolve_member_posture(request, &profiles, &teams, None, None);
+    assert!(!roleless.launch.args.contains(&"--verbose".into()));
+    assert_eq!(roleless.launch.system_prompt_file, None);
+}
+
+#[test]
 fn recorded_cross_provider_cohorts_match_without_a_tier() {
     for base in [Some("codex"), None] {
         let mut agent = agent("codex", "a1", "/repo", 1);
