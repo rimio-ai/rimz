@@ -1077,4 +1077,17 @@ fn stop_failure_maps_retryable_classes() {
         .class,
         TurnErrorClass::Failed
     );
+    let long = format!("  {}bcd  ", "a".repeat(79));
+    assert_eq!(
+        hook_output(
+            &adapter,
+            "StopFailure",
+            &json!({"error":"unknown","last_assistant_message": long})
+        )
+        .turn_error()
+        .cloned()
+        .unwrap()
+        .label,
+        Some(format!("{}b", "a".repeat(79)))
+    );
 }
