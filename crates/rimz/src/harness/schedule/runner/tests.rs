@@ -21,8 +21,8 @@ fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
 
     assert!(context.scope.is_some());
     assert!(
-        newest_active_run_for_entry("vanished-root", &entry)
-            .expect("read persisted workspace runs")
+        in_flight_run("vanished-root", &root)
+            .expect("probe the vanished root's run lock")
             .is_none()
     );
 }

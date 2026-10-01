@@ -23,7 +23,7 @@ rimz loop fire watchdog
 | `rimz loop disable <NAME>\|--all` | Hold tasks on this machine until enabled. |
 | `rimz loop pause <NAME> --for <DUR>` | Hold a task for a bounded time. |
 | `rimz loop fire <NAME>` | Run a task now in the foreground. |
-| `rimz loop stop <NAME>` | Stop a task's active run and release its overlap lock. |
+| `rimz loop stop <NAME>` | Stop a task's active run and release its overlap lock, including a fired one-shot's run. |
 | `rimz loop list` | List tasks grouped by project, with last run and next fire. |
 | `rimz loop watch` | Hold a live dashboard open with countdowns. |
 | `rimz loop show <NAME>` | One task's trigger, health, spend, and recent runs. |
@@ -317,7 +317,7 @@ For an untrusted or stale project task on a terminal, `fire` asks `grant trust a
 | `0` | A gate or check skipped the action, a `--wait` delivered, or a check-only task finished, whatever its check returned. |
 | `1` | An error, or a trust refusal. |
 
-A task whose previous run is still active records `overlapped` and does not start another. `loop stop <name>` ends the active run: it marks a linked supervised run canceled, waits 5 seconds for the overlap lock, sends SIGTERM to a remaining holder, and waits again. It prints ``loop `<name>`: stopped`` (with the run id, and `· SIGTERM` when it signaled) or `no active run`, and exits `0`. When the lock is still held it exits `1` with the holder's PID and the lock path; SIGKILL is left to you.
+A task whose previous run is still active records `overlapped` and does not start another. `loop stop <name>` ends the active run: it marks a linked supervised run canceled, waits 5 seconds for the overlap lock, sends SIGTERM to a remaining holder, and waits again. It prints ``loop `<name>`: stopped`` (with the run id, and `· SIGTERM` when it signaled) or `no active run`, and exits `0`. When the lock is still held it exits `1` with the holder's PID and the lock path; SIGKILL is left to you. A fired one-shot (`--at`, `--in`, `--after-reset`) gives up its task row when its run starts; while that run is active, `stop`, `show`, and `logs` still find it by name from inside its project.
 
 ## Read run history
 
@@ -351,7 +351,7 @@ Footers count tasks blocked by trust and project tasks not yet enabled, with the
 
 A condition adds a `condition: <NEXT text>` block immediately below the trigger. Each leaf term appears in expression order, followed by `✓` or `✗` for that term's truth and its current reading (`unknown` if absent). Negation applies to the expression, not the leaf's glyph.
 
-`loop show <name>` opens with the task's schedule and next fire or hold, a health verdict from the latest conclusive run, and the task's facts: action, check, root (and `dir` for a linked worktree), source, effective timeout, budgets, surplus gate, spend, and `strikes N/max` once a strike is recorded. An active run adds its run id and the `loop stop` command. The sections below follow:
+`loop show <name>` opens with the task's schedule and next fire or hold, a health verdict from the latest conclusive run, and the task's facts: action, check, root (and `dir` for a linked worktree), source, effective timeout, budgets, surplus gate, spend, and `strikes N/max` once a strike is recorded. An active run adds its run id and the `loop stop` command. For a fired one-shot whose run is still active, the task row is already gone: `show` says the one-shot fired, prints the active run (`run in progress`, its run id, holder PID and start), the agent, and the `loop stop` command, then any recorded runs as `loop logs` prints them. The sections below follow:
 
 | Section | Contents |
 | --- | --- |
@@ -363,7 +363,7 @@ A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind)
 
 ### `loop logs`
 
-`loop logs <name>` prints the full record of the latest runs, oldest first, so the newest ends the output. Each block holds the status, age, mode (`scheduled` or `manual`), exit information, check output, error chains, run ids, pane output tails, cost and tokens, and transcript links when recorded. Agent messages render as [agent prose](../cli.md#agent-prose); check output and errors stay literal.
+`loop logs <name>` prints the full record of the latest runs, oldest first, so the newest ends the output. Each block holds the status, age, mode (`scheduled` or `manual`), exit information, check output, error chains, run ids, pane output tails, cost and tokens, and transcript links when recorded. Agent messages render as [agent prose](../cli.md#agent-prose); check output and errors stay literal. For a fired one-shot whose run is still active, a final `run in progress` line names that run; `--failed` leaves it out.
 
 | Flag | Effect |
 | --- | --- |

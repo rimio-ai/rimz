@@ -504,6 +504,9 @@ fn has_agent_runs_section(task: &LoadedTask) -> bool {
 
 pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let Some(task) = load_task(&args.name, globals)? else {
+        if let Some((root, in_flight)) = in_flight_without_row(&args.name, globals)? {
+            return show_in_flight(&args, &root, &in_flight);
+        }
         return logs(
             LogsArgs {
                 name: args.name,
@@ -531,12 +534,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         project_root_for_globals(globals).as_deref(),
     );
     let show_agent_runs = has_agent_runs_section(&task);
-    let lock_state = probe_run_lock(&args.name, entry).ok();
-    let active_run = if matches!(lock_state.as_ref(), Some(RunLockState::Held(_))) {
-        newest_active_run_for_entry(&args.name, entry)?
-    } else {
-        None
-    };
+    let in_flight = in_flight_run(&args.name, &root)?;
 
     let mut out = ui::out();
     write_show_headline(&mut out, &args.name, &timing, now)?;
@@ -552,8 +550,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         ShowFactsContext {
             now_zoned: &now_zoned,
             is_held: timing.arm_state() != ArmState::Live,
-            lock_state: lock_state.as_ref(),
-            active_run: active_run.as_ref(),
+            in_flight: in_flight.as_ref(),
             full_spend: !show_agent_runs,
         },
     )?;
@@ -587,6 +584,34 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
+/// `show` for a fired one-shot whose run consumed its row: the run is all there is.
+fn show_in_flight(args: &ShowArgs, root: &Path, in_flight: &InFlightRun) -> Result<()> {
+    let mut out = ui::out();
+    writeln!(
+        out,
+        "{} — one-shot fired · row consumed by its run",
+        ui::paint(ui::palette::header(), &args.name)
+    )?;
+    let mut kv = ui::KeyVals::new().indent(2);
+    kv.push("active", ui::cell(active_run_text(in_flight)));
+    if let Some(run) = &in_flight.run {
+        let agent = match &run.agent_name {
+            Some(name) => format!("{} {name}", run.kind.as_str()),
+            None => run.kind.as_str().to_owned(),
+        };
+        kv.push("agent", ui::cell(agent));
+    }
+    kv.render(&mut out)?;
+    writeln!(out, "  stop with `rimz loop stop {}`", args.name)?;
+    let records = run_log::task_records(&rimz::disk::paths::logs_dir(), &args.name, Some(root));
+    let visible = records.iter().rev().take(args.runs).collect::<Vec<_>>();
+    if !visible.is_empty() {
+        writeln!(out)?;
+        write_log_records(&mut out, None, &visible)?;
+    }
+    Ok(())
+}
+
 pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     let task = load_task(&args.name, globals)?;
     let entry = task.as_ref().map(|task| task.entry());
@@ -595,9 +620,14 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         &args.name,
         project_root_for_globals(globals).as_deref(),
     );
-    if entry.is_none() && records.is_empty() {
+    let in_flight = match entry {
+        Some(_) => None,
+        None => in_flight_without_row(&args.name, globals)?.map(|(_, in_flight)| in_flight),
+    };
+    if entry.is_none() && records.is_empty() && in_flight.is_none() {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
     }
+    let in_flight = in_flight.filter(|_| !args.failed);
     let visible = records
         .iter()
         .filter(|record| !args.failed || record_is_failure(record))
@@ -605,7 +635,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         .take(args.runs)
         .collect::<Vec<_>>();
     let mut out = ui::out();
-    if visible.is_empty() {
+    if visible.is_empty() && in_flight.is_none() {
         if args.failed {
             writeln!(out, "no failed runs recorded")?;
         } else {
@@ -613,6 +643,22 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         return Ok(());
     }
+    write_log_records(&mut out, entry, &visible)?;
+    if let Some(in_flight) = &in_flight {
+        if !visible.is_empty() {
+            writeln!(out)?;
+        }
+        writeln!(out, "{}", active_run_text(in_flight))?;
+    }
+    Ok(())
+}
+
+/// History rows oldest first, from `visible` collected newest first.
+fn write_log_records(
+    out: &mut impl Write,
+    entry: Option<&TaskEntry>,
+    visible: &[&LoopRunRecord],
+) -> Result<()> {
     let now = Timestamp::now();
     let prose = ui::prose::Prose::for_stdout();
     for (idx, record) in visible.iter().rev().enumerate() {
@@ -635,9 +681,29 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
             write!(out, " · {exit}")?;
         }
         writeln!(out)?;
-        run_report::write_record_forensics(&mut out, entry, record, prose)?;
+        run_report::write_record_forensics(out, entry, record, prose)?;
     }
     Ok(())
+}
+
+/// The one rendering of a run in flight, shared by `show` and `logs`.
+fn active_run_text(in_flight: &InFlightRun) -> String {
+    let run = in_flight
+        .run
+        .as_ref()
+        .map(|run| format!(" · run {}", run.run_id))
+        .unwrap_or_default();
+    let holder = in_flight
+        .holder
+        .map(|info| {
+            format!(
+                " · pid {} · started {}",
+                info.pid,
+                ui::rel_age(info.started_at, Timestamp::now())
+            )
+        })
+        .unwrap_or_default();
+    format!("run in progress{run}{holder}")
 }
 
 fn write_show_headline(
@@ -699,8 +765,7 @@ fn write_show_headline(
 struct ShowFactsContext<'a> {
     now_zoned: &'a jiff::Zoned,
     is_held: bool,
-    lock_state: Option<&'a RunLockState>,
-    active_run: Option<&'a RunRecord>,
+    in_flight: Option<&'a InFlightRun>,
     full_spend: bool,
 }
 
@@ -717,23 +782,7 @@ fn write_show_facts(
     let room_is_open = room_open(&root);
     let blocked_state = source.blocked_state();
     let strike_count = strikes::load().get(&task.key(name)).copied().unwrap_or(0);
-    let run_id = context.active_run.map(|record| record.run_id.as_str());
-    let active = match context.lock_state {
-        Some(RunLockState::Held(Some(info))) => Some(format!(
-            "run in progress{} · pid {} · started {}",
-            run_id
-                .map(|run_id| format!(" · run {run_id}"))
-                .unwrap_or_default(),
-            info.pid,
-            ui::rel_age(info.started_at, Timestamp::now())
-        )),
-        Some(RunLockState::Held(None)) => Some(
-            run_id
-                .map(|run_id| format!("run in progress · run {run_id}"))
-                .unwrap_or_else(|| "run in progress".to_owned()),
-        ),
-        Some(RunLockState::Available) | None => None,
-    };
+    let active = context.in_flight.map(active_run_text);
     let has_active_run = active.is_some();
     let timeout = entry.timeout.clone().or_else(|| {
         entry.agent.as_ref().map(|_| {

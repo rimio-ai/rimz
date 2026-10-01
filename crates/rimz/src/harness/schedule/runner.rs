@@ -1342,13 +1342,23 @@ fn newest_active_run(paths: &StatePaths, name: &str) -> Result<Option<RunRecord>
     Ok(records.into_iter().next())
 }
 
-/// Resolve the task workspace before selecting its newest active run.
-pub fn newest_active_run_for_entry(name: &str, entry: &TaskEntry) -> Result<Option<RunRecord>> {
-    let root = entry.resolved_root();
-    let project_root = WorkspaceResolver::persisted_project_root(&root)
+/// A loop run in flight: the held run lock's holder, and its run record once written.
+pub struct InFlightRun {
+    pub holder: Option<RunLockInfo>,
+    pub run: Option<RunRecord>,
+}
+
+/// The run of task `name` in flight under `root`. The run lock decides; the run
+/// record is read only while the lock is held, so a stale record is no run.
+pub fn in_flight_run(name: &str, root: &Path) -> Result<Option<InFlightRun>> {
+    let RunLockState::Held(holder) = probe_run_lock_path(&root_run_lock_path(name, root)?)? else {
+        return Ok(None);
+    };
+    let project_root = WorkspaceResolver::persisted_project_root(root)
         .with_context(|| format!("resolving persisted project root at {}", root.display()))?;
     let paths = StatePaths::for_project_root(&project_root)?;
-    newest_active_run(&paths, name)
+    let run = newest_active_run(&paths, name)?;
+    Ok(Some(InFlightRun { holder, run }))
 }
 
 pub(super) fn effective_spawn_timeout(
@@ -1372,18 +1382,18 @@ pub enum StopOutcome {
     },
 }
 
+/// Stop the run of task `name` under `root`; the task's row may already be gone.
 pub fn stop_task(
     name: &str,
-    task: &LoadedTask,
+    root: &Path,
     cancel: impl FnOnce(Option<&ResolvedWorkspace>, StatePaths, Option<&RunRecord>) -> Result<()>,
 ) -> Result<StopOutcome> {
-    let entry = task.entry();
-    let RunLockState::Held(holder) = probe_run_lock(name, entry)? else {
+    let lock = root_run_lock_path(name, root)?;
+    let RunLockState::Held(holder) = probe_run_lock_path(&lock)? else {
         return Ok(StopOutcome::NoActiveRun);
     };
 
-    let root = entry.resolved_root();
-    let (workspace, project_root) = stop_workspace(&root)?;
+    let (workspace, project_root) = stop_workspace(root)?;
     let paths = StatePaths::for_project_root(&project_root)?;
     let run = newest_active_run(&paths, name);
     cancel(
@@ -1393,7 +1403,7 @@ pub fn stop_task(
     )?;
     let run = run?;
 
-    if wait_for_run_lock_release(name, entry, STOP_GRACE)? {
+    if wait_for_run_lock_release_path(&lock, STOP_GRACE)? {
         return Ok(StopOutcome::Stopped {
             run_id: run.map(|record| record.run_id),
             signaled: false,
@@ -1404,16 +1414,15 @@ pub fn stop_task(
 
     if signal_error.is_none()
         && let Some(info) = holder
-        && wait_for_run_lock_release(name, entry, STOP_GRACE)?
+        && wait_for_run_lock_release_path(&lock, STOP_GRACE)?
     {
-        append_stopped_record(name, task, info, run.as_ref());
+        append_stopped_record(name, root, info, run.as_ref());
         return Ok(StopOutcome::Stopped {
             run_id: run.map(|record| record.run_id),
             signaled: true,
         });
     }
 
-    let lock = run_lock_path(name, entry)?;
     let holder = holder
         .map(|info| format!(" (pid {})", info.pid))
         .unwrap_or_default();
@@ -1439,12 +1448,7 @@ fn stop_workspace(root: &Path) -> Result<(Option<ResolvedWorkspace>, PathBuf)> {
     Ok((workspace, project_root))
 }
 
-fn append_stopped_record(
-    name: &str,
-    task: &LoadedTask,
-    info: RunLockInfo,
-    run: Option<&RunRecord>,
-) {
+fn append_stopped_record(name: &str, root: &Path, info: RunLockInfo, run: Option<&RunRecord>) {
     let elapsed = Timestamp::now()
         .as_millisecond()
         .saturating_sub(info.started_at.as_millisecond());
@@ -1458,7 +1462,7 @@ fn append_stopped_record(
     record.mode = None;
     record.error = Some("stopped by rimz loop stop".to_owned());
     record.run_id = run.map(|record| record.run_id.to_string());
-    run_log::record_transition(task, &record);
+    run_log::record_stopped(root, &record);
 }
 
 struct RunLockGuard {
@@ -1526,8 +1530,11 @@ fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
 }
 
 fn run_lock_path(name: &str, entry: &TaskEntry) -> Result<PathBuf> {
-    let state =
-        StatePaths::for_project_root(&entry.resolved_root()).context("locating loop task state")?;
+    root_run_lock_path(name, &entry.resolved_root())
+}
+
+fn root_run_lock_path(name: &str, root: &Path) -> Result<PathBuf> {
+    let state = StatePaths::for_project_root(root).context("locating loop task state")?;
     let runtime = RuntimePaths::for_state(&state).context("locating loop task runtime")?;
     Ok(runtime.lock_path(format!("loop-run-{name}.lock")))
 }
@@ -1544,10 +1551,6 @@ fn signal_run_lock_holder(info: &RunLockInfo) -> Result<()> {
         Ok(()) | Err(Errno::ESRCH) => Ok(()),
         Err(err) => Err(err).with_context(|| format!("signaling loop run lock holder pid {pid}")),
     }
-}
-
-fn wait_for_run_lock_release(name: &str, entry: &TaskEntry, grace: Duration) -> Result<bool> {
-    wait_for_run_lock_release_path(&run_lock_path(name, entry)?, grace)
 }
 
 fn wait_for_run_lock_release_path(path: &Path, grace: Duration) -> Result<bool> {

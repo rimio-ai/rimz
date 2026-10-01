@@ -50,9 +50,7 @@ pub enum RunTransition {
 /// Attempt the history append before updating strike and arming overlays.
 /// Both the append and overlay updates are best-effort.
 pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> RunTransition {
-    let mut scoped_record = record.clone();
-    scoped_record.root = Some(task.entry().resolved_root());
-    append_to(&logs_dir(), &scoped_record);
+    append_for_root(&task.entry().resolved_root(), record);
     let name = &record.task;
     let key = task.key(name);
     let signal = strikes::classify(record);
@@ -77,6 +75,19 @@ pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> Ru
             RunTransition::Recorded
         }
     }
+}
+
+/// Append a `rimz loop stop` cancellation, which may outlive its task's row. A
+/// cancellation is strike-neutral, so no overlay moves and no row is needed.
+pub(super) fn record_stopped(root: &Path, record: &LoopRunRecord) {
+    debug_assert_eq!(strikes::classify(record), strikes::Signal::Neutral);
+    append_for_root(root, record);
+}
+
+fn append_for_root(root: &Path, record: &LoopRunRecord) {
+    let mut scoped_record = record.clone();
+    scoped_record.root = Some(root.to_path_buf());
+    append_to(&logs_dir(), &scoped_record);
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
