@@ -5,7 +5,7 @@
 //! leaving the first wide frame on screen until the next 60 s data refresh.
 
 #![cfg(unix)]
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};

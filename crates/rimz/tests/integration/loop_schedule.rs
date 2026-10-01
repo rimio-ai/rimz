@@ -549,6 +549,7 @@ fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
 fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
     let env = Env::new();
     if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
         return;
     }
     let cwd = env.home_root.join("feature-team");
@@ -977,6 +978,7 @@ fn write_team_signal_config(env: &Env) {
 
 fn team_signal_fixture(env: &Env) -> Option<std::path::PathBuf> {
     if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
         return None;
     }
     let cwd = env.home_root.join("feature-team");
@@ -1931,6 +1933,7 @@ fn loop_history_filters_workspace_and_keeps_legacy_records() {
 #[test]
 fn external_tick_fires_a_machine_task_without_a_workspace_record() {
     if which::which("tmux").is_err() && which::which("zellij").is_err() {
+        crate::common::skip("neither tmux nor zellij on PATH");
         return;
     }
     let env = Env::new();
@@ -1966,6 +1969,7 @@ fn external_tick_fires_a_machine_task_without_a_workspace_record() {
 #[test]
 fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
     if which::which("tmux").is_err() && which::which("zellij").is_err() {
+        crate::common::skip("neither tmux nor zellij on PATH");
         return;
     }
     let env = Env::new();
@@ -2358,6 +2362,7 @@ fn external_tick_does_not_record_a_fast_run_as_a_failed_start() {
 fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     let env = Env::new();
     let Some(real_git) = find_real_git() else {
+        crate::common::skip("git not on PATH");
         return;
     };
     if !Command::new(&real_git)
@@ -2366,6 +2371,7 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
         .status()
         .is_ok_and(|status| status.success())
     {
+        crate::common::skip("git unavailable");
         return;
     }
 
@@ -3707,6 +3713,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
 fn loop_check_runs_in_the_arming_worktree() {
     let env = Env::new();
     if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
         return;
     }
     let linked = env.home_root.join("linked");
@@ -4214,6 +4221,7 @@ fn loop_poll_until_delivers_once_or_expires() {
 fn loop_worktree_target_delivery_preserves_session() {
     let env = Env::new();
     if !init_git_repo(&env.project_root) {
+        crate::common::skip("git unavailable");
         return;
     }
     let worktree = env.home_root.join("project-worktrees/feature-loop");
@@ -4435,6 +4443,7 @@ fn loop_stop_without_active_run_reports_no_active_run() {
 #[test]
 fn terminal_check_runs_interactive_shell_before_its_timeout() {
     if which::which("bash").is_err() {
+        crate::common::skip("bash not on PATH");
         return;
     }
     let env = Env::new();

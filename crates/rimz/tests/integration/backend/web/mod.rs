@@ -4,14 +4,12 @@
 //! mux server. Missing browser, ttyd 1.7.5+, or selected mux binaries turn the
 //! test into an explicit self-skip so the live tier remains portable.
 
-#![allow(clippy::print_stderr)]
-
 macro_rules! require_web_stack {
     ($mux:literal) => {
         match support::WebStack::resolve($mux) {
             Ok(stack) => stack,
             Err(reason) => {
-                eprintln!("{reason}; skipping test");
+                crate::common::skip(&reason);
                 return;
             }
         }

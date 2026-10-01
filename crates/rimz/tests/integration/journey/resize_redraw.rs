@@ -17,7 +17,7 @@
 //! before the (deliberately long) tick would fire.
 
 #![cfg(unix)]
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};

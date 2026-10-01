@@ -72,11 +72,10 @@ fn fake_codex_bin(dir: &Path) -> PathBuf {
 #[test]
 fn tmux_room_shows_agent_after_hook() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping deep tmux smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping deep tmux smoke");
         return;
     };
     let env = Env::new();
@@ -91,7 +90,7 @@ fn tmux_room_shows_agent_after_hook() {
         .current_dir(&env.project_root)
         .status();
     if !git_init.map(|status| status.success()).unwrap_or(false) {
-        eprintln!("git unavailable; skipping deep tmux smoke");
+        crate::common::skip("git unavailable");
         return;
     }
 
@@ -187,11 +186,10 @@ fn tmux_room_shows_agent_after_hook() {
 #[test]
 fn tmux_sidebar_keeps_width_when_work_pane_closes() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping deep tmux resize smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping deep tmux resize smoke");
         return;
     };
     let env = Env::new();
@@ -324,11 +322,10 @@ fn tmux_sidebar_keeps_width_when_work_pane_closes() {
 #[test]
 fn tmux_sidebar_self_closes_without_full_width_flash() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping deep tmux self-close smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping deep tmux self-close smoke");
         return;
     };
     let env = Env::new();
@@ -460,11 +457,10 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
 #[test]
 fn zellij_room_shows_agent_and_holds_width_keys() {
     if which::which("zellij").is_err() {
-        eprintln!("zellij not on PATH; skipping deep zellij smoke");
+        crate::common::skip("zellij not on PATH");
         return;
     }
     let Some(rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping deep zellij smoke");
         return;
     };
     let env = Env::new();
@@ -624,7 +620,7 @@ fn zellij_room_shows_agent_and_holds_width_keys() {
 #[test]
 fn tmux_steer_delivers_text_and_enter_to_real_agent_pane() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping deep tmux steer smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let env = Env::new();
@@ -655,7 +651,7 @@ fn tmux_steer_delivers_text_and_enter_to_real_agent_pane() {
 #[test]
 fn tmux_steer_without_enter_suppresses_submit_in_real_agent_pane() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping deep tmux steer smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let env = Env::new();
@@ -694,11 +690,10 @@ fn tmux_steer_without_enter_suppresses_submit_in_real_agent_pane() {
 #[test]
 fn tmux_supervised_print_launches_hook_firing_agent_binary() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping supervised tmux smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(_rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping supervised tmux smoke");
         return;
     };
     let env = Env::new();
@@ -758,11 +753,10 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
 #[test]
 fn tmux_resumed_parent_session_switch_keeps_subagent_nested() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping resumed parent smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(_rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping resumed parent smoke");
         return;
     };
     let env = Env::new();
@@ -1096,11 +1090,10 @@ fn tmux_resumed_parent_session_switch_keeps_subagent_nested() {
 #[test]
 fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping subagent tmux smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(_rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping subagent tmux smoke");
         return;
     };
     let env = Env::new();
@@ -1360,11 +1353,10 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
 #[test]
 fn tmux_settled_subagent_reports_to_parent() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping subagent report smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(_rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping subagent report smoke");
         return;
     };
     let env = Env::new();
@@ -1970,11 +1962,10 @@ fn tmux_settled_subagent_reports_to_parent() {
 #[test]
 fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping subagent parent-watch smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(_rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping subagent parent-watch smoke");
         return;
     };
     let env = Env::new();
@@ -2157,11 +2148,10 @@ fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
 #[test]
 fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping supervised tmux smoke");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(_rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping supervised tmux smoke");
         return;
     };
     let env = Env::new();
@@ -2225,11 +2215,10 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
 #[test]
 fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping named account journey");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     let Some(_rimz) = rimz_bin() else {
-        eprintln!("rimz not built; skipping named account journey");
         return;
     };
     let env = Env::new();

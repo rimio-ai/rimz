@@ -1,4 +1,4 @@
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 use super::support::*;
 
@@ -140,7 +140,7 @@ fn presence_watch_reads_layout_changes_beside_floating_panes() {
     require_tmux!();
     let server = TmuxServer::new();
     if !server.supports_floating_panes() {
-        eprintln!("tmux predates 3.7 floating panes; skipping test");
+        crate::common::skip("tmux predates 3.7 floating panes");
         return;
     }
     server.ensure_with_shell("floating-layout");

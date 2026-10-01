@@ -12,7 +12,7 @@
 //! act of running an agent. The harness's pane presence is a fixture; real
 //! focus, steering, and launched binaries live in `deep.rs`.
 //!
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 mod asks;
 mod dashboard;
@@ -815,11 +815,15 @@ pub fn permission_request(session_id: &str, secret: &str) -> Value {
     })
 }
 
-/// Absolute path to the built `rimz` binary, or `None` if it is not
-/// built (lets deep tests self-skip rather than fail).
+/// Absolute path to the built `rimz` binary, or `None`, with the self-skip
+/// recorded, if it is not built (lets deep tests self-skip rather than fail).
 pub fn rimz_bin() -> Option<PathBuf> {
     let bin = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
-    bin.exists().then_some(bin)
+    if !bin.exists() {
+        crate::common::skip("rimz binary not built");
+        return None;
+    }
+    Some(bin)
 }
 
 fn process_pane(mux: MuxName, index: usize, command: &str, cwd: String) -> PaneRef {

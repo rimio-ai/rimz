@@ -109,6 +109,7 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
         .nth(1)
         .and_then(|value| value.parse::<u32>().ok());
     if minor.is_none_or(|minor| minor < 45) {
+        crate::common::skip("zellij below 0.45");
         return;
     }
     let cwd = TempDir::new().expect("cwd");
@@ -306,6 +307,7 @@ fn directional_background_split_uses_exact_anchor_rectangle() {
         .and_then(|part| part.parse::<u32>().ok())
         .is_none_or(|minor| minor < 45)
     {
+        crate::common::skip("zellij below 0.45");
         return;
     }
     let mut client = AttachedClient::attach(&room, 200, 80);

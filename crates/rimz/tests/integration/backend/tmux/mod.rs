@@ -1,12 +1,12 @@
 //! Live tmux backend tests on isolated private servers.
 
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 /// Skip a live test when tmux is unavailable.
 macro_rules! require_tmux {
     () => {
         if which::which("tmux").is_err() {
-            eprintln!("tmux not on PATH; skipping test");
+            crate::common::skip("tmux not on PATH");
             return;
         }
     };

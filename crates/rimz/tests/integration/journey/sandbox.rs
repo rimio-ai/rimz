@@ -31,11 +31,11 @@ fn tmux_sandbox_subagent_skills_are_judged_from_host_truth() {
     use rimz::store::run::RunStatus;
 
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping sandbox skill journey");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     if let Err(err) = rimz::sandbox::preflight(Isolation::Sandbox) {
-        eprintln!("skipping sandbox skill journey: {err}");
+        crate::common::skip(&format!("bubblewrap unusable: {err}"));
         return;
     }
     for author_marked in [false, true] {
@@ -201,11 +201,11 @@ while IFS= read -r line; do :; done
 #[test]
 fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
     if which::which("tmux").is_err() {
-        eprintln!("tmux not on PATH; skipping sandbox team journey");
+        crate::common::skip("tmux not on PATH");
         return;
     }
     if let Err(err) = rimz::sandbox::preflight(Isolation::Sandbox) {
-        eprintln!("skipping sandbox team journey: {err}");
+        crate::common::skip(&format!("bubblewrap unusable: {err}"));
         return;
     }
     let env = Env::new();

@@ -13,7 +13,7 @@
 //! git path resolves to that shim; the shim logs each `git` argv then execs the
 //! real git, so the log line count is the true cross-process git fork rate.
 
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -50,7 +50,10 @@ impl Fixture {
     pub(crate) fn with_worktrees(count: usize) -> Option<Self> {
         assert!(count > 0, "fixture needs at least one worktree");
         let env = Env::new();
-        let real_git = find_git()?;
+        let Some(real_git) = find_git() else {
+            crate::common::skip("git not on PATH");
+            return None;
+        };
         // Keep this fixture unrecorded so pane cwd, not a room root class, drives git probes.
         // Create the id-only fallback first so root-based fixture helpers use the same store.
         rimz::StatePaths::under(env.workspace_id.clone(), &env.rimz_home())
@@ -71,7 +74,7 @@ impl Fixture {
             };
             std::fs::create_dir_all(&worktree).expect("mkdir worktree");
             if !init_git_worktree(&worktree, &real_git) {
-                eprintln!("git init failed; skipping diff-stats single-flight test");
+                crate::common::skip("git init failed");
                 return None;
             }
             panes.push(PaneRef {

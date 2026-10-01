@@ -11,7 +11,7 @@ fn extension_tracks_settled_boundary_spend_and_child_lineage() {
         .output()
         .is_err()
     {
-        tracing::warn!("skipping: node not on PATH");
+        crate::common::skip("node not on PATH");
         return;
     }
 

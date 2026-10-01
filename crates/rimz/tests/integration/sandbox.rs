@@ -14,12 +14,11 @@ use crate::common::{
     CommandTimeoutExt, Env, exec_args, path_with_front, write_env_dump_shim, write_fake_login_shell,
 };
 
-#[expect(clippy::print_stderr, reason = "optional bubblewrap test dependency")]
 fn available() -> bool {
     match rimz::sandbox::preflight(Isolation::Sandbox) {
         Ok(_) => true,
         Err(err) => {
-            eprintln!("skipping bubblewrap execution: {err}");
+            crate::common::skip(&format!("bubblewrap unusable: {err}"));
             false
         }
     }
@@ -421,10 +420,6 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "permission test requires enforced read permissions"
-)]
 fn sandbox_unreadable_unlisted_skill_is_omitted_with_warning() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -436,7 +431,7 @@ fn sandbox_unreadable_unlisted_skill_is_omitted_with_warning() {
     std::fs::write(&unreadable, "echo original\n").unwrap();
     std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
     if std::fs::read(&unreadable).is_ok() {
-        eprintln!("skipping unreadable skill test: mode 000 files remain readable");
+        crate::common::skip("mode 000 files remain readable");
         return;
     }
     let vars = environment(&env);
@@ -938,7 +933,13 @@ fn sandbox_symlinked_manual_skills_resolve_shared_modules() {
     std::os::unix::fs::symlink(&source, root.join("absolute")).unwrap();
     std::fs::write(root.join("AGENTS.md"), "root instructions\n").unwrap();
     std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
-    let execute = available() && which::which("python3").is_ok();
+    let execute = available() && {
+        let python3 = which::which("python3").is_ok();
+        if !python3 {
+            crate::common::skip("python3 not on PATH");
+        }
+        python3
+    };
     for workaround in [false, true] {
         if workaround {
             std::os::unix::fs::symlink("../../.agents/skills/_shared", root.join("_shared"))

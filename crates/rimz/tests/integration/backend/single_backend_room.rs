@@ -1,7 +1,5 @@
 //! Live regression tests for the one-root/one-backend room invariant.
 
-#![allow(clippy::print_stderr)]
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -332,7 +330,7 @@ fn reset_explicit_rival_refuses_before_teardown() {
 #[test]
 fn reset_refuses_an_unbirthable_default_rebirth_before_teardown() {
     if which::which("zellij").is_err() {
-        eprintln!("zellij not on PATH; skipping rebirth socket preflight test");
+        crate::common::skip("zellij not on PATH");
         return;
     }
     let Some(room) = TmuxRoom::start() else {
@@ -471,7 +469,7 @@ impl TmuxRoom {
     /// Start the room from a process carrying `extra` over the fixture env.
     fn start_with(extra: &[(&str, &str)]) -> Option<Self> {
         if which::which("tmux").is_err() {
-            eprintln!("tmux not on PATH; skipping single-backend room test");
+            crate::common::skip("tmux not on PATH");
             return None;
         }
         let env = Env::new();
@@ -546,11 +544,11 @@ impl ZellijRoom {
     /// Start the room from a process carrying `extra` over the fixture env.
     fn start_with(extra: &[(&str, &str)]) -> Option<Self> {
         if which::which("zellij").is_err() {
-            eprintln!("zellij not on PATH; skipping zellij auto-backend room test");
+            crate::common::skip("zellij not on PATH");
             return None;
         }
         if which::which("tmux").is_err() {
-            eprintln!("tmux not on PATH; skipping zellij auto-backend room test");
+            crate::common::skip("tmux not on PATH");
             return None;
         }
         let env = Env::new();

@@ -11,8 +11,6 @@
 //! is pinned by the unit gates in `sidebar::produce::metrics::tests`
 //! (`metric*`).
 
-#![allow(clippy::print_stderr)] // self-skip notices, like the sibling fixture
-
 use rimz::sidebar::consumer::RollupCursor;
 use rimz::sidebar::refresh::git_stats::DiffStatsCache;
 use rimz::utils::time::unix_now_ms;
@@ -32,7 +30,7 @@ fn worktree_roots_reenumerate_on_session_boundary_only() {
         return;
     };
     if !fixture.init_repo_room() {
-        eprintln!("git init failed; skipping enumeration-cadence test");
+        crate::common::skip("git init failed");
         return;
     }
     // The enumeration runs only for a recorded workspace (the snapshot's

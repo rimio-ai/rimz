@@ -1,4 +1,4 @@
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 use super::support::*;
 
@@ -95,7 +95,7 @@ fn floating_panes_are_classified_and_closed_with_their_view() {
     require_tmux!();
     let server = TmuxServer::new();
     if !server.supports_floating_panes() {
-        eprintln!("tmux predates 3.7 floating panes; skipping test");
+        crate::common::skip("tmux predates 3.7 floating panes");
         return;
     }
 

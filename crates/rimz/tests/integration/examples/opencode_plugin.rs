@@ -16,11 +16,11 @@ fn plugin_preserves_usage_and_announces_child_models() {
         ])
         .output();
     let Ok(capability) = capability else {
-        tracing::warn!("skipping: node not on PATH");
+        crate::common::skip("node not on PATH");
         return;
     };
     if !capability.status.success() {
-        tracing::warn!("skipping: node cannot strip TypeScript syntax");
+        crate::common::skip("node cannot strip TypeScript syntax");
         return;
     }
 

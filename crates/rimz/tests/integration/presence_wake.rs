@@ -16,7 +16,7 @@
 //! workspace-wide including tests, so env is seeded onto the `rimz`
 //! subprocess rather than mutated in-process (the `wakeup_pipe` discipline).
 
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -445,7 +445,7 @@ fn assert_sidebar_envelope(
 fn wake_panes_changed_broadcasts_topology_nudge_and_stamps() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
     let recv_eldest = env.bind_socket("sidebar.eldest.sock");
@@ -479,7 +479,7 @@ fn wake_panes_changed_broadcasts_topology_nudge_and_stamps() {
 fn wake_pane_opened_and_closed_broadcast_card_events() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
     let recv_eldest = env.bind_socket("sidebar.eldest.sock");
@@ -553,7 +553,7 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
 fn wake_switch_settled_classifies_and_broadcasts_focus_repair() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
     let recv = env.bind_socket("sidebar.eldest.sock");
@@ -598,7 +598,7 @@ fn wake_switch_settled_classifies_and_broadcasts_focus_repair() {
 fn wake_alive_stamps_without_a_datagram() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
     let recv_eldest = env.bind_socket("sidebar.eldest.sock");
@@ -684,7 +684,7 @@ fn wake_alive_without_telemetry_writes_no_sample() {
 fn stale_topology_writer_rejects_the_whole_poke_and_throttles_diagnostics() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
     let recv = env.bind_socket("sidebar.eldest.sock");
@@ -814,7 +814,7 @@ fn stale_topology_cache_accepts_an_older_writer_takeover() {
 fn malformed_topology_is_best_effort_while_wake_stamps_and_broadcasts() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
     let recv = env.bind_socket("sidebar.eldest.sock");
@@ -1017,7 +1017,7 @@ fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
 fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
     let produced_at_ms = unix_now_ms().saturating_sub(5_000);
@@ -1091,7 +1091,7 @@ fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
 fn wake_command_changed_treats_agents_launch_as_nudge_and_strips_topology_command() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
     let launch = "rimz agents claude,codex --worktree=quality-pass";

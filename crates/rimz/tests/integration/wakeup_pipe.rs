@@ -19,7 +19,7 @@
 //! planted there, and sends one wakeup datagram per fresh sidebar — never
 //! shelling out to the trace shim.
 
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -102,7 +102,7 @@ fn wakeup_fixture() -> Option<WakeupFixture> {
     let runtime = RuntimePaths::for_state_under(&state, &runtime_root);
     runtime.ensure_dirs().expect("ensure runtime dirs");
     if crate::common::af_unix_bind_sandboxed(&runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return None;
     }
     let (recv_a, recv_b) = bind_wakeup_receivers(&runtime, &workspace_id);

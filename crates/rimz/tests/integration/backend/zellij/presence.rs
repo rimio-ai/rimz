@@ -395,7 +395,7 @@ fn wait_for_switch_settled(log: &Path, prior_lines: usize) -> Vec<String> {
 fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
     require_zellij!();
     let Some(wasm) = presence_wasm_artifact() else {
-        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
         return;
     };
     match zellij::capabilities() {
@@ -404,7 +404,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
                 .parsed_version
                 .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
         _ => {
-            eprintln!("zellij below the presence-plugin floor; skipping test");
+            crate::common::skip("zellij below the presence-plugin floor");
             return;
         }
     }
@@ -540,7 +540,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 fn presence_identity_transition_keeps_global_background_updates() {
     require_zellij!();
     let Some(wasm) = presence_wasm_artifact() else {
-        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
         return;
     };
     match zellij::capabilities() {
@@ -549,7 +549,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
                 .parsed_version
                 .is_some_and(|version| version >= zellij::MIN_ZELLIJ_VERSION) => {}
         _ => {
-            eprintln!("zellij below the presence-plugin floor; skipping test");
+            crate::common::skip("zellij below the presence-plugin floor");
             return;
         }
     }
@@ -704,7 +704,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     require_zellij!();
     let real_rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
     if !real_rimz.exists() {
-        eprintln!("rimz binary not built; skipping tab-switch repair test");
+        crate::common::skip("rimz binary not built");
         return;
     }
     match zellij::capabilities() {
@@ -713,7 +713,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
                 .parsed_version
                 .is_some_and(|version| version >= zellij::MIN_ZELLIJ_VERSION) => {}
         _ => {
-            eprintln!("zellij below the presence-plugin floor; skipping test");
+            crate::common::skip("zellij below the presence-plugin floor");
             return;
         }
     }
@@ -907,7 +907,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
 fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
     require_zellij!();
     let Some(wasm) = presence_wasm_artifact() else {
-        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
         return;
     };
     match zellij::capabilities() {
@@ -916,7 +916,7 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
                 .parsed_version
                 .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
         _ => {
-            eprintln!("zellij below the presence-plugin floor; skipping test");
+            crate::common::skip("zellij below the presence-plugin floor");
             return;
         }
     }
@@ -1001,7 +1001,7 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
 fn room_key_presses_from_different_cwd_reach_the_plugin() {
     require_zellij!();
     let Some(wasm) = presence_wasm_artifact() else {
-        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
         return;
     };
     match zellij::capabilities() {
@@ -1010,7 +1010,7 @@ fn room_key_presses_from_different_cwd_reach_the_plugin() {
                 .parsed_version
                 .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION) => {}
         _ => {
-            eprintln!("zellij below the presence-plugin floor; skipping test");
+            crate::common::skip("zellij below the presence-plugin floor");
             return;
         }
     }

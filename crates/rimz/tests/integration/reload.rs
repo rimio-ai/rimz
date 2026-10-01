@@ -3,7 +3,7 @@
 //! No live mux needed — we plant heartbeats and bound sockets directly under a
 //! `RuntimePaths::under` root and call the library function.
 
-#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(clippy::print_stdout)]
 
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
@@ -132,7 +132,7 @@ fn reload_signals_fresh_sidebars_and_skips_stale() {
     runtime.ensure_dirs().expect("ensure runtime dirs");
 
     if crate::common::af_unix_bind_sandboxed(&runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        crate::common::skip(crate::common::AF_UNIX_SANDBOXED);
         return;
     }
 

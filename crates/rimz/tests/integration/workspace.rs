@@ -24,7 +24,7 @@ fn init_git_repo(path: &std::path::Path) -> bool {
     match status {
         Ok(status) if status.success() => true,
         _ => {
-            tracing::warn!("skipping: git unavailable");
+            crate::common::skip("git unavailable");
             false
         }
     }
@@ -485,7 +485,7 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
     // process sharing that cwd.
     #[cfg(not(target_os = "linux"))]
     {
-        tracing::warn!("skipping: /proc recovery is Linux-only");
+        crate::common::skip("/proc recovery is Linux-only");
     }
     #[cfg(target_os = "linux")]
     {
@@ -528,7 +528,7 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
 fn codex_daemon_hook_ignores_valid_inherited_pin_from_another_room() {
     #[cfg(not(target_os = "linux"))]
     {
-        tracing::warn!("skipping: /proc recovery is Linux-only");
+        crate::common::skip("/proc recovery is Linux-only");
     }
     #[cfg(target_os = "linux")]
     {
