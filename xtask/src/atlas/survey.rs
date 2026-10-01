@@ -1307,7 +1307,14 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
                 .members
                 .iter()
                 .take(5)
-                .map(|member| format!("{}:{}", member.path.display(), member.line))
+                .map(|member| {
+                    format!(
+                        "{}:{} `{}`",
+                        member.path.display(),
+                        member.line,
+                        member.name
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             let siblings = family.role.as_ref().map_or_else(String::new, |role| {
