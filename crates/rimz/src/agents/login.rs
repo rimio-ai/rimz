@@ -150,6 +150,16 @@ impl ProviderLogin {
         LoginKey::new(self.kind.clone(), self.name.clone())
     }
 
+    /// The history pool this login reads and writes, as [`LoginCatalog::pool`]
+    /// answers for its key.
+    pub fn pool(&self) -> LoginKey {
+        if self.shares_history() {
+            LoginKey::default_for(self.kind.clone())
+        } else {
+            self.key()
+        }
+    }
+
     pub fn is_default(&self) -> bool {
         self.home.is_none()
     }
@@ -928,6 +938,14 @@ impl RoomLoginSet {
 
     pub fn default_key(&self, kind: &str) -> Option<LoginKey> {
         self.default_login(kind).map(|login| login.key())
+    }
+
+    /// The history pool of `login`; its own key when the account config does
+    /// not load.
+    pub fn pool(&self, login: &LoginKey) -> LoginKey {
+        self.catalog
+            .as_ref()
+            .map_or_else(|| login.clone(), |catalog| catalog.pool(login))
     }
 
     /// The environment `login`'s provider state is read under.

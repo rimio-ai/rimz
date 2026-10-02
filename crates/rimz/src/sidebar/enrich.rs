@@ -1009,7 +1009,17 @@ pub(super) fn fold_machine_config_with(
         PanelScope::Current => logins.current_keys(),
         PanelScope::InUse => logins.keys_in_use(),
     };
-    snapshot.with_provider_aggregates(&accounts, &remote_control_flags, provider_spending, &shown)
+    // A panel is one account; its spend is its history pool's.
+    let spending = shown
+        .iter()
+        .filter_map(|key| {
+            Some((
+                key.clone(),
+                provider_spending.get(&logins.pool(key))?.clone(),
+            ))
+        })
+        .collect();
+    snapshot.with_provider_aggregates(&accounts, &remote_control_flags, &spending, &shown)
 }
 
 /// Derive the rc badge from enablement and the managed-server probe. An absent

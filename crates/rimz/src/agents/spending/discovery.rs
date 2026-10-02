@@ -13,17 +13,19 @@ use super::SpendingFile;
 use super::aggregate::cold_parse_out_of_window;
 use super::cache::SpendingDiskCache;
 
-/// Every account on this machine with its adapter; `default` logins alone
+/// One history pool's base login, its adapter, and the environment its home
+/// resolves from.
+pub(super) type PoolBase = (
+    ProviderLogin,
+    &'static AgentDefinition,
+    BTreeMap<String, String>,
+);
+
+/// Every history pool on this machine under `ambient`; `default` logins alone
 /// when the account config does not load.
-pub(super) fn runtime_logins() -> Vec<(ProviderLogin, &'static AgentDefinition)> {
+pub(super) fn runtime_logins(ambient: &BTreeMap<String, String>) -> Vec<PoolBase> {
     match LoginCatalog::from_config(&crate::config::MachineConfig::load_lenient().accounts) {
-        Ok(catalog) => catalog
-            .all()
-            .filter_map(|login| {
-                crate::agents::find_definition(login.kind().as_str())
-                    .map(|adapter| (login.clone(), adapter))
-            })
-            .collect(),
+        Ok(catalog) => pool_bases(&catalog, ambient),
         Err(_) => crate::agents::all_definitions()
             .map(|adapter| {
                 (
@@ -31,10 +33,33 @@ pub(super) fn runtime_logins() -> Vec<(ProviderLogin, &'static AgentDefinition)>
                         adapter.spec().kind,
                     )),
                     adapter,
+                    ambient.clone(),
                 )
             })
             .collect(),
     }
+}
+
+/// The logins whose homes hold history: `default` and each standalone
+/// account. A shared account's home links into the default one, so walking it
+/// would count that history a second time.
+pub(super) fn pool_bases(
+    catalog: &LoginCatalog,
+    ambient: &BTreeMap<String, String>,
+) -> Vec<PoolBase> {
+    catalog
+        .all()
+        .filter(|login| !login.shares_history())
+        .filter_map(|login| {
+            crate::agents::find_definition(login.kind().as_str())
+                // `default` resolves as the reconciler resolves it: a pane on
+                // an account exports that account's home, not the provider's own.
+                .map(|adapter| {
+                    let native = catalog.native_ambient(login.kind(), ambient);
+                    (login.clone(), adapter, login.env(&native))
+                })
+        })
+        .collect()
 }
 
 const COMPLETE_RECONCILE_INTERVAL: Duration = Duration::from_secs(15 * 60);
@@ -344,8 +369,7 @@ pub(crate) struct DiscoveryStats {
 impl SpendingDiscoveryIndex {
     pub(crate) fn discover(
         &mut self,
-        logins: impl Iterator<Item = (ProviderLogin, &'static AgentDefinition)>,
-        ambient: &BTreeMap<String, String>,
+        bases: impl Iterator<Item = PoolBase>,
         now_secs: u64,
     ) -> Vec<SpendingFile> {
         self.stats = DiscoveryStats::default();
@@ -355,11 +379,11 @@ impl SpendingDiscoveryIndex {
         let mut seen_paths = HashSet::new();
         // Named logins claim their paths first, so a default login whose
         // ambient home names a declared account's home cannot take its spend.
-        let mut logins = logins.collect::<Vec<_>>();
-        logins.sort_by_key(|(login, _)| login.is_default());
-        for (login, adapter) in logins {
+        let mut bases = bases.collect::<Vec<_>>();
+        bases.sort_by_key(|(login, ..)| login.is_default());
+        for (login, adapter, env) in bases {
             let login_key = login.key();
-            let declarations = adapter.spending_sources(&login.env(ambient));
+            let declarations = adapter.spending_sources(&env);
             let key = source_set_key(&declarations);
             let changed = self
                 .adapters

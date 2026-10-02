@@ -39,25 +39,27 @@ fn catalog_logins_discover_separate_homes_and_deduplicate_shared_paths() {
             "work".parse().unwrap(),
             NamedAccount {
                 home: Some(work.clone()),
-                ..Default::default()
+                history: crate::config::AccountHistory::Standalone,
             },
         )]),
         ..Default::default()
     };
     let catalog = LoginCatalog::from_config(&accounts).unwrap();
     let adapter = crate::agents::definition_by_kind("claude").unwrap();
-    let logins = || {
+    let logins = |ambient: &BTreeMap<String, String>| {
         catalog
             .all()
             .filter(|login| login.kind().as_str() == "claude")
-            .map(|login| (login.clone(), adapter))
+            .map(|login| (login.clone(), adapter, login.env(ambient)))
+            .collect::<Vec<_>>()
+            .into_iter()
     };
     let mut ambient = BTreeMap::from([(
         "CLAUDE_CONFIG_DIR".to_owned(),
         native.to_string_lossy().into_owned(),
     )]);
     let mut index = SpendingDiscoveryIndex::default();
-    let files = index.discover(logins(), &ambient, now_secs());
+    let files = index.discover(logins(&ambient), now_secs());
     assert_eq!(files.len(), 2);
     assert!(
         files.iter().any(|file| file.path == work_file
@@ -70,10 +72,99 @@ fn catalog_logins_discover_separate_homes_and_deduplicate_shared_paths() {
         "CLAUDE_CONFIG_DIR".to_owned(),
         work.to_string_lossy().into_owned(),
     );
-    let files = index.discover(logins(), &ambient, now_secs());
+    let files = index.discover(logins(&ambient), now_secs());
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path, work_file);
     assert_eq!(files[0].login, "claude@work".parse::<LoginKey>().unwrap());
+}
+
+#[test]
+fn pool_bases_count_shared_history_once_and_a_standalone_home_apart() {
+    use crate::agents::LoginCatalog;
+
+    let dir = tempdir().unwrap();
+    let native = dir.path().join("native");
+    let work = dir.path().join("work");
+    let solo = dir.path().join("solo");
+    let native_file = native.join("projects/project/native.jsonl");
+    let solo_file = solo.join("projects/project/solo.jsonl");
+    for path in [&native_file, &solo_file] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    std::fs::create_dir_all(&work).unwrap();
+    std::os::unix::fs::symlink(native.join("projects"), work.join("projects")).unwrap();
+    let accounts = toml::from_str(&format!(
+        "[claude.work]\nhome = {work:?}\n[claude.solo]\nhome = {solo:?}\nhistory = \"standalone\"\n"
+    ))
+    .unwrap();
+    let catalog = LoginCatalog::from_config(&accounts).unwrap();
+    let walk = |ambient: &[(&str, &std::path::Path)]| {
+        let ambient = ambient
+            .iter()
+            .map(|(key, path)| ((*key).to_owned(), path.to_string_lossy().into_owned()))
+            .collect();
+        let bases = super::super::discovery::pool_bases(&catalog, &ambient)
+            .into_iter()
+            .filter(|(login, ..)| login.kind().as_str() == "claude");
+        let mut files: Vec<_> = SpendingDiscoveryIndex::default()
+            .discover(bases, now_secs())
+            .into_iter()
+            .map(|file| (file.login.to_string(), file.path))
+            .collect();
+        files.sort();
+        files
+    };
+    let expected = [
+        ("claude@default".to_owned(), native_file),
+        ("claude@solo".to_owned(), solo_file),
+    ];
+    assert_eq!(walk(&[("CLAUDE_CONFIG_DIR", &native)]), expected);
+    // From a pane on an account, the export names that account's home and
+    // `default` is still the provider's own.
+    std::fs::rename(&native, dir.path().join(".claude")).unwrap();
+    std::fs::remove_file(work.join("projects")).unwrap();
+    std::os::unix::fs::symlink(dir.path().join(".claude/projects"), work.join("projects")).unwrap();
+    let expected = [
+        (
+            "claude@default".to_owned(),
+            dir.path().join(".claude/projects/project/native.jsonl"),
+        ),
+        expected[1].clone(),
+    ];
+    for pane_home in [&solo, &work] {
+        assert_eq!(
+            walk(&[("HOME", dir.path()), ("CLAUDE_CONFIG_DIR", pane_home)]),
+            expected,
+            "{}",
+            pane_home.display()
+        );
+    }
+}
+
+#[test]
+fn codex_legacy_walk_skips_a_set_aside_tree() {
+    let dir = tempdir().unwrap();
+    let home = dir.path().join("solo");
+    let kept = home.join("rollout.jsonl");
+    let aside = home.join(".rimz-aside/20261002T000000Z/sessions/old.jsonl");
+    for path in [&kept, &aside] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    let login = crate::agents::ProviderLogin::named(
+        crate::ids::AgentKind::new_unchecked("codex"),
+        "solo".parse().unwrap(),
+        home,
+    )
+    .unwrap();
+    let adapter = crate::agents::definition_by_kind("codex").unwrap();
+    let files = SpendingDiscoveryIndex::default().discover(
+        std::iter::once((login.clone(), adapter, login.env(&Default::default()))),
+        now_secs(),
+    );
+    let paths: Vec<_> = files.into_iter().map(|file| file.path).collect();
+    assert_eq!(paths, [kept]);
 }
 
 #[test]

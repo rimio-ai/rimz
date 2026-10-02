@@ -344,7 +344,7 @@ fn build_report(
             provider_spending
                 .spending
                 .by_login
-                .get(&login.key())
+                .get(&login.pool())
                 .cloned()
         }),
         day_budget: panel.and_then(|panel| panel.day_budget),

@@ -259,8 +259,7 @@ impl SpendingWalker {
         }
 
         self.discovery.discover(
-            discovery::runtime_logins().into_iter(),
-            &crate::agents::ambient_env(),
+            discovery::runtime_logins(&crate::agents::ambient_env()).into_iter(),
             now_secs,
         )
     }

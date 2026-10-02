@@ -1335,8 +1335,8 @@ impl crate::agents::capabilities::SpendingCapability for CodexAdapter {
                 )?
                 .codex_dates();
                 let legacy = crate::agents::spending::SpendingSourceTree::new(home, "**/*.jsonl")?
-                    .filtered("codex-legacy-v2", spend::legacy_spend_relative)
-                    .descend_filtered("codex-legacy-dirs-v2", spend::legacy_spend_relative);
+                    .filtered("codex-legacy-v3", spend::legacy_spend_relative)
+                    .descend_filtered("codex-legacy-dirs-v3", spend::legacy_spend_relative);
                 Some(crate::agents::spending::SpendingSource::group(vec![
                     active, archived, legacy,
                 ]))

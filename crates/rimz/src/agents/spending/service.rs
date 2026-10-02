@@ -39,13 +39,12 @@ struct SpendingServiceNamespace(String);
 
 impl SpendingServiceNamespace {
     fn for_runtime(runtime: &RuntimePaths) -> Self {
-        let login_env = crate::agents::ambient_env();
-        let declarations = super::discovery::runtime_logins()
+        let declarations = super::discovery::runtime_logins(&crate::agents::ambient_env())
             .into_iter()
-            .flat_map(|(login, adapter)| {
+            .flat_map(|(login, adapter, env)| {
                 let key = login.key().to_string();
                 adapter
-                    .spending_sources(&login.env(&login_env))
+                    .spending_sources(&env)
                     .into_iter()
                     .map(|source| source.fingerprint())
                     // A login without history still changes the namespace.
