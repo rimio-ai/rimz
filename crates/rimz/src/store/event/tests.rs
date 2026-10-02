@@ -380,6 +380,7 @@ fn launch_event_uses_flat_compact_wire_shape() {
 fn attach_event_uses_typed_compact_wire_shape() {
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%4");
     let payload = AgentAttachPayload {
+        login: None,
         record: None,
         tier: None,
         mode: None,
@@ -428,6 +429,7 @@ fn attach_event_uses_typed_compact_wire_shape() {
     assert_eq!(decoded, payload);
 
     let absent = AgentAttachPayload {
+        login: None,
         record: None,
         tier: None,
         mode: None,
@@ -436,6 +438,15 @@ fn attach_event_uses_typed_compact_wire_shape() {
     };
     let wire = serde_json::to_value(&absent).expect("serialize attach");
     assert!(wire.get("isolation").is_none());
+    assert!(wire.get("login").is_none());
+    let stamped = AgentAttachPayload {
+        login: Some(crate::ids::LoginName::default()),
+        ..absent.clone()
+    };
+    assert_eq!(
+        serde_json::to_value(&stamped).expect("serialize attach")["login"],
+        json!("default")
+    );
     assert_eq!(
         serde_json::from_value::<AgentAttachPayload>(wire).expect("decode legacy attach"),
         absent,

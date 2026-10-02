@@ -111,7 +111,8 @@ pub use locate::locate_binary;
 use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use login::{
     AccountStatus, BirthLoginErr, LoginCatalog, LoginConfigErr, ProviderLogin, RoomLoginErr,
-    RoomLoginSet, ambient_env, room_login, room_logins, session_login, session_login_env,
+    RoomLoginSet, ambient_env, machine_login_catalog, room_login, room_logins, session_login,
+    session_login_env,
 };
 pub(crate) use login::{birth_name, live_login_keys};
 pub use managed_source::ManagedIntegration;

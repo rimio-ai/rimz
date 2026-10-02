@@ -692,6 +692,7 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
             &kind,
             &session,
             caller.launch_id.as_ref(),
+            &crate::ids::LoginName::default(),
             "rimz-test",
             &PaneId::from_parts(MuxName::Tmux, "%resumed"),
             crate::pane::RuntimeOwner::new(

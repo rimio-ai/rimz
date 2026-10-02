@@ -837,6 +837,7 @@ fn launch_resume_layout(
     let mut plan = rimz::harness::resume::plan_cohort_resume(
         &agents,
         &logins,
+        &rimz::agents::machine_login_catalog(),
         rimz::store::runtime::agent_liveness,
         &cells,
         team_name.as_deref(),

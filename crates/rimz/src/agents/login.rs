@@ -766,6 +766,14 @@ pub fn session_login_env(
     Ok(session_login(kind, login, accounts)?.env(&ambient))
 }
 
+/// The machine's login catalog for a caller with no config in scope. An
+/// account config that does not load answers the empty catalog, where every
+/// login is its own history pool.
+pub fn machine_login_catalog() -> LoginCatalog {
+    LoginCatalog::from_config(&crate::config::MachineConfig::load_lenient().accounts)
+        .unwrap_or_default()
+}
+
 /// Resolving the login a room launches a kind under.
 #[derive(Debug, thiserror::Error)]
 pub enum RoomLoginErr {

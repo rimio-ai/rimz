@@ -1228,6 +1228,7 @@ fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
             &current.kind,
             &current.agent_id,
             Some(&identity.agent_id),
+            &current.login.clone().unwrap_or_default(),
             &workspace.session_name,
             &pane_id,
             rimz::store::runtime::current_process_owner(
@@ -1268,6 +1269,7 @@ fn record_own_resume_pane(
             &target.0,
             &target.1,
             launch_id.as_ref(),
+            &params.login.clone().unwrap_or_default(),
             &workspace.session_name,
             &pane_id,
             runtime_owner,

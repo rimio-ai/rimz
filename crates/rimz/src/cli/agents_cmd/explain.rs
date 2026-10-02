@@ -91,9 +91,14 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             .map(PathBuf::from)
             .unwrap_or_else(|| workspace.worktree_root.clone());
         let logins = rimz::agents::room_logins(&state.workspace_record)?;
-        let (action, note) = restart::relaunch_action(&agent, &logins, &cwd)?;
+        let (action, login, note) = restart::relaunch_action(
+            &agent,
+            &logins,
+            &rimz::agents::machine_login_catalog(),
+            &cwd,
+        )?;
         (
-            restart::relaunch_request(&agent, &posture, action, None),
+            restart::relaunch_request(&agent, &posture, action, login, None),
             cwd,
             note.map(str::to_owned),
         )

@@ -64,6 +64,7 @@ pub(super) fn resume_lane(
             rimz_bin: &rimz::proc::rimz_exe(),
             runtime: store.runtime_paths(),
             logins: &logins,
+            catalog: &catalog,
         },
         Path::is_dir,
         resume_session_present,
