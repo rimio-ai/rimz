@@ -27,6 +27,30 @@ fn budget_set_raise_clear_and_config_routes() {
         ])
         .assert()
         .success();
+    env.rimz()
+        .args([
+            "config",
+            "set",
+            "accounts.claude.work.history",
+            "standalone",
+        ])
+        .assert()
+        .success();
+    // A shared account spends against `default`'s cap and earns no row.
+    env.rimz()
+        .args([
+            "config",
+            "set",
+            "accounts.claude.pooled.home",
+            "/srv/budget-test-pooled",
+        ])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["budget", "--account", "claude@pooled"])
+        .assert()
+        .success()
+        .stdout(contains("scope:  claude@default account"));
     let inspected = env.rimz().arg("budget").assert().success();
     let output = String::from_utf8_lossy(&inspected.get_output().stdout);
     let table_rows = output

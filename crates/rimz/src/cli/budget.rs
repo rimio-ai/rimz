@@ -51,11 +51,13 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     let now = Timestamp::now();
+    let catalog = LoginCatalog::from_config(&config.accounts).unwrap_or_default();
     let scope = match account {
         None => DailyBudgetScope::Fleet,
-        Some((_, Some(key))) => DailyBudgetScope::Account(key),
-        Some((kind, None)) => DailyBudgetScope::Account(
-            RoomLoginSet::for_runtime(store.runtime_paths())
+        Some((_, Some(key))) => DailyBudgetScope::account(&catalog, &key),
+        Some((kind, None)) => DailyBudgetScope::account(
+            &catalog,
+            &RoomLoginSet::for_runtime(store.runtime_paths())
                 .default_key(kind)
                 .with_context(|| {
                     format!("cannot resolve this room's {kind} account; check `rimz accounts list`")
@@ -91,10 +93,8 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         .filter(|agent| {
             !agent.agent_id.is_empty()
                 && !agent.agent_id.is_provisional()
-                && match &scope {
-                    DailyBudgetScope::Fleet => true,
-                    DailyBudgetScope::Account(key) => agent.login_key() == *key,
-                }
+                && (matches!(scope, DailyBudgetScope::Fleet)
+                    || DailyBudgetScope::account(&catalog, &agent.login_key()) == scope)
         });
     let continue_text = config.resume.auto_continue_text.trim();
     for agent in affected {
@@ -263,30 +263,43 @@ fn inspect(
     kv.render(&mut out)?;
 
     if matches!(scope, DailyBudgetScope::Fleet) && !config.accounts.budget.is_empty() {
-        let logins: Vec<_> = LoginCatalog::from_config(&config.accounts)
-            .map(|catalog| catalog.all().map(|login| login.key()).collect::<Vec<_>>())
+        // One row per history pool: `default` and its shared accounts spend
+        // against one cap.
+        let scopes: std::collections::BTreeSet<_> = LoginCatalog::from_config(&config.accounts)
+            .map(|catalog| {
+                catalog
+                    .all()
+                    .map(|login| DailyBudgetScope::account(&catalog, &login.key()))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_else(|_| {
                 config
                     .accounts
                     .budget
                     .keys()
-                    .map(|kind| LoginKey::default_for(AgentKind::new_unchecked(kind)))
+                    .map(|kind| {
+                        DailyBudgetScope::Account(LoginKey::default_for(AgentKind::new_unchecked(
+                            kind,
+                        )))
+                    })
                     .collect()
             })
             .into_iter()
-            .filter(|key| config.accounts.budget(key.kind.as_str()).is_some())
-            .filter(|key| {
-                rimz::config::AccountsConfig::validate_budget_kind(key.kind.as_str()).is_ok()
+            .filter(|scope| {
+                scope.account_login().is_some_and(|key| {
+                    config.accounts.budget(key.kind.as_str()).is_some()
+                        && rimz::config::AccountsConfig::validate_budget_kind(key.kind.as_str())
+                            .is_ok()
+                })
             })
             .collect();
         // Every configured key can be ineligible, and a header with no rows
         // reads as a broken command; the warnings below still name each one.
-        if !logins.is_empty() {
+        if !scopes.is_empty() {
             writeln!(out)?;
             let mut table =
                 crate::cli::render::Table::new(["ACCOUNT", "CAP", "SOURCE", "SPEND", "PARKED"]);
-            for key in logins {
-                let scope = DailyBudgetScope::Account(key);
+            for scope in scopes {
                 let account = scope.read_ledger(runtime, Some(state));
                 table.row([
                     crate::cli::render::cell(

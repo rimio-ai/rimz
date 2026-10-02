@@ -37,9 +37,11 @@
 
 [accounts]
 [accounts.budget]
-# Per-login local-calendar-day caps shared by every room. Values require /day
-# and wired authoritative account-spend history; quota bars and estimates do
-# not qualify. Unsupported kinds refuse config edits and room start.
+# Local-calendar-day caps shared by every room: one per provider across
+# `default` and its shared accounts, one per standalone account. Values
+# require /day and wired authoritative account-spend history; quota bars and
+# estimates do not qualify. Unsupported kinds refuse config edits and room
+# start.
 ## claude = "100/day"
 ## codex = "100/day"
 

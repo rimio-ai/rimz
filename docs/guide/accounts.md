@@ -39,9 +39,9 @@ RimZ writes no credentials. Run the printed login command once so the provider s
 
 To keep an account's sessions and transcripts in its own home, declare it with `--history standalone`. A standalone account links only its settings: Codex shares `config.toml` and `AGENTS.md`; Claude shares `settings.json`, `settings.local.json`, `CLAUDE.md`, `skills/`, `plugins/`, `agents/`, `commands/`, and `output-styles/`. `rimz accounts add claude work --history standalone` on an account you already declared removes the other links and leaves what they pointed at in the provider's own home; `--history shared` links them again.
 
-Rerunning `add` also migrates accounts you already declared: it leaves the config entry alone, creates the home if missing, brings the links up to date, and refreshes hooks. Every agent launch on a named account brings them up to date the same way, so an entry the provider creates later is linked by the next launch. Nothing is deleted. An entry only the account has, such as the transcripts of an account you used before it was shared, moves into the provider's own home. An entry both homes have stays where the provider's own home keeps it, and the account's copy moves aside to `<account home>/.rimz-aside/<UTC timestamp>/<name>`, with each move printed; the two are not merged, except Codex hook-trust entries. Merge what you need out of `.rimz-aside` by hand: sessions in there cannot be resumed and are left out of `rimz stats` and the spend totals until you move them. Already-correct links stay in place and the output says `already linked to <home>`. If a Claude release saves settings by replacing a link, the next `add` or launch moves the copy aside, relinks it, and says so.
+Rerunning `add` also migrates accounts you already declared: it leaves the config entry alone, creates the home if missing, brings the links up to date, and refreshes hooks. Every agent launch on a named account brings them up to date the same way, so an entry the provider creates later is linked by the next launch. Nothing is deleted. An entry only the account has, such as the transcripts of an account you used before it was shared, moves into the provider's own home. An entry both homes have stays where the provider's own home keeps it, and the account's copy moves aside to `<account home>/.rimz-aside/<UTC timestamp>/<name>`, with each move printed; the two are not merged, except Codex hook-trust entries. Merge what you need out of `.rimz-aside` by hand: sessions in there cannot be resumed and are left out of `rimz stats`, the spend totals, and today's budget count until you move them. Already-correct links stay in place and the output says `already linked to <home>`. If a Claude release saves settings by replacing a link, the next `add` or launch moves the copy aside, relinks it, and says so. A session whose directory was set aside is no longer where the provider looks for it, so its first relaunch fails once at the provider; the launch warning names where the directory went, and the relaunch after that starts fresh.
 
-Moving a directory aside under an agent that is writing into it would split its session, so RimZ refuses that one case while any other agent runs on the account, and names the fix: end those agents, or make the account standalone. An account home on another filesystem cannot have its entries moved; they stay in the account home with a warning.
+Moving a directory out from under an agent that is writing into it would split its session, so RimZ refuses to set a directory aside, or to remove the link to one after a switch to standalone, while any other agent runs on the account. The refusal names the fix: end those agents, or set the account's `history` back. An account home on another filesystem cannot have its entries moved; they stay in the account home with a warning. Its history then stays local too: no other account can resume it, and it is left out of the pool's spend totals and daily budget.
 
 The account named `default` is the provider's own home and is never declared. It is whatever the provider CLI resolves for itself: `~/.claude` or `~/.codex`, unless you export `CLAUDE_CONFIG_DIR` or `CODEX_HOME` in the shell you start the room from. When that variable points at any declared named account's home, `add` refuses before writing anything, including on a rerun inside a room. Unset it for the command, for example `env -u CODEX_HOME rimz accounts add codex work`. Do not export one that points at a named account's home in your login shell: `default` would then launch into that account too. Select the account with `rimz accounts use` instead. `rimz accounts add` refuses to declare the provider's own home, including a `--home` symlink to it, and `rimz doctor` flags an exported-home conflict.
 
@@ -49,12 +49,12 @@ The account named `default` is the provider's own home and is never declared. It
 
 ```console
 $ rimz accounts list
-   KIND    NAME      STATUS           DEFAULT FOR  AGENTS  HOME
-   claude  default   ready            -            -       ~/.claude
-●  claude  work      ready            new rooms    -       ~/.rimz/accounts/claude/work
+   KIND    NAME      STATUS           DEFAULT FOR  AGENTS  HISTORY  HOME
+   claude  default   ready            -            -       -        ~/.claude
+●  claude  work      ready            new rooms    -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default   hooks untrusted  new rooms    -       ~/.codex
-   codex   personal  hooks missing    -            -       ~/codex-me
+●  codex   default   hooks untrusted  new rooms    -       -        ~/.codex
+   codex   personal  hooks missing    -            -       shared   ~/codex-me
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run `rimz accounts add codex personal`
 ```
@@ -99,14 +99,14 @@ RimZ sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME` on each provider process from that
 
 The sidebar's provider dashboard shows one block per provider, for the account the room launches under: the plan, the 5-hour and 7-day limit bars, and the credits all come from that account's home. A named account labels its block, as in `Codex · team-1`. After `rimz accounts use`, the block shows the new account from the next refresh on. Agents still running on the old account keep running and keep their own cards, but the dashboard does not show that account. Right after a switch to an account no room has read yet, the provider has no block until RimZ reads that account, and an account that was never logged in shows none. `rimz providers` lists every account, one table row each ([reading the numbers](./insight.md#per-account-the-provider-dashboard)).
 
-A daily cap in the per-machine config's `[accounts.budget]` table applies to each account of that provider separately:
+A daily cap in the per-machine config's `[accounts.budget]` table follows the history: `default` and the shared accounts of a provider spend against one cap, and each standalone account has its own:
 
 ```toml
 [accounts.budget]
 claude = "100/day"
 ```
 
-A room on `work` parks when `work` has spent $100 today, whatever `default` has spent. The caps and what lifts a park are in [budgets](./budget.md#cap-the-room-and-the-account).
+With `work` shared, a room on `work` parks when `default` and the shared accounts have spent $100 between them today. Declare `work` with `history = "standalone"` and it parks on its own $100, whatever `default` has spent. The caps and what lifts a park are in [budgets](./budget.md#cap-the-room-and-the-account).
 
 `rimz stats` and the spend totals read the provider's own home and every standalone account home, so your spend history covers all of them whichever room you are standing in. `default` and the shared accounts of a provider are one history, so they are one spend figure: a shared account's dashboard block shows that shared spend beside the account's own plan, limits, and credits.
 

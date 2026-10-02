@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
-use crate::agents::{AgentState, AgentStatus, BudgetPark, BudgetScope, BudgetWindow, RoomLoginSet};
+use crate::agents::{
+    AgentState, AgentStatus, BudgetPark, BudgetScope, BudgetWindow, LoginCatalog, RoomLoginSet,
+};
 use crate::config::MachineConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, LoginKey, PaneId, WorkspaceId};
@@ -107,7 +109,8 @@ pub struct BudgetParkStamp {
     pub at: Timestamp,
 }
 
-/// One workspace-fleet or provider-login daily budget scope.
+/// One workspace-fleet or provider-account daily budget scope. An account
+/// scope is keyed by history pool: build it with [`DailyBudgetScope::account`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DailyBudgetScope {
     Fleet,
@@ -128,6 +131,12 @@ pub struct DailyBudgetLedger {
 }
 
 impl DailyBudgetScope {
+    /// The account scope `login` spends against: one cap and one ledger for
+    /// `default` and every shared account of a kind, its own for a standalone one.
+    pub fn account(catalog: &LoginCatalog, login: &LoginKey) -> Self {
+        Self::Account(catalog.pool(login))
+    }
+
     pub fn effective_cap_usd(
         &self,
         ledger: &DailyBudgetLedger,
@@ -652,6 +661,7 @@ pub(crate) fn project_parks(
         &runtime.shared_provider_spending_path(),
     );
     let day_cutoff = local_day_cutoff_secs(now, &zone);
+    let catalog = account_catalog(config);
     let mut accounts = BTreeMap::new();
     for agent in &mut snapshot.agents {
         agent.budget_park = ledger_for_agent(runtime, agent)
@@ -683,10 +693,9 @@ pub(crate) fn project_parks(
             agent.budget_park = Some(park);
             continue;
         }
-        let key = agent.login_key();
-        let scope = DailyBudgetScope::Account(key.clone());
+        let scope = DailyBudgetScope::account(&catalog, &agent.login_key());
         let account = accounts
-            .entry(key)
+            .entry(scope.clone())
             .or_insert_with(|| scope.read_ledger(runtime, state));
         agent.budget_park = daily_scope_park(
             &scope, account, runtime, config, &provider, day_cutoff, now, &zone,
@@ -844,6 +853,7 @@ struct DailyScopeVerdict {
 
 struct ScopeVerdicts {
     daily: Vec<DailyScopeVerdict>,
+    catalog: LoginCatalog,
 }
 
 fn evaluate_scopes(
@@ -868,11 +878,12 @@ fn evaluate_scopes(
     let provider = crate::agents::spending::read_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
     );
-    let root_logins = snapshot
+    let catalog = account_catalog(config);
+    let account_scopes = snapshot
         .agents
         .iter()
         .filter(|agent| !agent.is_provider_subagent())
-        .map(|agent| agent.login_key())
+        .map(|agent| DailyBudgetScope::account(&catalog, &agent.login_key()))
         .collect::<BTreeSet<_>>();
     let mut daily = vec![DailyScopeVerdict {
         scope: fleet_scope,
@@ -880,12 +891,14 @@ fn evaluate_scopes(
         parked_before: fleet_parked_before,
         verdict: fleet_verdict,
     }];
-    for key in root_logins {
-        let scope = DailyBudgetScope::Account(key.clone());
+    for scope in account_scopes {
         let mut ledger = scope.read_ledger(runtime, state);
         let parked_before = ledger.parked.clone();
         let cap = scope.effective_cap_usd(&ledger, config);
-        let spend = login_day_usd(&provider, day_cutoff, &key).unwrap_or_default();
+        let spend = scope
+            .account_login()
+            .and_then(|pool| login_day_usd(&provider, day_cutoff, pool))
+            .unwrap_or_default();
         let verdict = evaluate_daily_scope(&mut ledger.parked, cap, spend, now);
         daily.push(DailyScopeVerdict {
             scope,
@@ -895,7 +908,7 @@ fn evaluate_scopes(
         });
     }
 
-    ScopeVerdicts { daily }
+    ScopeVerdicts { daily, catalog }
 }
 
 struct EnforceCtx<'a> {
@@ -1188,9 +1201,9 @@ fn evaluate_scope_waiver(
 }
 
 fn binding_scope_park(scopes: &ScopeVerdicts, key: &LoginKey) -> Option<Timestamp> {
+    let account = DailyBudgetScope::account(&scopes.catalog, key);
     scopes.daily.iter().find_map(|daily| {
-        let applies = matches!(daily.scope, DailyBudgetScope::Fleet)
-            || matches!(&daily.scope, DailyBudgetScope::Account(account) if account == key);
+        let applies = matches!(daily.scope, DailyBudgetScope::Fleet) || daily.scope == account;
         (applies && matches!(daily.verdict, BudgetVerdict::Park { .. }))
             .then(|| daily.ledger.parked.as_ref().map(|park| park.at))
             .flatten()
@@ -1295,6 +1308,12 @@ fn local_day_cutoff_secs(now: Timestamp, zone: &TimeZone) -> Option<u64> {
     local_day_start(now, zone).map(|stamp| stamp.as_second().max(0) as u64)
 }
 
+/// The catalog account scopes are pooled by; an account config that does not
+/// load leaves every login its own pool.
+fn account_catalog(config: &MachineConfig) -> LoginCatalog {
+    LoginCatalog::from_config(&config.accounts).unwrap_or_default()
+}
+
 fn login_day_usd(
     provider: &crate::agents::spending::ProviderSpendingCache,
     cutoff_secs: Option<u64>,
@@ -1356,16 +1375,20 @@ pub(crate) fn project_budget_views(
             }
         });
     let in_use = logins.keys_in_use();
+    let catalog = account_catalog(config);
     for panel in &mut snapshot.providers {
         panel.day_budget = None;
         let key = panel.login_key();
         if !in_use.contains(&key) {
             continue;
         }
-        let scope = DailyBudgetScope::Account(key.clone());
+        let scope = DailyBudgetScope::account(&catalog, &key);
         let ledger = scope.read_ledger(runtime, state);
         panel.day_budget = scope.effective_cap_usd(&ledger, config).map(|cap_usd| {
-            let spend_usd = login_day_usd(provider, cutoff, &key).unwrap_or_default();
+            let spend_usd = scope
+                .account_login()
+                .and_then(|pool| login_day_usd(provider, cutoff, pool))
+                .unwrap_or_default();
             crate::store::snapshot::DailyBudgetView {
                 cap_usd,
                 spend_usd,
@@ -1387,8 +1410,9 @@ pub fn scope_gate(
     let provider = crate::agents::spending::read_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
     );
+    let catalog = account_catalog(config);
     std::iter::once(DailyBudgetScope::Fleet)
-        .chain(login.cloned().map(DailyBudgetScope::Account))
+        .chain(login.map(|login| DailyBudgetScope::account(&catalog, login)))
         .find_map(|scope| {
             scope
                 .exhausted(runtime, state, config, now, &provider)

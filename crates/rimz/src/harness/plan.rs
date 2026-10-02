@@ -71,6 +71,8 @@ impl LaunchAvailability {
             model_pins: config.models.clone(),
             now,
         };
+        let catalog =
+            crate::agents::LoginCatalog::from_config(&config.accounts).unwrap_or_default();
         let families: BTreeSet<_> = config
             .tiers
             .entries(crate::config::tiers::ModelTier::Intern)
@@ -84,7 +86,7 @@ impl LaunchAvailability {
             {
                 result.logged_out.insert(login.kind.clone());
             }
-            if let Some((spend, cap)) = DailyBudgetScope::Account(login.clone())
+            if let Some((spend, cap)) = DailyBudgetScope::account(&catalog, login)
                 .exhausted(runtime, state, config, now, &provider)
                 && let (Some(spend_usd), Some(cap_usd)) = (
                     serde_json::Number::from_f64(spend),

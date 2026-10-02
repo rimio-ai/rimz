@@ -112,7 +112,7 @@ The rows print in this order, and a row with nothing to report is left out:
 
 Each reset-credit expiry prints as `YYYY-MM-DD HH:MM:SS ±HH:MM` in the machine timezone, followed by `in <interval>`, or `due` once it has passed. When the cache holds only the soonest expiry, that one line prints.
 
-Spend, windows, paid usage, reset credits, and the daily cap all belong to the account, so each account reports its own.
+Windows, paid usage, and reset credits belong to the account, so each account reports its own. Spend and the daily cap belong to the history pool: `default` and the shared accounts of a provider report one figure, and a standalone account its own.
 
 With colour on, only the dollar figures in `extra`, `spend`, and `budget` take the money colour.
 

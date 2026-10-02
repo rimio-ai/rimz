@@ -214,7 +214,7 @@ claude = "100/day"
 codex = "100/day"
 ```
 
-`harness.turn_budget` caps every agent turn in the room. It takes a plain dollar amount such as `"3"` or `"$2.50"`, and each new prompt starts a fresh turn baseline. `harness.budget` caps a room's whole fleet for one day, and an `[accounts.budget]` entry caps one provider account for one day, shared by every room signed in to it.
+`harness.turn_budget` caps every agent turn in the room. It takes a plain dollar amount such as `"3"` or `"$2.50"`, and each new prompt starts a fresh turn baseline. `harness.budget` caps a room's whole fleet for one day, and an `[accounts.budget]` entry caps one provider for one day across `default` and its shared accounts, with a separate cap of the same size for each standalone account, shared by every room signed in to them.
 
 A daily cap runs from local midnight in your [`timezone`](#sidebar-rendering) and must carry the `/day` suffix; a bare amount is refused with the form to use. An account entry also needs a provider that publishes a complete dollar history, which [five of them do](./budget.md#cap-the-room-and-the-account) today. A subscription quota bar or a partial estimate does not qualify, so `rimz config set`, strict config loading, and room start refuse an ineligible kind such as Antigravity and name the key to remove. `rimz budget --account KIND` checks only the targeted kind; fleet reports omit ineligible kinds and warn on stderr about each key to remove without blocking adjustments. Cursor still takes per-agent and room caps, just not an account-day cap. None of these keys runs a command, so none of them enters the project trust hash.
 

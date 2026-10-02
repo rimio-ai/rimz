@@ -152,7 +152,8 @@ upward-dependencies = ["address"]
 # LoginCatalog::pool maps a login to its history pool for the resume gate, spend, and budget (+1).
 # The account reconciler reports its warnings; a login answers its history mode, its overrides, and the
 # provider's own home; adapters name their private home entries and database-home key (+6).
-surface-budget = 958
+# Adapters name the history directories a shared account links before either home holds them (+1).
+surface-budget = 959
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -402,7 +403,7 @@ path = "crates/rimz/src/harness"
 # The `[agents] shell` refusal is shared by launch compile, room start, and config set (+2).
 # Window conditions: the lazy window reading both evaluation callers build, and the add-time resolver with its refusals (+4).
 # `--after-reset`: its add-time resolver and the reset it reports to both `loop add` paths (+2).
-surface-budget = 635
+surface-budget = 636
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
