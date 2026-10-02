@@ -24,7 +24,7 @@ The rule that resolves this: **the durable run record is the run; the pane, the 
 | [`harness/deadline.rs`](../../../crates/rimz/src/harness/deadline.rs) | Pure warning, stop-channel, and grace-bound kill policy. |
 | [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) | `plan_supervised_launch`: lane qualification, isolation inheritance, route, resolve, finalize, the single-cell refusals, and the child isolation cap, returning finalize warnings as values. |
 | [`harness/prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | `retry_prompt` and `verify_reprompt`, beside the system-prompt composition [fleet.md](./fleet.md#system-prompt-composition) owns. |
-| [`cli/supervised.rs`](../../../crates/rimz/src/cli/supervised.rs) | Command-neutral effects: agent and program preflight, the pane's exec argv, stop and cancel, the SIGINT cancellation flag, `--timeout` parsing, and the stream-json prompt reader. |
+| [`cli/supervised.rs`](../../../crates/rimz/src/cli/supervised.rs) | Command-neutral effects: agent and program preflight, the pane's exec argv (`run_pane_cmd` over an `ExecRequest`), stop and cancel, the SIGINT cancellation flag, `--timeout` parsing, and the stream-json prompt reader. |
 | [`cli/supervised/run.rs`](../../../crates/rimz/src/cli/supervised/run.rs) | The driver `run_supervised` that both `agents -p` and loop fires call: preparation around the launch plan, room birth, placement, the attempt loop, the verify loop, and the retry loop. |
 | [`cli/supervised/output.rs`](../../../crates/rimz/src/cli/supervised/output.rs) | The output projections: text, JSON, the `StreamSink` for NDJSON `RunStreamEvent`s and streamed text, and the stderr forensics block. |
 | [`cli/supervised/stream.rs`](../../../crates/rimz/src/cli/supervised/stream.rs) | Streaming while a run is live, for a blocking caller and for an attached `agents wait --stream`. |
@@ -76,7 +76,7 @@ The parenthesized codes are what a caller exits with when it stops waiting on a 
 
 Exit `125` also comes from a run that never started. The provider quota gate and `budget::scope_gate` refuse before any record exists, return `SupervisedRunOutcome::BudgetExceeded`, and `run_print` exits `125` straight from that outcome. A script reading run records never sees a gate refusal.
 
-Terminal statuses are absorbing. `RunRecord::mark_terminal` returns false when the record is already terminal, and the transitions pass that on as a `wrote` flag, so each run sends exactly one wake datagram per terminal write. Two transitions leave a terminal status, and both require it to be exactly `Completed`: `reopen_for_verify` moves it back to `Running`, and `verify_failed` moves it to `VerifyFailed`.
+Terminal statuses are absorbing. `RunRecord::mark_terminal` returns false when the record is already terminal, and the transitions pass that on as a `wrote` flag, so each run sends exactly one wake datagram per terminal write. Only verify settlement leaves a terminal status, and only from exactly `Completed`: `run::settle_verify` moves the run back to `Running` for a re-prompt, or on to `VerifyFailed` at the attempt cap, through private transitions.
 
 ## Life of a run
 

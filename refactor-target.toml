@@ -663,7 +663,7 @@ surface-budget = 60
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
 path = "crates/rimz/src/cli/supervised"
-surface-budget = 47
+surface-budget = 36
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
@@ -1009,7 +1009,8 @@ allowed-dependencies = [
 # Hook and pane consumers claim each deadline rung through the same locked CAS.
 # Peer creation, lookup, failure and adapter gating, plus record_run_delivery for peer enrollment and subagent stamping, are shared with the CLI.
 # Team runs: the hook finds the leader's open run; the flip settles or reopens it per Done.
-surface-budget = 46
+# Verify settlement is one call (settle_verify, VerifyStep); its three transitions are private.
+surface-budget = 45
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
@@ -1214,6 +1215,21 @@ reason = "Pass 29d: cx 0.8 (cyclomatic/cognitive/SLOC 25/15/157), solely the SLO
 kind = "item"
 key = "cli::remote::supervisor::wait_for_master"
 reason = "Pass 29d: cx 0.6 (cyclomatic/cognitive/SLOC 26/12/126), solely the SLOC term. The master-wait driver orders reachability, master advancement, initial path preflight, retry startup and panel interruption; these effects stay together rather than split into single-caller helpers."
+
+[[verdict]]
+kind = "item"
+key = "cli::supervised::run::run_supervised"
+reason = "The run driver births the room and places, presents and closes attempt panes through room::RoomContext, room::select_birth_logins and room::pane_identity_env, and verify re-prompts read sidebar::produce::resolution_snapshot; harness cannot import room (same layer, room imports harness) or sidebar and channel (above it), and an effect trait would serve one caller (pass 32c)."
+
+[[verdict]]
+kind = "item"
+key = "cli::supervised::run::prepare_supervised"
+reason = "Residual is fail-fast admission in pinned refusal order (room check, worktree config, caller ancestry, subagent allowlist before the lane snapshot read, then sandbox, login, program and LSP preflight, channel registration); the launch plan itself is harness::plan::plan_supervised_launch (pass 32c)."
+
+[[verdict]]
+kind = "item"
+key = "cli::supervised::run::execute_attempt"
+reason = "The attempt's RunRecord and identity build is a single-use struct fill; a harness home adds one pub item at harness/run.rs's ceiling and deletes nothing (pass 32c)."
 
 [[verdict]]
 kind = "item"
