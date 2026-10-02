@@ -476,7 +476,7 @@ fn apply(
                     None => aside_dir.insert(new_aside_dir(named_home)?),
                 };
                 let aside = dir.join(&name);
-                fs::rename(&slot, &aside).map_err(|error| io_err(&slot, error))?;
+                set_aside(named_home, &slot, &aside, &kind)?;
                 report.set_aside.push((slot.clone(), aside));
             }
         }
@@ -488,6 +488,26 @@ fn apply(
         report.unlinked.push(name);
     }
     Ok(())
+}
+
+/// Move the entry at `slot` to `aside`. A relative link resolves against the
+/// directory holding it, so it is rewritten against the account home it
+/// leaves and keeps pointing where the user aimed it.
+fn set_aside(
+    named_home: &Path,
+    slot: &Path,
+    aside: &Path,
+    kind: &fs::FileType,
+) -> Result<(), ShareErr> {
+    if kind.is_symlink() {
+        let link = fs::read_link(slot).map_err(|error| io_err(slot, error))?;
+        if link.is_relative() {
+            std::os::unix::fs::symlink(named_home.join(link), aside)
+                .map_err(|error| io_err(aside, error))?;
+            return fs::remove_file(slot).map_err(|error| io_err(slot, error));
+        }
+    }
+    fs::rename(slot, aside).map_err(|error| io_err(slot, error))
 }
 
 /// A fresh `<account home>/.rimz-aside/<UTC timestamp>` directory, so a second
