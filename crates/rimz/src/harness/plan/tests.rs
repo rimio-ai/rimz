@@ -2693,3 +2693,285 @@ fn prompt_that_looks_like_spec_reports_the_fan_out_fix() {
         "{err:#}"
     );
 }
+
+fn supervised_request(spec: &str, prompt: &str) -> crate::harness::run::SupervisedRunRequest {
+    crate::harness::run::SupervisedRunRequest::new(
+        spec.to_owned(),
+        prompt.to_owned(),
+        None,
+        crate::agents::ManagedLaunchState::PendingResolution,
+    )
+}
+
+struct SupervisedPlan<'a> {
+    request: &'a crate::harness::run::SupervisedRunRequest,
+    caller: Option<&'a crate::agents::AgentState>,
+    lane: Option<(&'a str, &'a str)>,
+    parent_isolation: Option<crate::config::Isolation>,
+    machine: &'a MachineConfig,
+}
+
+impl SupervisedPlan<'_> {
+    fn run(&self, root: &Path) -> (Result<SupervisedLaunch>, Vec<LaunchFinalizeWarning>) {
+        let workspace =
+            crate::workspace::WorkspaceResolver::resolve(root, None).expect("resolve workspace");
+        let mut warnings = Vec::new();
+        let planned = plan_supervised_launch(
+            self.request,
+            self.caller,
+            self.lane,
+            self.parent_isolation,
+            &workspace,
+            self.machine,
+            effective_launch(self.machine, &workspace.project_root),
+            |_| crate::store::writer::LaunchLogin::RoomDefault,
+            &mut warnings,
+        );
+        (planned, warnings)
+    }
+}
+
+fn plan_one(
+    request: &crate::harness::run::SupervisedRunRequest,
+    machine: &MachineConfig,
+    root: &Path,
+) -> SupervisedLaunch {
+    let (planned, _warnings) = SupervisedPlan {
+        request,
+        caller: None,
+        lane: None,
+        parent_isolation: None,
+        machine,
+    }
+    .run(root);
+    planned.expect("supervised launch plan")
+}
+
+fn planned_cell(launch: &SupervisedLaunch) -> &AgentCell {
+    let cells = launch
+        .layout
+        .columns
+        .iter()
+        .flat_map(|column| &column.rows)
+        .collect::<Vec<_>>();
+    let [Cell::Agent(cell)] = cells.as_slice() else {
+        panic!(
+            "a supervised launch holds exactly one agent cell: {:?}",
+            launch.layout
+        );
+    };
+    cell
+}
+
+#[test]
+fn tier_override_changes_the_supervised_launch_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("agents")).unwrap();
+    for kind in ["claude", "codex"] {
+        std::fs::write(
+            root.path().join(format!("agents/{kind}.md")),
+            "---\ndescription: Base\n---\nBase.",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.path().join("agents/worker.md"),
+        "---\ndescription: Worker\nagent: codex\ntier: senior\ntools: [Bash]\n---\nCraft.",
+    )
+    .unwrap();
+    let mut machine = MachineConfig::default();
+    let definitions = crate::config::definitions::load(
+        root.path(),
+        crate::config::definitions::SkillCheck::Skip,
+        &machine.agents.commands,
+        &machine.tiers,
+    );
+    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
+    machine.agents.profiles = definitions.agent_profiles;
+    let mut request = supervised_request("worker", "Read the brief.");
+    request.tier = Some(crate::config::tiers::ModelTier::Principal);
+    request.agent = Some("codex".into());
+    let launch = plan_one(&request, &machine, root.path());
+    let cell = planned_cell(&launch);
+    assert_eq!(cell.kind.as_str(), "claude");
+    assert_eq!(cell.launch.model.as_deref(), Some("fable"));
+    assert!(cell.args.iter().any(|arg| arg == "--tools"));
+}
+
+#[test]
+fn supervised_launch_normalizes_model_and_effort_overrides() {
+    let mut request = supervised_request("codex", "fix-it");
+    request.model = Some(" gpt-5 ".to_owned());
+    request.effort = Some(" low ".to_owned());
+    let dir = tempfile::tempdir().expect("temp dir");
+    let launch = plan_one(&request, &MachineConfig::default(), dir.path());
+    let cell = planned_cell(&launch);
+    assert_eq!(cell.launch.model.as_deref(), Some("gpt-5"));
+    assert_eq!(cell.launch.effort.as_deref(), Some("low"));
+}
+
+#[test]
+fn supervised_launch_refuses_a_prompt_that_looks_like_a_spec() {
+    let mut request = supervised_request("claude", "amp");
+    request.subagent = true;
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (planned, _warnings) = SupervisedPlan {
+        request: &request,
+        caller: None,
+        lane: None,
+        parent_isolation: None,
+        machine: &MachineConfig::default(),
+    }
+    .run(dir.path());
+    let err = planned.expect_err("spec-like prompt");
+    assert!(
+        err.to_string()
+            .contains("prompt `amp` looks like another spec cell"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn supervised_launch_qualifies_a_bare_role_in_its_team_lane() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "claude-agent".to_owned(),
+        configured_profile("claude", None, Some("opus"), None, None, None),
+    );
+    machine.agents.teams.0.insert(
+        "forge".to_owned(),
+        Team {
+            roles: vec![RoleBinding {
+                profile: "claude-agent".to_owned(),
+                ..role_binding("reviewer")
+            }],
+            leader: None,
+            layout: None,
+            scratch_files: None,
+            consensus_file: None,
+            append_system_prompt_files: Vec::new(),
+            stages: Vec::new(),
+        },
+    );
+    let request = supervised_request("reviewer", "Review the diff.");
+    let (planned, _warnings) = SupervisedPlan {
+        request: &request,
+        caller: None,
+        lane: Some(("forge", "forge")),
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(dir.path());
+    let launch = planned.expect("lane role launch");
+    assert_eq!(launch.inferred_lane.as_deref(), Some("forge"));
+    assert_eq!(launch.team_name.as_deref(), Some("forge"));
+    assert_eq!(
+        planned_cell(&launch).launch.role.as_deref(),
+        Some("reviewer")
+    );
+
+    let request = supervised_request("claude", "Review the diff.");
+    let (planned, _warnings) = SupervisedPlan {
+        request: &request,
+        caller: None,
+        lane: Some(("forge", "forge")),
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(dir.path());
+    assert_eq!(planned.expect("kind launch").inferred_lane, None);
+}
+
+#[test]
+fn supervised_launch_refuses_layouts_beyond_one_agent_cell() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine
+        .agents
+        .commands
+        .0
+        .insert("logs".to_owned(), "tail -f run.log".to_owned());
+    for (spec, refusal) in [
+        (
+            "claude,codex",
+            "--print requires a layout with exactly one agent cell",
+        ),
+        ("claude,logs", "--print requires a single-cell agent layout"),
+    ] {
+        let request = supervised_request(spec, "work");
+        let (planned, _warnings) = SupervisedPlan {
+            request: &request,
+            caller: None,
+            lane: None,
+            parent_isolation: None,
+            machine: &machine,
+        }
+        .run(dir.path());
+        let err = planned.expect_err(spec);
+        assert_eq!(err.to_string(), refusal);
+    }
+}
+
+#[test]
+fn supervised_subagent_is_capped_at_its_sandboxed_parent() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.subagents.profiles.0.insert(
+        "worker".to_owned(),
+        Profile {
+            isolation: Some(crate::config::Isolation::Host),
+            ..configured_profile("claude", None, None, None, None, None)
+        },
+    );
+    let mut request = supervised_request("worker", "work");
+    request.subagent = true;
+    let caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+    let (planned, _warnings) = SupervisedPlan {
+        request: &request,
+        caller: Some(&caller),
+        lane: None,
+        parent_isolation: Some(crate::config::Isolation::Sandbox),
+        machine: &machine,
+    }
+    .run(dir.path());
+    let launch = planned.expect("capped subagent");
+    assert_eq!(launch.clamped, Some(ClampSource::ProfileDefault));
+    assert_eq!(
+        planned_cell(&launch).launch.isolation,
+        Some(crate::config::Isolation::Sandbox)
+    );
+}
+
+#[test]
+fn supervised_finalize_refusal_keeps_its_warnings() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "coder".to_owned(),
+        configured_profile(
+            "codex",
+            None,
+            None,
+            None,
+            None,
+            Some("--model first --model second"),
+        ),
+    );
+    let mut request = supervised_request("coder", "work");
+    request.max_turns = Some(3);
+    let (planned, warnings) = SupervisedPlan {
+        request: &request,
+        caller: None,
+        lane: None,
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(dir.path());
+    let err = planned.expect_err("codex rejects max turns");
+    assert_eq!(err.to_string(), "codex does not support --max-turns");
+    assert_eq!(
+        warnings.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ["warning: profile `coder` args set --model first; later model second wins"]
+    );
+}

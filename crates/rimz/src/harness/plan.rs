@@ -1,6 +1,7 @@
 //! Resolve launch layouts from effective config, then compile them into launch
 //! identities and backend-neutral pane commands.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -632,6 +633,151 @@ pub fn reject_prompt_that_looks_like_spec(
         );
     }
     Ok(())
+}
+
+/// One supervised run's launch: a layout holding exactly one cell, an agent cell.
+#[derive(Debug)]
+pub struct SupervisedLaunch {
+    pub layout: LayoutSpec,
+    pub team_name: Option<String>,
+    /// The lane a bare team role was qualified in; set only when qualification
+    /// rewrote the spec.
+    pub inferred_lane: Option<String>,
+    /// Why a subagent's isolation was capped at its sandboxed parent's.
+    pub clamped: Option<ClampSource>,
+}
+
+/// Plan a supervised run's one-cell launch over the caller's one effective
+/// config load. `lane` is the launch channel and the team it belongs to;
+/// `parent_isolation` is the isolation the launching process runs under;
+/// `login` names the account each kind's tier availability is judged on.
+/// Finalize warnings land in `warnings`, also when a later refusal returns.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each input is a distinct caller-resolved fact; the planner has one caller"
+)]
+pub fn plan_supervised_launch(
+    request: &crate::harness::run::SupervisedRunRequest,
+    caller: Option<&crate::agents::AgentState>,
+    lane: Option<(&str, &str)>,
+    parent_isolation: Option<crate::config::Isolation>,
+    workspace: &crate::workspace::ResolvedWorkspace,
+    machine_config: &crate::config::MachineConfig,
+    mut effective: crate::config::effective::LaunchAgents,
+    login: impl Fn(&AgentKind) -> crate::store::writer::LaunchLogin,
+    warnings: &mut Vec<LaunchFinalizeWarning>,
+) -> Result<SupervisedLaunch> {
+    let scope = if request.subagent {
+        crate::config::effective::ProfileScope::Subagents
+    } else {
+        crate::config::effective::ProfileScope::Agents
+    };
+    let commands = &machine_config.agents.commands;
+    let mut spec = Cow::Borrowed(request.spec.as_str());
+    let mut inferred_lane = None;
+    if let Some((channel, team)) = lane {
+        let qualified = crate::harness::spec::qualify_spec_in_channel(
+            &request.spec,
+            channel,
+            team,
+            &effective.teams,
+            effective.profiles_for(scope),
+            commands,
+        )?;
+        if let Cow::Owned(qualified) = qualified {
+            spec = Cow::Owned(qualified);
+            inferred_lane = Some(channel.to_owned());
+        }
+    }
+    let isolation = request.isolation.or_else(|| {
+        caller
+            .filter(|_| request.subagent)
+            .and_then(|caller| caller.isolation)
+    });
+    let state = StatePaths::for_project_root(&workspace.project_root)?;
+    let runtime = RuntimePaths::for_state(&state)?;
+    let availability = LaunchAvailability::read_as(
+        &runtime,
+        &state,
+        machine_config,
+        jiff::Timestamp::now(),
+        login,
+    );
+    let routed = effective.route(
+        &machine_config.tiers,
+        scope,
+        Some(&spec),
+        request.tier,
+        request.model.as_deref(),
+        request.agent.as_deref(),
+        |kind, model| availability.unavailable(kind, model),
+    )?;
+    let agent_base = request.agent.as_deref().filter(|_| !routed);
+    let mut resolved = resolve_launch(&effective, scope, commands, Some(&spec), agent_base)?;
+    reject_prompt_that_looks_like_spec(
+        Some(&spec),
+        Some(&request.prompt),
+        effective.profiles_for(scope),
+        commands,
+        &effective.teams,
+    )?;
+    let preset = crate::agents::LaunchPreset {
+        model: normalized_preset_value(request.model.as_deref()),
+        effort: normalized_preset_value(request.effort.as_deref()),
+        auto_compact: None,
+        system_prompt_file: request.system_prompt_file.clone(),
+        append_system_prompt_files: request.append_system_prompt_files.clone(),
+    };
+    let finalized = finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
+            agent_base,
+            permission_mode: Some(request.permission_mode.map_or(
+                PermissionModeChoice::Default(PermissionMode::Auto),
+                PermissionModeChoice::Explicit,
+            )),
+            isolation,
+            preset: &preset,
+            passthrough: &request.passthrough,
+            budget: request.budget,
+            max_turns: request.max_turns,
+        },
+    );
+    match finalized {
+        Ok(finalize_warnings) => warnings.extend(finalize_warnings),
+        Err(err) => {
+            warnings.extend_from_slice(err.warnings());
+            return Err(err.into());
+        }
+    }
+    let mut layout = resolved.layout;
+    if layout.agent_cells().count() != 1 {
+        bail!("--print requires a layout with exactly one agent cell");
+    }
+    let mut cells = layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows);
+    let (Some(Cell::Agent(cell)), None) = (cells.next(), cells.next()) else {
+        bail!("--print requires a single-cell agent layout");
+    };
+    let mut clamped = None;
+    if request.subagent {
+        let capped = cap_child_isolation(
+            parent_isolation,
+            cell.launch.isolation,
+            cell.isolation_default,
+            machine_config.agents.isolation,
+        )?;
+        cell.launch.isolation = capped.isolation;
+        clamped = capped.clamped;
+    }
+    Ok(SupervisedLaunch {
+        layout,
+        team_name: resolved.team_name,
+        inferred_lane,
+        clamped,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

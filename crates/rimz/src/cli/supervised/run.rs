@@ -4,7 +4,7 @@ use crate::cli::supervised;
 use crate::cli::render;
 use rimz::agents::PermissionMode;
 use rimz::agents::transcript::TranscriptCursor;
-use rimz::harness::plan::{LaunchFinalizeOptions, PermissionModeChoice, launch_identity_requests};
+use rimz::harness::plan::launch_identity_requests;
 use rimz::harness::run::{SupervisedRunOutcome, SupervisedRunRequest, VerifyStep};
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::harness::spec::LayoutSpec;
@@ -63,90 +63,6 @@ pub(super) fn supervised_prompt<'a>(
     } else {
         Cow::Borrowed(&request.prompt)
     }
-}
-
-/// Resolve and finalize the one-cell layout for a command-neutral supervised request.
-pub(super) fn prepare_supervised_launch_layout(
-    request: &SupervisedRunRequest,
-    spec: &str,
-    workspace: &rimz::ResolvedWorkspace,
-    machine_config: &rimz::config::MachineConfig,
-    scope: rimz::config::effective::ProfileScope,
-    isolation: Option<rimz::config::Isolation>,
-    login: impl Fn(&AgentKind) -> LaunchLogin,
-) -> Result<rimz::harness::plan::ResolvedLaunch> {
-    let mut effective = rimz::config::effective::load(machine_config, &workspace.project_root)?;
-    let state = rimz::StatePaths::for_project_root(&workspace.project_root)?;
-    let runtime = rimz::RuntimePaths::for_state(&state)?;
-    let availability = rimz::harness::plan::LaunchAvailability::read_as(
-        &runtime,
-        &state,
-        machine_config,
-        jiff::Timestamp::now(),
-        login,
-    );
-    let routed = effective.route(
-        &machine_config.tiers,
-        scope,
-        Some(spec),
-        request.tier,
-        request.model.as_deref(),
-        request.agent.as_deref(),
-        |kind, model| availability.unavailable(kind, model),
-    )?;
-    let mut resolved = rimz::harness::plan::resolve_launch(
-        &effective,
-        scope,
-        &machine_config.agents.commands,
-        Some(spec),
-        if routed {
-            None
-        } else {
-            request.agent.as_deref()
-        },
-    )?;
-    rimz::harness::plan::reject_prompt_that_looks_like_spec(
-        Some(spec),
-        Some(&request.prompt),
-        effective.profiles_for(scope),
-        &machine_config.agents.commands,
-        &effective.teams,
-    )?;
-    let preset = rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
-        effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
-        auto_compact: None,
-        system_prompt_file: request.system_prompt_file.clone(),
-        append_system_prompt_files: request.append_system_prompt_files.clone(),
-    };
-    let warnings = rimz::harness::plan::finalize_launch_layout(
-        &mut resolved.layout,
-        LaunchFinalizeOptions {
-            agent_base: if routed {
-                None
-            } else {
-                request.agent.as_deref()
-            },
-            permission_mode: Some(request.permission_mode.map_or(
-                PermissionModeChoice::Default(PermissionMode::Auto),
-                PermissionModeChoice::Explicit,
-            )),
-            isolation,
-            preset: &preset,
-            passthrough: &request.passthrough,
-            budget: request.budget,
-            max_turns: request.max_turns,
-        },
-    )
-    .inspect_err(|err| {
-        for warning in err.warnings() {
-            let _ = writeln!(std::io::stderr(), "{warning}");
-        }
-    })?;
-    for warning in warnings {
-        writeln!(std::io::stderr(), "{warning}")?;
-    }
-    Ok(resolved)
 }
 
 pub(super) fn check_supervised_subagent_allowed(
@@ -501,86 +417,58 @@ fn prepare_supervised(
     let reader = caller.and_then(|caller| caller.name.clone());
     // The room pin keeps the store and effective config on the same project root.
     let workspace = supervised::anchor_subagent_workspace(workspace, request, caller, globals)?;
-    let scope = if request.subagent {
-        rimz::config::effective::ProfileScope::Subagents
-    } else {
-        rimz::config::effective::ProfileScope::Agents
-    };
     check_supervised_subagent_allowed(request, caller, &effective.profiles)?;
-    let mut spec = Cow::Borrowed(request.spec.as_str());
     let lane = request
         .channel
         .clone()
         .or_else(|| crate::cli::current_channel(&workspace));
-    let mut inferred_lane = None;
-    if let Some(channel) = lane.as_deref() {
-        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-        if let Some(team) = rimz::address::channel_team(&snapshot.agents, channel) {
-            let qualified = rimz::harness::spec::qualify_spec_in_channel(
-                &spec,
-                channel,
-                team,
-                &effective.teams,
-                effective.profiles_for(scope),
-                &machine_config.agents.commands,
-            )?;
-            if let Cow::Owned(qualified) = qualified {
-                spec = Cow::Owned(qualified);
-                inferred_lane = Some(channel.to_owned());
-            }
-        }
-    }
-    let isolation = request.isolation.or_else(|| {
-        caller
-            .filter(|_| request.subagent)
-            .and_then(|caller| caller.isolation)
-    });
-    let resolved = prepare_supervised_launch_layout(
+    let snapshot = lane
+        .is_some()
+        .then(|| store.snapshot_cached())
+        .transpose()
+        .context("reading agent snapshot")?;
+    let lane = lane
+        .as_deref()
+        .zip(snapshot.as_ref())
+        .and_then(|(channel, snapshot)| {
+            rimz::address::channel_team(&snapshot.agents, channel).map(|team| (channel, team))
+        });
+    let mut warnings = Vec::new();
+    let planned = rimz::harness::plan::plan_supervised_launch(
         request,
-        &spec,
+        caller,
+        lane,
+        rimz::config::Isolation::ambient(&rimz::agents::ambient_env()),
         &workspace,
         &machine_config,
-        scope,
-        isolation,
+        effective,
         |kind| launch_login(request, caller, kind),
-    )?;
-    let team_name = resolved.team_name;
-    let mut layout = resolved.layout;
-    let agent_cells = layout.agent_cells().collect::<Vec<_>>();
-    if agent_cells.len() != 1 {
-        bail!("--print requires a layout with exactly one agent cell");
-    }
-    if layout_cell_count(&layout) != 1 {
-        bail!("--print requires a single-cell agent layout");
-    }
-    // The checks above guarantee exactly one agent cell.
+        &mut warnings,
+    );
+    let printed = warnings
+        .iter()
+        .try_for_each(|warning| writeln!(std::io::stderr(), "{warning}"));
+    let rimz::harness::plan::SupervisedLaunch {
+        layout,
+        team_name,
+        inferred_lane,
+        clamped,
+    } = planned?;
+    printed?;
+    // The plan guarantees exactly one cell, an agent cell.
     let agent_cell = layout
-        .columns
-        .iter_mut()
-        .flat_map(|column| &mut column.rows)
-        .find_map(|cell| match cell {
-            rimz::harness::spec::Cell::Agent(agent) => Some(agent),
-            rimz::harness::spec::Cell::Command { .. } => None,
-        })
-        .expect("the layout was checked to contain exactly one agent cell");
-    if request.subagent {
-        let capped = rimz::harness::plan::cap_child_isolation(
-            rimz::config::Isolation::ambient(&rimz::agents::ambient_env()),
-            agent_cell.launch.isolation,
-            agent_cell.isolation_default,
-            machine_config.agents.isolation,
+        .agent_cells()
+        .next()
+        .expect("a supervised launch plan holds exactly one agent cell");
+    if let Some(source) = &clamped {
+        supervised::note_isolation_clamp(
+            agent_cell
+                .launch
+                .profile
+                .as_deref()
+                .unwrap_or(&agent_cell.kind),
+            source,
         )?;
-        agent_cell.launch.isolation = capped.isolation;
-        if let Some(source) = &capped.clamped {
-            supervised::note_isolation_clamp(
-                agent_cell
-                    .launch
-                    .profile
-                    .as_deref()
-                    .unwrap_or(&agent_cell.kind),
-                source,
-            )?;
-        }
     }
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
@@ -1147,8 +1035,4 @@ fn record_failure_tail_before_cleanup(
             record
         }
     }
-}
-
-fn layout_cell_count(layout: &LayoutSpec) -> usize {
-    layout.columns.iter().map(|column| column.rows.len()).sum()
 }
