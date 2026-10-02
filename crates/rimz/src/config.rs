@@ -59,7 +59,7 @@ mod worktree;
 
 #[cfg(test)]
 pub(crate) use accounts::UsageLimitUsd;
-pub use accounts::{AccountBudgetConfigError, AccountsConfig, NamedAccount};
+pub use accounts::{AccountBudgetConfigError, AccountHistory, AccountsConfig, NamedAccount};
 use agents::{AgentsConfig, SubagentProfilesConfig};
 pub use agents::{
     CommandsConfig, DONE_STAGE, Isolation, LaunchPlacement, Profile, ProfilesConfig, PromptSource,

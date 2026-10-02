@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::config::AccountsConfig;
+use crate::config::{AccountHistory, AccountsConfig};
 use crate::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
 use crate::utils::path::normalize_path_lexical;
 
@@ -225,6 +225,7 @@ pub fn default_named_home(kind: &AgentKind, name: &LoginName) -> PathBuf {
 pub struct LoginCatalog {
     logins: BTreeMap<LoginKey, ProviderLogin>,
     account_kinds: BTreeSet<AgentKind>,
+    standalone: BTreeSet<LoginKey>,
 }
 
 impl LoginCatalog {
@@ -241,6 +242,7 @@ impl LoginCatalog {
     ) -> Result<Self, LoginConfigErr> {
         let mut logins = BTreeMap::new();
         let mut account_kinds = BTreeSet::new();
+        let mut standalone = BTreeSet::new();
         for kind in crate::agents::known_kinds().map(AgentKind::new_unchecked) {
             let key = LoginKey::default_for(kind.clone());
             logins.insert(key, ProviderLogin::default_for(kind.clone()));
@@ -298,12 +300,16 @@ impl LoginCatalog {
                 // adapter declares one home override key.
                 let login = ProviderLogin::named(kind.clone(), name.clone(), declared_home)
                     .expect("named accounts are configurable only for kinds with a home override");
+                if account.history == AccountHistory::Standalone {
+                    standalone.insert(login.key());
+                }
                 logins.insert(login.key(), login);
             }
         }
         Ok(Self {
             logins,
             account_kinds,
+            standalone,
         })
     }
 
@@ -441,6 +447,17 @@ impl LoginCatalog {
             native.remove(env_key);
         }
         native
+    }
+
+    /// The history pool a login belongs to: `<kind>@default` for the default
+    /// and every shared account of the kind, the login's own key for a
+    /// standalone account and for a name the config does not declare.
+    pub fn pool(&self, login: &LoginKey) -> LoginKey {
+        if self.logins.contains_key(login) && !self.standalone.contains(login) {
+            LoginKey::default_for(login.kind.clone())
+        } else {
+            login.clone()
+        }
     }
 
     /// Every login, defaults included, in `<kind>@<name>` order.

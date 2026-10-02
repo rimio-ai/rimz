@@ -605,6 +605,7 @@ pub mod testkit {
                     name.parse().unwrap(),
                     crate::config::NamedAccount {
                         home: Some(root.join(name)),
+                        ..Default::default()
                     },
                 );
         }

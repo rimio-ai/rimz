@@ -1011,7 +1011,7 @@ fn merge_keeps_empty_named_account() {
         editor.merge_defaults().unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), merged, "{seed}");
         editor
-            .upsert_named_account(&claude, &personal, None)
+            .upsert_named_account(&claude, &personal, None, None)
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), merged, "{seed}");
     }
@@ -1707,10 +1707,10 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
     let personal = "personal".parse::<crate::ids::LoginName>().unwrap();
 
     editor
-        .upsert_named_account(&claude, &work, Some(Path::new("/srv/homes/work")))
+        .upsert_named_account(&claude, &work, Some(Path::new("/srv/homes/work")), None)
         .expect("declare work");
     editor
-        .upsert_named_account(&claude, &personal, None)
+        .upsert_named_account(&claude, &personal, None, None)
         .expect("declare personal");
     let text = std::fs::read_to_string(&path).expect("read config");
     assert!(text.contains("# my machine"), "{text}");
@@ -1725,6 +1725,7 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
         Some(Path::new("/srv/homes/work"))
     );
     assert_eq!(parsed.claude["personal"].home, None);
+    assert!(!text.contains("history"), "{text}");
     assert!(!text.contains("[accounts.claude]"), "{text}");
     assert!(
         text.contains("[accounts.usage_limit_usd]\n# ceilings\n\n[accounts.claude.work]\n"),
@@ -1733,6 +1734,24 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
     assert!(
         text.find("[accounts.claude.personal]") < text.find("\n\n[notifications]"),
         "{text}"
+    );
+
+    editor
+        .upsert_named_account(
+            &claude,
+            &work,
+            None,
+            Some(crate::config::AccountHistory::Standalone),
+        )
+        .expect("set history");
+    let edited = std::fs::read_to_string(&path).expect("read config");
+    assert_eq!(
+        edited,
+        text.replace(
+            "home = \"/srv/homes/work\"\n",
+            "home = \"/srv/homes/work\"\nhistory = \"standalone\"\n"
+        ),
+        "only the history field changes"
     );
 
     assert!(editor.remove_named_account(&claude, &work).expect("remove"));
@@ -1800,7 +1819,7 @@ fn machine_selection_edits_preserve_comments_and_clear_on_removal() {
         Some("work")
     );
     editor
-        .upsert_named_account(&kind, &"personal".parse().unwrap(), None)
+        .upsert_named_account(&kind, &"personal".parse().unwrap(), None, None)
         .unwrap();
     editor.remove_named_account(&kind, &work).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
@@ -1841,7 +1860,9 @@ fn account_tables_land_beside_the_templated_accounts_block() {
     let codex = crate::ids::AgentKind::new_unchecked("codex");
     let rimio = "rimio".parse::<crate::ids::LoginName>().unwrap();
 
-    editor.upsert_named_account(&codex, &rimio, None).unwrap();
+    editor
+        .upsert_named_account(&codex, &rimio, None, None)
+        .unwrap();
     editor.use_account(&codex, &rimio).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     let at = |needle: &str| {

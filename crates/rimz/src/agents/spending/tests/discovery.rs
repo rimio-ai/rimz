@@ -39,6 +39,7 @@ fn catalog_logins_discover_separate_homes_and_deduplicate_shared_paths() {
             "work".parse().unwrap(),
             NamedAccount {
                 home: Some(work.clone()),
+                ..Default::default()
             },
         )]),
         ..Default::default()

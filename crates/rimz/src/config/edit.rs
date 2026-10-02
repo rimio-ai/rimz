@@ -144,36 +144,40 @@ impl ConfigEditor {
         write(file.path(), doc.to_string().as_bytes())
     }
 
-    /// Declare `[accounts.<kind>.<name>]`. An account without an explicit home
-    /// is written as an empty table so the default location stays derived.
+    /// Declare `[accounts.<kind>.<name>]`, or set the given fields of a
+    /// declared one. An account with neither field is written as an empty
+    /// table so the default location and history mode stay derived.
     pub fn upsert_named_account(
         &self,
         kind: &crate::ids::AgentKind,
         name: &crate::ids::LoginName,
         home: Option<&Path>,
+        history: Option<super::AccountHistory>,
     ) -> Result<()> {
         let file = self.files.file(MachineConfigFileKind::Core);
         let text = read_config_or_template(file.path(), file.template())?;
         let mut doc = parse_document(file.path(), &text)?;
-        let mut key = vec!["accounts".to_owned(), kind.to_string(), name.to_string()];
-        let declared = item_at(&doc, &key).is_some();
-        match home {
-            Some(home) => {
-                key.push("home".to_owned());
-                apply_logical_key(
-                    &mut doc,
-                    file.path(),
-                    &key,
-                    Value::from(home.to_string_lossy().as_ref()),
-                    self.files.agents_home(),
-                )?;
-            }
-            None if !declared => {
+        let key = vec!["accounts".to_owned(), kind.to_string(), name.to_string()];
+        let fields = [
+            ("home", home.map(|home| home.to_string_lossy().into_owned())),
+            ("history", history.map(|mode| mode.as_str().to_owned())),
+        ];
+        if fields.iter().all(|(_, value)| value.is_none()) {
+            if item_at(&doc, &key).is_none() {
                 set_document_value(&mut doc, &key, Value::InlineTable(InlineTable::new()))?;
-            }
-            None => {
+            } else {
                 table_at_mut(&mut doc, &key)?;
             }
+        }
+        for (field, value) in fields {
+            let Some(value) = value else { continue };
+            apply_logical_key(
+                &mut doc,
+                file.path(),
+                &[key.as_slice(), &[field.to_owned()]].concat(),
+                Value::from(value),
+                self.files.agents_home(),
+            )?;
         }
         write(file.path(), doc.to_string().as_bytes())
     }
@@ -1001,7 +1005,7 @@ fn is_unknown_get_shape(path: &[String]) -> bool {
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "use" && path.len() > 3)
-        || matches!(path, [root, child, _, field] if root == "accounts" && is_named_account_kind(child) && field != "home")
+        || matches!(path, [root, child, _, field] if root == "accounts" && is_named_account_kind(child) && !matches!(field.as_str(), "home" | "history"))
         || matches!(path, [root, child, _, _, _, ..] if root == "accounts" && is_named_account_kind(child))
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(

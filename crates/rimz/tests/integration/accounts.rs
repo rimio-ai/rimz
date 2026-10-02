@@ -300,6 +300,7 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
             "kind": "claude",
             "name": "work",
             "home": home_arg,
+            "history": "shared",
             "machine_default": false,
             "status": "ready",
             "active": false,
@@ -340,6 +341,65 @@ fn accounts_add_adopts_existing_settings_without_discarding_them() {
     assert!(
         added.contains(&format!("{} → {}", settings.display(), orig.display())),
         "{added}"
+    );
+}
+
+#[test]
+fn accounts_add_history_writes_only_that_field() {
+    let env = Env::new();
+    let config = env.rimz_home().join("config.toml");
+    let home = env.home_root.join("work-home");
+    let listed = |name: &str| -> serde_json::Value {
+        let rows: Vec<serde_json::Value> =
+            serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
+        rows.into_iter()
+            .find(|row| row["kind"] == "claude" && row["name"] == name)
+            .unwrap_or_else(|| panic!("no claude row `{name}`"))["history"]
+            .clone()
+    };
+
+    succeeded(&accounts(
+        &env,
+        &["add", "claude", "work", "--home", home.to_str().unwrap()],
+    ));
+    let declared = std::fs::read_to_string(&config).unwrap();
+    assert!(!declared.contains("\nhistory = "), "{declared}");
+    assert_eq!(listed("work"), "shared");
+    assert_eq!(listed("default"), serde_json::Value::Null);
+
+    succeeded(&accounts(
+        &env,
+        &["add", "claude", "work", "--history", "standalone"],
+    ));
+    let home_line = format!("home = \"{}\"\n", home.display());
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        declared.replace(
+            &home_line,
+            &format!("{home_line}history = \"standalone\"\n")
+        )
+    );
+    assert_eq!(listed("work"), "standalone");
+
+    succeeded(&accounts(&env, &["add", "claude", "work"]));
+    assert_eq!(
+        listed("work"),
+        "standalone",
+        "a rerun leaves the mode alone"
+    );
+
+    succeeded(&accounts(
+        &env,
+        &["add", "claude", "solo", "--history", "standalone"],
+    ));
+    assert_eq!(listed("solo"), "standalone");
+    let error = failed(&accounts(
+        &env,
+        &["add", "claude", "other", "--history", "mine"],
+    ));
+    assert!(
+        error.contains("shared") && error.contains("standalone"),
+        "{error}"
     );
 }
 
