@@ -1,11 +1,11 @@
 # Accounts CLI
 
-`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials, sessions, and transcripts stay apart; `add` links settings to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
+`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
 The commands work inside or outside a room, except bare `use`, which requires running inside one. Bare `use` writes only the current room's launch default for that provider, leaving running agents and machine and project configuration unchanged. `add`, `use --global`, and `remove` write the machine `config.toml`; `add` also writes into the account home. A room picks its defaults at birth and keeps them across restarts ([Accounts at start](./getting-started.md#accounts)), so the machine selection reaches only rooms born after it. Inside its own multiplexer session, `start --account` refuses and names `accounts use` instead. The workflow is in the [accounts guide](../../guide/accounts.md).
 
 ```sh
-rimz accounts add claude work                        # declare, share settings, install hooks
+rimz accounts add claude work                        # declare, link the home, install hooks
 rimz accounts add codex personal --home ~/codex-me   # place the home yourself
 rimz accounts use codex personal                     # this room's account for future launches
 rimz accounts use --global codex personal            # machine selection for new rooms
@@ -49,20 +49,33 @@ rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone]
 
 1. Writes `[accounts.<KIND>.<NAME>]` to the machine `config.toml`, with `home` only when `--home` is given and `history` only when `--history` is given.
 2. Creates the home directory.
-3. Links the entries below to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR` or `CODEX_HOME`. Reports linked entries, existing links, and any moves to `.orig`.
+3. Links the account home to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, under one lock per provider in `~/.rimz/accounts/.locks/`. Reports linked entries, entries moved into the provider's own home, links removed, and any moves to `.rimz-aside`.
 4. Installs RimZ hooks through the named home's config link (`settings.json` for Claude, `config.toml` for Codex), updating the shared file in the provider's own home too.
 5. Prints where the account lives, the command that logs the provider in once under that home, the `rimz start` flag that uses it, and the `rimz accounts use` commands for a running room and new rooms.
 
-| Provider | Shared files | Shared directories |
-| --- | --- | --- |
-| Codex | `config.toml`, `AGENTS.md` | none |
-| Claude | `settings.json`, `settings.local.json`, `CLAUDE.md` | `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` |
+A `standalone` account links the settings entries; a `shared` account links those and every other top-level entry of either home that is not private. A name is private when it equals a listed name or extends it with a `.` suffix (`auth.json.bak`); `.rimz-aside` is private for both providers. A `shared` account always links the provider's history directories, Claude's `projects/` and Codex's `sessions/` and `archived_sessions/`, creating them in the provider's own home when neither home holds one yet.
 
-Missing directory targets are created; missing file targets remain dangling links until written. Existing entries other than links to the intended target move to `<name>.orig`, never get deleted, and are reported as `moved aside <slot> → <orig>`. Codex carries missing `[hooks.state]` keys into the shared config before moving its old `config.toml`; existing target keys win. Other settings are not merged.
+| Provider | Settings files | Settings directories | Private names |
+| --- | --- | --- | --- |
+| Codex | `config.toml`, `AGENTS.md` | none | `auth.json`, `app-server-control`, `app-server-daemon`, `packages` |
+| Claude | `settings.json`, `settings.local.json`, `CLAUDE.md` | `skills/`, `plugins/`, `agents/`, `commands/`, `output-styles/` | `.credentials.json`, `.claude.json` |
+
+Each entry takes one of four paths, and nothing but a link is ever removed:
+
+| Account home | Provider's own home | Result |
+| --- | --- | --- |
+| Link to the intended target | any | Left alone. |
+| Absent | any | Linked. Missing settings and history directory targets are created; other missing targets remain dangling links until written. |
+| File or directory | Absent | Moved into the provider's own home, then linked. Across filesystems it stays in the account home and `add` warns. |
+| File, directory, or link elsewhere | Present, or the entry is a link | Moved to `<account home>/.rimz-aside/<UTC timestamp>/<name>`, then linked, and reported as `<account> account: moved <slot> aside to <aside>; the account now reads the copy in <default-home>`. |
+
+A link into the provider's own home that the account's mode no longer asks for is removed and reported as `unlinked from <default-home>`; its target stays. When a later entry fails after others were set aside, the error ends with the same `moved <slot> aside to <aside>` lines, since a rerun finds those links in place and has nothing left to report. Codex carries missing `[hooks.state]` keys into the shared config before moving its old `config.toml` aside; existing target keys win. Nothing else is merged.
+
+A shared Codex account launches with `CODEX_SQLITE_HOME` set to the provider's own home, so its databases follow its sessions; a `CODEX_SQLITE_HOME` you export wins.
 
 ```console
 $ rimz accounts add claude work
-linked settings to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skills, plugins, agents, commands, output-styles
+linked to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skills, plugins, agents, commands, output-styles
 ✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
@@ -71,15 +84,16 @@ claude account `work` lives at ~/.rimz/accounts/claude/work
   new rooms     rimz accounts use --global claude work
 ```
 
-RimZ writes no credentials. Credentials, sessions, and transcripts remain per account; the entries above are shared by links, not copied. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`; trust hooks with `/hooks` once per account path (see `hooks untrusted` under [`list`](#list)).
+RimZ writes no credentials and never writes inside a private name. Private names remain per account; every other listed entry is shared by a link, not copied. Run the printed login command once so the provider stores its own credentials there. For Codex the login line reads `CODEX_HOME=<home> codex`; trust hooks with `/hooks` once per account path (see `hooks untrusted` under [`list`](#list)).
 
-Rerunning `add` leaves the config entry alone, creates the home if missing, migrates settings to links, and refreshes hooks. Correct links remain unchanged and print `settings already shared with <default-home>`. This also repairs a settings link replaced by a provider save, moving the replacement to `.orig`. `--home` on a rerun must name the same directory.
+Rerunning `add` leaves the config entry alone unless `--history` rewrites that field, creates the home if missing, brings the links to the account's mode, and refreshes hooks. Correct links remain unchanged and print `already linked to <default-home>`. This also repairs a link replaced by a provider save, moving the replacement to `.rimz-aside`. `--home` on a rerun must name the same directory. An agent launch on a named account runs the same link step before it starts the provider, prints the moved-aside and left-in-place lines as warnings, and refuses on the same error.
 
-`add` refuses these cases. The `.orig` check runs before any settings entry changes, but after first-declaration config writing and home creation; that declaration remains for a rerun. The other checks, including resolved-home and exported-home checks, precede those writes.
+`add` refuses these cases. The live-agent checks count agents with a pane attached, so the unstarted seats of one team launch never block each other, and run before any entry changes, but after first-declaration config writing and home creation; that declaration remains for a rerun. The other checks, including resolved-home and exported-home checks, precede those writes.
 
 | Case | Error |
 | --- | --- |
-| A move-aside entry already has `<slot>.orig` | `` cannot move <slot> aside: <orig> exists; remove or rename <orig>, then rerun `rimz accounts add` `` |
+| A directory, or a link to one elsewhere, would move aside while another agent runs on the account, or the live rooms cannot be read | `` cannot share `<entry>` of <account> with <default-home>: <N> live agent(s) on the account write to the copy in its home, which would move aside under them; end those agents, or set `history = "standalone"` under `[accounts.<kind>.<name>]` `` |
+| A link to a directory would be removed, after a switch to `standalone`, while another agent runs on the account, or the live rooms cannot be read | `` cannot unlink `<entry>` of <account> from <default-home>: <N> live agent(s) on the account write through that link, which would be removed under them; end those agents, or remove `history = "standalone"` from `[accounts.<kind>.<name>]` `` |
 | The home resolves through links to the provider's own home | `` `--home` names the provider's own home, which is the `default` account (<home>); choose another home `` |
 | `NAME` is `default` | `` `default` is <kind>'s own home and needs no declaring; choose another name `` |
 | `NAME` breaks the name rules | `` invalid account name `<name>`; expected 1-32 characters of ... `` |

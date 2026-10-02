@@ -292,7 +292,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         inputs.accounts,
     )?;
     let mut extra_env = prompt.materialized.env.clone();
-    extra_env.extend(login.env(&BTreeMap::new()));
+    extra_env.extend(login.overrides(inputs.ambient_env));
     let isolation = if inputs.bwrap.is_some() {
         crate::config::Isolation::Sandbox
     } else {

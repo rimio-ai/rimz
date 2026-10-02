@@ -200,6 +200,13 @@ pub(crate) struct FramedTransport {
     child: Option<Child>,
 }
 
+fn app_server_command(bin: &Path, login_env: &BTreeMap<String, String>) -> Command {
+    let mut command = Command::new(bin);
+    command.arg("app-server");
+    crate::agents::adapters::codex::forward_login_env(&mut command, login_env);
+    command
+}
+
 impl FramedTransport {
     /// Spawn `bin app-server`, giving the handshake +
     /// reads `total` wall-clock.
@@ -208,9 +215,7 @@ impl FramedTransport {
         total: Duration,
         login_env: &BTreeMap<String, String>,
     ) -> Result<Self, AppServerErr> {
-        let mut child = Command::new(bin)
-            .arg("app-server")
-            .envs(login_env.iter().filter(|(key, _)| key.as_str() == "CODEX_HOME"))
+        let mut child = app_server_command(bin, login_env)
             // Mark this as a RimZ-internal enrichment server so the lifecycle
             // hooks it fires on startup no-op instead of spawning another
             // `refresh-context` (which would cold-spawn another app-server …).
@@ -366,6 +371,27 @@ mod tests {
     use std::thread;
 
     use super::*;
+
+    #[test]
+    fn the_app_server_runs_under_the_account_and_its_database_home() {
+        let login_env = BTreeMap::from([
+            ("CODEX_HOME".to_owned(), "/srv/work".to_owned()),
+            ("CODEX_SQLITE_HOME".to_owned(), "/home/u/.codex".to_owned()),
+            ("HOME".to_owned(), "/home/u".to_owned()),
+        ]);
+        let command = app_server_command(Path::new("codex"), &login_env);
+        let envs: Vec<_> = command
+            .get_envs()
+            .map(|(key, value)| (key.to_str().unwrap(), value.and_then(|v| v.to_str())))
+            .collect();
+        assert_eq!(
+            envs,
+            [
+                ("CODEX_HOME", Some("/srv/work")),
+                ("CODEX_SQLITE_HOME", Some("/home/u/.codex")),
+            ]
+        );
+    }
 
     #[test]
     fn ws_transport_round_trips_and_skips_non_matching_frames() {

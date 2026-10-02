@@ -175,30 +175,38 @@ fn add(
             return Err(error.into());
         }
     }
-    let default_home = ProviderLogin::default_for(kind.clone())
-        .home_dir(&ambient)
+    let default_home = login
+        .default_home(&ambient)
         .with_context(|| format!("cannot resolve {kind}'s own home; set HOME"))?;
     // Sound: `select` answers a non-default name only with a declared home.
     let named_home = login.home().expect("a named account has a home");
     rimz::agents::account_links::check_distinct_homes(named_home, &default_home)?;
-    if declaring || history.is_some() {
+    let login = if declaring || history.is_some() {
         ConfigEditor::machine().upsert_named_account(
             kind,
             &name,
             home.as_deref().filter(|_| declaring),
             history,
         )?;
-    }
-    let home = named_home;
+        LoginCatalog::from_config(&MachineConfig::load()?.accounts)?.select(kind, &name)?
+    } else {
+        login
+    };
+    let home = login.home().expect("a named account has a home");
     std::fs::create_dir_all(home)
         .with_context(|| format!("creating {kind} account home {}", home.display()))?;
     let definition = rimz::agents::definition_by_kind(kind.as_str())?;
-    let shared = rimz::agents::account_links::share_settings(definition, home, &default_home)?;
+    let account = login.key();
+    let shared = rimz::agents::account_links::reconcile(&login, &ambient, &|| {
+        rimz::room::other_live_agents_on(&account, &[]).ok()
+    })?;
     let mut out = render::out();
-    writeln!(out, "{shared}")?;
+    if let Some(shared) = shared {
+        writeln!(out, "{shared}")?;
+    }
     crate::cli::hooks::install_hooks_into(definition, &login.env(&ambient), &mut out)?;
     let home_override = login
-        .env(&BTreeMap::new())
+        .overrides(&ambient)
         .into_iter()
         .map(|(key, value)| {
             // The home was just created, so it holds no NUL byte.

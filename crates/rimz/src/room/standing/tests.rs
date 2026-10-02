@@ -249,3 +249,45 @@ fn live_counts_stamped_and_unstamped_agents_but_never_ended_or_provider_subagent
         ])
     );
 }
+
+#[test]
+fn an_account_counts_its_other_live_agents_and_never_the_one_launching() {
+    let agent = |id: &str, login: Option<&str>| {
+        let mut agent = AgentState::seed(
+            kind("codex"),
+            id.into(),
+            AgentStatus::Idle,
+            jiff::Timestamp::UNIX_EPOCH,
+        );
+        agent.login = login.map(name);
+        agent
+    };
+    let mut ended = agent("ended", Some("team"));
+    ended.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
+    let agents = [
+        agent("launching", Some("team")),
+        agent("peer", Some("team")),
+        agent("native", None),
+        ended,
+    ];
+    let team = LoginKey::new(kind("codex"), name("team"));
+    // A seat of the same batch, or a row a rebirth recovered: no pane, so no
+    // provider that could be writing.
+    assert_eq!(count_others_on(&agents, &team, &[]), 0);
+    let agents = agents.map(|mut agent| {
+        agent.pane = Some(crate::pane::PaneRef::from_id(
+            crate::ids::PaneId::from_parts(crate::MuxName::Tmux, "%1"),
+        ));
+        agent
+    });
+    assert_eq!(count_others_on(&agents, &team, &[]), 2);
+    assert_eq!(count_others_on(&agents, &team, &["launching".into()]), 1);
+    assert_eq!(
+        count_others_on(&agents, &team, &["launching".into(), "peer".into()]),
+        0
+    );
+    assert_eq!(
+        count_others_on(&agents, &LoginKey::new(kind("claude"), name("team")), &[]),
+        0
+    );
+}

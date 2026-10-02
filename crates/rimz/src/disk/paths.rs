@@ -1163,6 +1163,16 @@ pub fn accounts_dir() -> PathBuf {
     rimz_home().join("accounts")
 }
 
+/// The machine-wide lock a named account's home is linked under: one per
+/// provider kind, since every shared account of a kind moves entries into the
+/// same default home. It sits outside every provider home, and nothing sweeps
+/// this tree, so no holder loses it while idle.
+pub fn account_lock(account: &crate::ids::LoginKey) -> PathBuf {
+    accounts_dir()
+        .join(".locks")
+        .join(format!("{}.lock", account.kind))
+}
+
 /// Account-global provider caches, `<home>/cache/providers`: probe memos,
 /// rate limits, credits, the spend cursor and aggregate, and the pricing
 /// book. Every file rebuilds from the providers' own files; deleting the

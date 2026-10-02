@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::config::{AccountHistory, AccountsConfig};
 use crate::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
@@ -103,6 +104,12 @@ pub struct ProviderLogin {
 struct NamedHome {
     path: PathBuf,
     env_key: &'static str,
+    /// The account keeps only its credentials and reads everything else from
+    /// the provider's own home.
+    shared: bool,
+    /// Every declared home of the kind, this one included: an exported home
+    /// override naming one is a pane's account, never the provider's own home.
+    declared: Arc<[PathBuf]>,
 }
 
 impl ProviderLogin {
@@ -123,8 +130,10 @@ impl ProviderLogin {
             kind,
             name,
             home: Some(NamedHome {
+                declared: [home.clone()].into(),
                 path: home,
                 env_key,
+                shared: false,
             }),
         })
     }
@@ -150,18 +159,61 @@ impl ProviderLogin {
         self.home.as_ref().map(|home| home.path.as_path())
     }
 
-    /// `ambient`, with this login's home override applied. The default login
+    /// Whether this account shares the `default` account's history.
+    pub fn shares_history(&self) -> bool {
+        self.home.as_ref().is_some_and(|home| home.shared)
+    }
+
+    /// `ambient`, with this login's overrides applied. The default login
     /// leaves the ambient environment exactly as it is, so today's resolution
     /// policies — comma lists, XDG order, test overrides — keep running.
     pub fn env(&self, ambient: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         let mut env = ambient.clone();
-        if let Some(home) = &self.home {
-            env.insert(
-                home.env_key.to_owned(),
-                home.path.to_string_lossy().into_owned(),
-            );
-        }
+        env.extend(self.overrides(ambient));
         env
+    }
+
+    /// What this login sets on top of `ambient`: its home, and for a shared
+    /// account whose provider keeps databases beside it, the home those live
+    /// in. A database home the user exported stands.
+    pub fn overrides(&self, ambient: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+        let Some(home) = &self.home else {
+            return BTreeMap::new();
+        };
+        let mut overrides = BTreeMap::from([(
+            home.env_key.to_owned(),
+            home.path.to_string_lossy().into_owned(),
+        )]);
+        let databases = crate::agents::find_definition(self.kind.as_str())
+            .filter(|_| home.shared)
+            .and_then(|adapter| adapter.shared_database_home_env_key())
+            .filter(|key| ambient.get(*key).is_none_or(String::is_empty));
+        if let Some((key, default)) = databases.zip(self.default_home(ambient)) {
+            overrides.insert(key.to_owned(), default.to_string_lossy().into_owned());
+        }
+        overrides
+    }
+
+    /// `ambient` as the provider's own home reads it: an exported home
+    /// override that names a declared account's home is dropped, since a pane
+    /// born on that account exports it by design and `default` is not that
+    /// account.
+    fn native_ambient(&self, ambient: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+        let mut native = ambient.clone();
+        if let Some(home) = &self.home
+            && home
+                .declared
+                .iter()
+                .any(|declared| exports_home(&self.kind, home.env_key, declared, ambient))
+        {
+            native.remove(home.env_key);
+        }
+        native
+    }
+
+    /// The provider's own home, the base a named account links into.
+    pub fn default_home(&self, ambient: &BTreeMap<String, String>) -> Option<PathBuf> {
+        Self::default_for(self.kind.clone()).home_dir(&self.native_ambient(ambient))
     }
 
     /// The directory this login's provider reads its config from, as the
@@ -182,16 +234,7 @@ impl ProviderLogin {
         let (Some(home), Some(env_key)) = (self.home(), config_home_env_key(&self.kind)) else {
             return Ok(());
         };
-        if !ambient.get(env_key).is_some_and(|value| !value.is_empty()) {
-            return Ok(());
-        }
-        let default = Self::default_for(self.kind.clone()).home_dir(ambient);
-        let same_home =
-            default.is_some_and(|path| match (path.canonicalize(), home.canonicalize()) {
-                (Ok(default), Ok(named)) => default == named,
-                _ => normalize_path_lexical(&path) == normalize_path_lexical(home),
-            });
-        if !same_home {
+        if !exports_home(&self.kind, env_key, home, ambient) {
             return Ok(());
         }
         Err(LoginConfigErr::ExportedHome {
@@ -201,6 +244,24 @@ impl ProviderLogin {
             home: home.to_path_buf(),
         })
     }
+}
+
+/// Whether `ambient` exports `env_key` so that `kind`'s own home resolves to `home`.
+fn exports_home(
+    kind: &AgentKind,
+    env_key: &str,
+    home: &Path,
+    ambient: &BTreeMap<String, String>,
+) -> bool {
+    if !ambient.get(env_key).is_some_and(|value| !value.is_empty()) {
+        return false;
+    }
+    ProviderLogin::default_for(kind.clone())
+        .home_dir(ambient)
+        .is_some_and(|path| match (path.canonicalize(), home.canonicalize()) {
+            (Ok(default), Ok(named)) => default == named,
+            _ => normalize_path_lexical(&path) == normalize_path_lexical(home),
+        })
 }
 
 fn config_home_env_key(kind: &AgentKind) -> Option<&'static str> {
@@ -298,12 +359,22 @@ impl LoginCatalog {
                 claimed.insert(normalized, name.clone());
                 // Sound: `accounts.named` answers for exactly the kinds whose
                 // adapter declares one home override key.
-                let login = ProviderLogin::named(kind.clone(), name.clone(), declared_home)
+                let mut login = ProviderLogin::named(kind.clone(), name.clone(), declared_home)
                     .expect("named accounts are configurable only for kinds with a home override");
                 if account.history == AccountHistory::Standalone {
                     standalone.insert(login.key());
+                } else if let Some(home) = &mut login.home {
+                    home.shared = true;
                 }
                 logins.insert(login.key(), login);
+            }
+            let declared: Arc<[PathBuf]> = claimed.into_keys().collect();
+            for home in logins
+                .values_mut()
+                .filter(|login| login.kind == kind)
+                .filter_map(|login| login.home.as_mut())
+            {
+                home.declared = Arc::clone(&declared);
             }
         }
         Ok(Self {
@@ -434,19 +505,10 @@ impl LoginCatalog {
         kind: &AgentKind,
         ambient: &BTreeMap<String, String>,
     ) -> BTreeMap<String, String> {
-        let exported = self
-            .logins
+        self.logins
             .values()
-            .filter(|login| login.kind() == kind)
-            .find_map(|login| match login.check_exported_home(ambient) {
-                Err(LoginConfigErr::ExportedHome { env_key, .. }) => Some(env_key),
-                _ => None,
-            });
-        let mut native = ambient.clone();
-        if let Some(env_key) = exported {
-            native.remove(env_key);
-        }
-        native
+            .find(|login| login.kind() == kind && !login.is_default())
+            .map_or_else(|| ambient.clone(), |login| login.native_ambient(ambient))
     }
 
     /// The history pool a login belongs to: `<kind>@default` for the default

@@ -1,20 +1,64 @@
-//! Share provider settings without sharing account credentials or history.
+//! Link a named account's home into the provider's own home: everything but
+//! credentials for an account that shares the default's history, settings
+//! alone for a standalone one.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::AgentDefinition;
-use super::capabilities::{SharedHomeEntry, SharedHomeKind};
-use super::skill_links;
+use super::capabilities::SharedHomeKind;
+use super::{AgentDefinition, ProviderLogin, skill_links};
+use crate::disk::lock::{LockErr, WorkspaceLock};
+use crate::ids::{AgentKind, LoginKey};
 use crate::utils::path::normalize_path_lexical;
+
+/// Where a conflicting entry of the account home is kept, inside that home.
+const ASIDE_DIR: &str = ".rimz-aside";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShareErr {
     #[error("`--home` names the provider's own home, which is the `default` account ({}); choose another home", home.display())]
     SameHome { home: PathBuf },
-    #[error("cannot move {} aside: {} exists; remove or rename {}, then rerun `rimz accounts add`", slot.display(), orig.display(), orig.display())]
-    OrigExists { slot: PathBuf, orig: PathBuf },
-    #[error("cannot share settings at {}: {source}; fix access to that path, then rerun `rimz accounts add`", path.display())]
+    #[error("cannot resolve {kind}'s own home; set HOME")]
+    DefaultHome { kind: AgentKind },
+    #[error(
+        "cannot share `{entry}` of {account} with {}: {}; end those agents, or set `history = \"standalone\"` under `[accounts.{}.{}]`",
+        default_home.display(),
+        live_writers(*agents, "to the copy in its home, which would move aside under them"),
+        account.kind,
+        account.name
+    )]
+    LiveAgents {
+        account: LoginKey,
+        entry: String,
+        default_home: PathBuf,
+        /// `None` when the live rooms could not be read.
+        agents: Option<usize>,
+    },
+    #[error(
+        "cannot unlink `{entry}` of {account} from {}: {}; end those agents, or remove `history = \"standalone\"` from `[accounts.{}.{}]`",
+        default_home.display(),
+        live_writers(*agents, "through that link, which would be removed under them"),
+        account.kind,
+        account.name
+    )]
+    LiveAgentsUnlink {
+        account: LoginKey,
+        entry: String,
+        default_home: PathBuf,
+        /// `None` when the live rooms could not be read.
+        agents: Option<usize>,
+    },
+    /// A failure after entries were already set aside, which a rerun would no
+    /// longer report.
+    #[error("{source}\n{}", warnings.join("\n"))]
+    AfterSetAside {
+        warnings: Vec<String>,
+        source: Box<ShareErr>,
+    },
+    #[error(transparent)]
+    Lock(#[from] LockErr),
+    #[error("cannot link {}: {source}; fix access to that path, then rerun `rimz accounts add`", path.display())]
     Io {
         path: PathBuf,
         source: std::io::Error,
@@ -26,36 +70,75 @@ pub enum ShareErr {
     },
 }
 
-#[derive(Debug, Default)]
+fn live_writers(agents: Option<usize>, writes: &str) -> String {
+    match agents {
+        Some(count) => format!("{count} live agent(s) on the account write {writes}"),
+        None => {
+            format!("the live rooms could not be read, so agents on the account may write {writes}")
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ShareReport {
-    pub default_home: PathBuf,
-    pub linked: Vec<&'static str>,
-    pub current: Vec<&'static str>,
-    pub moved_aside: Vec<(PathBuf, PathBuf)>,
-    pub notes: Vec<String>,
+    account: LoginKey,
+    default_home: PathBuf,
+    linked: Vec<String>,
+    current: Vec<String>,
+    /// Entries only the account had, now in the provider's own home.
+    moved: Vec<String>,
+    /// Links a standalone account no longer shares.
+    unlinked: Vec<String>,
+    set_aside: Vec<(PathBuf, PathBuf)>,
+    /// Entries that could not move to the provider's own home.
+    left_local: Vec<PathBuf>,
+    notes: Vec<String>,
+}
+
+impl ShareReport {
+    /// What the account's owner must hear about: every entry set aside and
+    /// every entry left in the account home.
+    pub fn warnings(&self) -> Vec<String> {
+        let set_aside = self.set_aside.iter().map(|(slot, aside)| {
+            format!(
+                "{} account: moved {} aside to {}; the account now reads the copy in {}",
+                self.account,
+                slot.display(),
+                aside.display(),
+                self.default_home.display()
+            )
+        });
+        let left_local = self.left_local.iter().map(|slot| {
+            format!(
+                "{} account: {} stays in the account home; it cannot move to {} on another filesystem",
+                self.account,
+                slot.display(),
+                self.default_home.display()
+            )
+        });
+        set_aside.chain(left_local).collect()
+    }
 }
 
 impl std::fmt::Display for ShareReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (slot, orig) in &self.moved_aside {
-            writeln!(f, "moved aside {} → {}", slot.display(), orig.display())?;
+        for warning in self.warnings() {
+            writeln!(f, "{warning}")?;
         }
         for note in &self.notes {
             writeln!(f, "{note}")?;
         }
+        let home = self.default_home.display();
+        if !self.moved.is_empty() {
+            writeln!(f, "moved to {home}: {}", self.moved.join(", "))?;
+        }
+        if !self.unlinked.is_empty() {
+            writeln!(f, "unlinked from {home}: {}", self.unlinked.join(", "))?;
+        }
         if self.linked.is_empty() {
-            write!(
-                f,
-                "settings already shared with {}",
-                self.default_home.display()
-            )
+            write!(f, "already linked to {home}")
         } else {
-            write!(
-                f,
-                "linked settings to {}: {}",
-                self.default_home.display(),
-                self.linked.join(", ")
-            )
+            write!(f, "linked to {home}: {}", self.linked.join(", "))
         }
     }
 }
@@ -63,14 +146,13 @@ impl std::fmt::Display for ShareReport {
 enum Action {
     Link,
     Current,
-    MoveAside {
-        orig: PathBuf,
-        file_type: fs::FileType,
-    },
+    /// Real in the account home and absent from the provider's own.
+    Move(fs::FileType),
+    SetAside(fs::FileType),
 }
 
 struct PlannedLink {
-    entry: &'static SharedHomeEntry,
+    name: String,
     slot: PathBuf,
     target: PathBuf,
     action: Action,
@@ -91,29 +173,57 @@ fn metadata(path: &Path) -> Result<Option<fs::Metadata>, ShareErr> {
     }
 }
 
-fn classify(slot: &Path, target: &Path, name: &str) -> Result<Action, ShareErr> {
+/// Where the link at `slot` points, resolved against its directory.
+fn link_target(slot: &Path) -> Result<PathBuf, ShareErr> {
+    let link = fs::read_link(slot).map_err(|error| io_err(slot, error))?;
+    // Slots are named entries joined onto the account home.
+    let parent = slot.parent().expect("a home entry has a parent");
+    Ok(normalize_path_lexical(&parent.join(link)))
+}
+
+fn classify(slot: &Path, target: &Path) -> Result<Action, ShareErr> {
     let Some(existing) = metadata(slot)? else {
         return Ok(Action::Link);
     };
     if existing.is_symlink() {
-        let link = fs::read_link(slot).map_err(|error| io_err(slot, error))?;
-        // Slots are named entries joined onto the account home.
-        let parent = slot.parent().expect("settings slot has a parent");
-        if normalize_path_lexical(&parent.join(link)) == target {
-            return Ok(Action::Current);
-        }
-    }
-    let orig = slot.with_file_name(format!("{name}.orig"));
-    if metadata(&orig)?.is_some() {
-        return Err(ShareErr::OrigExists {
-            slot: slot.into(),
-            orig,
+        return Ok(if link_target(slot)? == target {
+            Action::Current
+        } else {
+            Action::SetAside(existing.file_type())
         });
     }
-    Ok(Action::MoveAside {
-        orig,
-        file_type: existing.file_type(),
+    Ok(if metadata(target)?.is_some() {
+        Action::SetAside(existing.file_type())
+    } else {
+        Action::Move(existing.file_type())
     })
+}
+
+/// The top-level names of a home; a home that does not exist has none. A name
+/// that is not UTF-8 is no provider's and stays where it is.
+fn top_level(home: &Path) -> Result<BTreeSet<String>, ShareErr> {
+    let entries = match fs::read_dir(home) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(error) => return Err(io_err(home, error)),
+    };
+    let mut names = BTreeSet::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| io_err(home, error))?;
+        names.extend(entry.file_name().into_string().ok());
+    }
+    Ok(names)
+}
+
+fn is_private(adapter: &AgentDefinition, name: &str) -> bool {
+    adapter
+        .private_home_entries()
+        .iter()
+        .chain(&[ASIDE_DIR])
+        .any(|private| {
+            name.strip_prefix(private)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+        })
 }
 
 pub fn check_distinct_homes(named_home: &Path, default_home: &Path) -> Result<(), ShareErr> {
@@ -130,289 +240,277 @@ pub fn check_distinct_homes(named_home: &Path, default_home: &Path) -> Result<()
     }
 }
 
-pub fn share_settings(
-    adapter: &AgentDefinition,
-    named_home: &Path,
-    default_home: &Path,
+/// Bring a named account's home to the link set its history mode asks for.
+/// `default` has no links and answers `None`. `other_live_agents` counts the
+/// live agents on the account besides the one launching, or `None` when the
+/// live rooms cannot be read; it is asked only before a directory would move
+/// aside.
+pub fn reconcile(
+    login: &ProviderLogin,
+    ambient: &BTreeMap<String, String>,
+    other_live_agents: &dyn Fn() -> Option<usize>,
+) -> Result<Option<ShareReport>, ShareErr> {
+    let Some((named_home, adapter)) = login
+        .home()
+        .zip(super::find_definition(login.kind().as_str()))
+    else {
+        return Ok(None);
+    };
+    let default_home = login
+        .default_home(ambient)
+        .ok_or_else(|| ShareErr::DefaultHome {
+            kind: login.kind().clone(),
+        })?;
+    let account = login.key();
+    reconcile_homes(
+        &Homes {
+            adapter,
+            named: named_home,
+            default: &default_home,
+            shared: login.shares_history(),
+            lock: &crate::disk::paths::account_lock(&account),
+            account: &account,
+        },
+        other_live_agents,
+    )
+    .map(Some)
+}
+
+struct Homes<'a> {
+    adapter: &'a AgentDefinition,
+    account: &'a LoginKey,
+    named: &'a Path,
+    default: &'a Path,
+    shared: bool,
+    lock: &'a Path,
+}
+
+fn reconcile_homes(
+    homes: &Homes<'_>,
+    other_live_agents: &dyn Fn() -> Option<usize>,
 ) -> Result<ShareReport, ShareErr> {
-    check_distinct_homes(named_home, default_home)?;
-    let named_home = std::path::absolute(named_home)
+    let adapter = homes.adapter;
+    check_distinct_homes(homes.named, homes.default)?;
+    let named_home = std::path::absolute(homes.named)
         .map(|home| normalize_path_lexical(&home))
-        .map_err(|error| io_err(named_home, error))?;
-    let default_home = std::path::absolute(default_home)
+        .map_err(|error| io_err(homes.named, error))?;
+    let default_home = std::path::absolute(homes.default)
         .map(|home| normalize_path_lexical(&home))
-        .map_err(|error| io_err(default_home, error))?;
+        .map_err(|error| io_err(homes.default, error))?;
+    let _lock = WorkspaceLock::acquire(homes.lock)?;
+
+    let included = adapter.shared_home_entries();
+    let mut names: Vec<String> = included.iter().map(|entry| entry.name.to_owned()).collect();
+    let mut dirs: Vec<&str> = included
+        .iter()
+        .filter(|entry| matches!(entry.kind, SharedHomeKind::Dir))
+        .map(|entry| entry.name)
+        .collect();
+    let in_account = top_level(&named_home)?;
+    if homes.shared {
+        dirs.extend(adapter.history_home_entries());
+        let rest: BTreeSet<String> = in_account
+            .iter()
+            .cloned()
+            .chain(top_level(&default_home)?)
+            .chain(
+                adapter
+                    .history_home_entries()
+                    .iter()
+                    .map(|&name| name.to_owned()),
+            )
+            .filter(|name| !is_private(adapter, name) && !names.contains(name))
+            .collect();
+        names.extend(rest);
+    }
     let mut plan = Vec::new();
-    for entry in adapter.shared_home_entries() {
-        let slot = named_home.join(entry.name);
-        let target = default_home.join(entry.name);
-        let action = classify(&slot, &target, entry.name)?;
+    for name in &names {
+        let slot = named_home.join(name);
+        let target = default_home.join(name);
+        let action = classify(&slot, &target)?;
         plan.push(PlannedLink {
-            entry,
+            name: name.clone(),
             slot,
             target,
             action,
         });
     }
+    let mut stale = Vec::new();
+    for name in in_account {
+        let slot = named_home.join(&name);
+        if !names.contains(&name)
+            && !is_private(adapter, &name)
+            && metadata(&slot)?.is_some_and(|entry| entry.is_symlink())
+            && link_target(&slot)?.starts_with(&default_home)
+        {
+            stale.push((name, slot));
+        }
+    }
+    // A provider appends by path, so a directory, or a link to one, leaves
+    // its slot only when no other agent on the account can be writing.
+    let set_aside = plan
+        .iter()
+        .find(|planned| matches!(planned.action, Action::SetAside(_)) && planned.slot.is_dir())
+        .map(|planned| (planned.name.clone(), false));
+    let unlinked = stale
+        .iter()
+        .find(|(_, slot)| slot.is_dir())
+        .map(|(name, _)| (name.clone(), true));
+    if let Some((entry, unlink)) = set_aside.or(unlinked) {
+        let agents = other_live_agents();
+        let account = homes.account.clone();
+        match (agents, unlink) {
+            (Some(0), _) => {}
+            (_, false) => {
+                return Err(ShareErr::LiveAgents {
+                    account,
+                    entry,
+                    default_home,
+                    agents,
+                });
+            }
+            (_, true) => {
+                return Err(ShareErr::LiveAgentsUnlink {
+                    account,
+                    entry,
+                    default_home,
+                    agents,
+                });
+            }
+        }
+    }
+
     let mut report = ShareReport {
-        default_home,
-        ..ShareReport::default()
+        account: homes.account.clone(),
+        default_home: default_home.clone(),
+        linked: Vec::new(),
+        current: Vec::new(),
+        moved: Vec::new(),
+        unlinked: Vec::new(),
+        set_aside: Vec::new(),
+        left_local: Vec::new(),
+        notes: Vec::new(),
     };
+    let applied = apply(
+        adapter,
+        &named_home,
+        &default_home,
+        &dirs,
+        plan,
+        stale,
+        &mut report,
+    );
+    match applied {
+        Ok(()) => Ok(report),
+        Err(source) if report.warnings().is_empty() => Err(source),
+        Err(source) => Err(ShareErr::AfterSetAside {
+            warnings: report.warnings(),
+            source: Box::new(source),
+        }),
+    }
+}
+
+fn apply(
+    adapter: &AgentDefinition,
+    named_home: &Path,
+    default_home: &Path,
+    dirs: &[&str],
+    plan: Vec<PlannedLink>,
+    stale: Vec<(String, PathBuf)>,
+    report: &mut ShareReport,
+) -> Result<(), ShareErr> {
+    let mut aside_dir = None;
     for PlannedLink {
-        entry,
+        name,
         slot,
         target,
         action,
     } in plan
     {
-        if matches!(entry.kind, SharedHomeKind::Dir) {
+        if dirs.contains(&name.as_str()) && !matches!(action, Action::Move(_)) {
             fs::create_dir_all(&target).map_err(|error| io_err(&target, error))?;
+        }
+        if let Action::Move(kind) | Action::SetAside(kind) = &action
+            && name == "skills"
+            && kind.is_dir()
+        {
+            skill_links::plan(
+                &slot,
+                &crate::disk::paths::skills_library(),
+                skill_links::Desired::None,
+            )
+            .and_then(|plan| skill_links::apply(&plan))
+            .map_err(|skill_links::SkillLinkErr::Io { path, source }| io_err(&path, source))?;
         }
         match action {
             Action::Current => {
-                report.current.push(entry.name);
+                report.current.push(name);
                 continue;
             }
-            Action::MoveAside { orig, file_type } => {
-                if file_type.is_file()
-                    && let Some(note) = adapter
-                        .adopt_shared_file(entry.name, &slot, &target)
-                        .map_err(|source| ShareErr::Adopt {
-                            path: slot.clone(),
-                            source,
-                        })?
+            Action::Link => {}
+            Action::Move(_) => {
+                fs::create_dir_all(default_home).map_err(|error| io_err(default_home, error))?;
+                match fs::rename(&slot, &target) {
+                    Ok(()) => report.moved.push(name.clone()),
+                    Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+                        report.left_local.push(slot);
+                        continue;
+                    }
+                    Err(error) => return Err(io_err(&slot, error)),
+                }
+            }
+            Action::SetAside(kind) => {
+                if kind.is_file()
+                    && let Some(note) =
+                        adapter
+                            .adopt_shared_file(&name, &slot, &target)
+                            .map_err(|source| ShareErr::Adopt {
+                                path: slot.clone(),
+                                source,
+                            })?
                 {
                     report.notes.push(note);
                 }
-                let empty_skill_root = if entry.name == "skills" && file_type.is_dir() {
-                    skill_links::plan(
-                        &slot,
-                        &crate::disk::paths::skills_library(),
-                        skill_links::Desired::None,
-                    )
-                    .and_then(|plan| skill_links::apply(&plan))
-                    .map_err(
-                        |skill_links::SkillLinkErr::Io { path, source }| io_err(&path, source),
-                    )?;
-                    fs::read_dir(&slot)
-                        .map_err(|error| io_err(&slot, error))?
-                        .next()
-                        .is_none()
-                } else {
-                    false
+                let dir = match &aside_dir {
+                    Some(dir) => dir,
+                    None => aside_dir.insert(new_aside_dir(named_home)?),
                 };
-                if empty_skill_root {
-                    fs::remove_dir(&slot).map_err(|error| io_err(&slot, error))?;
-                } else {
-                    fs::rename(&slot, &orig).map_err(|error| io_err(&slot, error))?;
-                    report.moved_aside.push((slot.clone(), orig));
-                }
+                let aside = dir.join(&name);
+                fs::rename(&slot, &aside).map_err(|error| io_err(&slot, error))?;
+                report.set_aside.push((slot.clone(), aside));
             }
-            Action::Link => {}
         }
         std::os::unix::fs::symlink(&target, &slot).map_err(|error| io_err(&slot, error))?;
-        report.linked.push(entry.name);
+        report.linked.push(name);
     }
-    Ok(report)
+    for (name, slot) in stale {
+        fs::remove_file(&slot).map_err(|error| io_err(&slot, error))?;
+        report.unlinked.push(name);
+    }
+    Ok(())
+}
+
+/// A fresh `<account home>/.rimz-aside/<UTC timestamp>` directory, so a second
+/// conflict on one name never meets the first.
+fn new_aside_dir(named_home: &Path) -> Result<PathBuf, ShareErr> {
+    let root = named_home.join(ASIDE_DIR);
+    fs::create_dir_all(&root).map_err(|error| io_err(&root, error))?;
+    let stamp = jiff::Timestamp::now()
+        .strftime("%Y%m%dT%H%M%SZ")
+        .to_string();
+    let mut dir = root.join(&stamp);
+    let mut attempt = 1;
+    loop {
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempt += 1;
+                dir = root.join(format!("{stamp}-{attempt}"));
+            }
+            Err(error) => return Err(io_err(&dir, error)),
+        }
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::os::unix::fs::symlink;
-
-    fn names(path: &Path) -> Vec<std::ffi::OsString> {
-        let mut names = fs::read_dir(path)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect::<Vec<_>>();
-        names.sort();
-        names
-    }
-
-    #[test]
-    fn migration_removes_owned_skill_links_and_preserves_user_entries() {
-        for user_entry in [false, true] {
-            let temp = tempfile::tempdir().unwrap();
-            let named = temp.path().join("named");
-            let native = temp.path().join("native");
-            let skills = named.join("skills");
-            fs::create_dir_all(&skills).unwrap();
-            symlink(
-                crate::disk::paths::skills_library().join("owned"),
-                skills.join("owned"),
-            )
-            .unwrap();
-            if user_entry {
-                fs::create_dir(skills.join("user")).unwrap();
-            }
-            share_settings(
-                super::super::definition_by_kind("claude").unwrap(),
-                &named,
-                &native,
-            )
-            .unwrap();
-            assert_eq!(fs::read_link(&skills).unwrap(), native.join("skills"));
-            let orig = named.join("skills.orig");
-            assert_eq!(orig.exists(), user_entry);
-            if user_entry {
-                assert_eq!(names(&orig), [std::ffi::OsString::from("user")]);
-            }
-        }
-    }
-
-    #[test]
-    fn fresh_homes_share_expected_entries_and_rerun_changes_nothing() {
-        for (kind, files, dirs) in [
-            ("codex", &["config.toml", "AGENTS.md"][..], &[][..]),
-            (
-                "claude",
-                &["settings.json", "settings.local.json", "CLAUDE.md"][..],
-                &["skills", "plugins", "agents", "commands", "output-styles"][..],
-            ),
-        ] {
-            let temp = tempfile::tempdir().unwrap();
-            let named = temp.path().join("named");
-            let native = temp.path().join("native");
-            fs::create_dir(&named).unwrap();
-            let adapter = super::super::definition_by_kind(kind).unwrap();
-            let report = share_settings(adapter, &named, &native).unwrap();
-            assert_eq!(report.linked.len(), files.len() + dirs.len());
-            assert!(report.current.is_empty());
-            for name in files.iter().chain(dirs) {
-                assert_eq!(fs::read_link(named.join(name)).unwrap(), native.join(name));
-                assert_eq!(native.join(name).is_dir(), dirs.contains(name));
-                if files.contains(name) {
-                    assert!(
-                        !native.join(name).exists(),
-                        "missing files stay unconfigured"
-                    );
-                }
-            }
-            let before = names(&named);
-            let again = share_settings(adapter, &named, &native).unwrap();
-            assert!(again.linked.is_empty());
-            assert_eq!(again.current, report.linked);
-            assert!(again.moved_aside.is_empty());
-            assert!(again.notes.is_empty());
-            assert_eq!(names(&named), before);
-            for name in files.iter().chain(dirs) {
-                assert_eq!(fs::read_link(named.join(name)).unwrap(), native.join(name));
-            }
-            assert_eq!(
-                again.to_string(),
-                format!("settings already shared with {}", native.display())
-            );
-        }
-    }
-
-    #[test]
-    fn relative_links_to_the_native_entries_are_current() {
-        let temp = tempfile::tempdir().unwrap();
-        let named = temp.path().join("named");
-        let native = temp.path().join("native");
-        fs::create_dir(&named).unwrap();
-        for name in ["config.toml", "AGENTS.md"] {
-            symlink(Path::new("../native").join(name), named.join(name)).unwrap();
-        }
-        fs::write(named.join("config.toml.orig"), "preserved").unwrap();
-        let report = share_settings(
-            super::super::definition_by_kind("codex").unwrap(),
-            &named,
-            &native,
-        )
-        .unwrap();
-        assert_eq!(report.current, ["config.toml", "AGENTS.md"]);
-        assert!(report.linked.is_empty());
-        assert_eq!(
-            fs::read_link(named.join("config.toml")).unwrap(),
-            Path::new("../native/config.toml")
-        );
-        assert_eq!(
-            fs::read_to_string(named.join("config.toml.orig")).unwrap(),
-            "preserved"
-        );
-    }
-
-    #[test]
-    fn moves_files_directories_and_foreign_links_aside() {
-        let temp = tempfile::tempdir().unwrap();
-        let named = temp.path().join("named");
-        let native = temp.path().join("native");
-        fs::create_dir_all(named.join("skills")).unwrap();
-        fs::write(named.join("settings.json"), "{}").unwrap();
-        fs::write(named.join("skills/private"), "mine").unwrap();
-        symlink("elsewhere", named.join("plugins")).unwrap();
-        let report = share_settings(
-            super::super::definition_by_kind("claude").unwrap(),
-            &named,
-            &native,
-        )
-        .unwrap();
-        assert_eq!(report.moved_aside.len(), 3);
-        assert_eq!(
-            fs::read_to_string(named.join("settings.json.orig")).unwrap(),
-            "{}"
-        );
-        assert_eq!(
-            fs::read_to_string(named.join("skills.orig/private")).unwrap(),
-            "mine"
-        );
-        assert_eq!(
-            fs::read_link(named.join("plugins.orig")).unwrap(),
-            Path::new("elsewhere")
-        );
-        for (slot, orig) in &report.moved_aside {
-            assert!(report.to_string().contains(&format!(
-                "{} → {}",
-                slot.display(),
-                orig.display()
-            )));
-            assert!(fs::symlink_metadata(slot).unwrap().is_symlink());
-        }
-    }
-
-    #[test]
-    fn orig_conflict_refuses_before_any_changes() {
-        let temp = tempfile::tempdir().unwrap();
-        let named = temp.path().join("named");
-        let native = temp.path().join("native");
-        fs::create_dir(&named).unwrap();
-        let slot = named.join("settings.local.json");
-        let orig = named.join("settings.local.json.orig");
-        fs::write(&slot, "mine").unwrap();
-        symlink("missing", &orig).unwrap();
-        let before = names(&named);
-        let error = share_settings(
-            super::super::definition_by_kind("claude").unwrap(),
-            &named,
-            &native,
-        )
-        .unwrap_err();
-        assert!(matches!(error, ShareErr::OrigExists { .. }));
-        assert!(error.to_string().contains("remove or rename"));
-        assert_eq!(names(&named), before);
-        assert_eq!(fs::read_to_string(slot).unwrap(), "mine");
-        assert_eq!(fs::read_link(orig).unwrap(), Path::new("missing"));
-        assert!(!native.exists());
-    }
-
-    #[test]
-    fn same_home_through_symlink_refuses_without_changes() {
-        let temp = tempfile::tempdir().unwrap();
-        let native = temp.path().join("native");
-        let named = temp.path().join("named");
-        fs::create_dir(&native).unwrap();
-        symlink(&native, &named).unwrap();
-        let error = share_settings(
-            super::super::definition_by_kind("codex").unwrap(),
-            &named,
-            &native,
-        )
-        .unwrap_err();
-        assert!(matches!(error, ShareErr::SameHome { .. }));
-        assert!(names(&native).is_empty());
-        assert_eq!(fs::read_link(named).unwrap(), native);
-    }
-}
+mod tests;

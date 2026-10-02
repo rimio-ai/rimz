@@ -850,6 +850,18 @@ impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
     }
 }
 
+const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
+
+/// Give a Codex child the account it runs for: its home, and for a shared
+/// account the home its databases live in.
+fn forward_login_env(command: &mut std::process::Command, login_env: &BTreeMap<String, String>) {
+    command.envs(
+        login_env
+            .iter()
+            .filter(|(key, _)| ["CODEX_HOME", SQLITE_HOME_ENV].contains(&key.as_str())),
+    );
+}
+
 const MIN_NO_DAEMON: super::version::CliVersion = super::version::CliVersion::new(0, 156, 0);
 
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
@@ -865,6 +877,23 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                 kind: File,
             },
         ]
+    }
+
+    fn private_home_entries(&self) -> &'static [&'static str] {
+        &[
+            "auth.json",
+            "app-server-control",
+            "app-server-daemon",
+            "packages",
+        ]
+    }
+
+    fn history_home_entries(&self) -> &'static [&'static str] {
+        &["sessions", "archived_sessions"]
+    }
+
+    fn shared_database_home_env_key(&self) -> Option<&'static str> {
+        Some(SQLITE_HOME_ENV)
     }
 
     fn min_version(&self) -> Option<super::version::CliVersion> {

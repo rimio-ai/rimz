@@ -5,7 +5,7 @@ You may pay for more than one Claude or Codex plan: a work subscription and a pe
 That works for one terminal. A fleet needs each agent, child, and restart to keep the correct home too: a session cannot resume under another account because its transcript lives in its original home. RimZ records an account on each agent and a default for future launches in the room. Declare each home once, pick the room's default, and switch it later without moving the agents already working.
 
 ```sh
-rimz accounts add claude work          # declare the home, share settings, install hooks
+rimz accounts add claude work          # declare the home, link it, install hooks
 rimz start --account claude=work       # a room whose Claude agents all run under `work`
 rimz reset --account claude=default    # rebuild the room on Claude's own home
 ```
@@ -16,7 +16,7 @@ rimz reset --account claude=default    # rebuild the room on Claude's own home
 
 ```console
 $ rimz accounts add claude work
-linked settings to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skills, plugins, agents, commands, output-styles
+linked to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skills, plugins, agents, commands, output-styles
 ✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
@@ -29,15 +29,19 @@ What it does on your machine:
 
 1. Writes `[accounts.claude.work]` to the per-machine config, `~/.rimz/config.toml`.
 2. Creates the home directory, `~/.rimz/accounts/<kind>/<name>`.
-3. Links settings to the provider's own home, as `default` resolves it. Codex shares `config.toml` and `AGENTS.md`; Claude shares `settings.json`, `settings.local.json`, `CLAUDE.md`, `skills/`, `plugins/`, `agents/`, `commands/`, and `output-styles/`.
+3. Links the account home to the provider's own home, as `default` resolves it: every top-level entry of either home except the provider's credentials. The line above is a provider home that holds nothing yet; yours also lists what your own `~/.claude` holds, such as `projects`.
 4. Installs the RimZ reporting hooks through the links into the shared config, so the provider's own home gains the hooks too.
 5. Prints the account home, login command, and commands to select it.
 
 `--home <path>` adopts a directory you already keep, such as `~/.claude-work`, instead of creating one under `~/.rimz/accounts/`.
 
-RimZ writes no credentials. Run the printed login command once so the provider stores its own credentials in the new home. Credentials, sessions, and transcripts stay per account; settings, and for Claude skills and plugins, are shared with the provider's own home, so a change in any linked account applies to all. This includes permissions, `env`, and hook commands. Codex trusts hooks per account path, so run `/hooks` once in each account even though the config is shared.
+RimZ writes no credentials. Run the printed login command once so the provider stores its own credentials in the new home. Only the credentials stay per account: Claude's `.credentials.json` and `.claude.json`, and Codex's `auth.json`, `app-server-control`, `app-server-daemon`, and `packages`. Everything else is a link, so the account writes its sessions and transcripts into the provider's own home and reads the same settings, skills, and plugins. A change through any linked account applies to all of them, including permissions, `env`, and hook commands. A shared Codex account also launches with `CODEX_SQLITE_HOME` set to the provider's own home, unless you export that variable yourself, so its databases sit beside the sessions they index. Codex trusts hooks per account path, so run `/hooks` once in each account even though the config is shared.
 
-Rerunning `add` also migrates accounts you already declared: it leaves the config entry alone, creates the home if missing, links settings, and refreshes hooks. Existing files, directories, or links to another target move aside to `<name>.orig`, with each move printed; their settings are not merged, except Codex hook-trust entries. If a backup already exists, rename or remove it and rerun; no settings entries change on that refusal, though a first declaration remains in the config. Already-correct links stay in place and the output says `settings already shared`. If a Claude release saves settings by replacing a link, the next `rimz accounts add` moves the copy to `.orig`, relinks it, and says so.
+To keep an account's sessions and transcripts in its own home, declare it with `--history standalone`. A standalone account links only its settings: Codex shares `config.toml` and `AGENTS.md`; Claude shares `settings.json`, `settings.local.json`, `CLAUDE.md`, `skills/`, `plugins/`, `agents/`, `commands/`, and `output-styles/`. `rimz accounts add claude work --history standalone` on an account you already declared removes the other links and leaves what they pointed at in the provider's own home; `--history shared` links them again.
+
+Rerunning `add` also migrates accounts you already declared: it leaves the config entry alone, creates the home if missing, brings the links up to date, and refreshes hooks. Every agent launch on a named account brings them up to date the same way, so an entry the provider creates later is linked by the next launch. Nothing is deleted. An entry only the account has, such as the transcripts of an account you used before it was shared, moves into the provider's own home. An entry both homes have stays where the provider's own home keeps it, and the account's copy moves aside to `<account home>/.rimz-aside/<UTC timestamp>/<name>`, with each move printed; the two are not merged, except Codex hook-trust entries. Merge what you need out of `.rimz-aside` by hand. Already-correct links stay in place and the output says `already linked to <home>`. If a Claude release saves settings by replacing a link, the next `add` or launch moves the copy aside, relinks it, and says so.
+
+Moving a directory aside under an agent that is writing into it would split its session, so RimZ refuses that one case while any other agent runs on the account, and names the fix: end those agents, or make the account standalone. An account home on another filesystem cannot have its entries moved; they stay in the account home with a warning.
 
 The account named `default` is the provider's own home and is never declared. It is whatever the provider CLI resolves for itself: `~/.claude` or `~/.codex`, unless you export `CLAUDE_CONFIG_DIR` or `CODEX_HOME` in the shell you start the room from. When that variable points at any declared named account's home, `add` refuses before writing anything, including on a rerun inside a room. Unset it for the command, for example `env -u CODEX_HOME rimz accounts add codex work`. Do not export one that points at a named account's home in your login shell: `default` would then launch into that account too. Select the account with `rimz accounts use` instead. `rimz accounts add` refuses to declare the provider's own home, including a `--home` symlink to it, and `rimz doctor` flags an exported-home conflict.
 

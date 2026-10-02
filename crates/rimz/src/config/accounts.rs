@@ -60,10 +60,12 @@ pub struct NamedAccount {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AccountHistory {
-    /// Everything but credentials is the default provider home's.
+    /// Everything but credentials is the default provider home's: the
+    /// account home links there, sessions and transcripts included.
     #[default]
     Shared,
-    /// The account home holds its own sessions and transcripts.
+    /// The account home holds its own sessions and transcripts and links
+    /// its settings alone.
     Standalone,
 }
 

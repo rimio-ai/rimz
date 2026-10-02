@@ -782,6 +782,14 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         ]
     }
 
+    fn private_home_entries(&self) -> &'static [&'static str] {
+        &[".credentials.json", ".claude.json"]
+    }
+
+    fn history_home_entries(&self) -> &'static [&'static str] {
+        &["projects"]
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["CLAUDE_CONFIG_DIR"]
     }

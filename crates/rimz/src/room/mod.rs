@@ -26,7 +26,9 @@ use crate::{RuntimePaths, StatePaths, Store, workspace::record::WorkspaceRecord}
 pub use birth::{
     AttendedRecovery, BirthOutcome, NormalRebirth, ResetRecoveryError, RoomBirth, RoomResetReport,
 };
-pub use standing::{AccountStanding, Deciding, Scope, Scopes, live_agents_by_login};
+pub use standing::{
+    AccountStanding, Deciding, Scope, Scopes, live_agents_by_login, other_live_agents_on,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LiveRoomErr {

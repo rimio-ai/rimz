@@ -142,12 +142,14 @@ fn with_credentials_mtime(probe: AccountProbe, path: &std::path::Path) -> Accoun
 }
 
 fn probe_login_status(login_env: &BTreeMap<String, String>) -> AccountProbe {
+    probe_login_status_with(&mut login_status_command(login_env))
+}
+
+fn login_status_command(login_env: &BTreeMap<String, String>) -> Command {
     let mut command = Command::new("codex");
     command.args(["login", "status"]).stdin(Stdio::null());
-    if let Some(home) = login_env.get("CODEX_HOME") {
-        command.env("CODEX_HOME", home);
-    }
-    probe_login_status_with(&mut command)
+    super::forward_login_env(&mut command, login_env);
+    command
 }
 
 fn probe_login_status_with(command: &mut Command) -> AccountProbe {
@@ -266,6 +268,27 @@ mod tests {
             AccountProbe::Found(account) => account,
             other => panic!("expected {label}, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_login_status_probe_runs_under_the_account_and_its_database_home() {
+        let login_env = BTreeMap::from([
+            ("CODEX_HOME".to_owned(), "/srv/work".to_owned()),
+            ("CODEX_SQLITE_HOME".to_owned(), "/home/u/.codex".to_owned()),
+            ("HOME".to_owned(), "/home/u".to_owned()),
+        ]);
+        let command = login_status_command(&login_env);
+        let envs: Vec<_> = command
+            .get_envs()
+            .map(|(key, value)| (key.to_str().unwrap(), value.and_then(|v| v.to_str())))
+            .collect();
+        assert_eq!(
+            envs,
+            [
+                ("CODEX_HOME", Some("/srv/work")),
+                ("CODEX_SQLITE_HOME", Some("/home/u/.codex")),
+            ]
+        );
     }
 
     #[test]

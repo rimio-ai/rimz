@@ -3764,3 +3764,84 @@ fn agent_launched_tier_routing_uses_exhausted_room_default() {
         "{report}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn seats_of_one_batch_on_a_shared_account_set_its_history_aside_once() {
+    let env = Env::new();
+    let work = env.home_root.join("work");
+    let native = env.home_root.join(".codex");
+    for home in [&work, &native] {
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+    }
+    std::fs::write(work.join("sessions/old.jsonl"), "before sharing").unwrap();
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[agents]\nisolation = \"host\"\n[accounts.codex.work]\nhome = {:?}\n",
+            work.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let seats = ["launch_seat_a", "launch_seat_b"];
+    let seat = |id: &str| rimz::store::writer::AgentLaunchRequest {
+        kind: AgentKind::new_unchecked("codex"),
+        login: rimz::store::writer::LaunchLogin::Pinned("work".parse().unwrap()),
+        agent_id: id.into(),
+        name: rimz::store::writer::AgentLaunchName::Explicit(id.replace('_', "-")),
+        launch: Default::default(),
+        run_id: None,
+        prompt: None,
+    };
+    env.store()
+        .begin_agent_launch_batch(
+            &seats.map(seat),
+            rimz::store::writer::AgentLaunchScope {
+                session_name: workspace.session_name.clone(),
+                cwd: env.project_root.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    for id in seats {
+        let mut request = fresh_exec("codex", None);
+        request.identity.name = Some(id.replace('_', "-"));
+        request.identity.launch_id = Some(id.to_owned());
+        request.identity.params.login = Some("work".parse().unwrap());
+        env.rimz()
+            .args(exec_args(&env, &request))
+            .arg("--root")
+            .arg(&env.project_root)
+            .env_remove("CODEX_HOME")
+            .env("SHELL", "/definitely/not/a/shell")
+            .env("PATH", path_with_front(&shim_dir))
+            .env(
+                "RIMZ_TEST_AGENT_ENV_DUMP",
+                env.home_root.join(format!("{id}.env")),
+            )
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+            .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+            .assert_success_within_timeout("launch one seat of the batch");
+    }
+    assert_eq!(
+        std::fs::read_link(work.join("sessions")).unwrap(),
+        native.join("sessions")
+    );
+    let stamps: Vec<_> = std::fs::read_dir(work.join(".rimz-aside"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let [stamp] = &stamps[..] else {
+        panic!("expected one set-aside directory, found {stamps:?}");
+    };
+    assert_eq!(
+        std::fs::read_to_string(stamp.join("sessions/old.jsonl")).unwrap(),
+        "before sharing"
+    );
+}

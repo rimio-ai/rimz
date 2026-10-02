@@ -1519,3 +1519,71 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
         "agents show names the unit the launch used"
     );
 }
+
+#[test]
+fn a_shared_codex_account_points_its_databases_at_the_default_home_without_touching_either() {
+    let project = tempfile::tempdir().expect("project");
+    let work = project.path().join("codex-work");
+    let solo = project.path().join("codex-solo");
+    let native = project.path().join("home/.codex");
+    for dir in [&work, &solo, &native] {
+        std::fs::create_dir_all(dir).expect("home");
+    }
+    std::fs::write(native.join("config.toml"), "").expect("default config");
+    let (machine, state) = room_with_accounts(
+        project.path(),
+        &format!(
+            "[codex.work]\nhome = {:?}\n[codex.solo]\nhome = {:?}\nhistory = \"standalone\"",
+            work.display().to_string(),
+            solo.display().to_string()
+        ),
+        &[("codex", "work")],
+    );
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .expect("effective config");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(project.path()),
+        project.path(),
+    )
+    .expect("runtime paths");
+    // The pane this launch starts from runs on the other account.
+    let ambient = BTreeMap::from([
+        (
+            "HOME".to_owned(),
+            project.path().join("home").display().to_string(),
+        ),
+        ("CODEX_HOME".to_owned(), solo.display().to_string()),
+    ]);
+    for (login, databases) in [("work", Some(&native)), ("solo", None)] {
+        let mut request = request("codex", action_with_args("launch", Vec::new()));
+        request.identity.params.login = Some(login.parse().unwrap());
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: Some(&effective),
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+        })
+        .expect("compile");
+        assert_eq!(
+            plan.process()
+                .env
+                .get("CODEX_SQLITE_HOME")
+                .map(PathBuf::from),
+            databases.cloned(),
+            "{login}"
+        );
+    }
+    for home in [&work, &solo] {
+        assert_eq!(std::fs::read_dir(home).expect("home").count(), 0);
+    }
+}

@@ -231,29 +231,68 @@ pub(super) fn blocked_project_logins(state: crate::trust::TrustState) -> String 
 /// without creating its store.
 pub fn live_agents_by_login() -> Result<BTreeMap<LoginKey, usize>, super::LiveRoomErr> {
     let mut counts = BTreeMap::new();
-    for room in super::session::room_inventory()?.live {
-        // A live room whose agents cannot be read could hold any account, so
-        // every count is unknown rather than short by that room.
-        let unreadable = || super::LiveRoomErr::RoomAgents {
-            session_name: room.session_name.clone(),
-            project_root: room.project_root.clone(),
-        };
-        let agents = StatePaths::for_workspace(room.workspace_id.clone())
-            .ok()
-            .zip(RuntimePaths::for_workspace(room.workspace_id.clone()).ok())
-            .and_then(|(paths, runtime)| Store::open_existing(paths, runtime))
-            .and_then(|store| store.snapshot_cached().ok())
-            .ok_or_else(unreadable)?
-            .agents;
+    for agents in live_room_agents()? {
         count_live_logins(&mut counts, &agents);
     }
     Ok(counts)
+}
+
+/// Agents on `account` whose provider can be writing, across every live room,
+/// besides the `launching` one. A row counts once a pane is attached to it: a
+/// seat of a batch that has not started and a row a rebirth recovered have
+/// none.
+pub fn other_live_agents_on(
+    account: &LoginKey,
+    launching: &[crate::ids::AgentSessionId],
+) -> Result<usize, super::LiveRoomErr> {
+    Ok(live_room_agents()?
+        .iter()
+        .map(|agents| count_others_on(agents, account, launching))
+        .sum())
+}
+
+fn live_room_agents() -> Result<Vec<Vec<crate::agents::AgentState>>, super::LiveRoomErr> {
+    super::session::room_inventory()?
+        .live
+        .into_iter()
+        .map(|room| {
+            // A live room whose agents cannot be read could hold any account, so
+            // every count is unknown rather than short by that room.
+            StatePaths::for_workspace(room.workspace_id.clone())
+                .ok()
+                .zip(RuntimePaths::for_workspace(room.workspace_id.clone()).ok())
+                .and_then(|(paths, runtime)| Store::open_existing(paths, runtime))
+                .and_then(|store| store.snapshot_cached().ok())
+                .map(|snapshot| snapshot.agents)
+                .ok_or(super::LiveRoomErr::RoomAgents {
+                    session_name: room.session_name,
+                    project_root: room.project_root,
+                })
+        })
+        .collect()
 }
 
 fn count_live_logins(counts: &mut BTreeMap<LoginKey, usize>, agents: &[crate::agents::AgentState]) {
     for key in crate::agents::live_login_keys(agents) {
         *counts.entry(key).or_default() += 1;
     }
+}
+
+fn count_others_on(
+    agents: &[crate::agents::AgentState],
+    account: &LoginKey,
+    launching: &[crate::ids::AgentSessionId],
+) -> usize {
+    agents
+        .iter()
+        .filter(|agent| {
+            agent.ended_at.is_none()
+                && agent.pane.is_some()
+                && !agent.is_provider_subagent()
+                && agent.login_key() == *account
+                && !launching.contains(&agent.agent_id)
+        })
+        .count()
 }
 
 #[cfg(test)]
