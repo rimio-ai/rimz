@@ -362,12 +362,8 @@ impl DailyBudgetScope {
 fn account_ledger_file(runtime: &RuntimePaths, key: &LoginKey) -> ScopeLedgerFile {
     let component = account_ledger_component(key);
     ScopeLedgerFile {
-        path: runtime
-            .persistent_shared_root
-            .join(format!("budget.account.{component}.json")),
-        lock_path: runtime
-            .shared_root
-            .join(format!("budget.account.{component}.lock")),
+        path: runtime.shared_account_budget_ledger(&component),
+        lock_path: runtime.shared_account_budget_lock(&component),
     }
 }
 

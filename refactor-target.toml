@@ -291,6 +291,7 @@ surface-budget = 11
 path = "crates/rimz/src/diag"
 surface-budget = 79
 
+# RuntimePaths owns the account budget ledger and its lock path (+2).
 [[module]]
 path = "crates/rimz/src/disk"
 allowed-dependencies = [
@@ -326,7 +327,7 @@ allowed-dependencies = [
 # Assist logging exposes the checked rotating append for launch-time warnings (+1).
 # The trunk signal lane owns a separate classed runtime cache path.
 # A named account's home is linked under one machine-wide lock path (+1).
-surface-budget = 206
+surface-budget = 208
 
 [[module]]
 path = "crates/rimz/src/forge"
