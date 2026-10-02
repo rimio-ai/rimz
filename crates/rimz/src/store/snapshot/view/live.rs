@@ -574,6 +574,7 @@ fn empty_local_agent(observation: &LocalSessionObservation) -> AgentState {
         observation.last_activity,
     );
     state.registered_at = Some(observation.created_at);
+    state.login.clone_from(&observation.login);
     state
 }
 

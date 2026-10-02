@@ -307,6 +307,7 @@ fn observation_from_header(
         .unwrap_or(created_at)
         .max(created_at);
     Some(LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("codex"),
         session_id: AgentSessionId::from(session_id),
         workspace: workspace.to_path_buf(),
@@ -352,6 +353,7 @@ fn file_mtime(path: &Path) -> Option<Timestamp> {
 pub(super) fn fixture_observation() -> LocalSessionObservation {
     let created_at = "2025-01-01T00:00:00Z".parse::<Timestamp>().unwrap();
     LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("codex"),
         session_id: AgentSessionId::from("11111111-1111-4111-8111-111111111111"),
         workspace: PathBuf::from("/workspace/project"),
@@ -448,13 +450,13 @@ mod tests {
             "HOME".to_owned(),
             temp.path().to_string_lossy().into_owned(),
         )]);
-        let named_env = crate::agents::ProviderLogin::named(
+        let work = crate::agents::ProviderLogin::named(
             fixture.kind.clone(),
             "work".parse().unwrap(),
             named_home.clone(),
         )
-        .unwrap()
-        .env(&home_env);
+        .unwrap();
+        let named_env = work.env(&home_env);
         for (home, id) in [
             (
                 temp.path().join(".codex"),
@@ -477,6 +479,16 @@ mod tests {
         let named = adapter.discover_local_sessions(&[&fixture.workspace], &named_env);
         assert_eq!(named.len(), 1);
         assert_eq!(named[0].session_id, fixture.session_id);
+
+        let definition = crate::agents::find_definition("codex").unwrap();
+        let workspaces = [fixture.workspace.as_path()];
+        let stamped = work.local_sessions(definition, &workspaces, &home_env);
+        assert_eq!(stamped[0].session_id, fixture.session_id);
+        assert_eq!(stamped[0].login.as_ref(), Some(work.name()));
+        let native = crate::agents::ProviderLogin::default_for(fixture.kind.clone())
+            .local_sessions(definition, &workspaces, &home_env);
+        assert_eq!(native[0].session_id, default[0].session_id);
+        assert_eq!(native[0].login, None);
     }
 
     #[test]

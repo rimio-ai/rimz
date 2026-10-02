@@ -449,6 +449,7 @@ fn materialize(
     current_session_id: Option<&str>,
 ) -> LocalSessionObservation {
     LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("antigravity"),
         session_id: AgentSessionId::from(conversation.session_id.clone()),
         workspace: workspace.to_path_buf(),
@@ -712,6 +713,7 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
     let folded = fold(lines);
     let created_at = folded.first_event_at.unwrap();
     LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("antigravity"),
         session_id: AgentSessionId::from("11111111-1111-4111-8111-111111111111"),
         workspace: PathBuf::from("/workspace/project"),

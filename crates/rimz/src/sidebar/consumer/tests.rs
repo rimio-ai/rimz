@@ -137,6 +137,7 @@ fn local_observation(
     now: Timestamp,
 ) -> crate::agents::LocalSessionObservation {
     crate::agents::LocalSessionObservation {
+        login: None,
         kind: crate::ids::AgentKind::new_unchecked("kiro"),
         session_id: crate::ids::AgentSessionId::from(session),
         workspace: workspace.to_path_buf(),
@@ -177,7 +178,8 @@ fn cached_alive_snapshot_binds_safe_local_session_intersection() {
         live_pane.clone(),
         removed_pane,
     ]);
-    let live_observation = local_observation("kiro-live", &live_worktree, now);
+    let mut live_observation = local_observation("kiro-live", &live_worktree, now);
+    live_observation.login = Some("work".parse().unwrap());
     let removed_observation = local_observation("kiro-removed", &removed_worktree, now);
     atomic::write_temp_then_rename_cache(
         &runtime.agent_projection_path(),
@@ -196,12 +198,12 @@ fn cached_alive_snapshot_binds_safe_local_session_intersection() {
 
     let snapshot = cached_alive_snapshot(base, &runtime, "rimz-test");
 
-    assert!(
-        snapshot
-            .agents
-            .iter()
-            .any(|agent| agent.agent_id == live_observation.session_id),
-    );
+    let live = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == live_observation.session_id)
+        .unwrap();
+    assert_eq!(live.login, live_observation.login);
     assert!(
         snapshot
             .agents
@@ -258,6 +260,7 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
     };
     crate::store::agent_context::write(&runtime, "codex", "conversation-a", &context).unwrap();
     let observation = crate::agents::LocalSessionObservation {
+        login: None,
         kind: crate::ids::AgentKind::new_unchecked("codex"),
         session_id: crate::ids::AgentSessionId::from("conversation-b"),
         workspace: PathBuf::from("/repo/main"),
@@ -733,6 +736,7 @@ fn read_published_snapshot_binds_safe_local_session_intersection() {
     let inputs = crate::sidebar::agent_projection::LocalSessionInputs::from_panes(&published_panes);
     let session_id = crate::ids::AgentSessionId::from("kiro-session");
     let observation = crate::agents::LocalSessionObservation {
+        login: None,
         kind: crate::ids::AgentKind::new_unchecked("kiro"),
         session_id: session_id.clone(),
         workspace: worktree.clone(),
@@ -745,6 +749,7 @@ fn read_published_snapshot_binds_safe_local_session_intersection() {
     };
     let removed_session_id = crate::ids::AgentSessionId::from("removed-kiro-session");
     let removed_observation = crate::agents::LocalSessionObservation {
+        login: None,
         session_id: removed_session_id.clone(),
         workspace: removed_worktree.clone(),
         transcript_path: removed_worktree.join("kiro-session.json"),

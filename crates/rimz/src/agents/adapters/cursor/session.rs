@@ -581,6 +581,7 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
     let created_at = Timestamp::from_second(1_735_689_600).unwrap();
     let waiting_since = Timestamp::from_second(1_735_689_610).unwrap();
     LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("cursor"),
         session_id: AgentSessionId::from("11111111-1111-4111-8111-111111111111"),
         workspace: PathBuf::from("/workspace/project"),
@@ -634,6 +635,7 @@ fn observation_with_transcript(
     (open_wait.waiting_since >= created_at && open_wait.waiting_since <= updated_at)
         .then_some(())?;
     Some(LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("cursor"),
         session_id: AgentSessionId::from(session_id),
         workspace: workspace.to_path_buf(),

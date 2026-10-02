@@ -73,12 +73,13 @@ impl LocalSessionInputs {
     fn discover(&self, state: &StatePaths) -> Vec<LocalSessionObservation> {
         let accounts = &crate::config::MachineConfig::load_lenient().accounts;
         let logins = crate::agents::RoomLoginSet::resolve(&state.workspace_record, accounts);
+        let ambient = crate::agents::ambient_env();
         self.discover_with(|kind, workspaces| {
             let Some(login) = logins.default_login(kind.as_str()) else {
                 return Vec::new();
             };
             crate::agents::find_definition(kind.as_str())
-                .map(|adapter| adapter.discover_local_sessions(workspaces, &logins.env(&login)))
+                .map(|adapter| login.local_sessions(adapter, workspaces, &ambient))
                 .unwrap_or_default()
         })
     }
@@ -388,6 +389,7 @@ mod tests {
     fn observation(workspace: &Path, session: &str) -> LocalSessionObservation {
         let now = Timestamp::from_second(1_750_000_000).expect("fixed timestamp");
         LocalSessionObservation {
+            login: None,
             kind: AgentKind::new_unchecked("kiro"),
             session_id: AgentSessionId::from(session),
             workspace: workspace.to_path_buf(),
@@ -529,6 +531,25 @@ mod tests {
             project_published(&publication, &current).local_sessions,
             vec![observation(&inputs.by_kind[&kind][1], "b")],
             "removed inputs disappear and new inputs wait for publication",
+        );
+    }
+
+    #[test]
+    fn observation_account_is_optional_on_the_wire() {
+        let mut observation = observation(Path::new("/repo"), "a");
+        let unstamped = serde_json::to_value(&observation).unwrap();
+        assert!(unstamped.get("login").is_none());
+        assert_eq!(
+            serde_json::from_value::<LocalSessionObservation>(unstamped).unwrap(),
+            observation
+        );
+
+        observation.login = Some("work".parse().unwrap());
+        let stamped = serde_json::to_value(&observation).unwrap();
+        assert_eq!(stamped["login"], "work");
+        assert_eq!(
+            serde_json::from_value::<LocalSessionObservation>(stamped).unwrap(),
+            observation
         );
     }
 

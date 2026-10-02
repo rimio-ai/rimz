@@ -241,7 +241,7 @@ fn discover_lane_sessions(
         .flat_map(|adapter| {
             let kind = rimz::ids::AgentKind::new_unchecked(adapter.spec().kind);
             match catalog.room_login(logins, &kind) {
-                Ok(login) => adapter.discover_local_sessions(&[path], &login.env(&ambient)),
+                Ok(login) => login.local_sessions(adapter, &[path], &ambient),
                 Err(_) => Vec::new(),
             }
         })
