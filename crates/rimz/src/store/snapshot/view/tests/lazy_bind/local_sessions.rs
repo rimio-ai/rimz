@@ -12,6 +12,7 @@ fn observation(
 ) -> LocalSessionObservation {
     let event_at = event_secs_ago.map(ago);
     LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("kiro"),
         session_id: AgentSessionId::from(id),
         workspace: PathBuf::from("/repo/main"),
@@ -1009,4 +1010,60 @@ fn provider_session_adopts_provisional_launch_identity() {
     assert_eq!(adopted.channel.as_deref(), Some("auth"));
     assert_eq!(adopted.description.as_deref(), Some("migration"));
     assert_eq!(adopted.budget.as_deref(), Some("$5.00"));
+}
+
+/// A recordless Codex session discovered under `login` and bound to its pane.
+fn discovered_codex_agent(login: Option<&str>) -> AgentState {
+    let mut pane = pane("%1", "codex", "/repo/main");
+    pane.pane_process_start = Some(ago(21));
+    let mut observation = event_observation("sess-live", 20, 10);
+    observation.kind = AgentKind::new_unchecked("codex");
+    observation.login = login.map(|name| name.parse().expect("login name"));
+    let snapshot = room(Vec::new())
+        .with_local_sessions(std::slice::from_ref(&pane), vec![observation])
+        .with_live_panes(vec![pane], None);
+    rollup_agent(&snapshot, "sess-live").clone()
+}
+
+#[test]
+fn discovered_session_acts_as_the_account_it_was_discovered_under() {
+    let catalog = crate::agents::LoginCatalog::from_config(
+        &toml::from_str("[codex.work]\nhome = \"/srv/codex-work\"\nhistory = \"standalone\"\n")
+            .expect("accounts toml"),
+    )
+    .expect("login catalog");
+    let work: crate::ids::LoginName = "work".parse().expect("login name");
+    let codex = AgentKind::new_unchecked("codex");
+    let logins = crate::ids::RoomLogins::from([(codex.clone(), work.clone())]);
+
+    let agent = discovered_codex_agent(Some("work"));
+    assert_eq!(
+        crate::harness::resume::relaunch_login(&agent, &logins, &catalog),
+        Ok(Some(work))
+    );
+    let in_use = crate::agents::RoomLoginSet::new(Some(logins), Some(catalog), BTreeMap::new())
+        .with_agents(&[agent])
+        .keys_in_use();
+    assert!(!in_use.contains(&crate::ids::LoginKey::default_for(codex)));
+
+    assert_eq!(discovered_codex_agent(None).login, None);
+}
+
+#[test]
+fn prior_row_keeps_its_account_when_a_discovered_session_binds() {
+    let work: crate::ids::LoginName = "work".parse().expect("login name");
+    let bound_login = |mut prior: AgentState, session: &str| {
+        prior.login = Some(work.clone());
+        let pane = pane("%1", "codex", "/repo/main");
+        let mut observation = identity_observation("codex", session, 1);
+        observation.login = Some("personal".parse().expect("login name"));
+        let snapshot =
+            room(vec![prior]).with_local_sessions(std::slice::from_ref(&pane), vec![observation]);
+        rollup_agent(&snapshot, session).login.clone()
+    };
+
+    let exact = agent("codex", "session-a", AgentStatus::Idle, 5).in_pane("%1");
+    assert_eq!(bound_login(exact, "session-a"), Some(work.clone()));
+    let provisional = agent("codex", "launch_abc", AgentStatus::Running, 1).in_pane("%1");
+    assert_eq!(bound_login(provisional, "session-real"), Some(work.clone()));
 }

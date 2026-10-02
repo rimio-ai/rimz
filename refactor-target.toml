@@ -157,7 +157,8 @@ upward-dependencies = ["address"]
 # AgentState::attach_context is the one sidecar join the store's attach sites share (+1).
 # Pass 32a: HookContextReply declares the hook-context reply on the spec; AgentDefinition::attach_hook_context is its one writer, replacing the trait method (+1).
 # RoomLoginSet::declared and ProviderCapacity::known_unused give auto-redeem its idle accounts and their unused-window evidence (+2).
-surface-budget = 964
+# ProviderLogin::local_sessions discovers a provider home and stamps each observation with its account (+1).
+surface-budget = 965
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
