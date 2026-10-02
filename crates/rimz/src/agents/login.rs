@@ -174,6 +174,22 @@ impl ProviderLogin {
         self.home.as_ref().is_some_and(|home| home.shared)
     }
 
+    /// The sessions `adapter` finds for `workspaces` in this login's home,
+    /// each carrying this account.
+    pub fn local_sessions(
+        &self,
+        adapter: &super::AgentDefinition,
+        workspaces: &[&Path],
+        ambient: &BTreeMap<String, String>,
+    ) -> Vec<super::LocalSessionObservation> {
+        let login = (!self.is_default()).then(|| self.name.clone());
+        let mut observations = adapter.discover_local_sessions(workspaces, &self.env(ambient));
+        for observation in &mut observations {
+            observation.login.clone_from(&login);
+        }
+        observations
+    }
+
     /// `ambient`, with this login's overrides applied. The default login
     /// leaves the ambient environment exactly as it is, so today's resolution
     /// policies — comma lists, XDG order, test overrides — keep running.

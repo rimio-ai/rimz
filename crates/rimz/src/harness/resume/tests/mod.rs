@@ -182,6 +182,7 @@ fn local_session(kind: &str, id: &str, created: i64, last: i64) -> LocalSessionO
             + std::time::Duration::from_secs(hour.max(0) as u64 * 3600)
     };
     LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked(kind),
         session_id: AgentSessionId::from(id),
         workspace: PathBuf::from("/code/query-engine"),

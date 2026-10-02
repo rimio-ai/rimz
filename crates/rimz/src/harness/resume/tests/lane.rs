@@ -5,8 +5,9 @@ use super::*;
 
 #[test]
 fn discovered_sessions_carry_the_account_they_were_discovered_under() {
-    let observation = local_session("claude", "local", 1, 2);
-    let candidate = ResumeCandidate::from_observation(&observation, &claude_room("work")).unwrap();
+    let mut observation = local_session("claude", "local", 1, 2);
+    observation.login = Some("work".parse().expect("login name"));
+    let candidate = ResumeCandidate::from_observation(&observation).unwrap();
     assert_eq!(
         candidate
             .identity
@@ -318,11 +319,11 @@ fn concurrent_session_set_selects_the_newest_overlap_cluster() {
 fn discovered_candidate_requires_session_and_workspace() {
     let mut observation = local_session("claude", "only", 9, 10);
     observation.session_id = AgentSessionId::from("");
-    assert!(ResumeCandidate::from_observation(&observation, &NO_LOGINS).is_none());
+    assert!(ResumeCandidate::from_observation(&observation).is_none());
 
     observation.session_id = AgentSessionId::from("only");
     observation.workspace = PathBuf::new();
-    assert!(ResumeCandidate::from_observation(&observation, &NO_LOGINS).is_none());
+    assert!(ResumeCandidate::from_observation(&observation).is_none());
 }
 
 /// Lane selectors resolve to a place before anything is planned. A durable

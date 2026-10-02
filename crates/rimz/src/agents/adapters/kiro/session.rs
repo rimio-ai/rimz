@@ -727,6 +727,7 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         (waiting.detail, Some(waiting.since))
     });
     LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("kiro"),
         session_id: AgentSessionId::from("sess_11111111-1111-4111-8111-111111111111"),
         workspace: PathBuf::from("/workspace/project"),
@@ -755,6 +756,7 @@ fn observation(session: ValidatedSession, workspace: &Path) -> Option<LocalSessi
         (waiting.detail, Some(waiting.since))
     });
     Some(LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("kiro"),
         session_id: AgentSessionId::from(session.metadata.id),
         workspace: workspace.to_path_buf(),
