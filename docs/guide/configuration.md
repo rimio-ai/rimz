@@ -390,6 +390,7 @@ To configure your own Zellij or tmux, the theme, truecolor, copy-mode, and keybi
 home = "/home/you/.claude-work"
 
 [accounts.codex.personal]
+history = "standalone"
 
 [accounts.use]
 codex = "personal"
@@ -402,7 +403,7 @@ claude = 50.0
 codex = 25.0
 ```
 
-`[accounts.<kind>.<name>]` declares a named Claude or Codex account: a separate provider home that a room launches that provider's agents into. `home` is optional, and an empty table places the home under `~/.rimz/accounts/<kind>/<name>`. `default` is reserved for the provider's own home and is never declared. `rimz accounts add` writes these entries for you, and [provider accounts](./accounts.md) walks the whole flow.
+`[accounts.<kind>.<name>]` declares a named Claude or Codex account: a separate provider home that a room launches that provider's agents into. `home` is optional, and an empty table places the home under `~/.rimz/accounts/<kind>/<name>`. `history` is `shared` unless you write `standalone`: a shared account keeps only its credentials in its home and links everything else, sessions and transcripts included, to the provider's own home, while a standalone account links its settings alone. `default` is reserved for the provider's own home and is never declared. `rimz accounts add` writes these entries for you, and [provider accounts](./accounts.md) walks the whole flow.
 
 Two limits apply to the path. Two accounts of the same provider cannot share a home, and a `home` cannot contain `,` or end in a directory named `projects`, because provider home lists split on commas and Claude reads `projects` as its transcript folder.
 

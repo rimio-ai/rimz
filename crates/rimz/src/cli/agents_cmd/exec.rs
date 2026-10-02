@@ -96,6 +96,22 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &machine_config.accounts,
     )
     .inspect_err(|_| fail())?;
+    // Before the plan compiles: it resolves the skill root through these links.
+    let launching: Vec<AgentSessionId> = request
+        .identity
+        .launch_id
+        .as_deref()
+        .map(AgentSessionId::from)
+        .into_iter()
+        .chain(attach_target.iter().map(|(_, id)| id.clone()))
+        .collect();
+    let shared = rimz::agents::account_links::reconcile(&login, &ambient_env, &|| {
+        rimz::room::other_live_agents_on(&login.key(), &launching).ok()
+    })
+    .inspect_err(|_| fail())?;
+    for warning in shared.iter().flat_map(|shared| shared.warnings()) {
+        warn(warning);
+    }
     let recorded_session = match &request.action {
         rimz::harness::launch::ExecAction::Launch { .. } => None,
         rimz::harness::launch::ExecAction::Resume { session_id, .. }

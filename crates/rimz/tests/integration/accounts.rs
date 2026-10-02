@@ -230,8 +230,7 @@ fn accounts_add_rejects_exported_named_homes_before_writing() {
                 );
                 assert!(!proposed.exists());
                 assert_eq!(succeeded(&accounts(&env, &["list", "--json"])), before);
-                assert!(!home.join("config.toml.orig").exists());
-                assert!(!home.join("settings.json.orig").exists());
+                assert!(!home.join(".rimz-aside").exists());
             }
         }
         let native = env.home_root.join(format!(".{kind}"));
@@ -273,7 +272,7 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
     );
     let rerun = succeeded(&accounts(&env, &["add", "claude", "work"]));
     assert!(rerun.contains("hooks up to date"), "{rerun}");
-    assert!(rerun.contains("settings already shared"), "{rerun}");
+    assert!(rerun.contains("already linked to"), "{rerun}");
     assert_eq!(
         std::fs::read_link(home.join("settings.json")).unwrap(),
         target
@@ -322,25 +321,92 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
     assert!(failed(&started).contains("run `rimz accounts add claude work`"));
 }
 
+/// The one timestamp directory under an account home's set-aside root.
+fn aside(home: &std::path::Path) -> std::path::PathBuf {
+    let mut stamps = std::fs::read_dir(home.join(".rimz-aside"))
+        .expect("set-aside root")
+        .map(|entry| entry.unwrap().path());
+    let stamp = stamps.next().expect("one set-aside directory");
+    assert_eq!(stamps.next(), None);
+    stamp
+}
+
 #[test]
-fn accounts_add_adopts_existing_settings_without_discarding_them() {
+fn accounts_add_shares_everything_but_credentials_and_sets_conflicts_aside() {
     let env = Env::new();
     let home = env.home_root.join("adopted");
-    std::fs::create_dir(&home).unwrap();
+    let native = env.home_root.join(".claude");
+    std::fs::create_dir_all(native.join("projects")).unwrap();
+    std::fs::create_dir_all(home.join("todos")).unwrap();
+    std::fs::write(native.join("settings.json"), "{}").unwrap();
+    std::fs::write(native.join(".credentials.json"), "default").unwrap();
     let settings = home.join("settings.json");
     let original = "{\"model\":\"mine\"}";
     std::fs::write(&settings, original).unwrap();
+    std::fs::write(home.join(".credentials.json"), "work").unwrap();
+    std::fs::write(home.join("todos/one"), "mine").unwrap();
+    std::fs::create_dir_all(home.join("projects/repo")).unwrap();
+    std::fs::write(home.join("projects/repo/session.jsonl"), "old").unwrap();
     let added = succeeded(&accounts(
         &env,
         &["add", "claude", "work", "--home", home.to_str().unwrap()],
     ));
-    let orig = home.join("settings.json.orig");
-    assert!(orig.is_file(), "{added}");
-    assert_eq!(std::fs::read_to_string(&orig).unwrap(), original);
-    assert!(settings.is_symlink());
+    let kept = aside(&home).join("settings.json");
+    assert_eq!(std::fs::read_to_string(&kept).unwrap(), original);
+    assert_eq!(
+        std::fs::read_link(&settings).unwrap(),
+        native.join("settings.json")
+    );
     assert!(
-        added.contains(&format!("{} → {}", settings.display(), orig.display())),
+        added.contains(&format!(
+            "moved {} aside to {}",
+            settings.display(),
+            kept.display()
+        )),
         "{added}"
+    );
+    for name in ["projects", "todos"] {
+        assert_eq!(
+            std::fs::read_link(home.join(name)).unwrap(),
+            native.join(name)
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(native.join("todos/one")).unwrap(),
+        "mine"
+    );
+    // No room is live, so the account's own history directory moves aside.
+    assert_eq!(
+        std::fs::read_to_string(aside(&home).join("projects/repo/session.jsonl")).unwrap(),
+        "old"
+    );
+    assert!(!home.join(".credentials.json").is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(home.join(".credentials.json")).unwrap(),
+        "work"
+    );
+    assert_eq!(
+        std::fs::read_to_string(native.join(".credentials.json")).unwrap(),
+        "default"
+    );
+
+    let standalone = succeeded(&accounts(
+        &env,
+        &["add", "claude", "work", "--history", "standalone"],
+    ));
+    assert!(standalone.contains("unlinked from"), "{standalone}");
+    for name in ["projects", "todos"] {
+        assert!(!home.join(name).exists(), "{standalone}");
+        assert!(native.join(name).is_dir(), "{standalone}");
+    }
+    assert!(settings.is_symlink());
+    succeeded(&accounts(
+        &env,
+        &["add", "claude", "work", "--history", "shared"],
+    ));
+    assert_eq!(
+        std::fs::read_link(home.join("projects")).unwrap(),
+        native.join("projects")
     );
 }
 

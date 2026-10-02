@@ -19,8 +19,13 @@ fn codex_toggle_off_reaches_every_declared_codex_account() {
         ..Default::default()
     };
     let ambient = crate::agents::ambient_env();
-    let mut work = ambient.clone();
-    work.insert("CODEX_HOME".to_owned(), "/srv/codex-work".to_owned());
+    // A shared account's daemon also takes the default home's databases.
+    let work = crate::agents::LoginCatalog::from_config(&machine.accounts)
+        .unwrap()
+        .select(&AgentKind::new_unchecked("codex"), &"work".parse().unwrap())
+        .unwrap()
+        .env(&ambient);
+    assert_eq!(work["CODEX_HOME"], "/srv/codex-work");
     assert_eq!(
         codex_daemon_envs(&machine, &[], true),
         vec![ambient.clone()]

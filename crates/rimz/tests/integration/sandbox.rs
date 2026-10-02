@@ -1424,6 +1424,72 @@ fn sandboxed_exec_uses_probed_bwrap_with_trusted_path() {
 }
 
 #[test]
+fn a_shared_account_writes_its_history_into_the_default_home_under_both_isolations() {
+    for isolation in ["host", "sandbox"] {
+        if isolation == "sandbox" && !available() {
+            continue;
+        }
+        let env = Env::new();
+        let work = env.home_root.join("work");
+        let native = env.home_root.join(".codex");
+        std::fs::create_dir_all(native.join("sessions")).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("auth.json"), "work").unwrap();
+        let config = env.rimz_home().join("config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            config,
+            format!(
+                "[agents]\nisolation = {isolation:?}\n[accounts.codex.work]\nhome = {:?}\n",
+                work.to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        let shim_dir = write_env_dump_shim(&env, "codex");
+        std::fs::write(
+            shim_dir.join("codex"),
+            "#!/bin/sh\nprintf turn > \"$CODEX_HOME/sessions/rollout.jsonl\"\n\
+             printf '%s' \"$CODEX_SQLITE_HOME\" > \"$CODEX_HOME/sessions/databases\"\n",
+        )
+        .unwrap();
+        env.write_config(
+            &env.project_root,
+            &format!(
+                "[[agents]]\nname = \"codex\"\nenv = {{ PATH = {:?} }}\n",
+                path_with_front(&shim_dir).to_str().unwrap()
+            ),
+        );
+        env.rimz()
+            .args(["trust", "grant"])
+            .assert_success_within_timeout("grant trusted provider PATH");
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
+        request.identity.params.login = Some("work".parse().unwrap());
+        env.rimz()
+            .args(exec_args(&env, &request))
+            .env_remove("CODEX_HOME")
+            .env("SHELL", "/definitely/not/a/shell")
+            .assert_success_within_timeout("launch on a shared account");
+        assert_eq!(
+            std::fs::read_link(work.join("sessions")).unwrap(),
+            native.join("sessions"),
+            "{isolation}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(native.join("sessions/rollout.jsonl")).unwrap(),
+            "turn",
+            "{isolation}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(native.join("sessions/databases")).unwrap(),
+            native.to_str().unwrap(),
+            "{isolation}"
+        );
+        assert!(!work.join("auth.json").is_symlink(), "{isolation}");
+        assert!(!native.join("auth.json").exists(), "{isolation}");
+    }
+}
+
+#[test]
 fn sandbox_skills_under_host_use_provider_switches() {
     let env = Env::new();
     let shell = write_fake_login_shell(&env, "host-skills-shell", &[]);

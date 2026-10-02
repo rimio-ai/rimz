@@ -284,6 +284,26 @@ pub trait LaunchCapability: CoreCapability {
         &[]
     }
 
+    /// Top-level home names a shared account keeps to itself: its credentials,
+    /// and state that belongs to one running daemon or one install. A name is
+    /// private when it equals one of these or starts with one followed by `.`.
+    fn private_home_entries(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Top-level directories that hold the provider's sessions and
+    /// transcripts. A shared account links each one, created in the provider's
+    /// own home when neither home holds it yet.
+    fn history_home_entries(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The variable that points a shared account's databases at the
+    /// provider's own home, where a link would leave their sidecar files local.
+    fn shared_database_home_env_key(&self) -> Option<&'static str> {
+        None
+    }
+
     fn rejected_extra_arg(&self, _extra_args: &[String]) -> Option<RejectedLaunchArg> {
         None
     }

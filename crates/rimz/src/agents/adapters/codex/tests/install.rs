@@ -449,20 +449,23 @@ fn adopting_config_carries_only_trust_and_preserves_target_keys_and_links() {
     std::fs::write(&existing, original).unwrap();
     std::fs::write(&shared, "model = 'shared'\n[hooks.state.native]\ntrusted_hash = 'native'\n[hooks.state.duplicate]\ntrusted_hash = 'current'\n").unwrap();
     std::os::unix::fs::symlink(&shared, &target).unwrap();
-    let report = crate::agents::account_links::share_settings(
-        crate::agents::definition_by_kind("codex").unwrap(),
-        &named,
-        &native,
+    let login = crate::agents::ProviderLogin::named(
+        crate::ids::AgentKind::new_unchecked("codex"),
+        "work".parse().unwrap(),
+        named.clone(),
     )
     .unwrap();
-    assert_eq!(report.notes.len(), 1);
-    assert_eq!(
-        report.notes[0],
-        format!(
+    let ambient = BTreeMap::from([("CODEX_HOME".to_owned(), native.display().to_string())]);
+    let report = crate::agents::account_links::reconcile(&login, &ambient, &|| Some(0))
+        .unwrap()
+        .unwrap();
+    assert!(
+        report.to_string().contains(&format!(
             "carried 1 hook trust entry from {} into {}",
             existing.display(),
             target.display()
-        )
+        )),
+        "{report}"
     );
     let table: toml::Value = toml::from_str(&std::fs::read_to_string(&shared).unwrap()).unwrap();
     assert_eq!(table["model"].as_str(), Some("shared"));
@@ -478,8 +481,14 @@ fn adopting_config_carries_only_trust_and_preserves_target_keys_and_links() {
         table["hooks"]["state"]["duplicate"]["trusted_hash"].as_str(),
         Some("current")
     );
+    let aside = std::fs::read_dir(named.join(".rimz-aside"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     assert_eq!(
-        std::fs::read_to_string(named.join("config.toml.orig")).unwrap(),
+        std::fs::read_to_string(aside.join("config.toml")).unwrap(),
         original
     );
     assert_eq!(std::fs::read_link(&existing).unwrap(), target);

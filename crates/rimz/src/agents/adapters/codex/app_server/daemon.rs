@@ -319,9 +319,7 @@ fn control_command(
     let (program, args) = argv.split_first()?;
     let mut command = Command::new(program);
     command.args(args).current_dir(home);
-    if let Some(home) = login_env.get("CODEX_HOME") {
-        command.env("CODEX_HOME", home);
-    }
+    crate::agents::adapters::codex::forward_login_env(&mut command, login_env);
     Some(command)
 }
 

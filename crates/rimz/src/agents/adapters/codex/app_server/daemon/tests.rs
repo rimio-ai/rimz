@@ -154,14 +154,23 @@ fn failed_commands_retry_recovery_first_and_settle_only_for_start() {
 fn commands_anchor_descendants_to_codex_home() {
     let bin = Path::new("/home/u/.codex/packages/standalone/current/codex");
     let home = Path::new("/home/u/.codex");
-    let login_env =
-        BTreeMap::from([("CODEX_HOME".to_owned(), home.to_string_lossy().into_owned())]);
+    let login_env = BTreeMap::from([
+        ("CODEX_HOME".to_owned(), home.to_string_lossy().into_owned()),
+        ("CODEX_SQLITE_HOME".to_owned(), "/home/u/base".to_owned()),
+        ("HOME".to_owned(), "/home/u".to_owned()),
+    ]);
     for argv in [command(bin, true), command(bin, false)] {
         let command = control_command(&argv, home, &login_env).expect("non-empty Codex command");
         assert_eq!(command.get_current_dir(), Some(home));
         assert_eq!(
             command.get_envs().collect::<Vec<_>>(),
-            vec![(OsStr::new("CODEX_HOME"), Some(home.as_os_str()))]
+            vec![
+                (OsStr::new("CODEX_HOME"), Some(home.as_os_str())),
+                (
+                    OsStr::new("CODEX_SQLITE_HOME"),
+                    Some(OsStr::new("/home/u/base"))
+                ),
+            ]
         );
         assert_eq!(command.get_program(), argv[0].as_str());
         assert_eq!(

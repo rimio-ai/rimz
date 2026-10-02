@@ -626,3 +626,63 @@ fn pool_joins_default_and_shared_accounts_and_isolates_the_rest() {
     let unloaded = LoginCatalog::default();
     assert_eq!(unloaded.pool(&key("claude", "work")), key("claude", "work"));
 }
+
+#[test]
+fn a_shared_codex_login_points_its_databases_at_the_default_home() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts(
+            "[codex.work]\nhome = \"/srv/work\"\n[codex.solo]\nhome = \"/srv/solo\"\nhistory = \"standalone\"\n[claude.work]\nhome = \"/srv/claude\"\n",
+        ),
+        Some(Path::new("/home/u")),
+    )
+    .expect("catalog");
+    let ambient = BTreeMap::from([("HOME".to_owned(), "/home/u".to_owned())]);
+    let with = |key: &str, value: &str| {
+        let mut env = ambient.clone();
+        env.insert(key.to_owned(), value.to_owned());
+        env
+    };
+    let work = catalog.select(&kind("codex"), &name("work")).unwrap();
+    let solo = catalog.select(&kind("codex"), &name("solo")).unwrap();
+    let claude = catalog.select(&kind("claude"), &name("work")).unwrap();
+    assert!(work.shares_history());
+    assert!(claude.shares_history());
+    assert!(!solo.shares_history());
+    assert!(!ProviderLogin::default_for(kind("codex")).shares_history());
+
+    let databases = |env: BTreeMap<String, String>| env.get("CODEX_SQLITE_HOME").cloned();
+    assert_eq!(
+        work.overrides(&ambient),
+        BTreeMap::from([
+            ("CODEX_HOME".to_owned(), "/srv/work".to_owned()),
+            ("CODEX_SQLITE_HOME".to_owned(), "/home/u/.codex".to_owned()),
+        ])
+    );
+    // A pane born on either declared account exports that account's home.
+    for exported in ["/srv/work", "/srv/solo"] {
+        let pane = with("CODEX_HOME", exported);
+        assert_eq!(
+            work.default_home(&pane),
+            Some(PathBuf::from("/home/u/.codex"))
+        );
+        assert_eq!(
+            databases(work.env(&pane)).as_deref(),
+            Some("/home/u/.codex")
+        );
+    }
+    // The user's own default home, and the user's own database home, stand.
+    assert_eq!(
+        databases(work.env(&with("CODEX_HOME", "/data/codex"))).as_deref(),
+        Some("/data/codex")
+    );
+    assert_eq!(
+        databases(work.env(&with("CODEX_SQLITE_HOME", "/data/db"))).as_deref(),
+        Some("/data/db")
+    );
+    assert_eq!(databases(solo.env(&ambient)), None);
+    assert_eq!(databases(claude.env(&ambient)), None);
+    assert_eq!(
+        databases(ProviderLogin::default_for(kind("codex")).env(&ambient)),
+        None
+    );
+}

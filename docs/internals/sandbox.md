@@ -65,7 +65,7 @@ A compiler cache wrapper crosses views. Every sccache client forwards compiles t
 
 `sandbox::bwrap_argv` emits `bwrap --bind / / --dev-bind /dev /dev --die-with-parent`, then the plan's mounts in this order, then `--chdir <cwd> -- <provider argv>`:
 
-1. The adapter's provider config home (`config_home`), bound at its own path, when it exists. Built-ins resolve it from the effective launch environment, and a room's named account carries its home override there (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the bind follows the room's account. Plugins declare no config home.
+1. The adapter's provider config home (`config_home`), bound at its own path, when it exists. Built-ins resolve it from the effective launch environment, and a room's named account carries its home override there (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the bind follows the room's account. A shared account's home holds links into the provider's own home, which resolve through the root bind; the reconciler runs on the host before the view is built. Plugins declare no config home.
 2. The launch's temp unit (`StatePaths::temp_unit_dir`) bound at `/tmp`, then the same unit at `/var/tmp`. Bubblewrap resolves each bind source against the host root, so the second bind shows the unit, not the first mount.
 3. Host paths beneath `/tmp` or `/var/tmp` that must stay reachable, rebound at their original paths ([reachable host paths](#reachable-host-paths)).
 4. The skill view, when one is needed: a tmpfs over the resolved skill root, one entry per skill, and read-only shadows of rewritten skills at their canonical paths ([building the view](#building-the-view)).
