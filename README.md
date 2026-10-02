@@ -86,7 +86,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 
 - Start on your MacBook or a server, close the laptop, and reattach from anywhere over SSH or in a browser tab; the link heals itself every time you reconnect.
 - When an agent stops to ask, the question reaches you in the official Claude and ChatGPT mobile apps exactly as if you were driving the CLI by hand. Your answer lands in the same terminal session, and RimZ is never between you and the official apps.
-- A room runs its Claude or Codex agents under a second provider account, with its own limits, budget, and sessions.
+- A room runs its Claude or Codex agents under a second provider account with its own login and limits. Sessions, spend, and budget are shared with the provider's own account, so you can move a conversation onto the second account when the first runs out; a standalone account keeps all of it apart.
 - On Linux, sandbox isolation gives each agent pane a bubblewrap mount view: the room's own `/tmp` and a curated skill set. It is a mount view and does not contain the agent.
 
 ## Get started
@@ -340,7 +340,7 @@ rimz start --account claude=work              # a room whose Claude agents all r
 rimz config set agents.isolation sandbox      # Linux: a bubblewrap mount view for every agent pane
 ```
 
-- A [provider account](./docs/guide/accounts.md) is chosen when the room is born, and everything the room launches (agents, team members, subagents, loop tasks, restarts) runs under it, with its own limits, budget, and sessions. `rimz accounts use claude default` inside the room moves new launches to Claude's own home; agents already running keep the account they launched under.
+- A [provider account](./docs/guide/accounts.md) is chosen when the room is born, and everything the room launches (agents, team members, subagents, loop tasks, restarts) runs under it, with its own login and limits; its sessions, spend, and budget are shared with the provider's own account unless you declare it standalone. `rimz accounts use claude default` inside the room moves new launches to Claude's own home; agents already running keep the account they launched under.
 - [Sandbox isolation](./docs/guide/security.md#sandbox-isolation) gives each agent the room's own `/tmp` and the RimZ skill library merged into its provider's skill root, with a profile's `skills:` list deciding which skills the model may call on its own. It is a mount view and not containment: the host filesystem stays writable and your credentials stay readable. `rimz start` refuses to launch when bubblewrap is missing or unusable, and `--isolation host|sandbox` overrides the setting for one launch.
 
 The [setup guide](./docs/guide/setup.md) walks the whole first pass, agent hooks included; the [Zellij and tmux guide](./docs/guide/multiplexer.md) has a modern baseline with [ready-to-adopt example configs](./examples/README.md), and the full key catalog is the [configuration guide](./docs/guide/configuration.md).

@@ -1299,7 +1299,7 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
     let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime");
     runtime.ensure_dirs().expect("dirs");
     let config: MachineConfig = toml::from_str(
-        "timezone = \"UTC\"\n[accounts.budget]\nclaude = \"10/day\"\n[accounts.claude.work]\nhome = \"/srv/budget-test-work\"\n",
+        "timezone = \"UTC\"\n[accounts.budget]\nclaude = \"10/day\"\n[accounts.claude.work]\nhome = \"/srv/budget-test-work\"\nhistory = \"standalone\"\n",
     ).expect("config");
     let now: Timestamp = "2026-06-02T12:00:00Z".parse().expect("now");
     let cutoff = local_day_cutoff_secs(now, &TimeZone::UTC).expect("cutoff");
@@ -1484,6 +1484,93 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
             .all(|panel| panel.day_budget.is_none())
     );
 }
+#[test]
+fn accounts_of_one_pool_share_a_ledger_and_park_together() {
+    use crate::agents::spending::{
+        ProviderSpendingCache, SpendWindow, write_provider_spending_cache,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("dirs");
+    let config: MachineConfig = toml::from_str(
+        "timezone = \"UTC\"\n[accounts.budget]\nclaude = \"10/day\"\n[accounts.claude.work]\nhome = \"/srv/budget-test-work\"\n[accounts.claude.personal]\nhome = \"/srv/budget-test-personal\"\n[accounts.claude.solo]\nhome = \"/srv/budget-test-solo\"\nhistory = \"standalone\"\n",
+    ).expect("config");
+    let catalog = crate::agents::LoginCatalog::from_config(&config.accounts).expect("catalog");
+    let now: Timestamp = "2026-06-02T12:00:00Z".parse().expect("now");
+    let cutoff = local_day_cutoff_secs(now, &TimeZone::UTC).expect("cutoff");
+    let on = |login: &str| {
+        let mut agent = agent(0.0, AgentStatus::Running, Some(now));
+        agent.agent_id = format!("{login}-session").into();
+        agent.login = Some(login.parse().expect("login"));
+        agent
+    };
+    let agents = vec![on("work"), on("personal"), on("solo")];
+    let keys: Vec<_> = agents.iter().map(AgentState::login_key).collect();
+    let pool = LoginKey::default_for(agents[0].kind.clone());
+    let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id, agents, now);
+    // The walk publishes by pool: the shared accounts' spend is the default's.
+    let provider = ProviderSpendingCache {
+        day_cutoff_secs: cutoff,
+        day_by_login: BTreeMap::from([
+            (
+                pool.clone(),
+                SpendWindow {
+                    usd: 12.0,
+                    ..Default::default()
+                },
+            ),
+            (
+                keys[2].clone(),
+                SpendWindow {
+                    usd: 2.0,
+                    ..Default::default()
+                },
+            ),
+        ]),
+        ..Default::default()
+    };
+    write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
+    let state = state_paths(&runtime);
+
+    let scopes = evaluate_scopes(
+        &snapshot,
+        &runtime,
+        Some(&state),
+        &config,
+        now,
+        Some(cutoff),
+    );
+    assert_eq!(scopes.daily.len(), 3, "fleet, the pool, and the standalone");
+    assert_eq!(binding_scope_park(&scopes, &keys[0]), Some(now));
+    assert_eq!(binding_scope_park(&scopes, &keys[1]), Some(now));
+    assert_eq!(binding_scope_park(&scopes, &keys[2]), None);
+
+    enforce(&snapshot, &runtime, None, &config);
+    let work = DailyBudgetScope::account(&catalog, &keys[0]);
+    assert_eq!(work, DailyBudgetScope::account(&catalog, &keys[1]));
+    assert_eq!(work, DailyBudgetScope::account(&catalog, &pool));
+    assert_eq!(
+        work.ledger_path(&runtime, &state).file_name().unwrap(),
+        "budget.account.claude@default.json"
+    );
+    assert!(work.read_ledger(&runtime, Some(&state)).parked.is_some());
+    let solo = DailyBudgetScope::account(&catalog, &keys[2]);
+    assert_eq!(solo, DailyBudgetScope::Account(keys[2].clone()));
+    assert!(!solo.ledger_path(&runtime, &state).exists());
+
+    project_parks(&mut snapshot, &runtime, Some(&state), &config);
+    let parked: Vec<_> = snapshot
+        .agents
+        .iter()
+        .map(|agent| agent.budget_park.as_ref().map(|park| park.spend_usd))
+        .collect();
+    assert_eq!(parked, [Some(12.0), Some(12.0), None]);
+    assert!(scope_gate(&runtime, &state, Some(&keys[1]), &config, now).is_some());
+    assert!(scope_gate(&runtime, &state, Some(&keys[2]), &config, now).is_none());
+}
+
 fn state_paths(runtime: &RuntimePaths) -> crate::StatePaths {
     let home = runtime
         .root

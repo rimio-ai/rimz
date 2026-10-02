@@ -27,7 +27,8 @@ pub struct AccountsConfig {
     /// Machine account selections for new rooms, below explicit and project selections.
     #[serde(rename = "use", skip_serializing_if = "BTreeMap::is_empty")]
     pub use_accounts: RoomLogins,
-    /// Local-calendar-day dollar caps by provider login, shared across rooms.
+    /// Local-calendar-day dollar caps by provider kind, shared across rooms and
+    /// applied once per history pool of the kind.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub budget: BTreeMap<String, DayCap>,
     /// Display-only monthly USD ceiling by provider kind. It scales the

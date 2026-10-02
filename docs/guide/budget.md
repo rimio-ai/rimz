@@ -16,7 +16,7 @@ A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`. Five s
 | Turn | every agent turn in the room | `harness.turn_budget = "3"` | turn |
 | Loop task | one task's scheduled runs | `rimz loop add … --budget 5 --budget-per-day 20` | per run, per day |
 | Room | every agent under one project root, worktrees included | `harness.budget = "50/day"` | `/day` only |
-| Account | one provider account, every room on that account | `[accounts.budget] claude = "100/day"` | `/day` only |
+| Account | one provider's `default` and shared accounts together, or one standalone account; every room on them | `[accounts.budget] claude = "100/day"` | `/day` only |
 
 A `/day` window runs from local midnight in your configured [`timezone`](./configuration.md#sidebar-rendering). Each scope is checked on its own, so the first cap crossed is the one that parks.
 
@@ -68,10 +68,10 @@ The two daily scopes switch on in config, and only in config:
 
 ```sh
 rimz config set harness.budget 50/day              # this project's whole fleet
-rimz config set accounts.budget.claude 100/day     # each claude account, every room on it
+rimz config set accounts.budget.claude 100/day     # claude's shared accounts together, every room on them
 ```
 
-Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap applies to each [account](./accounts.md) of that provider separately and sums that account across every room running on it, while each room parks only the panes it owns.
+Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap follows the provider's history: `default` and every shared [account](./accounts.md) of that provider spend against one cap and park together, and each standalone account has a cap of its own. Either way the spend is summed across every room running on those accounts, while each room parks only the panes it owns.
 
 An account cap also needs a complete dollar history for that provider on disk, which only some agents publish: Claude, Codex, Grok, Pi, and OpenCode do today. For any other agent, config edits and room start refuse the key outright rather than enforce against incomplete dollars. `rimz budget --account KIND` refuses only if the targeted kind is ineligible, ignoring other keys. Fleet reports omit ineligible kinds and print a warning on stderr for each key to remove; fleet adjustments still proceed.
 

@@ -43,7 +43,7 @@ Any change lifts the park this agent's cap set. When that park had interrupted a
 
 ## Cap the room and accounts
 
-`rimz budget [VALUE]` inspects or changes the room's fleet cap, and `rimz budget --account <KIND> [VALUE]` the cap on this room's default account of one provider. Use `--account <KIND>@<NAME>` to target a particular declared login, including one still used by running agents after a room switch. Config is the on-switch: the command adjusts a cap that `harness.budget` or `[accounts.budget].<kind>` armed, and refuses to set one that config never switched on.
+`rimz budget [VALUE]` inspects or changes the room's fleet cap, and `rimz budget --account <KIND> [VALUE]` the cap on this room's default account of one provider. Use `--account <KIND>@<NAME>` to target a particular declared login, including one still used by running agents after a room switch. A cap belongs to a history pool, so `default` and every shared account of a kind name the same scope, printed as `<KIND>@default account`; a standalone account names its own. Config is the on-switch: the command adjusts a cap that `harness.budget` or `[accounts.budget].<kind>` armed, and refuses to set one that config never switched on.
 
 ```sh
 rimz budget                        # fleet cap plus every configured account cap
@@ -75,7 +75,7 @@ Every form prints the scope's report, after the change when there is one:
 | `parked` | `yes` when the cap has parked agents, otherwise `no`. |
 | `turn cap` | Printed only when `harness.turn_budget` is set, as `$N.NN/turn (source: config; per turn)`. `rimz budget` cannot change it. |
 
-Without `--account`, when `[accounts.budget]` has any key, a table follows with one row per configured login of each eligible capped kind, including logins no agent in this room uses. Its columns `ACCOUNT`, `CAP`, `SOURCE`, `SPEND`, and `PARKED` carry the same values as the fields above, except that `SPEND` prints `$N.NN` without `today`. Each ineligible key is omitted and gets one `rimz: warning: ...` line on stderr after the table, naming the key to remove and why. Fleet writes still proceed and print the same report and warnings afterward.
+Without `--account`, when `[accounts.budget]` has any key, a table follows with one row per history pool of each eligible capped kind (`<KIND>@default` for the default and shared accounts, plus one per standalone account), including pools no agent in this room uses. Its columns `ACCOUNT`, `CAP`, `SOURCE`, `SPEND`, and `PARKED` carry the same values as the fields above, except that `SPEND` prints `$N.NN` without `today`. Each ineligible key is omitted and gets one `rimz: warning: ...` line on stderr after the table, naming the key to remove and why. Fleet writes still proceed and print the same report and warnings afterward.
 
 Any change lifts the scope's park for this room's agents. When the cap had parked the scope, RimZ queues the configured continue prompt to each agent in this room that the park interrupted; `--no-continue` leaves them at rest. Agents another room interrupted on the same account stay at rest.
 

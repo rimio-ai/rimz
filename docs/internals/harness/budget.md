@@ -6,7 +6,7 @@
 
 A budget is a dollar cap RimZ enforces itself, at a scale the provider has no concept of: this agent, this turn, this room, this login. Crossing one **parks** the agent: RimZ presses Esc in its pane, stamps the park in a ledger, and leaves everything else alone. The CLI keeps running, the session files stay where the provider put them, and the turn's work up to the interrupt is already in the transcript.
 
-The engine reads spend that already exists. Agents write transcripts, the spending walk prices them, and the walk publishes per-room and per-account local-day tallies ([spending.md § What reads the totals](../agents/spending.md#what-reads-the-totals)). Budgets compare those figures against caps and turn a crossing into a stop.
+The engine reads spend that already exists. Agents write transcripts, the spending walk prices them, and the walk publishes per-room and per-history-pool local-day tallies ([spending.md § What reads the totals](../agents/spending.md#what-reads-the-totals)). Budgets compare those figures against caps and turn a crossing into a stop.
 
 Whether an agent is parked is answered by its ledger, never by its pane. The Esc keypress is only what makes the park visible to the agent. If the keypress fails, the ledger still says parked and a later tick interrupts again, so correctness never depends on the keypress landing.
 
@@ -21,7 +21,7 @@ Four scopes live in this module, and the sidebar producer evaluates them togethe
 | Agent | one agent session | launch identity: `--budget`, a profile, or a team role | session, or `/day` | `evaluate` |
 | Turn | every agent turn in one room | machine config `harness.turn_budget` | one turn | `evaluate_turn_scope` |
 | Room fleet | every agent under one project root | machine config `harness.budget` | `/day` only | `evaluate_daily_scope` |
-| Provider account | one provider account, across every room on it | machine config `[accounts.budget].<kind>`, applied to each account of the kind | `/day` only | `evaluate_daily_scope` |
+| Provider account | one history pool (`default` and every shared account of a kind, or one standalone account), across every room on it | machine config `[accounts.budget].<kind>`, applied once per pool of the kind | `/day` only | `evaluate_daily_scope` |
 | Loop task | one task's scheduled runs | the task's `--budget-per-day` | `/day` only | `run_log::daily_budget_gate` ([loops.md § One fire](./loops.md#one-fire)) |
 
 Enforcement treats the scopes independently: the first cap crossed parks the agent. The displayed park picks one scope, in the order agent, turn, fleet, account (`project_parks`), so a card names the narrowest reason.
@@ -58,7 +58,7 @@ Each scope reads a different figure.
 | Agent, `/day` window | the same cumulative cost minus the ledger's `day_baseline` |
 | Turn | the same cumulative cost minus the `baseline_cost_usd` stamped when the turn started |
 | Room fleet | the workspace spending cache's local-day total, with the live overlay applied so costs not yet flushed into the walk still count |
-| Provider account | the machine-shared provider spending cache's `day_by_login` entry for the agent's `LoginKey` (kind plus launch login, such as `claude@work`); a missing entry reads as zero, never as the kind-wide total |
+| Provider account | the machine-shared provider spending cache's `day_by_login` entry for the pool of the agent's `LoginKey` (`claude@default` for a shared `claude@work`, its own key for a standalone one); `DailyBudgetScope::account` maps the login through `LoginCatalog::pool`, so scope, ledger (`budget.account.<pool key>.json`), and agent matching all agree. A missing entry reads as zero, never as the kind-wide total |
 
 The `/day` baseline is stamped on the first evaluation of a local date and re-stamped when the date changes, so one long-lived session measures each calendar day separately while the provider's counter keeps climbing.
 
