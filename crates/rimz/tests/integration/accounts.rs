@@ -469,6 +469,45 @@ fn accounts_add_history_writes_only_that_field() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn accounts_add_history_keeps_the_declared_mode_when_the_switch_is_refused() {
+    let env = Env::new();
+    let config = env.rimz_home().join("config.toml");
+    let home = env.home_root.join("work-home");
+    let native = env.home_root.join(".claude");
+    succeeded(&accounts(
+        &env,
+        &[
+            "add",
+            "claude",
+            "work",
+            "--home",
+            home.to_str().unwrap(),
+            "--history",
+            "standalone",
+        ],
+    ));
+    let declared = std::fs::read_to_string(&config).unwrap();
+    assert!(declared.contains("history = \"standalone\""), "{declared}");
+
+    // Sharing must set the account's own `projects` aside, which a file in
+    // the aside directory's place prevents (for root too, unlike a mode).
+    std::fs::create_dir_all(home.join("projects")).unwrap();
+    std::fs::create_dir_all(native.join("projects")).unwrap();
+    std::fs::write(home.join(".rimz-aside"), "").unwrap();
+    let refused = accounts(&env, &["add", "claude", "work", "--history", "shared"]);
+
+    let error = failed(&refused);
+    assert!(error.contains("cannot link"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        declared,
+        "a refused switch leaves the config as it was"
+    );
+    assert!(home.join("projects").is_dir() && !home.join("projects").is_symlink());
+}
+
 #[test]
 fn machine_account_switch_and_removal_preserve_declared_accounts() {
     let env = Env::new();

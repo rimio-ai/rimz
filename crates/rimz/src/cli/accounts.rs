@@ -118,7 +118,7 @@ fn add(
     if name.is_default() {
         bail!("`default` is {kind}'s own home and needs no declaring; choose another name");
     }
-    let home = home
+    let home_flag = home
         .map(std::path::absolute)
         .transpose()
         .context("resolving --home")?;
@@ -127,33 +127,30 @@ fn add(
     let catalog = LoginCatalog::from_config(&machine.accounts)?;
     let existing = catalog.select(kind, &name).ok();
     let declaring = existing.is_none();
-    let login = match (existing, home.as_ref()) {
-        (Some(existing), None) => existing,
-        (existing, home) => {
-            let mut accounts = machine.accounts.clone();
-            if let Some(declared) = accounts.named_mut(kind) {
-                declared.insert(
-                    name.clone(),
-                    NamedAccount {
-                        home: home.cloned(),
-                        history: history.unwrap_or_default(),
-                    },
-                );
-            }
-            let login = LoginCatalog::from_config(&accounts)?.select(kind, &name)?;
-            match existing {
-                Some(existing) if lexical_home(&existing) != lexical_home(&login) => bail!(
-                    "{kind} account `{name}` already lives at `{}`; rerun without --home, or remove the account first",
-                    existing
-                        .home()
-                        .unwrap_or(std::path::Path::new(""))
-                        .display()
-                ),
-                Some(existing) => existing,
-                None => login,
-            }
-        }
-    };
+    // The login under the requested declaration, which reaches the config
+    // file only once the home is reconciled to it.
+    let mut accounts = machine.accounts.clone();
+    if let Some(declared) = accounts.named_mut(kind) {
+        let account = declared
+            .entry(name.clone())
+            .or_insert_with(|| NamedAccount {
+                home: home_flag.clone(),
+                history: AccountHistory::default(),
+            });
+        account.history = history.unwrap_or(account.history);
+    }
+    let login = LoginCatalog::from_config(&accounts)?.select(kind, &name)?;
+    if let Some((existing, home)) = existing.as_ref().zip(home_flag.as_deref())
+        && lexical_home(existing) != Some(normalize_path_lexical(home))
+    {
+        bail!(
+            "{kind} account `{name}` already lives at `{}`; rerun without --home, or remove the account first",
+            existing
+                .home()
+                .unwrap_or(std::path::Path::new(""))
+                .display()
+        );
+    }
     for account in std::iter::once(&login).chain(
         catalog
             .all()
@@ -181,17 +178,19 @@ fn add(
     // Sound: `select` answers a non-default name only with a declared home.
     let named_home = login.home().expect("a named account has a home");
     rimz::agents::account_links::check_distinct_homes(named_home, &default_home)?;
-    let login = if declaring || history.is_some() {
+    // A first declaration is written before the home changes, so a rerun
+    // finds it; a mode switch is written only once the home matches it.
+    let write_declaration = || {
         ConfigEditor::machine().upsert_named_account(
             kind,
             &name,
-            home.as_deref().filter(|_| declaring),
+            home_flag.as_deref().filter(|_| declaring),
             history,
-        )?;
-        LoginCatalog::from_config(&MachineConfig::load()?.accounts)?.select(kind, &name)?
-    } else {
-        login
+        )
     };
+    if declaring {
+        write_declaration()?;
+    }
     let home = login.home().expect("a named account has a home");
     std::fs::create_dir_all(home)
         .with_context(|| format!("creating {kind} account home {}", home.display()))?;
@@ -200,6 +199,9 @@ fn add(
     let shared = rimz::agents::account_links::reconcile(&login, &ambient, &|| {
         rimz::room::other_live_agents_on(&account, &[]).ok()
     })?;
+    if !declaring && history.is_some() {
+        write_declaration()?;
+    }
     let mut out = render::out();
     if let Some(shared) = shared {
         writeln!(out, "{shared}")?;
