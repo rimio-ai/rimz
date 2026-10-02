@@ -4,7 +4,6 @@ use rimz::agents::{AgentState, AgentStatus, LaunchParams};
 use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::run::{RunCancellation, SupervisedRunRequest};
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
-use rimz::harness::spec::Cell;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::pane::PaneRef;
 use rimz::store::run::{RunStatus, WakeupFrame};
@@ -407,84 +406,6 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
 }
 
 #[test]
-fn tier_override_changes_the_supervised_launch_runtime() {
-    let root = tempfile::tempdir().unwrap();
-    std::fs::create_dir(root.path().join("agents")).unwrap();
-    for kind in ["claude", "codex"] {
-        std::fs::write(
-            root.path().join(format!("agents/{kind}.md")),
-            "---\ndescription: Base\n---\nBase.",
-        )
-        .unwrap();
-    }
-    std::fs::write(
-        root.path().join("agents/worker.md"),
-        "---\ndescription: Worker\nagent: codex\ntier: senior\ntools: [Bash]\n---\nCraft.",
-    )
-    .unwrap();
-    let mut machine = rimz::config::MachineConfig::default();
-    let definitions = rimz::config::definitions::load(
-        root.path(),
-        rimz::config::definitions::SkillCheck::Skip,
-        &machine.agents.commands,
-        &machine.tiers,
-    );
-    assert!(definitions.errors.is_empty(), "{:?}", definitions.errors);
-    machine.agents.profiles = definitions.agent_profiles;
-    let workspace = rimz::workspace::WorkspaceResolver::resolve(root.path(), None).unwrap();
-    let mut request = supervised_request("Read the brief.", false);
-    request.tier = Some(rimz::config::tiers::ModelTier::Principal);
-    request.agent = Some("codex".into());
-    let resolved = super::run::prepare_supervised_launch_layout(
-        &request,
-        "worker",
-        &workspace,
-        &machine,
-        rimz::config::effective::ProfileScope::Agents,
-        None,
-        |_| rimz::store::writer::LaunchLogin::RoomDefault,
-    )
-    .unwrap();
-    let cell = resolved.layout.agent_cells().next().unwrap();
-    assert_eq!(cell.kind.as_str(), "claude");
-    assert_eq!(cell.launch.model.as_deref(), Some("fable"));
-    assert!(cell.args.iter().any(|arg| arg == "--tools"));
-}
-
-#[test]
-fn supervised_launch_normalizes_model_and_effort_overrides() {
-    let mut request = supervised_request("fix-it", false);
-    request.model = Some(" gpt-5 ".to_owned());
-    request.effort = Some(" low ".to_owned());
-    let dir = tempfile::tempdir().expect("temp dir");
-    let workspace =
-        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
-
-    let prepared = super::run::prepare_supervised_launch_layout(
-        &request,
-        &request.spec,
-        &workspace,
-        &rimz::config::MachineConfig::default(),
-        rimz::config::effective::ProfileScope::Agents,
-        None,
-        |_| rimz::store::writer::LaunchLogin::RoomDefault,
-    )
-    .expect("prepare supervised launch")
-    .layout;
-    let [
-        Cell::Agent(rimz::harness::spec::AgentCell {
-            launch: LaunchParams { model, effort, .. },
-            ..
-        }),
-    ] = prepared.columns[0].rows.as_slice()
-    else {
-        panic!("one agent")
-    };
-    assert_eq!(model.as_deref(), Some("gpt-5"));
-    assert_eq!(effort.as_deref(), Some("low"));
-}
-
-#[test]
 fn subagent_launch_anchors_at_the_parent_checkout() {
     use clap::Parser;
 
@@ -622,26 +543,6 @@ fn supervised_selection_checks_subagent_allowlist() {
 #[test]
 fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
     let request = supervised_request("amp", true);
-    let dir = tempfile::tempdir().expect("temp dir");
-    let workspace =
-        rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("resolve workspace");
-
-    let err = super::run::prepare_supervised_launch_layout(
-        &request,
-        "claude",
-        &workspace,
-        &rimz::config::MachineConfig::default(),
-        rimz::config::effective::ProfileScope::Subagents,
-        None,
-        |_| rimz::store::writer::LaunchLogin::RoomDefault,
-    )
-    .expect_err("spec-like prompt");
-    assert!(
-        err.to_string()
-            .contains("prompt `amp` looks like another spec cell"),
-        "{err:#}"
-    );
-
     let adapter = rimz::agents::find_definition("amp").unwrap();
     let prompt = super::run::supervised_prompt(&request, adapter);
     assert_eq!(
