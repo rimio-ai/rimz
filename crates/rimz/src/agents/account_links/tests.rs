@@ -626,12 +626,12 @@ fn two_accounts_moving_one_name_into_the_default_home_overwrite_nothing() {
     let work = Fixture::new("codex");
     let team = work.sibling("team");
     assert_eq!(
-        crate::disk::paths::account_lock(&work.account),
-        crate::disk::paths::account_lock(&team.account)
+        crate::disk::paths::account_lock(&work.account.kind),
+        crate::disk::paths::account_lock(&team.account.kind)
     );
     assert_ne!(
-        crate::disk::paths::account_lock(&work.account),
-        crate::disk::paths::account_lock(&"claude@work".parse().unwrap())
+        crate::disk::paths::account_lock(&work.account.kind),
+        crate::disk::paths::account_lock(&AgentKind::new_unchecked("claude"))
     );
     fs::write(work.named.join("history.jsonl"), "work").unwrap();
     fs::write(team.named.join("history.jsonl"), "team").unwrap();
