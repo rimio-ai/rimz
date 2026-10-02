@@ -149,7 +149,8 @@ upward-dependencies = ["address"]
 # RoomLoginSet::current_keys names each kind's launch login for the dashboard fold (+1).
 # The window-span vocabulary and its span selector serve loop window triggers in the scheduler and CLI (+4).
 # LaunchCapability::temp_dir_env_keys names a provider's own temp-root override for the launch plan (+1).
-surface-budget = 946
+# LoginCatalog::pool maps a login to its history pool for the resume gate, spend, and budget (+1).
+surface-budget = 947
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -266,7 +267,8 @@ upward-dependencies = [
 # ToolRule carries validated definition permission rules across launch boundaries (+1).
 # MachineConfig::require_readable_core shares birth/worktree refusal; ConfigEditor::use_account preserves machine selection edits (+2).
 # MachineConfig::model_alias exposes machine pins to the launch wrapper (+1).
-surface-budget = 183
+# AccountHistory carries a named account's history mode to the login catalog and `rimz accounts` (+1).
+surface-budget = 184
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

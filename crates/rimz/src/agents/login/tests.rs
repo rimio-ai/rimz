@@ -597,3 +597,32 @@ fn native_ambient_drops_only_an_exported_home_naming_a_declared_account() {
     let team = ambient("/srv/team");
     assert_eq!(catalog.native_ambient(&kind("claude"), &team), team);
 }
+
+#[test]
+fn pool_joins_default_and_shared_accounts_and_isolates_the_rest() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts(
+            "[claude.work]\nhome = \"/srv/work\"\n[claude.personal]\nhome = \"/srv/personal\"\nhistory = \"shared\"\n[claude.solo]\nhome = \"/srv/solo\"\nhistory = \"standalone\"\n",
+        ),
+        Some(Path::new("/home/u")),
+    )
+    .expect("catalog");
+    let key = |kind_name: &str, login: &str| LoginKey::new(kind(kind_name), name(login));
+    for shared in ["default", "work", "personal"] {
+        assert_eq!(
+            catalog.pool(&key("claude", shared)),
+            LoginKey::default_for(kind("claude")),
+            "{shared}"
+        );
+    }
+    assert_eq!(catalog.pool(&key("claude", "solo")), key("claude", "solo"));
+    assert_eq!(catalog.pool(&key("claude", "gone")), key("claude", "gone"));
+    assert_eq!(catalog.pool(&key("codex", "work")), key("codex", "work"));
+    assert_eq!(
+        catalog.pool(&key("codex", "default")),
+        LoginKey::default_for(kind("codex"))
+    );
+    // A config that does not load leaves the empty catalog: no login shares.
+    let unloaded = LoginCatalog::default();
+    assert_eq!(unloaded.pool(&key("claude", "work")), key("claude", "work"));
+}

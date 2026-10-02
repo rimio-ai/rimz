@@ -51,6 +51,41 @@ pub struct NamedAccount {
     /// location RimZ derives from the kind and the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<PathBuf>,
+    /// Absent means shared; only `standalone` is written back.
+    #[serde(default, skip_serializing_if = "AccountHistory::is_shared")]
+    pub history: AccountHistory,
+}
+
+/// Whether a named account keeps its provider history to itself.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountHistory {
+    /// Everything but credentials is the default provider home's.
+    #[default]
+    Shared,
+    /// The account home holds its own sessions and transcripts.
+    Standalone,
+}
+
+impl AccountHistory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::Standalone => "standalone",
+        }
+    }
+
+    fn is_shared(&self) -> bool {
+        *self == Self::Shared
+    }
+}
+
+impl std::str::FromStr for AccountHistory {
+    type Err = de::value::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::deserialize(de::value::StrDeserializer::new(value))
+    }
 }
 
 impl AccountsConfig {
@@ -315,6 +350,34 @@ mod tests {
                 .contains("unknown field")
         );
         assert!(toml::from_str::<AccountsConfig>("[claude.Work]\n").is_err());
+    }
+
+    #[test]
+    fn account_history_is_shared_unless_declared_standalone() {
+        let config: AccountsConfig = toml::from_str(
+            "[claude.work]\n[claude.solo]\nhistory = \"standalone\"\n[codex.team]\nhistory = \"shared\"\n",
+        )
+        .expect("parse account history");
+        assert_eq!(config.claude["work"].history, AccountHistory::Shared);
+        assert_eq!(config.claude["solo"].history, AccountHistory::Standalone);
+        assert_eq!(config.codex["team"].history, AccountHistory::Shared);
+        let rendered = toml::to_string(&config).expect("serialize accounts");
+        assert_eq!(rendered.matches("history").count(), 1, "{rendered}");
+        assert!(rendered.contains("history = \"standalone\""), "{rendered}");
+    }
+
+    #[test]
+    fn account_history_refuses_an_unknown_value_at_strict_load() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.toml");
+        std::fs::write(&path, "[accounts.claude.work]\nhistory = \"mine\"\n").unwrap();
+        let error = crate::config::MachineConfig::load_from(&path, root.path())
+            .expect_err("an unknown history value");
+        let error = format!("{:#}", anyhow::Error::from(error));
+        assert!(
+            error.contains("`shared`") && error.contains("`standalone`"),
+            "{error}"
+        );
     }
 
     #[test]

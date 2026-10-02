@@ -35,7 +35,7 @@ A `config.toml` entry that breaks a rule, or that declares `default`, makes ever
 ## `add`
 
 ```sh
-rimz accounts add <KIND> <NAME> [--home <PATH>]
+rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone]
 ```
 
 | Argument or flag | Effect |
@@ -43,10 +43,11 @@ rimz accounts add <KIND> <NAME> [--home <PATH>]
 | `KIND` | `claude` or `codex`. |
 | `NAME` | The account name a room selects with `--account <KIND>=<NAME>`. |
 | `--home <PATH>` | The account's provider home, such as an existing `~/.claude-work`. Without it, the home is the default location above. |
+| `--history <MODE>` | `shared` or `standalone`: the account's `history` field, which names its history pool. `shared`, also what an absent field means, puts the account in one pool with `default` and every other shared account of its kind; `standalone` makes it a pool of its own. On a new account the flag writes the field, and without the flag no field is written. On an existing account the flag rewrites only that field, and without the flag the field is left alone. Any other value is refused, by the flag and by the config load, naming both. |
 
 `add` runs these steps in order:
 
-1. Writes `[accounts.<KIND>.<NAME>]` to the machine `config.toml`, with `home` only when `--home` is given.
+1. Writes `[accounts.<KIND>.<NAME>]` to the machine `config.toml`, with `home` only when `--home` is given and `history` only when `--history` is given.
 2. Creates the home directory.
 3. Links the entries below to the provider's own home as `default` resolves it, honoring the ambient `CLAUDE_CONFIG_DIR` or `CODEX_HOME`. Reports linked entries, existing links, and any moves to `.orig`.
 4. Installs RimZ hooks through the named home's config link (`settings.json` for Claude, `config.toml` for Codex), updating the shared file in the provider's own home too.
@@ -116,12 +117,12 @@ rimz accounts list [--json]
 
 ```console
 $ rimz accounts list
-   KIND    NAME      STATUS           DEFAULT FOR  AGENTS  HOME
-   claude  default   ready            -            -       ~/.claude
-●  claude  work      ready            new rooms    -       ~/.rimz/accounts/claude/work
+   KIND    NAME      STATUS           DEFAULT FOR  AGENTS  HISTORY  HOME
+   claude  default   ready            -            -       -        ~/.claude
+●  claude  work      ready            new rooms    -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default   hooks untrusted  new rooms    -       ~/.codex
-   codex   personal  hooks missing    -            -       ~/codex-me
+●  codex   default   hooks untrusted  new rooms    -       -        ~/.codex
+   codex   personal  hooks missing    -            -       shared   ~/codex-me
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run `rimz accounts add codex personal`
 ```
@@ -137,6 +138,8 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `new rooms` | The machine's `[accounts.use]` selection, or `default` when the machine selects nothing for its kind. |
 
 `AGENTS` counts the live agents on the account across every live room, `-` for none. When the rooms cannot be listed, or one live room's agents cannot be read, the column reads `–` and a warning on stderr names the cause.
+
+`HISTORY` is the account's `history` mode, `shared` or `standalone`, and `-` for `default` and for a selected account nothing declares.
 
 `HOME` for a `default` row is the directory the provider resolves from your environment, so a `CLAUDE_CONFIG_DIR` or `CODEX_HOME` you have exported shows there, unless it names a declared account's home, as it does in a pane born on that account; then the row shows the provider's own home. `STATUS` is one of:
 
@@ -157,6 +160,7 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `kind` | `claude` or `codex`. |
 | `name` | The account name, `default` included. |
 | `home` | Absolute path of the home, or `null` when the provider's home cannot be resolved. |
+| `history` | `shared` or `standalone`; `null` for `default` and for a selected account nothing declares. |
 | `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
 | `problem` | The problem line with its fix. Present only when the account has a problem. |
 | `status` | The `STATUS` word in snake case: `ready`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. |

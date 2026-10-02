@@ -55,8 +55,11 @@
 # claude=work`; `default` is the provider's own home and is never declared.
 # `rimz accounts add` writes these entries, creates the directory and installs
 # the RimZ hooks into it. An empty table takes RimZ's default location.
+# `history` is "shared" (the default: the account joins the provider's own
+# history pool) or "standalone" (the account is a pool of its own).
 ## [accounts.claude.work]
 ## home = "/home/you/.claude-work"
+## history = "standalone"
 ## [accounts.codex.personal]
 
 # Account selections for new rooms, below --account and trusted project choices.

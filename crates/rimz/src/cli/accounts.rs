@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use rimz::agents::{AccountStatus, BirthLoginErr, LoginCatalog, ProviderLogin};
-use rimz::config::{AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
+use rimz::config::{AccountHistory, AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
 use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
 use rimz::room::{AccountStanding, Scopes};
 use rimz::utils::path::normalize_path_lexical;
@@ -47,6 +47,10 @@ enum AccountsSubcmd {
         /// RimZ data root.
         #[arg(long)]
         home: Option<PathBuf>,
+        /// `shared` (the default) keeps only credentials in the account home;
+        /// `standalone` keeps the account's sessions and transcripts apart.
+        #[arg(long, value_name = "MODE")]
+        history: Option<AccountHistory>,
     },
     /// List every account with its home and whether a room can launch into it.
     List {
@@ -65,7 +69,12 @@ enum AccountsSubcmd {
 
 pub fn run(args: AccountsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        AccountsSubcmd::Add { kind, name, home } => add(&account_kind(&kind)?, name, home),
+        AccountsSubcmd::Add {
+            kind,
+            name,
+            home,
+            history,
+        } => add(&account_kind(&kind)?, name, home, history),
         AccountsSubcmd::List { json } => list(globals, json),
         AccountsSubcmd::Remove { kind, name } => remove(&account_kind(&kind)?, &name),
         AccountsSubcmd::Use { kind, name, global } => {
@@ -100,7 +109,12 @@ fn account_kind(raw: &str) -> Result<AgentKind> {
     )
 }
 
-fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
+fn add(
+    kind: &AgentKind,
+    name: LoginName,
+    home: Option<PathBuf>,
+    history: Option<AccountHistory>,
+) -> Result<()> {
     if name.is_default() {
         bail!("`default` is {kind}'s own home and needs no declaring; choose another name");
     }
@@ -122,6 +136,7 @@ fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
                     name.clone(),
                     NamedAccount {
                         home: home.cloned(),
+                        history: history.unwrap_or_default(),
                     },
                 );
             }
@@ -166,8 +181,13 @@ fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
     // Sound: `select` answers a non-default name only with a declared home.
     let named_home = login.home().expect("a named account has a home");
     rimz::agents::account_links::check_distinct_homes(named_home, &default_home)?;
-    if declaring {
-        ConfigEditor::machine().upsert_named_account(kind, &name, home.as_deref())?;
+    if declaring || history.is_some() {
+        ConfigEditor::machine().upsert_named_account(
+            kind,
+            &name,
+            home.as_deref().filter(|_| declaring),
+            history,
+        )?;
     }
     let home = named_home;
     std::fs::create_dir_all(home)
@@ -282,6 +302,8 @@ struct AccountRow {
     kind: AgentKind,
     name: LoginName,
     home: Option<PathBuf>,
+    /// `None` for `default` and for a selected account nothing declares.
+    history: Option<AccountHistory>,
     machine_default: bool,
     /// Why a room cannot launch into this account, with the fix.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -352,6 +374,10 @@ fn account_rows(
             kind: kind.clone(),
             name: name.clone(),
             home,
+            history: accounts
+                .named(kind)
+                .and_then(|declared| declared.get(name))
+                .map(|account| account.history),
             machine_default: accounts.use_accounts.get(kind).cloned().unwrap_or_default() == *name,
             status: AccountStatus::of(problem.as_ref()),
             problem: problem.map(|err| err.to_string()),
@@ -411,6 +437,7 @@ fn write_accounts(w: &mut impl std::io::Write, rows: &[AccountRow]) -> std::io::
         "STATUS",
         "DEFAULT FOR",
         "AGENTS",
+        "HISTORY",
         "HOME",
     ]);
     let mut previous: Option<&AgentKind> = None;
@@ -441,6 +468,10 @@ fn write_accounts(w: &mut impl std::io::Write, rows: &[AccountRow]) -> std::io::
                 Some(0) => render::cell("-").dash(),
                 Some(count) => render::cell(count.to_string()),
             },
+            row.history.map_or_else(
+                || render::cell("-").dash(),
+                |history| render::cell(history.as_str()),
+            ),
             row.home.as_ref().map_or_else(
                 || render::cell("-").dash(),
                 |home| {
@@ -605,6 +636,32 @@ mod tests {
             .expect_err("--room is gone");
     }
 
+    #[test]
+    fn add_takes_a_history_mode_and_refuses_an_unknown_one() {
+        let history = |argv: &[&str]| {
+            AccountsHarness::try_parse_from(argv).map(|parsed| match parsed.args.command {
+                AccountsSubcmd::Add { history, .. } => history,
+                other => panic!("{other:?} parsed as another subcommand"),
+            })
+        };
+        let add = ["accounts", "add", "claude", "work"];
+        assert_eq!(history(&add).unwrap(), None);
+        for (word, mode) in [
+            ("shared", AccountHistory::Shared),
+            ("standalone", AccountHistory::Standalone),
+        ] {
+            let argv = [&add[..], &["--history", word]].concat();
+            assert_eq!(history(&argv).unwrap(), Some(mode));
+        }
+        let error = history(&[&add[..], &["--history", "mine"]].concat())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("shared") && error.contains("standalone"),
+            "{error}"
+        );
+    }
+
     fn listed(
         accounts: &str,
         agents: Option<&BTreeMap<LoginKey, usize>>,
@@ -632,7 +689,7 @@ mod tests {
             2,
         )]);
         let (rows, text) = listed(
-            "[claude.alpha]\nhome = \"/srv/alpha\"\n[codex.team]\nhome = \"/srv/team\"\n[use]\ncodex = \"team\"\n",
+            "[claude.alpha]\nhome = \"/srv/alpha\"\n[codex.team]\nhome = \"/srv/team\"\nhistory = \"standalone\"\n[use]\ncodex = \"team\"\n",
             Some(&counts),
         );
         let lines: Vec<&str> = text.lines().collect();
@@ -668,7 +725,17 @@ mod tests {
         );
         assert!(lines[1].contains("  -  "), "{text}");
         assert!(!text.contains("native"), "{text}");
+        assert!(lines[0].contains("  AGENTS  HISTORY     HOME"), "{text}");
+        assert!(lines[1].contains("  -           /nonexistent"), "{text}");
+        assert!(lines[2].contains("  shared      /srv/alpha"), "{text}");
+        assert!(lines[5].contains("  standalone  /srv/team"), "{text}");
+        assert_eq!(
+            serde_json::to_value(&rows[0]).unwrap()["history"],
+            serde_json::Value::Null
+        );
+        assert_eq!(serde_json::to_value(&rows[1]).unwrap()["history"], "shared");
         let team = serde_json::to_value(&rows[3]).unwrap();
+        assert_eq!(team["history"], "standalone");
         assert_eq!(team["active"], true);
         assert_eq!(team["default_for"], serde_json::json!(["new_rooms"]));
         assert_eq!(team["agents"], 2);
