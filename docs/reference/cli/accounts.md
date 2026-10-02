@@ -198,7 +198,7 @@ cleared the machine selection; new rooms now use claude account `default`
 removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use claude default` for future launches
 ```
 
-A room selecting the removed account keeps that default, so its next launch fails with the account's declaration fix. Add the account again, or run `rimz accounts use <KIND> default` inside the room for future launches. Old sessions still require their account to be declared, and selected in the room, to resume. `rimz reset --account <KIND>=<NAME>` remains a destructive alternative that rebuilds the room.
+A room selecting the removed account keeps that default, so its next launch fails with the account's declaration fix. Add the account again, or run `rimz accounts use <KIND> default` inside the room for future launches. Old sessions still require their account to be declared to resume, and the room to select an account that shares its history: `default` or any shared account for a shared one, the account itself for a standalone one. `rimz reset --account <KIND>=<NAME>` remains a destructive alternative that rebuilds the room.
 
 If a live room still selects the account as its launch default, removal proceeds and warns with the room's name and the add-or-switch fixes. The warning reads room records only; it does not enumerate older account stamps on running agents.
 

@@ -399,9 +399,11 @@ fn plan_recovery(
         .ok()
         .and_then(|record| record.logins)
         .unwrap_or_default();
+    let catalog = crate::agents::LoginCatalog::from_config(&machine.accounts).unwrap_or_default();
     let (team, flat_agents) = split_team_and_flat(
         &agents,
         &logins,
+        &catalog,
         teams,
         profiles,
         &machine.agents.commands,
@@ -426,6 +428,7 @@ fn plan_recovery(
             profiles,
             max: machine.resume.max.saturating_sub(team_panes),
             logins: &logins,
+            catalog: &catalog,
         },
         Path::is_dir,
         resume_session_present,

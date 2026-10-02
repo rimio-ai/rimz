@@ -2213,7 +2213,18 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
 }
 
 #[test]
-fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() {
+fn standalone_account_room_launches_into_its_home_and_refuses_cross_account_resume() {
+    account_room_journey("standalone");
+}
+
+#[test]
+fn shared_account_room_resumes_under_the_rooms_new_account() {
+    account_room_journey("shared");
+}
+
+/// Launch on a named Claude account, then rebirth the room on `default`: a
+/// standalone account's session is refused, a shared one's continues there.
+fn account_room_journey(history: &str) {
     if which::which("tmux").is_err() {
         crate::common::skip("tmux not on PATH");
         return;
@@ -2228,7 +2239,8 @@ fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() 
     let work_home = env.home_root.join("claude-work");
     let added = env
         .rimz()
-        .args(["accounts", "add", "claude", "work", "--home"])
+        .args(["accounts", "add", "claude", "work", "--history", history])
+        .arg("--home")
         .arg(&work_home)
         .bounded_output_within(Duration::from_secs(30))
         .expect("add work account");
@@ -2241,10 +2253,16 @@ fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() 
     let shim = stub_dir.join("claude");
     let launched_homes = env.home_root.join("launched-homes");
     let body = std::fs::read_to_string(&shim).expect("read claude shim");
+    // A real provider saves its conversation under its home; resume planning
+    // reads that file once any home holds a `projects` directory.
     let body = body.replacen(
         "session=",
         &format!(
-            "printf '%s\\n' \"${{CLAUDE_CONFIG_DIR:-native}}\" >> {}\nsession=",
+            "printf '%s\\n' \"${{CLAUDE_CONFIG_DIR:-native}}\" >> {}\n\
+             saved=\"${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/projects/$(printf '%s' \"$PWD\" | sed 's/[^A-Za-z0-9]/-/g')\"\n\
+             mkdir -p \"$saved\"\n\
+             printf '{{}}\\n' > \"$saved/${{RIMZ_TEST_AGENT_SESSION:-sess-hook-agent}}.jsonl\"\n\
+             session=",
             shell_quote(&launched_homes.display().to_string())
         ),
         1,
@@ -2377,6 +2395,36 @@ fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() 
         String::from_utf8_lossy(&reborn.stderr)
     );
     assert!(reborn.status.success(), "rebirth failed: {output}");
+    if history == "shared" {
+        let expected = format!("{}\nnative\n", work_home.display());
+        let deadline = Instant::now() + CAPTURE_BUDGET;
+        let (homes, stamp) = loop {
+            let homes = std::fs::read_to_string(&launched_homes).expect("launched homes trace");
+            // The audit rollup keeps the row once the reopened stand-in exits.
+            let stamp = env
+                .store()
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .expect("read audit rollup")
+                .agents
+                .iter()
+                .find(|agent| agent.name.as_deref() == Some("account-worker"))
+                .map(|agent| agent.login.clone());
+            if (homes == expected && stamp == Some(None)) || Instant::now() >= deadline {
+                break (homes, stamp);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(
+            homes, expected,
+            "the work session is reopened under the default account: {output}"
+        );
+        assert_eq!(
+            stamp,
+            Some(None),
+            "the stamp follows the account it now runs on"
+        );
+        return;
+    }
     let mismatch = "@account-worker's session belongs to claude account `work`; this room now launches claude on `default`. Run `rimz accounts use claude work` to resume it, then switch back.";
     assert!(
         output.contains(mismatch) && output.contains("(different account)"),

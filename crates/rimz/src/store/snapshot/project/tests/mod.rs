@@ -231,6 +231,7 @@ fn attach_event(
         "session",
         &AgentKind::new_unchecked(kind),
         AgentAttachPayload {
+            login: None,
             record: None,
             tier: None,
             mode: None,
@@ -248,6 +249,38 @@ fn attach_event(
             ),
         },
     )
+}
+
+#[test]
+fn attach_login_moves_the_stamp_and_an_absent_one_keeps_it() {
+    let attach = |login: Option<&str>| {
+        let EventKind::AgentAttach(payload) =
+            attach_event("codex", "sess-1", Some("launch-1"), "tmux:%4", None, 7).kind()
+        else {
+            panic!("agent attach event")
+        };
+        EventEnvelope::agent_attached(
+            workspace(),
+            "session",
+            &AgentKind::new_unchecked("codex"),
+            AgentAttachPayload {
+                login: login.map(|name| name.parse().expect("login name")),
+                ..payload
+            },
+        )
+    };
+    let stamp = |events: &[EventEnvelope]| reduce_agent_states(events)[0].login_key().to_string();
+
+    let born = attach(Some("work"));
+    assert_eq!(stamp(std::slice::from_ref(&born)), "codex@work");
+    // An event written before the field replays to the previous stamp.
+    assert_eq!(stamp(&[born.clone(), attach(None)]), "codex@work");
+    assert_eq!(
+        stamp(&[born.clone(), attach(Some("personal"))]),
+        "codex@personal"
+    );
+    let cleared = reduce_agent_states(&[born, attach(Some("default"))]);
+    assert_eq!(cleared[0].login, None);
 }
 
 fn raw_launch(
@@ -1560,6 +1593,7 @@ fn resumed_fork_events(provider_pane: &str) -> Vec<EventEnvelope> {
             "session",
             &AgentKind::new_unchecked("codex"),
             AgentAttachPayload {
+                login: None,
                 record: None,
                 tier: None,
                 mode: None,
@@ -1834,6 +1868,7 @@ fn launch_identity_retry_inspects_only_same_instance_candidates() {
         "session",
         &AgentKind::new_unchecked("codex"),
         AgentAttachPayload {
+            login: None,
             record: None,
             tier: None,
             mode: None,

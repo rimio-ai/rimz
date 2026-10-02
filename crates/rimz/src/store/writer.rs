@@ -488,7 +488,8 @@ impl Store {
 
     /// Persist a resumed session's stable identity and wrapper pane.
     ///
-    /// The owner names the agent process the row belongs to.
+    /// The owner names the agent process the row belongs to, and `login` the
+    /// account that process runs under, which becomes the row's stamp.
     #[must_use = "durability barrier; check the result"]
     #[allow(clippy::too_many_arguments)]
     pub fn attach_agent_pane(
@@ -496,6 +497,7 @@ impl Store {
         kind: &crate::ids::AgentKind,
         agent_id: &crate::ids::AgentSessionId,
         launch_id: Option<&crate::ids::AgentSessionId>,
+        login: &crate::ids::LoginName,
         session_name: &str,
         pane_id: &crate::ids::PaneId,
         runtime_owner: RuntimeOwner,
@@ -516,6 +518,7 @@ impl Store {
                     isolation,
                     effective_isolation,
                     launch_id: launch_id.cloned(),
+                    login: Some(login.clone()),
                     pane_id: pane_id.clone(),
                     pane_pid: Some(std::process::id()),
                     runtime_owner,

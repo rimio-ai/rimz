@@ -9,6 +9,8 @@ use jiff::Timestamp;
 
 const RIMZ_BIN: &str = "/bin/rimz";
 static NO_LOGINS: RoomLogins = RoomLogins::new();
+static NO_ACCOUNTS: std::sync::LazyLock<LoginCatalog> =
+    std::sync::LazyLock::new(LoginCatalog::default);
 static WORKSPACE: std::sync::LazyLock<WorkspaceId> =
     std::sync::LazyLock::new(|| WorkspaceId::from_project_root(Path::new("/repo")));
 static RUNTIME: std::sync::LazyLock<RuntimePaths> = std::sync::LazyLock::new(|| {
@@ -206,6 +208,7 @@ fn ctx<'a>(
         profiles,
         max,
         logins: &NO_LOGINS,
+        catalog: &NO_ACCOUNTS,
     }
 }
 
@@ -215,6 +218,19 @@ fn claude_room(name: &str) -> RoomLogins {
         AgentKind::new_unchecked("claude"),
         name.parse().expect("login name"),
     )])
+}
+
+/// Claude accounts `work` and `personal`, both sharing history unless
+/// `work_history` says otherwise.
+fn claude_accounts(work_history: &str) -> LoginCatalog {
+    LoginCatalog::from_config(
+        &toml::from_str(&format!(
+            "[claude.work]\nhome = \"/srv/claude-work\"\nhistory = \"{work_history}\"\n\
+             [claude.personal]\nhome = \"/srv/claude-personal\"\n"
+        ))
+        .expect("accounts toml"),
+    )
+    .expect("login catalog")
 }
 
 fn no_profiles() -> ProfilesConfig {
@@ -379,6 +395,7 @@ fn cohort_with(
     plan_cohort_resume(
         agents,
         &NO_LOGINS,
+        &NO_ACCOUNTS,
         liveness,
         cells,
         team,
@@ -444,6 +461,7 @@ struct LaneCase<'a> {
     current_root: &'a Path,
     max: usize,
     logins: &'a RoomLogins,
+    catalog: &'a LoginCatalog,
     path_exists: PathPredicate<'a>,
     session_backed: AgentPredicate<'a>,
     liveness: LivenessFn<'a>,
@@ -461,6 +479,7 @@ impl<'a> LaneCase<'a> {
             current_root: Path::new("/repo"),
             max: 128,
             logins: &NO_LOGINS,
+            catalog: &NO_ACCOUNTS,
             path_exists: Box::new(|_| true),
             session_backed: Box::new(|_| true),
             liveness: Box::new(dead),
@@ -471,6 +490,11 @@ impl<'a> LaneCase<'a> {
 
     fn logins(mut self, logins: &'a RoomLogins) -> Self {
         self.logins = logins;
+        self
+    }
+
+    fn catalog(mut self, catalog: &'a LoginCatalog) -> Self {
+        self.catalog = catalog;
         self
     }
 
@@ -536,6 +560,7 @@ impl<'a> LaneCase<'a> {
                 rimz_bin: Path::new(RIMZ_BIN),
                 runtime: &RUNTIME,
                 logins: self.logins,
+                catalog: self.catalog,
             },
             self.path_exists,
             self.session_backed,

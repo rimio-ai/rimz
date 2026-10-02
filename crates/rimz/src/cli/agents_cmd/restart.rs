@@ -74,11 +74,12 @@ pub(in crate::cli) fn restart_resolved(
     )?;
 
     let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
-    let (action, fresh_reason) = relaunch_action(agent, &logins, &cwd)?;
+    let (action, login, fresh_reason) =
+        relaunch_action(agent, &logins, &rimz::agents::machine_login_catalog(), &cwd)?;
     if isolation == rimz::config::Isolation::Host {
         rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,
-            &relaunch_request(agent, &posture, action.clone(), None),
+            &relaunch_request(agent, &posture, action.clone(), login.clone(), None),
             &cwd,
             Some(store.runtime_paths()),
         )?;
@@ -99,7 +100,7 @@ pub(in crate::cli) fn restart_resolved(
         .as_ref()
         .map(AgentLaunchBatch::single_identity)
         .transpose()?;
-    let invocation = relaunch_request(agent, &posture, action, fresh_identity);
+    let invocation = relaunch_request(agent, &posture, action, login, fresh_identity);
     let pane_name = invocation
         .identity
         .params
@@ -206,11 +207,14 @@ pub(in crate::cli) fn restart_resolved(
 pub(in crate::cli) fn relaunch_action(
     agent: &AgentState,
     logins: &rimz::ids::RoomLogins,
+    catalog: &rimz::agents::LoginCatalog,
     cwd: &Path,
-) -> Result<(rimz::harness::launch::ExecAction, Option<&'static str>)> {
-    if let Some(mismatch) = rimz::harness::resume::login_mismatch(agent, logins) {
-        return Err(mismatch.into());
-    }
+) -> Result<(
+    rimz::harness::launch::ExecAction,
+    Option<rimz::ids::LoginName>,
+    Option<&'static str>,
+)> {
+    let login = rimz::harness::resume::relaunch_login(agent, logins, catalog)?;
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let resume_support = !agent.agent_id.is_provisional()
@@ -238,13 +242,14 @@ pub(in crate::cli) fn relaunch_action(
             extra_args: Vec::new(),
         }
     };
-    Ok((action, fresh_reason.map(FreshReason::as_str)))
+    Ok((action, login, fresh_reason.map(FreshReason::as_str)))
 }
 
 pub(in crate::cli) fn relaunch_request(
     agent: &AgentState,
     posture: &ResumePosture,
     action: ExecAction,
+    login: Option<rimz::ids::LoginName>,
     fresh_identity: Option<&AgentLaunchIdentity>,
 ) -> ExecRequest {
     let identity_name = fresh_identity.map_or(agent.name.as_deref(), |identity| {
@@ -257,7 +262,7 @@ pub(in crate::cli) fn relaunch_request(
         launch_depth: agent.launch_depth,
         launched_by: agent.launched_by.clone().map(Box::new),
         profile: agent.profile.clone(),
-        login: agent.login.clone(),
+        login,
         tier: posture.launch.tier.clone(),
         role: agent.role.clone(),
         team: agent.team.clone(),
@@ -554,7 +559,7 @@ mod tests {
             extra_args: Vec::new(),
         };
 
-        let request = relaunch_request(&agent, &posture, action, None);
+        let request = relaunch_request(&agent, &posture, action, None, None);
 
         let Cell::Agent(cell) = restart_cell(&agent, &posture) else {
             panic!("agent cell")
@@ -610,7 +615,20 @@ mod tests {
             )])
         };
 
-        let err = relaunch_action(&agent, &room("work"), Path::new("/repo")).unwrap_err();
+        let accounts = |work_history: &str| {
+            rimz::agents::LoginCatalog::from_config(
+                &toml::from_str(&format!(
+                    "[claude.work]\nhome = \"/srv/claude-work\"\nhistory = \"{work_history}\"\n\
+                     [claude.personal]\nhome = \"/srv/claude-personal\"\n"
+                ))
+                .expect("accounts toml"),
+            )
+            .expect("login catalog")
+        };
+        let standalone = accounts("standalone");
+
+        let err =
+            relaunch_action(&agent, &room("work"), &standalone, Path::new("/repo")).unwrap_err();
         assert_eq!(
             err.to_string(),
             "@x's session belongs to claude account `personal`; this room now launches claude \
@@ -618,9 +636,33 @@ mod tests {
              back."
         );
 
-        let (action, _) = relaunch_action(&agent, &room("personal"), Path::new("/repo"))
-            .expect("same-account relaunch");
-        let request = relaunch_request(&agent, &ResumePosture::default(), action, None);
+        // Resume and fresh alike: a pooled relaunch runs under the room's account.
+        let (action, login, _) = relaunch_action(
+            &agent,
+            &room("work"),
+            &accounts("shared"),
+            Path::new("/repo"),
+        )
+        .expect("pooled relaunch");
+        assert_eq!(login, Some("work".parse().expect("login name")));
+        let request = relaunch_request(&agent, &ResumePosture::default(), action, login, None);
+        assert_eq!(
+            request.identity.params.login,
+            Some("work".parse().expect("login name"))
+        );
+        let (_, login, _) = relaunch_action(
+            &agent,
+            &room("default"),
+            &accounts("shared"),
+            Path::new("/repo"),
+        )
+        .expect("pooled relaunch on the default account");
+        assert_eq!(login, None);
+
+        let (action, login, _) =
+            relaunch_action(&agent, &room("personal"), &standalone, Path::new("/repo"))
+                .expect("same-account relaunch");
+        let request = relaunch_request(&agent, &ResumePosture::default(), action, login, None);
         let dir = tempfile::tempdir().unwrap();
         rimz::harness::launch_plan::testkit::assert_claude_stamped_home(
             &request,

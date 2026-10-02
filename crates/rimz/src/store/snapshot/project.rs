@@ -334,6 +334,9 @@ impl ReducerState {
         if let Some(launch_id) = &payload.launch_id {
             state.launch_id = Some(launch_id.clone());
         }
+        if let Some(login) = &payload.login {
+            state.login = (!login.is_default()).then(|| login.clone());
+        }
         if let Some(isolation) = payload.isolation {
             state.isolation = Some(isolation);
         }

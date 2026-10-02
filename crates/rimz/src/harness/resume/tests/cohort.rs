@@ -32,6 +32,7 @@ fn recorded_team_restore_keeps_role_layers() {
         let tabs = plan_team_restore_tabs(
             &[planner],
             &NO_LOGINS,
+            &NO_ACCOUNTS,
             &teams,
             &profiles,
             &commands,
@@ -323,6 +324,7 @@ fn check_cohort_alias_replay(override_model: Option<&str>) {
                 &agent.kind,
                 &agent.agent_id,
                 None,
+                &crate::ids::LoginName::default(),
                 "resume-test",
                 &pane_id("terminal_a1"),
                 crate::pane::RuntimeOwner::new(
@@ -925,6 +927,7 @@ fn team_restore_routes_fresh_seats_before_planning() {
         let tabs = plan_team_restore_tabs(
             std::slice::from_ref(&coder),
             &NO_LOGINS,
+            &NO_ACCOUNTS,
             &config.teams,
             &config.profiles,
             &config.commands,
@@ -1121,6 +1124,7 @@ fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
     let tabs = plan_team_restore_tabs(
         &[planner, coder],
         &NO_LOGINS,
+        &NO_ACCOUNTS,
         &teams,
         &profiles,
         &commands,
@@ -1806,6 +1810,7 @@ fn team_restore_tabs_seed_every_declared_role() {
         let tabs = plan_team_restore_tabs(
             &agents,
             &NO_LOGINS,
+            &NO_ACCOUNTS,
             &teams,
             &profiles,
             &commands,
@@ -1841,6 +1846,7 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
     let (tabs, flat_agents) = split_team_and_flat(
         &[planner, flat],
         &NO_LOGINS,
+        &NO_ACCOUNTS,
         &teams,
         &profiles,
         &commands,
@@ -1864,9 +1870,26 @@ fn cohort_resume_refuses_a_member_from_another_account() {
     };
     let room = claude_room("work");
 
+    let plan = plan_cohort_resume(
+        std::slice::from_ref(&planner),
+        &room,
+        &claude_accounts("shared"),
+        dead,
+        &[cohort_cell("claude", Some("planner"))],
+        Some("forge"),
+        |_| true,
+        |_| true,
+    )
+    .expect("a pooled member resumes");
+    let [CohortSeed::Resume(seed)] = plan.seeds.as_slice() else {
+        panic!("expected one resume seed, got {:?}", plan.seeds);
+    };
+    assert_eq!(seed.login, Some("work".parse().expect("login name")));
+
     let err = plan_cohort_resume(
         &[planner],
         &room,
+        &claude_accounts("standalone"),
         dead,
         &[cohort_cell("claude", Some("planner"))],
         Some("forge"),

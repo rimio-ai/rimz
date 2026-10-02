@@ -91,14 +91,15 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         &cwd,
     )?;
     let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
-    let (action, fresh_reason) = agents_cmd::relaunch_action(child, &logins, &cwd)?;
+    let (action, login, fresh_reason) =
+        agents_cmd::relaunch_action(child, &logins, &rimz::agents::machine_login_catalog(), &cwd)?;
     if let Some(reason) = fresh_reason {
         bail!("{reason}");
     }
     let runs = rimz::harness::run::list(store.paths())?;
     let run = newest_run_for_child(&runs, child)
         .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;
-    let mut request = resume_request(child, run, &posture, action);
+    let mut request = resume_request(child, run, &posture, action, login);
     request.identity.params.isolation = capped.isolation;
     if isolation == rimz::config::Isolation::Host {
         rimz::harness::launch::preflight_agent_process(
@@ -198,8 +199,9 @@ fn resume_request(
     run: &RunRecord,
     posture: &ResumePosture,
     action: ExecAction,
+    login: Option<rimz::ids::LoginName>,
 ) -> ExecRequest {
-    let mut request = agents_cmd::relaunch_request(child, posture, action, None);
+    let mut request = agents_cmd::relaunch_request(child, posture, action, login, None);
     request.identity.name_explicit = true;
     let (close_pane_on_exit, exit_on_run_completion) = supervised::run_exit_policy(!run.keep);
     ExecRequest {

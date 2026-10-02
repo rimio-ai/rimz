@@ -86,6 +86,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                 session_id: child.agent_id.to_string(),
                 extra_args: Vec::new(),
             },
+            Some("work".parse().unwrap()),
         );
         assert_eq!(
             request,
@@ -116,6 +117,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
                         parent_agent_id: child.parent_agent_id.clone(),
                         parent_agent_kind: child.parent_agent_kind.clone(),
                         launch_depth: Some(1),
+                        login: Some("work".parse().unwrap()),
                         mode: posture.launch.mode,
                         ..Default::default()
                     },

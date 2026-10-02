@@ -171,6 +171,7 @@ fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
         "session",
         &kind,
         AgentAttachPayload {
+            login: None,
             record: None,
             tier: None,
             mode: None,

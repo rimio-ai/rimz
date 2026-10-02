@@ -966,10 +966,12 @@ fn lane_refuses_a_closed_member_from_another_account() {
         ..agent("claude", "closed", "/lane", 1)
     }];
     let room = claude_room("work");
+    let standalone = claude_accounts("standalone");
 
     let error = LaneCase::new(LaneResumeSelector::Current, &agents)
         .current_root("/lane")
         .logins(&room)
+        .catalog(&standalone)
         .run()
         .unwrap_err();
 
@@ -977,5 +979,45 @@ fn lane_refuses_a_closed_member_from_another_account() {
         error.to_string(),
         "@x's session belongs to claude account `default`; this room now launches claude on \
          `work`. Run `rimz accounts use claude default` to resume it, then switch back."
+    );
+}
+
+#[test]
+fn lane_resumes_a_pooled_member_under_the_rooms_account() {
+    let agents = [
+        agent("claude", "closed", "/lane", 1),
+        AgentState {
+            pane: Some(PaneRef::from_id(pane_id("live-pane"))),
+            ..agent("claude", "live", "/lane", 2)
+        },
+    ];
+    let room = claude_room("work");
+    let shared = claude_accounts("shared");
+
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .logins(&room)
+        .catalog(&shared)
+        .liveness(|agent| {
+            if agent.agent_id.as_str() == "live" {
+                AgentLiveness::Live { pid: 7 }
+            } else {
+                AgentLiveness::Dead
+            }
+        })
+        .run()
+        .unwrap();
+
+    let LaneResumeAction::SplitClosed { commands, .. } = action else {
+        panic!("expected partial split");
+    };
+    let request = decode_exec_request(&commands[0].argv);
+    assert!(matches!(
+        request.action,
+        crate::harness::launch::ExecAction::Resume { ref session_id, .. } if session_id == "closed"
+    ));
+    assert_eq!(
+        request.identity.params.login,
+        Some("work".parse().expect("login name"))
     );
 }

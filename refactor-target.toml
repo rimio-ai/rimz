@@ -152,7 +152,7 @@ upward-dependencies = ["address"]
 # LoginCatalog::pool maps a login to its history pool for the resume gate, spend, and budget (+1).
 # The account reconciler reports its warnings; a login answers its history mode, its overrides, and the
 # provider's own home; adapters name their private home entries and database-home key (+6).
-surface-budget = 953
+surface-budget = 955
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

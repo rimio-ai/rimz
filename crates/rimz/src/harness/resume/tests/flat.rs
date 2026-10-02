@@ -523,12 +523,14 @@ fn skips_a_session_from_another_account_and_resumes_the_rest() {
         ..agent("claude", "a2", "/code/qe-feature", 10)
     };
     let room = claude_room("work");
+    let accounts = claude_accounts("standalone");
 
     let plan = plan_resume(
         &[personal, work],
         &BTreeSet::new(),
         ResumeContext {
             logins: &room,
+            catalog: &accounts,
             ..ctx(
                 crate::config::ResumeConfig::default().max,
                 None,
@@ -564,5 +566,102 @@ fn skips_a_session_from_another_account_and_resumes_the_rest() {
         &request,
         dir.path(),
         Some("work"),
+    );
+}
+
+#[test]
+fn resumes_a_pooled_session_under_the_rooms_account() {
+    let accounts = claude_accounts("shared");
+    for (stamp, room_login) in [
+        (Some("work"), "personal"),
+        (None, "work"),
+        (Some("work"), "default"),
+    ] {
+        let session = AgentState {
+            login: stamp.map(|name| name.parse().expect("login name")),
+            ..agent("claude", "a1", "/code/qe", 5)
+        };
+        let room = claude_room(room_login);
+
+        let plan = plan_resume(
+            &[session],
+            &BTreeSet::new(),
+            ResumeContext {
+                logins: &room,
+                catalog: &accounts,
+                ..ctx(
+                    crate::config::ResumeConfig::default().max,
+                    None,
+                    &no_profiles(),
+                )
+            },
+            |_| true,
+            |_| true,
+        );
+
+        assert_eq!(plan.skipped, [], "{stamp:?} -> {room_login}");
+        let request = decode_exec_request(&first_argv(&plan.tabs[0]));
+        assert!(
+            matches!(&request.action, crate::harness::launch::ExecAction::Resume { session_id, .. } if session_id == "a1"),
+            "{:?}",
+            request.action
+        );
+        assert_eq!(
+            request.identity.params.login.unwrap_or_default().as_str(),
+            room_login,
+            "{stamp:?} -> {room_login}"
+        );
+    }
+}
+
+#[test]
+fn relaunch_login_answers_by_history_pool() {
+    let session = |stamp: Option<&str>| AgentState {
+        login: stamp.map(|name| name.parse().expect("login name")),
+        ..agent("claude", "a1", "/code/qe", 5)
+    };
+    let shared = claude_accounts("shared");
+    let standalone = claude_accounts("standalone");
+    let answer = |stamp, room: &str, catalog: &LoginCatalog| {
+        relaunch_login(&session(stamp), &claude_room(room), catalog)
+            .map(|login| login.unwrap_or_default().to_string())
+            .map_err(|mismatch| {
+                (
+                    mismatch.session_login.to_string(),
+                    mismatch.room_login.to_string(),
+                )
+            })
+    };
+
+    assert_eq!(
+        answer(Some("work"), "personal", &shared),
+        Ok("personal".to_owned())
+    );
+    assert_eq!(answer(None, "work", &shared), Ok("work".to_owned()));
+    assert_eq!(
+        answer(Some("work"), "default", &shared),
+        Ok("default".to_owned())
+    );
+    assert_eq!(
+        answer(Some("work"), "work", &standalone),
+        Ok("work".to_owned())
+    );
+    assert_eq!(
+        answer(Some("work"), "personal", &standalone),
+        Err(("work".to_owned(), "personal".to_owned()))
+    );
+    assert_eq!(
+        answer(None, "work", &standalone),
+        Err(("default".to_owned(), "work".to_owned()))
+    );
+    // A name the config no longer declares is its own pool.
+    assert_eq!(
+        answer(Some("gone"), "personal", &shared),
+        Err(("gone".to_owned(), "personal".to_owned()))
+    );
+    // An account config that did not load pools nothing.
+    assert_eq!(
+        answer(Some("work"), "personal", &NO_ACCOUNTS),
+        Err(("work".to_owned(), "personal".to_owned()))
     );
 }

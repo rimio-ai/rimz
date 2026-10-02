@@ -225,6 +225,10 @@ pub struct AgentAttachPayload {
     /// wrappers that predate launch identity leave this unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_id: Option<AgentSessionId>,
+    /// The account this launch runs under, `default` spelled out. Events
+    /// written before the field leave it unset, and the stamp stays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<crate::ids::LoginName>,
     pub pane_id: PaneId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_pid: Option<u32>,

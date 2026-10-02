@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 
 use crate::Store;
+use crate::agents::LoginCatalog;
 use crate::agents::PermissionMode;
 use crate::agents::find_definition;
 use crate::agents::{AgentState, LocalSessionObservation};
@@ -28,7 +29,7 @@ use crate::harness::plan::{
     ResumeLaunchPosture, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::spec::LayoutSpec;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RoomLogins, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, LoginKey, LoginName, PaneId, RoomLogins, WorkspaceId};
 use crate::mux::ResumeTab;
 use crate::store::runtime::AgentLiveness;
 use crate::store::writer::AgentLaunchScope;
@@ -98,8 +99,11 @@ pub struct LaneResumeRequest<'a> {
     pub max: usize,
     pub rimz_bin: &'a Path,
     pub runtime: &'a RuntimePaths,
-    /// The room's defaults for locally discovered sessions; recorded members keep their own stamps.
+    /// The room's defaults: the account of locally discovered sessions, and the one a
+    /// recorded member relaunches under when its stamp shares that account's history pool.
     pub logins: &'a RoomLogins,
+    /// The machine's accounts, whose history pools gate a recorded member's relaunch.
+    pub catalog: &'a LoginCatalog,
 }
 
 impl<'a> LaneResumeRequest<'a> {
@@ -114,6 +118,7 @@ impl<'a> LaneResumeRequest<'a> {
             profiles,
             max: self.max,
             logins: self.logins,
+            catalog: self.catalog,
         }
     }
 }
@@ -920,7 +925,7 @@ struct ResumeCandidate {
     pane_id: Option<PaneId>,
     last_activity: Timestamp,
     conversation_present: bool,
-    /// Set when the session was born under another account than the room's.
+    /// Set when the session's account is outside the history pool of the room's.
     login_mismatch: Option<LoginMismatch>,
 }
 
@@ -928,15 +933,18 @@ impl ResumeCandidate {
     fn from_agent(
         agent: &AgentState,
         logins: &RoomLogins,
+        catalog: &LoginCatalog,
         conversation_present: impl FnOnce() -> bool,
     ) -> Option<Self> {
         if !root_session(agent) {
             return None;
         }
-        Some(Self {
-            login_mismatch: login_mismatch(agent, logins),
-            ..Self::from_agent_identity(agent, conversation_present())
-        })
+        let mut candidate = Self::from_agent_identity(agent, conversation_present());
+        match relaunch_login(agent, logins, catalog) {
+            Ok(login) => candidate.identity.login = login,
+            Err(mismatch) => candidate.login_mismatch = Some(mismatch),
+        }
+        Some(candidate)
     }
 
     fn from_agent_identity(agent: &AgentState, conversation_present: bool) -> Self {
@@ -1132,7 +1140,7 @@ pub fn plan_lane_resume(
     if let Some(mismatch) = closed
         .iter()
         .filter(|agent| !agent.agent_id.is_provisional())
-        .find_map(|agent| login_mismatch(agent, request.logins))
+        .find_map(|agent| relaunch_login(agent, request.logins, request.catalog).err())
     {
         return Err(mismatch.into());
     }
@@ -1498,6 +1506,7 @@ fn plan_closed_lane(
     let (team, flat_agents) = split_team_and_flat(
         &closed,
         request.logins,
+        request.catalog,
         &restore.teams,
         &restore.profiles,
         &restore.commands,
@@ -1763,6 +1772,7 @@ fn materialize_team_restore_tab(
 fn plan_team_restore_tabs(
     agents: &[AgentState],
     logins: &RoomLogins,
+    catalog: &LoginCatalog,
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -1820,6 +1830,7 @@ fn plan_team_restore_tabs(
             let Ok(cohort) = plan_cohort_resume(
                 &group_agents,
                 logins,
+                catalog,
                 |_| AgentLiveness::Dead,
                 &cells,
                 Some(&team),
@@ -1879,6 +1890,7 @@ fn plan_team_restore_tabs(
 pub(super) fn split_team_and_flat(
     agents: &[AgentState],
     logins: &RoomLogins,
+    catalog: &LoginCatalog,
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -1891,6 +1903,7 @@ pub(super) fn split_team_and_flat(
     let team = plan_team_restore_tabs(
         agents,
         logins,
+        catalog,
         teams,
         profiles,
         commands,
@@ -1974,9 +1987,10 @@ pub struct ResumeContext<'a> {
     pub runtime: &'a RuntimePaths,
     pub profiles: &'a ProfilesConfig,
     pub max: usize,
-    /// The room's frozen account selection; sessions born under another
-    /// account are skipped.
+    /// The room's frozen account selection; sessions whose account is outside
+    /// its history pool are skipped.
     pub logins: &'a RoomLogins,
+    pub catalog: &'a LoginCatalog,
 }
 
 pub fn plan_resume(
@@ -2000,7 +2014,7 @@ pub(super) fn plan_resume_detailed(
         .iter()
         .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .filter_map(|agent| {
-            ResumeCandidate::from_agent(agent, ctx.logins, || session_backed(agent))
+            ResumeCandidate::from_agent(agent, ctx.logins, ctx.catalog, || session_backed(agent))
         })
         .collect();
     plan_resume_candidates_detailed(candidates, ctx, worktree_exists)
@@ -2210,9 +2224,14 @@ fn candidate_room_channel(
 /// `cells` is the launch layout's agent cells in display order. `team` is the
 /// named-team spec, when the launch resolved one. The caller supplies liveness
 /// and worktree existence so the matching rules stay pure and testable.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the resume planners' shared inputs, borrowed from two different callers"
+)]
 pub fn plan_cohort_resume(
     agents: &[AgentState],
     logins: &RoomLogins,
+    catalog: &LoginCatalog,
     liveness: impl Fn(&AgentState) -> AgentLiveness,
     cells: &[CohortCell],
     team: Option<&str>,
@@ -2238,13 +2257,15 @@ pub fn plan_cohort_resume(
     if !live.is_empty() {
         return Err(CohortResumeErr::MembersStillLive { labels: live });
     }
-    if let Some(mismatch) = matches
+    let relaunch_logins = matches
         .iter()
-        .flatten()
-        .find_map(|agent| login_mismatch(agent, logins))
-    {
-        return Err(CohortResumeErr::LoginMismatch(mismatch));
-    }
+        .map(|matched| {
+            matched
+                .map(|agent| relaunch_login(agent, logins, catalog))
+                .transpose()
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(CohortResumeErr::LoginMismatch)?;
 
     let newest = matches
         .iter()
@@ -2277,7 +2298,10 @@ pub fn plan_cohort_resume(
         let matched = matches[index];
         let seed = match matched {
             Some(agent) if supports_agent_resume(agent) && session_backed(agent) => {
-                CohortSeed::Resume(Box::new(agent.clone()))
+                CohortSeed::Resume(Box::new(AgentState {
+                    login: relaunch_logins[index].clone().flatten(),
+                    ..agent.clone()
+                }))
             }
             Some(agent) => {
                 fresh.push(cohort_fresh_label_for_agent(agent));
@@ -2970,8 +2994,8 @@ fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
     })
 }
 
-/// A session that cannot be reopened because it belongs to another account
-/// than the one the room now launches its kind on.
+/// A session that cannot be reopened because its account is outside the
+/// history pool of the one the room now launches its kind on.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
     "{agent}'s session belongs to {kind} account `{session_login}`; this room now launches {kind} on `{room_login}`. Run `rimz accounts use {kind} {session_login}` to resume it, then switch back."
@@ -2984,12 +3008,22 @@ pub struct LoginMismatch {
     pub room_login: crate::ids::LoginName,
 }
 
-/// The mismatch between `agent`'s stamp and the room's current default for its
-/// kind in `logins`, or `None` when they agree. An absent name is `default`.
-pub fn login_mismatch(agent: &AgentState, logins: &RoomLogins) -> Option<LoginMismatch> {
+/// The account a relaunch of `agent` runs under: the room's current login for
+/// its kind in `logins` when that login shares a history pool with the
+/// session's stamp, else the mismatch. An absent name is `default`, and the
+/// answer spells `default` as `None`, as the stamp does.
+pub fn relaunch_login(
+    agent: &AgentState,
+    logins: &RoomLogins,
+    catalog: &LoginCatalog,
+) -> Result<Option<LoginName>, LoginMismatch> {
     let session_login = agent.login.clone().unwrap_or_default();
     let room_login = logins.get(&agent.kind).cloned().unwrap_or_default();
-    (session_login != room_login).then(|| LoginMismatch {
+    let pool = |name: &LoginName| catalog.pool(&LoginKey::new(agent.kind.clone(), name.clone()));
+    if pool(&session_login) == pool(&room_login) {
+        return Ok((!room_login.is_default()).then_some(room_login));
+    }
+    Err(LoginMismatch {
         agent: agent
             .name
             .as_ref()

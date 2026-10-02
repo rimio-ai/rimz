@@ -336,6 +336,7 @@ fn resumed_registration_satisfies_the_bind_wait() {
             &kind,
             &id,
             Some(&launch_id),
+            &rimz::ids::LoginName::default(),
             "room",
             &PaneId::parse("tmux:%2").unwrap(),
             rimz::store::runtime::current_process_owner(

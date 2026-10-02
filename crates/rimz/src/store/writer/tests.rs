@@ -252,6 +252,7 @@ fn attach_agent_pane_records_process_owned_placement() {
             &kind,
             &agent_id,
             Some(&launch_id),
+            &"personal".parse().expect("login name"),
             "rimz-test",
             &pane_id,
             owner.clone(),
@@ -278,11 +279,39 @@ fn attach_agent_pane_records_process_owned_placement() {
         panic!("agent attach event")
     };
     assert_eq!(payload.agent_id, agent_id);
-    assert_eq!(payload.launch_id, Some(launch_id));
+    assert_eq!(payload.launch_id, Some(launch_id.clone()));
     assert_eq!(payload.pane_id, pane_id);
     assert_eq!(payload.pane_pid, Some(std::process::id()));
     assert_eq!(payload.runtime_owner, owner);
     assert_eq!(payload.isolation, Some(crate::config::Isolation::Sandbox));
+    assert_eq!(payload.login, Some("personal".parse().expect("login name")));
+
+    // What a budget park and the hook preflight read off the row.
+    let row_key = || {
+        let projection = store
+            .runtime_projection(crate::RuntimeScope::Audit)
+            .expect("projection");
+        crate::store::snapshot::find_agent(&projection.agents, &kind, &agent_id)
+            .expect("attached row")
+            .login_key()
+            .to_string()
+    };
+    assert_eq!(row_key(), "codex@personal");
+    store
+        .attach_agent_pane(
+            &kind,
+            &agent_id,
+            Some(&launch_id),
+            &crate::ids::LoginName::default(),
+            "rimz-test",
+            &pane_id,
+            owner,
+            None,
+            None,
+            None,
+        )
+        .expect("attach under the default account");
+    assert_eq!(row_key(), "codex@default");
 }
 
 #[test]
