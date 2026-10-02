@@ -67,7 +67,7 @@ Each entry takes one of four paths, and nothing but a link is ever removed:
 | Link to the intended target | any | Left alone. |
 | Absent | any | Linked. Missing settings and history directory targets are created; other missing targets remain dangling links until written. |
 | File or directory | Absent | Moved into the provider's own home, then linked. Across filesystems it stays in the account home and `add` warns. |
-| File, directory, or link elsewhere | Present, or the entry is a link | Moved to `<account home>/.rimz-aside/<UTC timestamp>/<name>`, then linked, and reported as `<account> account: moved <slot> aside to <aside>; the account now reads the copy in <default-home>`. |
+| File, directory, or link elsewhere | Present, or the entry is a link | Moved to `<account home>/.rimz-aside/<UTC timestamp>/<name>`, then linked, and reported as `<account> account: moved <slot> aside to <aside>; the account now reads the copy in <default-home>`. A relative link is rewritten to the absolute path it pointed at, so it still resolves from there. |
 
 A link into the provider's own home that the account's mode no longer asks for is removed and reported as `unlinked from <default-home>`; its target stays. When a later entry fails after others were set aside, the error ends with the same `moved <slot> aside to <aside>` lines, since a rerun finds those links in place and has nothing left to report. Codex carries missing `[hooks.state]` keys into the shared config before moving its old `config.toml` aside; existing target keys win. Nothing else is merged.
 

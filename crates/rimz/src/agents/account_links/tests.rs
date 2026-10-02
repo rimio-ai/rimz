@@ -183,9 +183,10 @@ fn a_conflict_is_set_aside_and_a_second_one_lands_beside_the_first() {
         fs::read_to_string(aside.join("history.jsonl")).unwrap(),
         "first"
     );
+    // A relative link still names the entry beside the slot it left.
     assert_eq!(
         fs::read_link(aside.join("plugins")).unwrap(),
-        Path::new("elsewhere")
+        home.named.join("elsewhere")
     );
     assert_eq!(
         fs::read_to_string(home.named.join("history.jsonl")).unwrap(),
