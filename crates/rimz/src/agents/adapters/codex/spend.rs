@@ -75,7 +75,8 @@ pub(super) fn codex_homes(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> 
 /// stays open by default; it skips the session trees (scanned on their own)
 /// and the directories Codex fills with copied repository content (plugin
 /// checkouts and caches, skills, managed worktrees, helper temp files),
-/// managed binaries, caches, or diagnostic logs, none of which hold rollouts.
+/// managed binaries, caches, or diagnostic logs, none of which hold rollouts,
+/// and the tree a shared account's displaced entries were set aside into.
 pub(super) fn legacy_spend_relative(path: &Path) -> bool {
     path.components().next().is_none_or(|component| {
         !matches!(
@@ -91,6 +92,7 @@ pub(super) fn legacy_spend_relative(path: &Path) -> bool {
                     | "packages"
                     | "cache"
                     | "log"
+                    | crate::agents::account_links::ASIDE_DIR
             )
         )
     })

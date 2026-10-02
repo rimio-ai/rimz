@@ -35,6 +35,19 @@ fn provider_labels_include_only_non_default_logins() {
         BTreeMap::new(),
     );
     let (_dir, runtime, _) = runtime();
+    let pool = crate::ids::LoginKey::default_for(key.kind.clone());
+    let mut pool_spending = crate::agents::spending::ProviderSpendingCache::default();
+    pool_spending.spending.by_login.insert(
+        pool.clone(),
+        crate::agents::SpendTally {
+            week: crate::agents::spending::SpendWindow {
+                usd: 12.0,
+                sessions: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
     // `rimz providers` folds once per account, each under a selection naming it.
     for (login, logins, expected) in [
         (
@@ -50,10 +63,15 @@ fn provider_labels_include_only_non_default_logins() {
             &logins,
             &Default::default(),
             accounts,
-            &Default::default(),
+            &pool_spending,
         );
         let names: Vec<_> = panels.iter().map(|panel| &panel.product_name).collect();
         assert_eq!(names, [expected]);
+        assert_eq!(
+            panels[0].spending.as_ref(),
+            pool_spending.spending.by_login.get(&pool),
+            "a shared account's panel reads its pool's spend"
+        );
     }
 }
 

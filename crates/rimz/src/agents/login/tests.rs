@@ -622,8 +622,19 @@ fn pool_joins_default_and_shared_accounts_and_isolates_the_rest() {
         catalog.pool(&key("codex", "default")),
         LoginKey::default_for(kind("codex"))
     );
+    for login in catalog.all() {
+        assert_eq!(login.pool(), catalog.pool(&login.key()), "{}", login.key());
+    }
+    let room = RoomLoginSet::new(None, Some(catalog), BTreeMap::new());
+    assert_eq!(
+        room.pool(&key("claude", "work")),
+        LoginKey::default_for(kind("claude"))
+    );
+    assert_eq!(room.pool(&key("claude", "solo")), key("claude", "solo"));
     // A config that does not load leaves the empty catalog: no login shares.
     let unloaded = LoginCatalog::default();
+    assert_eq!(unloaded.pool(&key("claude", "work")), key("claude", "work"));
+    let unloaded = RoomLoginSet::new(None, None, BTreeMap::new());
     assert_eq!(unloaded.pool(&key("claude", "work")), key("claude", "work"));
 }
 

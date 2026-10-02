@@ -13,7 +13,7 @@ use crate::ids::{AgentKind, LoginKey};
 use crate::utils::path::normalize_path_lexical;
 
 /// Where a conflicting entry of the account home is kept, inside that home.
-const ASIDE_DIR: &str = ".rimz-aside";
+pub(crate) const ASIDE_DIR: &str = ".rimz-aside";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShareErr {

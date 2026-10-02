@@ -31,7 +31,9 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult};
 /// v12 publishes per-tool counts in windows and model/agent breakdowns.
 /// v13: per-account local-day windows for account daily caps.
 // v14: per-login headline and trailing-window tallies for dashboard panels.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 14;
+// v15: per-login maps are keyed by history pool; a shared account's spend is
+// under its kind's `default` key.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 15;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -64,7 +66,7 @@ pub struct ProviderSpendingCache {
     /// Account-local calendar-day spend by provider kind.
     #[serde(default)]
     pub day_by_provider: BTreeMap<String, SpendWindow>,
-    /// Account-local calendar-day spend by account, for account daily caps.
+    /// Account-local calendar-day spend by history pool, for account daily caps.
     #[serde(default)]
     pub day_by_login: BTreeMap<crate::ids::LoginKey, SpendWindow>,
     /// Epoch second at which the published local calendar day began.
