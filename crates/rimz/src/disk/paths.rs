@@ -1167,10 +1167,8 @@ pub fn accounts_dir() -> PathBuf {
 /// provider kind, since every shared account of a kind moves entries into the
 /// same default home. It sits outside every provider home, and nothing sweeps
 /// this tree, so no holder loses it while idle.
-pub fn account_lock(account: &crate::ids::LoginKey) -> PathBuf {
-    accounts_dir()
-        .join(".locks")
-        .join(format!("{}.lock", account.kind))
+pub fn account_lock(kind: &crate::ids::AgentKind) -> PathBuf {
+    accounts_dir().join(".locks").join(format!("{kind}.lock"))
 }
 
 /// Account-global provider caches, `<home>/cache/providers`: probe memos,

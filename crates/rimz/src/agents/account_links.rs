@@ -268,7 +268,7 @@ pub fn reconcile(
             named: named_home,
             default: &default_home,
             shared: login.shares_history(),
-            lock: &crate::disk::paths::account_lock(&account),
+            lock: &crate::disk::paths::account_lock(login.kind()),
             account: &account,
         },
         other_live_agents,
