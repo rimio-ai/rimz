@@ -34,6 +34,7 @@ const LATEST_SNAPSHOT_FILE: &str = "snapshots/latest.json";
 /// The per-agent directory of a launch or reader without a handle; `_` never
 /// occurs in a handle, so it cannot collide.
 const UNNAMED_DIR: &str = "_unnamed";
+const ACCOUNT_BUDGET_LEDGER_PREFIX: &str = "budget.account.";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathErr {
@@ -842,6 +843,17 @@ impl RuntimePaths {
 
     pub(crate) fn shared_accounts_lock(&self) -> PathBuf {
         self.shared_root.join("accounts.lock")
+    }
+
+    /// An account budget ledger; `component` names the login whose pool it is.
+    pub(crate) fn shared_account_budget_ledger(&self, component: &str) -> PathBuf {
+        self.persistent_shared_root
+            .join(format!("{ACCOUNT_BUDGET_LEDGER_PREFIX}{component}.json"))
+    }
+
+    pub(crate) fn shared_account_budget_lock(&self, component: &str) -> PathBuf {
+        self.shared_root
+            .join(format!("{ACCOUNT_BUDGET_LEDGER_PREFIX}{component}.lock"))
     }
 
     pub(crate) fn shared_pixel_slot_lock(&self, slot: u8) -> PathBuf {
