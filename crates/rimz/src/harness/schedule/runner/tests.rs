@@ -64,6 +64,52 @@ fn resident_fire_obeys_fleet_budget_and_deadline_before_launch() {
 }
 
 #[test]
+fn worktree_run_locks_do_not_overlap_other_checkouts() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let make = |checkout: &str| {
+        let entry = TaskEntry {
+            root: root.path().to_owned(),
+            agent: Some("claude".into()),
+            prompt: Some("repair".into()),
+            stay: true,
+            each_worktree: true,
+            ..Default::default()
+        };
+        let mut fire = TaskFire::new(
+            "fixer",
+            LoadedTask::new("fixer", entry, catalog::TaskSource::Config),
+            &catalog,
+            LoopRunMode::Scheduled,
+            false,
+            Timestamp::now(),
+            Arc::new(MachineConfig::default()),
+            None,
+            CheckEcho::Capture,
+            Instant::now(),
+        )
+        .unwrap()
+        .with_checkout(Some(root.path().join(checkout)));
+        fire.run_lock_path = |name, entry| Ok(entry.root.join(format!("{name}.lock")));
+        fire
+    };
+    let mut first = make("a");
+    assert!(matches!(
+        first.prepare(&mut |_| Ok(())).unwrap(),
+        TaskFirePlan::Resident { .. }
+    ));
+    let mut second = make("b");
+    assert!(matches!(
+        second.prepare(&mut |_| Ok(())).unwrap(),
+        TaskFirePlan::Resident { .. }
+    ));
+    let mut same = make("a");
+    assert!(
+        matches!(same.prepare(&mut |_| Ok(())).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped)
+    );
+}
+
+#[test]
 fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("vanished");

@@ -52,6 +52,8 @@ A resident condition task retries a failed or skipped fire that leaves no launch
 
 `--each-worktree` requires both `--stay` and `--when`. Repeatable `--subscribe <SIGNAL>` and `--stop-team` require `--stay`; subscriptions also require the prompt leader's installed, trusted registration hooks. Agent-family subscriptions need a separately scoped `loop add --wait --signal` task. `--stay` refuses `--account`, `--check`, `--verify`, `--max-attempts`, `--budget`, `--budget-per-day`, `--surplus`, `--surplus-after`, `--timeout`, `--system-prompt-file`, `--worktree`, `--once`, `--wait`, and `--project`.
 
+With `--each-worktree`, each RimZ-owned checkout has its own condition and `--for` hold, even without a resident pane. The project root and unmanaged worktrees are excluded. Already-matching checkouts are eligible when the task is added. On GitHub this includes PRs already merged or closed; on Gitea the checkout's PR must have been observed open while the room ran. Room teardown and reset clear the PR cache, so Gitea loses that observation. Launched checkouts stay excluded across condition changes, task replacement, and room teardown. Several eligible checkouts may launch on the same tick. Manual `loop fire NAME` targets the owned checkout containing your current directory and refuses elsewhere; it does not fire every checkout.
+
 ### Triggers
 
 | Shape | Flags | Repeats |
@@ -112,7 +114,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
 | `--stay` | `--agent` | Open a resident layout in a background tab, once per checkout. |
-| `--each-worktree` | `--stay --when` | Request condition evaluation per RimZ-owned worktree. |
+| `--each-worktree` | `--stay --when` | Evaluate and launch separately per RimZ-owned worktree. |
 | `--subscribe <SIGNAL>` | `--stay` | Request a standing subscription for the prompt leader; repeatable. |
 | `--stop-team` | `--stay` | Request stopping the checkout's team before the resident launch. |
 | `--prompt <TEXT>`, `--prompt-file <PATH>` | `--agent`, `--wait` | The prompt the action delivers. The two conflict. |

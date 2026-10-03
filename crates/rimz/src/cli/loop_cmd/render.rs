@@ -571,7 +571,15 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             )?;
         }
     }
-    condition::write_show(&mut out, task.entry(), &timing)?;
+    if entry.each_worktree {
+        writeln!(
+            out,
+            "condition: evaluated per owned worktree · {} launched",
+            launches.len()
+        )?;
+    } else {
+        condition::write_show(&mut out, task.entry(), &timing)?;
+    }
     if let Some((verdict, style)) = verdict_line(&records, now) {
         writeln!(out, "  {}", ui::paint(style, &verdict))?;
     }

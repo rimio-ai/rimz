@@ -218,10 +218,16 @@ pub(in crate::cli) fn launch_resolved(
         && let Some(name) = team_name.as_deref()
         && let Some(team) = team
     {
+        let mut launch_workspace = workspace.clone();
+        if loop_task.is_some()
+            && let Some(cwd) = &cwd
+        {
+            launch_workspace.worktree_root = cwd.clone();
+        }
         rimz::harness::schedule::team::validate_launch(
             name,
             team,
-            workspace,
+            &launch_workspace,
             explicit_worktree_name.as_deref(),
         )?;
     }
