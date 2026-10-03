@@ -781,10 +781,12 @@ surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/mux/recovery.rs"
+# Hook writers carry the room identity through the shared workspace environment pin.
 allowed-dependencies = [
     "ids",
     "mux",
     "proc",
+    "workspace",
 ]
 surface-budget = 14
 

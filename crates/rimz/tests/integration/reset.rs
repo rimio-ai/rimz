@@ -16,6 +16,80 @@ use rimz::store::run::{RunRecord, RunStatus};
 
 use crate::common::Env;
 
+#[cfg(unix)]
+#[test]
+fn reset_preserves_the_pre_teardown_roster_after_the_producer_exits() {
+    let env = Env::new();
+    let store = env.store();
+    let paths = store.paths();
+    rimz::store::live_roster::publish(
+        &paths.live_roster,
+        [(
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-reset"),
+        )]
+        .into_iter()
+        .collect(),
+    )
+    .expect("seed roster");
+    let before: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.live_roster).unwrap()).unwrap();
+    let mut empty = before.clone();
+    empty["agents"] = serde_json::json!([]);
+    let shim_dir = env.home_root.join("mux-bin");
+    crate::common::write_path_shim(
+        &shim_dir,
+        "zellij",
+        r#"
+case "$1" in
+    delete-session)
+        printf '%s' "$EMPTY_ROSTER" > "$ROSTER"
+        sh -c '
+            trap '\''printf "%s" "$EMPTY_ROSTER" > "$ROSTER"; : > "$AFTER_KILL"; exit 0'\'' TERM
+            echo $$ > "$PRODUCER_PID"
+            while :; do :; done
+        ' sidebar "$WORKSPACE_ID" "$2" </dev/null >/dev/null 2>&1 &
+        while [ ! -s "$PRODUCER_PID" ]; do sleep 0.01; done
+        ;;
+esac
+"#,
+    );
+    let after_kill = env.home_root.join("after-kill");
+    let producer_pid = env.home_root.join("producer-pid");
+    let path = std::env::join_paths(
+        std::iter::once(shim_dir).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    env.rimz()
+        .env("PATH", path)
+        .env("ROSTER", &paths.live_roster)
+        .env("EMPTY_ROSTER", empty.to_string())
+        .env("WORKSPACE_ID", env.workspace_id.as_str())
+        .env("AFTER_KILL", &after_kill)
+        .env("PRODUCER_PID", &producer_pid)
+        .args(["--mux", "zellij", "reset", "--no-start", "--yes"])
+        .assert()
+        .success();
+
+    assert!(
+        after_kill.exists(),
+        "producer published after the mux kill returned"
+    );
+    let pid = fs::read_to_string(producer_pid)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(!rimz::proc::process_is_live(pid, None), "producer is gone");
+    // Rebirth reads this persisted roster, not the reset command's report.
+    let recovered: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.live_roster).unwrap()).unwrap();
+    assert_eq!(
+        recovered["agents"], before["agents"],
+        "rebirth must see the pre-teardown roster"
+    );
+}
+
 #[test]
 fn reset_replaces_an_old_layout_room_without_starting() {
     let env = Env::new();

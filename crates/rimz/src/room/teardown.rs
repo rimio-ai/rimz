@@ -17,7 +17,7 @@ pub struct TeardownReport {
     pub session_killed: bool,
     /// Resurrection-cache paths removed.
     pub cache_removed: Vec<PathBuf>,
-    /// Orphaned server / leaked daemon pids signalled.
+    /// Orphaned servers, daemons, and hook writers signalled.
     pub processes_swept: Vec<u32>,
 }
 
@@ -84,17 +84,31 @@ pub fn teardown_room(
     session_name: &str,
     runtime: &RuntimePaths,
 ) -> TeardownReport {
+    let paths = StatePaths::under_named(
+        workspace_id.clone(),
+        runtime.dir_name.clone(),
+        &crate::disk::paths::rimz_home(),
+    );
+    let roster = crate::store::live_roster::read(&paths.live_roster);
     // Delete the session first, so the only server matching this exact name in
     // the sweep below is the corpse — never a freshly-born replacement.
     let session_killed = backend.kill_session(session_name).is_ok();
     let cache_removed = backend.purge_resurrection_cache(session_name);
-    if let Err(err) = runtime.remove_disposable_dirs() {
-        tracing::warn!(error = %err, "room runtime removal failed");
-    }
     // The session is already a corpse (killed above), so sweeping its lingering
     // mux server is cleanup, not destruction.
     let processes_swept =
-        crate::mux::recovery::sweep_orphan_processes(workspace_id.as_str(), session_name, true);
+        crate::mux::recovery::sweep_orphan_processes(workspace_id.as_str(), session_name, true)
+            .signalled;
+    // A dying producer can publish after kill_session returns. Restore only
+    // after the sweep's exit barrier, before callers touch workspace records.
+    if let Some(roster) = roster
+        && let Err(err) = crate::store::live_roster::publish(&paths.live_roster, roster.agents)
+    {
+        tracing::warn!(error = %err, "could not restore the pre-teardown live roster");
+    }
+    if let Err(err) = runtime.remove_disposable_dirs() {
+        tracing::warn!(error = %err, "room runtime removal failed");
+    }
     TeardownReport {
         session_killed,
         cache_removed,
