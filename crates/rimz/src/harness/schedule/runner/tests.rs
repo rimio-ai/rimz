@@ -1423,3 +1423,66 @@ fn the_account_daily_cap_reads_the_pinned_account_not_the_rooms() {
         );
     }
 }
+
+#[test]
+fn a_pin_that_stops_resolving_at_launch_skips_and_every_other_error_strikes() {
+    use crate::harness::schedule::strikes::{Signal, classify};
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root(dir.path()).unwrap();
+    let unresolved = |kind: &str| {
+        let err = crate::agents::session_login(
+            &AgentKind::new_unchecked(kind),
+            Some(&"ghost".parse().unwrap()),
+            &crate::config::AccountsConfig::default(),
+        )
+        .unwrap_err();
+        anyhow::Error::from(err).context("launch codex")
+    };
+    let unknown =
+        "unknown codex account `ghost`; configured: default; run `rimz accounts add codex ghost`";
+    let unsupported = "pi has no named accounts; only `default` is available; remove `account = \"ghost\"` from the task";
+    for (name, pinned, error, skip) in [
+        ("unknown", true, unresolved("codex"), Some(unknown)),
+        ("unsupported", true, unresolved("pi"), Some(unsupported)),
+        ("other", true, anyhow::anyhow!("pane refused"), None),
+        ("unpinned", false, unresolved("codex"), None),
+    ] {
+        let entry = TaskEntry {
+            agent: Some("codex".to_owned()),
+            prompt: Some("work".to_owned()),
+            account: pinned.then(|| "ghost".parse().unwrap()),
+            root: dir.path().to_path_buf(),
+            fire_at: Some(Timestamp::UNIX_EPOCH),
+            ..TaskEntry::default()
+        };
+        crate::harness::schedule::instances::insert(&state, name, &entry).unwrap();
+        let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+        let finished = skipped_fire(name, &catalog, None).finish_error(&error);
+        match skip {
+            Some(reason) => {
+                assert_eq!(
+                    finished.record.result,
+                    LoopRunResult::AccountSkipped,
+                    "{name}"
+                );
+                assert_eq!(finished.record.error.as_deref(), Some(reason), "{name}");
+                assert!(
+                    matches!(&finished.notice, TaskFireNotice::Gate { reason: told } if told == reason),
+                    "{name}"
+                );
+                assert_eq!(classify(&finished.record), Signal::Neutral, "{name}");
+            }
+            None => {
+                assert_eq!(finished.record.result, LoopRunResult::Errored, "{name}");
+                assert_eq!(classify(&finished.record), Signal::Strike, "{name}");
+            }
+        }
+        assert!(
+            !crate::harness::schedule::instances::load_from(&state.root)
+                .0
+                .contains_key(name),
+            "{name}: the one-shot row is consumed"
+        );
+    }
+}
