@@ -109,7 +109,7 @@ fn condition_add_refuses_invalid_predicates_and_options() {
     for (flags, expected) in [
         (
             vec!["--when", "wat=yes"],
-            "team.stage, ci, window.5h.left, window.7d.left",
+            "team.stage, ci, pr, window.5h.left, window.7d.left",
         ),
         (
             vec!["--when", "window.5h.left>=40"],

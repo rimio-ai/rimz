@@ -92,11 +92,13 @@ pub(super) fn write_no_room_hint(
     parsed: &schedule::ParsedTrigger,
 ) -> Result<()> {
     if let schedule::Trigger::Condition { expr, .. } = &parsed.trigger
-        && expr.terms().any(|term| term.key == "ci")
+        && expr
+            .terms()
+            .any(|term| matches!(term.key.as_str(), "ci" | "pr"))
     {
         writeln!(
             out,
-            "ci readings come from the room's sidebar; the loop timer alone never sees them"
+            "ci and pr readings come from the room's sidebar; the loop timer alone never sees them"
         )?;
     }
     Ok(())
