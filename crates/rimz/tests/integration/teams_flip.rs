@@ -388,14 +388,23 @@ impl Fixture {
     }
 
     fn hook(&self, role: &str, event: &str, pane: Option<&str>) {
-        self.feed(role, event, pane, false);
+        self.feed(role, event, pane, None);
     }
 
-    /// One hook's stdout; `runtime_env` feeds it as a launch stamped with the runtime switch does.
-    fn feed(&self, role: &str, event: &str, pane: Option<&str>, runtime_env: bool) -> String {
+    /// One hook's stdout; `runtime_env` feeds it as a launch stamped with the runtime switch
+    /// does, from the provider's current directory.
+    fn feed(
+        &self,
+        role: &str,
+        event: &str,
+        pane: Option<&str>,
+        runtime_env: Option<&Path>,
+    ) -> String {
         let mut command = self.command();
-        if runtime_env {
-            command.env(rimz::harness::launch::ENV_RUNTIME_ENV, "1");
+        if let Some(cwd) = runtime_env {
+            command
+                .env(rimz::harness::launch::ENV_RUNTIME_ENV, "1")
+                .current_dir(cwd);
         }
         command
             .args(["hooks", "feed", "--source", "claude"])
@@ -414,8 +423,7 @@ impl Fixture {
                 &json!({
                     "hook_event_name": event,
                     "session_id": role,
-                    "cwd": self.env.project_root,
-                    "worktree_path": self.env.project_root,
+                    "cwd": runtime_env.unwrap_or(&self.env.project_root),
                     "worktree_branch": "feature-team",
                     "prompt": "work"
                 })
@@ -635,12 +643,28 @@ fn prompt_submit_lists_a_memory_file_written_after_launch_once() {
     fixture.hook("coder", "SessionStart", None);
     std::fs::write(fixture.env.project_root.join("plan-notes.md"), "plan\n").unwrap();
     assert_eq!(
-        fixture.feed("coder", "UserPromptSubmit", None, false),
+        fixture.feed("coder", "UserPromptSubmit", None, None),
         "",
         "a launch without the switch"
     );
+    let below = fixture.env.project_root.join("crates");
+    std::fs::create_dir(&below).unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["commit", "-q", "--allow-empty", "-m", "initial"],
+    ] {
+        let status = Command::new("git")
+            .current_dir(&fixture.env.project_root)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
     let reply: serde_json::Value =
-        serde_json::from_str(&fixture.feed("coder", "UserPromptSubmit", None, true)).unwrap();
+        serde_json::from_str(&fixture.feed("coder", "UserPromptSubmit", None, Some(&below)))
+            .unwrap();
     let reply = &reply["hookSpecificOutput"];
     assert_eq!(reply["hookEventName"], "UserPromptSubmit");
     let context = reply["additionalContext"].as_str().unwrap();
@@ -650,9 +674,13 @@ fn prompt_submit_lists_a_memory_file_written_after_launch_once() {
         ),
         "{context}"
     );
+    assert!(
+        context.contains("$ git status --short --branch\n## "),
+        "{context}"
+    );
     assert!(context.ends_with("</system_reminder>"), "{context}");
     assert_eq!(
-        fixture.feed("coder", "UserPromptSubmit", None, true),
+        fixture.feed("coder", "UserPromptSubmit", None, Some(&below)),
         "",
         "the second prompt of the same conversation"
     );

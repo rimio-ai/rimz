@@ -117,7 +117,10 @@ fn runtime_env_context_reaches_the_first_root_prompt_of_each_session() {
             }
             let mut decoded = adapter.decode_hook("UserPromptSubmit", &payload).unwrap();
             handle_lifecycle_hook(
-                &hooks_test_workspace(Some("main")),
+                &rimz::ResolvedWorkspace {
+                    worktree_root: repo.path().into(),
+                    ..hooks_test_workspace(Some("main"))
+                },
                 &store,
                 adapter,
                 &mut decoded,

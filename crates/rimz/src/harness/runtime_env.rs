@@ -1,6 +1,8 @@
 //! Volatile Environment facts sampled as a prompt is submitted: the team's memory-file listing and git state.
 //!
 //! The launch reminder carries the facts that hold for the whole process. A listing or a branch sampled at launch is stale before the agent reads it, so a launch stamped with [`ENV_RUNTIME_ENV`](super::launch::ENV_RUNTIME_ENV) gets them here instead, as one reminder block returned through the provider's prompt-submit hook reply. Everything on this path is enrichment: a failed probe drops its part and never fails the hook.
+//!
+//! Both parts are sampled at the hook's resolved worktree root, never the provider's current directory, which moves with the agent's shell while the team's patterns stay anchored at the root. The cap bounds the git fence; the listing is uncapped, as it was at launch.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -30,7 +32,6 @@ pub struct PromptSubmit<'a> {
     pub session: &'a str,
     /// The provider process, when the hook could name it.
     pub owner: Option<&'a RuntimeOwner>,
-    pub worktree: &'a Path,
     /// The team this agent holds a seat in.
     pub team: Option<&'a str>,
     /// The prompt carries a delivered stage notice.
@@ -54,7 +55,7 @@ pub fn sample(submit: &PromptSubmit<'_>) -> Option<String> {
         })
         .map(|team| team.scratch_patterns())
         .unwrap_or_default();
-    render(submit.worktree, &patterns)
+    render(&submit.workspace.worktree_root, &patterns)
 }
 
 /// Claim the once-marker for one conversation in one provider process. A marker that cannot be written fires again, which costs a repeated block and never a missed one.
@@ -162,13 +163,23 @@ fn git_fence(status: &str, log: &str, budget: usize) -> String {
     text
 }
 
+/// One git line, escaped and then capped: escaping grows `&`, `<`, and `>`, so a cap on the raw text would not bound what the block spends.
 fn sampled_line(line: &str) -> String {
-    match line.char_indices().nth(LINE_CAP - 1) {
-        Some((cut, _)) if line[cut..].chars().nth(1).is_some() => {
-            escape_reminder_text(&format!("{}…", &line[..cut]))
-        }
-        _ => escape_reminder_text(line),
+    let escaped = escape_reminder_text(line);
+    if escaped.chars().count() <= LINE_CAP {
+        return escaped;
     }
+    let mut kept = String::new();
+    let mut length = 0;
+    for ch in line.chars() {
+        let piece = escape_reminder_text(ch.encode_utf8(&mut [0; 4]));
+        length += piece.chars().count();
+        if length >= LINE_CAP {
+            break;
+        }
+        kept.push_str(&piece);
+    }
+    kept + "…"
 }
 
 #[cfg(test)]
@@ -262,7 +273,6 @@ mod tests {
             kind: "claude",
             session: "sess-1",
             owner: None,
-            worktree: repo.path(),
             team: None,
             stage_notice: true,
         };
@@ -337,6 +347,13 @@ mod tests {
         let long = "x".repeat(LINE_CAP + 50);
         let fence = git_fence("## main", &format!("abc1234 {long}"), BLOCK_CAP);
         assert!(fence.contains(&format!("abc1234 {}…\n", "x".repeat(LINE_CAP - 9))));
+        let escaping = format!("abc1234 {}\n", "&".repeat(190)).repeat(5);
+        let fence = git_fence("## main", &escaping, BLOCK_CAP);
+        assert!(fence.len() < 1_200, "{}", fence.len());
+        assert!(
+            fence.contains(&format!("abc1234 {}…\n```", "&amp;".repeat(38))),
+            "{fence}"
+        );
         assert_eq!(
             git_fence(&status, "abc1234 init", BLOCK_CAP)
                 .matches(" M ")

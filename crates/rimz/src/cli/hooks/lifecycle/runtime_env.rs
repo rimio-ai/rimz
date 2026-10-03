@@ -35,17 +35,12 @@ pub(super) fn attach_runtime_env(
     let team = agent_state(store, agent, session)
         .filter(rimz::agents::AgentState::is_team_seat)
         .and_then(|state| state.team);
-    let worktree = observation
-        .worktree_path
-        .as_deref()
-        .map_or(workspace.worktree_root.as_path(), std::path::Path::new);
     let block = sample(&PromptSubmit {
         workspace,
         runtime: store.runtime_paths(),
         kind: agent.spec().kind,
         session: session.as_str(),
         owner: observation.runtime_owner.as_ref(),
-        worktree,
         team: team.as_deref(),
         stage_notice: carries_stage_notice(sections),
     });
