@@ -280,11 +280,14 @@ error: the calling agent has not registered a real session yet
 ```sh
 BIN="$PWD/target/debug/rimz"
 a() { target/debug/xtask sandbox in "$ROOT" --as '@coder' -- "$BIN" "--$MUX" "$@"; }
+rz() { target/debug/xtask sandbox in "$ROOT" -- "$BIN" "--$MUX" "$@"; }
 jq -n --arg session "$(cat /proc/sys/kernel/random/uuid)" --arg cwd "$ROOT/home/room-worktrees/probe" '{hook_event_name:"SessionStart",session_id:$session,cwd:$cwd,source:"startup"}' > "$ROOT/tmp/session-start.json"
 a hooks feed --source claude < "$ROOT/tmp/session-start.json"
 a wait --check true
 target/debug/xtask sandbox in "$ROOT" --as-ancestor '@coder' -- "$BIN" "--$MUX" wait --check true
 ```
+
+`a` runs a RimZ command as the agent and `rz` runs one as the plain user shell (`rz agents`). Keep each prefix in a function, not a variable: zsh does not split an unquoted variable into words, so `$PREFIX agents` fails there as one unknown command.
 
 `--as-ancestor` starts the command below the stub, with exactly plain `in`'s environment: no `RIMZ_AGENT_*` or pane key. It relays stdin, stdout, and stderr through pipes, not a tty, and reports a failed command's exit status. An absent or dead serving seat refuses with the instruction to hold a fresh room with this build. Both modes default to the card's Worktree; `--cwd` overrides it. A relative program path containing `/` resolves from your checkout, as it does for plain `in`.
 
