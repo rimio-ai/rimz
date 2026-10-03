@@ -1,12 +1,13 @@
-//! Persisted sidebar live roster for rebirth recovery.
+//! Persisted sidebar live roster: the current incarnation's live set.
 //!
 //! The elected sidebar producer writes the pane-backed root-agent set its mux
 //! session would lose if it died. The next room birth reads this snapshot before
-//! the new producer starts, scopes recovery to it, then clears it at the rebirth
-//! boundary.
+//! the new producer starts, parks its agents in the pending-recovery record
+//! (`pending_recovery.rs`), where they wait for the user's decision, then
+//! clears it at the rebirth boundary.
 //!
 //! It lives in the records class because nothing rebuilds it and a reset must
-//! not drop it before the rebirth that consumes it. The producer still writes
+//! not drop it before the rebirth that parks it. The producer still writes
 //! it with the cache write: it is rewritten on every final fetch from the
 //! sidebar graph, and a write lost to a crash only narrows one recovery.
 

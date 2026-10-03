@@ -107,7 +107,7 @@ The per-pane figures are raw producer output. The `WIRE(sshâ†‘)` and `WIRE(sshâ†
 
 ## Continuity across reboots
 
-The room and its state both live on the host, in durable flat files under `~/.rimz/` there, so the room survives a mux crash or a reboot of the host. On the next start you make while you are present, the host's `rimz` asks whether to recover the agents it found and defaults to yes: they come back idle in their tabs, one prompt from where they stopped (`claude --resume`, `codex resume`, `pi --session`). A start with no terminal on stdin recovers without asking, and a room you closed deliberately stays closed. A supervised reconnect after a host reboot takes that automatic path, and hook-installation and project-trust offers stay pending for your next attended start.
+The room and its state both live on the host, in durable flat files under `~/.rimz/` there, so the room survives a mux crash or a reboot of the host. On the next start you make while you are present, the host's `rimz` asks whether to recover the agents it found and defaults to yes: they come back idle in their tabs, one prompt from where they stopped (`claude --resume`, `codex resume`, `pi --session`). A start with no terminal on stdin recovers without asking and drops nothing: an agent it cannot resume waits for your next attended start. A room you closed deliberately stays closed. A supervised reconnect after a host reboot takes that automatic path, and hook-installation and project-trust offers stay pending for your next attended start.
 
 To bring a room up empty instead, or to rebuild one that came back wrong, run `rimz` with `--no-resume` or `rimz reset` on the host ([reset and clean up](./troubleshooting.md#reset-and-clean-up)).
 
