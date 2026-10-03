@@ -24,6 +24,7 @@ mod resize_redraw;
 mod resume;
 mod sandbox;
 mod sidebar_phases;
+mod spend_service_accounts;
 mod stats_refresh_resize;
 mod steer;
 mod teams;
