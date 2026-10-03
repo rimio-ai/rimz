@@ -604,7 +604,7 @@ fn late_tool_of_interrupted_turn_rests_and_is_superseded() {
 
 #[cfg(unix)]
 #[test]
-fn live_roster_does_not_protect_superseded_owner() {
+fn parking_protects_superseded_owner_but_roster_does_not() {
     let (_dir, store, workspace_id) = store();
     let now = Timestamp::now();
     let mut older = fresh_pane_lifecycle(&workspace_id, "older", "%1");
@@ -623,7 +623,10 @@ fn live_roster_does_not_protect_superseded_owner() {
         [older_key.clone()].into_iter().collect(),
     )
     .expect("publish roster");
+    pending_recovery::park(store.paths(), &[older_key.clone()].into()).expect("park");
 
+    assert_eq!(store.reap_dead_sessions().expect("parked reap"), 0);
+    pending_recovery::settle(store.paths(), &[older_key.clone()].into()).expect("settle");
     assert_eq!(store.reap_dead_sessions().expect("reap superseded"), 1);
     let audit = store
         .runtime_projection(RuntimeScope::Audit)
@@ -631,44 +634,69 @@ fn live_roster_does_not_protect_superseded_owner() {
     assert!(audit.ended.contains(&older_key));
 }
 
+#[test]
+fn parked_paneless_teammate_cannot_supersede_an_unparked_owner() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    for (id, age) in [("older", 2), ("parked", 1)] {
+        let mut event = worktree_lifecycle(
+            &workspace_id,
+            id,
+            None,
+            None,
+            "/repo/team",
+            "team",
+            LifecycleSignal::Registered,
+        );
+        event.timestamp = now - Duration::from_secs(age);
+        event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+    }
+    let parked = [(
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("parked"),
+    )]
+    .into();
+    pending_recovery::park(store.paths(), &parked).expect("park");
+    assert_eq!(store.reap_dead_sessions().expect("parked reap"), 0);
+    pending_recovery::settle(store.paths(), &parked).expect("settle");
+    assert_eq!(store.reap_dead_sessions().expect("settled reap"), 1);
+}
+
 #[cfg(unix)]
 #[test]
-fn live_roster_protects_crash_recovery_candidate_until_removed() {
+fn parked_recovery_candidates_survive_the_roster_until_settled() {
     let (_dir, store, workspace_id) = store();
-    event_log::append(
-        &store.paths().events_log,
-        &lifecycle(&workspace_id, "recoverable", Some(u32::MAX), None),
-    )
-    .expect("append dead-owner event");
-    let key = (
-        AgentKind::new_unchecked("codex"),
-        AgentSessionId::from("recoverable"),
-    );
-    live_roster::publish(
-        &store.paths().live_roster,
-        [key.clone()].into_iter().collect(),
-    )
-    .expect("publish roster");
+    let mut stale = lifecycle(&workspace_id, "stale", None, None);
+    stale.timestamp =
+        Timestamp::now() - Duration::from_secs((session_death::GHOST_SESSION_TTL_SECS + 60) as u64);
+    for event in [
+        lifecycle(&workspace_id, "recoverable", Some(u32::MAX), None),
+        stale,
+    ] {
+        event_log::append(&store.paths().events_log, &event).expect("append lifecycle");
+    }
+    let keys = ["recoverable", "stale"]
+        .map(|id| (AgentKind::new_unchecked("codex"), AgentSessionId::from(id)))
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    live_roster::publish(&store.paths().live_roster, keys.clone()).expect("publish roster");
 
-    assert_eq!(store.reap_dead_sessions().expect("guarded reap"), 0);
-    let guarded = store
-        .runtime_projection(RuntimeScope::Audit)
-        .expect("guarded projection");
-    assert!(guarded.agents.iter().any(|agent| agent.agent_id == key.1));
-    assert!(!guarded.ended.contains(&key));
+    assert_eq!(store.reap_dead_sessions().expect("rostered reap"), 0);
 
+    pending_recovery::park(store.paths(), &keys).expect("park roster");
     std::fs::remove_file(&store.paths().live_roster).expect("remove roster");
-    assert_eq!(store.reap_dead_sessions().expect("unguarded reap"), 1);
+    assert_eq!(store.reap_dead_sessions().expect("parked reap"), 0);
+    let parked = store
+        .runtime_projection(RuntimeScope::Audit)
+        .expect("parked projection");
+    assert!(parked.ended.is_disjoint(&keys));
+
+    pending_recovery::settle(store.paths(), &keys).expect("settle");
+    assert_eq!(store.reap_dead_sessions().expect("settled reap"), 2);
     let reaped = store
         .runtime_projection(RuntimeScope::Audit)
         .expect("reaped projection");
-    assert!(
-        reaped
-            .agents
-            .iter()
-            .any(|agent| agent.agent_id == key.1 && agent.ended_at.is_some())
-    );
-    assert!(reaped.ended.contains(&key));
+    assert!(reaped.ended.is_superset(&keys));
 }
 
 #[cfg(unix)]
