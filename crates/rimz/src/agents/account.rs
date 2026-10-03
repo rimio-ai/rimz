@@ -296,6 +296,20 @@ impl ProviderCapacity {
             .max()
     }
 
+    /// Whether every subscription window is known to be unused: it reads 0%,
+    /// or its clock has not started, since a fresh window reports about 1%.
+    /// A window without a percentage, or no window at all, is unknown rather
+    /// than unused.
+    pub(crate) fn known_unused(&self, now: Timestamp) -> bool {
+        let mut windows = self.projected_duration_windows(now).peekable();
+        windows.peek().is_some()
+            && windows.all(|window| {
+                window
+                    .used_percentage
+                    .is_some_and(|used| used == 0 || window.not_started(now))
+            })
+    }
+
     /// Latest reset of the account windows and this model's sub-caps.
     pub(crate) fn latest_spent_window_reset_for_model(
         &self,

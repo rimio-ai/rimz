@@ -74,6 +74,28 @@ fn room_login_set_includes_only_defaults_and_live_root_stamps() {
 }
 
 #[test]
+fn declared_answers_every_catalog_login_of_a_kind_and_none_without_a_catalog() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[codex.work]\nhome = \"/srv/work\"\n[claude.solo]\nhome = \"/srv/solo\"\n"),
+        Some(Path::new("/home/u")),
+    )
+    .unwrap();
+    let set = RoomLoginSet::new(
+        Some(RoomLogins::from([(kind("codex"), name("work"))])),
+        Some(catalog),
+        BTreeMap::new(),
+    );
+    let declared: Vec<_> = set
+        .declared("codex")
+        .iter()
+        .map(|login| login.key().to_string())
+        .collect();
+    assert_eq!(declared, ["codex@default", "codex@work"]);
+    let unloaded = RoomLoginSet::new(Some(RoomLogins::new()), None, BTreeMap::new());
+    assert!(unloaded.declared("codex").is_empty());
+}
+
+#[test]
 fn named_login_overrides_only_the_provider_home_key() {
     let ambient = BTreeMap::from([
         ("HOME".to_owned(), "/home/u".to_owned()),

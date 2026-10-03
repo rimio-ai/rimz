@@ -8,10 +8,15 @@
 //! attempts, refreshes both inputs, re-evaluates the same pure verdict with the
 //! producer's limit-paused evidence, and performs the provider-specific consume
 //! request.
+//! An idle account, one the machine declares and no agent of this room runs
+//! on, gets the expiry rescue alone: the producer reads its cached credits
+//! from its caller, the helper resolves its login from the machine catalog,
+//! and both skip a window known to be unused.
 //! Elected-producer and one-shot heavy refreshes may both advance the shared
 //! burn-rate cache; atomic replacement plus observation stamps make duplicate
 //! folds idempotent.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -23,8 +28,8 @@ use crate::agents::account::{
     ProviderCapacity, RedemptionCode, ResetCreditResult, prepare_reset_credit_redemption,
 };
 use crate::agents::{
-    AccountUsageIdentity, AccountUsageSnapshot, AgentState, RateLimitWindow, RedeemEffect,
-    ResetCredits,
+    AccountUsageIdentity, AccountUsageSnapshot, AgentState, ProviderLogin, RateLimitWindow,
+    RedeemEffect, ResetCredits, RoomLoginSet,
 };
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
@@ -46,7 +51,9 @@ const SECONDS_PER_DAY: f64 = 24.0 * 60.0 * 60.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RedeemReason {
-    /// A credit within 30 minutes of expiry, with or without the opt-in.
+    /// A credit within 30 minutes of expiry, with or without the opt-in. The
+    /// one rule an idle account is evaluated for, and there only when its
+    /// window is not known to be unused.
     ExpiryRescue,
     /// A spent window that parked an agent resets at least `min_gain` away.
     BlockedGain,
@@ -190,6 +197,46 @@ fn redeem_verdict(
         }
         RedeemEffect::KeepsSchedule => blocked_gain.then_some(RedeemReason::BlockedGain),
     }
+}
+
+/// The verdict for an idle account, one no agent of this room runs on: the
+/// expiry rescue alone, and not even that when its window is known to be
+/// unused, where a redemption would only start a clock nobody is spending.
+/// Unknown capacity is not evidence, so the rescue fires.
+fn idle_verdict(
+    capacity: Option<&ProviderCapacity>,
+    credits: &ResetCredits,
+    now: Timestamp,
+) -> Option<RedeemReason> {
+    if capacity.is_some_and(|capacity| capacity.known_unused(now)) {
+        return None;
+    }
+    redeem_verdict(capacity, credits, None, Duration::ZERO, false, false, now)
+}
+
+/// The helper's verdict on its fresh provider read. An idle account is judged
+/// as one whatever evidence the request carried.
+fn fresh_verdict(
+    idle: bool,
+    capacity: Option<&ProviderCapacity>,
+    credits: &ResetCredits,
+    rate_pct_per_day: Option<f64>,
+    config: &ResumeConfig,
+    limit_paused: bool,
+    now: Timestamp,
+) -> Option<RedeemReason> {
+    if idle {
+        return idle_verdict(capacity, credits, now);
+    }
+    redeem_verdict(
+        capacity,
+        credits,
+        rate_pct_per_day,
+        config.auto_redeem_min_gain(),
+        config.auto_redeem,
+        limit_paused,
+        now,
+    )
 }
 
 /// The paced chain for a credit whose redemption restarts the window: spend
@@ -494,16 +541,53 @@ fn limit_paused_on(agents: &[AgentState], key: &LoginKey) -> bool {
     })
 }
 
-/// Evaluate the Codex panel and spawn the account-wide helper when due.
+/// The idle accounts: every Codex login the machine declares, `default`
+/// included, that no default or live agent of this room uses. An account
+/// config that did not load declares none.
+pub(crate) fn idle_logins(logins: &RoomLoginSet) -> Vec<ProviderLogin> {
+    let in_use = logins.in_use(CODEX_KIND);
+    logins
+        .declared(CODEX_KIND)
+        .into_iter()
+        .filter(|login| in_use.iter().all(|used| used.key() != login.key()))
+        .collect()
+}
+
+/// Evaluate the Codex panel of each in-use login, then the cached credits of
+/// each idle account, and spawn the account-wide helper when due.
 /// Only Codex supports automated redemption; keep that provider choice here
 /// while the verdict above remains provider-neutral.
 pub(crate) fn redeem_credits(
     panels: &[SidebarProviderPanel],
+    idle_credits: &BTreeMap<LoginKey, ResetCredits>,
     agents: &[AgentState],
     runtime: &RuntimePaths,
-    logins: &crate::agents::RoomLoginSet,
+    logins: &RoomLoginSet,
     config: &ResumeConfig,
     now: Timestamp,
+) {
+    redeem_credits_with(
+        panels,
+        idle_credits,
+        agents,
+        runtime,
+        logins,
+        config,
+        now,
+        spawn_auto_redeem,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn redeem_credits_with(
+    panels: &[SidebarProviderPanel],
+    idle_credits: &BTreeMap<LoginKey, ResetCredits>,
+    agents: &[AgentState],
+    runtime: &RuntimePaths,
+    logins: &RoomLoginSet,
+    config: &ResumeConfig,
+    now: Timestamp,
+    mut spawn: impl FnMut(&RuntimePaths, &LoginKey, RedeemReason, uuid::Uuid, bool) -> bool,
 ) {
     for login in logins.in_use(CODEX_KIND) {
         let key = login.key();
@@ -527,17 +611,33 @@ pub(crate) fn redeem_credits(
         ) else {
             continue;
         };
+        reserve_and_spawn(runtime, &key, reason, limit_paused, now, &mut spawn);
+    }
+    for (key, credits) in idle_credits {
+        let capacity = ProviderCapacity::read(runtime, key);
+        if let Some(reason) = idle_verdict(capacity.as_ref(), credits, now) {
+            reserve_and_spawn(runtime, key, reason, false, now, &mut spawn);
+        }
+    }
+}
 
-        let request_id = uuid::Uuid::now_v7();
-        // A pending reservation deliberately uses the 10-minute attempt cooldown
-        // as its dead-helper lease. Redemption is rare and account-scoped, so the
-        // conservative backstop is preferable to a second freshness clock.
-        if !reserve_attempt(runtime, &key, reason, now, &request_id.to_string()) {
-            continue;
-        }
-        if !spawn_auto_redeem(runtime, &key, reason, request_id, limit_paused) {
-            cancel_attempt_reservation(runtime, &key, &request_id.to_string());
-        }
+fn reserve_and_spawn(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    reason: RedeemReason,
+    limit_paused: bool,
+    now: Timestamp,
+    spawn: &mut impl FnMut(&RuntimePaths, &LoginKey, RedeemReason, uuid::Uuid, bool) -> bool,
+) {
+    let request_id = uuid::Uuid::now_v7();
+    // A pending reservation deliberately uses the 10-minute attempt cooldown
+    // as its dead-helper lease. Redemption is rare and account-scoped, so the
+    // conservative backstop is preferable to a second freshness clock.
+    if !reserve_attempt(runtime, key, reason, now, &request_id.to_string()) {
+        return;
+    }
+    if !spawn(runtime, key, reason, request_id, limit_paused) {
+        cancel_attempt_reservation(runtime, key, &request_id.to_string());
     }
 }
 
@@ -548,7 +648,7 @@ pub(crate) fn project_redeem_forecasts(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &ResumeConfig,
-    logins: &crate::agents::RoomLoginSet,
+    logins: &RoomLoginSet,
 ) {
     let now = snapshot.now;
     let in_use = logins.keys_in_use();
@@ -594,7 +694,7 @@ pub fn execute_auto_redeem(
         return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));
     }
     let logins = crate::store::room_logins_in_use(runtime);
-    let Some(login) = redeem_login(runtime, key, &request_id.to_string(), &logins) else {
+    let Some((login, idle)) = redeem_login(runtime, key, &request_id.to_string(), &logins) else {
         return Ok(None);
     };
     if crate::agents::credits::oauth_usage_offline() {
@@ -618,12 +718,12 @@ pub fn execute_auto_redeem(
     let action = prepare_reset_credit_redemption(
         CODEX_KIND,
         |capacity, credits| {
-            redeem_verdict(
+            fresh_verdict(
+                idle,
                 capacity,
                 credits,
                 rate_pct_per_day,
-                config.auto_redeem_min_gain(),
-                config.auto_redeem,
+                config,
                 limit_paused,
                 now,
             )
@@ -708,22 +808,31 @@ pub fn execute_auto_redeem(
     }))
 }
 
+/// The login the helper redeems under, and whether it is idle. A login this
+/// room uses is read from the room; one it does not, from the machine catalog.
+/// A key neither holds cancels the reservation.
 fn redeem_login(
     runtime: &RuntimePaths,
     key: &LoginKey,
     request_id: &str,
-    logins: &crate::agents::RoomLoginSet,
-) -> Option<crate::agents::ProviderLogin> {
+    logins: &RoomLoginSet,
+) -> Option<(ProviderLogin, bool)> {
+    let is_key = |login: &ProviderLogin| login.key() == *key;
     let login = logins
         .in_use(CODEX_KIND)
         .into_iter()
-        .find(|login| login.key() == *key);
+        .find(is_key)
+        .map(|login| (login, false))
+        .or_else(|| {
+            let idle = idle_logins(logins).into_iter().find(is_key)?;
+            Some((idle, true))
+        });
     if login.is_none() {
         cancel_attempt_reservation(runtime, key, request_id);
         tracing::debug!(
             kind = key.kind.as_str(),
-            outcome = "login_unused",
-            "auto-redeem: login no longer in use"
+            outcome = "login_undeclared",
+            "auto-redeem: login neither in use nor declared"
         );
     }
     login

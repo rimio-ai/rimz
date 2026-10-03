@@ -199,6 +199,13 @@ pub(super) const OAUTH_USAGE_TTL: Duration = Duration::from_secs(5 * 60);
 /// sooner when the user re-logs-in.
 pub(super) const OAUTH_USAGE_SETTLED_TTL: Duration = Duration::from_secs(60 * 60);
 
+/// Floor between OAuth account-usage probes of an idle account, one the
+/// machine declares and no agent of this room runs on. It holds after every
+/// outcome, so a failing or logged-out spare account is never retried on the
+/// in-use tiers above; auto-redeem's expiry rescue runs off the cached expiry
+/// in between.
+pub(super) const IDLE_OAUTH_USAGE_TTL: Duration = Duration::from_secs(3 * 60 * 60);
+
 /// Lease for one direct account-usage worker. Realtime publication renews it
 /// before direct provider work, so each valid bounded segment fits while a dead
 /// child still recovers without a long-lived orphan claim.
