@@ -556,7 +556,8 @@ path = "crates/rimz/src/sidebar"
 # accounts::cached_account supplies published account facts to both idle-compaction consumers without probing.
 # Account-cache types and status projection now belong to agents.
 # Consumers import those types directly; the refresh re-exports are gone.
-surface-budget = 224
+# Roster publication confirms the existing election without the fetch-start memo (+1).
+surface-budget = 225
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
