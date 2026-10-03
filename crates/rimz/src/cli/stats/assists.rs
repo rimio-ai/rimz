@@ -16,6 +16,7 @@ pub(super) struct AssistStats {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(super) struct AssistRollup {
+    pub(super) resident_launches: usize,
     pub(super) model_aliases: usize,
     pub(super) tier_fallbacks: usize,
     pub(super) redeems: usize,
@@ -33,6 +34,16 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
+    ResidentLaunch {
+        at: Timestamp,
+        task: String,
+        checkout: std::path::PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        condition: Option<rimz::harness::schedule::when::ConditionEvidence>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stopped_team: Option<String>,
+        handles: Vec<String>,
+    },
     ModelAlias {
         at: Timestamp,
         kind: AgentKind,
@@ -187,6 +198,7 @@ impl AssistStats {
         let mut rollup = AssistRollup::default();
         for event in &events {
             match event {
+                AssistEvent::ResidentLaunch { .. } => rollup.resident_launches += 1,
                 AssistEvent::ModelAlias { .. } => rollup.model_aliases += 1,
                 AssistEvent::TierFallback { .. } => rollup.tier_fallbacks += 1,
                 AssistEvent::Redeem { outcome, .. } => {
@@ -243,6 +255,20 @@ impl AssistStats {
 impl AssistEvent {
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
+            Assist::ResidentLaunch {
+                task,
+                checkout,
+                condition,
+                stopped_team,
+                handles,
+            } => Self::ResidentLaunch {
+                at: record.at,
+                task,
+                checkout,
+                condition,
+                stopped_team,
+                handles,
+            },
             Assist::ModelAlias {
                 kind,
                 login,
@@ -445,7 +471,8 @@ impl AssistEvent {
 
     fn at(&self) -> Timestamp {
         match self {
-            Self::ModelAlias { at, .. }
+            Self::ResidentLaunch { at, .. }
+            | Self::ModelAlias { at, .. }
             | Self::Redeem { at, .. }
             | Self::Continue { at, .. }
             | Self::Compact { at, .. }
@@ -525,6 +552,9 @@ pub(super) fn category_rows(rollup: &AssistRollup) -> Vec<String> {
 
 fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     let mut rows = Vec::with_capacity(5);
+    if rollup.resident_launches > 0 {
+        rows.push(("Resident launches:", rollup.resident_launches.to_string()));
+    }
     if rollup.model_aliases > 0 {
         rows.push(("Model aliases:", rollup.model_aliases.to_string()));
     }
@@ -578,6 +608,9 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
     let at = event.at().to_zoned(zone.clone());
     let time = at.strftime("%H:%M");
     match event {
+        AssistEvent::ResidentLaunch { task, handles, .. } => {
+            format!("{time} loop {task} opened {}", handles.join(", "))
+        }
         AssistEvent::ModelAlias {
             kind,
             alias,
@@ -806,6 +839,21 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         .split_once(' ')
         .map_or_else(|| benefit_line(event, zone), |(_, rest)| rest.to_owned());
     match event {
+        AssistEvent::ResidentLaunch {
+            checkout,
+            condition,
+            stopped_team,
+            ..
+        } => format!(
+            "{at} {benefit} · checkout {}{}{}",
+            checkout.display(),
+            condition
+                .as_ref()
+                .map_or_else(String::new, |evidence| format!(" · when {}", evidence.when)),
+            stopped_team
+                .as_ref()
+                .map_or_else(String::new, |team| format!(" · stopped team {team}")),
+        ),
         AssistEvent::ModelAlias { login, .. } => format!("{at} {benefit} · login {login}"),
         AssistEvent::TierFallback { agent_id, .. } => format!("{at} {benefit} · agent {agent_id}"),
         AssistEvent::Redeem {
@@ -988,6 +1036,37 @@ mod tests {
         );
         let line = benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
         assert!(line.contains("sol now resolves to gpt-6.1-sol (was gpt-6-sol)"));
+    }
+
+    #[test]
+    fn resident_launch_assists_roll_up_and_render() {
+        let record = serde_json::from_value::<AssistRecord>(serde_json::json!({
+            "at": "2026-01-01T00:00:00Z", "assist": "resident_launch",
+            "task": "fixer", "checkout": "/repo-worktrees/auth", "stopped_team": "forge",
+            "condition": {"when":"ci=passed", "hold":null, "held_ms":0, "readings":{"ci":"passed"}},
+            "handles": ["@otter", "@fox"]
+        }))
+        .expect("resident launch assist wire format");
+        let stats = AssistStats::from_records("all", vec![record]);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["rollup"]["resident_launches"], 1);
+        assert_eq!(json["events"][0]["condition"]["readings"]["ci"], "passed");
+        assert!(
+            category_rows(&stats.rollup)
+                .join(" ")
+                .contains("Resident launches:")
+        );
+        let line = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+        for fact in [
+            "fixer",
+            "@otter",
+            "@fox",
+            "/repo-worktrees/auth",
+            "forge",
+            "ci=passed",
+        ] {
+            assert!(line.contains(fact), "{line}");
+        }
     }
 
     #[test]

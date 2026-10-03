@@ -514,7 +514,13 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         let mut run = command();
         run.args(["loop", "run", "resident"]);
         if each_worktree {
-            run.arg("--cwd").arg(&checkout);
+            run.arg("--cwd").arg(&checkout).arg("--condition-json").arg(
+                json!({
+                    "when": "pr=open", "hold": null, "held_ms": 0,
+                    "readings": {"pr": "open"}
+                })
+                .to_string(),
+            );
         }
         let output = run.output().unwrap();
         assert!(
@@ -554,6 +560,23 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     assert_eq!(
         rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap(),
         ledger
+    );
+    let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    assert_eq!(assists.len(), 1);
+    let assist = serde_json::to_value(&assists[0]).unwrap();
+    assert_eq!(assist["assist"], "resident_launch");
+    assert_eq!(assist["task"], "resident");
+    assert!(loop_ok(&env, &["stats", "--assists"]).contains("loop resident opened"));
+    if each_worktree {
+        assert_eq!(assist["condition"]["readings"]["pr"], "open");
+    }
+    assert_eq!(
+        assist["checkout"],
+        expected_checkout.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        assist["handles"],
+        json!([format!("@{}", agents[0].name.as_deref().unwrap())])
     );
     assert_eq!(
         serde_json::to_value(&agents[0]).unwrap()["loop_task"],
@@ -698,6 +721,10 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
             .iter()
             .filter(|row| row.task == "resident")
             .count(),
+        2
+    );
+    assert_eq!(
+        rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).len(),
         2
     );
     assert_eq!(
@@ -863,6 +890,7 @@ fn resident_team_stop_case(bind_pane: bool) {
                 .is_empty()
         );
         assert_eq!(last_loop_record(&env).result, LoopRunResult::Errored);
+        assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
         assert_eq!(read_loop_instances(&env).0.len(), 2);
         return;
     }
@@ -873,6 +901,12 @@ fn resident_team_stop_case(bind_pane: bool) {
     );
     let subscriptions = read_loop_instances(&env);
     assert_eq!(subscriptions.0.len(), 1);
+    let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    assert_eq!(assists.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&assists[0]).unwrap()["stopped_team"],
+        "forge"
+    );
     assert_eq!(
         subscriptions
             .0
