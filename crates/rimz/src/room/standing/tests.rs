@@ -291,3 +291,32 @@ fn an_account_counts_its_other_live_agents_and_never_the_one_launching() {
         0
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn an_account_stops_counting_a_row_whose_owner_process_is_dead() {
+    use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
+    let agent = |owner: Option<RuntimeOwner>| {
+        let mut agent = AgentState::seed(
+            kind("codex"),
+            "peer".into(),
+            AgentStatus::Idle,
+            jiff::Timestamp::UNIX_EPOCH,
+        );
+        agent.login = Some(name("team"));
+        agent.pane = Some(crate::pane::PaneRef::from_id(
+            crate::ids::PaneId::from_parts(crate::MuxName::Tmux, "%1"),
+        ));
+        agent.runtime_owner = owner;
+        agent
+    };
+    let team = LoginKey::new(kind("codex"), name("team"));
+    let count = |owner| count_others_on(&[agent(owner)], &team, &[]);
+    // A launch that failed after its pane was bound, or a wrapper killed
+    // outright: the row is not ended, and nothing behind it can write.
+    let dead = RuntimeOwner::new(RuntimeOwnerKind::Agent, "peer", u32::MAX, None);
+    assert_eq!(count(Some(dead)), 0);
+    let live = crate::store::runtime::current_process_owner(RuntimeOwnerKind::Agent, "peer");
+    assert_eq!(count(Some(live)), 1);
+    assert_eq!(count(None), 1);
+}
