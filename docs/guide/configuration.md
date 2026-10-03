@@ -190,6 +190,8 @@ Resume covers two moments: bringing the room back after the machine or the multi
 
 Subagent children are never restored. A child's open run cut off by the crash reports as canceled to its parent, which can relaunch the work if it is still needed.
 
+If a Zellij room is already running without anyone attached, you still answer the recovery questions first; its recovered tabs open once you attach. With `--no-attach`, the agents stay parked instead. Run `rimz start` without that flag when you are ready to recover them.
+
 **A park while the room is live.** `auto_continue` is off by default. Turned on, it picks a parked turn back up by typing `auto_continue_text` down the same path as `message --steer`:
 
 - A rate-limit or spend-limit park fires when the account's budget window resets.

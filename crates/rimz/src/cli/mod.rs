@@ -161,6 +161,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Setup(args)) => setup::run(args, &globals),
         Some(Subcmd::Ping) => doctor::ping(),
         Some(Subcmd::Start(args)) => room::start(args, &globals),
+        Some(Subcmd::RecoverParked(args)) => room::recover_deferred(args),
         Some(Subcmd::Attach(args)) => room::attach(args, &globals),
         Some(Subcmd::Sessions(args)) => sessions::run(args, &globals),
         Some(Subcmd::Remote(args)) => remote::run(args, &globals),
@@ -590,6 +591,9 @@ enum Subcmd {
     /// Pricing snapshot projection helper. Contributor automation calls this.
     #[command(hide = true)]
     PricingRefresh(pricing_refresh::PricingRefreshArgs),
+    /// Complete an attended recovery after a client attaches.
+    #[command(hide = true)]
+    RecoverParked(room::DeferredRecoveryArgs),
     /// Message agents; list, edit, steer, requeue, cancel.
     ///
     /// Bare send routes now with `--steer`, or at the next safe turn boundary.

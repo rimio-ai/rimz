@@ -571,6 +571,42 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
 }
 
 #[test]
+fn failed_recovery_park_refuses_birth_before_creating_a_session() {
+    let env = Env::new();
+    let bin = seed_actionable_agent(&env);
+    let store = env.store();
+    rimz::store::live_roster::publish(
+        &store.paths().live_roster,
+        [(rimz::ids::AgentKind::new_unchecked("claude"), "lost".into())].into(),
+    )
+    .expect("publish lost roster");
+    let roster = std::fs::read(&store.paths().live_roster).unwrap();
+    std::fs::create_dir_all(&store.paths().pending_recovery)
+        .expect("block pending record publication");
+    let trace = env.project_root.join("zellij.log");
+    let mut room = ShimRoom::watch(&env, &trace, MATERIALIZED_ROOM_PANES);
+    room.allow_no_trigger("a failed park refuses before creating the session");
+    let mut command = env.rimz();
+    configure_actionable_hooks(&mut command, &env, &bin, &trace, "");
+    let output = command.arg("--no-resume").bounded_output().expect("start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "birth must fail when parking fails: {stderr}"
+    );
+    assert!(
+        stderr.contains("park") && stderr.contains("retry"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(&store.paths().live_roster).unwrap(), roster);
+    let trace = std::fs::read_to_string(trace).unwrap();
+    assert!(
+        !trace.contains("\tattach\t--create-background\t"),
+        "no session creation: {trace}"
+    );
+}
+
+#[test]
 fn unattended_start_without_resume_parks_lost_agents() {
     use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
     use rimz::store::event::EventKind;
@@ -629,6 +665,146 @@ fn unattended_start_without_resume_parks_lost_agents() {
     )
     .expect("pending-recovery JSON");
     assert_eq!(pending["agents"], serde_json::json!([lost]));
+}
+
+#[test]
+fn live_room_start_offers_parked_agents_only_when_attended() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::store::event::EventKind;
+
+    let env = Env::new();
+    let bin_dir = seed_actionable_agent(&env);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let mut observation =
+        AgentLifecycleObservation::new(Some("lost".into()), LifecycleSignal::Registered);
+    observation.worktree_path = Some(
+        env.project_root
+            .join("missing-worktree")
+            .display()
+            .to_string(),
+    );
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .expect("register lost agent");
+    let parked = serde_json::json!({"version": 1, "agents": [["claude", "lost"]]});
+    std::fs::create_dir_all(
+        store
+            .paths()
+            .pending_recovery
+            .parent()
+            .expect("records dir"),
+    )
+    .expect("records dir");
+    std::fs::write(&store.paths().pending_recovery, parked.to_string()).expect("park lost agent");
+    let pending = || -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(&store.paths().pending_recovery).expect("record"))
+            .expect("pending-recovery JSON")
+    };
+    let ended = || {
+        env.read_events()
+            .iter()
+            .filter_map(|event| match event.kind() {
+                EventKind::AgentLifecycle(payload)
+                    if matches!(payload.observation.signal, LifecycleSignal::Ended) =>
+                {
+                    payload.event_name.clone()
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let sessions = format!("{} [Created 1m ago]\n", workspace.session_name);
+    let zellij_log = env.project_root.join("zellij-live.log");
+    let _room = ShimRoom::watch(&env, &zellij_log, MATERIALIZED_ROOM_PANES);
+
+    let mut unattended = env.rimz();
+    configure_actionable_hooks(&mut unattended, &env, &bin_dir, &zellij_log, &sessions);
+    let output = unattended.bounded_output().expect("run unattended start");
+    assert!(
+        output.status.success(),
+        "unattended start failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(pending(), parked, "nobody was asked");
+    assert_eq!(ended(), Vec::<String>::new());
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open pty");
+    let mut command = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut command);
+    command.cwd(&env.project_root);
+    command.args(["--mux", "zellij", "start", "--no-attach"]);
+    command.env("PATH", &bin_dir);
+    command.env("TERM", "dumb");
+    command.env("RIMZ_PETS_OFFLINE", "1");
+    command.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim());
+    command.env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log);
+    command.env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &sessions);
+    command.env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250");
+    command.env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES);
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn attended start");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+    let mut writer = pair.master.take_writer().expect("pty writer");
+    std::io::Write::write_all(&mut writer, b"y\n").expect("answer the drop question");
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll attended start") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    drop(writer);
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let status = status.unwrap_or_else(|| {
+        panic!("attended start did not finish within {COMMAND_TIMEOUT:?}:\n{output}")
+    });
+    assert!(status.success(), "attended start failed: {output}");
+    assert!(output.contains("rimz: cannot be resumed:"), "{output}");
+    assert!(output.contains("Drop 1 agent"), "{output}");
+    assert!(output.contains("worktree gone"), "{output}");
+    assert!(
+        !output.contains("Recover "),
+        "nothing is resumable: {output}"
+    );
+    assert_eq!(ended(), ["rimz.worktree-gone"]);
+    assert_eq!(pending()["agents"], serde_json::json!([]));
+    let events = env.read_events();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.kind(),
+            EventKind::SessionDeath(_) | EventKind::SessionRebirth
+        )),
+        "a live settlement writes no session event"
+    );
 }
 
 #[test]

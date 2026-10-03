@@ -15,7 +15,7 @@ use rimz::harness::resume::{
     LaneRestoreConfig, LaneResumeAction, LaneResumeError, LaneResumeRequest, LaneResumeSelector,
     LaneSummary, LaneWorktree, ResumeSkip, plan_lane_resume, resume_session_present,
 };
-use rimz::mux::{ResumeTab, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions};
+use rimz::mux::{ResumeTab, SplitPaneOptions, SplitPlacement, SplitTarget};
 
 use super::{GlobalFlags, RoomContext, RoomSizing};
 
@@ -173,7 +173,7 @@ pub(super) fn resume_lane(
             let plan = plan.materialize(&store, &workspace.session_name)?;
             let count = plan.tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
             for (index, tab) in plan.tabs.into_iter().enumerate() {
-                if let Err(error) = open_resume_tab(&room, tab, focus) {
+                if let Err(error) = room.open_resume_tab(tab, focus.takes_focus()) {
                     for launch in plan
                         .team_launches
                         .iter()
@@ -181,7 +181,7 @@ pub(super) fn resume_lane(
                     {
                         let _ = store.fail_agent_launch_batch(&launch.batch);
                     }
-                    return Err(error);
+                    return Err(error.into());
                 }
                 if let Some(launch) = plan.team_launches.iter().find(|launch| launch.tab == index) {
                     rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
@@ -250,21 +250,6 @@ fn discover_lane_sessions(
                 .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
         })
         .collect()
-}
-
-fn open_resume_tab(room: &RoomContext, tab: ResumeTab, focus: LaunchFocus) -> Result<()> {
-    let sidebar = room.sidebar_options(&tab.cwd);
-    room.backend()
-        .open_tab(&TabOptions {
-            env: tab.env,
-            title: tab.label,
-            panes: tab.layout,
-            focus: focus.takes_focus(),
-            dock_sidebar: true,
-            after: None,
-            sidebar,
-        })
-        .map_err(Into::into)
 }
 
 fn report_resume_skips(skips: &[ResumeSkip]) -> Result<()> {

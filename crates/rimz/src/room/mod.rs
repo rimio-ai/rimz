@@ -1,6 +1,7 @@
 //! Managed room context and lifecycle seam.
 
 mod birth;
+mod recovery;
 pub mod session;
 mod standing;
 pub mod teardown;
@@ -26,6 +27,7 @@ use crate::{RuntimePaths, StatePaths, Store, workspace::record::WorkspaceRecord}
 pub use birth::{
     AttendedRecovery, BirthOutcome, NormalRebirth, ResetRecoveryError, RoomBirth, RoomResetReport,
 };
+pub use recovery::DeferredRecovery;
 pub use standing::{
     AccountStanding, Deciding, Scope, Scopes, live_agents_by_login, other_live_agents_on,
 };
@@ -432,14 +434,37 @@ impl RoomContext {
         )
     }
 
-    /// Settle a plan from [`Self::inspect_parked_recovery`]. The caller opens
-    /// the returned resume tabs in the live session.
+    /// Settle a plan from [`Self::inspect_parked_recovery`], opening its
+    /// resumed tabs in the live session without taking focus. The returned
+    /// plan holds the tabs that opened and a warning for one that did not.
     pub fn settle_parked_recovery(
         &self,
         plan: RebirthPlan,
         disposition: RebirthDisposition,
     ) -> crate::harness::resume::ResumePlan {
-        plan.materialize(disposition, &self.workspace.session_name)
+        self.settle_recovery_consent(plan.consent(disposition))
+            .unwrap_or_else(|error| crate::harness::resume::ResumePlan {
+                warnings: vec![format!("agents stay parked: {error}")],
+                ..Default::default()
+            })
+    }
+
+    /// Open one resume tab in this room's live session.
+    pub fn open_resume_tab(
+        &self,
+        tab: crate::mux::ResumeTab,
+        focus: bool,
+    ) -> crate::mux::Result<()> {
+        let sidebar = self.sidebar_options(&tab.cwd);
+        self.backend.open_tab(&crate::mux::TabOptions {
+            env: tab.env,
+            title: tab.label,
+            panes: tab.layout,
+            focus,
+            dock_sidebar: true,
+            after: None,
+            sidebar,
+        })
     }
 
     /// Build options for an ordinary tab inside this room.

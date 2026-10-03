@@ -32,6 +32,17 @@ struct Fixture {
     project: PathBuf,
 }
 
+fn materialize(
+    plan: RebirthPlan,
+    disposition: RebirthDisposition,
+    session_name: &str,
+) -> ResumePlan {
+    if plan.boundary {
+        park_roster(&plan.paths).expect("park before birth");
+    }
+    plan.materialize(disposition, session_name)
+}
+
 impl Fixture {
     fn new(agents: &[(&str, &Path, bool)]) -> Self {
         Self::with_children(agents, &[])
@@ -256,7 +267,7 @@ fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
     let plan = fixture.inspect(false);
     let planned_labels = plan.preview().labels().to_vec();
 
-    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
+    let outcome = materialize(plan, RebirthDisposition::RecoverDrop, "rimz-test");
 
     assert_eq!(
         outcome
@@ -308,11 +319,16 @@ fn decline_archives_crash_and_records_zero_recovered_without_tabs() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
+    fixture.seed_named_channel("auth");
     let plan = fixture.inspect(false);
 
-    let outcome = plan.materialize(RebirthDisposition::Decline, "rimz-test");
+    let outcome = materialize(plan, RebirthDisposition::Decline, "rimz-test");
 
     assert!(outcome.tabs.is_empty());
+    assert!(
+        outcome.channel_tabs.is_empty(),
+        "an answered No starts bare"
+    );
     assert!(!fixture.paths.live_roster.exists());
     assert!(pending(&fixture).is_empty());
     let marker: LastDeathMarker =
@@ -371,6 +387,18 @@ fn decline_archives_crash_and_records_zero_recovered_without_tabs() {
 }
 
 #[test]
+fn missing_worktree_stays_pending_without_a_drop_decision() {
+    for disposition in [RebirthDisposition::Defer, RebirthDisposition::RecoverKeep] {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let fixture = Fixture::new(&[("missing", &missing, false)]);
+        materialize(fixture.inspect(false), disposition, "rimz-test");
+        assert_eq!(ended_events(&fixture), [], "{disposition:?}");
+        assert_eq!(pending(&fixture), [key("missing")].into());
+    }
+}
+
+#[test]
 fn recover_ends_the_unresumed_rest_only_when_the_user_drops_it() {
     for disposition in [
         RebirthDisposition::RecoverKeep,
@@ -401,13 +429,19 @@ fn recover_ends_the_unresumed_rest_only_when_the_user_drops_it() {
             preview
                 .unresumable()
                 .iter()
-                .map(|agent| agent.reason.clone())
+                .map(|agent| agent
+                    .reason
+                    .as_ref()
+                    .map(|reason| reason.label().into_owned()))
                 .collect::<Vec<_>>(),
-            [Some(ResumeSkipReason::OverCap)],
-            "the worktree-gone agent is ended either way, so it is not offered"
+            [
+                Some("worktree gone".to_owned()),
+                Some("over the resume cap".to_owned())
+            ],
+            "both skipped agents need a drop decision"
         );
 
-        let outcome = plan.materialize(disposition, "rimz-test");
+        let outcome = materialize(plan, disposition, "rimz-test");
 
         assert_eq!(outcome.resumed, resumed);
         let dropped = disposition == RebirthDisposition::RecoverDrop;
@@ -431,7 +465,11 @@ fn recover_ends_the_unresumed_rest_only_when_the_user_drops_it() {
                 .filter(|(_, agent_id)| agent_id.as_str() == "missing")
                 .map(|(event, _)| event.as_str())
                 .collect::<Vec<_>>(),
-            ["rimz.worktree-gone"],
+            if dropped {
+                vec!["rimz.worktree-gone"]
+            } else {
+                Vec::new()
+            },
             "{disposition:?}"
         );
         assert_eq!(
@@ -439,7 +477,7 @@ fn recover_ends_the_unresumed_rest_only_when_the_user_drops_it() {
             if dropped {
                 BTreeSet::new()
             } else {
-                [over_cap].into()
+                [over_cap, key("missing")].into()
             },
             "{disposition:?}"
         );
@@ -479,7 +517,7 @@ fn rebirth_fails_peer_turns_even_when_the_peer_is_recovered() {
             opened_by: Vec::new(),
         });
         crate::harness::run::create(&fixture.paths, &record).unwrap();
-        plan.materialize(choice, "rimz-test");
+        materialize(plan, choice, "rimz-test");
         assert_eq!(
             crate::harness::run::load(&fixture.paths, &record.run_id)
                 .unwrap()
@@ -497,10 +535,12 @@ fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
     use crate::store::run::{RunRecord, RunStatus, WakeupFrame, run_socket_path};
     use std::os::unix::net::UnixDatagram;
 
-    for choice in [
-        RebirthDisposition::RecoverDrop,
-        RebirthDisposition::Decline,
-        RebirthDisposition::RecoverKeep,
+    for (choice, inspected) in [
+        (RebirthDisposition::Defer, false),
+        (RebirthDisposition::RecoverDrop, true),
+        (RebirthDisposition::Decline, true),
+        (RebirthDisposition::RecoverKeep, true),
+        (RebirthDisposition::Defer, true),
     ] {
         let dir = tempfile::tempdir().expect("worktrees");
         let worktree = dir.path().join("lane");
@@ -558,24 +598,40 @@ fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
             }),
             "a launched child is neither planned nor skipped"
         );
-        plan.materialize(choice, "rimz-test");
+        if inspected {
+            materialize(plan, choice, "rimz-test");
+        } else {
+            park_roster(&fixture.paths).expect("park before birth");
+            record_boundary_at(
+                fixture.paths.clone(),
+                fixture.runtime.clone(),
+                &fixture.paths.workspace_id,
+                "rimz-test",
+            );
+        }
         let event = match choice {
             RebirthDisposition::RecoverDrop => "rimz.not-resumed",
             RebirthDisposition::Decline => "rimz.recovery-declined",
             _ => {
                 assert_eq!(ended_events(&fixture), []);
-                assert_eq!(pending(&fixture), ["child", "finished"].map(key).into());
-                for record in &records {
-                    assert_eq!(&run::load(&fixture.paths, &record.run_id).unwrap(), record);
+                let mut expected = ["child", "finished"]
+                    .map(key)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                if choice == RebirthDisposition::Defer {
+                    expected.insert(key("root"));
                 }
-                continue;
+                assert_eq!(pending(&fixture), expected);
+                ""
             }
         };
         let ended = ended_events(&fixture);
-        for id in ["child", "finished"] {
-            assert!(ended.contains(&(event.to_owned(), id.into())));
+        if !event.is_empty() {
+            for id in ["child", "finished"] {
+                assert!(ended.contains(&(event.to_owned(), id.into())));
+            }
+            assert!(pending(&fixture).is_empty(), "{choice:?}");
         }
-        assert!(pending(&fixture).is_empty(), "{choice:?}");
         assert_eq!(
             run::load(&fixture.paths, &records[0].run_id)
                 .unwrap()
@@ -613,7 +669,7 @@ fn failed_rebirth_append_still_parks_roster() {
     std::fs::remove_file(&fixture.paths.events_log).expect("remove log");
     std::fs::create_dir(&fixture.paths.events_log).expect("block log append");
 
-    plan.materialize(RebirthDisposition::Decline, "rimz-test");
+    materialize(plan, RebirthDisposition::Decline, "rimz-test");
 
     assert!(!fixture.paths.live_roster.exists());
     assert_eq!(
@@ -633,7 +689,7 @@ fn unattended_birth_with_recovery_off_parks_agents_for_a_later_recovery() {
 
     assert_eq!(plan.preview().pane_count(), 0);
     assert_eq!(plan.preview().candidate_count(), 1);
-    let outcome = plan.materialize(RebirthDisposition::Defer, "rimz-test");
+    let outcome = materialize(plan, RebirthDisposition::Defer, "rimz-test");
     assert!(outcome.tabs.is_empty());
     assert_eq!(outcome.channel_tabs.len(), 1);
     assert_eq!(outcome.channel_tabs[0].label, "#auth");
@@ -657,7 +713,7 @@ fn unattended_birth_with_recovery_off_parks_agents_for_a_later_recovery() {
     assert_eq!(plan.preview().pane_count(), 1);
     assert_eq!(plan.preview().unresumable(), []);
 
-    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
+    let outcome = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
 
     assert_eq!(outcome.resumed, [key("live")].into());
     assert_eq!(outcome.tabs.len(), 1);
@@ -670,6 +726,140 @@ fn unattended_birth_with_recovery_off_parks_agents_for_a_later_recovery() {
 }
 
 #[test]
+fn decline_with_recovery_off_ends_candidates_and_keeps_the_channel_tabs() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let live = dir.path().join("live");
+    let fixture = Fixture::new(&[("live", &live, true)]);
+    fixture.seed_named_channel("auth");
+    let plan = fixture.inspect(true);
+    assert!(plan.preview().recovery_off());
+
+    let outcome = materialize(plan, RebirthDisposition::Decline, "rimz-test");
+
+    assert_eq!(outcome.channel_tabs.len(), 1);
+    assert_eq!(
+        ended_events(&fixture),
+        vec![("rimz.recovery-declined".to_owned(), "live".into())]
+    );
+    assert!(pending(&fixture).is_empty());
+    assert!(!fixture.inspect(false).preview().recovery_off());
+}
+
+#[test]
+fn settlement_drops_parked_agents_ended_by_other_means() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let live = dir.path().join("live");
+    let closed = dir.path().join("closed");
+    let fixture = Fixture::new(&[("live", &live, true), ("closed", &closed, true)]);
+    park_roster(&fixture.paths).expect("park before birth");
+    record_boundary_at(
+        fixture.paths.clone(),
+        fixture.runtime.clone(),
+        &fixture.paths.workspace_id,
+        "rimz-test",
+    );
+    Store::open(fixture.paths.clone(), fixture.runtime.clone())
+        .expect("store")
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.paths.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionEnd",
+            &AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("closed")),
+                LifecycleSignal::Ended,
+            ),
+        ))
+        .expect("end by other means");
+    assert_eq!(pending(&fixture), [key("closed"), key("live")].into());
+
+    materialize(
+        fixture.inspect(true),
+        RebirthDisposition::Defer,
+        "rimz-test",
+    );
+
+    assert_eq!(pending(&fixture), [key("live")].into());
+}
+
+#[test]
+fn live_settlement_keeps_resumed_agents_parked_when_a_tab_does_not_open() {
+    for opened in 0..=2 {
+        let dir = tempfile::tempdir().expect("worktrees");
+        let lost = dir.path().join("lost");
+        let other = dir.path().join("other");
+        let fixture = Fixture::new(&[("lost", &lost, true), ("other", &other, true)]);
+        materialize(
+            fixture.inspect(true),
+            RebirthDisposition::Defer,
+            "rimz-test",
+        );
+        let plan = inspect_live_at(
+            fixture.paths.clone(),
+            fixture.runtime.clone(),
+            &fixture.project,
+            &MachineConfig::default(),
+            false,
+        );
+
+        let mut attempts = 0;
+        let outcome = plan.settle_live(RebirthDisposition::RecoverKeep, "rimz-test", |_| {
+            assert_eq!(
+                pending(&fixture),
+                [key("lost"), key("other")].into(),
+                "a dying opener must leave its candidates parked"
+            );
+            attempts += 1;
+            if attempts <= opened {
+                Ok(())
+            } else {
+                Err("no tab")
+            }
+        });
+
+        assert_eq!(outcome.tabs.len(), opened);
+        assert_eq!(outcome.warnings.len(), usize::from(opened < 2));
+        assert_eq!(
+            pending(&fixture),
+            if opened == 2 {
+                BTreeSet::new()
+            } else {
+                [key("lost"), key("other")].into()
+            }
+        );
+        assert_eq!(ended_events(&fixture), []);
+        let marker: LastDeathMarker = serde_json::from_slice(
+            &std::fs::read(&fixture.paths.last_death_marker).expect("last death"),
+        )
+        .expect("marker");
+        assert_eq!(marker.recovered, Some(opened));
+        let assists = crate::harness::assist_log::recent(&crate::disk::paths::logs_dir(), None)
+            .into_iter()
+            .filter_map(|record| match record.assist {
+                crate::harness::assist_log::Assist::AutoResume {
+                    workspace_id,
+                    recovered,
+                    labels,
+                    ..
+                } if workspace_id == fixture.paths.workspace_id => Some((recovered, labels)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            assists,
+            if opened == 0 {
+                vec![]
+            } else {
+                vec![(
+                    opened,
+                    outcome.tabs.iter().map(|tab| tab.label.clone()).collect(),
+                )]
+            }
+        );
+    }
+}
+
+#[test]
 fn live_settlement_writes_no_boundary_and_leaves_live_agents_alone() {
     for disposition in [RebirthDisposition::Decline, RebirthDisposition::RecoverKeep] {
         let dir = tempfile::tempdir().expect("worktrees");
@@ -677,6 +867,7 @@ fn live_settlement_writes_no_boundary_and_leaves_live_agents_alone() {
         let alive = dir.path().join("alive");
         let fixture = Fixture::new(&[("lost", &lost, true), ("alive", &alive, true)]);
         fixture.seed_named_channel("auth");
+        park_roster(&fixture.paths).expect("park before birth");
         record_boundary_at(
             fixture.paths.clone(),
             fixture.runtime.clone(),
@@ -712,7 +903,7 @@ fn live_settlement_writes_no_boundary_and_leaves_live_agents_alone() {
         );
         assert_eq!(plan.preview().candidate_count(), 1);
         assert_eq!(plan.preview().pane_count(), 1);
-        let outcome = plan.materialize(disposition, "rimz-test");
+        let outcome = materialize(plan, disposition, "rimz-test");
 
         let recovers = disposition.recovers();
         assert_eq!(outcome.tabs.len(), usize::from(recovers));
@@ -803,7 +994,7 @@ fn rebirth_recovery_globally_orders_fresher_flat_before_team() {
         plan.checkout_roots(),
         BTreeSet::from([flat_worktree.as_path(), team_worktree.as_path()])
     );
-    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
+    let outcome = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
     assert_eq!(outcome.tabs[0].cwd, flat_worktree);
     assert_eq!(outcome.tabs[1].cwd, team_worktree);
 }
@@ -979,7 +1170,7 @@ fn rebirth_recovers_flat_tabs_when_store_is_unavailable() {
     std::fs::remove_file(&fixture.paths.events_log).expect("remove event log");
     std::fs::create_dir(&fixture.paths.events_log).expect("block store open");
 
-    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
+    let outcome = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
 
     assert_eq!(outcome.tabs.len(), 1);
     assert_eq!(outcome.tabs[0].cwd, flat_worktree);
@@ -1019,7 +1210,7 @@ fn team_recovery_allocates_fresh_role_and_keeps_other_tabs_after_team_failure() 
     broken.cohort.seeds.clear();
     plan.planned.entries.insert(0, RecoveryEntry::Team(broken));
 
-    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
+    let outcome = materialize(plan, RebirthDisposition::RecoverKeep, "rimz-test");
 
     assert!(outcome.tabs.iter().any(|tab| tab.label == "#forge"));
     assert!(outcome.tabs.iter().any(|tab| tab.cwd == flat_worktree));
@@ -1100,7 +1291,7 @@ fn failed_team_materialization_keeps_its_resume_seeds_pending_unless_dropped() {
         ));
         team.cohort.seeds.truncate(1);
 
-        let outcome = plan.materialize(disposition, "rimz-test");
+        let outcome = materialize(plan, disposition, "rimz-test");
 
         assert!(outcome.tabs.is_empty());
         if disposition == RebirthDisposition::RecoverKeep {
@@ -1124,6 +1315,7 @@ fn boundary_without_inspection_parks_roster_and_ends_nobody() {
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
 
+    park_roster(&fixture.paths).expect("park before birth");
     record_boundary_at(
         fixture.paths.clone(),
         fixture.runtime.clone(),
@@ -1218,7 +1410,7 @@ fn crash_archive_uses_cache_bytes_captured_before_room_birth() {
     .expect("inspect");
 
     std::fs::write(source.join("state.kdl"), "reborn").expect("reborn cache");
-    plan.materialize(RebirthDisposition::Decline, "rimz-test");
+    materialize(plan, RebirthDisposition::Decline, "rimz-test");
 
     let archive = std::fs::read_dir(&fixture.paths.crashes_dir)
         .expect("crashes")

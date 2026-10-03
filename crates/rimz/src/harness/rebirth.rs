@@ -30,7 +30,7 @@ pub enum RebirthErr {
 
 /// What a settlement does with the recovery candidates. Only an interactive
 /// answer may choose a disposition that ends an agent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RebirthDisposition {
     /// Nobody was asked: every candidate stays pending.
     Defer,
@@ -40,6 +40,39 @@ pub enum RebirthDisposition {
     RecoverKeep,
     /// Resume what the plan can; the user dropped the rest.
     RecoverDrop,
+}
+
+/// The decision covers only agents the user was offered, not later losses.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct RecoveryConsent {
+    candidates: BTreeSet<(AgentKind, AgentSessionId)>,
+    pub(crate) disposition: RebirthDisposition,
+    recovery_off: bool,
+}
+
+impl RecoveryConsent {
+    pub(crate) fn inspect(
+        &self,
+        paths: StatePaths,
+        runtime: RuntimePaths,
+        project_root: &Path,
+        machine: &MachineConfig,
+    ) -> Result<RebirthPlan> {
+        let guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+        let scope = pending_recovery::read(&paths.pending_recovery)
+            .intersection(&self.candidates)
+            .cloned()
+            .collect();
+        drop(guard);
+        Ok(inspect_live_scope(
+            paths,
+            runtime,
+            project_root,
+            machine,
+            self.recovery_off,
+            scope,
+        ))
+    }
 }
 
 impl RebirthDisposition {
@@ -65,6 +98,7 @@ pub struct RebirthPreview {
     requires_sandbox: bool,
     candidate_count: usize,
     unresumable: Vec<UnresumableAgent>,
+    recovery_off: bool,
 }
 
 impl RebirthPreview {
@@ -94,6 +128,12 @@ impl RebirthPreview {
     pub fn unresumable(&self) -> &[UnresumableAgent] {
         &self.unresumable
     }
+
+    /// Whether `--no-resume` or `[resume] on_rebirth = false` switched
+    /// recovery off, so the plan resumes nobody.
+    pub const fn recovery_off(&self) -> bool {
+        self.recovery_off
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -107,7 +147,10 @@ pub struct RebirthPlan {
     crash_roster: Vec<AgentState>,
     crash_cache: CrashCacheSnapshot,
     candidates: Vec<AgentState>,
+    /// Lost agents already ended by other means: they only leave the record.
+    ended: BTreeSet<(AgentKind, AgentSessionId)>,
     planned: RecoveryPlan,
+    recovery_off: bool,
     requires_sandbox: bool,
     empty_tabs: Vec<ResumeTab>,
 }
@@ -125,6 +168,18 @@ enum CrashCacheEntry {
 }
 
 impl RebirthPlan {
+    pub(crate) fn consent(&self, disposition: RebirthDisposition) -> RecoveryConsent {
+        RecoveryConsent {
+            candidates: self
+                .candidates
+                .iter()
+                .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+                .chain(self.ended.iter().cloned())
+                .collect(),
+            disposition,
+            recovery_off: self.recovery_off,
+        }
+    }
     /// Inspect prior state without changing markers, archives, event logs, the
     /// persisted live roster, or the pending-recovery record.
     pub(crate) fn inspect(
@@ -182,7 +237,7 @@ impl RebirthPlan {
             .iter()
             .filter_map(|agent| {
                 let key = (agent.kind.clone(), agent.agent_id.clone());
-                if resumable.contains(&key) || self.planned.worktree_gone().contains(&key) {
+                if resumable.contains(&key) {
                     return None;
                 }
                 Some(match self.planned.skip_for(&key) {
@@ -195,7 +250,11 @@ impl RebirthPlan {
                             .name
                             .clone()
                             .unwrap_or_else(|| agent.agent_id.to_string()),
-                        reason: None,
+                        reason: self
+                            .planned
+                            .worktree_gone()
+                            .contains(&key)
+                            .then_some(ResumeSkipReason::WorktreeGone),
                     },
                 })
             })
@@ -207,7 +266,58 @@ impl RebirthPlan {
             requires_sandbox: self.requires_sandbox,
             candidate_count: self.candidates.len(),
             unresumable,
+            recovery_off: self.recovery_off,
         }
+    }
+
+    /// Settle a live session's parked agents, opening each resumed tab through
+    /// `open`. A tab that does not open stops the run and returns every
+    /// resumed agent to the pending record, where the ones now live are
+    /// ignored and the rest wait for the next attended start.
+    pub(crate) fn settle_live<E: std::fmt::Display>(
+        self,
+        disposition: RebirthDisposition,
+        session_name: &str,
+        mut open: impl FnMut(ResumeTab) -> std::result::Result<(), E>,
+    ) -> ResumePlan {
+        let paths = self.paths.clone();
+        let runtime = self.runtime.clone();
+        let death = self.death.clone();
+        let (mut resume, resumed) = self.settle(disposition, session_name);
+        let failed = resume
+            .tabs
+            .iter()
+            .enumerate()
+            .find_map(|(index, tab)| Some((index, open(tab.clone()).err()?)));
+        let Some((index, error)) = failed else {
+            if let Err(err) = pending_recovery::settle(&paths, &resumed) {
+                resume
+                    .warnings
+                    .push(format!("resumed agents stay pending: {err}"));
+            }
+            record_recovery(&paths, death, session_name, &resume.tabs);
+            return resume;
+        };
+        if let Err(err) = pending_recovery::park(&paths, &resumed) {
+            tracing::warn!(workspace = %paths.workspace_id, error = %err, "rebirth: could not park agents whose tab did not open");
+        }
+        if let Ok(store) = Store::open(paths.clone(), runtime) {
+            for launch in resume
+                .team_launches
+                .iter()
+                .filter(|launch| launch.tab >= index)
+            {
+                let _ = store.fail_agent_launch_batch(&launch.batch);
+            }
+        }
+        resume.warnings.push(format!(
+            "could not open resumed tab {}: {error}; its agents stay pending",
+            resume.tabs[index].label
+        ));
+        resume.team_launches.retain(|launch| launch.tab < index);
+        resume.tabs.truncate(index);
+        record_recovery(&paths, death, session_name, &resume.tabs);
+        resume
     }
 
     /// Distinct checkouts that recovery will launch into, before materialization.
@@ -217,15 +327,30 @@ impl RebirthPlan {
 
     /// Commit the boundary, when this birth ends an incarnation, and settle
     /// the candidates as `disposition` says, after the multiplexer session exists.
+    /// The caller must park the roster before creating that session.
     pub(crate) fn materialize(
         self,
         disposition: RebirthDisposition,
         session_name: &str,
     ) -> ResumePlan {
-        let planned_labels = self.planned.labels();
-        let death_cause = self.death.as_ref().map(|death| death.cause);
-        // First, so nothing below can fail the parking.
-        let parked = self.boundary && park_roster(&self.paths);
+        let paths = self.paths.clone();
+        let death = self.death.clone();
+        let (mut resume, resumed) = self.settle(disposition, session_name);
+        if let Err(err) = pending_recovery::settle(&paths, &resumed) {
+            resume
+                .warnings
+                .push(format!("resumed agents stay pending: {err}"));
+        }
+        record_recovery(&paths, death, session_name, &resume.tabs);
+        resume
+    }
+
+    /// [`Self::materialize`], also returning every agent it resumed.
+    fn settle(
+        self,
+        disposition: RebirthDisposition,
+        session_name: &str,
+    ) -> (ResumePlan, BTreeSet<(AgentKind, AgentSessionId)>) {
         if let Some(boot) = self.boot_token.as_deref() {
             write_boot_marker(&self.paths.boot_marker, boot);
         }
@@ -268,6 +393,14 @@ impl RebirthPlan {
                     tracing::warn!(workspace = %self.paths.workspace_id, agent_id = %agent.agent_id, error = %err, "rebirth: could not fail peer turn");
                 }
             }
+            if self.boundary {
+                let lost = self
+                    .crash_roster
+                    .iter()
+                    .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+                    .collect();
+                cancel_child_runs(store, &self.paths, &self.crash_roster, &lost);
+            }
         }
         let (resume, resumed) = match disposition {
             RebirthDisposition::RecoverKeep | RebirthDisposition::RecoverDrop => {
@@ -279,14 +412,18 @@ impl RebirthPlan {
                     self.empty_tabs,
                 )
             }
-            RebirthDisposition::Defer => (
+            // Declining at the prompt starts bare; recovery switched off
+            // decides the agents alone, and the channel tabs still restore.
+            RebirthDisposition::Decline if !self.recovery_off => {
+                (ResumePlan::default(), BTreeSet::new())
+            }
+            RebirthDisposition::Defer | RebirthDisposition::Decline => (
                 ResumePlan {
                     channel_tabs: self.empty_tabs,
                     ..ResumePlan::default()
                 },
                 BTreeSet::new(),
             ),
-            RebirthDisposition::Decline => (ResumePlan::default(), BTreeSet::new()),
         };
         let worktree_gone = resume
             .agents_to_end
@@ -300,8 +437,10 @@ impl RebirthPlan {
         };
         // An agent leaves the pending record only once it is resumed or its
         // ended stamp is durable; otherwise the reap would drop it unasked.
-        let mut settled = resumed.clone();
-        if let Some(store) = store.as_ref() {
+        let mut settled = self.ended;
+        if let Some(store) = store.as_ref()
+            && let Some(event_name) = dropped_as
+        {
             settled.extend(record_agents_ended(
                 store,
                 &self.paths.workspace_id,
@@ -309,52 +448,58 @@ impl RebirthPlan {
                 &worktree_gone,
                 "rimz.worktree-gone",
             ));
-            if let Some(event_name) = dropped_as {
-                let rest = self
-                    .candidates
-                    .iter()
-                    .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
-                    .filter(|key| !resumed.contains(key) && !worktree_gone.contains(key))
-                    .collect();
-                let dropped = record_agents_ended(
-                    store,
-                    &self.paths.workspace_id,
-                    session_name,
-                    &rest,
-                    event_name,
-                );
-                cancel_child_runs(store, &self.paths, &self.candidates, &dropped);
-                settled.extend(dropped);
-            }
+            let rest = self
+                .candidates
+                .iter()
+                .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+                .filter(|key| !resumed.contains(key) && !worktree_gone.contains(key))
+                .collect();
+            let dropped = record_agents_ended(
+                store,
+                &self.paths.workspace_id,
+                session_name,
+                &rest,
+                event_name,
+            );
+            cancel_child_runs(store, &self.paths, &self.candidates, &dropped);
+            settled.extend(dropped);
         }
         if let Err(err) = pending_recovery::settle(&self.paths, &settled) {
             tracing::warn!(workspace = %self.paths.workspace_id, error = %err, "rebirth: settled agents stay in the pending-recovery record");
         }
-        let recovered = resume.tabs.iter().map(ResumeTab::pane_count).sum();
-        if recovered > 0 {
-            crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
-                at: Timestamp::now(),
-                assist: crate::harness::assist_log::Assist::AutoResume {
-                    workspace_id: self.paths.workspace_id.clone(),
-                    session_name: session_name.to_owned(),
-                    cause: death_cause,
-                    recovered,
-                    labels: planned_labels,
-                },
-            });
-        }
-        match self.death {
-            Some(mut death) => {
-                death.recovered = Some(recovered);
-                write_last_death_marker(&self.paths, &death);
-            }
-            None if recovered > 0 => count_later_recovery(&self.paths, recovered),
-            None => {}
-        }
         if self.boundary {
-            close_boundary(store.as_ref(), &self.paths, session_name, parked);
+            close_boundary(store.as_ref(), &self.paths, session_name);
         }
-        resume
+        (resume, resumed)
+    }
+}
+
+fn record_recovery(
+    paths: &StatePaths,
+    death: Option<LastDeathMarker>,
+    session_name: &str,
+    tabs: &[ResumeTab],
+) {
+    let recovered = tabs.iter().map(ResumeTab::pane_count).sum();
+    if recovered > 0 {
+        crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
+            at: Timestamp::now(),
+            assist: crate::harness::assist_log::Assist::AutoResume {
+                workspace_id: paths.workspace_id.clone(),
+                session_name: session_name.to_owned(),
+                cause: death.as_ref().map(|death| death.cause),
+                recovered,
+                labels: tabs.iter().map(|tab| tab.label.clone()).collect(),
+            },
+        });
+    }
+    match death {
+        Some(mut death) => {
+            death.recovered = Some(recovered);
+            write_last_death_marker(paths, &death);
+        }
+        None if recovered > 0 => count_later_recovery(paths, recovered),
+        None => {}
     }
 }
 
@@ -362,7 +507,7 @@ fn cancel_child_runs(
     store: &Store,
     paths: &StatePaths,
     candidates: &[AgentState],
-    dropped: &BTreeSet<(AgentKind, AgentSessionId)>,
+    affected: &BTreeSet<(AgentKind, AgentSessionId)>,
 ) {
     let runs = match crate::harness::run::list(paths) {
         Ok(runs) => runs,
@@ -373,7 +518,7 @@ fn cancel_child_runs(
     };
     for agent in candidates {
         if agent.parent_agent_id.is_none()
-            || !dropped.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+            || !affected.contains(&(agent.kind.clone(), agent.agent_id.clone()))
         {
             continue;
         }
@@ -441,14 +586,15 @@ fn inspect_at(
 
     let mut scope = pending_recovery::read(&paths.pending_recovery);
     scope.extend(roster.iter().cloned());
-    let (candidates, planned) = plan_settlement(
+    let recovery_off = disabled || !machine.resume.on_rebirth;
+    let (candidates, ended, planned) = plan_settlement(
         audit.as_ref().map(|(_, projection)| projection),
         &paths,
         &runtime,
         &scope,
         project_root,
         machine,
-        disabled,
+        recovery_off,
     );
     let requires_sandbox = planned.requires_sandbox(machine.agents.isolation);
     let empty_tabs = empty_named_channel_tabs(&paths);
@@ -461,7 +607,9 @@ fn inspect_at(
         crash_roster,
         crash_cache,
         candidates,
+        ended,
         planned,
+        recovery_off,
         requires_sandbox,
         empty_tabs,
     })
@@ -476,18 +624,30 @@ fn inspect_live_at(
 ) -> RebirthPlan {
     // The roster is this session's live set; only parked agents are lost.
     let scope = pending_recovery::read(&paths.pending_recovery);
+    inspect_live_scope(paths, runtime, project_root, machine, disabled, scope)
+}
+
+fn inspect_live_scope(
+    paths: StatePaths,
+    runtime: RuntimePaths,
+    project_root: &Path,
+    machine: &MachineConfig,
+    disabled: bool,
+    scope: BTreeSet<(AgentKind, AgentSessionId)>,
+) -> RebirthPlan {
     let projection = (!scope.is_empty())
         .then(|| Store::open_existing(paths.clone(), runtime.clone()))
         .flatten()
         .and_then(|store| store.runtime_projection(crate::RuntimeScope::Audit).ok());
-    let (candidates, planned) = plan_settlement(
+    let recovery_off = disabled || !machine.resume.on_rebirth;
+    let (candidates, ended, planned) = plan_settlement(
         projection.as_ref(),
         &paths,
         &runtime,
         &scope,
         project_root,
         machine,
-        disabled,
+        recovery_off,
     );
     let requires_sandbox = planned.requires_sandbox(machine.agents.isolation);
     RebirthPlan {
@@ -499,14 +659,17 @@ fn inspect_live_at(
         crash_roster: Vec::new(),
         crash_cache: CrashCacheSnapshot::default(),
         candidates,
+        ended,
         planned,
+        recovery_off,
         requires_sandbox,
         empty_tabs: Vec::new(),
     }
 }
 
 /// The candidates a settlement decides about (lost agents in `scope` that are
-/// neither ended nor live) and the plan that resumes the ones it can.
+/// neither ended nor live), the agents in `scope` already ended, and the plan
+/// that resumes the candidates it can.
 fn plan_settlement(
     projection: Option<&crate::RuntimeProjection>,
     paths: &StatePaths,
@@ -514,11 +677,22 @@ fn plan_settlement(
     scope: &BTreeSet<(AgentKind, AgentSessionId)>,
     project_root: &Path,
     machine: &MachineConfig,
-    disabled: bool,
-) -> (Vec<AgentState>, RecoveryPlan) {
+    recovery_off: bool,
+) -> (
+    Vec<AgentState>,
+    BTreeSet<(AgentKind, AgentSessionId)>,
+    RecoveryPlan,
+) {
     let Some(projection) = projection else {
-        return (Vec::new(), RecoveryPlan::default());
+        return (Vec::new(), BTreeSet::new(), RecoveryPlan::default());
     };
+    let ended = projection
+        .agents
+        .iter()
+        .filter(|agent| agent.ended_at.is_some())
+        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        .filter(|key| scope.contains(key))
+        .collect();
     let lost = projection
         .agents
         .iter()
@@ -531,8 +705,8 @@ fn plan_settlement(
         .filter(|agent| agent.ended_at.is_none())
         .cloned()
         .collect::<Vec<_>>();
-    if disabled || !machine.resume.on_rebirth || candidates.is_empty() {
-        return (candidates, RecoveryPlan::default());
+    if recovery_off || candidates.is_empty() {
+        return (candidates, ended, RecoveryPlan::default());
     }
     let availability =
         crate::harness::plan::LaunchAvailability::read(runtime, paths, machine, Timestamp::now());
@@ -546,7 +720,7 @@ fn plan_settlement(
         machine,
         &teams_and_profiles,
     );
-    (candidates, planned)
+    (candidates, ended, planned)
 }
 
 fn effective_teams_and_profiles(
@@ -817,30 +991,27 @@ fn count_later_recovery(paths: &StatePaths, recovered: usize) {
 }
 
 /// Park the dead incarnation's roster in the pending-recovery record, where
-/// its agents wait for a decision. Returns whether they are parked: the roster
-/// may be deleted only then.
-fn park_roster(paths: &StatePaths) -> bool {
+/// its agents wait for a decision. Birth must succeed here before creating a
+/// session whose producer can replace the roster.
+pub(crate) fn park_roster(paths: &StatePaths) -> Result<()> {
     let roster = live_roster::read(&paths.live_roster)
         .map(|roster| roster.agents)
         .unwrap_or_default();
-    match pending_recovery::park(paths, &roster) {
-        Ok(()) => true,
-        Err(err) => {
-            tracing::warn!(workspace = %paths.workspace_id, error = %err, "rebirth: could not park lost agents; keeping the live roster");
-            false
-        }
+    if roster.is_empty() {
+        return Ok(());
     }
+    pending_recovery::park(paths, &roster).with_context(|| format!(
+        "cannot park lost agents in {}; restore write access to the record and release any stuck workspace lock, then retry rimz start; the live roster is unchanged",
+        paths.pending_recovery.display()
+    ))
 }
 
-fn close_boundary(store: Option<&Store>, paths: &StatePaths, session_name: &str, parked: bool) {
+fn close_boundary(store: Option<&Store>, paths: &StatePaths, session_name: &str) {
     if let Some(store) = store {
         let event = crate::EventEnvelope::session_rebirth(paths.workspace_id.clone(), session_name);
         if let Err(err) = store.append_event(&event) {
             tracing::warn!(workspace = %paths.workspace_id, error = %err, "rebirth boundary skipped");
         }
-    }
-    if !parked {
-        return;
     }
     match std::fs::remove_file(&paths.live_roster) {
         Ok(()) => {}
@@ -851,6 +1022,7 @@ fn close_boundary(store: Option<&Store>, paths: &StatePaths, session_name: &str,
     }
 }
 
+/// Record a birth whose roster was parked before the session was created.
 pub(crate) fn record_boundary(workspace_id: &WorkspaceId, session_name: &str) {
     let result = (|| -> Result<()> {
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
@@ -869,7 +1041,6 @@ fn record_boundary_at(
     workspace_id: &WorkspaceId,
     session_name: &str,
 ) {
-    let parked = park_roster(&paths);
     let store = match Store::open(paths.clone(), runtime) {
         Ok(store) => Some(store),
         Err(err) => {
@@ -877,7 +1048,14 @@ fn record_boundary_at(
             None
         }
     };
-    close_boundary(store.as_ref(), &paths, session_name, parked);
+    if let Some(store) = store.as_ref()
+        && let Ok(projection) = store.runtime_projection(crate::RuntimeScope::Audit)
+    {
+        let roster = recovery_roster(&paths, &projection.agents);
+        let agents = lost_agent_roster(&projection.agents, &roster);
+        cancel_child_runs(store, &paths, &agents, &roster);
+    }
+    close_boundary(store.as_ref(), &paths, session_name);
 }
 
 fn archive_crash(
