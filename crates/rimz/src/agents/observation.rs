@@ -274,9 +274,10 @@ impl AgentUsageSummary {
         )
     }
 
-    /// Gauge numerator: the input-side call split when known, else the latest
-    /// cumulative token reading.
-    fn context_used_tokens(&self) -> Option<u64> {
+    /// Window occupancy: the input-side call split when known, else the latest
+    /// cumulative token reading. The gauge percentage and the rollup's
+    /// compaction retire rule both measure this.
+    pub(crate) fn context_used_tokens(&self) -> Option<u64> {
         self.input_context_tokens().or(self.total_tokens)
     }
 
