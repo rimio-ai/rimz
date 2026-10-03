@@ -244,3 +244,222 @@ fn config_set_rejects_unsupported_account_budget_without_writing() {
 
     assert_eq!(std::fs::read_to_string(path).expect("config"), before);
 }
+
+/// A session resumed under a second shared account answers to that account:
+/// the pool's budget stop reaches its pane, and a parked message checks hooks
+/// in the second account's home.
+#[cfg(unix)]
+#[test]
+fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::harness::launch::{ExecAction, ExecRequest};
+    use rimz::ids::{AgentSessionId, MuxName, PaneId};
+    use rimz::store::event::{EventEnvelope, EventKind};
+
+    use crate::common::{exec_args, path_with_front, write_env_dump_shim};
+
+    const SESSION: &str = "sess-pool";
+    const PANE: &str = "terminal_3";
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let rimz = || {
+        let mut command = env.rimz();
+        command.env_remove("CLAUDE_CONFIG_DIR");
+        command
+    };
+    env.install_agent_hooks("claude");
+    let native = env.home_root.join(".claude");
+    std::fs::create_dir_all(native.join("projects")).unwrap();
+    let one = env.home_root.join("one");
+    let two = env.home_root.join("two");
+    for (name, home) in [("one", &one), ("two", &two)] {
+        rimz()
+            .args(["accounts", "add", "claude", name, "--home"])
+            .arg(home)
+            .assert()
+            .success();
+    }
+    rimz()
+        .args(["config", "set", "accounts.budget.claude", "1/day"])
+        .assert()
+        .success();
+
+    let lifecycle = |name: &str, signal: LifecycleSignal| {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from(SESSION)), signal);
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, PANE));
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                name,
+                &observation,
+            ))
+            .unwrap();
+    };
+    lifecycle("SessionStart", LifecycleSignal::Registered);
+    lifecycle("SessionEnd", LifecycleSignal::Ended);
+    // The resumed provider stays alive, so the row keeps a live runtime owner.
+    let shim_dir = write_env_dump_shim(&env, "claude");
+    std::fs::write(shim_dir.join("claude"), "#!/bin/sh\nexec sleep 300\n").unwrap();
+    let resume_under = |login_name: &str| -> std::process::Child {
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+        request.action = ExecAction::Resume {
+            session_id: SESSION.to_owned(),
+            extra_args: Vec::new(),
+        };
+        request.identity.params.login = Some(login_name.parse().unwrap());
+        let child = rimz()
+            .args(exec_args(&env, &request))
+            .arg("--root")
+            .arg(&env.project_root)
+            .env("SHELL", "/definitely/not/a/shell")
+            .env("PATH", path_with_front(&shim_dir))
+            .env("ZELLIJ", "0")
+            .env("ZELLIJ_PANE_ID", "3")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !env.store().read_events().unwrap().iter().any(|event| {
+            matches!(event.kind(), EventKind::AgentAttach(attach)
+                if attach.runtime_owner.pid == child.id()
+                    && attach.login.as_ref().is_some_and(|login| login.as_str() == login_name))
+        }) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no attach under {login_name}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        lifecycle(
+            "UserPromptSubmit",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        child
+    };
+    let message = || {
+        rimz()
+            .args(["message", "@claude", "--", "new direction"])
+            .output()
+            .unwrap()
+    };
+
+    // Under the first account, whose home has lost its hooks, a parked
+    // message is refused: the control for the check below.
+    let mut first = resume_under("one");
+    std::fs::remove_file(one.join("settings.json")).unwrap();
+    let refused = message();
+    assert!(!refused.status.success(), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("requires claude hooks"),
+        "{refused:?}"
+    );
+
+    first.kill().unwrap();
+    first.wait().unwrap();
+    let mut second = resume_under("two");
+    let sent = message();
+    assert!(
+        sent.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sent.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&sent.stdout).contains("queued for @claude"),
+        "{sent:?}"
+    );
+
+    // Spend over the cap, written through the second account's history link.
+    assert_eq!(
+        std::fs::read_link(two.join("projects")).unwrap(),
+        native.join("projects")
+    );
+    let now = rimz::agents::spending::unix_secs_now();
+    let tod = now % 86_400;
+    std::fs::create_dir_all(two.join("projects/repo")).unwrap();
+    std::fs::write(
+        two.join("projects/repo/turn.jsonl"),
+        format!(
+            r#"{{"timestamp":"{}T{:02}:{:02}:{:02}.000Z","costUSD":2.0,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":1200,"output_tokens":80}}}}}}"#,
+            rimz::agents::spending::utc_date(now),
+            tod / 3_600,
+            (tod % 3_600) / 60,
+            tod % 60
+        ) + "\n",
+    )
+    .unwrap();
+
+    let trace = env.project_root.join("budget-trace.log");
+    let panes = env.write_pane_fixture(&[rimz::pane::PaneRef {
+        pane_id: PaneId::from_parts(MuxName::Zellij, PANE),
+        session_name: workspace.session_name.clone(),
+        view_id: Some("tab_1".to_owned()),
+        view_kind: Some(rimz::ids::ViewKind::Tab),
+        view_name: Some("project".to_owned()),
+        title: None,
+        is_floating: false,
+        command: Some("claude".to_owned()),
+        foreground_cmdline: None,
+        spawn_command: None,
+        cwd: Some(env.project_root.display().to_string()),
+        pane_pid: None,
+        pane_process_start: None,
+        hosted_agent_kind: None,
+        hosted_agent_process_start: None,
+        resumed_session_id: None,
+        elevated_agent: None,
+        first_seen_at_ms: None,
+    }]);
+    let snapshot = rimz()
+        .args([
+            "sidebar",
+            "snapshot",
+            "--json",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--session-name",
+            &workspace.session_name,
+        ])
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .output()
+        .unwrap();
+    assert!(
+        snapshot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&snapshot.stderr)
+    );
+    let escape = format!("\taction\twrite\t--pane-id\t{PANE}\t27");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !std::fs::read_to_string(&trace)
+        .is_ok_and(|log| log.lines().any(|line| line.ends_with(&escape)))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no interrupt reached the pane: {:?}",
+            std::fs::read_to_string(&trace)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let snapshot: serde_json::Value = serde_json::from_slice(&snapshot.stdout).unwrap();
+    let card = snapshot["agents"]
+        .as_array()
+        .and_then(|agents| agents.iter().find(|agent| agent["agent_id"] == SESSION))
+        .unwrap_or_else(|| panic!("no card for {SESSION}: {snapshot}"));
+    assert_eq!(card["login"], "two", "{card}");
+    assert_eq!(card["budget_park"]["scope"], "account", "{card}");
+    assert_eq!(card["budget_park"]["account_kind"], "claude", "{card}");
+    rimz()
+        .args(["budget", "--account", "claude@two"])
+        .assert()
+        .success()
+        .stdout(contains("scope:  claude@default account"))
+        .stdout(contains("spend:  $2.00 today"))
+        .stdout(contains("parked: yes"));
+    second.kill().unwrap();
+    second.wait().unwrap();
+}
