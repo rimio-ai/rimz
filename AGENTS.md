@@ -94,6 +94,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - Search a snake_case field or function name with `rg -w`; a bare substring also matches every longer identifier that starts with it.
 - A scan command always names its path (`rg PATTERN .`): in an agent shell stdin is not a terminal, so a pathless `rg` searches stdin and hangs until the tool timeout.
 - Stop a process you started by its PID (`$!`, `pgrep -x`), never with `pkill -f PATTERN`: the pattern matches the shell running `pkill` and kills it.
+- Brace a shell variable that a colon follows (`git show "${rev}:path"`): zsh reads `$rev:c` as a modifier on the variable and passes git a mangled revision.
 
 ## Testing
 
