@@ -743,6 +743,170 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     );
 }
 
+#[test]
+fn resident_stops_only_checkout_team_and_explicit_team_stop_retires_the_rest() {
+    resident_team_stop_case(true);
+}
+
+#[test]
+fn resident_failed_team_stop_commits_no_launch_or_ledger() {
+    resident_team_stop_case(false);
+}
+
+fn resident_team_stop_case(bind_pane: bool) {
+    let env = Env::new();
+    let Some(cwd) = team_signal_fixture(&env) else {
+        return;
+    };
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &cwd);
+    let sibling = env.home_root.join("sibling");
+    assert!(git_ok(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "sibling",
+            sibling.to_str().unwrap()
+        ]
+    ));
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    for (session, checkout, pane) in [("old-coder", &cwd, "51"), ("sibling-coder", &sibling, "52")]
+    {
+        seed_team_signal_member_in_channel(&env, checkout, session, None, session);
+        let mut hook = env.hook_command("claude");
+        hook.current_dir(checkout)
+            .env(rimz::harness::launch::ENV_AGENT_NAME, session)
+            .env("RIMZ_AGENT_PID", std::process::id().to_string());
+        if bind_pane || checkout == &sibling {
+            hook.env("ZELLIJ", "1")
+                .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+                .env("ZELLIJ_PANE_ID", pane);
+        }
+        let output = env
+            .spawn_payload(
+                hook,
+                &json!({"hook_event_name":"SessionStart", "session_id":session, "cwd":checkout})
+                    .to_string(),
+            )
+            .wait_with_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert_eq!(read_loop_instances(&env).0.len(), 2);
+    assert!(
+        rimz::harness::resume::inspect_team_hold(
+            &store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .unwrap()
+                .agents,
+            &cwd
+        )
+        .is_some()
+    );
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        Vec::new(),
+    );
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let trace = env.home_root.join("stop-team.log");
+    let command = || {
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&agent_bin))
+            .env(
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            );
+        command
+    };
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nstay = true\nstop-team = true\n",
+            env.project_root, cwd
+        ),
+    );
+    let output = command()
+        .args(["loop", "run", "resident"])
+        .output()
+        .unwrap();
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    if !bind_pane {
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("no bound pane"));
+        assert_eq!(agents.len(), 2);
+        assert!(
+            rimz::harness::schedule::launch_ledger::load(store.paths())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(last_loop_record(&env).result, LoopRunResult::Errored);
+        assert_eq!(read_loop_instances(&env).0.len(), 2);
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let subscriptions = read_loop_instances(&env);
+    assert_eq!(subscriptions.0.len(), 1);
+    assert_eq!(
+        subscriptions
+            .0
+            .values()
+            .next()
+            .unwrap()
+            .wait
+            .as_ref()
+            .unwrap()
+            .session
+            .as_str(),
+        "sibling-coder"
+    );
+    let trace_text = std::fs::read_to_string(&trace).unwrap();
+    let close = trace_text.find("close-pane").unwrap();
+    assert!(close < trace_text.find("new-tab").unwrap(), "{trace_text}");
+    assert_eq!(trace_text.matches("close-pane").count(), 1, "{trace_text}");
+    assert_eq!(
+        agents
+            .iter()
+            .filter(|agent| agent.loop_task.as_deref() == Some("resident"))
+            .count(),
+        1
+    );
+    stamp_session_ended(&env, "old-coder");
+    let output = command().args(["teams", "stop", "forge"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(read_loop_instances(&env).0.is_empty());
+}
+
 fn publish_claude_5h(env: &Env, used: u8) {
     publish_claude_5h_resetting(env, used, SignedDuration::from_hours(2));
 }
@@ -1621,6 +1785,16 @@ fn team_signal_fixture(env: &Env) -> Option<std::path::PathBuf> {
 }
 
 fn seed_team_signal_member(env: &Env, cwd: &Path, session: &str, parent: Option<&str>) {
+    seed_team_signal_member_in_channel(env, cwd, session, parent, "feature-team");
+}
+
+fn seed_team_signal_member_in_channel(
+    env: &Env,
+    cwd: &Path,
+    session: &str,
+    parent: Option<&str>,
+    channel: &str,
+) {
     let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .append_event(&rimz::store::event::EventEnvelope::agent_launched(
@@ -1635,7 +1809,7 @@ fn seed_team_signal_member(env: &Env, cwd: &Path, session: &str, parent: Option<
                 launch: rimz::agents::LaunchParams {
                     team: Some("forge".to_owned()),
                     role: Some("coder".to_owned()),
-                    channel: Some("feature-team".to_owned()),
+                    channel: Some(channel.to_owned()),
                     parent_agent_id: parent.map(AgentSessionId::from),
                     parent_agent_kind: parent.map(|_| AgentKind::new_unchecked("claude")),
                     launch_depth: parent.map(|_| 1),
