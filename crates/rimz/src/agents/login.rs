@@ -861,6 +861,18 @@ impl RoomLoginSet {
         logins.into_values().collect()
     }
 
+    /// Every login of one kind the machine catalog holds, `default` included,
+    /// whether or not this room uses it; none when the account config did not
+    /// load.
+    pub fn declared(&self, kind: &str) -> Vec<ProviderLogin> {
+        self.catalog
+            .iter()
+            .flat_map(LoginCatalog::all)
+            .filter(|login| login.kind().as_str() == kind)
+            .cloned()
+            .collect()
+    }
+
     /// The resolvable logins this room currently uses across all kinds.
     pub fn keys_in_use(&self) -> BTreeSet<LoginKey> {
         self.kinds()
