@@ -166,6 +166,54 @@ fn condition_add_refuses_invalid_predicates_and_options() {
 }
 
 #[test]
+fn paused_fanout_keeps_hold_and_fired_state() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    loop_ok(&env, &["worktree", "new", "lane"]);
+    let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
+    assert_eq!(owned.len(), 1);
+    std::fs::write(owned[0].path.join("blackboard.md"), "Stage: Done\n").unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\nfor = \"30m\"\n",
+            env.project_root.to_str().unwrap()
+        ),
+    );
+    loop_ok(&env, &["loop", "tick"]);
+    loop_ok(&env, &["loop", "tick"]);
+    let runtime = env.runtime_paths();
+    let fire_path = runtime.lane_path("loop-fire.json");
+    let when_path = runtime.lane_path("loop-when.json");
+    let stamps = std::fs::read(&fire_path).unwrap();
+    let mut states: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&when_path).unwrap()).unwrap();
+    assert_eq!(states.as_object().unwrap().len(), 1);
+    for fired in [false, true] {
+        for state in states.as_object_mut().unwrap().values_mut() {
+            state["fired"] = json!(fired);
+        }
+        std::fs::write(&when_path, serde_json::to_vec(&states).unwrap()).unwrap();
+        loop_ok(&env, &["loop", "pause", "resident", "--for", "2h"]);
+        loop_ok(&env, &["loop", "tick"]);
+        assert_eq!(std::fs::read(&fire_path).unwrap(), stamps);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&when_path).unwrap())
+                .unwrap(),
+            states
+        );
+        loop_ok(&env, &["loop", "enable", "resident"]);
+        loop_ok(&env, &["loop", "tick"]);
+        assert_eq!(std::fs::read(&fire_path).unwrap(), stamps);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&when_path).unwrap())
+                .unwrap(),
+            states
+        );
+    }
+}
+
+#[test]
 fn resident_add_accepts_layout_and_persists_launch_options() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -242,6 +290,74 @@ fn resident_subscribe_requires_prompt_leader_and_installed_hooks() {
 #[cfg(unix)]
 #[test]
 fn resident_launch_deduplicates_and_manual_fire_relaunches() {
+    resident_launch_case(false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_show_summarizes_worktree_conditions() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nroot = {:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\neach-worktree = true\nwhen = [\"pr=open\"]\n",
+            env.project_root
+        ),
+    );
+    let summary = loop_ok(&env, &["loop", "show", "resident"]);
+    assert!(
+        summary.contains("condition: evaluated per owned worktree · 0 launched"),
+        "{summary}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_worktree_launch_preserves_marker_path_without_a_room() {
+    resident_launch_case(true, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_team_layout_uses_the_helpers_resolved_checkout() {
+    resident_launch_case(true, true);
+}
+
+#[test]
+fn agents_team_cwd_subdirectory_refuses_root_checkout_bindings() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.install_agent_hooks("codex");
+    env.write_config(
+        &env.project_root,
+        r#"
+        [profiles.codex]
+        agent = "codex"
+        [[agents.teams.forge.roles]]
+        role = "coder"
+        profile = "codex"
+        signals = [{ signal = "ci.failed" }]
+        "#,
+    );
+    loop_ok(&env, &["trust", "grant"]);
+    let cwd = env.project_root.join("docs");
+    std::fs::create_dir(&cwd).unwrap();
+    let output = env
+        .rimz()
+        .args(["agents", "forge", "--cwd"])
+        .arg(&cwd)
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{error}");
+    assert!(
+        error.contains("root checkout needs an explicit scope"),
+        "{error}"
+    );
+}
+
+#[cfg(unix)]
+fn resident_launch_case(each_worktree: bool, team: bool) {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
     env.install_agent_hooks("codex");
@@ -250,28 +366,56 @@ fn resident_launch_deduplicates_and_manual_fire_relaunches() {
     let alias = env.home_root.join("linked-worktrees");
     std::fs::create_dir(&actual).unwrap();
     std::os::unix::fs::symlink(&actual, &alias).unwrap();
+    std::fs::create_dir(alias.join("spare")).unwrap();
+    let worktree_dir = if each_worktree {
+        alias.join("spare/..")
+    } else {
+        alias.clone()
+    };
     std::fs::write(
         env.rimz_home().join("config.toml"),
-        format!("[agents.worktree]\ndir = {:?}\n", alias.to_str().unwrap()),
+        format!(
+            "[agents.worktree]\ndir = {:?}\n",
+            worktree_dir.to_str().unwrap()
+        ),
     )
     .unwrap();
     loop_ok(&env, &["worktree", "new", "lane"]);
+    if team {
+        env.write_config(
+            &env.project_root,
+            r#"
+            [profiles.codex]
+            agent = "codex"
+            [[agents.teams.forge.roles]]
+            role = "coder"
+            profile = "codex"
+            signals = [{ signal = "ci.failed" }]
+        "#,
+        );
+        loop_ok(&env, &["trust", "grant"]);
+    }
     let checkout = alias.join("lane");
     let marker = rimz::worktree::read_marker_for_worktree(&checkout)
         .unwrap()
         .unwrap();
-    assert_eq!(marker.worktree_path, checkout);
+    assert_eq!(marker.worktree_path, worktree_dir.join("lane"));
     assert_ne!(checkout, canonical(&checkout));
     trust_codex_project(&env, &checkout);
     let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = env.resolve_workspace(&env.project_root);
-    crate::common::room::seed_live_zellij_room(
-        &env.runtime_paths(),
-        &workspace.session_name,
-        Vec::new(),
-    );
     let trace = env.home_root.join("resident-mux.log");
+    let _room = if each_worktree {
+        Some(crate::common::room::ShimRoom::watch(&env, &trace, "[]"))
+    } else {
+        crate::common::room::seed_live_zellij_room(
+            &env.runtime_paths(),
+            &workspace.session_name,
+            Vec::new(),
+        );
+        None
+    };
     let command = || {
         let mut command = env.rimz();
         command
@@ -286,23 +430,60 @@ fn resident_launch_deduplicates_and_manual_fire_relaunches() {
             .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
             .env(
                 "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-                format!("{} [Created 1s ago]\n", workspace.session_name),
+                if each_worktree {
+                    String::new()
+                } else {
+                    format!("{} [Created 1s ago]\n", workspace.session_name)
+                },
             );
         command
     };
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nstay = true\n",
+            "[tasks.resident]\nagent = {:?}\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\n{}\nstay = true\n",
+            if team { "forge" } else { "codex" },
             env.project_root.to_str().unwrap(),
             checkout.to_str().unwrap(),
+            if each_worktree {
+                "each-worktree = true\nwhen = [\"pr=open\"]"
+            } else {
+                "every = \"1h\""
+            },
         ),
     );
+    if each_worktree {
+        let runtime = env.runtime_paths();
+        std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
+        std::fs::write(
+            runtime.lane_path("pr-state.json"),
+            json!({"states": {checkout.to_string_lossy().to_string(): {"state": "open"}}})
+                .to_string(),
+        )
+        .unwrap();
+        let source = rimz::harness::schedule::when::CiSource::read(&runtime);
+        let expr = rimz::harness::schedule::when::WhenExpr::parse(&["pr=open".to_owned()]).unwrap();
+        let windows =
+            rimz::harness::schedule::when::WindowReadings::new(Some(&runtime), Timestamp::now());
+        assert!(
+            rimz::harness::schedule::when::evaluate(
+                &expr,
+                &checkout,
+                Some(&source),
+                None,
+                None,
+                &windows
+            )
+            .ok
+        );
+    }
     for _ in 0..2 {
-        let output = command()
-            .args(["loop", "run", "resident"])
-            .output()
-            .unwrap();
+        let mut run = command();
+        run.args(["loop", "run", "resident"]);
+        if each_worktree {
+            run.arg("--cwd").arg(&checkout);
+        }
+        let output = run.output().unwrap();
         assert!(
             output.status.success(),
             "{}",
@@ -315,9 +496,14 @@ fn resident_launch_deduplicates_and_manual_fire_relaunches() {
         .unwrap()
         .agents;
     assert_eq!(agents.len(), 1);
+    let expected_checkout = if each_worktree {
+        checkout.clone()
+    } else {
+        canonical(&checkout)
+    };
     assert_eq!(
         agents[0].worktree_path.as_deref(),
-        canonical(&checkout).to_str()
+        expected_checkout.to_str()
     );
     assert_eq!(agents[0].channel.as_deref(), Some("lane"));
     assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
@@ -325,15 +511,28 @@ fn resident_launch_deduplicates_and_manual_fire_relaunches() {
     assert_eq!(records.len(), 1);
     assert_eq!(serde_json::to_value(records[0].result).unwrap(), "launched");
     let ledger = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
-    assert!(ledger["resident"].contains_key(&canonical(&checkout)));
+    assert!(ledger["resident"].contains_key(&expected_checkout));
+    if team {
+        assert_eq!(agents[0].team.as_deref(), Some("forge"));
+        return;
+    }
     let (_, error) = loop_fail(&env, &["loop", "rename", "resident", "renamed"]);
     assert!(error.contains("resident leaders"), "{error}");
     assert_eq!(
         rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap(),
         ledger
     );
+    if each_worktree {
+        let refused = command()
+            .args(["loop", "fire", "resident"])
+            .output()
+            .unwrap();
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("owned worktree"));
+    }
     let output = command()
         .args(["loop", "fire", "resident"])
+        .current_dir(&checkout)
         .output()
         .unwrap();
     assert!(
@@ -350,9 +549,37 @@ fn resident_launch_deduplicates_and_manual_fire_relaunches() {
             .len(),
         2
     );
-    let mux_log = std::fs::read_to_string(trace).unwrap();
+    let mux_log = std::fs::read_to_string(&trace).unwrap();
     assert!(!mux_log.contains("close-tab"), "{mux_log}");
     assert!(!mux_log.contains("close-pane"), "{mux_log}");
+    if each_worktree {
+        assert!(mux_log.contains("--create-background"), "{mux_log}");
+    }
+    let shown = command()
+        .args(["loop", "show", "resident", "--json"])
+        .output()
+        .unwrap();
+    assert!(shown.status.success());
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["launches"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        shown["runs"][0]["checkout"],
+        expected_checkout.to_string_lossy().as_ref()
+    );
+    if each_worktree {
+        let summary = loop_ok(&env, &["loop", "show", "resident"]);
+        assert!(
+            summary.contains("condition: evaluated per owned worktree · 1 launched"),
+            "{summary}"
+        );
+        assert!(!summary.contains("condition: unarmed"), "{summary}");
+    }
+    loop_ok(&env, &["loop", "remove", "resident"]);
+    assert!(
+        rimz::harness::schedule::launch_ledger::load(store.paths())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 fn publish_claude_5h(env: &Env, used: u8) {

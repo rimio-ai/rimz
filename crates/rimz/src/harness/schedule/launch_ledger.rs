@@ -16,10 +16,23 @@ pub type Ledger = BTreeMap<String, BTreeMap<PathBuf, LaunchRecord>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerErr {
+    #[error(transparent)]
+    Paths(#[from] crate::disk::paths::PathErr),
     #[error("reading resident launch ledger: {0}")]
     Read(#[from] std::io::Error),
     #[error("decoding resident launch ledger: {0}")]
     Decode(#[from] serde_json::Error),
+}
+
+pub(super) fn load_room(
+    runtime: &crate::RuntimePaths,
+    root: Option<&std::path::Path>,
+) -> Result<Ledger, LedgerErr> {
+    let paths = match root {
+        Some(root) => crate::StatePaths::for_project_root(root)?,
+        None => crate::StatePaths::for_workspace(runtime.workspace_id.clone())?,
+    };
+    load(&paths)
 }
 
 pub(super) fn path(paths: &crate::StatePaths) -> PathBuf {

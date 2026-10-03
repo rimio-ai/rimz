@@ -319,12 +319,14 @@ pub(super) fn has_scheduled_row_since(
     state_root: &Path,
     task: &str,
     root: &Path,
+    checkout: Option<&Path>,
     since: Timestamp,
 ) -> bool {
     let mut found = false;
     crate::disk::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
         if record.task == task
             && matches_root(&record, Some(root))
+            && checkout.is_none_or(|checkout| record.checkout.as_deref() == Some(checkout))
             && record.mode == Some(LoopRunMode::Scheduled)
             && record.at >= since
         {
@@ -560,13 +562,19 @@ mod tests {
             ("task", root, 10, None, false),
         ] {
             let dir = tempfile::tempdir().expect("tempdir");
-            assert!(!has_scheduled_row_since(dir.path(), "task", root, since));
+            assert!(!has_scheduled_row_since(
+                dir.path(),
+                "task",
+                root,
+                None,
+                since
+            ));
             let mut row = record(task, second, LoopRunResult::Expired);
             row.root = Some(recorded_root.to_path_buf());
             row.mode = mode;
             append_to(dir.path(), &row);
             assert_eq!(
-                has_scheduled_row_since(dir.path(), "task", root, since),
+                has_scheduled_row_since(dir.path(), "task", root, None, since),
                 expected,
                 "{row:?}"
             );
