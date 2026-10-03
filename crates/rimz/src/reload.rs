@@ -409,6 +409,7 @@ fn live_targets(sweep_dead: bool) -> (Vec<LiveTarget>, usize) {
                     &ws.session_name,
                     false,
                 )
+                .signalled
                 .len();
             }
             continue;
