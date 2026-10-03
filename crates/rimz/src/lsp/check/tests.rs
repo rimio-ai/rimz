@@ -81,6 +81,48 @@ fn outline_requests_stop_after_server_failure() {
     assert_eq!(counts, [1, 1, 2]);
 }
 
+#[test]
+fn fix_leaves_the_notes_alone_when_judging_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let notes = root.path().join("notes.md");
+    let servers = BTreeMap::from([(
+        "rust".into(),
+        serde_json::from_value(json!({
+            "command": ["stub"], "extensions": ["rs"], "root-markers": []
+        }))
+        .unwrap(),
+    )]);
+    let context = || Context {
+        checkout: root.path(),
+        entries: &[],
+        servers: &servers,
+        // `gone.txt` is listed but absent, so judging its line anchor fails.
+        files: vec!["a.rs".into(), "gone.txt".into()],
+        failures: BTreeMap::new(),
+        outlines: BTreeMap::from([(
+            "a.rs".into(),
+            FileOutline {
+                nodes: fixed_symbols(),
+                dirty: false,
+            },
+        )]),
+    };
+    let stale = "`a.rs::Type ~4-5`";
+    let source = format!("{stale} `gone.txt:1`");
+    std::fs::write(&notes, &source).unwrap();
+    let error = check_file(&notes, &mut context(), Mode::Fix).err().unwrap();
+    assert_eq!(error.exit_code(), 1);
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), source);
+
+    std::fs::write(&notes, stale).unwrap();
+    let report = check_file(&notes, &mut context(), Mode::Fix).unwrap();
+    assert_eq!(report.fixes.map(|fixes| fixes.len()), Some(1));
+    assert_eq!(
+        std::fs::read_to_string(&notes).unwrap(),
+        "`a.rs::Type ~1-3`"
+    );
+}
+
 fn anchor(text: &str) -> Anchor {
     extract(&format!("`{text}`")).pop().unwrap()
 }
