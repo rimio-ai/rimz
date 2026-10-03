@@ -958,6 +958,10 @@ pub struct LocalSessionObservation {
     pub first_event_at: Option<Timestamp>,
     pub last_activity: Timestamp,
     pub projection: LocalSessionProjection,
+    /// The account whose home the session was discovered in; `None` is the
+    /// provider's own `default` home, as on [`AgentState::login`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<crate::ids::LoginName>,
 }
 
 /// A detached `rimz` helper an adapter requests after a lifecycle event lands

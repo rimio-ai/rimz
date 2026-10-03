@@ -156,7 +156,8 @@ upward-dependencies = ["address"]
 # Native prompt-submit context attachment crosses the adapter/CLI hook seam (+1).
 # AgentState::attach_context is the one sidecar join the store's attach sites share (+1).
 # Pass 32a: HookContextReply declares the hook-context reply on the spec; AgentDefinition::attach_hook_context is its one writer, replacing the trait method (+1).
-surface-budget = 962
+# ProviderLogin::local_sessions discovers a provider home and stamps each observation with its account (+1).
+surface-budget = 963
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

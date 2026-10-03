@@ -299,6 +299,7 @@ fn observation(path: PathBuf, workspace: &Path) -> Option<LocalSessionObservatio
         .unwrap_or(created_at)
         .max(created_at);
     Some(LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("claude"),
         session_id: AgentSessionId::from(session_id),
         workspace: workspace.to_path_buf(),
@@ -390,6 +391,7 @@ fn project_directory_names_from(workspace: &Path, override_name: Option<&str>) -
 pub(super) fn fixture_observation() -> LocalSessionObservation {
     let created_at = "2025-01-01T00:00:00Z".parse::<Timestamp>().unwrap();
     LocalSessionObservation {
+        login: None,
         kind: AgentKind::new_unchecked("claude"),
         session_id: AgentSessionId::from("11111111-1111-4111-8111-111111111111"),
         workspace: PathBuf::from("/workspace/project"),
@@ -643,6 +645,7 @@ mod tests {
                 };
                 let at = Timestamp::from_second(timestamp).unwrap();
                 let observation = LocalSessionObservation {
+                    login: None,
                     kind: AgentKind::new_unchecked("claude"),
                     session_id: AgentSessionId::from(format!("{timestamp}-{index}")),
                     workspace: workspace.clone(),
