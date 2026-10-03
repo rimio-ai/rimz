@@ -11,6 +11,7 @@ mod delivery;
 mod identity;
 mod observe;
 mod reactors;
+mod runtime_env;
 mod transcript;
 
 use context::*;
@@ -247,6 +248,15 @@ pub(super) fn handle_lifecycle_hook(
                 "lifecycle: failed to record transcript entry",
             );
         }
+        runtime_env::attach_runtime_env(
+            workspace,
+            store,
+            agent,
+            decoded,
+            recorded,
+            &sections,
+            ingress_owner,
+        );
         if recorded.receipt.rotation_due {
             spawn_auto_rotation(workspace);
         }

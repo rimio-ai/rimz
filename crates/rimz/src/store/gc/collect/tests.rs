@@ -195,6 +195,9 @@ fn runtime_gc_reaps_sidecars_and_unblocks_the_workspace_root() {
     let stale_idle_compact = rt.live_path("idle-compact").join("deadbeef.json");
     fs::create_dir_all(stale_idle_compact.parent().unwrap()).unwrap();
     fs::write(&stale_idle_compact, b"{}").unwrap();
+    let stale_runtime_env_claim = rt.live_path("runtime-env").join("deadbeef");
+    fs::create_dir_all(stale_runtime_env_claim.parent().unwrap()).unwrap();
+    fs::write(&stale_runtime_env_claim, b"").unwrap();
     let stale_prompt = rt.prompt_dir().join("sys.deadbeef.md");
     fs::create_dir_all(stale_prompt.parent().unwrap()).unwrap();
     fs::write(&stale_prompt, b"prompt").unwrap();
@@ -207,6 +210,7 @@ fn runtime_gc_reaps_sidecars_and_unblocks_the_workspace_root() {
         &stale_subagent,
         &stale_telemetry,
         &stale_idle_compact,
+        &stale_runtime_env_claim,
         &stale_prompt,
     ] {
         fs::File::open(path).unwrap().set_modified(old).unwrap();
@@ -222,7 +226,8 @@ fn runtime_gc_reaps_sidecars_and_unblocks_the_workspace_root() {
     )
     .unwrap();
 
-    assert_eq!(report.sidecar_files_removed, 8);
+    assert_eq!(report.sidecar_files_removed, 9);
+    assert!(!stale_runtime_env_claim.exists());
     assert!(
         !rt.read_marks_dir.exists(),
         "the emptied read-marks dir is removed"

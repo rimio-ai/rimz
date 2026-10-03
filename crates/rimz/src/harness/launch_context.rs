@@ -237,21 +237,32 @@ fn pipeline_sentence(context: &TeamLaunchContext) -> Option<String> {
 
 /// A listing of the team's declared memory patterns, relative to the launch cwd.
 pub(super) fn files_block(context: &TeamLaunchContext) -> Option<String> {
-    if context.scratch_patterns.is_empty() {
+    files_listing(
+        &context.scratch_patterns,
+        &context.worktree,
+        &context.scratch,
+    )
+}
+
+/// One `ls` fence over `patterns`, with the scanned files relative to `worktree`.
+pub(super) fn files_listing(
+    patterns: &[String],
+    worktree: &Path,
+    scratch: &ScratchScan,
+) -> Option<String> {
+    if patterns.is_empty() {
         return None;
     }
-    let patterns = context
-        .scratch_patterns
+    let patterns = patterns
         .iter()
         .map(|pattern| escape_reminder_text(pattern.trim_start_matches('/')))
         .collect::<Vec<_>>()
         .join(" ");
-    let root = std::path::absolute(&context.worktree).unwrap_or_else(|_| context.worktree.clone());
-    let files = if context.scratch.files.is_empty() {
+    let root = std::path::absolute(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    let files = if scratch.files.is_empty() {
         "(no such files)".to_owned()
     } else {
-        context
-            .scratch
+        scratch
             .files
             .iter()
             .map(|file| {
@@ -267,7 +278,7 @@ pub(super) fn files_block(context: &TeamLaunchContext) -> Option<String> {
             .join("  ")
     };
     let mut text = format!("```\n$ ls {patterns}\n{files}\n```");
-    if context.scratch.probe_failed {
+    if scratch.probe_failed {
         text.push_str("\nRimZ could not inspect every pattern.");
     }
     Some(text)

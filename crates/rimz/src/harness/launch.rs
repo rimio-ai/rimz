@@ -50,6 +50,10 @@ pub const ENV_AGENT_ROLE: &str = "RIMZ_AGENT_ROLE";
 /// The `[agents.teams]` team name an agent launched under. Set by the launch
 /// wrapper; read by member CLI calls so in-place teams scope to their channel.
 pub const ENV_TEAM: &str = "RIMZ_TEAM";
+/// `1` on a launch whose volatile Environment facts arrive at prompt submit;
+/// cleared on every other launch so a nested launch never inherits it. Read by
+/// the prompt-submit hook.
+pub const ENV_RUNTIME_ENV: &str = "RIMZ_RUNTIME_ENV";
 /// The inline multi-agent launch cohort this agent belongs to. Team launches
 /// use [`ENV_TEAM`] as their cohort key; inline layouts use this generated id.
 pub const ENV_LAUNCH_GROUP: &str = "RIMZ_LAUNCH_GROUP";

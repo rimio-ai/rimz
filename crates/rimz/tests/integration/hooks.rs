@@ -367,6 +367,69 @@ fn session_start_hooks_write_lifecycle_rows() {
 }
 
 #[test]
+fn runtime_env_context_reaches_the_root_prompt_and_never_a_side_conversation() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let env = Env::new();
+    crate::common::git::init_repo(&env.project_root);
+    let run = |payload: Value| {
+        let output = env.run_installed_hook_in_pane(
+            "codex",
+            &payload.to_string(),
+            &[
+                ("TMUX_PANE", "%0"),
+                (rimz::harness::launch::ENV_RUNTIME_ENV, "1"),
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let prompt = |session: &str| {
+        run(json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session,
+            "transcript_path": null,
+            "prompt": "a question",
+        }))
+    };
+    assert_eq!(
+        run(json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "codex-root",
+            "source": "startup",
+        })),
+        ""
+    );
+    let reply: Value = serde_json::from_str(&prompt("codex-root")).unwrap();
+    let context = reply["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(
+        context.contains("```\n$ git status --short --branch\n## main\n$ git log -5 --oneline\n"),
+        "{context}"
+    );
+    assert!(
+        context.ends_with(" initial\n```\n</system_reminder>"),
+        "{context}"
+    );
+    assert_eq!(
+        run(json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "codex-side",
+            "source": "fork",
+            "transcript_path": null,
+        })),
+        ""
+    );
+    assert_eq!(prompt("codex-side"), "", "a side conversation");
+}
+
+#[test]
 fn codex_side_conversation_hooks_credit_the_host_without_becoming_an_agent() {
     for host_running in [false, true] {
         let env = Env::new();
