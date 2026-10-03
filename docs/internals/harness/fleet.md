@@ -372,7 +372,7 @@ The store remembers agents whose processes are gone, and resume turns those reco
 
 | Path | Trigger | Scope |
 | --- | --- | --- |
-| Room rebirth | a machine reboot or mux crash, at the next `rimz start` | root sessions from the producer's persisted live roster, intersected with the audit rollup, seeding one tab per live-at-death lane or worktree before the new mux session starts |
+| Room rebirth | a machine reboot or mux crash, at the next `rimz start` | root sessions from the producer's persisted live roster and the pending-recovery record, intersected with the audit rollup, seeding one tab per live-at-death lane or worktree after the new mux session is created; an attended start into a live room settles the agents still parked and opens their tabs in place |
 | Cohort resume | `rimz agents <spec> --resume` (`--continue` is the visible alias) in a live room | one prior cohort matched from the spec, after its tab or pane was closed |
 | Lane resume | `rimz agents resume <scope>` | one lane, resolved by `harness::resume` |
 
@@ -396,11 +396,24 @@ Missing cells launch fresh in the matched cohort's cwd and channel, so the layou
 
 Cleanly ended members stay candidates, so a closed team resumes while its worktree still exists. No resume path plans a row with a parent identity: `harness::resume::root_session` excludes both RimZ-launched children and provider-native subagents. The parent relaunches any child it still needs. Empty session ids, missing worktrees, and launch placeholders that never adopted a session and are no longer live are also excluded.
 
-The rebirth roster still carries children for crash protection. `RebirthPlan::materialize` stamps unrecovered roster members ended (`rimz.not-resumed` for recovery, `rimz.recovery-declined` for a fresh room) and cancels each excluded child's newest nonterminal run through `run::cancel_and_wake`, including `keep` runs. Already-terminal runs stay untouched. The durable cancellation settles the parent's wait and lets its fleet digest report the result; the waiter wake datagram is best-effort.
+The rebirth roster still carries children for crash protection. A birth does two separate things. The boundary records that an incarnation died: it parks the roster's agents in `records/pending-recovery.json`, appends `session.rebirth`, and deletes the roster, ending nobody. It cancels each roster child's newest open run and wakes its waiter; the child remains parked until the user decides. The settlement decides what happens to the candidates, by one of four dispositions (`RebirthDisposition`):
+
+| Disposition | Planned agents | Candidates the plan cannot resume |
+| --- | --- | --- |
+| `Defer` | stay pending | stay pending |
+| `Decline` | ended `rimz.recovery-declined` | ended `rimz.recovery-declined` |
+| `RecoverKeep` | resumed | stay pending |
+| `RecoverDrop` | resumed | ended `rimz.not-resumed` |
+
+Only an interactive start chooses a disposition that ends an agent. With recovery on it asks whether to recover the resumable agents (default yes; no is `Decline`), then lists the ones that cannot be resumed with their reasons and asks whether to drop them (default no, which keeps them pending for the next attended start). With recovery off (`--no-resume` or `resume.on_rebirth = false`) it declines without a prompt. A start with no one to ask recovers and keeps the rest when recovery is on, and defers when it is off. Missing-worktree agents appear in the second question with reason `worktree gone`. They stay pending under `Defer` and `RecoverKeep`; `RecoverDrop` ends them `rimz.worktree-gone`. An attended start into a live room runs the same settlement over the parked agents through `RoomContext::settle_parked_recovery`: it writes no session event, roster, or boot marker, never touches a live agent, and restores no channel tabs. Agents stay pending through tab opening; a failed opening keeps every resumed agent pending. Zellij closes an unconfirmed tab by the stable ID returned by `new-tab`, best effort, before returning the error, so a later recovery does not deliberately duplicate a half-open tab. An unattended start into a live room settles nothing.
+
+The backend decides whether tabs can open now: tmux always can; Zellij requires a persistent attached client. If Recover needs tabs and Zellij is clientless, the questions still happen before attach, but no settlement happens inline. The hidden detached `recover-parked --request <JSON>` helper waits up to 60 seconds for a client, then runs the same live settlement. The request carries only the offered identities and their disposition; both paths serialize through `recovery.lock`, re-read pending membership under the workspace lock, and exclude agents already settled or live. New losses are not covered by an earlier answer. The helper uses fresh stdin and sends stdout/stderr to state `log/recovery.log`; a timeout or death while waiting changes no record. Recovery counts and assists include only confirmed opened tabs. With `--no-attach`, no helper starts and the agents remain parked for the next attended `rimz start`. Decline and a drop-only decision need no tab and settle before attach.
+
+`RebirthPlan::materialize` cancels each ended child's newest nonterminal run through `run::cancel_and_wake`, including `keep` runs. Already-terminal runs stay untouched. The durable cancellation settles the parent's wait and lets its fleet digest report the result; the waiter wake datagram is best-effort.
 
 Flat resume keeps pane identity when a stamp survives: newest-first candidates sharing one pane collapse to the newest session. A rebirth boundary retires pane stamps, because pane ids renumber across a mux restart; an unstamped root stays a candidate and deduplicates by `(kind, session id)`.
 
-`resume.max` bounds how many agents one reborn session auto-resumes (`DEFAULT_RESUME_MAX`, 128), so a long-lived workspace cannot fork-bomb the machine on birth. Anything past the cap is reported as a skip. Every `ResumeSkip` carries its reason into the start report: `no resume CLI`, `no saved conversation`, `over the resume cap`, `no prompt replacement`, or `different account`.
+`resume.max` bounds how many agents one reborn session auto-resumes (`DEFAULT_RESUME_MAX`, 128), so a long-lived workspace cannot fork-bomb the machine on birth. Anything past the cap is reported as a skip. Every `ResumeSkip` carries its reason into the start report: `no resume CLI`, `no saved conversation`, `over the resume cap`, `no prompt replacement`, or `different account`. The recovery preview also lists missing checkouts as `worktree gone`.
 
 ### Discovering sessions the store never saw
 

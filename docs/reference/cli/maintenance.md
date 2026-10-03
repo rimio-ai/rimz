@@ -235,7 +235,7 @@ rimz reset [--yes] [--no-start] [--hard] [--account <KIND=NAME>]... [PATH]
 4. archives the active event log, clears rebuildable caches and its recorded provider accounts;
 5. starts the room again and attaches, with no prior agents recovered.
 
-Your agents' own session files and the room's archived records stay on disk. A plain reset keeps the prior-agent carryover as history; the reborn room still starts with no agents.
+Your agents' own session files and the room's archived records stay on disk. A plain reset keeps the prior-agent carryover as history; the reborn room still starts with no agents. A plain reset run with no terminal (`--yes` from a script) ends none of them, so your next start at a terminal asks about the agents the old room lost. With `--hard`, the prior-agent carryover is deleted: those agents are no longer offered for recovery, even if their identities remain in the pending record.
 
 | Flag | Effect |
 | --- | --- |
