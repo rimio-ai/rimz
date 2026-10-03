@@ -56,6 +56,8 @@ pub(super) enum AssistEvent {
     Redeem {
         at: Timestamp,
         kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        login: Option<rimz::ids::LoginName>,
         reason: RedeemReason,
         request_id: String,
         credits: u32,
@@ -275,6 +277,7 @@ impl AssistEvent {
             },
             Assist::AutoRedeem {
                 kind,
+                login,
                 reason,
                 request_id,
                 credits,
@@ -287,6 +290,7 @@ impl AssistEvent {
             } => Self::Redeem {
                 at: record.at,
                 kind,
+                login,
                 reason,
                 request_id,
                 credits,
@@ -595,11 +599,17 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
         }
         AssistEvent::Redeem {
             kind,
+            login,
             reason,
             outcome,
             error,
             ..
         } => {
+            let named_login = login
+                .as_ref()
+                .filter(|login| !login.is_default())
+                .map(|login| format!("@{login}"))
+                .unwrap_or_default();
             let result = match (outcome.as_deref(), error.as_deref()) {
                 (Some("reset"), _) => "budget reset ✓".to_owned(),
                 (Some(outcome), _) => outcome.replace('_', " "),
@@ -607,7 +617,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 (None, None) => "request failed".to_owned(),
             };
             format!(
-                "{time} ↻ {kind} credit — {} → {result}",
+                "{time} ↻ {kind}{named_login} credit — {} → {result}",
                 reason_label(*reason)
             )
         }
