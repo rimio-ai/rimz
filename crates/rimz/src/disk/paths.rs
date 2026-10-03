@@ -1194,8 +1194,8 @@ pub fn account_lock(kind: &crate::ids::AgentKind) -> PathBuf {
 
 /// Account-global provider caches, `<home>/cache/providers`: probe memos,
 /// rate limits, credits, the spend cursor and aggregate, and the pricing
-/// book. Every file rebuilds from the providers' own files; deleting the
-/// tree costs a cold dashboard and one full spending walk.
+/// book, which rebuild from the providers' own files. The account budget
+/// and auto-redeem ledgers beside them hold choices nothing rebuilds.
 pub fn providers_cache_dir() -> PathBuf {
     cache_dir().join("providers")
 }

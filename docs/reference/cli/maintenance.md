@@ -269,7 +269,7 @@ rimz gc [--older-than <DURATION>] [--dry-run] [--json] [--all]
 | Room class blocks | The current room's lifetime classes. | Every remaining room, after dead workspace pruning. |
 | `worktrees` | Removes current-repository RimZ-owned worktrees that are clean, landed, and unoccupied, as in [`rimz worktree sweep`](./worktree.md#sweep-landed-worktrees). | Same. |
 | `workspaces` | Skipped; run with `--all`. | Deletes rooms written by an older RimZ, stores whose project folder is gone, and setups abandoned before any history, along with their runtime trees. Unreadable records with history are kept and reported. |
-| `runtime` | The current room's runtime root only; no shared provider probe markers. Live files use `--older-than`, sockets a connect probe, locks a try-lock. | Every runtime root and stale shared provider probe markers. |
+| `runtime` | The current room's runtime root only; no shared provider probe markers. Live files use `--older-than`, sockets a connect probe, locks a try-lock. Also the machine's account budget ledgers that no history pool reads, counted as `account budget ledgers`. | Every runtime root, stale shared provider probe markers, and the same account budget ledgers. |
 | `temp files` | Removes orphan atomic-write temps (`*.tmp.<pid>.<nonce>`) older than `--older-than` under the room's state and runtime roots. | Sweeps both whole roots. |
 | `messages` | Archives open messages whose receiver has ended, and requeues or times out messages stuck as sent. | Same current-room maintenance. |
 | `event log` | Cuts a corrupt tail off the event log. | Same current-room maintenance. |
@@ -322,6 +322,7 @@ Owned state has a seven-day grace; audit files expire after 30 days or oldest-fi
 | `carryover_pruned` | Carryover entries pruned. |
 | `schedules_reaped` | Loop delivery tasks removed because their target is gone, plus RimZ-owned instance rows removed because they no longer compile to an action. |
 | `wait_logs_pruned` | Wait output files pruned. |
+| `budget_ledgers_removed` | Account budget ledgers no history pool reads, removed or, under `--dry-run`, that would be removed; their bytes count in `reclaimed_bytes`. |
 | `repair` | `bytes_truncated` and `frames_kept`, or `null` when store maintenance was skipped. |
 | `store_maintenance` | `done`, `skipped_dry_run`, or `skipped_no_store`. |
 
