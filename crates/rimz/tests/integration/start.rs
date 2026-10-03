@@ -571,6 +571,67 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
 }
 
 #[test]
+fn unattended_start_without_resume_parks_lost_agents() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::store::event::EventKind;
+
+    let env = Env::new();
+    let bin = seed_actionable_agent(&env);
+    let store = env.store();
+    let lost = (
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("lost"),
+    );
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            store.paths().workspace_id.clone(),
+            "rimz-test",
+            lost.0.as_str(),
+            "SessionStart",
+            &AgentLifecycleObservation::new(Some(lost.1.clone()), LifecycleSignal::Registered),
+        ))
+        .expect("register lost agent");
+    rimz::store::live_roster::publish(&store.paths().live_roster, [lost.clone()].into())
+        .expect("publish the dead session's roster");
+    let trace = env.project_root.join("zellij.log");
+    let _room = ShimRoom::watch(&env, &trace, MATERIALIZED_ROOM_PANES);
+    let mut command = env.rimz();
+    configure_actionable_hooks(&mut command, &env, &bin, &trace, "");
+
+    let output = command
+        .arg("--no-resume")
+        .bounded_output()
+        .expect("run unattended start");
+
+    assert!(
+        output.status.success(),
+        "start failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let events = env.read_events();
+    let count = |wanted: fn(&EventKind) -> bool| {
+        events.iter().filter(|event| wanted(&event.kind())).count()
+    };
+    assert_eq!(
+        count(|kind| matches!(
+            kind,
+            EventKind::AgentLifecycle(payload)
+                if matches!(payload.observation.signal, LifecycleSignal::Ended)
+        )),
+        0,
+        "nobody was asked, so nobody is ended"
+    );
+    assert_eq!(count(|kind| matches!(kind, EventKind::SessionDeath(_))), 1);
+    assert_eq!(count(|kind| matches!(kind, EventKind::SessionRebirth)), 1);
+    assert!(!store.paths().live_roster.exists());
+    let pending: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&store.paths().pending_recovery).expect("pending-recovery record"),
+    )
+    .expect("pending-recovery JSON");
+    assert_eq!(pending["agents"], serde_json::json!([lost]));
+}
+
+#[test]
 fn reconnect_marker_keeps_pty_start_unattended() {
     let env = Env::new();
     let bin_dir = seed_actionable_agent(&env);

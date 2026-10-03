@@ -13,7 +13,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::config::{MachineConfig, MultiplexerConfig};
-use crate::harness::rebirth::RebirthPlan;
+use crate::harness::rebirth::{RebirthDisposition, RebirthPlan};
 use crate::ids::{MuxName, WorkspaceId};
 use crate::mux::{
     BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PresencePluginOptions, SessionHealth,
@@ -416,6 +416,30 @@ impl RoomContext {
             &self.machine_config,
             disabled,
         )
+    }
+
+    /// Plan the agents parked by an earlier boundary, for a session that is
+    /// already live, without mutating anything.
+    pub fn inspect_parked_recovery(
+        &self,
+        disabled: bool,
+    ) -> std::result::Result<RebirthPlan, crate::harness::rebirth::RebirthErr> {
+        RebirthPlan::inspect_live(
+            &self.workspace.workspace_id,
+            &self.workspace.project_root,
+            &self.machine_config,
+            disabled,
+        )
+    }
+
+    /// Settle a plan from [`Self::inspect_parked_recovery`]. The caller opens
+    /// the returned resume tabs in the live session.
+    pub fn settle_parked_recovery(
+        &self,
+        plan: RebirthPlan,
+        disposition: RebirthDisposition,
+    ) -> crate::harness::resume::ResumePlan {
+        plan.materialize(disposition, &self.workspace.session_name)
     }
 
     /// Build options for an ordinary tab inside this room.

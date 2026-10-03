@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use crate::config::Isolation;
-use crate::harness::rebirth::{RebirthChoice, RebirthPlan};
+use crate::harness::rebirth::{RebirthDisposition, RebirthPlan};
 use crate::harness::resume::ResumePlan;
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, DaemonView, SessionHealth, SidebarPaneOptions,
@@ -42,7 +42,7 @@ pub enum NormalRebirth {
     /// Inspected recovery plan plus the user's selected disposition.
     Selected {
         plan: Box<RebirthPlan>,
-        choice: RebirthChoice,
+        disposition: RebirthDisposition,
     },
 }
 
@@ -193,8 +193,8 @@ impl RoomContext {
                     );
                     ResumePlan::default()
                 }
-                NormalRebirth::Selected { plan, choice } => {
-                    (*plan).materialize(choice, &self.workspace.session_name)
+                NormalRebirth::Selected { plan, disposition } => {
+                    (*plan).materialize(disposition, &self.workspace.session_name)
                 }
             },
             None => {

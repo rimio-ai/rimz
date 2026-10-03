@@ -32,7 +32,7 @@ use attach_exec::{
     inside_selected_mux, report_already_inside, run_attach_action, should_report_already_inside,
 };
 use resume::{report_previous_session_death, report_resume};
-use rimz::harness::rebirth::RebirthChoice;
+use rimz::harness::rebirth::RebirthDisposition;
 use start_notice::{report_start_notices, report_version_mismatch_notices};
 
 pub(crate) use attach_exec::{attach_action, launch_attach_command};
@@ -687,11 +687,12 @@ fn birth_managed_room(
                 {
                     report_previous_session_death(death);
                 }
-                let choice = prompt_recover_or_fresh(&preview, resume_prompt)?;
-                if choice == RebirthChoice::Recover && preview.requires_sandbox() {
+                let recovery_off = no_resume || !machine_config().resume.on_rebirth;
+                let disposition = prompt_disposition(&preview, resume_prompt, recovery_off)?;
+                if disposition.recovers() && preview.requires_sandbox() {
                     rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
                 }
-                if choice == RebirthChoice::Recover {
+                if disposition.recovers() {
                     for root in plan.checkout_roots() {
                         if let Err(error) =
                             crate::cli::lsp_admission::admit(root, &machine_config())
@@ -702,7 +703,7 @@ fn birth_managed_room(
                 }
                 NormalRebirth::Selected {
                     plan: Box::new(plan),
-                    choice,
+                    disposition,
                 }
             }
             Err(err) => {
@@ -1108,13 +1109,19 @@ fn rimz_socket_environment_preflight(project_root: &Path) -> Result<()> {
         .context("checking RimZ runtime socket budget")
 }
 
-fn prompt_recover_or_fresh(
+/// Nobody is asked unless the mode is interactive and the plan resumes
+/// something, and a disposition nobody chose ends no agent.
+fn prompt_disposition(
     plan: &rimz::harness::rebirth::RebirthPreview,
     mode: ResumePromptMode,
-) -> Result<RebirthChoice> {
+    recovery_off: bool,
+) -> Result<RebirthDisposition> {
+    if mode == ResumePromptMode::Silent && recovery_off {
+        return Ok(RebirthDisposition::Defer);
+    }
     let agents = plan.pane_count();
     if agents == 0 || mode == ResumePromptMode::Silent {
-        return Ok(RebirthChoice::Recover);
+        return Ok(RebirthDisposition::RecoverKeep);
     }
     let labels = plan.labels().join(", ");
     if confirm_with_default(
@@ -1124,9 +1131,9 @@ fn prompt_recover_or_fresh(
         ),
         true,
     )? {
-        Ok(RebirthChoice::Recover)
+        Ok(RebirthDisposition::RecoverKeep)
     } else {
-        Ok(RebirthChoice::Fresh)
+        Ok(RebirthDisposition::Decline)
     }
 }
 

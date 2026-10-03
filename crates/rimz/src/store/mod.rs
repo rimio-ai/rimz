@@ -42,10 +42,6 @@ pub mod follow;
 pub mod gc;
 pub mod live_roster;
 pub mod message;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the rebirth boundary that writes it lands next")
-)]
 pub(crate) mod pending_recovery;
 pub mod run;
 pub mod runtime;
