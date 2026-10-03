@@ -51,7 +51,7 @@ pub(super) fn produce_pr_states(
     let cache = read_pr_state_cache(&path);
     let now_ms = unix_now_ms();
     let condition_scopes =
-        crate::harness::schedule::when::ci_scopes(runtime, snapshot.project_root.as_deref());
+        crate::harness::schedule::when::probe_scopes(runtime, snapshot.project_root.as_deref());
     let needed = needed_worktree_paths(snapshot, condition_scopes);
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
