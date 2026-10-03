@@ -631,6 +631,189 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
     );
 }
 
+#[test]
+fn auto_redeem_rescues_an_idle_codex_account_and_records_its_login() {
+    let env = Env::new();
+    let now = jiff::Timestamp::now();
+    let reset_at = |secs| (now + jiff::SignedDuration::from_secs(secs)).as_second();
+    let usage = serde_json::json!({
+        "plan_type": "pro",
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 42,
+                "reset_at": reset_at(3600),
+                "limit_window_seconds": 18000
+            },
+            "secondary_window": {
+                "used_percent": 7,
+                "reset_at": reset_at(3 * 86400),
+                "limit_window_seconds": 604800
+            }
+        }
+    });
+    let reset_credits = serde_json::json!({
+        "available_count": 1,
+        "credits": [{
+            "id": "credit-1",
+            "status": "available",
+            "expires_at": now + jiff::SignedDuration::from_secs(10 * 60)
+        }]
+    });
+    let (origin, server) = serve_routes(
+        vec![
+            ("GET /backend-api/wham/usage ", usage.to_string()),
+            (
+                "GET /backend-api/wham/rate-limit-reset-credits ",
+                reset_credits.to_string(),
+            ),
+            (
+                "POST /backend-api/wham/rate-limit-reset-credits/consume ",
+                r#"{"code":"reset","windows_reset":2}"#.to_owned(),
+            ),
+        ],
+        5,
+    );
+    let spare_home = env.home_root.join("spare");
+    std::fs::create_dir_all(&spare_home).expect("mkdir spare codex home");
+    std::fs::write(
+        spare_home.join("auth.json"),
+        r#"{"tokens": {"access_token": "spare-token", "account_id": "acc_spare"}}"#,
+    )
+    .expect("write codex auth");
+    std::fs::write(
+        spare_home.join("config.toml"),
+        format!("chatgpt_base_url = \"{origin}/backend-api\"\n"),
+    )
+    .expect("write codex config");
+    std::fs::create_dir_all(env.rimz_home()).expect("mkdir rimz home");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[accounts.codex.spare]\nhome = {:?}\n",
+            spare_home.to_str().expect("utf-8 home")
+        ),
+    )
+    .expect("write machine config");
+
+    let request = rimz::harness::auto_redeem::AutoRedeemRequest {
+        workspace_id: env.workspace_id.clone(),
+        login: "codex@spare".parse().expect("login key"),
+        reason: rimz::harness::auto_redeem::RedeemReason::ExpiryRescue,
+        request_id: uuid::Uuid::now_v7(),
+        limit_paused: false,
+    };
+    let output = env
+        .rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "auto-redeem",
+            &request,
+        ))
+        .bounded_output()
+        .expect("rimz agents auto-redeem");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    let [record] = records.as_slice() else {
+        panic!("expected one assist record: {records:?}");
+    };
+    let rimz::harness::assist_log::Assist::AutoRedeem {
+        kind,
+        login,
+        reason,
+        request_id,
+        outcome,
+        error,
+        ..
+    } = &record.assist
+    else {
+        panic!("expected an auto-redeem record: {record:?}");
+    };
+    assert_eq!(kind, "codex");
+    assert_eq!(login.as_ref().map(|login| login.as_str()), Some("spare"));
+    assert_eq!(
+        *reason,
+        rimz::harness::auto_redeem::RedeemReason::ExpiryRescue
+    );
+    assert_eq!(request_id, &request.request_id.to_string());
+    assert_eq!(outcome.as_deref(), Some("reset"));
+    assert_eq!(*error, None);
+
+    let requests = server.join().expect("server requests");
+    let consume = requests
+        .iter()
+        .find(|request| request.starts_with("POST "))
+        .expect("consume request");
+    assert!(
+        consume
+            .to_ascii_lowercase()
+            .contains("authorization: bearer spare-token")
+    );
+    let body: Value = serde_json::from_str(consume.split_once("\r\n\r\n").expect("request body").1)
+        .expect("consume body json");
+    assert_eq!(body["redeem_request_id"], request.request_id.to_string());
+    assert_eq!(body["credit_id"], "credit-1");
+}
+
+/// Answer `count` requests, each with the body of the route its request line
+/// starts with, and return every request with its body.
+fn serve_routes(
+    routes: Vec<(&'static str, String)>,
+    count: usize,
+) -> (String, thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind http stub");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = thread::spawn(move || {
+        let mut requests = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("set read timeout");
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 1024];
+            loop {
+                let text = String::from_utf8_lossy(&request);
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let content_length = head
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .map_or(0, |(_, value)| {
+                            value.trim().parse::<usize>().expect("content-length")
+                        });
+                    if body.len() >= content_length {
+                        break;
+                    }
+                }
+                let read = stream.read(&mut buf).expect("read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..read]);
+            }
+            let request = String::from_utf8_lossy(&request).into_owned();
+            let (status, body) = routes
+                .iter()
+                .find(|(route, _)| request.starts_with(route))
+                .map_or(("404 Not Found", ""), |(_, body)| ("200 OK", body.as_str()));
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            requests.push(request);
+        }
+        requests
+    });
+    (format!("http://{addr}"), handle)
+}
+
 fn serve_after_failures(
     failures: usize,
     body: &'static str,
