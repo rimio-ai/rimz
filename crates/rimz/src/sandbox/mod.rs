@@ -122,6 +122,9 @@ pub struct SandboxInputs<'a> {
     pub skills_dir: &'a Path,
     pub provider_home: Option<ProviderHome>,
     pub provider_home_env_keys: &'a [&'a str],
+    /// The provider's own home that a named account's settings, and a shared
+    /// account's history, link into.
+    pub default_home: Option<PathBuf>,
     pub skills: SkillInputs<'a>,
 }
 
@@ -315,6 +318,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
     }
     required.extend([inputs.cwd.to_path_buf(), inputs.project_root.to_path_buf()]);
     required.extend(inputs.worktree.map(Path::to_path_buf));
+    required.extend(inputs.default_home.clone());
     if let Some(home) = &inputs.provider_home
         && home.source.exists()
     {
@@ -531,6 +535,7 @@ mod tests {
             skills_dir: &state().agent_skills_dir(Some("otter")),
             provider_home: None,
             provider_home_env_keys: &[],
+            default_home: None,
             skills: SkillInputs {
                 kind: "claude",
                 home: None,

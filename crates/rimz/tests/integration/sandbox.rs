@@ -195,6 +195,7 @@ fn skill_prepare(
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
+        default_home: None,
         skills,
     })?;
     rimz::sandbox::apply(&plan)?;
@@ -354,6 +355,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
+        default_home: None,
         skills: SkillInputs {
             kind: "claude",
             home: Some(root.clone()),
@@ -857,6 +859,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &["CODEX_HOME"],
+        default_home: None,
         skills: SkillInputs {
             kind: "codex",
             home: Some(root.clone()),
@@ -1124,6 +1127,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
+        default_home: None,
         skills: SkillInputs {
             kind: "codex",
             home: Some(env.home_root.join(".agents/skills")),
@@ -2152,6 +2156,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
+        default_home: None,
         skills: SkillInputs {
             kind: "claude",
             home: Some(root.clone()),

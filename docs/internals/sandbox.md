@@ -65,7 +65,7 @@ A compiler cache wrapper crosses views. Every sccache client forwards compiles t
 
 `sandbox::bwrap_argv` emits `bwrap --bind / / --dev-bind /dev /dev --die-with-parent`, then the plan's mounts in this order, then `--chdir <cwd> -- <provider argv>`:
 
-1. The adapter's provider config home (`config_home`), bound at its own path, when it exists. Built-ins resolve it from the effective launch environment, and a room's named account carries its home override there (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the bind follows the room's account. A shared account's home holds links into the provider's own home, which resolve through the root bind; the reconciler runs on the host before the view is built. Plugins declare no config home.
+1. The adapter's provider config home (`config_home`), bound at its own path, when it exists. Built-ins resolve it from the effective launch environment, and a room's named account carries its home override there (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the bind follows the room's account. A named account's home holds links into the provider's own home (its settings, and for a shared account its history too), which resolve through the root bind or, outside it, through the [reachable host paths](#reachable-host-paths) rebind; the reconciler runs on the host before the view is built. Plugins declare no config home.
 2. The launch's temp unit (`StatePaths::temp_unit_dir`) bound at `/tmp`, then the same unit at `/var/tmp`. Bubblewrap resolves each bind source against the host root, so the second bind shows the unit, not the first mount.
 3. Host paths beneath `/tmp` or `/var/tmp` that must stay reachable, rebound at their original paths ([reachable host paths](#reachable-host-paths)).
 4. The skill view, when one is needed: a tmpfs over the resolved skill root, one entry per skill, and read-only shadows of rewritten skills at their canonical paths ([building the view](#building-the-view)).
@@ -82,6 +82,7 @@ Replacing `/tmp` and `/var/tmp` would hide any RimZ state, socket, or project th
 | RimZ home, runtime home, Zellij socket base, tmux socket directory | `mux::domain::ProcessDomain::required_paths`. |
 | Working directory, project root, worktree | The launch. |
 | Provider config home | Mount step 1, when it exists. |
+| Provider's own home | A launch on a named account: `ProviderLogin::default_home`, which its settings entries, and a shared account's history entries, link into. |
 
 Each candidate is normalized lexically. A candidate equal to `/tmp` or `/var/tmp` refuses the launch with `SandboxErr::TmpCollision`, whose message names the path. A candidate below either that exists is rebound, and a candidate nested under one already rebound is skipped. Candidates elsewhere need no mount, since the root bind already shows them.
 
