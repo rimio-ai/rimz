@@ -668,6 +668,25 @@ pub(super) fn latest_context_tokens(records: &[WireRecord]) -> Option<u64> {
         })
 }
 
+/// Whether a compaction or clear replaced the window after the latest counted
+/// step, so [`latest_context_tokens`] is a count no step usage describes.
+pub(super) fn context_replaced_since_step(records: &[WireRecord]) -> bool {
+    records
+        .iter()
+        .rev()
+        .find_map(|record| match &record.event {
+            WireEvent::AppendLoopEvent(LoopEvent::StepEnd {
+                usage: Some(usage), ..
+            }) if !usage.is_zero() => Some(false),
+            WireEvent::ContextClear
+            | WireEvent::ApplyCompaction {
+                tokens_after: Some(_),
+            } => Some(true),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 pub(super) fn latest_turn_usage(records: &[WireRecord]) -> Option<UsageRecord> {
     records.iter().rev().find_map(|record| match &record.event {
         WireEvent::Usage(usage) if usage.is_turn_scoped() => Some(usage.clone()),

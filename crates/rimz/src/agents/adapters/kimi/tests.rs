@@ -652,6 +652,8 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
     let refresh = refresh_wire_path(&path, "s1", stat, &ctx).unwrap();
     let tokens = refresh.context.tokens.clone().into_value().unwrap();
     assert_eq!(tokens.used_percentage, Some(19));
+    // A step's count sits beside its own split and needs no scalar.
+    assert_eq!(tokens.current_context_tokens, None);
     assert_eq!(
         tokens.current_usage.unwrap().cache_read_input_tokens,
         Some(10_000)
@@ -675,6 +677,21 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
             > 0.0
     );
     assert_eq!(refresh.transcript_path.as_deref(), path.to_str());
+
+    // A compaction leaves the older step's split in the tail; the count it
+    // reports is the window, and the scalar outranks that split downstream.
+    let compacted = dir.path().join("compacted.jsonl");
+    let mut lines = std::fs::read_to_string(&path).unwrap();
+    lines.push_str(
+        "{\"type\":\"context.apply_compaction\",\"time\":1770000002000,\"tokensBefore\":50050,\"tokensAfter\":12000}\n",
+    );
+    std::fs::write(&compacted, lines).unwrap();
+    let stat = TranscriptStat::from_path(&compacted).unwrap();
+    let refresh = refresh_wire_path(&compacted, "s1", stat, &ctx).unwrap();
+    let tokens = refresh.context.tokens.into_value().unwrap();
+    assert_eq!(tokens.current_context_tokens, Some(12_000));
+    assert_eq!(tokens.used_tokens(), Some(12_000));
+    assert_eq!(tokens.used_percentage, Some(5));
 
     let parsed = spend::parse(&path, None, &super::super::PriceBook::fixture());
     let snapshot = wire::WireSnapshot::read(&path).unwrap();
