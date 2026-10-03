@@ -74,6 +74,30 @@ Install meets the machine, and five traps have each cost an upgrade pass a revie
 - **Several user hook files can shadow each other.** When the agent merges hooks from more than one user file, confirm which file wins per event before choosing where install writes; a later user save can copy the merged set into the file that shadows RimZ's entries.
 - **An in-process plugin's PID is not always the agent's.** A plugin or extension runtime can run in a child process, so `process.pid` there names the runtime and its parent names the agent CLI. Confirm which process the `RIMZ_AGENT_PID` stamp names.
 
+### Probe a hook reply outside a room
+
+A reply that injects context into the model (Claude's and Codex's `hookSpecificOutput.additionalContext`) has two questions no fixture answers: whether the model reads it, and how the provider stores it in its transcript. A disposable sandbox room cannot answer them, because it replaces `HOME` and holds no provider login ([sidebar-live-check.md → Check against a real provider login](./sidebar-live-check.md#check-against-a-real-provider-login)). Hand-feeding `rimz hooks feed` there proves the hook's output and nothing about the provider. Answer both with a throwaway hook under your own login, outside any room, before the reply shape is built on:
+
+```sh
+PROBE="$(mktemp -d)"
+cat > "$PROBE/hook.sh" <<'EOF'
+#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"PROBE-MARKER-7731"}}'
+EOF
+chmod +x "$PROBE/hook.sh"
+printf '{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$PROBE/hook.sh" > "$PROBE/settings.json"
+cd "$PROBE"
+claude -p 'Quote any marker you were given, without tools.' --settings "$PROBE/settings.json"
+codex exec --skip-git-repo-check --dangerously-bypass-hook-trust -s read-only \
+  -c "hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"$PROBE/hook.sh\"}]}]" \
+  'Quote any marker you were given, without tools.'
+```
+
+The model quoting the marker shows it read the reply; a model may also decline to quote it (Codex has answered that it cannot quote private instructions), so the session file is the proof. Search the one each provider just wrote for the marker and read the entry that holds it: its type and role decide whether RimZ's transcript reader sees the text as the user's. On Claude 2.1.288 it is a separate `attachment` entry of type `hook_additional_context`; on codex-cli 0.160.0 it is a `developer` message in the rollout. Both leave the user entry as typed.
+
+Codex takes the hook from the `-c` override; a project `.codex/hooks.json` in the probe directory was not loaded. The probe covers the provider and the model only. The chain from a prompt pasted into a pane through the installed hook still needs a host room with a login.
+
 ## Step 6 — Wire launch, resume, and presets
 
 From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any resolved preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (declare the native manual command and use `CompactInstruction::Trailing` only when upstream verifies that it accepts summary guidance, or document a registry exception when the agent only compacts automatically), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping. When the provider has a verified native delegation control, implement `lockdown_subagent_args` or `lockdown_subagent_env` so it overrides conflicting profile values without erasing unrelated settings; otherwise keep the prompt-only default. When the provider has a verified switch for its own command sandbox, implement `disable_native_sandbox_args` so a launch under RimZ sandbox isolation runs with it off and its approval flags intact ([sandbox.md](../internals/sandbox.md#provider-command-sandboxes)).
