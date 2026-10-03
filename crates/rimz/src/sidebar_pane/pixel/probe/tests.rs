@@ -348,6 +348,11 @@ fn zellij_resize_probe_holds_the_startup_caps() {
     );
 }
 
+/// The fake source answers without blocking, so the probe's deadline only has
+/// to outlast a descheduled test thread: a budget of a millisecond expires
+/// under load and turns a scripted reply into `NoReply`.
+const SCRIPTED_REPLY_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[test]
 fn zellij_kitty_probe_requires_version_and_matching_ok_reply() {
     let mut old = FakeKittySource::new([]);
@@ -366,7 +371,7 @@ fn zellij_kitty_probe_requires_version_and_matching_ok_reply() {
         probe_zellij_kitty_with(
             MIN_PIXEL_ZELLIJ_VERSION,
             &mut supported,
-            std::time::Duration::from_millis(1),
+            SCRIPTED_REPLY_BUDGET,
         ),
         ZellijKittySupport::Supported
     );
@@ -381,7 +386,7 @@ fn zellij_kitty_probe_requires_version_and_matching_ok_reply() {
         probe_zellij_kitty_with(
             MIN_PIXEL_ZELLIJ_VERSION,
             &mut unsupported,
-            std::time::Duration::from_millis(1),
+            SCRIPTED_REPLY_BUDGET,
         ),
         ZellijKittySupport::Unsupported
     );
@@ -391,18 +396,14 @@ fn zellij_kitty_probe_requires_version_and_matching_ok_reply() {
         probe_zellij_kitty_with(
             MIN_PIXEL_ZELLIJ_VERSION,
             &mut no_reply,
-            std::time::Duration::from_millis(1),
+            SCRIPTED_REPLY_BUDGET,
         ),
         ZellijKittySupport::NoReply
     );
 
     let mut eof = FakeKittySource::new([Some(b"".as_slice())]);
     assert_eq!(
-        probe_zellij_kitty_with(
-            MIN_PIXEL_ZELLIJ_VERSION,
-            &mut eof,
-            std::time::Duration::from_millis(1),
-        ),
+        probe_zellij_kitty_with(MIN_PIXEL_ZELLIJ_VERSION, &mut eof, SCRIPTED_REPLY_BUDGET,),
         ZellijKittySupport::NotProbed
     );
 }
