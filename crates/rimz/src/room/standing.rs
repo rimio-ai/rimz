@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 
 use crate::config::MachineConfig;
 use crate::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
+use crate::store::runtime::AgentLiveness;
 use crate::trust::ProjectLogins;
 use crate::{RuntimePaths, StatePaths, Store};
 
@@ -291,6 +292,7 @@ fn count_others_on(
                 && !agent.is_provider_subagent()
                 && agent.login_key() == *account
                 && !launching.contains(&agent.agent_id)
+                && crate::store::runtime::agent_liveness(agent) != AgentLiveness::Dead
         })
         .count()
 }
