@@ -11,7 +11,7 @@
 //! An idle account, one the machine declares and no agent of this room runs
 //! on, gets the expiry rescue alone: the producer reads its cached credits
 //! from its caller, the helper resolves its login from the machine catalog,
-//! and both skip a window known to be unused.
+//! and the helper skips a window its fresh read shows unused.
 //! Elected-producer and one-shot heavy refreshes may both advance the shared
 //! burn-rate cache; atomic replacement plus observation stamps make duplicate
 //! folds idempotent.
@@ -52,8 +52,8 @@ const SECONDS_PER_DAY: f64 = 24.0 * 60.0 * 60.0;
 #[serde(rename_all = "snake_case")]
 pub enum RedeemReason {
     /// A credit within 30 minutes of expiry, with or without the opt-in. The
-    /// one rule an idle account is evaluated for, and there only when its
-    /// window is not known to be unused.
+    /// one rule an idle account is evaluated for, and the helper drops it
+    /// there when its fresh read shows the window unused.
     ExpiryRescue,
     /// A spent window that parked an agent resets at least `min_gain` away.
     BlockedGain,
@@ -200,22 +200,17 @@ fn redeem_verdict(
 }
 
 /// The verdict for an idle account, one no agent of this room runs on: the
-/// expiry rescue alone, and not even that when its window is known to be
-/// unused, where a redemption would only start a clock nobody is spending.
-/// Unknown capacity is not evidence, so the rescue fires.
-fn idle_verdict(
-    capacity: Option<&ProviderCapacity>,
-    credits: &ResetCredits,
-    now: Timestamp,
-) -> Option<RedeemReason> {
-    if capacity.is_some_and(|capacity| capacity.known_unused(now)) {
-        return None;
-    }
-    redeem_verdict(capacity, credits, None, Duration::ZERO, false, false, now)
+/// expiry rescue alone.
+fn idle_rescue(credits: &ResetCredits, now: Timestamp) -> Option<RedeemReason> {
+    redeem_verdict(None, credits, None, Duration::ZERO, false, false, now)
 }
 
 /// The helper's verdict on its fresh provider read. An idle account is judged
-/// as one whatever evidence the request carried.
+/// as one whatever evidence the request carried, and is not rescued when its
+/// window is known to be unused, where a redemption would only start a clock
+/// nobody is spending. Only this fresh read may skip: the producer's cached
+/// windows can predate usage from another machine. Unknown capacity is not
+/// evidence, so the rescue fires.
 fn fresh_verdict(
     idle: bool,
     capacity: Option<&ProviderCapacity>,
@@ -226,7 +221,10 @@ fn fresh_verdict(
     now: Timestamp,
 ) -> Option<RedeemReason> {
     if idle {
-        return idle_verdict(capacity, credits, now);
+        if capacity.is_some_and(|capacity| capacity.known_unused(now)) {
+            return None;
+        }
+        return idle_rescue(credits, now);
     }
     redeem_verdict(
         capacity,
@@ -614,8 +612,7 @@ fn redeem_credits_with(
         reserve_and_spawn(runtime, &key, reason, limit_paused, now, &mut spawn);
     }
     for (key, credits) in idle_credits {
-        let capacity = ProviderCapacity::read(runtime, key);
-        if let Some(reason) = idle_verdict(capacity.as_ref(), credits, now) {
+        if let Some(reason) = idle_rescue(credits, now) {
             reserve_and_spawn(runtime, key, reason, false, now, &mut spawn);
         }
     }

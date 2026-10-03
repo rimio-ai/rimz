@@ -965,7 +965,7 @@ fn rate_limit_entry(
 }
 
 #[test]
-fn an_idle_account_is_rescued_only_at_expiry_and_only_when_its_window_shows_usage() {
+fn an_idle_account_spawns_a_rescue_only_at_expiry_whatever_its_cached_windows_read() {
     let now = ts(1_700_000_000);
     let dir = tempfile::tempdir().unwrap();
     let runtime =
@@ -1036,15 +1036,18 @@ fn an_idle_account_is_rescued_only_at_expiry_and_only_when_its_window_shows_usag
         spawned,
         [
             rescue("default"),
+            rescue("fresh"),
             rescue("running"),
             rescue("unknown"),
+            rescue("unused"),
             rescue("used")
         ],
-        "the in-use login rescues at 0% used; an idle account needs usage or no evidence, \
-         and a spent window alone redeems nothing"
+        "a dying credit spawns the helper whatever the cached windows read, since the \
+         unused-window skip is the helper's on its fresh read; a spent window alone \
+         redeems nothing"
     );
-    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key("used"))).is_some());
-    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key("unused"))).is_none());
+    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key("unused"))).is_some());
+    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key("spent"))).is_none());
     assert!(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(&default)).is_some());
     assert!(
         read_rate_stamp(&runtime.shared_auto_redeem_rate_path(&key("used"))).is_none(),
@@ -1132,6 +1135,22 @@ fn redeem_keeps_a_live_old_login_continues_idle_once_it_ends_and_cancels_an_unde
     let (selected, idle) = redeem_login(&runtime, &key, "request", &in_use).unwrap();
     assert_eq!((selected.key(), idle), (key.clone(), false));
     assert!(idle_logins(&in_use).is_empty());
+    // A room whose record cannot be read knows no default of its own, so
+    // every declared login, `default` included, is idle: rescue only.
+    let unreadable = crate::agents::RoomLoginSet::new(
+        None,
+        Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
+        Default::default(),
+    );
+    assert_eq!(
+        idle_logins(&unreadable)
+            .iter()
+            .map(|login| login.key().to_string())
+            .collect::<Vec<_>>(),
+        ["codex@default", "codex@work"]
+    );
+    let (_, idle) = redeem_login(&runtime, &key, "request", &unreadable).unwrap();
+    assert!(idle);
 
     agent.ended_at = Some(now);
     let ended = logins.with_agents(&[agent]);
