@@ -760,6 +760,25 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         );
         assert!(!summary.contains("condition: unarmed"), "{summary}");
     }
+    let assist_log = env.rimz_home().join("logs/assists.log.jsonl");
+    std::fs::remove_file(&assist_log).unwrap();
+    std::fs::create_dir(&assist_log).unwrap();
+    let launched = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
+    let unrecorded = command()
+        .args(["loop", "fire", "resident"])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(!unrecorded.status.success());
+    assert_eq!(
+        serde_json::to_value(read_loop_run_records(&env).last().unwrap().result).unwrap(),
+        "errored"
+    );
+    let kept = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
+    assert_ne!(
+        kept["resident"][&expected_checkout].leader,
+        launched["resident"][&expected_checkout].leader
+    );
     loop_ok(&env, &["loop", "remove", "resident"]);
     hook("SessionStart");
     assert!(read_loop_instances(&env).0.is_empty());
