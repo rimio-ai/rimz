@@ -1543,6 +1543,8 @@ fn a_provider_temp_root_follows_tmpdir() {
                 .unset
                 .iter()
                 .map(String::as_str)
+                // The runtime switch is cleared or stamped by its own rule, which is not this test's subject.
+                .filter(|key| *key != crate::harness::launch::ENV_RUNTIME_ENV)
                 .collect::<Vec<_>>(),
             unset,
             "{kind} over {ambient:?}"
