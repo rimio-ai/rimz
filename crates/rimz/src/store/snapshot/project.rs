@@ -774,12 +774,6 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     }
 }
 
-/// Window occupancy of a lifecycle-rail reading: the input-side split when the
-/// provider reports one, else the running total.
-fn usage_occupancy(usage: &AgentUsageSummary) -> Option<u64> {
-    usage.input_context_tokens().or(usage.total_tokens)
-}
-
 /// Drop a reading's current-window figures, keeping the window size and the
 /// whole-run total. A completed compaction retires the carried reading this
 /// way, and a later re-report of the retired occupancy contributes nothing.
@@ -832,14 +826,14 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         .and_then(|definition| definition.default_context_window);
     let mut carried_usage = input.prior.map(|prior| prior.usage.clone());
     if retires_usage && let Some(carried) = &mut carried_usage {
-        if let Some(occupancy) = usage_occupancy(carried) {
+        if let Some(occupancy) = carried.context_used_tokens() {
             state.retired_context_tokens = Some(occupancy);
         }
         clear_current_window(carried);
     }
     let mut observed_usage = input.observation.usage.clone();
     if state.retired_context_tokens.is_some()
-        && usage_occupancy(&observed_usage) == state.retired_context_tokens
+        && observed_usage.context_used_tokens() == state.retired_context_tokens
     {
         clear_current_window(&mut observed_usage);
     }
