@@ -26,9 +26,12 @@ use serde::{Deserialize, Serialize};
 
 use super::{LOOP_TASK_ENV, fire::deadline_expired_at};
 use crate::agents::PermissionMode;
+use crate::agents::account::{AccountsCache, ProviderStatus, read_accounts_cache};
+use crate::agents::login::LoginErr;
 use crate::agents::{
-    HookPreflightErr, ManagedLaunchState, ProviderCapacity, ProviderLogin, RateLimitWindow,
-    RoomLoginErr, TurnLifecycleNeed, WindowSpan, WindowSurplus, find_definition, preflight_hooks,
+    BirthLoginErr, HookPreflightErr, ManagedLaunchState, ProviderCapacity, ProviderLogin,
+    RateLimitWindow, RoomLoginErr, TurnLifecycleNeed, WindowSpan, WindowSurplus, ambient_env,
+    find_definition, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, WatchSpec};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
@@ -182,6 +185,8 @@ struct FireScope {
     managed_launch: ManagedLaunchState,
     /// The task's [`task_login`] for `kind`.
     login: Option<ProviderLogin>,
+    /// Why the task's pinned account cannot run this fire.
+    account_skip: Option<String>,
     capacity: OnceCell<Option<ProviderCapacity>>,
 }
 
@@ -195,6 +200,7 @@ impl FireScope {
     ) -> Self {
         Self {
             login,
+            account_skip: None,
             kind,
             scope_runtime,
             scope_state,
@@ -248,14 +254,28 @@ impl FireContext {
                 let resolved =
                     crate::harness::plan::resolve_single_agent_launch(spec, &workspace, &launch)?;
                 let managed_launch = resolve_managed_spawn_state(entry, &workspace, &resolved)?;
-                let login = task_login(&launch, &resolved.kind, &runtime)?;
+                let kind = AgentKind::new_unchecked(resolved.kind.clone());
+                let (login, account_skip) = match &entry.account {
+                    None => (task_login(&launch, &resolved.kind, &runtime)?, None),
+                    Some(name) => match pinned_login(
+                        &kind,
+                        name,
+                        &MachineConfig::load_lenient().accounts,
+                        &ambient_env(),
+                        &read_accounts_cache(&runtime.shared_accounts_path()),
+                    )? {
+                        Ok(login) => (Some(login), None),
+                        Err(reason) => (None, Some(reason)),
+                    },
+                };
                 let mut scope = FireScope::new(
-                    crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
+                    kind,
                     runtime,
                     StatePaths::for_project_root(&workspace.project_root)?,
                     Some(resolved),
                     login,
                 );
+                scope.account_skip = account_skip;
                 scope.managed_launch = managed_launch;
                 scope
             }
@@ -420,34 +440,43 @@ impl<'a> TaskFire<'a> {
             .take()
             .context("loop task action already prepared")?;
         let context = FireContext::resolve(&self.entry, action)?;
-        if let Some(scope) = &context.scope
-            && let Some(reason) = crate::harness::budget::scope_gate(
-                &scope.scope_runtime,
-                &scope.scope_state,
-                scope.login_key().as_ref(),
-                &self.config,
-                self.now,
-            )
+        if let Some((result, reason)) = context
+            .scope
+            .as_ref()
+            .and_then(|scope| self.scope_refusal(scope))
         {
-            return Ok(Some(self.record_gate(LoopRunResult::BudgetSkipped, reason)));
-        }
-        if let Some(scope) = &context.scope
-            && let Some(binding) = scope.managed_launch.binding()
-            && let Some(key) = scope.login_key()
-            && let Some(reason) =
-                crate::agents::provider_budget_gate(&scope.scope_runtime, &key, binding, self.now)
-        {
-            return Ok(Some(self.record_gate(LoopRunResult::BudgetSkipped, reason)));
-        }
-        if let Some(scope) = &context.scope
-            && let Some(reason) = scope.surplus_gate(&self.entry, self.now)
-        {
-            return Ok(Some(
-                self.record_gate(LoopRunResult::SurplusSkipped, reason),
-            ));
+            return Ok(Some(self.record_gate(result, reason)));
         }
         self.context = Some(context);
         Ok(None)
+    }
+
+    /// The first scope gate that refuses this fire, in ladder order; every
+    /// one reads the task's login.
+    fn scope_refusal(&self, scope: &FireScope) -> Option<(LoopRunResult, String)> {
+        if let Some(reason) = scope.account_skip.clone() {
+            return Some((LoopRunResult::AccountSkipped, reason));
+        }
+        let key = scope.login_key();
+        if let Some(reason) = crate::harness::budget::scope_gate(
+            &scope.scope_runtime,
+            &scope.scope_state,
+            key.as_ref(),
+            &self.config,
+            self.now,
+        ) {
+            return Some((LoopRunResult::BudgetSkipped, reason));
+        }
+        if let Some(binding) = scope.managed_launch.binding()
+            && let Some(key) = &key
+            && let Some(reason) =
+                crate::agents::provider_budget_gate(&scope.scope_runtime, key, binding, self.now)
+        {
+            return Some((LoopRunResult::BudgetSkipped, reason));
+        }
+        scope
+            .surplus_gate(&self.entry, self.now)
+            .map(|reason| (LoopRunResult::SurplusSkipped, reason))
     }
 
     fn prepare_run_lock(&mut self) -> Result<Option<TaskFireFinished>> {
@@ -986,6 +1015,48 @@ pub fn task_login(
     }
 }
 
+/// The account gate for a task pinned to `name`: the login its fire runs on,
+/// or the reason the fire is skipped, ending in the fix. A fire never falls
+/// back to the room's account. A home without trusted hooks passes here and
+/// fails the hooks preflight as an error.
+fn pinned_login(
+    kind: &AgentKind,
+    name: &crate::ids::LoginName,
+    accounts: &crate::config::AccountsConfig,
+    ambient: &BTreeMap<String, String>,
+    statuses: &AccountsCache,
+) -> Result<Result<ProviderLogin, String>, RoomLoginErr> {
+    let login = match crate::agents::session_login(kind, Some(name), accounts) {
+        Ok(login) => login,
+        Err(RoomLoginErr::Login(err @ LoginErr::Unknown { .. })) => {
+            return Ok(Err(err.to_string()));
+        }
+        Err(RoomLoginErr::Login(err @ LoginErr::Unsupported { .. })) => {
+            return Ok(Err(format!(
+                "{err}; remove `account = \"{name}\"` from the task"
+            )));
+        }
+        Err(err) => return Err(err),
+    };
+    if let Err(err @ BirthLoginErr::MissingHome { .. }) = login.preflight(ambient) {
+        return Ok(Err(err.to_string()));
+    }
+    if ProviderStatus::from_record(statuses.logins.get(&login.key())) == ProviderStatus::LoggedOut {
+        let start: String = login
+            .overrides(ambient)
+            .into_iter()
+            .map(|(key, value)| {
+                let value = shlex::try_quote(&value).unwrap_or(value.as_str().into());
+                format!("{key}={value} ")
+            })
+            .collect();
+        return Ok(Err(format!(
+            "{kind} account `{name}` is logged out; log in with `{start}{kind}`"
+        )));
+    }
+    Ok(Ok(login))
+}
+
 /// Hooks preflight for the action's kind under `login`, its [`task_login`].
 pub fn preflight_entry(
     action: &TaskAction,
@@ -1012,7 +1083,7 @@ fn preflight_kind(kind: &str, login: Option<&ProviderLogin>) -> Result<()> {
     })?;
     match preflight_hooks(
         adapter,
-        &login.env(&crate::agents::ambient_env()),
+        &login.env(&ambient_env()),
         TurnLifecycleNeed::NotUnsupported,
     ) {
         Ok(()) => Ok(()),

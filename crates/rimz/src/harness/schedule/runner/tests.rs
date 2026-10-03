@@ -496,10 +496,36 @@ fn check_only_terminals_consume_only_one_shots() {
 fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
     let dir = tempfile::tempdir().unwrap();
     let state = StatePaths::for_project_root(dir.path()).unwrap();
-    for (name, fire_at, mode, kept) in [
-        ("after-reset", true, LoopRunMode::Scheduled, false),
-        ("bare-at", false, LoopRunMode::Scheduled, true),
-        ("manual-run", true, LoopRunMode::Manual, true),
+    use LoopRunResult::{AccountSkipped, SurplusSkipped};
+    for (name, fire_at, mode, result, kept) in [
+        (
+            "after-reset",
+            true,
+            LoopRunMode::Scheduled,
+            SurplusSkipped,
+            false,
+        ),
+        (
+            "pinned",
+            true,
+            LoopRunMode::Scheduled,
+            AccountSkipped,
+            false,
+        ),
+        (
+            "bare-at",
+            false,
+            LoopRunMode::Scheduled,
+            SurplusSkipped,
+            true,
+        ),
+        (
+            "manual-run",
+            true,
+            LoopRunMode::Manual,
+            SurplusSkipped,
+            true,
+        ),
     ] {
         let entry = TaskEntry {
             check: Some("true".to_owned()),
@@ -512,10 +538,10 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
         let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
         let mut fire = skipped_fire(name, &catalog, None);
         fire.mode = mode;
-        let finished = fire.record_gate(LoopRunResult::SurplusSkipped, "no surplus".to_owned());
-        assert_eq!(
-            finished.record.result,
-            LoopRunResult::SurplusSkipped,
+        let finished = fire.record_gate(result, "no surplus".to_owned());
+        assert_eq!(finished.record.result, result, "{name}");
+        assert!(
+            matches!(finished.notice, TaskFireNotice::Gate { .. }),
             "{name}"
         );
         assert_eq!(
@@ -1109,6 +1135,19 @@ fn window_triggers_refuse_at_add_in_order() {
             .window,
         window(Some(55), 3_600, five)
     );
+    // So does its surplus gate at fire time.
+    let claude = AgentKind::new_unchecked("claude");
+    let accounts = toml::from_str("[claude.work]\nhome = \"/srv/work\"\n").unwrap();
+    let surplus_gate = |name: &str| {
+        let login =
+            crate::agents::session_login(&claude, Some(&name.parse().unwrap()), &accounts).unwrap();
+        let state = StatePaths::under(runtime.workspace_id.clone(), dir.path()).unwrap();
+        FireScope::new(claude.clone(), runtime.clone(), state, None, Some(login))
+            .surplus_gate(&surplus_entry(Some("1.5x"), None), now)
+    };
+    let no_reading = "no claude budget-window reading; surplus gate stays closed";
+    assert_eq!(surplus_gate("default").as_deref(), Some(no_reading));
+    assert_ne!(surplus_gate("work").as_deref(), Some(no_reading));
 }
 
 #[test]
@@ -1243,4 +1282,144 @@ fn window_conditions_record_the_provider_their_terms_read() {
             .to_string(),
         "claude has no 7d window"
     );
+}
+
+#[test]
+fn a_pinned_account_that_cannot_run_skips_with_the_fix() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("work");
+    std::fs::create_dir(&home).unwrap();
+    let accounts: crate::config::AccountsConfig = toml::from_str(&format!(
+        "[codex.work]\nhome = {home:?}\n[codex.gone]\nhome = {:?}\n",
+        dir.path().join("gone")
+    ))
+    .unwrap();
+    let ambient = BTreeMap::new();
+    let gate = |kind: &str, name: &str, statuses: &crate::agents::account::AccountsCache| {
+        pinned_login(
+            &AgentKind::new_unchecked(kind),
+            &name.parse().unwrap(),
+            &accounts,
+            &ambient,
+            statuses,
+        )
+        .expect("account config loads")
+    };
+    let work =
+        crate::ids::LoginKey::new(AgentKind::new_unchecked("codex"), "work".parse().unwrap());
+    let record = |ok| crate::agents::account::ProviderRecord {
+        probed_at_ms: 1,
+        ok,
+        account: None,
+    };
+    let no_record = crate::agents::account::AccountsCache::default();
+    let mut logged_out = no_record.clone();
+    logged_out.logins.insert(work.clone(), record(true));
+    let mut failed_probe = no_record.clone();
+    failed_probe.logins.insert(work.clone(), record(false));
+
+    // A home without hooks is the hooks preflight's error, not this gate's skip.
+    for statuses in [&no_record, &failed_probe] {
+        assert_eq!(gate("codex", "work", statuses).unwrap().key(), work);
+    }
+    assert!(gate("codex", "default", &no_record).unwrap().is_default());
+    assert_eq!(
+        gate("codex", "ghost", &no_record).unwrap_err(),
+        "unknown codex account `ghost`; configured: default, gone, work; run `rimz accounts add codex ghost`"
+    );
+    assert_eq!(
+        gate("pi", "work", &no_record).unwrap_err(),
+        "pi has no named accounts; only `default` is available; remove `account = \"work\"` from the task"
+    );
+    let gone = gate("codex", "gone", &no_record).unwrap_err();
+    assert!(
+        gone.starts_with("codex account `gone` home ")
+            && gone.contains("is not a directory; run `"),
+        "{gone}"
+    );
+    assert_eq!(
+        gate("codex", "work", &logged_out).unwrap_err(),
+        format!(
+            "codex account `work` is logged out; log in with `CODEX_HOME={} codex`",
+            home.display()
+        )
+    );
+}
+
+#[test]
+fn the_account_daily_cap_reads_the_pinned_account_not_the_rooms() {
+    use crate::agents::spending::{
+        ProviderSpendingCache, SpendWindow, write_provider_spending_cache,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let state = StatePaths::for_project_root(dir.path()).unwrap();
+    let config: MachineConfig = toml::from_str(
+        "timezone = \"UTC\"\n[accounts.budget]\nclaude = \"10/day\"\n[accounts.claude.solo]\nhome = \"/srv/loop-test-solo\"\nhistory = \"standalone\"\n",
+    )
+    .unwrap();
+    let now: Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
+    let claude = AgentKind::new_unchecked("claude");
+    let entry = TaskEntry {
+        check: Some("true".to_owned()),
+        root: dir.path().to_path_buf(),
+        at: Some("07:00".to_owned()),
+        ..TaskEntry::default()
+    };
+    crate::harness::schedule::instances::insert(&state, "capped", &entry).unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let mut fire = skipped_fire("capped", &catalog, None);
+    fire.now = now;
+    let refusal = |fire: &TaskFire<'_>, account: &str| {
+        let login = crate::agents::session_login(
+            &claude,
+            Some(&account.parse().unwrap()),
+            &config.accounts,
+        )
+        .unwrap();
+        let scope = FireScope::new(
+            claude.clone(),
+            runtime.clone(),
+            state.clone(),
+            None,
+            Some(login),
+        );
+        fire.scope_refusal(&scope).map(|(result, _)| result)
+    };
+    fire.config = Arc::new(config.clone());
+    for (solo_usd, room_usd, solo, room) in [
+        (12.0, 2.0, Some(LoopRunResult::BudgetSkipped), None),
+        (2.0, 12.0, None, Some(LoopRunResult::BudgetSkipped)),
+    ] {
+        let spent = |name: &str, usd| {
+            (
+                crate::ids::LoginKey::new(claude.clone(), name.parse().unwrap()),
+                SpendWindow {
+                    usd,
+                    ..Default::default()
+                },
+            )
+        };
+        write_provider_spending_cache(
+            &runtime.shared_provider_spending_path(),
+            &ProviderSpendingCache {
+                day_cutoff_secs: jiff::civil::date(2026, 6, 2)
+                    .to_zoned(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp()
+                    .as_second() as u64,
+                day_by_login: BTreeMap::from([spent("solo", solo_usd), spent("default", room_usd)]),
+                ..Default::default()
+            },
+        );
+        assert_eq!(refusal(&fire, "solo"), solo, "pinned, solo at {solo_usd}");
+        assert_eq!(
+            refusal(&fire, "default"),
+            room,
+            "room, default at {room_usd}"
+        );
+    }
 }

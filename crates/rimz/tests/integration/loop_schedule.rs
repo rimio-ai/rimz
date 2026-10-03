@@ -5363,6 +5363,221 @@ fn loop_add_pins_a_declared_account_and_refuses_the_rest() {
 }
 
 #[test]
+fn loop_fire_skips_when_its_pinned_account_cannot_run() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let home = add_claude_account(&env, "work");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "pinned",
+            "--agent",
+            "claude",
+            "--account",
+            "work",
+            "--prompt",
+            "work",
+            "--every",
+            "15m",
+        ],
+    );
+    let skipped = || {
+        loop_ok(&env, &["loop", "run", "pinned"]);
+        let record = last_loop_record(&env);
+        assert_eq!(record.result, LoopRunResult::AccountSkipped);
+        record.error.expect("skip reason")
+    };
+
+    env.publish_accounts(&rimz::agents::account::AccountsCache {
+        logins: BTreeMap::from([(
+            "claude@work".parse().unwrap(),
+            rimz::agents::account::ProviderRecord {
+                probed_at_ms: 1,
+                ok: true,
+                account: None,
+            },
+        )]),
+    });
+    assert_eq!(
+        skipped(),
+        format!(
+            "claude account `work` is logged out; log in with `CLAUDE_CONFIG_DIR={} claude`",
+            home.display()
+        )
+    );
+
+    std::fs::remove_file(env.runtime_paths().shared_accounts_path()).unwrap();
+    std::fs::remove_dir_all(&home).unwrap();
+    let reason = skipped();
+    assert!(reason.contains("is not a directory; run `"), "{reason}");
+
+    let config = std::fs::read_to_string(loop_config_path(&env)).unwrap();
+    std::fs::write(
+        loop_config_path(&env),
+        config.replace("account = \"work\"", "account = \"ghost\""),
+    )
+    .unwrap();
+    assert_eq!(
+        skipped(),
+        "unknown claude account `ghost`; configured: default, work; run `rimz accounts add claude ghost`"
+    );
+
+    assert_eq!(read_loop_run_records(&env).len(), 3);
+    assert!(read_loop_strikes(&env).is_empty(), "a skip adds no strike");
+    let paths = env.state_path_for(&env.project_root);
+    assert!(
+        rimz::harness::run::list(&paths)
+            .unwrap_or_default()
+            .is_empty(),
+        "a skipped fire launches nothing"
+    );
+}
+
+/// A codex task pinned to `work` or `default` fires in a room whose codex
+/// account is `spare`: the launch is stamped with the pin, never the room's.
+/// A `default` pin stores no stamp, which every launch reads as the provider's
+/// own home.
+#[cfg(unix)]
+#[test]
+fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
+    for (account, stamp) in [("work", Some("work")), ("default", None)] {
+        let env = Env::new();
+        env.install_agent_hooks("codex");
+        trust_codex_preflight_hooks(&env);
+        trust_codex_project(&env, &env.project_root);
+        for name in ["work", "spare"] {
+            let home = env.home_root.join(name);
+            let output = env
+                .rimz()
+                .args(["accounts", "add", "codex", name, "--home"])
+                .arg(&home)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            // Trust the named home's hooks the way the default home's are.
+            let config = env.agent_config_path("codex");
+            let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
+            let state = table["hooks"]["state"].as_table_mut().unwrap();
+            let prefix = format!("{}:", config.display());
+            let named: Vec<_> = state
+                .iter()
+                .filter_map(|(key, value)| {
+                    key.strip_prefix(&prefix).map(|event| {
+                        (
+                            format!("{}:{event}", home.join("config.toml").display()),
+                            value.clone(),
+                        )
+                    })
+                })
+                .collect();
+            state.extend(named);
+            std::fs::write(config, toml::to_string(&table).unwrap()).unwrap();
+        }
+        let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+        let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+        let workspace = env.resolve_workspace(&env.project_root);
+        let store = env.store();
+        store.record_workspace(&workspace).expect("record room");
+        store
+            .switch_room_login(
+                &workspace,
+                &AgentKind::new_unchecked("codex"),
+                &"spare".parse().unwrap(),
+            )
+            .unwrap();
+        crate::common::room::seed_live_zellij_room(
+            &env.runtime_paths(),
+            &workspace.session_name,
+            Vec::new(),
+        );
+        let pane_fixture = env.project_root.join("panes.json");
+        std::fs::write(&pane_fixture, "[]").unwrap();
+        let command = || {
+            let mut command = env.rimz();
+            command
+                .args(["--mux", "zellij"])
+                .env("SHELL", &shell)
+                .env("PATH", path_with_front(&agent_bin))
+                .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+                .env(
+                    "RIMZ_ZELLIJ_BIN",
+                    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+                )
+                .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("spawn.log"))
+                .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+                .env("ZELLIJ_PANE_ID", "1")
+                .env(
+                    "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                    format!("{} [Created 1s ago]\n", workspace.session_name),
+                );
+            command
+        };
+        loop_ok(
+            &env,
+            &[
+                "loop",
+                "add",
+                "spawn",
+                "--agent",
+                "codex",
+                "--account",
+                account,
+                "--prompt",
+                "fix it",
+                "--every",
+                "15m",
+            ],
+        );
+        let mut runner = command()
+            .args(["loop", "run", "spawn"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn loop runner");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let launched = loop {
+            let agents = store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .expect("launch history")
+                .agents;
+            if let Some(agent) = agents.into_iter().next() {
+                break agent;
+            }
+            if let Some(status) = runner.try_wait().expect("poll loop runner") {
+                let output = runner.wait_with_output().unwrap();
+                panic!(
+                    "loop runner exited {status}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the launch"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        assert_eq!(
+            launched.login.as_ref().map(|name| name.as_str()),
+            stamp,
+            "task pinned to `{account}`"
+        );
+        let stopped = command().args(["loop", "stop", "spawn"]).output().unwrap();
+        assert!(
+            stopped.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stopped.stderr)
+        );
+        runner.wait().expect("stopped runner exits");
+    }
+}
+
+#[test]
 fn loop_add_rejects_invalid_action_shapes() {
     let env = Env::new();
     env.install_agent_hooks("claude");

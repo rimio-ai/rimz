@@ -133,6 +133,17 @@ Without `--account`, each fire takes the room's current account for the agent's 
 
 The flag takes a bare name, where `rimz start --account` takes `KIND=NAME`: a task has one agent, so the provider is the one its `--agent` spec resolves to. Add refuses a name that provider does not declare, a provider without named accounts, and an account whose home is missing or unhooked, each with the `rimz accounts` fix. The row stores the name alone as `account`. A tier-routed spec that lands on another provider at fire time resolves the name against that provider, and runs on that provider's account of the same name when it declares one.
 
+A pinned fire never falls back to the room's account. When the account cannot run, the fire records `account skipped` with the reason and its fix, launches nothing, and adds no strike:
+
+| The pinned account | Recorded fix |
+| --- | --- |
+| is no longer declared for the provider | `rimz accounts add <kind> <name>` |
+| belongs to a provider without named accounts | remove `account` from the task |
+| has a home that is not a directory | `rimz accounts add <kind> <name>` |
+| has a stored logged-out status | the provider's login command, with the account's home set |
+
+The logged-out skip needs a stored status, which a room writes only for accounts its agents run on. An account with no stored status launches, and a login the provider then rejects fails that run. Hooks missing or untrusted in the account's home stay an `error`, as on any account, so they count a strike.
+
 The receipt, `rimz loop show`, and `rimz loop list` name the pin beside the agent, as `claude · account work`.
 
 ### The receipt
@@ -292,7 +303,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | `completed`, `delivered` otherwise | Resets the count. |
 | `skipped` after a passing check | Resets the count. |
 | `skipped` after a failing check, or a sibling signal | Neutral. |
-| `budget skipped`, `surplus skipped`, `overlapped`, `canceled`, `expired`, `target gone` | Neutral. |
+| `budget skipped`, `surplus skipped`, `account skipped`, `overlapped`, `canceled`, `expired`, `target gone` | Neutral. |
 | `start failed` — the fire left no run behind, so the occurrence is spent without one: either the runner was never spawned, or it exited before it could record anything | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
 ### Timeouts

@@ -254,6 +254,7 @@ fn agent_run_predicate_counts_spawn_and_delivery_attempts() {
         LoopRunResult::CheckSkipped,
         LoopRunResult::BudgetSkipped,
         LoopRunResult::SurplusSkipped,
+        LoopRunResult::AccountSkipped,
         LoopRunResult::Overlapped,
         LoopRunResult::Expired,
     ] {
@@ -443,6 +444,12 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
             "○",
             ui::palette::muted(),
             "surplus skipped",
+        ),
+        (
+            LoopRunResult::AccountSkipped,
+            "○",
+            ui::palette::warn(),
+            "account skipped",
         ),
         (
             LoopRunResult::CheckSkipped,
@@ -657,6 +664,7 @@ fn record_exit_maps_terminal_spawn_results_only_with_run_id() {
         (LoopRunResult::Canceled, Some("130")),
         (LoopRunResult::BudgetSkipped, None),
         (LoopRunResult::SurplusSkipped, None),
+        (LoopRunResult::AccountSkipped, None),
         (LoopRunResult::Delivered, None),
         (LoopRunResult::TargetGone, None),
         (LoopRunResult::CheckSkipped, None),

@@ -90,6 +90,90 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
 }
 
 #[test]
+fn launch_availability_judges_the_pinned_account_not_the_rooms() {
+    use crate::agents::account::{
+        AccountsCache, ProviderRecord, RateLimitCacheEntry, RateLimitsCache,
+    };
+    use crate::store::writer::LaunchLogin;
+
+    let root = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(root.path());
+    let runtime = RuntimePaths::under(id.clone(), root.path()).unwrap();
+    let state = StatePaths::under(id, root.path()).unwrap();
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let reset = now + jiff::SignedDuration::from_hours(1);
+    let config = MachineConfig {
+        accounts: toml::from_str("[codex.work]\nhome = \"/srv/work\"\n").unwrap(),
+        ..Default::default()
+    };
+    let codex = AgentKind::new_unchecked("codex");
+    let room = crate::ids::LoginKey::default_for(codex.clone());
+    let work = crate::ids::LoginKey::new(codex, "work".parse().unwrap());
+    let pinned = |_: &AgentKind| LaunchLogin::Pinned("work".parse().unwrap());
+    let publish = |spent: &crate::ids::LoginKey, logged_out: &crate::ids::LoginKey| {
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &runtime.shared_rate_limits_path(),
+            &RateLimitsCache {
+                entries: [(
+                    spent.clone(),
+                    RateLimitCacheEntry {
+                        limits: crate::agents::AgentRateLimits {
+                            windows: vec![crate::agents::RateLimitWindow {
+                                used_percentage: Some(100),
+                                duration_mins: Some(300),
+                                resets_at: Some(reset),
+                                ..Default::default()
+                            }],
+                        },
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let record = ProviderRecord {
+            probed_at_ms: 1,
+            ok: true,
+            account: None,
+        };
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &runtime.shared_accounts_path(),
+            &AccountsCache {
+                logins: [(logged_out.clone(), record)].into(),
+            },
+        )
+        .unwrap();
+    };
+
+    publish(&room, &room);
+    assert_eq!(
+        LaunchAvailability::read(&runtime, &state, &config, now).unavailable("codex", "astra"),
+        Some(TierSkipReason::LoggedOut)
+    );
+    assert_eq!(
+        LaunchAvailability::read_as(&runtime, &state, &config, now, pinned)
+            .unavailable("codex", "astra"),
+        None,
+        "the room account's state does not reach a pinned launch"
+    );
+
+    publish(&work, &room);
+    assert_eq!(
+        LaunchAvailability::read_as(&runtime, &state, &config, now, pinned)
+            .unavailable("codex", "astra"),
+        Some(TierSkipReason::Exhausted { until: Some(reset) })
+    );
+    publish(&room, &work);
+    assert_eq!(
+        LaunchAvailability::read_as(&runtime, &state, &config, now, pinned)
+            .unavailable("codex", "astra"),
+        Some(TierSkipReason::LoggedOut)
+    );
+}
+
+#[test]
 fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
     use crate::harness::launch::{ExecAction, ExecRequest};
 
