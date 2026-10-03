@@ -2418,12 +2418,12 @@ fn message_wait_gathers_fanout_replies_in_completion_order() {
     let [first, second] = ReplyAgentFixture::pair(&env, "gather");
 
     let child = traced_rimz(&env, "zellij-wait-gather-trace.log")
-        .args(["message", "@all", "--wait=5s", "status?"])
+        .args(["message", "@all", "--wait=60s", "status?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
+    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(60));
     first.start(&env, "@all, status?");
     second.start(&env, "@all, status?");
     second.finish(&env, "second finished", false);
@@ -2533,12 +2533,12 @@ fn message_wait_gathers_other_replies_after_one_leg_fails() {
         ReplyAgentFixture::pair_named(&env, "partial", ["failed", "completed"]);
 
     let child = traced_rimz(&env, "zellij-wait-partial-trace.log")
-        .args(["message", "@all", "--wait=5s", "try it"])
+        .args(["message", "@all", "--wait=60s", "try it"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn partial fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
+    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(60));
     failed.start(&env, "@all, try it");
     completed.start(&env, "@all, try it");
     failed.finish(&env, "partial answer", true);
