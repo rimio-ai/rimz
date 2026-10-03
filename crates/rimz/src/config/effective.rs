@@ -745,6 +745,10 @@ fn reject_project_task_state_fields(
             "once",
             "when",
             "for",
+            "stay",
+            "each-worktree",
+            "stop-team",
+            "subscribe",
         ] {
             if table.contains_key(field) {
                 return Err(ProjectTasksErr::UnsupportedField {
@@ -762,6 +766,9 @@ fn reject_project_task_state_fields(
                         "once" => "one-shot subscriptions are machine state; remove `once`",
                         "when" | "for" => {
                             "project tasks cannot use conditions yet; add it with `rimz loop add` without `--project`"
+                        }
+                        "stay" | "each-worktree" | "stop-team" | "subscribe" => {
+                            "resident launches are machine state; add them with `rimz loop add` without `--project`"
                         }
                         _ => unreachable!("field list is fixed"),
                     },

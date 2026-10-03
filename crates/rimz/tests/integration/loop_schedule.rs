@@ -30,6 +30,33 @@ use crate::common::{
 };
 
 #[test]
+fn resident_layout_refuses_account_pin() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "resident",
+            "--every",
+            "1h",
+            "--agent",
+            "codex",
+            "--prompt",
+            "watch",
+            "--stay",
+            "--account",
+            "work",
+        ])
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{error}");
+    assert!(error.contains("--stay cannot use --account"), "{error}");
+    assert!(error.contains("omit --account or --stay"), "{error}");
+}
+
+#[test]
 fn condition_tick_observes_board_and_records_evidence() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
@@ -135,6 +162,108 @@ fn condition_add_refuses_invalid_predicates_and_options() {
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success());
         assert!(error.contains(expected), "expected {expected}: {error}");
+    }
+}
+
+#[test]
+fn resident_add_accepts_layout_and_persists_launch_options() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let output = env
+        .rimz()
+        .args([
+            "loop",
+            "add",
+            "resident",
+            "--agent",
+            "claude,codex",
+            "--stay",
+            "--each-worktree",
+            "--when",
+            "pr=open",
+            "--stop-team",
+            "--subscribe",
+            "ci.failed",
+            "--subscribe",
+            "pr.conflicted",
+            "--mode",
+            "ask",
+            "--effort",
+            "high",
+            "--prompt",
+            "repair",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    let entry = serde_json::to_value(&config.tasks.0["resident"]).unwrap();
+    assert_eq!(entry["stay"], true);
+    assert_eq!(entry["each-worktree"], true);
+    assert_eq!(entry["stop-team"], true);
+    assert_eq!(entry["subscribe"][0]["signal"], "ci.failed");
+    assert_eq!(entry["subscribe"][1]["signal"], "pr.conflicted");
+    assert_eq!(entry["mode"], "ask");
+    assert_eq!(entry["effort"], "high");
+}
+
+#[test]
+fn resident_subscribe_requires_prompt_leader_and_installed_hooks() {
+    let env = Env::new();
+    for (spec, expected) in [("term", "prompt leader"), ("claude", "--subscribe")] {
+        let (_, error) = loop_fail(
+            &env,
+            &[
+                "loop",
+                "add",
+                "resident",
+                "--agent",
+                spec,
+                "--stay",
+                "--each-worktree",
+                "--when",
+                "pr=open",
+                "--subscribe",
+                "ci.failed",
+                "--prompt",
+                "repair",
+            ],
+        );
+        assert!(error.contains(expected), "{error}");
+    }
+    assert!(read_loop_instances(&env).0.is_empty());
+}
+
+#[test]
+fn resident_fire_refuses_without_starting_a_supervised_turn() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nagent = \"claude\"\nprompt = \"repair\"\nroot = {:?}\nevery = \"1h\"\nstay = true\n",
+            env.project_root.to_str().unwrap(),
+        ),
+    );
+    for command in ["fire", "run"] {
+        let (_, error) = loop_fail(&env, &["loop", command, "resident"]);
+        assert!(
+            error.contains("--stay launches are not available"),
+            "{error}"
+        );
+        let record = last_loop_record(&env);
+        assert!(
+            record
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("--stay launches are not available")
+        );
+        assert!(record.run_id.is_none());
     }
 }
 
