@@ -619,6 +619,50 @@ fn tool_calls_round_trip_and_default_for_legacy_state() {
 }
 
 #[test]
+fn context_join_withholds_the_window_a_compaction_retired() {
+    // One Codex `token_count` (85k input, 80k of it cached) as the sidecar
+    // rail writes it; the lifecycle rail's occupancy for the same record is
+    // the 85k the compaction retired.
+    let sidecar = |fresh_input| AgentContext {
+        tokens: Some(crate::agents::AgentTokenUsage {
+            context_window_size: Some(258_400),
+            used_percentage: Some(33),
+            current_usage: Some(crate::agents::AgentCurrentUsage {
+                input_tokens: Some(fresh_input),
+                output_tokens: Some(900),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: Some(80_000),
+            }),
+            session_usage: Some(crate::agents::AgentSessionUsage {
+                input_tokens: Some(410_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..AgentContext::new("codex", Timestamp::from_second(1_000).unwrap())
+    };
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    agent.retired_context_tokens = Some(85_000);
+
+    agent.attach_context(Some(sidecar(5_000)));
+    let stale = sidecar(5_000).tokens.unwrap();
+    assert_eq!(
+        agent.context.as_ref().and_then(|c| c.tokens.clone()),
+        Some(crate::agents::AgentTokenUsage {
+            context_window_size: stale.context_window_size,
+            session_usage: stale.session_usage,
+            ..Default::default()
+        })
+    );
+    assert_eq!(agent.occupied_context_tokens(), None);
+
+    agent.attach_context(Some(sidecar(6_000)));
+    assert_eq!(agent.context, Some(sidecar(6_000)));
+    agent.attach_context(None);
+    assert_eq!(agent.context, None);
+}
+
+#[test]
 fn activity_description_prefers_rich_context_then_fallbacks() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     agent.prompt = Some("latest prompt".to_owned());

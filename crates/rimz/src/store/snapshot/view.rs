@@ -499,7 +499,7 @@ impl SidebarSnapshot {
             .collect();
         for agent in &mut self.agents {
             if let Some(context) = by_key.remove(&(agent.kind.clone(), agent.agent_id.clone())) {
-                agent.context = Some(context);
+                agent.attach_context(Some(context));
             }
         }
         self
