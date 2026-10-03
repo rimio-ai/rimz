@@ -611,3 +611,93 @@ fn card_after_a_completed_compaction_reads_only_the_fresh_sidecar() {
     assert_eq!(row.context_used_tokens(), None);
     assert_eq!(row.call_split(), None);
 }
+
+/// What Claude reports once the boundary record is on disk: a bare total.
+fn compacted_reading() -> serde_json::Value {
+    serde_json::json!({ "total_tokens": 5_717 })
+}
+
+#[test]
+fn successful_end_without_an_open_bracket_retires_the_usage() {
+    for (label, closing, expected) in [
+        (
+            "the close reports the compacted total",
+            compacted_reading(),
+            crate::agents::AgentUsageSummary {
+                context_pct: Some(2),
+                total_tokens: Some(5_717),
+                ..retired_usage()
+            },
+        ),
+        (
+            "the close re-reports the old split",
+            full_reading(),
+            retired_usage(),
+        ),
+    ] {
+        // The `PreCompact` that opens the bracket was lost.
+        let agent = reduce_agent_states(&[
+            lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+            lifecycle_reading("PostCompact", compaction_ended(Some(false)), closing),
+        ])
+        .remove(0);
+
+        assert_eq!(agent.usage, expected, "{label}");
+        assert_eq!(agent.retired_context_tokens, Some(85_000), "{label}");
+        // The count stays on the bracket: with no open, none closed.
+        assert_eq!(agent.compaction_count, 0, "{label}");
+    }
+}
+
+#[test]
+fn failed_end_without_an_open_bracket_retires_nothing() {
+    let agent = reduce_agent_states(&[
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PostCompact", compaction_failed(Some(false))),
+    ])
+    .remove(0);
+
+    assert_eq!(agent.usage.fresh_input_tokens, Some(5_000));
+    assert_eq!(agent.retired_context_tokens, None);
+}
+
+#[test]
+fn end_after_an_early_close_keeps_the_retired_value_and_the_count() {
+    let agent = reduce_agent_states(&[
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        lifecycle_reading(
+            "PreToolUse",
+            serde_json::json!({ "signal": "tool_used", "mutates": false, "edits": false }),
+            full_reading(),
+        ),
+        lifecycle_reading("PostCompact", compaction_ended(Some(true)), full_reading()),
+    ])
+    .remove(0);
+
+    assert_eq!(agent.compaction_count, 1);
+    assert_eq!(agent.retired_context_tokens, Some(85_000));
+    assert_eq!(agent.usage, retired_usage());
+}
+
+#[test]
+fn second_end_of_one_compaction_keeps_the_fresh_figure() {
+    // Claude reports every compaction's end twice, as `PostCompact` and as a
+    // compact `SessionStart`; the second arrives with the bracket closed.
+    let agent = reduce_agent_states(&[
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        lifecycle_reading(
+            "PostCompact",
+            compaction_ended(Some(false)),
+            compacted_reading(),
+        ),
+        lifecycle_reading("SessionStart", compaction_ended(None), compacted_reading()),
+    ])
+    .remove(0);
+
+    assert_eq!(agent.compaction_count, 1);
+    assert_eq!(agent.retired_context_tokens, Some(85_000));
+    assert_eq!(agent.usage.total_tokens, Some(5_717));
+    assert_eq!(agent.usage.context_pct, Some(2));
+}
