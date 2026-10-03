@@ -33,7 +33,7 @@ use rimz::harness::schedule::run_log::{
 use rimz::harness::schedule::runner::{
     AfterReset, CheckEcho, InFlightRun, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
     after_reset as resolve_after_reset, in_flight_run, parse_mode, parse_task_timeout,
-    preflight_entry, probe_run_lock, window_condition_provider,
+    preflight_entry, probe_run_lock, task_login, window_condition_provider,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
@@ -225,6 +225,9 @@ struct AddArgs {
     /// Reasoning effort for the launched agent.
     #[arg(long)]
     effort: Option<String>,
+    /// Named account of the agent's provider that every fire runs on; unset follows the room.
+    #[arg(long, value_name = "NAME")]
+    account: Option<rimz::ids::LoginName>,
     /// Dollar cap for each spawned agent run.
     #[arg(long, value_name = "AMOUNT[/day]")]
     budget: Option<String>,
@@ -397,9 +400,13 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
 // ---- add / remove -----------------------------------------------------------
 
 fn task_subject(task: &LoadedTask) -> String {
-    task.action()
-        .map(|action| action.subject().to_owned())
-        .unwrap_or_else(|_| "<invalid>".to_owned())
+    let Ok(action) = task.action() else {
+        return "<invalid>".to_owned();
+    };
+    match &task.entry().account {
+        Some(account) => format!("{} · account {account}", action.subject()),
+        None => action.subject().to_owned(),
+    }
 }
 
 fn project_config_path(project_root: &Path) -> PathBuf {

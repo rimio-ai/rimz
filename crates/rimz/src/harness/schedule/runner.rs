@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use super::{LOOP_TASK_ENV, fire::deadline_expired_at};
 use crate::agents::PermissionMode;
 use crate::agents::{
-    HookPreflightErr, ManagedLaunchState, ProviderCapacity, RateLimitWindow, TurnLifecycleNeed,
-    WindowSpan, WindowSurplus, find_definition, preflight_hooks,
+    HookPreflightErr, ManagedLaunchState, ProviderCapacity, ProviderLogin, RateLimitWindow,
+    RoomLoginErr, TurnLifecycleNeed, WindowSpan, WindowSurplus, find_definition, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, WatchSpec};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
@@ -46,6 +46,7 @@ use crate::harness::schedule::{TaskAction, Trigger};
 use crate::ids::AgentKind;
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::RunRecord;
+use crate::store::writer::LaunchLogin;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
@@ -179,7 +180,8 @@ struct FireScope {
     scope_state: StatePaths,
     resolved: Option<ResolvedSingleAgentLaunch>,
     managed_launch: ManagedLaunchState,
-    login_key: Option<crate::ids::LoginKey>,
+    /// The task's [`task_login`] for `kind`.
+    login: Option<ProviderLogin>,
     capacity: OnceCell<Option<ProviderCapacity>>,
 }
 
@@ -189,11 +191,10 @@ impl FireScope {
         scope_runtime: RuntimePaths,
         scope_state: StatePaths,
         resolved: Option<ResolvedSingleAgentLaunch>,
+        login: Option<ProviderLogin>,
     ) -> Self {
-        let login_key =
-            crate::agents::RoomLoginSet::for_runtime(&scope_runtime).default_key(kind.as_str());
         Self {
-            login_key,
+            login,
             kind,
             scope_runtime,
             scope_state,
@@ -203,11 +204,15 @@ impl FireScope {
         }
     }
 
+    fn login_key(&self) -> Option<crate::ids::LoginKey> {
+        self.login.as_ref().map(ProviderLogin::key)
+    }
+
     fn capacity(&self) -> Option<&ProviderCapacity> {
         self.capacity
             .get_or_init(|| {
                 self.managed_launch
-                    .capacity(&self.scope_runtime, self.login_key.as_ref()?)
+                    .capacity(&self.scope_runtime, &self.login_key()?)
             })
             .as_ref()
     }
@@ -235,17 +240,21 @@ impl FireContext {
                 scope: None,
             });
         }
+        let launch = LaunchLogin::from(entry.account.clone());
         let scope = match &action {
             TaskAction::Spawn(spec) => {
                 let workspace = WorkspaceResolver::resolve(&root, None)?;
                 let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
-                let resolved = crate::harness::plan::resolve_single_agent_launch(spec, &workspace)?;
+                let resolved =
+                    crate::harness::plan::resolve_single_agent_launch(spec, &workspace, &launch)?;
                 let managed_launch = resolve_managed_spawn_state(entry, &workspace, &resolved)?;
+                let login = task_login(&launch, &resolved.kind, &runtime)?;
                 let mut scope = FireScope::new(
                     crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
                     runtime,
                     StatePaths::for_project_root(&workspace.project_root)?,
                     Some(resolved),
+                    login,
                 );
                 scope.managed_launch = managed_launch;
                 scope
@@ -253,11 +262,13 @@ impl FireContext {
             TaskAction::Deliver(target) => {
                 let project_root = WorkspaceResolver::persisted_project_root(&root)?;
                 let runtime = RuntimePaths::for_project_root(&project_root)?;
+                let login = task_login(&launch, target.kind.as_str(), &runtime)?;
                 let mut scope = FireScope::new(
                     target.kind.clone(),
                     runtime,
                     StatePaths::for_project_root(&project_root)?,
                     None,
+                    login,
                 );
                 scope.managed_launch =
                     unresolved_managed_state(&entry.resolved_root(), &target.kind);
@@ -413,7 +424,7 @@ impl<'a> TaskFire<'a> {
             && let Some(reason) = crate::harness::budget::scope_gate(
                 &scope.scope_runtime,
                 &scope.scope_state,
-                scope.login_key.as_ref(),
+                scope.login_key().as_ref(),
                 &self.config,
                 self.now,
             )
@@ -422,9 +433,9 @@ impl<'a> TaskFire<'a> {
         }
         if let Some(scope) = &context.scope
             && let Some(binding) = scope.managed_launch.binding()
-            && let Some(key) = scope.login_key.as_ref()
+            && let Some(key) = scope.login_key()
             && let Some(reason) =
-                crate::agents::provider_budget_gate(&scope.scope_runtime, key, binding, self.now)
+                crate::agents::provider_budget_gate(&scope.scope_runtime, &key, binding, self.now)
         {
             return Ok(Some(self.record_gate(LoopRunResult::BudgetSkipped, reason)));
         }
@@ -638,7 +649,7 @@ impl<'a> TaskFire<'a> {
                 .resolved
                 .as_ref()
                 .context("loop spawn context missing resolved task spec")?;
-            preflight_resolved_task(resolved, &scope.scope_runtime)?;
+            preflight_kind(&resolved.kind, scope.login.as_ref())?;
             scope.managed_launch.clone()
         };
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
@@ -683,6 +694,7 @@ impl<'a> TaskFire<'a> {
             .map(str::parse::<crate::harness::budget::BudgetSpec>)
             .transpose()?;
         let mut request = SupervisedRunRequest::new(spec, prompt, permission_mode, managed_launch);
+        request.login = LaunchLogin::from(self.entry.account.clone());
         request.worktree.clone_from(&self.entry.worktree);
         request.system_prompt_file = system_prompt_file;
         request.effort.clone_from(&self.entry.effort);
@@ -953,40 +965,54 @@ fn relative_age(ts: Timestamp, now: Timestamp) -> String {
     format!("{label} ago")
 }
 
+/// The account a task's gates, hooks preflight, window reads, and launch use
+/// for `kind`: the row's pin, else the room's current account, which is `None`
+/// when the room's record resolves none.
+pub fn task_login(
+    launch: &LaunchLogin,
+    kind: &str,
+    runtime: &RuntimePaths,
+) -> Result<Option<ProviderLogin>, RoomLoginErr> {
+    match launch {
+        LaunchLogin::RoomDefault => {
+            Ok(crate::agents::RoomLoginSet::for_runtime(runtime).default_login(kind))
+        }
+        LaunchLogin::Pinned(name) => crate::agents::session_login(
+            &AgentKind::new_unchecked(kind),
+            Some(name),
+            &MachineConfig::load_lenient().accounts,
+        )
+        .map(Some),
+    }
+}
+
+/// Hooks preflight for the action's kind under `login`, its [`task_login`].
 pub fn preflight_entry(
     action: &TaskAction,
     resolved: Option<&ResolvedSingleAgentLaunch>,
-    runtime: &RuntimePaths,
+    login: Option<&ProviderLogin>,
 ) -> Result<()> {
     match action {
         TaskAction::Spawn(spec) => {
             let resolved = resolved
                 .with_context(|| format!("missing resolved loop task spec for `{spec}`"))?;
-            preflight_resolved_task(resolved, runtime)?;
+            preflight_kind(&resolved.kind, login)?;
         }
-        TaskAction::Deliver(target) => preflight_kind(&target.kind, runtime)?,
+        TaskAction::Deliver(target) => preflight_kind(&target.kind, login)?,
         TaskAction::CheckOnly => {}
     }
     Ok(())
 }
 
-fn preflight_resolved_task(
-    resolved: &ResolvedSingleAgentLaunch,
-    runtime: &RuntimePaths,
-) -> Result<()> {
-    preflight_kind(&resolved.kind, runtime)
-}
-
-fn preflight_kind(kind: &str, runtime: &RuntimePaths) -> Result<()> {
+fn preflight_kind(kind: &str, login: Option<&ProviderLogin>) -> Result<()> {
     let adapter =
         find_definition(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
-    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
-    let login = logins.default_login(kind).with_context(|| {
+    let login = login.with_context(|| {
         format!("cannot resolve the room's {kind} account; run `rimz accounts list`")
     })?;
     match preflight_hooks(
         adapter,
-        &logins.env(&login),
+        &login.env(&crate::agents::ambient_env()),
         TurnLifecycleNeed::NotUnsupported,
     ) {
         Ok(()) => Ok(()),
@@ -1068,24 +1094,9 @@ struct WindowAtAdd {
 pub fn window_condition_provider(
     when: &[String],
     kind: Option<&str>,
+    login: Option<&crate::ids::LoginKey>,
     root: &Path,
     runtime: &RuntimePaths,
-    now: Timestamp,
-) -> Result<Option<AgentKind>, WindowRefusal> {
-    if super::when::WhenExpr::parse(when).map_or(true, |expr| expr.window_spans().next().is_none())
-    {
-        return Ok(None);
-    }
-    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
-    condition_provider_in(when, kind, root, runtime, &logins, now)
-}
-
-fn condition_provider_in(
-    when: &[String],
-    kind: Option<&str>,
-    root: &Path,
-    runtime: &RuntimePaths,
-    logins: &crate::agents::RoomLoginSet,
     now: Timestamp,
 ) -> Result<Option<AgentKind>, WindowRefusal> {
     let Ok(expr) = super::when::WhenExpr::parse(when) else {
@@ -1096,19 +1107,20 @@ fn condition_provider_in(
         .collect::<std::collections::BTreeSet<_>>();
     let mut provider = None;
     for span in spans {
-        provider = Some(window_at_add(kind, span, root, runtime, logins, now)?.kind);
+        provider = Some(window_at_add(kind, span, login, root, runtime, now)?.kind);
     }
     Ok(provider)
 }
 
-/// The stored reading of `kind`'s `span` window, refused in the order the
-/// fixes apply: provider, account selection, account, reading, window.
+/// The stored reading of `kind`'s `span` window on `login`, the key of the
+/// task's [`task_login`], refused in the order the fixes apply: provider,
+/// account selection, account, reading, window.
 fn window_at_add(
     kind: Option<&str>,
     span: WindowSpan,
+    login: Option<&crate::ids::LoginKey>,
     root: &Path,
     runtime: &RuntimePaths,
-    logins: &crate::agents::RoomLoginSet,
     now: Timestamp,
 ) -> Result<WindowAtAdd, WindowRefusal> {
     let kind = kind.ok_or(WindowRefusal::NoProvider)?;
@@ -1119,11 +1131,9 @@ fn window_at_add(
     ) {
         return Err(WindowRefusal::ManagedAccount { kind: owned() });
     }
-    let key = logins
-        .default_key(kind)
-        .ok_or_else(|| WindowRefusal::NoAccount { kind: owned() })?;
+    let key = login.ok_or_else(|| WindowRefusal::NoAccount { kind: owned() })?;
     let capacity =
-        ProviderCapacity::read(runtime, &key).ok_or_else(|| WindowRefusal::NoReading {
+        ProviderCapacity::read(runtime, key).ok_or_else(|| WindowRefusal::NoReading {
             kind: owned(),
             span,
         })?;
@@ -1157,22 +1167,10 @@ fn window_at_add(
 pub fn after_reset(
     span: WindowSpan,
     kind: Option<&str>,
+    login: Option<&crate::ids::LoginKey>,
     surplus: bool,
     root: &Path,
     runtime: &RuntimePaths,
-    now: Timestamp,
-) -> Result<AfterReset, WindowRefusal> {
-    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
-    after_reset_in(span, kind, surplus, root, runtime, &logins, now)
-}
-
-fn after_reset_in(
-    span: WindowSpan,
-    kind: Option<&str>,
-    surplus: bool,
-    root: &Path,
-    runtime: &RuntimePaths,
-    logins: &crate::agents::RoomLoginSet,
     now: Timestamp,
 ) -> Result<AfterReset, WindowRefusal> {
     let WindowAtAdd {
@@ -1180,7 +1178,7 @@ fn after_reset_in(
         span,
         window,
         longest,
-    } = window_at_add(kind, span, root, runtime, logins, now)?;
+    } = window_at_add(kind, span, login, root, runtime, now)?;
     let other = match span {
         WindowSpan::FiveHour => WindowSpan::SevenDay,
         WindowSpan::SevenDay => WindowSpan::FiveHour,

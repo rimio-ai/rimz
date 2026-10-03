@@ -640,6 +640,15 @@ fn project_accounts_apply_only_under_trust_and_leave_old_hashes_alone() {
 
     let config: ProjectConfig = toml::from_str("[env]\nA = \"1\"\n").expect("parse");
     assert!(!surface_snapshot(&config).json.contains("accounts"));
+
+    // A task's account pin is not a command, so it stays out of the hash.
+    let hash = |text: &str| {
+        executable_surface_hash(&toml::from_str::<ProjectConfig>(text).expect("parse task"))
+    };
+    assert_eq!(
+        hash("[tasks.x]\nagent = \"codex\"\naccount = \"work\"\n"),
+        hash("[tasks.x]\nagent = \"codex\"\n"),
+    );
 }
 
 #[test]

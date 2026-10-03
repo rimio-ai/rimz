@@ -27,6 +27,7 @@
 ## root = "/home/you/code/app"
 ## every = "15m"                       # interval; `cron = "*/15 * * * *"` uses raw cron syntax
 ## mode = "auto"                       # auto, ask, or yolo
+## account = "work"                    # named provider account every fire runs on; unset follows the room
 ## budget = "5"                        # cap each spawned run
 ## budget-per-day = "20"               # skip fires that cannot fit today's task budget
 ## surplus = "1.5x"                    # require forward headroom in the longest provider window

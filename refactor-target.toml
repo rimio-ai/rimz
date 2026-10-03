@@ -415,7 +415,8 @@ path = "crates/rimz/src/harness"
 # The prompt-submit Environment sampler and its launch switch cross the harness/CLI hook seam (+4).
 # A loop run in flight is looked up by name and root, its row gone or not (+1).
 # A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
-surface-budget = 644
+# A loop task's one account resolution serves the runner and `loop add`: `task_login` (+1).
+surface-budget = 645
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1048,6 +1049,7 @@ allowed-dependencies = [
     "ids",
     "proc",
     "store::run",
+    "store::writer",
     "utils::time",
     "workspace",
 ]
@@ -1056,7 +1058,8 @@ allowed-dependencies = [
 # The add-time window resolver and its refusals serve both `loop add` paths (+2).
 # `--after-reset` resolves its instant here for both `loop add` paths (+2).
 # `InFlightRun` carries the held lock's holder and run record to `loop show`/`logs` (+1).
-surface-budget = 45
+# A task's account pin is a `LaunchLogin`, resolved once by `task_login` for the runner and `loop add` (+1).
+surface-budget = 46
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

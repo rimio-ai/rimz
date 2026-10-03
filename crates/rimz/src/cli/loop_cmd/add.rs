@@ -55,9 +55,19 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let provider_kind = action.provider_kind().map(ToOwned::to_owned);
     let (mut entry, resolved_for_preflight) = build_task_entry(&args, action, &workspace)?;
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+    let login = provider_kind
+        .as_deref()
+        .map(|kind| task_login(&args.account.clone().into(), kind, &runtime))
+        .transpose()?
+        .flatten();
+    if let Some(login) = login.as_ref().filter(|_| args.account.is_some()) {
+        login.preflight(&rimz::agents::ambient_env())?;
+    }
+    let login_key = login.as_ref().map(rimz::agents::ProviderLogin::key);
     entry.provider = window_condition_provider(
         &args.when,
         provider_kind.as_deref(),
+        login_key.as_ref(),
         &entry.resolved_root(),
         &runtime,
         Timestamp::now(),
@@ -68,6 +78,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             resolve_after_reset(
                 span,
                 provider_kind.as_deref(),
+                login_key.as_ref(),
                 args.surplus.is_some() || args.surplus_after.is_some(),
                 &entry.resolved_root(),
                 &runtime,
@@ -80,7 +91,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let shape = schedule::TaskShape::compile(&args.name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
     let task_action = shape.action().map_err(Clone::clone)?;
-    preflight_entry(task_action, resolved_for_preflight.as_ref(), &runtime)?;
+    preflight_entry(task_action, resolved_for_preflight.as_ref(), login.as_ref())?;
     let catalog = TaskCatalog::load(Some(&project_root))?;
     let project_pre_state = args
         .project
@@ -136,18 +147,25 @@ fn add_delivery(
     matches: BTreeMap<String, String>,
 ) -> Result<()> {
     let timing = resolve_add_timing(args)?;
+    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+    let login_key = task_login(
+        &rimz::store::writer::LaunchLogin::RoomDefault,
+        target.kind.as_str(),
+        &runtime,
+    )?
+    .map(|login| login.key());
     let after_reset = args
         .after_reset
         .map(|span| {
             resolve_after_reset(
                 span,
                 Some(target.kind.as_str()),
+                login_key.as_ref(),
                 args.surplus.is_some() || args.surplus_after.is_some(),
                 &workspace.worktree_root,
-                &rimz::RuntimePaths::for_project_root(&workspace.project_root)?,
+                &runtime,
                 Timestamp::now(),
             )
-            .map_err(anyhow::Error::from)
         })
         .transpose()?;
     let trigger = if !args.when.is_empty() {
@@ -160,8 +178,9 @@ fn add_delivery(
                 provider: window_condition_provider(
                     &args.when,
                     Some(target.kind.as_str()),
+                    login_key.as_ref(),
                     &workspace.worktree_root,
-                    &rimz::RuntimePaths::for_project_root(&workspace.project_root)?,
+                    &runtime,
                     Timestamp::now(),
                 )?,
                 ..TaskEntry::default()
@@ -394,7 +413,8 @@ fn resolve_add_action(
     let mut action = match kind {
         TaskActionKind::Spawn => {
             let spec = args.agent.as_deref().unwrap_or_default();
-            let resolved = resolve_single_agent_launch(spec, workspace)?;
+            let resolved =
+                resolve_single_agent_launch(spec, workspace, &args.account.clone().into())?;
             AddTaskAction::Spawn {
                 resolved,
                 mode: None,
@@ -507,6 +527,7 @@ fn build_task_entry(
             entry.worktree = args.worktree.clone();
             entry.mode = mode;
             entry.effort = args.effort.clone();
+            entry.account.clone_from(&args.account);
             entry.budget = budget;
             entry.budget_per_day = budget_per_day;
             entry.system_prompt_file = args.system_prompt_file.clone();
@@ -742,6 +763,9 @@ fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Resu
     if args.effort.is_some() {
         flags.push("--effort");
     }
+    if args.account.is_some() {
+        flags.push("--account");
+    }
     if args.budget.is_some() {
         flags.push("--budget");
     }
@@ -802,9 +826,14 @@ fn write_add_feedback(
 ) -> Result<()> {
     match action {
         TaskAction::Spawn(agent) => {
+            let account = entry
+                .account
+                .as_ref()
+                .map(|account| format!(" on account `{account}`"))
+                .unwrap_or_default();
             writeln!(
                 out,
-                "action: launches a fresh {agent} pane in {}",
+                "action: launches a fresh {agent} pane{account} in {}",
                 entry.root.display()
             )?;
         }

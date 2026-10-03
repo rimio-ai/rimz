@@ -981,11 +981,23 @@ fn vanished_task_root_keeps_its_persisted_workspace_identity() {
 }
 
 fn publish_windows(runtime: &RuntimePaths, kind: &str, windows: Vec<RateLimitWindow>) {
+    publish_windows_for(
+        runtime,
+        crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)),
+        windows,
+    );
+}
+
+fn publish_windows_for(
+    runtime: &RuntimePaths,
+    key: crate::ids::LoginKey,
+    windows: Vec<RateLimitWindow>,
+) {
     crate::disk::atomic::write_temp_then_rename_cache(
         &runtime.shared_rate_limits_path(),
         &crate::agents::RateLimitsCache {
             entries: std::collections::BTreeMap::from([(
-                crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)),
+                key,
                 crate::agents::RateLimitCacheEntry {
                     limits: crate::agents::AgentRateLimits { windows },
                     ..Default::default()
@@ -1018,8 +1030,9 @@ fn window_triggers_refuse_at_add_in_order() {
         None,
         std::collections::BTreeMap::new(),
     );
-    let at_add = |kind, span, logins: &crate::agents::RoomLoginSet| {
-        window_at_add(kind, span, dir.path(), &runtime, logins, now)
+    let at_add = |kind: Option<&str>, span, logins: &crate::agents::RoomLoginSet| {
+        let key = kind.and_then(|kind| logins.default_key(kind));
+        window_at_add(kind, span, key.as_ref(), dir.path(), &runtime, now)
     };
     let five = WindowSpan::FiveHour;
     let seven = WindowSpan::SevenDay;
@@ -1081,6 +1094,21 @@ fn window_triggers_refuse_at_add_in_order() {
         lifted_past_reset,
         "a lifted window passes the reading check whatever its stale reset"
     );
+
+    // A pinned task reads its own account's stored window, not the room's.
+    let work =
+        crate::ids::LoginKey::new(AgentKind::new_unchecked("claude"), "work".parse().unwrap());
+    publish_windows_for(&runtime, work.clone(), vec![window(Some(55), 3_600, five)]);
+    assert!(matches!(
+        at_add(Some("claude"), five, &native),
+        Err(WindowRefusal::NoReading { .. })
+    ));
+    assert_eq!(
+        window_at_add(Some("claude"), five, Some(&work), dir.path(), &runtime, now)
+            .unwrap()
+            .window,
+        window(Some(55), 3_600, five)
+    );
 }
 
 #[test]
@@ -1093,11 +1121,7 @@ fn after_reset_fires_at_the_reset_or_now_and_refuses_what_has_none() {
     .unwrap();
     runtime.ensure_dirs().unwrap();
     let now = Timestamp::now();
-    let native = crate::agents::RoomLoginSet::new(
-        Some(Default::default()),
-        None,
-        std::collections::BTreeMap::new(),
-    );
+    let native = crate::ids::LoginKey::default_for(AgentKind::new_unchecked("claude"));
     let five = WindowSpan::FiveHour;
     let seven = WindowSpan::SevenDay;
     let window = |used, resets_in: Option<i64>, span: WindowSpan| RateLimitWindow {
@@ -1107,18 +1131,18 @@ fn after_reset_fires_at_the_reset_or_now_and_refuses_what_has_none() {
         ..RateLimitWindow::default()
     };
     let resolve = |span, surplus| {
-        after_reset_in(
+        after_reset(
             span,
             Some("claude"),
+            Some(&native),
             surplus,
             dir.path(),
             &runtime,
-            &native,
             now,
         )
     };
     assert_eq!(
-        after_reset_in(five, None, false, dir.path(), &runtime, &native, now),
+        after_reset(five, None, None, false, dir.path(), &runtime, now),
         Err(WindowRefusal::NoProvider)
     );
     let week = window(Some(10), Some(86_400), seven);
@@ -1176,13 +1200,17 @@ fn window_conditions_record_the_provider_their_terms_read() {
     .unwrap();
     runtime.ensure_dirs().unwrap();
     let now = Timestamp::now();
-    let native = crate::agents::RoomLoginSet::new(
-        Some(Default::default()),
-        None,
-        std::collections::BTreeMap::new(),
-    );
-    let provider = |when: &str, kind| {
-        condition_provider_in(&[when.to_owned()], kind, dir.path(), &runtime, &native, now)
+    let provider = |when: &str, kind: Option<&str>| {
+        let key =
+            kind.map(|kind| crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind)));
+        window_condition_provider(
+            &[when.to_owned()],
+            kind,
+            key.as_ref(),
+            dir.path(),
+            &runtime,
+            now,
+        )
     };
     assert_eq!(provider("ci=passed", None), Ok(None));
     assert_eq!(provider("ci=passed", Some("claude")), Ok(None));
