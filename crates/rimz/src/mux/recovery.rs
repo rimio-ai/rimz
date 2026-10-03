@@ -1,11 +1,11 @@
 //! The dangerous step is the process sweep: it signals processes by heuristic, so
-//! it is scoped four ways — real uid, the exact recorded session name in the
-//! command line, an explicit exclusion of this process and its ancestors, and the
+//! it is scoped four ways — real uid, the recorded session name or a hook's
+//! inherited workspace pin, an explicit exclusion of this process and its ancestors, and the
 //! inherited environment domain — and it runs where the process backend can
 //! enumerate the current user's process table.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::ids::{MuxName, PaneId};
 use crate::mux::domain::ProcessDomain;
@@ -70,6 +70,7 @@ fn select_sweep_targets(
     workspace_id: &str,
     protected: &HashSet<u32>,
     include_mux_server: bool,
+    hook_identity: impl Fn(u32) -> Option<(Vec<std::ffi::OsString>, String)>,
 ) -> Vec<(u32, RequiredDomainCheck)> {
     procs
         .iter()
@@ -82,6 +83,24 @@ fn select_sweep_targets(
                 workspace_id,
                 include_mux_server,
             )
+            .or_else(|| {
+                // Hooks can outlive their pane and publish caches. Only an
+                // explicit teardown may reap them, not reload's liveness probe.
+                if !include_mux_server || !proc.cmdline.contains("hooks feed") {
+                    return None;
+                }
+                let (argv, pin) = hook_identity(proc.pid)?;
+                let [program, command, subcommand, ..] = argv.as_slice() else {
+                    return None;
+                };
+                (std::path::Path::new(program)
+                    .file_name()
+                    .is_some_and(|name| name == "rimz")
+                    && command == "hooks"
+                    && subcommand == "feed"
+                    && pin == workspace_id)
+                    .then_some(RequiredDomainCheck::World)
+            })
             .map(|check| (proc.pid, check))
         })
         .collect()
@@ -108,12 +127,13 @@ pub(crate) fn protected_pids(procs: &[ProcInfo], self_pid: u32) -> HashSet<u32> 
 /// runs it for a workspace whose session a probe read as gone, reaping only
 /// respawnable sidebar/app-server leftovers (`include_mux_server: false`) so a
 /// misread live session is never destroyed.
+/// Teardown also reaps hook feeds carrying this workspace's inherited pin.
 #[cfg(unix)]
 pub(crate) fn sweep_orphan_processes(
     workspace_id: &str,
     session_name: &str,
     include_mux_server: bool,
-) -> Vec<u32> {
+) -> KillOutcome {
     let procs = crate::proc::list_processes();
     let protected = protected_pids(&procs, std::process::id());
     let own_domain = ProcessDomain::current();
@@ -124,6 +144,12 @@ pub(crate) fn sweep_orphan_processes(
         workspace_id,
         &protected,
         include_mux_server,
+        |pid| {
+            Some((
+                crate::proc::argv(pid)?,
+                crate::proc::env_var(pid, crate::workspace::ENV_WORKSPACE_ID)?,
+            ))
+        },
     )
     .into_iter()
     .filter_map(|(pid, check)| {
@@ -134,7 +160,7 @@ pub(crate) fn sweep_orphan_processes(
         if matches { Some(pid) } else { None }
     })
     .collect::<Vec<_>>();
-    kill_pids(&targets, SWEEP_GRACE).signalled
+    kill_pids(&targets, SWEEP_GRACE)
 }
 
 #[cfg(not(unix))]
@@ -142,8 +168,8 @@ pub(crate) fn sweep_orphan_processes(
     _workspace_id: &str,
     _session_name: &str,
     _include_mux_server: bool,
-) -> Vec<u32> {
-    Vec::new()
+) -> KillOutcome {
+    KillOutcome::default()
 }
 
 /// SIGUSR1 every `rimz stats --refresh` dashboard this user owns in this state
@@ -267,8 +293,9 @@ pub(crate) fn current_uid() -> u32 {
     u32::MAX
 }
 
-/// SIGTERM each pid, wait `grace`, then SIGKILL any still alive; reports every
-/// pid signalled and the subset that needed escalation. The shared
+/// SIGTERM each pid, allow `grace` for exit, then SIGKILL any still alive and
+/// confirm exit within two seconds, warning about survivors. Reports signalled
+/// and escalated pids. Identity tokens prevent waiting on or escalating a reused pid. The shared
 /// graceful-then-forceful kill path for the `rimz reset` orphan sweep and
 /// `rimz reload`'s zombie-sidebar reaping.
 #[cfg(unix)]
@@ -282,25 +309,40 @@ pub(crate) fn kill_pids(targets: &[u32], grace: Duration) -> KillOutcome {
     let signal = |pid: u32, sig: Signal| {
         let _ = kill(Pid::from_raw(pid as i32), sig);
     };
+    let mut live = targets
+        .iter()
+        .map(|&pid| (pid, crate::proc::process_start_token(pid)))
+        .collect::<Vec<_>>();
     for &pid in targets {
         signal(pid, Signal::SIGTERM);
     }
-    std::thread::sleep(grace);
-    let still_alive: HashSet<u32> = crate::proc::list_processes()
-        .iter()
-        .map(|proc| proc.pid)
-        .collect();
-    let sigkilled = targets
-        .iter()
-        .copied()
-        .filter(|pid| still_alive.contains(pid))
-        .collect::<Vec<_>>();
+    wait_for_exit(&mut live, grace);
+    let sigkilled = live.iter().map(|(pid, _)| *pid).collect::<Vec<_>>();
     for &pid in &sigkilled {
         signal(pid, Signal::SIGKILL);
+    }
+    wait_for_exit(&mut live, Duration::from_secs(2));
+    if !live.is_empty() {
+        let survived = live.iter().map(|(pid, _)| *pid).collect::<Vec<_>>();
+        tracing::warn!(pids = ?survived, "processes survived the room process sweep");
     }
     KillOutcome {
         signalled: targets.to_vec(),
         sigkilled,
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_exit(targets: &mut Vec<(u32, Option<String>)>, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        targets.retain(|(pid, start)| crate::proc::process_is_live(*pid, start.as_deref()));
+        if targets.is_empty() || Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(
+            Duration::from_millis(10).min(deadline.saturating_duration_since(Instant::now())),
+        );
     }
 }
 
@@ -390,7 +432,7 @@ mod tests {
         ];
         let protected = HashSet::new();
         assert_eq!(
-            select_sweep_targets(&procs, me, SESSION, WS, &protected, true),
+            select_sweep_targets(&procs, me, SESSION, WS, &protected, true, |_| None),
             vec![
                 (10, RequiredDomainCheck::Mux(MuxName::Zellij)),
                 (11, RequiredDomainCheck::World),
@@ -403,7 +445,7 @@ mod tests {
         // probe that misread a live session as gone can only reap respawnable
         // daemons, never tear the session down.
         assert_eq!(
-            select_sweep_targets(&procs, me, SESSION, WS, &protected, false),
+            select_sweep_targets(&procs, me, SESSION, WS, &protected, false, |_| None),
             vec![
                 (11, RequiredDomainCheck::World),
                 (12, RequiredDomainCheck::World),
@@ -435,8 +477,44 @@ mod tests {
         assert!(protected.contains(&101));
         assert!(protected.contains(&100));
         assert!(protected.contains(&1));
-        let got = select_sweep_targets(&procs, me, SESSION, WS, &protected, true);
+        let got = select_sweep_targets(&procs, me, SESSION, WS, &protected, true, |_| None);
         assert_eq!(got, vec![(10, RequiredDomainCheck::Mux(MuxName::Zellij))]);
+    }
+
+    #[test]
+    fn teardown_sweeps_pinned_hook_writers_but_reload_spares_them() {
+        let procs = vec![
+            proc(10, 1, 1000, "/build/rimz hooks feed --source claude"),
+            proc(11, 1, 1000, "rimz hooks feed --source claude"),
+            proc(12, 1, 1000, "rimz hooks feed --source claude"),
+            proc(13, 1, 1000, "echo rimz hooks feed --source claude"),
+            proc(14, 1, 2000, "rimz hooks feed --source claude"),
+            proc(15, 1, 1000, "rimz hooks feed --source claude"),
+            proc(16, 1, 1000, "claude --worktree main"),
+        ];
+        let hook_identity = |pid| {
+            let pin = match pid {
+                11 => "ws-other",
+                12 => return None,
+                _ => WS,
+            };
+            let process = procs.iter().find(|process| process.pid == pid).unwrap();
+            Some((
+                process.cmdline.split_whitespace().map(Into::into).collect(),
+                pin.to_owned(),
+            ))
+        };
+        let protected = HashSet::from([15]);
+        assert_eq!(
+            select_sweep_targets(&procs, 1000, SESSION, WS, &protected, true, hook_identity),
+            vec![(10, RequiredDomainCheck::World)],
+            "a room's hook writer can outlive its mux without naming the session in argv",
+        );
+        assert!(
+            select_sweep_targets(&procs, 1000, SESSION, WS, &protected, false, hook_identity)
+                .is_empty(),
+            "reload must not kill hooks on a possibly mistaken dead-session probe",
+        );
     }
 
     #[cfg(unix)]

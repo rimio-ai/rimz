@@ -322,6 +322,15 @@ impl ProducerElectionTracker {
         self.elder_instance_at(SystemTime::now())
     }
 
+    /// A slow fetch may finish after an elder appears. Publication must check
+    /// the same election without relying on the role memo from before the fetch.
+    pub(crate) fn confirm_producer(&self) -> bool {
+        matches!(
+            self.full_scan(SystemTime::now()),
+            CachedElection::Producer { .. }
+        )
+    }
+
     fn elder_instance_at(&self, now: SystemTime) -> Option<SidebarInstanceId> {
         // A poisoned memo cannot invalidate election correctness. Recover its
         // contents and let the normal validation/rescan path repair it.
