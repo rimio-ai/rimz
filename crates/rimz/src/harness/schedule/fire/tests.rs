@@ -295,6 +295,90 @@ fn condition_tick(
 }
 
 #[test]
+fn resident_conditions_retry_at_five_minutes_until_ledgered() {
+    let root = tempfile::tempdir().unwrap();
+    let now = zdt(2026, 6, 24, 8, 0, 0);
+    for stay in [true, false] {
+        let tasks = one(loaded(TaskEntry {
+            root: root.path().to_owned(),
+            agent: Some("claude".into()),
+            prompt: Some("repair".into()),
+            stay,
+            when: Some(vec!["team.stage=Done".into()]),
+            ..Default::default()
+        }));
+        let verdicts = one(Verdict {
+            ok: true,
+            readings: BTreeMap::new(),
+        });
+        let (_, mut stamps, mut states) = plan(
+            &tasks,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &now,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        for (minute, second, expected) in [
+            (0, 0, true),
+            (4, 59, false),
+            (5, 0, stay),
+            (9, 59, false),
+            (10, 0, stay),
+        ] {
+            let tick = zdt(2026, 6, 24, 8, minute, second);
+            let (actions, next_stamps, next_states) =
+                plan(&tasks, &stamps, &BTreeMap::new(), &tick, &states, &verdicts);
+            assert_eq!(
+                actions,
+                if expected {
+                    vec![(NAME.into(), Action::Fire)]
+                } else {
+                    vec![]
+                },
+                "stay={stay}, {tick}"
+            );
+            assert_eq!(next_states[NAME].since, now.timestamp());
+            assert!(next_states[NAME].fired);
+            stamps = next_stamps;
+            states = next_states;
+        }
+        if !stay {
+            continue;
+        }
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let runtime = RuntimePaths::for_state(&paths).unwrap();
+        crate::disk::atomic::write_temp_then_rename(
+            &super::super::launch_ledger::path(&paths),
+            &one(BTreeMap::from([(
+                root.path().to_owned(),
+                super::super::launch_ledger::LaunchRecord {
+                    at: now.timestamp(),
+                    leader: "otter".into(),
+                },
+            )])),
+        )
+        .unwrap();
+        write_temp_then_rename_cache(&state_path(&runtime), &stamps).unwrap();
+        write_temp_then_rename_cache(&when_state_path(&runtime), &states).unwrap();
+        std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        for hour in [9, 10] {
+            assert!(
+                fire_tasks(
+                    &runtime,
+                    Some(root.path()),
+                    tasks.clone(),
+                    &zdt(2026, 6, 24, hour, 0, 0),
+                    LoopRunHost::Detached,
+                    None
+                )
+                .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
 fn condition_first_sight_arms_without_a_verdict() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let (actions, stamps, states) = condition_tick(None, None, None, None, false, &now);

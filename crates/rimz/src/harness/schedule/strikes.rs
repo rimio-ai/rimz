@@ -42,7 +42,7 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::TimedOut
         | LoopRunResult::Errored
         | LoopRunResult::BudgetExceeded => Signal::Strike,
-        LoopRunResult::Completed | LoopRunResult::Delivered => {
+        LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
             if record
                 .check
                 .as_ref()
@@ -156,6 +156,7 @@ mod tests {
 
     fn record(result: LoopRunResult, check: Option<CheckRecord>) -> LoopRunRecord {
         LoopRunRecord {
+            checkout: None,
             task: "nightly".to_owned(),
             root: None,
             at: Timestamp::from_second(1).expect("timestamp"),

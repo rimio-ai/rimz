@@ -466,6 +466,14 @@ pub(super) fn write_record_forensics(
         .run_id
         .as_deref()
         .and_then(|run_id| entry.and_then(|entry| run_record_for(entry, run_id)));
+    if let Some(checkout) = &record.checkout {
+        write_detail_link(out, "checkout", &checkout.display().to_string())?;
+    }
+    if record.result == LoopRunResult::Launched
+        && let Some(leader) = &record.target
+    {
+        write_detail_link(out, "leader", leader)?;
+    }
     write_check_section(out, record, run_record.as_ref(), prose)?;
     write_verify_section(out, run_record.as_ref())?;
     if let Some(spend) = record_spend_label(record) {

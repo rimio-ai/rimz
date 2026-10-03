@@ -3,6 +3,67 @@ use std::path::Path;
 use super::*;
 
 #[test]
+fn resident_fire_obeys_fleet_budget_and_deadline_before_launch() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let now: Timestamp = "2026-06-02T12:00:00Z".parse().unwrap();
+    let runtime = RuntimePaths::for_project_root(root.path()).unwrap();
+    crate::agents::spending::write_workspace_spending_cache(
+        &runtime.workspace_spending_path("resident"),
+        &crate::agents::spending::WorkspaceSpendingCache {
+            scope_hash: "resident".into(),
+            day: crate::agents::spending::SpendWindow {
+                usd: 6.0,
+                ..Default::default()
+            },
+            day_cutoff_secs: "2026-06-02T00:00:00Z"
+                .parse::<Timestamp>()
+                .unwrap()
+                .as_second() as u64,
+            ..Default::default()
+        },
+    );
+    for (config, deadline, expected) in [
+        (
+            toml::from_str("timezone = \"UTC\"\n[harness]\nbudget = \"5/day\"\n").unwrap(),
+            None,
+            LoopRunResult::BudgetSkipped,
+        ),
+        (
+            MachineConfig::default(),
+            Some(Timestamp::UNIX_EPOCH),
+            LoopRunResult::Expired,
+        ),
+    ] {
+        let entry = TaskEntry {
+            root: root.path().to_owned(),
+            agent: Some("claude,codex".into()),
+            prompt: Some("repair".into()),
+            stay: true,
+            deadline,
+            ..Default::default()
+        };
+        let mut fire = TaskFire::new(
+            "resident-gates",
+            LoadedTask::new("resident-gates", entry, catalog::TaskSource::Config),
+            &catalog,
+            LoopRunMode::Manual,
+            false,
+            now,
+            Arc::new(config),
+            None,
+            CheckEcho::Capture,
+            Instant::now(),
+        )
+        .unwrap();
+        let plan = fire
+            .prepare(&mut |_| panic!("gate must precede room birth"))
+            .unwrap();
+        assert!(matches!(plan, TaskFirePlan::Done(done) if done.record.result == expected));
+    }
+}
+
+#[test]
 fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("vanished");
