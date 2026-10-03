@@ -36,11 +36,25 @@ impl LaunchAvailability {
         config: &crate::config::MachineConfig,
         now: jiff::Timestamp,
     ) -> Self {
+        Self::read_as(runtime, state, config, now, |_| {
+            crate::store::writer::LaunchLogin::RoomDefault
+        })
+    }
+
+    /// Judge each kind on the account `login` names for it; a kind where that
+    /// account does not resolve contributes no facts.
+    pub fn read_as(
+        runtime: &RuntimePaths,
+        state: &StatePaths,
+        config: &crate::config::MachineConfig,
+        now: jiff::Timestamp,
+        login: impl Fn(&AgentKind) -> crate::store::writer::LaunchLogin,
+    ) -> Self {
         let defaults = crate::agents::room_logins(&state.workspace_record).ok();
         let logins: BTreeMap<_, _> = crate::agents::known_kinds()
             .filter_map(|kind| {
                 let kind = AgentKind::new_unchecked(kind);
-                let login = crate::store::writer::LaunchLogin::RoomDefault
+                let login = login(&kind)
                     .resolve(&kind, defaults.as_ref()?, &config.accounts)
                     .ok()?;
                 Some((kind, login.key()))

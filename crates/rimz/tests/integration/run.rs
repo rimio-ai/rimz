@@ -1087,13 +1087,37 @@ fn agent_launch_root_mismatch_refuses_without_creating_room() {
 
 #[cfg(unix)]
 fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) {
-    assert_subagent_checkout_with_login(fanout, repo_subdir, cwd, false);
+    assert_subagent_checkout_with_login(fanout, repo_subdir, cwd, None);
 }
 
 #[cfg(unix)]
 #[test]
-fn subagent_uses_the_room_account_after_the_room_switches() {
-    assert_subagent_checkout_with_login(false, false, None, true);
+fn subagent_inherits_its_parents_account_after_the_room_switches() {
+    for (parent_kind, parent_login, child_login) in [
+        ("codex", Some("work"), Some("work")),
+        ("codex", None, None),
+        ("claude", Some("work"), Some("spare")),
+    ] {
+        assert_subagent_checkout_with_login(
+            false,
+            false,
+            None,
+            Some(ParentLogin {
+                parent_kind,
+                parent_login,
+                child_login,
+            }),
+        );
+    }
+}
+
+/// A room switched to codex `spare` after a parent launched, and the account
+/// its codex child must land on.
+#[cfg(unix)]
+struct ParentLogin {
+    parent_kind: &'static str,
+    parent_login: Option<&'static str>,
+    child_login: Option<&'static str>,
 }
 
 #[cfg(unix)]
@@ -1101,7 +1125,7 @@ fn assert_subagent_checkout_with_login(
     fanout: bool,
     repo_subdir: bool,
     cwd: Option<&str>,
-    switch: bool,
+    switch: Option<ParentLogin>,
 ) {
     let env = Env::new();
     let checkout = if repo_subdir {
@@ -1133,7 +1157,7 @@ fn assert_subagent_checkout_with_login(
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
-    if switch {
+    if switch.is_some() {
         for name in ["work", "spare"] {
             let home = env.home_root.join(name);
             let output = env
@@ -1178,8 +1202,12 @@ fn assert_subagent_checkout_with_login(
     store
         .record_workspace(&workspace)
         .expect("record pinned room");
-    let parent_kind = AgentKind::new_unchecked(if switch { "codex" } else { "claude" });
-    if switch {
+    let parent_kind = AgentKind::new_unchecked(
+        switch
+            .as_ref()
+            .map_or("claude", |switch| switch.parent_kind),
+    );
+    if switch.is_some() {
         store
             .switch_room_login(
                 &workspace,
@@ -1201,7 +1229,10 @@ fn assert_subagent_checkout_with_login(
                 agent_name: "parent".to_owned(),
                 agent_name_explicit: true,
                 launch: LaunchParams {
-                    login: switch.then(|| "work".parse().unwrap()),
+                    login: switch
+                        .as_ref()
+                        .and_then(|switch| switch.parent_login)
+                        .map(|name| name.parse().unwrap()),
                     ..Default::default()
                 },
                 state: AgentLaunchState::Bound,
@@ -1322,7 +1353,8 @@ fn assert_subagent_checkout_with_login(
         assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_launch_id));
         assert_eq!(
             child.login.as_ref().map(|name| name.as_str()),
-            switch.then_some("spare")
+            switch.as_ref().and_then(|switch| switch.child_login),
+            "child of a {parent_kind} parent"
         );
     }
     let trace = std::fs::read_to_string(&trace_path).expect("read child pane trace");

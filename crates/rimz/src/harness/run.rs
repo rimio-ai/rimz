@@ -182,6 +182,9 @@ pub struct SupervisedRunRequest {
     /// Managed-account state: pending inputs, unsupported selection, unresolved
     /// exact selection, or one proven binding.
     pub managed_launch: crate::agents::ManagedLaunchState,
+    /// The account the launch runs under; a subagent on the room default
+    /// inherits its same-kind parent's.
+    pub login: crate::store::writer::LaunchLogin,
 }
 
 impl SupervisedRunRequest {
@@ -225,6 +228,7 @@ impl SupervisedRunRequest {
             loop_task: None,
             passthrough: Vec::new(),
             managed_launch,
+            login: crate::store::writer::LaunchLogin::RoomDefault,
         }
     }
 }
