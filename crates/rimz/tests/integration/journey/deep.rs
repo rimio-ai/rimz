@@ -2490,6 +2490,240 @@ fn account_room_journey(history: &str) {
     );
 }
 
+/// The account live-agent count sees a supervised headless run: its wrapper is
+/// placed in a pane like every other launch, so a history switch that would
+/// remove a link under it is refused, and proceeds once the process is dead.
+#[test]
+fn tmux_supervised_run_holds_its_account_history_link_until_it_dies() {
+    if which::which("tmux").is_err() {
+        crate::common::skip("tmux not on PATH");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let work_home = declare_shared_work_account(&env);
+    let stub_dir = write_hook_firing_agent(&env, "claude");
+    let agent_path = path_with_front(&stub_dir);
+    trust_agent_path(&env, "claude", &agent_path);
+    let socket = managed_socket(&env.runtime_root);
+    let _server = TmuxServerGuard::new(socket.clone());
+
+    let launched = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "120000")
+        .args(["--mux", "tmux"])
+        .args(SUPERVISED_ACCOUNT_RUN)
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch supervised run");
+    assert!(launched.status.success(), "launch failed: {launched:?}");
+    let agent = wait_for_quiet_account_run(&env);
+
+    assert_history_switch_follows_the_run(&env, &work_home, &agent);
+}
+
+/// The account run's row once the stub has fired its last hook before it
+/// sleeps, so no hook write lands after the run is killed.
+fn wait_for_quiet_account_run(env: &Env) -> rimz::agents::AgentState {
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    loop {
+        let agent = wait_for_named_agent(env, "account-runner", true, CAPTURE_BUDGET);
+        if agent.tool_calls.contains_key("apply_patch") {
+            return agent;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the stub's tool hook never landed"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Zellij: the same proof through a real Zellij server under the fixture's
+/// runtime root.
+#[test]
+fn zellij_supervised_run_holds_its_account_history_link_until_it_dies() {
+    if which::which("zellij").is_err() {
+        crate::common::skip("zellij not on PATH");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let work_home = declare_shared_work_account(&env);
+    let stub_dir = write_hook_firing_agent(&env, "claude");
+    let agent_path = path_with_front(&stub_dir);
+    trust_agent_path(&env, "claude", &agent_path);
+    // The run's pane inherits the server's environment, born here.
+    let started = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "120000")
+        .args(["--mux", "zellij", "start", "--no-attach"])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("start room");
+    assert!(started.status.success(), "room start failed: {started:?}");
+    // A Zellij server lays out a new tab only for an attached client.
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(40, 160, 0)));
+    let _client = AttachProcess::spawn(&workspace_session(&env), &parser, |cmd| {
+        env.pin_pty_command(cmd);
+    });
+
+    let launched = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .args(["--mux", "zellij"])
+        .args(SUPERVISED_ACCOUNT_RUN)
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch supervised run");
+    assert!(launched.status.success(), "launch failed: {launched:?}");
+    let agent = wait_for_quiet_account_run(&env);
+
+    assert_history_switch_follows_the_run(&env, &work_home, &agent);
+}
+
+const SUPERVISED_ACCOUNT_RUN: [&str; 10] = [
+    "agents",
+    "claude",
+    "hold the account",
+    "--name",
+    "account-runner",
+    "-p",
+    "--bg",
+    "--keep",
+    "--timeout",
+    "3m",
+];
+
+/// Declare a shared Claude account `work` under a fixture home and make it the
+/// default for new rooms, before any provider has written to either home.
+fn declare_shared_work_account(env: &Env) -> PathBuf {
+    let work_home = env.home_root.join("claude-work");
+    let mut add = env.rimz();
+    add.args(["accounts", "add", "claude", "work", "--history", "shared"])
+        .arg("--home")
+        .arg(&work_home);
+    let mut default = env.rimz();
+    default.args(["accounts", "use", "--global", "claude", "work"]);
+    for mut command in [add, default] {
+        let out = command
+            .bounded_output_within(Duration::from_secs(30))
+            .expect("declare work account");
+        assert!(out.status.success(), "declare work account: {out:?}");
+    }
+    work_home
+}
+
+/// Make the room publish a rollup that holds `agent`, which the count then
+/// serves as long as nothing else writes. A publish runs at most once a
+/// second, so the write that triggers it waits past that interval.
+fn publish_room_rollup_with(env: &Env, agent: &rimz::ids::AgentSessionId) {
+    std::thread::sleep(Duration::from_millis(1_100));
+    let emitted = env
+        .rimz()
+        .args(["events", "emit", "account.check"])
+        .bounded_output_within(Duration::from_secs(30))
+        .expect("emit a signal into the room");
+    assert!(emitted.status.success(), "emit failed: {emitted:?}");
+    let store = env.store();
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    while !rimz::store::snapshot::read_fresh_latest(store.paths())
+        .is_some_and(|rollup| rollup.agents.iter().any(|row| row.agent_id == *agent))
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the room never published a fresh rollup"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// With `agent` live on the shared `work` account, a switch to standalone
+/// history is refused and changes nothing; once the agent's processes are
+/// dead, with no hook or settle to tell the room, the same switch succeeds.
+fn assert_history_switch_follows_the_run(
+    env: &Env,
+    work_home: &Path,
+    agent: &rimz::agents::AgentState,
+) {
+    assert_eq!(
+        agent.login.as_ref().map(|login| login.as_str()),
+        Some("work"),
+        "the run is stamped with the account"
+    );
+    assert!(agent.pane.is_some(), "the run's row has a pane");
+    let config = env.rimz_home().join("config.toml");
+    let declared = std::fs::read_to_string(&config).expect("read machine config");
+    let link = work_home.join("projects");
+    assert!(link.is_symlink(), "shared history links `projects`");
+    let switch = || {
+        env.rimz()
+            .args([
+                "accounts",
+                "add",
+                "claude",
+                "work",
+                "--history",
+                "standalone",
+            ])
+            .bounded_output_within(Duration::from_secs(30))
+            .expect("switch work account to standalone")
+    };
+
+    let refused = switch();
+    let error = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "a live run refuses the switch: {refused:?}"
+    );
+    assert!(
+        error.contains("cannot unlink `projects`") && error.contains("1 live agent(s)"),
+        "{error}"
+    );
+    assert!(link.is_symlink(), "a refused switch leaves the link");
+    assert_eq!(
+        std::fs::read_to_string(&config).expect("read machine config"),
+        declared,
+        "a refused switch leaves the config as it was"
+    );
+
+    publish_room_rollup_with(env, &agent.agent_id);
+    // Kill the wrapper with its provider, so nothing settles the run and the
+    // rollup the room last published still says the agent is live.
+    let provider = agent.runtime_owner.as_ref().expect("provider owner").pid;
+    let wrapper = rimz::proc::comm_and_ppid(provider)
+        .map(|(_, ppid)| ppid)
+        .expect("provider parent process");
+    let killed = Command::new("kill")
+        .args(["-KILL", &wrapper.to_string(), &provider.to_string()])
+        .bounded_output()
+        .expect("kill the run's wrapper and provider");
+    assert!(killed.status.success(), "kill run: {killed:?}");
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    while rimz::proc::comm_and_ppid(provider).is_some() {
+        assert!(Instant::now() < deadline, "provider did not exit");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let switched = switch();
+    assert!(
+        switched.status.success(),
+        "a dead run no longer holds the link: {}",
+        String::from_utf8_lossy(&switched.stderr)
+    );
+    assert!(!link.is_symlink(), "the switch removed the link");
+}
+
 fn wait_for_named_agent(
     env: &Env,
     name: &str,
@@ -2638,7 +2872,10 @@ struct AttachProcess {
 impl AttachedZellijScreen {
     fn new(namespace: &ZellijNamespace, session: &str, cols: u16, rows: u16) -> Self {
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
-        let client = AttachProcess::spawn(namespace.path(), session, &parser);
+        let path = namespace.path();
+        let client = AttachProcess::spawn(session, &parser, |cmd| {
+            ZellijNamespace::pin_pty_at(path, cmd);
+        });
         Self {
             namespace: namespace.path().to_path_buf(),
             session: session.to_owned(),
@@ -2658,7 +2895,10 @@ impl AttachedZellijScreen {
         self.client.stop();
         let (rows, cols) = self.parser.lock().expect("parser").screen().size();
         *self.parser.lock().expect("parser") = vt100::Parser::new(rows, cols, 0);
-        self.client = AttachProcess::spawn(&self.namespace, &self.session, &self.parser);
+        let path = &self.namespace;
+        self.client = AttachProcess::spawn(&self.session, &self.parser, |cmd| {
+            ZellijNamespace::pin_pty_at(path, cmd);
+        });
     }
 
     fn wait_until(&mut self, mut ready: impl FnMut(&str) -> bool, budget: Duration) -> String {
@@ -2676,7 +2916,12 @@ impl AttachedZellijScreen {
 }
 
 impl AttachProcess {
-    fn spawn(namespace: &Path, session: &str, parser: &Arc<Mutex<vt100::Parser>>) -> Self {
+    /// A `zellij attach` client on a PTY, its server reached through `pin`.
+    fn spawn(
+        session: &str,
+        parser: &Arc<Mutex<vt100::Parser>>,
+        pin: impl FnOnce(&mut CommandBuilder),
+    ) -> Self {
         let (rows, cols) = parser.lock().expect("parser").screen().size();
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -2688,7 +2933,7 @@ impl AttachProcess {
             .expect("openpty");
         let mut cmd = CommandBuilder::new("zellij");
         cmd.args(["attach", session]);
-        ZellijNamespace::pin_pty_at(namespace, &mut cmd);
+        pin(&mut cmd);
         let child = pair.slave.spawn_command(cmd).expect("attach zellij");
         drop(pair.slave);
 
