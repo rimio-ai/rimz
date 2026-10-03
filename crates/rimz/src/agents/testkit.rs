@@ -35,6 +35,22 @@ pub(crate) fn deadline_context_replies(
     (post_reply, decoded.json_reply().cloned())
 }
 
+/// Attach prompt context to the adapter's prompt-submit sample and return the
+/// exact line the hook writes to stdout.
+pub(crate) fn prompt_context_stdout(kind: &str, prompt_event: &str) -> String {
+    let adapter = crate::agents::definition_by_kind(kind).unwrap();
+    let samples = adapter.conformance().classification;
+    let prompt = samples
+        .iter()
+        .find(|sample| sample.event_name == prompt_event)
+        .unwrap();
+    let mut decoded = adapter
+        .decode_hook(prompt.event_name, &prompt.payload)
+        .unwrap();
+    assert!(adapter.attach_prompt_context(&mut decoded, "prompt context"));
+    decoded.json_reply().unwrap().to_string()
+}
+
 /// Decode one native hook payload, asserting the adapter accepted it.
 pub(crate) fn hook_output(
     adapter: &impl HookCapability,

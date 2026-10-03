@@ -28,6 +28,14 @@ fn deadline_context_reply_matches_native_post_tool_contract() {
 }
 
 #[test]
+fn prompt_context_reply_matches_native_prompt_submit_contract() {
+    insta::assert_snapshot!(
+        crate::agents::testkit::prompt_context_stdout("claude", "UserPromptSubmit"),
+        @r#"{"hookSpecificOutput":{"additionalContext":"prompt context","hookEventName":"UserPromptSubmit"}}"#
+    );
+}
+
+#[test]
 fn routine_rimz_settings_union_and_idempotence() {
     use crate::agents::capabilities::LaunchCapability;
     let root = tempfile::tempdir().unwrap();

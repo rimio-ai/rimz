@@ -65,6 +65,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
     },
     capabilities: Capabilities {
         hook_context: true,
+        prompt_context: false,
         // Droid draws its own permission and question prompts; `Notification`
         // announces them without an id or options, so the pane stays the
         // answer surface.

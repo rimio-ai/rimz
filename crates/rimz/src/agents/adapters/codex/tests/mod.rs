@@ -34,6 +34,14 @@ fn deadline_context_reply_matches_native_post_tool_contract() {
 }
 
 #[test]
+fn prompt_context_reply_matches_native_prompt_submit_contract() {
+    insta::assert_snapshot!(
+        crate::agents::testkit::prompt_context_stdout("codex", "UserPromptSubmit"),
+        @r#"{"hookSpecificOutput":{"additionalContext":"prompt context","hookEventName":"UserPromptSubmit"}}"#
+    );
+}
+
+#[test]
 fn host_skills_replace_cli_config_and_use_frontmatter_names() {
     use crate::agents::skills::{HostSkills, SkillDir};
     let root = tempfile::tempdir().unwrap();

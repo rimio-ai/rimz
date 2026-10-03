@@ -61,6 +61,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
     },
     capabilities: Capabilities {
         hook_context: false,
+        prompt_context: false,
         // Kiro can draw native prompts, but v3 exposes no hook that records
         // them for RimZ routing.
         native_ask_ui: true,

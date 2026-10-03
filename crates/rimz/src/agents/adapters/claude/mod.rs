@@ -112,6 +112,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     },
     capabilities: Capabilities {
         hook_context: true,
+        prompt_context: true,
         native_ask_ui: true,
         transcript_tail_context: false,
         // Claude stamps a live pane on every session, so it opts out of the
@@ -979,6 +980,17 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
         decoded.merge_reply_object([(
             "hookSpecificOutput".to_owned(),
             serde_json::json!({"hookEventName": "PostToolUse", "additionalContext": text}),
+        )]);
+        true
+    }
+
+    fn attach_prompt_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
+        if decoded.event_name() != "UserPromptSubmit" {
+            return false;
+        }
+        decoded.merge_reply_object([(
+            "hookSpecificOutput".to_owned(),
+            serde_json::json!({"hookEventName": "UserPromptSubmit", "additionalContext": text}),
         )]);
         true
     }

@@ -46,6 +46,12 @@ pub trait HookCapability: CoreCapability {
         false
     }
 
+    /// Attach additive model context when this native event is the provider's
+    /// prompt submit and its reply accepts it.
+    fn attach_prompt_context(&self, _decoded: &mut HookOutput, _text: &str) -> bool {
+        false
+    }
+
     /// Normalize hook-emitter process ownership before workspace or store I/O.
     fn hook_ingress(&self, pid: Option<u32>) -> HookIngressDecision {
         HookIngressDecision::Accept(HookIngressAcceptance::agent(pid))

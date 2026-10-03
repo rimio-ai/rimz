@@ -73,6 +73,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
     },
     capabilities: Capabilities {
         hook_context: true,
+        prompt_context: false,
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: false,

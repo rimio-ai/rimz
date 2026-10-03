@@ -176,6 +176,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
     },
     capabilities: Capabilities {
         hook_context: false,
+        prompt_context: false,
         native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: true,
