@@ -54,11 +54,6 @@ fn check_file(
     } else {
         let hints = mode == Mode::FixHints;
         let (updated, fixes, ambiguous) = fix::rewrite(&source, context, hints)?;
-        if !fixes.is_empty() {
-            let target = std::fs::canonicalize(notes).map_err(LspErr::from)?;
-            crate::disk::atomic::write_bytes_atomically(&target, updated.as_bytes())
-                .map_err(LspErr::from)?;
-        }
         (updated, Some(fixes), hints.then_some(ambiguous))
     };
     let mut lengths = BTreeMap::new();
@@ -91,6 +86,13 @@ fn check_file(
             continue;
         };
         verdicts.push(check_symbol(anchor, path, &file.nodes));
+    }
+    // Written only once the anchors are judged, so a file that reports an
+    // error is a file left as it was.
+    if fixes.as_ref().is_some_and(|fixes| !fixes.is_empty()) {
+        let target = std::fs::canonicalize(notes).map_err(LspErr::from)?;
+        crate::disk::atomic::write_bytes_atomically(&target, source.as_bytes())
+            .map_err(LspErr::from)?;
     }
     let mut report = Report::new(notes, root, verdicts);
     report.fixes = fixes;
