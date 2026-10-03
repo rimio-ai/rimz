@@ -428,7 +428,9 @@ path = "crates/rimz/src/harness"
 # auto_redeem::idle_logins names the idle accounts for the sidebar's usage lane and credits input (+1).
 # Resident launch ledger records and strict reads cross the planner/CLI seam (+5).
 # Fan-out helpers hand the marker checkout to the runner without re-resolving it (+1).
-surface-budget = 665
+# Root registration shares resident-loop subscription arming with the team binding builder (+1).
+# Add-time subscription validation shares the registration scope-key predicate (+1).
+surface-budget = 667
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

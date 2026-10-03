@@ -697,6 +697,9 @@ pub struct AgentState {
     /// cohort for resume; routing uses the launch-stamped `channel`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// Resident loop task whose subscriptions this prompt leader arms at registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_task: Option<String>,
     /// Inline multi-agent launch cohort, stamped by `RIMZ_LAUNCH_GROUP` and
     /// carried forward like `team`. Team launches use `team` as their cohort
     /// key; inline layouts use this generated id.
@@ -1006,6 +1009,7 @@ impl AgentState {
             effective_isolation: None,
             role: None,
             team: None,
+            loop_task: None,
             launch_group: None,
             launch_ordinal: None,
             channel: None,

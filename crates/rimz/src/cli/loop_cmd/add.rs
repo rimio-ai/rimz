@@ -385,6 +385,14 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
                 "resident launches are deduplicated per checkout, not per task",
             ),
             (
+                !args.subscribe.is_empty()
+                    && (args.in_after.is_some()
+                        || (args.at.is_some() && args.every.is_none())
+                        || args.after_reset.is_some()),
+                "--subscribe",
+                "one-shot triggers remove the task before registration; use --every, --cron, or --when",
+            ),
+            (
                 args.project,
                 "--project",
                 "resident launch state is machine-local",
@@ -569,6 +577,22 @@ fn resolve_resident_action(
         .team_name
         .as_ref()
         .and_then(|name| resolved.teams.0.get(name));
+    for signal in &args.subscribe {
+        let selector = schedule::parse_signal_selector(&args.name, signal, None)?;
+        match arm::default_signal_match_key(&selector, &BTreeMap::new()) {
+            Some("path")
+                if !args.each_worktree && workspace.worktree_root == workspace.project_root =>
+            {
+                bail!(
+                    "--subscribe {signal} needs a checkout scope; use --each-worktree with --when, or --root <worktree>"
+                );
+            }
+            Some("instance") if team.is_none() => {
+                bail!("--subscribe {signal} needs a team layout; choose a team with --agent");
+            }
+            _ => {}
+        }
+    }
     let leader = rimz::harness::spec::prompt_leader(&resolved.layout, team)
         .context("--stay and --subscribe need a layout with a prompt leader")?;
     // prompt_leader returns an index into this layout's agent cells.
@@ -1161,6 +1185,24 @@ mod tests {
             .try_get_matches_from(["add", "resident"].into_iter().chain(extra.iter().copied()))
             .unwrap();
         AddArgs::from_arg_matches(&matches).unwrap()
+    }
+
+    #[test]
+    fn resident_subscriptions_reject_one_shot_triggers() {
+        for trigger in [["--in", "5m"], ["--at", "12:00"], ["--after-reset", "5h"]] {
+            let argv = ["--agent", "claude", "--stay"]
+                .into_iter()
+                .chain(trigger)
+                .collect::<Vec<_>>();
+            assert!(validate_add_args(&args(&argv)).is_ok());
+            let argv = argv
+                .into_iter()
+                .chain(["--subscribe", "ci.failed"])
+                .collect::<Vec<_>>();
+            let error =
+                validate_add_args(&args(&argv)).expect_err("one-shot cannot retain subscriptions");
+            assert!(error.to_string().contains("--subscribe"), "{error}");
+        }
     }
 
     #[test]

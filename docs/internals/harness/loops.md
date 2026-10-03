@@ -40,7 +40,7 @@ Every path below is under `crates/rimz/src/`; `schedule/` means `harness/schedul
 | [`store/event.rs`](../../../crates/rimz/src/store/event.rs) | The persisted signal: the `SignalName` grammar and its reserved families, `SignalSource`, and the `SignalEventPayload` that `Store::append_signal` records ([store.md](../store.md#what-is-in-it)). |
 | [`schedule/arm.rs`](../../../crates/rimz/src/harness/schedule/arm.rs) | `arm_delivery`, the one builder for session-pinned delivery rows: caller-scoped signal defaults and guards, locked dedupe, watcher spawning, and `retire_session`. |
 | [`schedule/pending.rs`](../../../crates/rimz/src/harness/schedule/pending.rs) | The read-only projection of armed one-shot deliveries into per-agent pending waits. |
-| [`schedule/team.rs`](../../../crates/rimz/src/harness/schedule/team.rs) | Team signal bindings: validation at launch, materialization at member registration. |
+| [`schedule/team.rs`](../../../crates/rimz/src/harness/schedule/team.rs) | Team and resident-loop bindings: shared standing-delivery construction and materialization at registration. |
 | [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd), [`cli/wait/`](../../../crates/rimz/src/cli/wait) | Flag translation, caller resolution, executing prepared effects, receipts, and rendering. Neither holds scheduling policy, and neither imports the other. |
 | [`harness/assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | The [assist log](#the-assist-log). |
 
@@ -61,6 +61,8 @@ A `Spawn` task names exactly one agent cell: a built-in kind, a profile, or an a
 `TaskShape::compile` compiles each persisted row into an action result and a timing result independently. A row with a valid action and a malformed schedule stays visible and can be fired by hand, while scheduled firing skips it.
 
 ## Where tasks live
+
+Resident prompt leaders carry their launching task's name on the durable agent row. Root registration looks that task up and arms its `subscribe` bindings through the same builder as team bindings, with loop provenance and standing lifetime. Names are `loop-<task>-<agent>-<binding index>`. CI and PR subscriptions default to the row's recorded checkout, including its lexical marker path. Re-registration deduplicates; removing the task before registration arms nothing. Existing session retirement removes the subscriptions when their target ends.
 
 Three sources back the catalog.
 
@@ -192,6 +194,7 @@ Resident fires apply the shared fleet, account and provider budget gates to ever
 
 The planner reads the ledger for every resident task and excludes launched checkouts before planning. For a resident condition still true without a launch record, `fire::plan` retries once 5 minutes have elapsed since that key's last fire stamp, retaining the original hold start. The same rule applies to single-checkout and fan-out tasks. No helper writes the condition cache and no stored field is added; failures still accumulate strikes, while budget skips remain strike-neutral.
 
+Resident prompt leaders carry their launching task's name on the durable agent row. Root registration looks that task up and arms its `subscribe` bindings through the same builder as team bindings, with resident provenance and standing lifetime. Each subscription stores its declaring task in `TaskEntry.loop_task` (`loop-task` on disk), separately from `team`. Names are `loop-<task>-<agent>-<binding index>`. CI and PR subscriptions default to the row's recorded checkout, including its lexical marker path. Re-registration deduplicates; removing the task before registration arms nothing. Same-session restart preserves these declared bindings even when re-registration precedes retirement; session end still removes them.
 
 For `each-worktree`, the planner expands a task over owned markers absent from the ledger, including paused and disabled tasks so arming policy can preserve their hold and fired state like ordinary conditions. Runtime condition and fire keys encode `(task, checkout)`; ordinary task keys and edge rules are unchanged. The marker path is lexically normalized (removing `.` and `..`, without resolving symlinks) for condition evaluation, PR probes, hidden helper `--cwd`, and the ledger, matching agent rows and subscription paths. It does not pass through `TaskEntry.run_dir` (which resolves configured paths). The helper validates that checkout against normalized owned markers, retains it separately, and takes a checkout-specific run lock before its ledger recheck. Manual fire selects the deepest owned checkout containing the caller cwd and uses the same normalized marker path. Fire planning enumerates owned worktrees once when any fan-out task exists, including paused tasks; probe selection still enumerates only for a relevant live fan-out task. A ledger read failure suppresses resident fires without suppressing ordinary tasks. `loop show` summarizes per-checkout evaluation and the launch count rather than displaying a task-wide condition state.
 

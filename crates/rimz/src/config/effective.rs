@@ -749,6 +749,7 @@ fn reject_project_task_state_fields(
             "each-worktree",
             "stop-team",
             "subscribe",
+            "loop-task",
         ] {
             if table.contains_key(field) {
                 return Err(ProjectTasksErr::UnsupportedField {
@@ -769,6 +770,9 @@ fn reject_project_task_state_fields(
                         }
                         "stay" | "each-worktree" | "stop-team" | "subscribe" => {
                             "resident launches are machine state; add them with `rimz loop add` without `--project`"
+                        }
+                        "loop-task" => {
+                            "resident subscription provenance is machine state; remove `loop-task`"
                         }
                         _ => unreachable!("field list is fixed"),
                     },

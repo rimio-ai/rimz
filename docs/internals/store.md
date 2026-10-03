@@ -243,6 +243,8 @@ Message records get the same tolerance outside the log. A record's `sender` can 
 
 Lifecycle records inherit from the rollup instead of repeating themselves. High-cadence progress events omit `transcript_path`, worktree, pane identity, role, team, channel, profile, and the smart-compact stamp, and the reducer carries them forward from the prior row. Missing optional keys decode as absent, and `runtime_owner` is serialized on lifecycle records when present; the reducer carries a prior owner forward when it is absent. That keeps the hot log compact under a busy fleet.
 
+Resident loop launches stamp `LaunchParams.loop_task` on the prompt leader before opening its pane. The reducer carries it into `AgentState.loop_task`, through provisional adoption, subsequent observations and event-log rotation, like the team identity. Registration reads that durable task name to arm subscriptions, not the launch ledger. The additive field defaults to absent in old records; snapshot version 32 and rollup-cache version 26 rebuild pre-field caches.
+
 ### Crash recovery
 
 Only the trailing frame can be in flight when a process dies, because each append is one `write()` under the workspace lock.

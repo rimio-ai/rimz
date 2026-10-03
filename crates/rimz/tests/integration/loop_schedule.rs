@@ -261,6 +261,39 @@ fn resident_add_accepts_layout_and_persists_launch_options() {
 }
 
 #[test]
+fn resident_subscriptions_require_a_usable_scope_at_add() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    for (signal, fix) in [
+        ("ci.failed", "--each-worktree"),
+        ("pr.conflicted", "--each-worktree"),
+        ("team.stage", "team layout"),
+    ] {
+        let (_, error) = loop_fail(
+            &env,
+            &[
+                "loop",
+                "add",
+                "resident",
+                "--agent",
+                "claude",
+                "--stay",
+                "--every",
+                "1h",
+                "--subscribe",
+                signal,
+                "--prompt",
+                "watch",
+            ],
+        );
+        assert!(
+            error.contains("--subscribe") && error.contains(fix),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn resident_subscribe_requires_prompt_leader_and_installed_hooks() {
     let env = Env::new();
     for (spec, expected) in [("term", "prompt leader"), ("claude", "--subscribe")] {
@@ -441,7 +474,7 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nagent = {:?}\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\n{}\nstay = true\n",
+            "[tasks.resident]\nagent = {:?}\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\n{}\nstay = true\nsubscribe = [{{ signal = \"ci.failed\" }}]\n",
             if team { "forge" } else { "codex" },
             env.project_root.to_str().unwrap(),
             checkout.to_str().unwrap(),
@@ -522,6 +555,126 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap(),
         ledger
     );
+    assert_eq!(
+        serde_json::to_value(&agents[0]).unwrap()["loop_task"],
+        "resident"
+    );
+    let owner = dummy_agent_process();
+    let owner_pid = owner.id();
+    reap_later(owner);
+    let transcript = env.home_root.join("resident-transcript.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    let hook = |event: &str| {
+        let mut command = env.hook_command("codex");
+        command
+            .env("RIMZ_AGENT_PID", owner_pid.to_string())
+            .env("ZELLIJ", "1")
+            .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+            .env("ZELLIJ_PANE_ID", "51");
+        command.current_dir(&checkout).env(
+            rimz::harness::launch::ENV_AGENT_NAME,
+            agents[0].name.as_deref().unwrap(),
+        );
+        let output = env
+            .spawn_payload(
+                command,
+                &json!({
+                    "hook_event_name": event, "session_id": "resident-session",
+                    "cwd": expected_checkout, "prompt": "work",
+                    "transcript_path": transcript
+                })
+                .to_string(),
+            )
+            .wait_with_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    hook("SessionStart");
+    let armed = read_loop_instances(&env);
+    assert_eq!(armed.0.len(), 1);
+    let (subscription, binding) = armed.0.iter().next().unwrap();
+    assert!(
+        subscription.contains("resident")
+            && subscription.contains(agents[0].name.as_deref().unwrap())
+    );
+    assert_eq!(
+        binding.matches.as_ref().unwrap()["path"],
+        expected_checkout.to_string_lossy()
+    );
+    assert_eq!(
+        binding.wait.as_ref().unwrap().session.as_str(),
+        "resident-session"
+    );
+    assert!(binding.once.is_none() && binding.team.is_none());
+    hook("SessionStart");
+    assert_eq!(read_loop_instances(&env), armed);
+    let restarted = command()
+        .args([
+            "agents",
+            "restart",
+            &format!("@{}", agents[0].name.as_deref().unwrap()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        restarted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&restarted.stdout).contains("resumed session resident-session")
+    );
+    hook("UserPromptSubmit");
+    for (path, matching) in [(&env.project_root, false), (&expected_checkout, true)] {
+        loop_ok(
+            &env,
+            &[
+                "events",
+                "emit",
+                "ci.failed",
+                "--source",
+                "forge",
+                "--json",
+                &json!({"path":path}).to_string(),
+            ],
+        );
+        if !matching {
+            assert!(store.list_pending_messages().unwrap().is_empty());
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !read_loop_run_records(&env)
+        .iter()
+        .any(|row| row.task == *subscription)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let messages = store.list_pending_messages().unwrap();
+    assert_eq!(messages.len(), 1, "{:?}", read_loop_run_records(&env));
+    assert_eq!(messages[0].kind.as_str(), "codex");
+    assert_eq!(messages[0].agent_id.as_str(), "resident-session");
+    assert_eq!(messages[0].status, MessageStatus::Queued);
+    assert!(messages[0].text.contains("ci.failed"));
+    assert_eq!(read_loop_instances(&env), armed);
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "codex",
+            "rimz.agent-ended",
+            &rimz::agents::AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("resident-session")),
+                rimz::agents::LifecycleSignal::Ended,
+            ),
+        ))
+        .unwrap();
+    loop_ok(&env, &["events", "emit", "deploy.done"]);
+    assert!(read_loop_instances(&env).0.is_empty());
     if each_worktree {
         let refused = command()
             .args(["loop", "fire", "resident"])
@@ -540,7 +693,13 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(read_loop_run_records(&env).len(), 2);
+    assert_eq!(
+        read_loop_run_records(&env)
+            .iter()
+            .filter(|row| row.task == "resident")
+            .count(),
+        2
+    );
     assert_eq!(
         store
             .runtime_projection(rimz::RuntimeScope::Audit)
@@ -551,7 +710,7 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     );
     let mux_log = std::fs::read_to_string(&trace).unwrap();
     assert!(!mux_log.contains("close-tab"), "{mux_log}");
-    assert!(!mux_log.contains("close-pane"), "{mux_log}");
+    assert_eq!(mux_log.matches("close-pane").count(), 1, "{mux_log}");
     if each_worktree {
         assert!(mux_log.contains("--create-background"), "{mux_log}");
     }
@@ -575,6 +734,8 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
         assert!(!summary.contains("condition: unarmed"), "{summary}");
     }
     loop_ok(&env, &["loop", "remove", "resident"]);
+    hook("SessionStart");
+    assert!(read_loop_instances(&env).0.is_empty());
     assert!(
         rimz::harness::schedule::launch_ledger::load(store.paths())
             .unwrap()

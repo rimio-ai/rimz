@@ -109,6 +109,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             effort: Some("xhigh".to_owned()),
             budget: Some("$2.00/day".to_owned()),
             team: Some("forge".to_owned()),
+            loop_task: None,
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(1),
             channel: Some("identity-channel".to_owned()),

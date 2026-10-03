@@ -171,6 +171,8 @@ pub struct LaunchParams {
     /// `RIMZ_TEAM`. It is role/cohort/resume identity; routing uses `channel`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_task: Option<String>,
     /// The inline multi-agent launch cohort the launcher minted, passed through
     /// `RIMZ_LAUNCH_GROUP`. Team launches use `RIMZ_TEAM` as the cohort key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
