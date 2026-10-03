@@ -125,8 +125,8 @@ fn stats_refresh_reloads_on_sigusr1() {
         .unwrap_or_else(|| panic!("stats did not render after SIGUSR1 reload:\n{after_signal}"));
 }
 
-struct StatsRefreshHarness {
-    parser: Arc<Mutex<vt100::Parser>>,
+pub(super) struct StatsRefreshHarness {
+    pub(super) parser: Arc<Mutex<vt100::Parser>>,
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -136,14 +136,17 @@ struct StatsRefreshHarness {
 
 impl StatsRefreshHarness {
     fn launch(cols: u16) -> Self {
+        Self::launch_in(cols, short_tempdir(), &[])
+    }
+
+    /// Holds stats with every root at `xdg`, then `env` on top.
+    pub(super) fn launch_in(
+        cols: u16,
+        xdg: tempfile::TempDir,
+        env: &[(&str, &std::path::Path)],
+    ) -> Self {
         let bin = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
         assert!(bin.exists(), "rimz binary missing: {}", bin.display());
-
-        let xdg = tempfile::Builder::new()
-            .prefix("rz")
-            .rand_bytes(6)
-            .tempdir()
-            .expect("xdg tempdir");
 
         let pty = native_pty_system();
         let pair = pty
@@ -179,6 +182,9 @@ impl StatsRefreshHarness {
         cmd.env_remove("PI_CODING_AGENT_SESSION_DIR");
         cmd.env_remove("PI_CODING_AGENT_DIR");
         cmd.env_remove("RUST_LOG");
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
         let child = pair.slave.spawn_command(cmd).expect("spawn rimz stats");
         drop(pair.slave);
 
@@ -247,7 +253,7 @@ impl Drop for StatsRefreshHarness {
     }
 }
 
-fn wait_for_tagline_col(
+pub(super) fn wait_for_tagline_col(
     parser: &Arc<Mutex<vt100::Parser>>,
     pred: impl Fn(usize) -> bool,
     budget: Duration,
@@ -266,7 +272,7 @@ fn wait_for_tagline_col(
     }
 }
 
-fn screen(parser: &Arc<Mutex<vt100::Parser>>) -> String {
+pub(super) fn screen(parser: &Arc<Mutex<vt100::Parser>>) -> String {
     parser.lock().expect("parser").screen().contents()
 }
 
@@ -274,4 +280,13 @@ fn tagline_col(screen: &str) -> Option<usize> {
     screen
         .lines()
         .find_map(|line| line.find(TAGLINE).map(|idx| line[..idx].chars().count()))
+}
+
+/// A root short enough for the Unix socket paths RimZ derives under it.
+pub(super) fn short_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("rz")
+        .rand_bytes(6)
+        .tempdir()
+        .expect("xdg tempdir")
 }
