@@ -32,13 +32,7 @@ fn mutate(
     if ledger != before {
         crate::disk::atomic::write_temp_then_rename(&launch_ledger::path(paths), &ledger)?;
     }
-    if let Err(error) = after_write() {
-        if ledger != before {
-            crate::disk::atomic::write_temp_then_rename(&launch_ledger::path(paths), &before)?;
-        }
-        return Err(LedgerWriteErr::Completion(error));
-    }
-    Ok(())
+    after_write().map_err(LedgerWriteErr::Completion)
 }
 
 pub(super) fn record(
@@ -198,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_completion_rolls_back_only_the_attempted_launch() {
+    fn failed_completion_keeps_the_attempted_launch() {
         let home = tempfile::tempdir().unwrap();
         let paths = crate::StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
         let launch = LaunchRecord {
@@ -206,21 +200,19 @@ mod tests {
             leader: "otter".into(),
         };
         record(&paths, "fixer", home.path(), launch.clone(), || Ok(())).unwrap();
-        let before = launch_ledger::load(&paths).unwrap();
         for task in ["yagni", "fixer"] {
             let replacement = LaunchRecord {
                 leader: "fox".into(),
                 ..launch.clone()
             };
             let result = record(&paths, task, home.path(), replacement.clone(), || {
-                assert_eq!(
-                    launch_ledger::load(&paths).unwrap()[task][home.path()],
-                    replacement
-                );
                 Err(std::io::Error::other("assist append failed"))
             });
-            assert!(result.is_err());
-            assert_eq!(launch_ledger::load(&paths).unwrap(), before);
+            assert!(matches!(result, Err(LedgerWriteErr::Completion(_))));
+            assert_eq!(
+                launch_ledger::load(&paths).unwrap()[task][home.path()],
+                replacement
+            );
         }
     }
 }
