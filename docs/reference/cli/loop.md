@@ -142,7 +142,7 @@ A pinned fire never falls back to the room's account. When the account cannot ru
 | has a home that is not a directory | `rimz accounts add <kind> <name>` |
 | has a stored logged-out status | the provider's login command, with the account's home set |
 
-The logged-out skip needs a stored status, which a room writes only for accounts its agents run on. An account with no stored status launches, and a login the provider then rejects fails that run. Hooks missing or untrusted in the account's home stay an `error`, as on any account, so they count a strike.
+The launch resolves the name once more, for the provider its routing lands on; a name that provider does not declare, or a provider without named accounts, records the same skip there. The logged-out skip needs a stored status, which a room writes only for accounts its agents run on. An account with no stored status launches, and a login the provider then rejects fails that run. Hooks missing or untrusted in the account's home stay an `error`, as on any account, so they count a strike.
 
 The receipt, `rimz loop show`, and `rimz loop list` name the pin beside the agent, as `claude · account work`.
 

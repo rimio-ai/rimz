@@ -562,6 +562,18 @@ impl<'a> TaskFire<'a> {
         {
             tracing::warn!(task = %self.name, error = %format!("{consume:#}"), "failed to consume errored one-shot delivery");
         }
+        // The launch resolves the pin again, for the kind its routing lands on.
+        let unresolved =
+            self.entry
+                .account
+                .as_ref()
+                .and_then(|name| match err.downcast_ref::<RoomLoginErr>() {
+                    Some(RoomLoginErr::Login(login)) => Some(unresolved_pin(login, name)),
+                    _ => None,
+                });
+        if let Some(reason) = unresolved {
+            return self.record_gate(LoopRunResult::AccountSkipped, reason);
+        }
         let error = format!("{err:#}");
         self.record_terminal_with(
             LoopRunResult::Errored,
@@ -1028,14 +1040,7 @@ fn pinned_login(
 ) -> Result<Result<ProviderLogin, String>, RoomLoginErr> {
     let login = match crate::agents::session_login(kind, Some(name), accounts) {
         Ok(login) => login,
-        Err(RoomLoginErr::Login(err @ LoginErr::Unknown { .. })) => {
-            return Ok(Err(err.to_string()));
-        }
-        Err(RoomLoginErr::Login(err @ LoginErr::Unsupported { .. })) => {
-            return Ok(Err(format!(
-                "{err}; remove `account = \"{name}\"` from the task"
-            )));
-        }
+        Err(RoomLoginErr::Login(err)) => return Ok(Err(unresolved_pin(&err, name))),
         Err(err) => return Err(err),
     };
     if let Err(err @ BirthLoginErr::MissingHome { .. }) = login.preflight(ambient) {
@@ -1055,6 +1060,16 @@ fn pinned_login(
         )));
     }
     Ok(Ok(login))
+}
+
+/// Why a pin that does not resolve skips the fire, ending in the fix.
+fn unresolved_pin(err: &LoginErr, name: &crate::ids::LoginName) -> String {
+    match err {
+        LoginErr::Unknown { .. } => err.to_string(),
+        LoginErr::Unsupported { .. } => {
+            format!("{err}; remove `account = \"{name}\"` from the task")
+        }
+    }
 }
 
 /// Hooks preflight for the action's kind under `login`, its [`task_login`].
