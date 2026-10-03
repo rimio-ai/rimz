@@ -178,7 +178,7 @@ fn force_next_publish(h: &crate::common::Harness) {
 
 #[cfg(unix)]
 #[test]
-fn publishing_reap_preserves_rostered_crash_candidate_until_boundary() {
+fn publishing_reap_preserves_crash_candidate_until_settled() {
     let h = crate::common::Harness::new();
     let reap_stamp = h.store.paths().cache_dir.join("dead-reap.stamp");
     std::fs::write(&reap_stamp, b"").expect("defer initial reap");
@@ -214,11 +214,31 @@ fn publishing_reap_preserves_rostered_crash_candidate_until_boundary() {
         "rostered crash candidate should remain resumable"
     );
 
+    // The rebirth boundary parks the roster's agents before it deletes the roster.
+    std::fs::write(
+        &h.store.paths().pending_recovery,
+        json!({"version": 1, "agents": [key]}).to_string(),
+    )
+    .expect("park recovery candidate");
     std::fs::remove_file(&h.store.paths().live_roster).expect("consume recovery roster");
+    std::fs::remove_file(&reap_stamp).expect("force parked reap");
+    h.store
+        .append_event(&lifecycle(&h, "SessionStart", "parked-trigger"))
+        .expect("publishing commit after recovery boundary");
+    assert!(
+        !h.store
+            .runtime_projection(RuntimeScope::Audit)
+            .expect("parked audit projection")
+            .ended
+            .contains(&key),
+        "a parked crash candidate should survive the boundary"
+    );
+
+    std::fs::remove_file(&h.store.paths().pending_recovery).expect("settle recovery candidate");
     std::fs::remove_file(&reap_stamp).expect("force unguarded reap");
     h.store
         .append_event(&lifecycle(&h, "SessionStart", "unguarded-trigger"))
-        .expect("publishing commit after recovery boundary");
+        .expect("publishing commit after settlement");
 
     let reaped = h
         .store
@@ -244,7 +264,7 @@ fn publishing_reap_preserves_rostered_crash_candidate_until_boundary() {
                 false
             }
         }),
-        "post-boundary publishing commit should append the reconstructed SessionEnd observation"
+        "post-settlement publishing commit should append the reconstructed SessionEnd observation"
     );
 }
 

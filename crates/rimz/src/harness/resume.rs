@@ -665,11 +665,24 @@ pub(super) struct DetailedResumePlan {
     tabs: Vec<PlannedResumeTab>,
     resumed: BTreeSet<(AgentKind, AgentSessionId)>,
     skipped: Vec<ResumeSkip>,
+    /// The session each flat-planner skip belongs to, as an index into `skipped`.
+    skipped_sessions: BTreeMap<(AgentKind, AgentSessionId), usize>,
     agents_to_end: Vec<(AgentKind, AgentSessionId)>,
     warnings: Vec<String>,
 }
 
 impl DetailedResumePlan {
+    fn skip(&mut self, candidate: &ResumeCandidate, label: String, reason: ResumeSkipReason) {
+        self.skipped_sessions.insert(
+            (
+                candidate.identity.kind.clone(),
+                candidate.identity.session_id.clone(),
+            ),
+            self.skipped.len(),
+        );
+        self.skipped.push(ResumeSkip { label, reason });
+    }
+
     fn lower(self) -> ResumePlan {
         ResumePlan {
             tabs: self.tabs.into_iter().map(|planned| planned.tab).collect(),
@@ -737,6 +750,7 @@ pub(super) struct RecoveryPlan {
     teams: TeamsConfig,
     pub(super) entries: Vec<RecoveryEntry>,
     skipped: Vec<ResumeSkip>,
+    skipped_sessions: BTreeMap<(AgentKind, AgentSessionId), usize>,
     pub(super) warnings: Vec<String>,
     agents_to_end: Vec<(AgentKind, AgentSessionId)>,
     base_resumed: BTreeSet<(AgentKind, AgentSessionId)>,
@@ -787,6 +801,7 @@ impl RecoveryPlan {
             teams,
             entries,
             skipped: flat.skipped,
+            skipped_sessions: flat.skipped_sessions,
             warnings: flat.warnings,
             agents_to_end: flat.agents_to_end,
             base_resumed: flat.resumed,
@@ -825,11 +840,19 @@ impl RecoveryPlan {
             .collect()
     }
 
-    #[cfg(test)]
     pub(super) fn resumed_keys(&self) -> BTreeSet<(AgentKind, AgentSessionId)> {
         let mut keys = self.base_resumed.clone();
         keys.extend(self.entries.iter().flat_map(RecoveryEntry::resumed_keys));
         keys
+    }
+
+    /// Why the planner left `session` out, where it gave a reason.
+    pub(super) fn skip_for(&self, session: &(AgentKind, AgentSessionId)) -> Option<&ResumeSkip> {
+        self.skipped.get(*self.skipped_sessions.get(session)?)
+    }
+
+    pub(super) fn worktree_gone(&self) -> &[(AgentKind, AgentSessionId)] {
+        &self.agents_to_end
     }
 
     pub(super) fn materialize(
@@ -2054,32 +2077,20 @@ fn plan_resume_candidates_detailed(
         }
         if let Some(mismatch) = candidate.login_mismatch.take() {
             plan.warnings.push(mismatch.to_string());
-            plan.skipped.push(ResumeSkip {
-                label,
-                reason: ResumeSkipReason::LoginMismatch,
-            });
+            plan.skip(&candidate, label, ResumeSkipReason::LoginMismatch);
             continue;
         }
         if !supports_candidate_resume(&candidate) {
-            plan.skipped.push(ResumeSkip {
-                label,
-                reason: ResumeSkipReason::NoResumeSupport,
-            });
+            plan.skip(&candidate, label, ResumeSkipReason::NoResumeSupport);
             continue;
         }
         if !candidate.conversation_present {
-            plan.skipped.push(ResumeSkip {
-                label,
-                reason: ResumeSkipReason::NoConversation,
-            });
+            plan.skip(&candidate, label, ResumeSkipReason::NoConversation);
             continue;
         }
         let seeded = tabs.iter().map(PlannedResumeTab::pane_count).sum::<usize>();
         if seeded >= ctx.max {
-            plan.skipped.push(ResumeSkip {
-                label,
-                reason: ResumeSkipReason::OverCap,
-            });
+            plan.skip(&candidate, label, ResumeSkipReason::OverCap);
             continue;
         }
         // The pane runs the supervised exec wrapper, not the agent CLI
@@ -2107,10 +2118,7 @@ fn plan_resume_candidates_detailed(
                     .as_ref()
                     .map(|reason| format!("{reason}; not resuming")),
             );
-            plan.skipped.push(ResumeSkip {
-                label,
-                reason: ResumeSkipReason::PromptUnsupported,
-            });
+            plan.skip(&candidate, label, ResumeSkipReason::PromptUnsupported);
             continue;
         }
         plan.warnings.extend(

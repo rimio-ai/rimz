@@ -416,7 +416,8 @@ path = "crates/rimz/src/harness"
 # A loop run in flight is looked up by name and root, its row gone or not (+1).
 # A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
 # A loop task's one account resolution serves the runner and `loop add`: `task_login` (+1).
-surface-budget = 645
+# Rebirth settlement takes a disposition and previews the unresumable agents; the plan reads skips by session (+5).
+surface-budget = 650
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -531,7 +532,8 @@ upward-dependencies = [
 # The account standing, its scopes and deciding layer, and live agents per account serve accounts list, providers, and doctor (+5).
 # Birth-login selection stands apart from the all-account check room entry adds, since a supervised launch checks only its own account (+1).
 # A launch on a named account counts that account's other live agents (+1).
-surface-budget = 59
+# A live reattach inspects and settles the parked recovery candidates (+2).
+surface-budget = 61
 
 [[module]]
 path = "crates/rimz/src/sidebar"
@@ -914,7 +916,8 @@ allowed-dependencies = [
 # Restart, fork, and subagent resume share the account-mismatch refusal with lane and cohort resume.
 # ResumeOverrides shares saved-posture overrides with cohort CLI callers.
 # resolve_member_posture gives agents restart a team member's role layers.
-surface-budget = 58
+# The rebirth preview joins skips, resumed keys, and worktree-gone agents to candidates by session (+3).
+surface-budget = 61
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"

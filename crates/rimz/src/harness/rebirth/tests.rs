@@ -80,7 +80,7 @@ impl Fixture {
                 AgentSessionId::from(*id),
             ));
         }
-        crate::store::live_roster::publish(&paths.live_roster, roster).expect("roster");
+        live_roster::publish(&paths.live_roster, roster).expect("roster");
         Self {
             _dir: dir,
             paths,
@@ -163,6 +163,18 @@ impl Fixture {
     }
 }
 
+fn key(id: &str) -> (AgentKind, AgentSessionId) {
+    (AgentKind::new_unchecked("claude"), AgentSessionId::from(id))
+}
+
+fn pending(fixture: &Fixture) -> BTreeSet<(AgentKind, AgentSessionId)> {
+    pending_recovery::read(&fixture.paths.pending_recovery)
+}
+
+fn event_log(fixture: &Fixture) -> String {
+    String::from_utf8_lossy(&std::fs::read(&fixture.paths.events_log).unwrap()).into_owned()
+}
+
 fn ended_events(fixture: &Fixture) -> Vec<(String, AgentSessionId)> {
     Store::open(fixture.paths.clone(), fixture.runtime.clone())
         .expect("store")
@@ -192,15 +204,16 @@ fn inspection_is_read_only_and_scopes_to_live_roster() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
-    let mut roster = crate::store::live_roster::read(&fixture.paths.live_roster)
+    let mut roster = live_roster::read(&fixture.paths.live_roster)
         .expect("read roster")
         .agents;
     roster.insert((
         AgentKind::new_unchecked("claude"),
         AgentSessionId::from("not-in-audit"),
     ));
-    crate::store::live_roster::publish(&fixture.paths.live_roster, roster)
-        .expect("publish expanded roster");
+    live_roster::publish(&fixture.paths.live_roster, roster).expect("publish expanded roster");
+    pending_recovery::park(&fixture.paths, &[key("parked-earlier")].into()).expect("park");
+    let pending_before = std::fs::read(&fixture.paths.pending_recovery).expect("pending");
     let boot_before = std::fs::read(&fixture.paths.boot_marker).expect("boot marker");
     let roster_before = std::fs::read(&fixture.paths.live_roster).expect("roster");
     let events_before = std::fs::read(&fixture.paths.events_log).expect("events");
@@ -223,6 +236,10 @@ fn inspection_is_read_only_and_scopes_to_live_roster() {
         roster_before
     );
     assert_eq!(
+        std::fs::read(&fixture.paths.pending_recovery).unwrap(),
+        pending_before
+    );
+    assert_eq!(
         std::fs::read(&fixture.paths.events_log).unwrap(),
         events_before
     );
@@ -239,7 +256,7 @@ fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
     let plan = fixture.inspect(false);
     let planned_labels = plan.preview().labels().to_vec();
 
-    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
 
     assert_eq!(
         outcome
@@ -250,6 +267,10 @@ fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
         1
     );
     assert!(!fixture.paths.live_roster.exists());
+    assert!(
+        pending(&fixture).is_empty(),
+        "resumed and worktree-gone agents are settled"
+    );
     let events =
         String::from_utf8_lossy(&std::fs::read(&fixture.paths.events_log).unwrap()).into_owned();
     let death = events.find("session.death").expect("death");
@@ -283,16 +304,17 @@ fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
 }
 
 #[test]
-fn fresh_archives_crash_and_records_zero_recovered_without_tabs() {
+fn decline_archives_crash_and_records_zero_recovered_without_tabs() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
     let plan = fixture.inspect(false);
 
-    let outcome = plan.materialize(RebirthChoice::Fresh, "rimz-test");
+    let outcome = plan.materialize(RebirthDisposition::Decline, "rimz-test");
 
     assert!(outcome.tabs.is_empty());
     assert!(!fixture.paths.live_roster.exists());
+    assert!(pending(&fixture).is_empty());
     let marker: LastDeathMarker =
         serde_json::from_slice(&std::fs::read(&fixture.paths.last_death_marker).unwrap())
             .expect("marker");
@@ -335,7 +357,7 @@ fn fresh_archives_crash_and_records_zero_recovered_without_tabs() {
             .is_some_and(|agent| agent.ended_at.is_some())
     );
 
-    crate::store::live_roster::publish(
+    live_roster::publish(
         &fixture.paths.live_roster,
         [(
             AgentKind::new_unchecked("claude"),
@@ -349,61 +371,89 @@ fn fresh_archives_crash_and_records_zero_recovered_without_tabs() {
 }
 
 #[test]
-fn recover_ends_only_agents_not_resumed_without_overwriting_worktree_gone_reason() {
-    let dir = tempfile::tempdir().expect("worktrees");
-    let newest = dir.path().join("newest");
-    let older = dir.path().join("older");
-    let missing = dir.path().join("missing");
-    let fixture = Fixture::new(&[
-        ("newest", &newest, true),
-        ("older", &older, true),
-        ("missing", &missing, false),
-    ]);
-    let mut machine = MachineConfig::default();
-    machine.resume.max = 1;
-    let plan = fixture.inspect_with(&machine, false);
-    let resumed = plan.planned.resumed_keys();
-    assert_eq!(resumed.len(), 1);
+fn recover_ends_the_unresumed_rest_only_when_the_user_drops_it() {
+    for disposition in [
+        RebirthDisposition::RecoverKeep,
+        RebirthDisposition::RecoverDrop,
+    ] {
+        let dir = tempfile::tempdir().expect("worktrees");
+        let newest = dir.path().join("newest");
+        let older = dir.path().join("older");
+        let missing = dir.path().join("missing");
+        let fixture = Fixture::new(&[
+            ("newest", &newest, true),
+            ("older", &older, true),
+            ("missing", &missing, false),
+        ]);
+        let mut machine = MachineConfig::default();
+        machine.resume.max = 1;
+        let plan = fixture.inspect_with(&machine, false);
+        let resumed = plan.planned.resumed_keys();
+        assert_eq!(resumed.len(), 1);
+        let over_cap = ["newest", "older"]
+            .map(key)
+            .into_iter()
+            .find(|key| !resumed.contains(key))
+            .expect("over-cap agent");
+        let preview = plan.preview();
+        assert_eq!(preview.candidate_count(), 3);
+        assert_eq!(
+            preview
+                .unresumable()
+                .iter()
+                .map(|agent| agent.reason.clone())
+                .collect::<Vec<_>>(),
+            [Some(ResumeSkipReason::OverCap)],
+            "the worktree-gone agent is ended either way, so it is not offered"
+        );
 
-    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+        let outcome = plan.materialize(disposition, "rimz-test");
 
-    assert_eq!(outcome.resumed, resumed);
-    let projection = Store::open(fixture.paths.clone(), fixture.runtime.clone())
-        .expect("store")
-        .runtime_projection(crate::RuntimeScope::Audit)
-        .expect("projection");
-    for agent in &projection.agents {
-        let key = (agent.kind.clone(), agent.agent_id.clone());
-        if ["newest", "older", "missing"].contains(&agent.agent_id.as_str()) {
-            assert_eq!(agent.ended_at.is_none(), resumed.contains(&key), "{key:?}");
-        }
+        assert_eq!(outcome.resumed, resumed);
+        let dropped = disposition == RebirthDisposition::RecoverDrop;
+        let ended = ended_events(&fixture);
+        assert_eq!(
+            ended
+                .iter()
+                .filter(|(event, _)| event == "rimz.not-resumed")
+                .map(|(_, agent_id)| agent_id.clone())
+                .collect::<Vec<_>>(),
+            if dropped {
+                vec![over_cap.1.clone()]
+            } else {
+                Vec::new()
+            },
+            "{disposition:?}"
+        );
+        assert_eq!(
+            ended
+                .iter()
+                .filter(|(_, agent_id)| agent_id.as_str() == "missing")
+                .map(|(event, _)| event.as_str())
+                .collect::<Vec<_>>(),
+            ["rimz.worktree-gone"],
+            "{disposition:?}"
+        );
+        assert_eq!(
+            pending(&fixture),
+            if dropped {
+                BTreeSet::new()
+            } else {
+                [over_cap].into()
+            },
+            "{disposition:?}"
+        );
     }
-    let ended = ended_events(&fixture);
-    assert_eq!(
-        ended
-            .iter()
-            .filter(|(event, _)| event == "rimz.not-resumed")
-            .count(),
-        1
-    );
-    assert_eq!(
-        ended
-            .iter()
-            .filter(|(event, agent_id)| {
-                event == "rimz.worktree-gone" && agent_id.as_str() == "missing"
-            })
-            .count(),
-        1
-    );
-    assert!(!ended.iter().any(|(event, agent_id)| {
-        event == "rimz.not-resumed" && agent_id.as_str() == "missing"
-    }));
 }
 
 #[test]
 fn rebirth_fails_peer_turns_even_when_the_peer_is_recovered() {
     use crate::store::run::{PeerRun, RunRecord, RunStatus};
-    for choice in [RebirthChoice::Recover, RebirthChoice::Fresh] {
+    for choice in [
+        RebirthDisposition::RecoverKeep,
+        RebirthDisposition::Decline,
+        RebirthDisposition::Defer,
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let fixture = Fixture::new(&[("peer", dir.path(), true)]);
         let mut plan = fixture.inspect(false);
@@ -447,7 +497,11 @@ fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
     use crate::store::run::{RunRecord, RunStatus, WakeupFrame, run_socket_path};
     use std::os::unix::net::UnixDatagram;
 
-    for choice in [RebirthChoice::Recover, RebirthChoice::Fresh] {
+    for choice in [
+        RebirthDisposition::RecoverDrop,
+        RebirthDisposition::Decline,
+        RebirthDisposition::RecoverKeep,
+    ] {
         let dir = tempfile::tempdir().expect("worktrees");
         let worktree = dir.path().join("lane");
         let mut fixture = Fixture::with_children(
@@ -496,15 +550,32 @@ fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
             plan.planned.resumed_keys(),
             BTreeSet::from([(AgentKind::new_unchecked("claude"), "root".into())])
         );
+        assert_eq!(
+            plan.preview().unresumable(),
+            ["child", "finished"].map(|id| UnresumableAgent {
+                label: id.to_owned(),
+                reason: None,
+            }),
+            "a launched child is neither planned nor skipped"
+        );
         plan.materialize(choice, "rimz-test");
         let event = match choice {
-            RebirthChoice::Recover => "rimz.not-resumed",
-            RebirthChoice::Fresh => "rimz.recovery-declined",
+            RebirthDisposition::RecoverDrop => "rimz.not-resumed",
+            RebirthDisposition::Decline => "rimz.recovery-declined",
+            _ => {
+                assert_eq!(ended_events(&fixture), []);
+                assert_eq!(pending(&fixture), ["child", "finished"].map(key).into());
+                for record in &records {
+                    assert_eq!(&run::load(&fixture.paths, &record.run_id).unwrap(), record);
+                }
+                continue;
+            }
         };
         let ended = ended_events(&fixture);
         for id in ["child", "finished"] {
             assert!(ended.contains(&(event.to_owned(), id.into())));
         }
+        assert!(pending(&fixture).is_empty(), "{choice:?}");
         assert_eq!(
             run::load(&fixture.paths, &records[0].run_id)
                 .unwrap()
@@ -534,7 +605,7 @@ fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
 }
 
 #[test]
-fn failed_rebirth_append_still_consumes_roster() {
+fn failed_rebirth_append_still_parks_roster() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
@@ -542,13 +613,18 @@ fn failed_rebirth_append_still_consumes_roster() {
     std::fs::remove_file(&fixture.paths.events_log).expect("remove log");
     std::fs::create_dir(&fixture.paths.events_log).expect("block log append");
 
-    plan.materialize(RebirthChoice::Fresh, "rimz-test");
+    plan.materialize(RebirthDisposition::Decline, "rimz-test");
 
     assert!(!fixture.paths.live_roster.exists());
+    assert_eq!(
+        pending(&fixture),
+        [key("live")].into(),
+        "an agent whose ended stamp did not land stays parked"
+    );
 }
 
 #[test]
-fn disabled_recovery_restores_empty_channels_without_seeding_agents() {
+fn unattended_birth_with_recovery_off_parks_agents_for_a_later_recovery() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
@@ -556,7 +632,8 @@ fn disabled_recovery_restores_empty_channels_without_seeding_agents() {
     let plan = fixture.inspect(true);
 
     assert_eq!(plan.preview().pane_count(), 0);
-    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+    assert_eq!(plan.preview().candidate_count(), 1);
+    let outcome = plan.materialize(RebirthDisposition::Defer, "rimz-test");
     assert!(outcome.tabs.is_empty());
     assert_eq!(outcome.channel_tabs.len(), 1);
     assert_eq!(outcome.channel_tabs[0].label, "#auth");
@@ -568,6 +645,103 @@ fn disabled_recovery_restores_empty_channels_without_seeding_agents() {
         Some(0),
         "a restored channel shell is not a recovered agent"
     );
+    assert_eq!(ended_events(&fixture), []);
+    assert_eq!(pending(&fixture), [key("live")].into());
+    assert!(!fixture.paths.live_roster.exists());
+    let events = event_log(&fixture);
+    assert!(events.find("session.death").unwrap() < events.find("session.rebirth").unwrap());
+
+    // The headless room's sidebar publishes its own roster before the user returns.
+    live_roster::publish(&fixture.paths.live_roster, BTreeSet::new()).expect("new roster");
+    let plan = fixture.inspect(false);
+    assert_eq!(plan.preview().pane_count(), 1);
+    assert_eq!(plan.preview().unresumable(), []);
+
+    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
+
+    assert_eq!(outcome.resumed, [key("live")].into());
+    assert_eq!(outcome.tabs.len(), 1);
+    assert!(pending(&fixture).is_empty());
+    assert_eq!(ended_events(&fixture), []);
+    let marker: LastDeathMarker =
+        serde_json::from_slice(&std::fs::read(&fixture.paths.last_death_marker).unwrap())
+            .expect("marker");
+    assert_eq!(marker.recovered, Some(1), "a later recovery still counts");
+}
+
+#[test]
+fn live_settlement_writes_no_boundary_and_leaves_live_agents_alone() {
+    for disposition in [RebirthDisposition::Decline, RebirthDisposition::RecoverKeep] {
+        let dir = tempfile::tempdir().expect("worktrees");
+        let lost = dir.path().join("lost");
+        let alive = dir.path().join("alive");
+        let fixture = Fixture::new(&[("lost", &lost, true), ("alive", &alive, true)]);
+        fixture.seed_named_channel("auth");
+        record_boundary_at(
+            fixture.paths.clone(),
+            fixture.runtime.clone(),
+            &fixture.paths.workspace_id,
+            "rimz-test",
+        );
+        // Resumed by hand since the boundary: its owner process is running.
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("alive")),
+            LifecycleSignal::Registered,
+        );
+        observation.agent_pid = Some(std::process::id());
+        Store::open(fixture.paths.clone(), fixture.runtime.clone())
+            .expect("store")
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                fixture.paths.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .expect("live owner event");
+        live_roster::publish(&fixture.paths.live_roster, [key("alive")].into()).expect("roster");
+        let roster_before = std::fs::read(&fixture.paths.live_roster).expect("roster");
+        let boot_before = std::fs::read(&fixture.paths.boot_marker).expect("boot marker");
+
+        let plan = inspect_live_at(
+            fixture.paths.clone(),
+            fixture.runtime.clone(),
+            &fixture.project,
+            &MachineConfig::default(),
+            false,
+        );
+        assert_eq!(plan.preview().candidate_count(), 1);
+        assert_eq!(plan.preview().pane_count(), 1);
+        let outcome = plan.materialize(disposition, "rimz-test");
+
+        let recovers = disposition.recovers();
+        assert_eq!(outcome.tabs.len(), usize::from(recovers));
+        assert!(
+            outcome.channel_tabs.is_empty(),
+            "the live room has its tabs"
+        );
+        assert_eq!(
+            ended_events(&fixture),
+            if recovers {
+                Vec::new()
+            } else {
+                vec![("rimz.recovery-declined".to_owned(), "lost".into())]
+            }
+        );
+        assert_eq!(pending(&fixture), [key("alive")].into(), "{disposition:?}");
+        let events = event_log(&fixture);
+        assert_eq!(events.matches("session.rebirth").count(), 1, "{events}");
+        assert!(!events.contains("session.death"), "{events}");
+        assert_eq!(
+            std::fs::read(&fixture.paths.live_roster).unwrap(),
+            roster_before
+        );
+        assert_eq!(
+            std::fs::read(&fixture.paths.boot_marker).unwrap(),
+            boot_before
+        );
+        assert!(!fixture.paths.last_death_marker.exists());
+    }
 }
 
 #[test]
@@ -629,7 +803,7 @@ fn rebirth_recovery_globally_orders_fresher_flat_before_team() {
         plan.checkout_roots(),
         BTreeSet::from([flat_worktree.as_path(), team_worktree.as_path()])
     );
-    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
     assert_eq!(outcome.tabs[0].cwd, flat_worktree);
     assert_eq!(outcome.tabs[1].cwd, team_worktree);
 }
@@ -698,7 +872,8 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
             crate::pane::RuntimeOwner::new(
                 crate::pane::RuntimeOwnerKind::Agent,
                 session.as_str(),
-                std::process::id(),
+                // A dead owner: a live agent is not a recovery candidate.
+                u32::MAX,
                 None,
             ),
             Some(Isolation::Sandbox),
@@ -804,10 +979,11 @@ fn rebirth_recovers_flat_tabs_when_store_is_unavailable() {
     std::fs::remove_file(&fixture.paths.events_log).expect("remove event log");
     std::fs::create_dir(&fixture.paths.events_log).expect("block store open");
 
-    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
 
     assert_eq!(outcome.tabs.len(), 1);
     assert_eq!(outcome.tabs[0].cwd, flat_worktree);
+    assert!(pending(&fixture).is_empty(), "parking needs no store");
 }
 
 #[test]
@@ -843,7 +1019,7 @@ fn team_recovery_allocates_fresh_role_and_keeps_other_tabs_after_team_failure() 
     broken.cohort.seeds.clear();
     plan.planned.entries.insert(0, RecoveryEntry::Team(broken));
 
-    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+    let outcome = plan.materialize(RebirthDisposition::RecoverKeep, "rimz-test");
 
     assert!(outcome.tabs.iter().any(|tab| tab.label == "#forge"));
     assert!(outcome.tabs.iter().any(|tab| tab.cwd == flat_worktree));
@@ -899,41 +1075,51 @@ fn team_recovery_allocates_fresh_role_and_keeps_other_tabs_after_team_failure() 
 }
 
 #[test]
-fn failed_team_materialization_ends_its_resume_seeds() {
-    let dir = tempfile::tempdir().expect("worktrees");
-    let worktree = dir.path().join("forge");
-    let fixture = Fixture::new(&[("planner", &worktree, true)]);
-    fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
-    let mut plan = fixture.inspect_with(&team_machine(), false);
-    let team = plan
-        .planned
-        .entries
-        .iter_mut()
-        .find_map(|entry| match entry {
-            RecoveryEntry::Team(team) => Some(team),
-            RecoveryEntry::Flat(_) => None,
-        })
-        .expect("team entry");
-    assert!(matches!(
-        team.cohort.seeds.first(),
-        Some(CohortSeed::Resume(agent)) if agent.agent_id == "planner"
-    ));
-    team.cohort.seeds.truncate(1);
+fn failed_team_materialization_keeps_its_resume_seeds_pending_unless_dropped() {
+    for disposition in [
+        RebirthDisposition::RecoverKeep,
+        RebirthDisposition::RecoverDrop,
+    ] {
+        let dir = tempfile::tempdir().expect("worktrees");
+        let worktree = dir.path().join("forge");
+        let fixture = Fixture::new(&[("planner", &worktree, true)]);
+        fixture.stamp_team("planner", &worktree, "forge", "planner", "claude-plan");
+        let mut plan = fixture.inspect_with(&team_machine(), false);
+        let team = plan
+            .planned
+            .entries
+            .iter_mut()
+            .find_map(|entry| match entry {
+                RecoveryEntry::Team(team) => Some(team),
+                RecoveryEntry::Flat(_) => None,
+            })
+            .expect("team entry");
+        assert!(matches!(
+            team.cohort.seeds.first(),
+            Some(CohortSeed::Resume(agent)) if agent.agent_id == "planner"
+        ));
+        team.cohort.seeds.truncate(1);
 
-    let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
+        let outcome = plan.materialize(disposition, "rimz-test");
 
-    assert!(outcome.tabs.is_empty());
-    assert_eq!(
-        ended_events(&fixture),
-        vec![("rimz.not-resumed".to_owned(), "planner".into())]
-    );
-    let events =
-        String::from_utf8_lossy(&std::fs::read(&fixture.paths.events_log).unwrap()).into_owned();
-    assert!(events.find("rimz.not-resumed").unwrap() < events.find("session.rebirth").unwrap());
+        assert!(outcome.tabs.is_empty());
+        if disposition == RebirthDisposition::RecoverKeep {
+            assert_eq!(ended_events(&fixture), []);
+            assert_eq!(pending(&fixture), [key("planner")].into());
+            continue;
+        }
+        assert_eq!(
+            ended_events(&fixture),
+            vec![("rimz.not-resumed".to_owned(), "planner".into())]
+        );
+        assert!(pending(&fixture).is_empty());
+        let events = event_log(&fixture);
+        assert!(events.find("rimz.not-resumed").unwrap() < events.find("session.rebirth").unwrap());
+    }
 }
 
 #[test]
-fn supervised_boundary_consumes_roster_without_inspecting_or_seeding_agents() {
+fn boundary_without_inspection_parks_roster_and_ends_nobody() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
@@ -946,10 +1132,11 @@ fn supervised_boundary_consumes_roster_without_inspecting_or_seeding_agents() {
     );
 
     assert!(!fixture.paths.live_roster.exists());
+    assert_eq!(pending(&fixture), [key("live")].into());
+    assert_eq!(ended_events(&fixture), []);
     assert!(!fixture.paths.last_death_marker.exists());
     assert!(!fixture.paths.crashes_dir.exists());
-    let events =
-        String::from_utf8_lossy(&std::fs::read(&fixture.paths.events_log).unwrap()).into_owned();
+    let events = event_log(&fixture);
     assert!(events.contains("session.rebirth"), "{events}");
     assert!(!events.contains("session.death"), "{events}");
     assert!(!events.contains("agent.launched"), "{events}");
@@ -1031,7 +1218,7 @@ fn crash_archive_uses_cache_bytes_captured_before_room_birth() {
     .expect("inspect");
 
     std::fs::write(source.join("state.kdl"), "reborn").expect("reborn cache");
-    plan.materialize(RebirthChoice::Fresh, "rimz-test");
+    plan.materialize(RebirthDisposition::Decline, "rimz-test");
 
     let archive = std::fs::read_dir(&fixture.paths.crashes_dir)
         .expect("crashes")
