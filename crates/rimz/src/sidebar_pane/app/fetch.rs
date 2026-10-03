@@ -557,7 +557,8 @@ impl FetchWorker {
             source,
         } = publication;
         let final_producer = role.is_producer() && phase == FetchPhase::Final;
-        if final_producer && source == SnapshotSource::Produced {
+        if final_producer && source == SnapshotSource::Produced && self.election.confirm_producer()
+        {
             let roster = crate::sidebar::produce::live_roster_from_snapshot(&snapshot);
             if let Err(err) = crate::store::live_roster::publish(&state.live_roster, roster) {
                 tracing::debug!(

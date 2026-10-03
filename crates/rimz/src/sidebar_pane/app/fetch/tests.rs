@@ -540,6 +540,58 @@ struct ConsumerFixture {
     younger: SidebarInstanceId,
 }
 
+#[test]
+fn roster_publication_rechecks_election_after_the_fetch() {
+    let fixture = ConsumerFixture::new();
+    let elder_path = std::fs::read_dir(&fixture.runtime.heartbeat_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let heartbeat = std::fs::read(&elder_path).unwrap();
+    std::fs::remove_file(&elder_path).unwrap();
+    let mut worker = fixture.worker();
+    let role = worker.observe_role();
+    assert!(role.is_producer());
+
+    // The elder appears and publishes while this renderer finishes an older fetch.
+    std::fs::write(&elder_path, &heartbeat).unwrap();
+    let live = [(AgentKind::new_unchecked("claude"), "live".into())]
+        .into_iter()
+        .collect();
+    crate::store::live_roster::publish(&fixture.state.live_roster, live).unwrap();
+    let before = crate::store::live_roster::read(&fixture.state.live_roster).unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
+    let empty = || SnapshotPublication {
+        snapshot: SidebarSnapshot::build(
+            fixture.workspace_id.clone(),
+            Vec::new(),
+            jiff::Timestamp::UNIX_EPOCH,
+        ),
+        role,
+        phase: FetchPhase::Final,
+        source: SnapshotSource::Produced,
+    };
+    worker.publish_snapshot(&fixture.state, empty(), &mut sink);
+    assert_eq!(
+        crate::store::live_roster::read(&fixture.state.live_roster),
+        Some(before),
+        "rebirth must not read the late non-producer's empty roster",
+    );
+
+    // With no elder, the same empty observation is a genuine exit, not a race.
+    std::fs::remove_file(&elder_path).unwrap();
+    worker.publish_snapshot(&fixture.state, empty(), &mut sink);
+    assert!(
+        crate::store::live_roster::read(&fixture.state.live_roster)
+            .unwrap()
+            .agents
+            .is_empty()
+    );
+}
+
 impl ConsumerFixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
