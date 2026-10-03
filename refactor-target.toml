@@ -674,6 +674,11 @@ path = "crates/rimz/src/cli/agents_cmd/exec.rs"
 surface-budget = 1
 
 [[module]]
+path = "crates/rimz/src/cli/agents_cmd/launch.rs"
+# Resident loops share resolved-cwd launch execution and its returned identities.
+surface-budget = 6
+
+[[module]]
 path = "crates/rimz/src/cli/transcript"
 surface-budget = 18
 
