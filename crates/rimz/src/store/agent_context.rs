@@ -77,8 +77,10 @@ pub fn attach_rest_certificates<'a>(
         {
             continue;
         }
-        agent.context = read_one(runtime, agent.kind.as_str(), agent.agent_id.as_str())
-            .map(|record| record.context);
+        agent.attach_context(
+            read_one(runtime, agent.kind.as_str(), agent.agent_id.as_str())
+                .map(|record| record.context),
+        );
     }
 }
 

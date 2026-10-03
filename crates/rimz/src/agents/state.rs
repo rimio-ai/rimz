@@ -1402,6 +1402,27 @@ impl AgentState {
         Some((effective_turn_error_class(error), error))
     }
 
+    /// Join a stored context sidecar onto this row; every sidecar attach goes
+    /// through here. A sidecar whose occupancy is the reading the latest
+    /// completed compaction retired was measured before the close, so the
+    /// attached copy drops its current-window fields and keeps the window
+    /// size and session counters. The sidecar file is not rewritten.
+    pub(crate) fn attach_context(&mut self, context: Option<AgentContext>) {
+        self.context = context;
+        let Some(retired) = self.retired_context_tokens else {
+            return;
+        };
+        let Some(tokens) = self.context.as_mut().and_then(|c| c.tokens.as_mut()) else {
+            return;
+        };
+        if tokens.used_tokens() == Some(retired) {
+            tokens.used_percentage = None;
+            tokens.remaining_percentage = None;
+            tokens.current_context_tokens = None;
+            tokens.current_usage = None;
+        }
+    }
+
     /// Tokens currently occupying the window: the folded statusline breakdown,
     /// else the per-call split (`cache_read + cache_write + fresh_input`) the lifecycle rail
     /// reduces. `None` when nothing has reported occupancy yet.
