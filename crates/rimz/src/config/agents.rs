@@ -70,9 +70,13 @@ pub struct AgentsConfig {
     /// Maximum successive agent-to-agent launches from a human-started root.
     #[serde(default = "default_max_chain_length", rename = "max-chain-length")]
     pub max_chain_length: u8,
-    /// Carry the launch cwd, shell, and git state in the launch reminder.
+    /// Carry the launch cwd and shell in the launch reminder.
     #[serde(rename = "env-reminder")]
     pub env_reminder: bool,
+    /// Deliver a team's memory-file listing and git state at prompt submit,
+    /// where the adapter can carry them, rather than a listing at launch.
+    #[serde(rename = "runtime-env")]
+    pub runtime_env: bool,
     /// Allow routine RimZ coordination through provider launch settings.
     #[serde(rename = "allow-routine-rimz")]
     pub allow_routine_rimz: bool,
@@ -100,6 +104,7 @@ impl Default for AgentsConfig {
             isolation: Isolation::default(),
             max_chain_length: default_max_chain_length(),
             env_reminder: true,
+            runtime_env: true,
             allow_routine_rimz: true,
             shell: None,
             worktree: WorktreeConfig::default(),

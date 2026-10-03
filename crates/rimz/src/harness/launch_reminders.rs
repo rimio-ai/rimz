@@ -13,6 +13,8 @@ pub use super::launch_context::TeamReminder;
 pub(super) struct LaunchReminders {
     /// The Environment bullets (cwd and shell) are on.
     pub env: bool,
+    /// The launch gets its memory-file listing and git state at prompt submit, so the reminder carries neither.
+    pub runtime_env: bool,
     /// The configured `[agents] shell`, which the launch runs under in place
     /// of the user's own shell.
     pub agent_shell: Option<std::path::PathBuf>,
@@ -51,6 +53,7 @@ impl Default for LaunchReminders {
     fn default() -> Self {
         Self {
             env: false,
+            runtime_env: false,
             agent_shell: None,
             settings: None,
             routine_rimz: None,
@@ -183,7 +186,9 @@ fn env_paragraph(
             escape_reminder_text(&files.shared.to_string_lossy())
         ));
     }
-    if let Some(files) = team.and_then(launch_context::files_block) {
+    if !reminders.runtime_env
+        && let Some(files) = team.and_then(launch_context::files_block)
+    {
         lines.push(format!("\n{files}"));
     }
     lines.join("\n")

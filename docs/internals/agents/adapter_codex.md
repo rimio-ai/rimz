@@ -29,7 +29,7 @@ Every hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex`, and 
 | Event | Matcher | Signal |
 | --- | --- | --- |
 | `SessionStart` | `startup\|resume\|clear\|compact\|fork` | `Registered`; source `compact` gives `CompactionEnded` with no trigger |
-| `UserPromptSubmit` | none | `TurnStarted` |
+| `UserPromptSubmit` | none | `TurnStarted`; a root prompt's reply can carry the [Environment block](../harness/fleet.md#environment-at-prompt-submit) as `hookSpecificOutput.additionalContext` beside `hookEventName` |
 | `SubagentStart` | `.*` | `SubagentStarted` |
 | `SubagentStop` | `.*` | `SubagentStopped { errored }` |
 | `Stop` | none | `AwaitingInput { PlanApproval }` when the rollout rests on a plan, otherwise `TurnEnded { errored, parked_on_background: false }` |

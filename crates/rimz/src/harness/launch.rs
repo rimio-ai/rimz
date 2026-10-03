@@ -895,6 +895,14 @@ fn compile_agent_process_with_extra_env(
     if channel == Some(SystemTextChannel::ExtensionEnv) {
         env.insert(ENV_LAUNCH_REMINDERS.to_owned(), reminder.clone());
     }
+    // Stamped or cleared on every launch: an inherited switch would promise
+    // a nested launch context its own adapter or config does not deliver.
+    let mut unset = BTreeSet::new();
+    if reminders.runtime_env {
+        env.insert(ENV_RUNTIME_ENV.to_owned(), "1".to_owned());
+    } else {
+        unset.insert(ENV_RUNTIME_ENV.to_owned());
+    }
     let mut process = CompiledAgentProcess {
         host_skills,
         settings_artifact,
@@ -904,7 +912,7 @@ fn compile_agent_process_with_extra_env(
         env,
         secret_keys,
         reminder,
-        unset: BTreeSet::new(),
+        unset,
         shell,
     };
     process.argv = process.login_shell_argv(&process.provider_argv);

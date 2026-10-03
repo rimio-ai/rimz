@@ -656,14 +656,21 @@ An agent that runs `rimz agents` or `rimz teams` launches independent top-level 
 
 #### Environment at launch
 
-Agents receive their launch cwd and the kind of shell their commands run under (`zsh`, `bash`) by default, so they can start with their environment in view. Git state is left out: it can change between launch and the agent's first turn, so agents read it themselves. To omit these optional environment bullets for your machine, set this in `~/.rimz/config.toml`:
+Agents receive their launch cwd and the kind of shell their commands run under (`zsh`, `bash`) by default, so they can start with their environment in view. Git state is left out of the launch text: it can change between launch and the agent's first turn. To omit these optional environment bullets for your machine, set this in `~/.rimz/config.toml`:
 
 ```toml
 [agents]
 env-reminder = false
 ```
 
-A trusted room's `.rimz/config.toml` can set the same key to override the machine value in either direction. Team members still receive cwd and their memory-file listing, and a configured language server still appears. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for the full reminder.
+Claude and Codex agents get the facts that change instead with the prompt. The first prompt of each conversation, and each stage notice a team member receives, carries the current branch, the short status, and the last five commits, and for a team member the team's memory files as they are at that moment. The text you typed is recorded unchanged. This travels through RimZ's hooks, so a Claude or Codex agent whose account has no RimZ hooks installed, or whose Codex hooks are not yet trusted, is treated like the other agents: they keep the memory-file list in their launch text and read git themselves. To put the list back at launch for Claude and Codex as well and send nothing with the prompt:
+
+```toml
+[agents]
+runtime-env = false
+```
+
+`runtime-env` is a machine setting; a project's config cannot change it. `env-reminder` is the one a project can: a trusted room's `.rimz/config.toml` can set `env-reminder` to override the machine value in either direction. With `env-reminder` off, team members still receive cwd and their memory-file listing, and a configured language server still appears. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for the full reminder.
 
 #### Agent shell
 

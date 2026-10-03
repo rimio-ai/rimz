@@ -291,6 +291,18 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         request.identity.params.login.as_ref(),
         inputs.accounts,
     )?;
+    // The block rides the provider's prompt hook: without wired hooks the
+    // launch keeps its listing, as a provider without the capability does.
+    reminders.runtime_env = adapter.spec().capabilities.prompt_context
+        && inputs
+            .effective
+            .is_none_or(|effective| effective.runtime_env)
+        && crate::agents::preflight_hooks(
+            adapter,
+            &login.env(inputs.ambient_env),
+            crate::agents::TurnLifecycleNeed::None,
+        )
+        .is_ok();
     let mut extra_env = prompt.materialized.env.clone();
     extra_env.extend(login.overrides(inputs.ambient_env));
     let isolation = if inputs.bwrap.is_some() {

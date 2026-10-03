@@ -208,7 +208,7 @@ Two flags answer the prompt in advance. `--resume` (or `--continue`) resumes the
 rimz agents forge -w restore-living-team --fresh   # new sessions, same checkout and files
 ```
 
-`--fresh` removes nothing. The worktree, its branch, and every file survive, so the previous run's team scratch files still appear in each member's launch reminder where the adapter takes one. The closed members keep their store rows, the new members get new handles in the same channel, and messages still queued for the old members are archived by the next `rimz gc`. `--fresh` needs a named worktree (`-w NAME`), conflicts with `--resume` and `--from-pr`, is refused with `-p`, and never duplicates a live cohort: that case reports the running cohort and follows the [focus rule](#channel-worktree-and-placement). The decision logic is in [fleet.md → Cohort relaunch reconciliation](../../internals/harness/fleet.md#cohort-relaunch-reconciliation).
+`--fresh` removes nothing. The worktree, its branch, and every file survive, so the previous run's team scratch files still reach each member: with its first prompt on Claude and Codex, and in the launch reminder where another adapter takes one. The closed members keep their store rows, the new members get new handles in the same channel, and messages still queued for the old members are archived by the next `rimz gc`. `--fresh` needs a named worktree (`-w NAME`), conflicts with `--resume` and `--from-pr`, is refused with `-p`, and never duplicates a live cohort: that case reports the running cohort and follows the [focus rule](#channel-worktree-and-placement). The decision logic is in [fleet.md → Cohort relaunch reconciliation](../../internals/harness/fleet.md#cohort-relaunch-reconciliation).
 
 ### Supervised runs (`-p`)
 
