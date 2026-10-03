@@ -451,7 +451,7 @@ fn open_attempt_pane(
 
 /// The account a supervised launch of `kind` runs under: the request's pin,
 /// else a subagent's same-kind parent's account, else the room default.
-fn launch_login(
+pub(super) fn launch_login(
     request: &SupervisedRunRequest,
     caller: Option<&rimz::agents::AgentState>,
     kind: &AgentKind,

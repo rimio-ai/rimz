@@ -224,14 +224,17 @@ A room can be born between the tick's heartbeat check and its state write. That 
 | # | Gate | Records on refusal |
 | --- | --- | --- |
 | 1 | the task's `budget-per-day`: the cost of every run of this task and root on the configured local day, including failed ones, against the cap, reserving the per-run `budget` | `budget skipped` |
-| 2 | the room-fleet and provider-account [scope caps](./budget.md#the-fail-fast-gate) | `budget skipped` |
-| 3 | the exact managed-launch provider quota, when a binding is proven | `budget skipped` |
-| 4 | `surplus` / `surplus-after` forward headroom on the provider's longest window | `surplus skipped` |
-| 5 | the per-task run lock | `overlapped` |
-| 6 | the poll-until `deadline` | `expired` |
-| 7 | the `check` command and its polarity | `skipped`, or a check-only terminal result |
+| 2 | the task's pinned `account`: declared for the resolved kind, home a directory, no stored logged-out status | `account skipped` |
+| 3 | the room-fleet and provider-account [scope caps](./budget.md#the-fail-fast-gate) | `budget skipped` |
+| 4 | the exact managed-launch provider quota, when a binding is proven | `budget skipped` |
+| 5 | `surplus` / `surplus-after` forward headroom on the provider's longest window | `surplus skipped` |
+| 6 | the per-task run lock | `overlapped` |
+| 7 | the poll-until `deadline` | `expired` |
+| 8 | the `check` command and its polarity | `skipped`, or a check-only terminal result |
 
 Gate 1 trips when the day's spend has reached the cap, or when spend plus the per-run `budget` would exceed it. A `budget-per-day` without a `budget` is an error.
+
+Gate 2 resolves the task's login once: the row's `account`, else the room's current account for the kind. Gates 3 to 5, the hooks preflight, tier routing, and the request's `login` all use that one resolution, so a pinned task is judged and launched on its own account and never on the room's. The gate runs before the caps because they read the account. It skips rather than errors because the fix is outside the task: the status cache holds only accounts a room's agents run on, so the logged-out skip needs a positive record and an account with none proceeds to launch. A home without trusted hooks passes this gate and fails the preflight as `error`.
 
 Then the action runs. `TaskFirePlan` returns `Done` (a gate already produced the terminal record), `Spawn` (a prepared `SupervisedRunRequest`), or `Deliver` (a prepared target and prompt). The CLI executes it and calls `finish`, which maps the outcome to a `LoopRunResult` and appends the record. Scheduled and manual fires walk the same gates, so `rimz loop fire` tests the real policy.
 
@@ -338,7 +341,7 @@ Append caps the stored copies: 4 KiB of check output, 2 KiB each of error text a
 | --- | --- |
 | Strike | `failed`, `verify failed`, `timed out`, `error`, `budget exceeded`; `completed` or `delivered` whose check did not pass |
 | Reset | `completed` or `delivered` with a passing or absent check; `skipped` from a check that passed |
-| Neutral | `budget skipped`, `surplus skipped`, `overlapped`, `canceled`, `expired`, `target gone`, `start failed`; `skipped` from a failed or absent check; `skipped` from a sibling signal; any nonterminal watch check-in |
+| Neutral | `budget skipped`, `surplus skipped`, `account skipped`, `overlapped`, `canceled`, `expired`, `target gone`, `start failed`; `skipped` from a failed or absent check; `skipped` from a sibling signal; any nonterminal watch check-in |
 
 The table encodes three judgements. A turn that completed but left its check red is a failure, because the task is not doing its job. A gate that declined to spend money is not a failure at all. And a fire that left no run behind says nothing about the task, so `start failed` is neutral even though every renderer shows it as a failure: a broken timer must not auto-disable the work it failed to run.
 

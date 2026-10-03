@@ -578,6 +578,24 @@ fn subagent_launch_anchors_at_the_parent_checkout() {
 }
 
 #[test]
+fn a_request_account_pin_outranks_a_subagents_parent() {
+    use rimz::store::writer::LaunchLogin;
+    let codex = AgentKind::new_unchecked("codex");
+    let mut caller = AgentState::stub("codex", "parent", AgentStatus::Running);
+    caller.login = Some("spare".parse().unwrap());
+    let mut request = supervised_request("fix-it", true);
+    assert_eq!(
+        super::run::launch_login(&request, Some(&caller), &codex),
+        LaunchLogin::Pinned("spare".parse().unwrap())
+    );
+    request.login = LaunchLogin::Pinned("work".parse().unwrap());
+    assert_eq!(
+        super::run::launch_login(&request, Some(&caller), &codex),
+        request.login
+    );
+}
+
+#[test]
 fn supervised_selection_checks_subagent_allowlist() {
     let mut caller = AgentState::stub("claude", "parent", AgentStatus::Running);
     caller.profile = Some("planner".to_owned());
