@@ -1178,3 +1178,78 @@ fn render_agent_card_age_pin_holds_the_parent_own_clock_while_children_work() {
         "under five minutes the card stays quiet, children or not:\n{rendered}"
     );
 }
+
+#[test]
+fn completed_compaction_empties_the_gauge_until_a_fresh_reading() {
+    let lifecycle = |event_name: &str, signal: serde_json::Value, reading: bool| {
+        let mut params = serde_json::json!({
+            "event_name": event_name,
+            "agent_id": "claude-1",
+            "signal": signal,
+        });
+        if reading {
+            params["cache_read_input_tokens"] = 80_000.into();
+            params["fresh_input_tokens"] = 5_000.into();
+            params["output_tokens"] = 900.into();
+        }
+        crate::store::event::EventEnvelope::new(
+            fixed_workspace(),
+            "session",
+            "claude",
+            "agent-hook",
+            "agent.lifecycle",
+            params,
+        )
+    };
+    let events = vec![
+        lifecycle(
+            "UserPromptSubmit",
+            serde_json::json!({ "signal": "turn_started" }),
+            true,
+        ),
+        lifecycle(
+            "PreCompact",
+            serde_json::json!({ "signal": "compacting" }),
+            false,
+        ),
+        lifecycle(
+            "PostCompact",
+            serde_json::json!({ "signal": "compaction_ended", "auto": false }),
+            true,
+        ),
+    ];
+    let folded =
+        SidebarSnapshot::build_with_carryover(fixed_workspace(), events, Vec::new(), fixed_now())
+            .agents
+            .remove(0);
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.usage = folded.usage;
+    claude.compaction_count = folded.compaction_count;
+    let mut context = claude_context(fixed_now());
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(200_000),
+        ..Default::default()
+    });
+    claude.context = Some(context);
+
+    let rendered = snapshot_to_screen(&snapshot_with(vec![claude.clone()]), 58, 17);
+    assert!(
+        rendered.contains(" 0%▐") && rendered.contains('▢') && rendered.contains("▤ 0 · ↻ 1"),
+        "no reading survives the close:\n{rendered}"
+    );
+
+    let tokens = claude.context.as_mut().and_then(|c| c.tokens.as_mut());
+    tokens.expect("sidecar tokens").used_percentage = Some(3);
+    let rendered = snapshot_to_screen(&snapshot_with(vec![claude]), 58, 17);
+    assert!(
+        rendered.contains(" 3%▐") && rendered.contains("▤ 0 · ↻ 1"),
+        "the fresh statusline percentage draws alone:\n{rendered}"
+    );
+}

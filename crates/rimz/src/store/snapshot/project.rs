@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::agents::lifecycle::{self, Transition};
 use crate::agents::petname::valid_agent_name;
-use crate::agents::{AgentLifecycleObservation, LaunchParams, SessionOrigin};
+use crate::agents::{AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
@@ -708,6 +708,7 @@ fn carried_base(
         state.tool_calls = prior.tool_calls.clone();
         state.background_shells = prior.background_shells.clone();
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
+        state.retired_context_tokens = prior.retired_context_tokens;
         state.compacted_awaiting_prompt = prior.compacted_awaiting_prompt;
         state.turn_started_at = prior.turn_started_at;
         state.user_turn_started_at = prior.user_turn_started_at;
@@ -773,6 +774,23 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     }
 }
 
+/// Window occupancy of a lifecycle-rail reading: the input-side split when the
+/// provider reports one, else the running total.
+fn usage_occupancy(usage: &AgentUsageSummary) -> Option<u64> {
+    usage.input_context_tokens().or(usage.total_tokens)
+}
+
+/// Drop a reading's current-window figures, keeping the window size and the
+/// whole-run total. A completed compaction retires the carried reading this
+/// way, and a later re-report of the retired occupancy contributes nothing.
+fn clear_current_window(usage: &mut AgentUsageSummary) {
+    *usage = AgentUsageSummary {
+        context_window: usage.context_window,
+        run_total_tokens: usage.run_total_tokens,
+        ..AgentUsageSummary::default()
+    };
+}
+
 fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     let mut state = carried_base(
         input.kind,
@@ -789,7 +807,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         &input.signal,
         lifecycle::LifecycleSignal::Ended | lifecycle::LifecycleSignal::Registered
     );
-    fold_lifecycle(
+    let completed_compaction = fold_lifecycle(
         &mut state,
         input.prior,
         input.event.timestamp,
@@ -812,10 +830,20 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     }
     let default_window = crate::agents::spec_by_kind(input.kind.as_str())
         .and_then(|definition| definition.default_context_window);
-    let usage = input
-        .observation
-        .usage
-        .merge(input.prior.map(|prior| &prior.usage), default_window);
+    let mut carried_usage = input.prior.map(|prior| prior.usage.clone());
+    if completed_compaction && let Some(carried) = &mut carried_usage {
+        if let Some(occupancy) = usage_occupancy(carried) {
+            state.retired_context_tokens = Some(occupancy);
+        }
+        clear_current_window(carried);
+    }
+    let mut observed_usage = input.observation.usage.clone();
+    if state.retired_context_tokens.is_some()
+        && usage_occupancy(&observed_usage) == state.retired_context_tokens
+    {
+        clear_current_window(&mut observed_usage);
+    }
+    let usage = observed_usage.merge(carried_usage.as_ref(), default_window);
     // Established lineage stays authoritative. The explicit adoption event is
     // the one path that converts a provisional root after provider evidence
     // became readable later than the child's own hooks.
@@ -1006,6 +1034,7 @@ fn assemble_launch_state(
     state
 }
 
+/// Returns whether this event completed a compaction.
 fn fold_lifecycle(
     state: &mut AgentState,
     prior: Option<&AgentState>,
@@ -1013,7 +1042,7 @@ fn fold_lifecycle(
     signal: lifecycle::LifecycleSignal,
     prompt: Option<&str>,
     ask_queue: Option<&crate::agents::AskQueueEdit>,
-) {
+) -> bool {
     let turn_ids = prior.map(AgentState::turn_ids).unwrap_or_default();
     let Transition {
         next,
@@ -1147,6 +1176,7 @@ fn fold_lifecycle(
         state.superseded_turn_id,
         state.interrupted_turn_id,
     ) = lifecycle::turn_ids_after(turn_ids, &signal, opened_turn);
+    completed_compaction
 }
 
 struct WorktreeProjection {

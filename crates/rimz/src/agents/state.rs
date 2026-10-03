@@ -906,6 +906,12 @@ pub struct AgentState {
     /// old message events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_compact_command_tokens: Option<u64>,
+    /// Lifecycle-rail occupancy the latest completed compaction retired. A
+    /// later reading with this occupancy is the pre-compaction measurement read
+    /// again, so the fold and the sidecar join withhold it; the next completed
+    /// compaction that retires a known reading replaces it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_context_tokens: Option<u64>,
     /// The next input must not be another compaction. Set by a sent compact
     /// command or successful manual compaction; cleared only by `TurnStarted`.
     /// Registration preserves it; delivery acknowledgements do not rearm it.
@@ -1049,6 +1055,7 @@ impl AgentState {
             tool_calls: BTreeMap::new(),
             tool_repeat: None,
             last_compact_command_tokens: None,
+            retired_context_tokens: None,
             compacted_awaiting_prompt: None,
             last_seen: at,
             last_activity: at,

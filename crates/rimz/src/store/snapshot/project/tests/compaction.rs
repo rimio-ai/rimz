@@ -440,3 +440,174 @@ fn turn_started_at_is_stamped_when_progress_reconciles_a_turn_open() {
         Some(Timestamp::from_second(epoch().as_second() + 5).unwrap())
     );
 }
+
+/// A lifecycle event carrying a usage reading beside its signal.
+fn lifecycle_reading(
+    event_name: &str,
+    signal: serde_json::Value,
+    reading: serde_json::Value,
+) -> EventEnvelope {
+    let mut params = serde_json::json!({
+        "event_name": event_name,
+        "agent_id": "sess-1",
+        "signal": signal,
+    });
+    for (key, value) in reading.as_object().expect("reading object") {
+        params[key] = value.clone();
+    }
+    raw_lifecycle("claude", params)
+}
+
+/// 85k input-side tokens of a 200k window, measured before the compaction.
+fn full_reading() -> serde_json::Value {
+    serde_json::json!({
+        "context_window": 200_000,
+        "total_tokens": 85_900,
+        "cache_read_input_tokens": 80_000,
+        "fresh_input_tokens": 5_000,
+        "output_tokens": 900,
+    })
+}
+
+fn turn_ended() -> serde_json::Value {
+    serde_json::json!({
+        "signal": "turn_ended",
+        "errored": false,
+        "parked_on_background": false
+    })
+}
+
+fn retired_usage() -> crate::agents::AgentUsageSummary {
+    crate::agents::AgentUsageSummary {
+        context_window: Some(200_000),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn completed_compaction_retires_the_usage_measured_before_it() {
+    let mut events = vec![
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        // Claude's close hook re-reads the same transcript record.
+        lifecycle_reading("PostCompact", compaction_ended(Some(false)), full_reading()),
+    ];
+
+    let agent = reduce_agent_states(&events).remove(0);
+    assert_eq!(agent.usage, retired_usage());
+    assert_eq!(agent.compaction_count, 1);
+    assert_eq!(agent.retired_context_tokens, Some(85_000));
+
+    events.push(lifecycle_reading(
+        "SessionStart",
+        signal("registered"),
+        full_reading(),
+    ));
+    let agent = reduce_agent_states(&events).remove(0);
+    assert_eq!(
+        agent.usage,
+        retired_usage(),
+        "a re-report of the retired reading stays withheld"
+    );
+
+    events.push(lifecycle_reading(
+        "Stop",
+        turn_ended(),
+        serde_json::json!({ "fresh_input_tokens": 6_000, "output_tokens": 40 }),
+    ));
+    let agent = reduce_agent_states(&events).remove(0);
+    assert_eq!(agent.usage.fresh_input_tokens, Some(6_000));
+    assert_eq!(agent.usage.cache_read_input_tokens, None);
+    assert_eq!(agent.usage.output_tokens, Some(40));
+    assert_eq!(agent.usage.context_pct, Some(3));
+    assert_eq!(agent.retired_context_tokens, Some(85_000));
+}
+
+#[test]
+fn failed_compaction_keeps_the_usage_and_retires_nothing() {
+    let agent = reduce_agent_states(&[
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        lifecycle("claude", "PostCompact", compaction_failed(Some(false))),
+    ])
+    .remove(0);
+
+    assert_eq!(agent.usage.fresh_input_tokens, Some(5_000));
+    assert_eq!(agent.usage.context_pct, Some(42));
+    assert_eq!(agent.compaction_count, 0);
+    assert_eq!(agent.retired_context_tokens, None);
+}
+
+#[test]
+fn derived_close_shows_the_reading_its_closing_signal_carries() {
+    let agent = reduce_agent_states(&[
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        lifecycle_reading(
+            "Stop",
+            turn_ended(),
+            serde_json::json!({ "total_tokens": 7_000 }),
+        ),
+    ])
+    .remove(0);
+
+    assert_eq!(agent.compaction_count, 1);
+    assert_eq!(agent.retired_context_tokens, Some(85_000));
+    assert_eq!(
+        agent.usage,
+        crate::agents::AgentUsageSummary {
+            context_pct: Some(3),
+            total_tokens: Some(7_000),
+            ..retired_usage()
+        }
+    );
+}
+
+#[test]
+fn second_compaction_without_a_reading_keeps_the_retired_value() {
+    let agent = reduce_agent_states(&[
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        lifecycle("claude", "PostCompact", compaction_ended(Some(false))),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        lifecycle("claude", "PostCompact", compaction_ended(Some(false))),
+        lifecycle_reading("SessionStart", signal("registered"), full_reading()),
+    ])
+    .remove(0);
+
+    assert_eq!(agent.compaction_count, 2);
+    assert_eq!(agent.retired_context_tokens, Some(85_000));
+    assert_eq!(agent.usage, retired_usage());
+}
+
+#[test]
+fn card_after_a_completed_compaction_reads_only_the_fresh_sidecar() {
+    let mut agent = reduce_agent_states(&[
+        lifecycle_reading("UserPromptSubmit", signal("turn_started"), full_reading()),
+        lifecycle("claude", "PreCompact", signal("compacting")),
+        lifecycle_reading("PostCompact", compaction_ended(Some(false)), full_reading()),
+    ])
+    .remove(0);
+    let mut context = crate::agents::AgentContext::new("claude", epoch());
+    context.tokens = Some(crate::agents::AgentTokenUsage {
+        context_window_size: Some(200_000),
+        ..Default::default()
+    });
+    agent.context = Some(context);
+
+    let row = row_from_agent(&agent, epoch());
+    assert_eq!(row.context_gauge_percent(), None);
+    assert_eq!(row.context_used_tokens(), None);
+    assert_eq!(row.call_split(), None);
+    // The idle-compact predicate and both thresholds read this occupancy.
+    assert_eq!(agent.occupied_context_tokens(), None);
+    assert!(!crate::store::message::AutoCompact::Percent(40).triggered(&agent));
+    assert!(!crate::store::message::AutoCompact::Tokens(50_000).triggered(&agent));
+
+    let tokens = agent.context.as_mut().and_then(|c| c.tokens.as_mut());
+    tokens.expect("sidecar tokens").used_percentage = Some(3);
+    let row = row_from_agent(&agent, epoch());
+    assert_eq!(row.context_gauge_percent(), Some(3));
+    assert_eq!(row.context_used_tokens(), None);
+    assert_eq!(row.call_split(), None);
+}
