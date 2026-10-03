@@ -908,3 +908,159 @@ fn pane_capture_reads_a_held_pane_that_pane_list_omits() {
         "pane list omits the held pane {held}:\n{listed}"
     );
 }
+
+/// A room pane another pane replaced in place stays in the session suppressed,
+/// where Zellij takes a write or a screen dump for it, exits 0, and does
+/// nothing. `pane send` and `pane capture` refuse it rather than report a
+/// delivery that never happened, and reach it again once the replacement
+/// closes.
+#[test]
+fn pane_send_and_capture_refuse_a_suppressed_pane_until_it_returns() {
+    require_zellij!();
+
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let here = workspace.session_name;
+    record_known_workspace_session(
+        &env.rimz_home(),
+        &workspace.workspace_id,
+        &env.project_root,
+        &here,
+    );
+    let room = LiveZellijSession::from_namespace(crate::common::ZellijNamespace::new(), &here);
+    let xdg = room.path();
+    std::fs::write(xdg.join(".zshrc"), "# hermetic test shell\n")
+        .expect("write test shell profile");
+    room.create_background();
+    let shell = wait_for_pane_count(xdg, &here, 1)[0].pane_id.clone();
+    let backend = room.backend();
+    let screen = || {
+        backend
+            .capture_pane(&shell, Some(&here), None, false)
+            .map_err(|err| err.to_string())
+    };
+    let shows = |text: &str, mark: &str| text.lines().any(|line| line.trim() == mark);
+    poll_until(
+        Duration::from_secs(10),
+        screen,
+        |capture| !capture.raw_text.trim().is_empty(),
+        "shell prompt before the pane is suppressed",
+    );
+    let pane = |args: &[&str]| {
+        env.rimz()
+            .env("XDG_RUNTIME_DIR", xdg)
+            .env("XDG_CACHE_HOME", xdg)
+            .env("TMPDIR", xdg)
+            .arg("pane")
+            .args(args)
+            .bounded_output()
+            .expect("run rimz pane")
+    };
+    let id = shell.to_string();
+    let raw_id = shell
+        .raw()
+        .strip_prefix("terminal_")
+        .and_then(|id| id.parse::<u64>().ok())
+        .expect("terminal pane id");
+    let send = |text: &str| {
+        let output = pane(&["send", "--enter", &id, text]);
+        assert!(
+            output.status.success(),
+            "send {text:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    let suppressed = || {
+        list_panes(xdg, &here).map(|snapshot| {
+            snapshot
+                .panes
+                .into_iter()
+                .find(|pane| !pane.is_plugin && pane.id == raw_id)
+                .map(|pane| pane.is_suppressed)
+        })
+    };
+    send("echo BEFORE_MARK");
+    poll_until(
+        Duration::from_secs(10),
+        screen,
+        |capture| shows(&capture.raw_text, "BEFORE_MARK"),
+        "mark on the pane's screen before it is suppressed",
+    );
+
+    let replaced = room
+        .command()
+        .args(["--session", &here, "action", "new-pane", "--in-place"])
+        .args(["--pane-id", shell.raw(), "--", "sleep", "600"])
+        .bounded_output()
+        .expect("replace the shell pane in place");
+    assert!(
+        replaced.status.success(),
+        "new-pane --in-place: {}",
+        String::from_utf8_lossy(&replaced.stderr)
+    );
+    let replacement = String::from_utf8_lossy(&replaced.stdout).trim().to_owned();
+    poll_until(
+        Duration::from_secs(10),
+        suppressed,
+        |state| *state == Some(true),
+        "the replaced shell pane suppressed",
+    );
+
+    let refusal = format!(
+        "pane {shell} is not in room {here}; run `rimz pane list` to see its panes, or pass `--root <project>` to address another room"
+    );
+    for args in [
+        &["send", "--enter", &id, "echo REFUSED_MARK"][..],
+        &["capture", &id][..],
+    ] {
+        let output = pane(args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {stderr}");
+        assert!(stderr.contains(&refusal), "{args:?}: {stderr}");
+        assert!(
+            output.stdout.is_empty(),
+            "{args:?} printed {:?}",
+            output.stdout
+        );
+    }
+
+    let closed = room
+        .command()
+        .args(["--session", &here, "action", "close-pane"])
+        .args(["--pane-id", &replacement])
+        .bounded_output()
+        .expect("close the replacement pane");
+    assert!(
+        closed.status.success(),
+        "close-pane {replacement}: {}",
+        String::from_utf8_lossy(&closed.stderr)
+    );
+    poll_until(
+        Duration::from_secs(10),
+        suppressed,
+        |state| *state == Some(false),
+        "the shell pane back on screen",
+    );
+    send("echo AFTER_MARK");
+    let text = poll_until(
+        Duration::from_secs(10),
+        || {
+            let output = pane(&["capture", &id]);
+            if output.status.success() {
+                Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            } else {
+                Err(String::from_utf8_lossy(&output.stderr).into_owned())
+            }
+        },
+        |text| shows(text, "AFTER_MARK"),
+        "text sent to the returned pane ran in it",
+    );
+    assert!(
+        shows(&text, "BEFORE_MARK"),
+        "the pane kept its screen while suppressed: {text}"
+    );
+    assert!(
+        !text.contains("REFUSED_MARK"),
+        "the refused send reached the pane: {text}"
+    );
+}
