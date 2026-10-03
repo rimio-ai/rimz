@@ -93,7 +93,7 @@ pub(super) fn run_one(
         started,
     )?
     .with_condition(condition);
-    let plan = fire.prepare(&mut |root| {
+    let mut plan = fire.prepare(&mut |root| {
         if mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly) {
             return Ok(());
         }
@@ -124,17 +124,12 @@ pub(super) fn run_one(
         ) {
             return Err(err);
         }
-        return Err(record_task_error(&mut fire, name, &entry, err));
+        plan = Err(err);
     }
-    let plan = match plan {
-        Ok(plan) => plan,
-        Err(err) => {
-            return Err(record_task_error(&mut fire, name, &entry, err));
-        }
-    };
     let finished = match plan {
-        rimz::harness::schedule::runner::TaskFirePlan::Done(finished) => finished,
-        rimz::harness::schedule::runner::TaskFirePlan::Spawn(prepared) => {
+        Err(err) => record_task_error(&mut fire, name, &entry, err)?,
+        Ok(rimz::harness::schedule::runner::TaskFirePlan::Done(finished)) => finished,
+        Ok(rimz::harness::schedule::runner::TaskFirePlan::Spawn(prepared)) => {
             let mut run_globals = globals.clone();
             run_globals.root = Some(prepared.root.clone());
             let effect = crate::cli::supervised::run::run_supervised(
@@ -149,7 +144,7 @@ pub(super) fn run_one(
             });
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
-        rimz::harness::schedule::runner::TaskFirePlan::Deliver(prepared) => {
+        Ok(rimz::harness::schedule::runner::TaskFirePlan::Deliver(prepared)) => {
             let effect = execute_prepared_delivery(prepared, globals);
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
@@ -191,9 +186,9 @@ fn finish_task_effect(
     match effect {
         Ok(effect) => match fire.finish(effect) {
             Ok(finished) => Ok(finished),
-            Err(err) => Err(record_task_error(fire, name, entry, err)),
+            Err(err) => record_task_error(fire, name, entry, err),
         },
-        Err(err) => Err(record_task_error(fire, name, entry, err)),
+        Err(err) => record_task_error(fire, name, entry, err),
     }
 }
 
@@ -202,11 +197,25 @@ fn record_task_error(
     name: &str,
     entry: &TaskEntry,
     err: anyhow::Error,
-) -> anyhow::Error {
+) -> Result<rimz::harness::schedule::runner::TaskFireFinished> {
     let finished = fire.finish_error(&err);
-    handle_run_transition(name, entry, finished.transition);
-    tracing::warn!(task = name, error = %err, "loop task run failed");
-    err
+    let transition = finished.transition;
+    skip_or_error(finished, err).inspect_err(|err| {
+        handle_run_transition(name, entry, transition);
+        tracing::warn!(task = name, error = %err, "loop task run failed");
+    })
+}
+
+/// An error the runner recorded as a gate skip ends the fire like any other
+/// skip: presented as one, with a zero exit. Every other error propagates.
+fn skip_or_error(
+    finished: rimz::harness::schedule::runner::TaskFireFinished,
+    err: anyhow::Error,
+) -> Result<rimz::harness::schedule::runner::TaskFireFinished> {
+    match finished.notice {
+        rimz::harness::schedule::runner::TaskFireNotice::Gate { .. } => Ok(finished),
+        _ => Err(err),
+    }
 }
 
 fn handle_run_transition(name: &str, entry: &TaskEntry, transition: RunTransition) {
