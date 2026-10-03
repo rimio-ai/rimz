@@ -107,7 +107,7 @@ max-items = 3
 - An item whose surviving readers are all unit tests is spelled `#[cfg(test)] pub(crate)` (precedent `config.rs`, `parse_scheme_text`), since `lint` builds without `cfg(test)`.
 - A module lifted below its old home is a leaf in that same commit: an upward `use` or qualified path fails the ratchet.
 
-**Tests.** Behaviour is pinned at the interface before internals move; a module whose escaping items have no outside test site (`pins` empty, `t/c` low) pays this in full. Tests reaching past a narrowed reach move with it: rewritten when the assertion matters, deleted with the internals when not; the plan names each one.
+**Tests.** Behaviour is pinned at the interface before internals move; a module whose escaping items have no outside test site (`pins` empty, `t/c` low) pays this in full. Tests reaching past a narrowed reach move with it: rewritten when the assertion matters, deleted with the internals when not; the plan names each one. A pin is proven before the steps build on it: break the pinned behaviour with a one-line edit, watch the pin fail, restore. The PR lists each mutation with the pin it failed.
 
 **Prove.** On a tree that passed `gate`, `cargo xtask atlas diff --expect <contract>` exits zero, or the drift is fixed or the contract loosened with the reason in the commit. A lint fix after `diff` reindexes, so prove again. `[[dependency]]` rows prove a closed direction; a grep is a convenience and must not count rustdoc links or inline `#[cfg(test)]` sites. Then `cargo xtask atlas conform --tighten --only <owned-path>` per owned path.
 
