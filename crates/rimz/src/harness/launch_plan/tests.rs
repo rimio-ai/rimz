@@ -1011,6 +1011,118 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
     }
 }
 
+#[test]
+fn runtime_env_compile_stamps_the_switch_and_moves_the_listing_out_of_the_reminder() {
+    use crate::harness::launch::ENV_RUNTIME_ENV;
+
+    let project = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let mut effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .unwrap();
+    effective.teams.0.insert(
+        "forge".to_owned(),
+        toml::from_str(
+            "leader = 'planner'\n[[roles]]\nrole = 'planner'\nprofile = 'claude'\nowns = ['Plan']",
+        )
+        .unwrap(),
+    );
+    let workspace_id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(workspace_id, project.path()).unwrap();
+    #[derive(Clone, Copy, Debug)]
+    enum Hooks {
+        Absent,
+        Untrusted,
+        Wired,
+    }
+    for (kind, flag, configured, hooks, runtime_env) in [
+        ("claude", true, true, Hooks::Wired, true),
+        ("codex", true, true, Hooks::Wired, true),
+        ("claude", true, false, Hooks::Wired, true),
+        ("claude", false, true, Hooks::Wired, false),
+        ("droid", true, true, Hooks::Wired, false),
+        ("claude", true, true, Hooks::Absent, false),
+        ("codex", true, true, Hooks::Absent, false),
+        ("codex", true, true, Hooks::Untrusted, false),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let ambient = BTreeMap::from(
+            [
+                (ENV_RUNTIME_ENV, "1".to_owned()),
+                ("HOME", home.path().display().to_string()),
+                ("CLAUDE_CONFIG_DIR", home.path().display().to_string()),
+                ("CODEX_HOME", home.path().display().to_string()),
+            ]
+            .map(|(key, value)| (key.to_owned(), value)),
+        );
+        let adapter = crate::agents::find_definition(kind).unwrap();
+        if !matches!(hooks, Hooks::Absent) {
+            adapter.install_hooks(&ambient).unwrap();
+        }
+        if matches!(hooks, Hooks::Wired) && kind == "codex" {
+            // Codex keys a trusted hook by config path and lower_snake event.
+            let config = home.path().join("config.toml");
+            let mut text = std::fs::read_to_string(&config).unwrap();
+            for event in adapter
+                .managed_integration()
+                .unwrap()
+                .untrusted_preflight_hooks(&ambient)
+            {
+                let token = event.chars().fold(String::new(), |mut token, c| {
+                    if c.is_ascii_uppercase() && !token.is_empty() {
+                        token.push('_');
+                    }
+                    token.push(c.to_ascii_lowercase());
+                    token
+                });
+                text.push_str(&format!(
+                    "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
+                    config.display()
+                ));
+            }
+            std::fs::write(&config, text).unwrap();
+        }
+        effective.runtime_env = flag;
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+        request.identity.params.team = Some("forge".to_owned());
+        request.identity.params.role = Some("planner".to_owned());
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: configured.then_some(&effective),
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+        })
+        .unwrap();
+        let process = plan.process();
+        let case = format!("{kind} flag={flag} configured={configured} hooks={hooks:?}");
+        assert_eq!(
+            process.env.get(ENV_RUNTIME_ENV).map(String::as_str),
+            runtime_env.then_some("1"),
+            "{case}"
+        );
+        assert_eq!(
+            process.unset.contains(ENV_RUNTIME_ENV),
+            !runtime_env,
+            "{case}"
+        );
+        assert_eq!(
+            process.reminder.contains("$ ls blackboard.md *-notes.md"),
+            configured && !runtime_env,
+            "{case}: the listing is in the reminder or at prompt submit, never both"
+        );
+    }
+}
+
 /// A room whose `workspace.json` freezes `logins`, with the machine config
 /// that declares those accounts.
 fn room_with_accounts(

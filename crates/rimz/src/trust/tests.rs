@@ -223,6 +223,19 @@ fn unknown_non_command_field_does_not_change_hash() {
 }
 
 #[test]
+fn runtime_env_key_does_not_enter_trust_hash() {
+    let base = project_with("");
+    let extra = project_with("[agents]\nruntime-env = false\n");
+    let a = read_project_config(&base.path().join(CONFIG_REL))
+        .unwrap()
+        .unwrap();
+    let b = read_project_config(&extra.path().join(CONFIG_REL))
+        .unwrap()
+        .unwrap();
+    assert_eq!(executable_surface_hash(&a), executable_surface_hash(&b));
+}
+
+#[test]
 fn project_worktree_hooks_do_not_enter_trust_hash() {
     let base = project_with("");
     let extra = project_with("[agents.worktree.hooks]\ncreated = 'exit 1'\nremoved = 'exit 2'\n");

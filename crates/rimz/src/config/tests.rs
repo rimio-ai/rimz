@@ -502,6 +502,44 @@ fn allow_routine_rimz_defaults_on_and_parses_override() {
 }
 
 #[test]
+fn runtime_env_defaults_on_and_only_the_machine_layer_sets_it() {
+    let dir = tempdir().unwrap();
+    let defaulted = load_no_fragments(&write_named(&dir, "config.toml", "")).unwrap();
+    assert_eq!(
+        serde_json::to_value(&defaulted.agents).unwrap()["runtime-env"],
+        true
+    );
+    let tuned = load_no_fragments(&write_named(
+        &dir,
+        "config.toml",
+        "[agents]\nruntime-env = false\n",
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&tuned.agents).unwrap()["runtime-env"],
+        false
+    );
+    let project = tempdir().unwrap();
+    std::fs::create_dir(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[agents]\nruntime-env = true\n",
+    )
+    .unwrap();
+    for trusted in [false, true] {
+        if trusted {
+            crate::trust::grant_with_roots(project.path(), dir.path()).unwrap();
+        }
+        let effective =
+            super::effective::load_with_roots(&tuned, project.path(), dir.path()).unwrap();
+        assert!(!effective.runtime_env);
+        let effective =
+            super::effective::load_with_roots(&defaulted, project.path(), dir.path()).unwrap();
+        assert!(effective.runtime_env);
+    }
+}
+
+#[test]
 fn env_reminder_defaults_on_and_parses_override() {
     let dir = tempdir().expect("tempdir");
     let defaulted = load_no_fragments(&write_named(&dir, "config.toml", "")).unwrap();

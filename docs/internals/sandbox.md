@@ -136,7 +136,7 @@ Copies deduplicate within a handle. GC removes the owned unit seven days after i
 
 ## Launch reminder
 
-Every compiled launch names its temp unit and the room's shared dir in the Environment section of its launch reminder (`harness/launch_reminders.rs`, from `LaunchReminders.files`), after the `lsp` bullet and before a team's memory-file listing:
+Every compiled launch names its temp unit and the room's shared dir in the Environment section of its launch reminder (`harness/launch_reminders.rs`, from `LaunchReminders.files`), after the `lsp` bullet and before a team's memory-file listing, where the reminder carries one:
 
 > - tmp: /tmp (`$TMPDIR`): every temporary file you make. Your subagents share it; no other agent sees it.
 > - shared: ~/.rimz/ws/rimz-f89e/shared (`$RIMZ_SHARED`): files a peer or teammate must read, in a `<task>/` subdirectory you name.

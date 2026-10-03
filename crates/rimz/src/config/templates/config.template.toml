@@ -210,7 +210,8 @@ aggressive_resize = true
 # Definitions live in <agents_home>/{agents,subagents,teams,traits}/*.md.
 # placement = "auto"                    # launch placement: "auto" (single agent → current pane; team/worktree → new tab), "pane" (split a new pane), or "tab" (always new tab)
 # max-chain-length = 3                  # successive agent-to-agent launches allowed from a human-started root
-# env-reminder = true                   # include cwd, shell, and git state in launch reminders
+# env-reminder = true                   # include cwd and shell in launch reminders
+# runtime-env = true                    # Claude and Codex: team memory files and git state arrive with the first prompt of a conversation and each stage notice
 # allow-routine-rimz = true             # allow routine RimZ coordination in Claude launch settings
 ## shell = "/bin/bash"                  # absolute path every agent launch runs under; default = your login shell
 # `rimz agents <spec>` names a team or uses inline cells made from profiles,

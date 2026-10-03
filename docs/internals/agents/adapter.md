@@ -80,7 +80,7 @@ The table names each trait's central methods; the trait file is the full list.
 | Trait | Central methods | The default means |
 | --- | --- | --- |
 | `CoreCapability` | `spec()`, plus the test-only conformance fixtures | required, no default |
-| `HookCapability` | `decode_hook`, `hook_ingress`, `ask_options`, `answer_plan`, subagent correlation and provider-settled child recovery | every event classifies unknown and records nothing |
+| `HookCapability` | `decode_hook`, `hook_ingress`, `ask_options`, `answer_plan`, subagent correlation and provider-settled child recovery, `attach_prompt_context` for additive model context on a prompt-submit reply | every event classifies unknown and records nothing, and no reply takes context |
 | `InstallationCapability` | `managed_integration`, which backs install, preview, uninstall, detection, statusline wrapping, and installed-hook trust; `folder_trust` returns a decision and an exact grant preview for [Codex](./adapter_codex.md#directory-trust-preflight) and [Claude](./adapter_claude.md#folder-trust) | hook installation is unavailable, and folder trust is not modeled |
 | `LaunchCapability` | `is_interactive_process`, `launch_command`, `resume_command`, `launch_env`, `append_system_text_channel`, subagent argv and env lockdown, `disable_native_sandbox_args` for sandbox isolation, `room_env`, `config_home` and `skills_home`, version probing | argv renders from the spec, no provider-native subagent lockdown applies, and a provider command sandbox stays as configured |
 | `SessionCapability` | `discover_local_sessions`, `resumed_session_id_from_cmdline`, `local_conversation_present`, daemon evidence, turn-death refinement | no provider-owned session store to read |
@@ -152,6 +152,8 @@ This is the canonical statement of the rule the rest of the docs link to. A hook
 - Logs go to stderr or to RimZ runtime state logs such as `binding.log.jsonl`. The `print_stdout` lint gates this ([rust-conventions.md](../../contributing/rust-conventions.md)), and `emit_reply` is the one allowed print.
 - Hook helper children get fresh, fully piped stdio, so a wrapped statusline's stderr or a notification helper's output never reaches the decision channel. The `ensure_hook_stdio` invariant rejects `Stdio::inherit`.
 - Every neutral shape has an inline `insta` golden in the adapter's tests.
+
+Additive model context is the one thing RimZ puts on that channel beyond neutral. An adapter that declares `prompt_context` answers a root prompt submit with the native context reply (`hookSpecificOutput.additionalContext`), which carries the [prompt-submit Environment block](../harness/fleet.md#environment-at-prompt-submit) and decides nothing: the prompt proceeds as typed. `conformance.rs` holds the flag to the adapter's replies, and each supporting adapter goldens the exact line.
 
 What neutral looks like depends on the agent, so verify it for each one. `HookReply::Silent` prints nothing, which hands the prompt back to the native UI for Claude, Codex, Droid, and most others, and lets Pi's tools run and its `ask_user_question` extension open its questionnaire. Cursor and Antigravity return `HookReply::Json` on every wired event because their hook contracts require JSON; Cursor's is `{}`.
 

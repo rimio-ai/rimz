@@ -112,6 +112,8 @@ pub struct ProjectTasks {
 #[derive(Clone)]
 pub struct LaunchAgents {
     pub env_reminder: bool,
+    /// Volatile Environment facts arrive at prompt submit where the adapter can carry them.
+    pub runtime_env: bool,
     pub allow_routine_rimz: bool,
     pub lsp_servers: BTreeMap<String, super::LspServerConfig>,
     pub untrusted_lsp_servers: Vec<String>,
@@ -355,6 +357,7 @@ pub fn load_with_roots(
             .unwrap_or_default();
         return Ok(LaunchAgents {
             env_reminder: machine.env_reminder,
+            runtime_env: machine.runtime_env,
             allow_routine_rimz: machine.allow_routine_rimz,
             lsp_servers,
             untrusted_lsp_servers,
@@ -372,6 +375,7 @@ pub fn load_with_roots(
     let Some(repo_value) = repo_value else {
         return Ok(LaunchAgents {
             env_reminder: machine.env_reminder,
+            runtime_env: machine.runtime_env,
             allow_routine_rimz: machine.allow_routine_rimz,
             lsp_servers,
             untrusted_lsp_servers: Vec::new(),
@@ -495,6 +499,7 @@ pub fn load_with_roots(
         })?;
     Ok(LaunchAgents {
         env_reminder: repo.env_reminder.unwrap_or(machine.env_reminder),
+        runtime_env: machine.runtime_env,
         allow_routine_rimz: machine.allow_routine_rimz,
         lsp_servers,
         untrusted_lsp_servers: Vec::new(),
