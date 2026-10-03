@@ -106,6 +106,7 @@ fn fire_tasks(
                         &task.entry().run_dir(),
                         ci_source,
                         task.entry().provider.as_ref(),
+                        task.entry().account.as_ref(),
                         &windows,
                     ),
                 )),
