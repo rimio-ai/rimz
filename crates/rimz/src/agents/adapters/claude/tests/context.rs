@@ -369,6 +369,40 @@ fn transcript_usage_absent_reports_zero_or_unknown() {
 }
 
 #[test]
+fn compact_boundary_supplies_the_post_compaction_total() {
+    const USAGE: &str = r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":5000,"cache_read_input_tokens":80000,"output_tokens":900}}}"#;
+    const BOUNDARY: &str = r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":86367,"postTokens":5717}}"#;
+    const BARE_BOUNDARY: &str =
+        r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto"}}"#;
+    let dir = tempfile::tempdir().unwrap();
+    let usage_of = |records: &[&str]| {
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, records.join("\n") + "\n").unwrap();
+        hook_lifecycle(
+            &ClaudeAdapter,
+            "PostCompact",
+            &json!({ "session_id": "sess-1", "transcript_path": path.to_str().unwrap() }),
+        )
+        .usage
+    };
+
+    // The usage record before the boundary was measured before the compaction.
+    let compacted = usage_of(&[USAGE, BOUNDARY]);
+    assert_eq!(compacted.total_tokens, Some(5_717));
+    assert_eq!(compacted.fresh_input_tokens, None);
+    assert_eq!(compacted.cache_read_input_tokens, None);
+    assert_eq!(compacted.output_tokens, None);
+
+    let next_call = usage_of(&[BOUNDARY, USAGE]);
+    assert_eq!(next_call.total_tokens, Some(85_900));
+    assert_eq!(next_call.fresh_input_tokens, Some(5_000));
+
+    let unsized_boundary = usage_of(&[USAGE, BARE_BOUNDARY]);
+    assert_eq!(unsized_boundary.total_tokens, None);
+    assert_eq!(unsized_boundary.fresh_input_tokens, None);
+}
+
+#[test]
 fn subagent_usage_comes_from_the_child_transcript_not_the_parents() {
     // A SubagentStop payload names both transcripts. Reading the parent's would
     // stamp the parent's model and token total onto the child's row, which is

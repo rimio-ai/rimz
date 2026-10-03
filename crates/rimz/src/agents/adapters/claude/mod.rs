@@ -1799,7 +1799,8 @@ fn context_window_for(model: &str, prices: &PriceBook) -> Option<u64> {
 /// Derive context-window usage from the tail of a Claude transcript JSONL.
 /// Claude never puts token counts in the hook payload — they live in the
 /// transcript — so this is the only place the context gauge can be sourced.
-/// Reads a bounded tail and takes the most recent assistant `message.usage`.
+/// Reads a bounded tail and takes the most recent assistant `message.usage`,
+/// or the newer `compact_boundary` record's post-compaction size.
 /// Best-effort: any IO or parse failure yields empty fields (enrichment, never
 /// correctness).
 fn usage_from_transcript(path: &Path) -> TranscriptUsage {
@@ -1824,6 +1825,17 @@ fn usage_from_transcript_tail(text: &str, agent_id: Option<&str>) -> TranscriptU
             .is_some_and(|agent_id| value.get("agentId").and_then(Value::as_str) != Some(agent_id))
         {
             continue;
+        }
+        // Every usage record older than a compaction boundary was measured
+        // before the compaction, so the boundary ends the walk with the size
+        // it records for the compacted window, or with no reading.
+        if value.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
+            return TranscriptUsage {
+                total_tokens: value
+                    .pointer("/compactMetadata/postTokens")
+                    .and_then(Value::as_u64),
+                ..TranscriptUsage::default()
+            };
         }
         let message = value.get("message");
         let Some(usage) = message.and_then(|m| m.get("usage")) else {
