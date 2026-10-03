@@ -399,7 +399,8 @@ fn cleanup_sandbox(root: &Path, env: &BTreeMap<&'static str, PathBuf>) {
 /// account, so a sandboxed command that inherited it would install hooks in and
 /// start agents against the real account rather than the sandbox `HOME`. This
 /// mirrors the integration harness's scrub (each adapter's
-/// `config_home_env_keys` plus `PROVIDER_SIDECAR_KEYS` in
+/// `config_home_env_keys` and `shared_database_home_env_key` plus
+/// `PROVIDER_SIDECAR_KEYS` in
 /// `crates/rimz/tests/integration/common/command.rs`); xtask does not link the
 /// `rimz` crate, so a new adapter home key is added here by hand.
 const PROVIDER_HOME_ENV: [&str; 18] = [

@@ -42,11 +42,19 @@ const PROVIDER_SIDECAR_KEYS: [&str; 9] = [
 /// scrub every spawned `rimz` installs and uninstalls hooks in, and starts real
 /// agents against, the developer's real account instead of the fixture `HOME`.
 /// Each adapter's own home keys come from its definition, so a new adapter is
-/// covered without touching this file. `RIMZ_*` overrides such as
-/// `RIMZ_ANTIGRAVITY_HOME` are covered by the prefix.
+/// covered without touching this file. So does its database-home key
+/// (`CODEX_SQLITE_HOME`), which a shared account exports to every child and
+/// which a launch leaves standing when the ambient environment sets it.
+/// `RIMZ_*` overrides such as `RIMZ_ANTIGRAVITY_HOME` are covered by the prefix.
 pub(super) fn provider_home_keys() -> impl Iterator<Item = &'static str> {
     rimz::agents::all_definitions()
-        .flat_map(|definition| definition.config_home_env_keys().iter().copied())
+        .flat_map(|definition| {
+            definition
+                .config_home_env_keys()
+                .iter()
+                .copied()
+                .chain(definition.shared_database_home_env_key())
+        })
         .chain(PROVIDER_SIDECAR_KEYS)
 }
 
