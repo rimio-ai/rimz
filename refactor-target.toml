@@ -1070,6 +1070,7 @@ allowed-dependencies = [
     "config",
     "disk::lock",
     "disk::paths",
+    "harness::assist_log",
     "harness::budget",
     "harness::launch",
     "harness::plan",
@@ -1089,6 +1090,7 @@ allowed-dependencies = [
 # `InFlightRun` carries the held lock's holder and run record to `loop show`/`logs` (+1).
 # A task's account pin is a `LaunchLogin`, resolved once by `task_login` for the runner and `loop add` (+1).
 # Fan-out supplies its already-resolved marker checkout separately from task config.
+# Resident completion appends its assist after durable ledger publication.
 surface-budget = 47
 
 [[strangler]]

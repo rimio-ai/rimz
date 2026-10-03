@@ -145,9 +145,11 @@ pub(super) fn run_one(
                 launch_globals.root = Some(root);
                 crate::cli::check_launch_room(&launch_globals)?;
                 let ctx = crate::cli::ctx::Ctx::open(&launch_globals)?;
-                if entry.stop_team {
-                    stop_checkout_team(&ctx, &launch_globals, &cwd)?;
-                }
+                let stopped_team = if entry.stop_team {
+                    stop_checkout_team(&ctx, &launch_globals, &cwd)?
+                } else {
+                    None
+                };
                 let mut launch = crate::cli::agents_cmd::AgentLaunchArgs {
                     spec: Some(spec),
                     prompt: Some(prompt),
@@ -174,6 +176,12 @@ pub(super) fn run_one(
                     .context("resident layout has no prompt leader")?;
                 Ok(rimz::harness::schedule::runner::TaskFireEffect::Resident {
                     leader: leader.name.clone(),
+                    handles: launched
+                        .identities
+                        .iter()
+                        .map(|identity| format!("@{}", identity.name))
+                        .collect(),
+                    stopped_team,
                 })
             })();
             finish_task_effect(&mut fire, effect, name, &entry)?

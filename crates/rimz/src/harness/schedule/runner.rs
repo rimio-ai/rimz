@@ -24,6 +24,7 @@ use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
+use super::super::assist_log::{self, Assist, AssistRecord};
 use super::{LOOP_TASK_ENV, fire::deadline_expired_at};
 use crate::agents::PermissionMode;
 use crate::agents::account::{AccountsCache, ProviderStatus, read_accounts_cache};
@@ -155,7 +156,11 @@ pub enum TaskFirePlan {
 
 #[derive(Debug)]
 pub enum TaskFireEffect {
-    Resident { leader: String },
+    Resident {
+        leader: String,
+        handles: Vec<String>,
+        stopped_team: Option<String>,
+    },
     Spawn(SupervisedRunOutcome),
     Delivered(crate::ids::MessageId),
     TargetGone,
@@ -645,17 +650,35 @@ impl<'a> TaskFire<'a> {
             .take()
             .context("loop task has no prepared effect to finish")?;
         match (pending, effect) {
-            (PendingEffect::Resident, TaskFireEffect::Resident { leader }) => {
+            (
+                PendingEffect::Resident,
+                TaskFireEffect::Resident {
+                    leader,
+                    handles,
+                    stopped_team,
+                },
+            ) => {
                 let cwd = self.launch_checkout();
                 let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+                let assist = AssistRecord {
+                    at: Timestamp::now(),
+                    assist: Assist::ResidentLaunch {
+                        task: self.name.clone(),
+                        checkout: cwd.clone(),
+                        condition: self.condition.clone(),
+                        stopped_team,
+                        handles,
+                    },
+                };
                 super::launch_ledger_store::record(
                     &paths,
                     &self.name,
                     &cwd,
                     super::launch_ledger::LaunchRecord {
-                        at: Timestamp::now(),
+                        at: assist.at,
                         leader: leader.clone(),
                     },
+                    || assist_log::try_append(&assist),
                 )?;
                 Ok(self.record_terminal_with(
                     LoopRunResult::Launched,
