@@ -109,6 +109,37 @@ fn manual_tty_prompts_for_blocked_project_trust() {
     );
 }
 
+#[test]
+fn an_error_recorded_as_a_skip_succeeds_and_any_other_error_propagates() {
+    use rimz::harness::schedule::runner::{TaskFireFinished, TaskFireNotice};
+
+    let finished = |result, notice| TaskFireFinished {
+        record: LoopRunRecord::new("test", result, LoopRunMode::Manual, 0),
+        presentation: LoopRunPresentation::default(),
+        transition: RunTransition::Recorded,
+        notice,
+    };
+    let skipped = skip_or_error(
+        finished(
+            LoopRunResult::AccountSkipped,
+            TaskFireNotice::Gate {
+                reason: "unknown codex account `ghost`".to_owned(),
+            },
+        ),
+        anyhow::anyhow!("launch codex"),
+    )
+    .expect("a recorded skip is not an error");
+    assert_eq!(skipped.record.result, LoopRunResult::AccountSkipped);
+    assert_eq!(skipped.presentation.exit_code, None);
+
+    let failed = skip_or_error(
+        finished(LoopRunResult::Errored, TaskFireNotice::None),
+        anyhow::anyhow!("pane refused"),
+    )
+    .expect_err("an errored fire keeps its error");
+    assert_eq!(failed.to_string(), "pane refused");
+}
+
 fn spawn_entry(check: bool, on: CheckOn) -> TaskEntry {
     TaskEntry {
         agent: Some("codex".to_owned()),
