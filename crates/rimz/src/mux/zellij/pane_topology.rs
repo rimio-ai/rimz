@@ -296,12 +296,14 @@ impl PaneTopologyPane {
         !self.is_plugin && !self.is_suppressed && !self.is_held && !self.exited
     }
 
-    /// A terminal pane that still holds a screen, in any state: held, exited,
-    /// and suppressed panes count, plugin panes do not. Pane I/O targets this
-    /// set, since Zellij takes a write or capture on a plugin id and does
-    /// nothing.
+    /// A terminal pane Zellij reads and writes by id: held and exited panes
+    /// count, plugin and suppressed panes do not. Pane I/O targets this set,
+    /// since Zellij takes a write or capture on a plugin id, or on a pane
+    /// another pane replaced in place, exits 0, and does nothing. A room pins
+    /// `stacked_pane_list false`, so replacement is its one source of a
+    /// suppressed pane.
     pub(super) fn holds_terminal(&self) -> bool {
-        !self.is_plugin
+        !self.is_plugin && !self.is_suppressed
     }
 
     /// A live tiled terminal pane. Command fields may still be absent for an
