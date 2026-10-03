@@ -93,18 +93,10 @@ pub(super) fn run_one(
         started,
     )?
     .with_condition(condition);
-    if entry.stay {
-        return record_task_error(
-            &mut fire,
-            name,
-            &entry,
-            anyhow::anyhow!(
-                "--stay launches are not available in this version; disable this task until resident launch support is installed"
-            ),
-        ).map(|_| ());
-    }
     let mut plan = fire.prepare(&mut |root| {
-        if mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly) {
+        if !entry.stay
+            && (mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly))
+        {
             return Ok(());
         }
         let state = StatePaths::for_project_root(root)?;
@@ -138,6 +130,48 @@ pub(super) fn run_one(
     }
     let finished = match plan {
         Err(err) => record_task_error(&mut fire, name, &entry, err)?,
+        Ok(rimz::harness::schedule::runner::TaskFirePlan::AlreadyLaunched) => return Ok(()),
+        Ok(rimz::harness::schedule::runner::TaskFirePlan::Resident {
+            root,
+            cwd,
+            spec,
+            prompt,
+        }) => {
+            let effect = (|| {
+                let mut launch_globals = globals.clone();
+                launch_globals.root = Some(root);
+                crate::cli::check_launch_room(&launch_globals)?;
+                let ctx = crate::cli::ctx::Ctx::open(&launch_globals)?;
+                let mut launch = crate::cli::agents_cmd::AgentLaunchArgs {
+                    spec: Some(spec),
+                    prompt: Some(prompt),
+                    ..Default::default()
+                };
+                launch.cohort.new_tab = true;
+                launch.cohort.bg = true;
+                launch.overrides.ask = entry.mode.as_deref() == Some("ask");
+                launch.overrides.yolo = entry.mode.as_deref() == Some("yolo");
+                launch.overrides.effort = entry.effort.clone();
+                let launched = crate::cli::agents_cmd::launch::launch_resolved(
+                    launch,
+                    &launch_globals,
+                    false,
+                    &ctx,
+                    MachineConfig::load_lenient(),
+                    Some(cwd),
+                    Some(name),
+                )?
+                .context("resident launch aborted")?;
+                let leader = launched
+                    .leader_index
+                    .and_then(|index| launched.identities.get(index))
+                    .context("resident layout has no prompt leader")?;
+                Ok(rimz::harness::schedule::runner::TaskFireEffect::Resident {
+                    leader: leader.name.clone(),
+                })
+            })();
+            finish_task_effect(&mut fire, effect, name, &entry)?
+        }
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Done(finished)) => finished,
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Spawn(prepared)) => {
             let mut run_globals = globals.clone();

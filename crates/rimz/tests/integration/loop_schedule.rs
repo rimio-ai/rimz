@@ -239,32 +239,120 @@ fn resident_subscribe_requires_prompt_leader_and_installed_hooks() {
     assert!(read_loop_instances(&env).0.is_empty());
 }
 
+#[cfg(unix)]
 #[test]
-fn resident_fire_refuses_without_starting_a_supervised_turn() {
+fn resident_launch_deduplicates_and_manual_fire_relaunches() {
     let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    let actual = env.home_root.join("actual-worktrees");
+    let alias = env.home_root.join("linked-worktrees");
+    std::fs::create_dir(&actual).unwrap();
+    std::os::unix::fs::symlink(&actual, &alias).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!("[agents.worktree]\ndir = {:?}\n", alias.to_str().unwrap()),
+    )
+    .unwrap();
+    loop_ok(&env, &["worktree", "new", "lane"]);
+    let checkout = alias.join("lane");
+    let marker = rimz::worktree::read_marker_for_worktree(&checkout)
+        .unwrap()
+        .unwrap();
+    assert_eq!(marker.worktree_path, checkout);
+    assert_ne!(checkout, canonical(&checkout));
+    trust_codex_project(&env, &checkout);
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        Vec::new(),
+    );
+    let trace = env.home_root.join("resident-mux.log");
+    let command = || {
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&agent_bin))
+            .env(
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            );
+        command
+    };
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nagent = \"claude\"\nprompt = \"repair\"\nroot = {:?}\nevery = \"1h\"\nstay = true\n",
+            "[tasks.resident]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nstay = true\n",
             env.project_root.to_str().unwrap(),
+            checkout.to_str().unwrap(),
         ),
     );
-    for command in ["fire", "run"] {
-        let (_, error) = loop_fail(&env, &["loop", command, "resident"]);
+    for _ in 0..2 {
+        let output = command()
+            .args(["loop", "run", "resident"])
+            .output()
+            .unwrap();
         assert!(
-            error.contains("--stay launches are not available"),
-            "{error}"
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
         );
-        let record = last_loop_record(&env);
-        assert!(
-            record
-                .error
-                .as_deref()
-                .unwrap()
-                .contains("--stay launches are not available")
-        );
-        assert!(record.run_id.is_none());
     }
+    let store = env.store();
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert_eq!(agents.len(), 1);
+    assert_eq!(
+        agents[0].worktree_path.as_deref(),
+        canonical(&checkout).to_str()
+    );
+    assert_eq!(agents[0].channel.as_deref(), Some("lane"));
+    assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1);
+    assert_eq!(serde_json::to_value(records[0].result).unwrap(), "launched");
+    let ledger = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
+    assert!(ledger["resident"].contains_key(&canonical(&checkout)));
+    let (_, error) = loop_fail(&env, &["loop", "rename", "resident", "renamed"]);
+    assert!(error.contains("resident leaders"), "{error}");
+    assert_eq!(
+        rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap(),
+        ledger
+    );
+    let output = command()
+        .args(["loop", "fire", "resident"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(read_loop_run_records(&env).len(), 2);
+    assert_eq!(
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .len(),
+        2
+    );
+    let mux_log = std::fs::read_to_string(trace).unwrap();
+    assert!(!mux_log.contains("close-tab"), "{mux_log}");
+    assert!(!mux_log.contains("close-pane"), "{mux_log}");
 }
 
 fn publish_claude_5h(env: &Env, used: u8) {
@@ -2051,6 +2139,22 @@ fn same_task_name_in_two_rooms_does_not_collide() {
 }
 
 #[test]
+fn loop_launched_logs_show_checkout_and_leader() {
+    let env = Env::new();
+    let mut record =
+        LoopRunRecord::new("resident", LoopRunResult::Launched, LoopRunMode::Manual, 0);
+    record.checkout = Some(env.project_root.join("lane"));
+    record.target = Some("@spry-cargo".into());
+    write_loop_run_records(&env, &[record]);
+    let output = loop_ok(&env, &["loop", "logs", "resident"]);
+    assert!(
+        output.contains("checkout:") && output.contains("/lane"),
+        "{output}"
+    );
+    assert!(output.contains("leader: @spry-cargo"), "{output}");
+}
+
+#[test]
 fn loop_history_filters_workspace_and_keeps_legacy_records() {
     let env = Env::new();
     let records = [
@@ -2074,6 +2178,16 @@ fn loop_history_filters_workspace_and_keeps_legacy_records() {
         );
         assert!(!output.contains("foreign-room"), "{output}");
     }
+    let output = env
+        .rimz()
+        .args(["loop", "show", "history", "--json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "missing task must fail JSON show");
+    assert!(
+        output.stdout.is_empty(),
+        "JSON show must not print human history"
+    );
 }
 
 #[test]

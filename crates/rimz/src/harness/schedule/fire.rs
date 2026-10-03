@@ -34,6 +34,7 @@ enum Action {
 }
 
 const WATCH_LOST_GRACE_SECS: i64 = 30;
+const RESIDENT_RETRY_SECS: i64 = 5 * 60;
 
 /// Whether a launch actually put a runner on the host. A `NotStarted` launch
 /// has already recorded its own `start failed` row.
@@ -356,7 +357,11 @@ fn plan(
                 let elapsed =
                     u128::try_from(now.timestamp().duration_since(state.since).as_millis())
                         .unwrap_or(0);
-                if !state.fired && elapsed >= hold.map_or(0, |duration| duration.as_millis()) {
+                let retry_due = task.entry().stay
+                    && now.timestamp().duration_since(last_fire).as_secs() >= RESIDENT_RETRY_SECS;
+                if (!state.fired || retry_due)
+                    && elapsed >= hold.map_or(0, |duration| duration.as_millis())
+                {
                     actions.push((name.clone(), Action::Fire));
                     next_state.insert(name.clone(), now.timestamp());
                     state.fired = true;

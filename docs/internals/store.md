@@ -89,6 +89,7 @@ records/agents-carryover.json                 agent rollup carried across rotati
 records/messages/messages.jsonl               live message queue
 records/channels.json                         named channels
 records/loop-instances.json                   loop and wait rows
+records/loop-launches.json                    resident loop launches by task and checkout
 records/boot.json                             last host boot id
 records/live-roster.json                      producer's last pane-backed live agent set
 records/pending-recovery.json                 lost agents awaiting the user's recovery decision

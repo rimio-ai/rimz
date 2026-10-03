@@ -30,7 +30,7 @@ rimz loop fire watchdog
 | `rimz loop logs <NAME>` | Full forensics for a task's recent runs. |
 | `rimz loop timer install\|status\|remove` | Manage the machine-wide timer. |
 
-Every command takes the [global flags](../cli.md#global-flags). No `loop` command prints JSON.
+Every command takes the [global flags](../cli.md#global-flags). `loop show --json` prints structured task, launch, and run records. It fails if the task no longer exists; without `--json`, `show` can still display its retained history.
 
 ## Add a task
 
@@ -46,7 +46,11 @@ Every command takes the [global flags](../cli.md#global-flags). No `loop` comman
 
 `--check` combined with `--agent` or `--wait` is a guard: the command runs first, and the action runs only on the outcome `--on` names. A supervised `--agent` task refuses a kind whose hooks are not installed, because a scheduled turn reports completion through them.
 
-Resident launch options can be saved, but resident fires are not available in this version: firing a `--stay` task records an error rather than starting a supervised turn. `--agent <SPEC> --stay` accepts the same layout grammar as `rimz agents`, requires a prompt leader and a prompt, and accepts `--mode auto|ask|yolo` and `--effort`. `--each-worktree` requires both `--stay` and `--when`. Repeatable `--subscribe <SIGNAL>` and `--stop-team` require `--stay`; subscriptions also require the prompt leader's installed, trusted registration hooks. Agent-family subscriptions need a separately scoped `loop add --wait --signal` task. `--stay` refuses `--check`, `--verify`, `--max-attempts`, `--budget`, `--budget-per-day`, `--surplus`, `--surplus-after`, `--timeout`, `--system-prompt-file`, `--worktree`, `--once`, `--wait`, and `--project`.
+`--agent <SPEC> --stay` opens ordinary agents in a new background tab on the checkout's channel, leaves their panes open, and returns without supervising a turn. It accepts the same layout grammar as `rimz agents`, requires a prompt leader and a prompt, and accepts `--effort`. With `--stay`, `--mode ask` and `--mode yolo` override the layout; `--mode auto` leaves each profile its own mode. A missing room is opened detached. Scheduled fires launch only once per task and checkout; changing the task under the same name preserves that memory. `loop fire NAME` launches again, and `loop remove NAME` clears the launch records. `loop show NAME` lists launched checkouts, times, and leader handles; `--json` includes those records and run history. Logs identify each launch's checkout and leader.
+
+A resident condition task retries a failed or skipped fire that leaves no launch record after 5 minutes from that checkout's last fire, while the task is enabled, unpaused, and the condition remains true. A recorded launch suppresses further scheduled fires. Failures remain subject to the task's strike limit; budget skips add no strike. Strikes are per task, so one checkout that keeps failing disables the task for every checkout.
+
+`--each-worktree` requires both `--stay` and `--when`. Repeatable `--subscribe <SIGNAL>` and `--stop-team` require `--stay`; subscriptions also require the prompt leader's installed, trusted registration hooks. Agent-family subscriptions need a separately scoped `loop add --wait --signal` task. `--stay` refuses `--account`, `--check`, `--verify`, `--max-attempts`, `--budget`, `--budget-per-day`, `--surplus`, `--surplus-after`, `--timeout`, `--system-prompt-file`, `--worktree`, `--once`, `--wait`, and `--project`.
 
 ### Triggers
 
@@ -59,7 +63,7 @@ Resident launch options can be saved, but resident fires are not available in th
 | Raw cron | `--cron "<5 fields>"` | Per the expression. |
 | Poll-until | `--every <DUR> --until <DUR> --check <CMD>` plus `--agent` or `--wait` | Until the guard fires the action or the deadline passes. |
 | Signal | `--signal <NAME\|FAMILY.*>`, narrowed by `--match` | On every delivering signal, or once with `--once`; see [signals](#signals). |
-| Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period; `--once` retires after the first fire. |
+| Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period, except resident retries; `--once` retires after the first fire. |
 
 The trigger values follow these rules:
 
@@ -82,7 +86,7 @@ Add refuses what a [window condition](#conditions) refuses, and also a window th
 
 ### Conditions
 
-`--when 'team.stage=Done && ci=passed' --for 30m` waits for both readings to stay true for 30 minutes. Evaluation uses the clock tick, not signal history: CI can pass before or after the board reaches Done. The first tick arms without evaluating. A false tick resets the hold; a fired standing task re-arms after a false tick. Holds start at the first true observation, never at a board timestamp, and reset when the room's runtime state is removed.
+`--when 'team.stage=Done && ci=passed' --for 30m` waits for both readings to stay true for 30 minutes. Evaluation uses the clock tick, not signal history: CI can pass before or after the board reaches Done. The first tick arms without evaluating. A false tick resets the hold; a fired standing task without `--stay` re-arms after a false tick. Holds start at the first true observation, never at a board timestamp, and reset when the room's runtime state is removed.
 
 Expressions accept `!`, `&&`, `||`, and parentheses, in that precedence order. A term is `key=value` or `key=value1,value2` (either value); a window key instead takes `key>=N`, `key<=N`, `key>N`, or `key<N`, with `N` a whole percent from `0` to `100`. Repeating `--when` ANDs the clauses. Whitespace between tokens is ignored; values use letters, digits, `_`, `.`, or `-`. Window percents are the only numbers, and there are no other literals and no functions. Use `!ci=failed`, not `ci!=failed`; a window key refuses `=` and `!=`, and for an exact percent `window.5h.left>=40 && window.5h.left<=40` reads the same.
 
@@ -107,7 +111,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
-| `--stay` | `--agent` | Save a resident layout task. Fires are not available yet. |
+| `--stay` | `--agent` | Open a resident layout in a background tab, once per checkout. |
 | `--each-worktree` | `--stay --when` | Request condition evaluation per RimZ-owned worktree. |
 | `--subscribe <SIGNAL>` | `--stay` | Request a standing subscription for the prompt leader; repeatable. |
 | `--stop-team` | `--stay` | Request stopping the checkout's team before the resident launch. |
@@ -362,7 +366,7 @@ Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and 
 | `waiting · team.stage: Review, ci: unknown` | Condition readings, in expression order; the whole expression is false. |
 | `holding 12m/30m` | Continuously true since the observed start of the hold. |
 | `due` | A clock fire is due, or a condition without `--for` is true and awaiting its next tick. |
-| `fired` | Already fired in this true period; waits for a false tick to re-arm. |
+| `fired` | Already fired in this true period; waits for a false tick to re-arm, except resident retries described above. |
 | `disabled`, `disabled · N strikes`, `disabled · enable to arm` | Held until enabled; the last is a project task not yet enabled here. |
 | `paused · in 2h` | Paused until then. |
 | `blocked · trust` | A project task whose project is not trusted. |
@@ -401,7 +405,7 @@ A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind)
 
 Condition runs in `loop logs` include `when: <expression> · held <duration>` and a JSON readings line. The record keeps the canonical expression, configured hold, observed held milliseconds, and readings; manual fires do not synthesize readings.
 
-`loop rename <name> <new-name>` moves the task to the new key in its store. The new name must differ and be free. The task re-arms, so an interval task next fires one interval after the rename.
+`loop rename <name> <new-name>` moves the task to the new key in its store. The new name must differ and be free. A task with recorded resident launches cannot be renamed because its resident leaders retain the task name. Edit it with `loop add` under the same name, or remove and re-add under a new name (which relaunches its checkouts). A resident task without recorded launches can be renamed. The task re-arms, so an interval task next fires one interval after the rename.
 
 `loop remove <name>` deletes the task from its store and prints ``removed loop task `<name>` ``, or ``no loop task named `<name>` `` when none exists. Run history stays readable. For a project task, both commands print the [trust result](#project-tasks).
 

@@ -426,7 +426,8 @@ path = "crates/rimz/src/harness"
 # The exec wrapper decides its launch through one harness entry and its outcome type, `launch_plan::prepare_exec` (+1).
 # Supervised launch planning and verify settlement leave the CLI: plan +2, run +2 with three transitions made private (+1).
 # auto_redeem::idle_logins names the idle accounts for the sidebar's usage lane and credits input (+1).
-surface-budget = 659
+# Resident launch ledger records and strict reads cross the planner/CLI seam (+5).
+surface-budget = 664
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

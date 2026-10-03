@@ -94,6 +94,8 @@ fn append_for_root(root: &Path, record: &LoopRunRecord) {
 pub struct LoopRunRecord {
     pub task: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<PathBuf>,
     pub at: Timestamp,
     pub result: LoopRunResult,
@@ -138,6 +140,7 @@ impl LoopRunRecord {
     ) -> Self {
         Self {
             task: task.into(),
+            checkout: None,
             root: None,
             at: Timestamp::now(),
             result,
@@ -194,6 +197,7 @@ pub struct SignalRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopRunResult {
+    Launched,
     Completed,
     Failed,
     VerifyFailed,
@@ -228,6 +232,7 @@ impl LoopRunResult {
 
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Launched => "launched",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::VerifyFailed => "verify failed",
@@ -499,6 +504,7 @@ mod tests {
 
     fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         LoopRunRecord {
+            checkout: None,
             task: task.to_owned(),
             root: None,
             at: Timestamp::from_second(second).expect("timestamp"),
