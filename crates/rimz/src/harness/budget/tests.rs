@@ -1582,3 +1582,140 @@ fn state_paths(runtime: &RuntimePaths) -> crate::StatePaths {
         .unwrap();
     crate::StatePaths::under_named(runtime.workspace_id.clone(), runtime.dir_name.clone(), home)
 }
+
+/// Runtime paths whose ledgers and ledger locks live in different directories,
+/// as in production.
+fn split_shared_roots() -> (tempfile::TempDir, RuntimePaths) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    runtime.persistent_shared_root = dir.path().join("providers");
+    std::fs::create_dir_all(&runtime.persistent_shared_root).expect("providers dir");
+    std::fs::create_dir_all(&runtime.shared_root).expect("shared dir");
+    (dir, runtime)
+}
+
+fn seed_account_ledger(runtime: &RuntimePaths, component: &str) -> (PathBuf, PathBuf) {
+    let ledger = runtime.shared_account_budget_ledger(component);
+    let lock = runtime.shared_account_budget_lock(component);
+    std::fs::write(&ledger, b"{}").expect("ledger");
+    std::fs::write(&lock, b"").expect("lock");
+    (ledger, lock)
+}
+
+fn accounts_config(accounts: &str) -> MachineConfig {
+    toml::from_str(accounts).expect("config")
+}
+
+const SHARED_AND_STANDALONE: &str = "[accounts.claude.work]\nhome = \"/srv/budget-test-work\"\n[accounts.claude.solo]\nhome = \"/srv/budget-test-solo\"\nhistory = \"standalone\"\n";
+
+#[test]
+fn ledger_sweep_removes_only_ledgers_no_pool_reads() {
+    let (_dir, runtime) = split_shared_roots();
+    let (work, work_lock) = seed_account_ledger(&runtime, "claude@work");
+    let (legacy, legacy_lock) = seed_account_ledger(&runtime, "codex");
+    let kept: Vec<PathBuf> = ["claude@default", "claude@solo", "claude@gone"]
+        .into_iter()
+        .flat_map(|component| <[PathBuf; 2]>::from(seed_account_ledger(&runtime, component)))
+        .chain(
+            ["accounts.json", "auto_redeem_rate.codex@work.json"].map(|name| {
+                let path = runtime.persistent_shared_root.join(name);
+                std::fs::write(&path, b"{}").expect("neighbour");
+                path
+            }),
+        )
+        .collect();
+
+    let sweep =
+        sweep_orphan_account_ledgers(&runtime, &accounts_config(SHARED_AND_STANDALONE), false);
+
+    assert_eq!(
+        sweep,
+        AccountLedgerSweep {
+            ledgers: 2,
+            bytes: 4
+        }
+    );
+    for gone in [work, work_lock, legacy, legacy_lock] {
+        assert!(!gone.exists(), "{}", gone.display());
+    }
+    for path in kept {
+        assert!(path.exists(), "{}", path.display());
+    }
+}
+
+#[test]
+fn ledger_sweep_removes_the_kind_only_ledger_without_named_accounts() {
+    let (_dir, runtime) = split_shared_roots();
+    let (legacy, legacy_lock) = seed_account_ledger(&runtime, "codex");
+    let (default, _) = seed_account_ledger(&runtime, "codex@default");
+
+    let sweep = sweep_orphan_account_ledgers(&runtime, &MachineConfig::default(), false);
+
+    assert_eq!(sweep.ledgers, 1);
+    assert!(!legacy.exists() && !legacy_lock.exists());
+    assert!(default.exists());
+}
+
+#[test]
+fn ledger_sweep_leaves_a_ledger_whose_lock_is_held() {
+    let (_dir, runtime) = split_shared_roots();
+    let (ledger, lock) = seed_account_ledger(&runtime, "claude@work");
+    let config = accounts_config(SHARED_AND_STANDALONE);
+    let held = crate::disk::lock::WorkspaceLock::acquire(&lock).expect("hold");
+
+    let busy = sweep_orphan_account_ledgers(&runtime, &config, false);
+    assert_eq!(busy, AccountLedgerSweep::default());
+    assert!(ledger.exists() && lock.exists());
+
+    drop(held);
+    let free = sweep_orphan_account_ledgers(&runtime, &config, false);
+    assert_eq!(free.ledgers, 1);
+    assert!(!ledger.exists() && !lock.exists());
+}
+
+#[test]
+fn ledger_sweep_keeps_named_ledgers_when_the_accounts_config_does_not_load() {
+    let (_dir, runtime) = split_shared_roots();
+    let (work, work_lock) = seed_account_ledger(&runtime, "claude@work");
+    let config = accounts_config("[accounts.claude.work]\nhome = \"relative\"\n");
+    assert!(crate::agents::LoginCatalog::from_config(&config.accounts).is_err());
+
+    let sweep = sweep_orphan_account_ledgers(&runtime, &config, false);
+
+    assert_eq!(sweep, AccountLedgerSweep::default());
+    assert!(work.exists() && work_lock.exists());
+}
+
+#[test]
+fn ledger_sweep_dry_run_counts_and_touches_nothing() {
+    let (_dir, runtime) = split_shared_roots();
+    let ledger = runtime.shared_account_budget_ledger("claude@work");
+    std::fs::write(&ledger, b"{}").expect("ledger");
+
+    let sweep =
+        sweep_orphan_account_ledgers(&runtime, &accounts_config(SHARED_AND_STANDALONE), true);
+
+    assert_eq!(
+        sweep,
+        AccountLedgerSweep {
+            ledgers: 1,
+            bytes: 2
+        }
+    );
+    assert!(ledger.exists());
+    assert!(!runtime.shared_account_budget_lock("claude@work").exists());
+}
+
+#[test]
+fn ledger_sweep_unlinks_its_lock_when_the_ledger_unlink_fails() {
+    let (_dir, runtime) = split_shared_roots();
+    let ledger = runtime.shared_account_budget_ledger("codex");
+    std::fs::create_dir(&ledger).expect("a directory under a ledger name");
+
+    let sweep = sweep_orphan_account_ledgers(&runtime, &MachineConfig::default(), false);
+
+    assert_eq!(sweep.ledgers, 0);
+    assert!(ledger.exists());
+    assert!(!runtime.shared_account_budget_lock("codex").exists());
+}

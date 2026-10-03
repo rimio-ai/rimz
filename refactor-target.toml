@@ -291,7 +291,6 @@ surface-budget = 11
 path = "crates/rimz/src/diag"
 surface-budget = 79
 
-# RuntimePaths owns the account budget ledger and its lock path (+2).
 [[module]]
 path = "crates/rimz/src/disk"
 allowed-dependencies = [
@@ -327,7 +326,9 @@ allowed-dependencies = [
 # Assist logging exposes the checked rotating append for launch-time warnings (+1).
 # The trunk signal lane owns a separate classed runtime cache path.
 # A named account's home is linked under one machine-wide lock path (+1).
-surface-budget = 208
+# RuntimePaths owns the account budget ledger and its lock path (+2).
+# The ledger sweep reads an account ledger file name back to its account component (+1).
+surface-budget = 209
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -404,7 +405,8 @@ path = "crates/rimz/src/harness"
 # The `[agents] shell` refusal is shared by launch compile, room start, and config set (+2).
 # Window conditions: the lazy window reading both evaluation callers build, and the add-time resolver with its refusals (+4).
 # `--after-reset`: its add-time resolver and the reset it reports to both `loop add` paths (+2).
-surface-budget = 636
+# `rimz gc` sweeps orphan account budget ledgers and reports the typed sweep result (+2).
+surface-budget = 638
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

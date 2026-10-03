@@ -856,6 +856,15 @@ impl RuntimePaths {
             .join(format!("{ACCOUNT_BUDGET_LEDGER_PREFIX}{component}.lock"))
     }
 
+    /// The component of an account budget ledger's file name; `None` for any
+    /// other file.
+    pub(crate) fn account_budget_ledger_component(path: &Path) -> Option<&str> {
+        path.file_name()?
+            .to_str()?
+            .strip_prefix(ACCOUNT_BUDGET_LEDGER_PREFIX)?
+            .strip_suffix(".json")
+    }
+
     pub(crate) fn shared_pixel_slot_lock(&self, slot: u8) -> PathBuf {
         self.shared_root.join(format!("pixel-slot-{slot}.lock"))
     }
