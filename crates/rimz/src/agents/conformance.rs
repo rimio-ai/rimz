@@ -44,9 +44,61 @@ fn hook_context_capability_agrees_with_native_reply_support() {
             if adapter.attach_hook_context(&mut decoded, "deadline context") {
                 attached = true;
                 assert!(supported, "{kind}");
+                let mut prompt = adapter
+                    .decode_hook(sample.event_name, &sample.payload)
+                    .unwrap();
+                assert!(
+                    !adapter.attach_prompt_context(&mut prompt, "prompt context"),
+                    "{kind}: a post-tool event is never a prompt submit"
+                );
                 assert!(
                     matches!(decoded.reply(), super::HookReply::Json(value) if value.to_string().contains("deadline context")),
                     "{kind}"
+                );
+            } else {
+                assert_eq!(decoded.reply(), &before, "{kind}");
+            }
+        }
+        assert_eq!(attached, supported, "{kind}");
+    }
+}
+
+#[test]
+fn prompt_context_capability_agrees_with_native_reply_support() {
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
+        let supported = matches!(kind, "claude" | "codex");
+        assert_eq!(
+            adapter.spec().capabilities.prompt_context,
+            supported,
+            "{kind}"
+        );
+        let mut attached = false;
+        for sample in adapter.conformance().classification {
+            let mut decoded = adapter
+                .decode_hook(sample.event_name, &sample.payload)
+                .unwrap();
+            let before = decoded.reply().clone();
+            if adapter.attach_prompt_context(&mut decoded, "prompt context") {
+                attached = true;
+                assert!(supported, "{kind}");
+                let super::HookReply::Json(reply) = decoded.reply() else {
+                    panic!("{kind}: prompt context needs a JSON reply");
+                };
+                assert_eq!(
+                    reply["hookSpecificOutput"],
+                    serde_json::json!({
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": "prompt context",
+                    }),
+                    "{kind}"
+                );
+                let mut post_tool = adapter
+                    .decode_hook(sample.event_name, &sample.payload)
+                    .unwrap();
+                assert!(
+                    !adapter.attach_hook_context(&mut post_tool, "deadline context"),
+                    "{kind}: a prompt submit is never a post-tool event"
                 );
             } else {
                 assert_eq!(decoded.reply(), &before, "{kind}");

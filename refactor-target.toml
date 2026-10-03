@@ -153,7 +153,8 @@ upward-dependencies = ["address"]
 # The account reconciler reports its warnings; a login answers its history mode, its overrides, and the
 # provider's own home; adapters name their private home entries and database-home key (+6).
 # Adapters name the history directories a shared account links before either home holds them (+1).
-surface-budget = 959
+# Native prompt-submit context attachment crosses the adapter/CLI hook seam (+1).
+surface-budget = 960
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

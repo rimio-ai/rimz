@@ -166,6 +166,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
     },
     capabilities: Capabilities {
         hook_context: true,
+        prompt_context: true,
         native_ask_ui: true,
         transcript_tail_context: true,
         // Codex has no background-task parking.
@@ -667,6 +668,17 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
         decoded.merge_reply_object([(
             "hookSpecificOutput".to_owned(),
             serde_json::json!({"hookEventName": "PostToolUse", "additionalContext": text}),
+        )]);
+        true
+    }
+
+    fn attach_prompt_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
+        if decoded.event_name() != "UserPromptSubmit" {
+            return false;
+        }
+        decoded.merge_reply_object([(
+            "hookSpecificOutput".to_owned(),
+            serde_json::json!({"hookEventName": "UserPromptSubmit", "additionalContext": text}),
         )]);
         true
     }
