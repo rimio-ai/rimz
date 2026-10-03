@@ -678,6 +678,7 @@ fn fire_signal_with_wait(
                 &name,
                 Some(signal),
                 None,
+                None,
                 super::fire::LoopRunHost::Detached,
             )
         };

@@ -427,7 +427,8 @@ path = "crates/rimz/src/harness"
 # Supervised launch planning and verify settlement leave the CLI: plan +2, run +2 with three transitions made private (+1).
 # auto_redeem::idle_logins names the idle accounts for the sidebar's usage lane and credits input (+1).
 # Resident launch ledger records and strict reads cross the planner/CLI seam (+5).
-surface-budget = 664
+# Fan-out helpers hand the marker checkout to the runner without re-resolving it (+1).
+surface-budget = 665
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1087,7 +1088,8 @@ allowed-dependencies = [
 # `--after-reset` resolves its instant here for both `loop add` paths (+2).
 # `InFlightRun` carries the held lock's holder and run record to `loop show`/`logs` (+1).
 # A task's account pin is a `LaunchLogin`, resolved once by `task_login` for the runner and `loop add` (+1).
-surface-budget = 46
+# Fan-out supplies its already-resolved marker checkout separately from task config.
+surface-budget = 47
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

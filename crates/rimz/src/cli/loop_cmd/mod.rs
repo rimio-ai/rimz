@@ -272,6 +272,8 @@ struct NameArgs {
 struct RunArgs {
     name: String,
     #[arg(long, hide = true)]
+    cwd: Option<PathBuf>,
+    #[arg(long, hide = true)]
     signal_json: Option<String>,
     #[arg(long, hide = true, conflicts_with = "signal_json")]
     condition_json: Option<String>,
@@ -383,6 +385,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
             args.keep,
             None,
             None,
+            None,
             globals,
         ),
         LoopSubcmd::Run(args) => {
@@ -404,6 +407,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
                 false,
                 signal,
                 condition,
+                args.cwd,
                 globals,
             )
         }

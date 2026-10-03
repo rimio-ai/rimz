@@ -330,6 +330,7 @@ pub struct TaskFire<'a> {
     check_trip: Option<CheckTrip>,
     signal: Option<TriggerSignal>,
     condition: Option<super::when::ConditionEvidence>,
+    checkout: Option<PathBuf>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
     run_lock_path: fn(&str, &TaskEntry) -> Result<PathBuf>,
@@ -374,6 +375,7 @@ impl<'a> TaskFire<'a> {
             check_trip: None,
             signal,
             condition: None,
+            checkout: None,
             started,
             run_lock: None,
             run_lock_path,
@@ -389,6 +391,17 @@ impl<'a> TaskFire<'a> {
     pub fn with_condition(mut self, condition: Option<super::when::ConditionEvidence>) -> Self {
         self.condition = condition;
         self
+    }
+
+    pub fn with_checkout(mut self, checkout: Option<PathBuf>) -> Self {
+        self.checkout = checkout;
+        self
+    }
+
+    fn launch_checkout(&self) -> PathBuf {
+        self.checkout
+            .clone()
+            .unwrap_or_else(|| self.entry.run_dir())
     }
 
     pub fn prepare(
@@ -437,7 +450,7 @@ impl<'a> TaskFire<'a> {
         }
         let root = self.entry.resolved_root();
         let paths = StatePaths::for_project_root(&root)?;
-        let cwd = self.entry.run_dir();
+        let cwd = self.launch_checkout();
         if self.mode == LoopRunMode::Scheduled
             && super::launch_ledger::load(&paths)?
                 .get(&self.name)
@@ -590,7 +603,16 @@ impl<'a> TaskFire<'a> {
     }
 
     fn prepare_run_lock(&mut self) -> Result<Option<TaskFireFinished>> {
-        let path = (self.run_lock_path)(&self.name, &self.entry)?;
+        let name = if self.entry.each_worktree {
+            format!(
+                "{}-{}",
+                self.name,
+                WorkspaceId::from_project_root(&self.launch_checkout())
+            )
+        } else {
+            self.name.clone()
+        };
+        let path = (self.run_lock_path)(&name, &self.entry)?;
         match acquire_run_lock(&path)? {
             RunLockAttempt::Acquired(guard) => {
                 self.run_lock = Some(guard);
@@ -624,7 +646,7 @@ impl<'a> TaskFire<'a> {
             .context("loop task has no prepared effect to finish")?;
         match (pending, effect) {
             (PendingEffect::Resident, TaskFireEffect::Resident { leader }) => {
-                let cwd = self.entry.run_dir();
+                let cwd = self.launch_checkout();
                 let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
                 super::launch_ledger_store::record(
                     &paths,
@@ -1016,7 +1038,7 @@ impl<'a> TaskFire<'a> {
         });
         record.condition = self.condition.clone();
         if self.entry.stay {
-            record.checkout = Some(self.entry.run_dir());
+            record.checkout = Some(self.launch_checkout());
         }
         record
     }
