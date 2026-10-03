@@ -2363,6 +2363,7 @@ fn account_room_journey(history: &str) {
         "{stderr}"
     );
 
+    wait_for_live_roster_entry(&env, &agent, CAPTURE_BUDGET);
     let reset = env
         .rimz()
         .env("PATH", &agent_path)
@@ -2550,6 +2551,31 @@ fn tmux_screens(socket: &Path) -> String {
             )
         })
         .collect()
+}
+
+/// Rebirth recovers the sessions the sidebar producer last published, which
+/// trails the store's bind, so a teardown that expects a resume waits for it.
+fn wait_for_live_roster_entry(env: &Env, agent: &rimz::agents::AgentState, budget: Duration) {
+    let path = env.store().paths().live_roster.clone();
+    let entry = serde_json::to_value((&agent.kind, &agent.agent_id)).expect("encode roster entry");
+    let deadline = Instant::now() + budget;
+    loop {
+        let roster = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        let agents = roster
+            .as_ref()
+            .and_then(|roster| roster["agents"].as_array());
+        if agents.is_some_and(|agents| agents.contains(&entry)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the sidebar producer never published {entry} to {}: {roster:?}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn wait_for_named_run(env: &Env, name: &str, budget: Duration) -> rimz::store::run::RunRecord {
