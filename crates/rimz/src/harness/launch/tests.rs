@@ -531,6 +531,33 @@ fn configured_lsp_denies_native_tool_on_every_launch_action() {
 }
 
 #[test]
+fn an_unstamped_launch_never_carries_the_runtime_switch() {
+    let switch = BTreeMap::from([(ENV_RUNTIME_ENV.to_owned(), "1".to_owned())]);
+    for stamped in [false, true] {
+        let process = compile_agent_process_with_extra_env(
+            None,
+            Path::new("/checkout"),
+            &request(
+                "claude",
+                ExecAction::Launch {
+                    prompt: None,
+                    extra_args: Vec::new(),
+                },
+            ),
+            Path::new("/checkout"),
+            &switch,
+            &LaunchReminders {
+                runtime_env: stamped,
+                ..LaunchReminders::default()
+            },
+        )
+        .expect("process");
+        assert_eq!(process.env.contains_key(ENV_RUNTIME_ENV), stamped);
+        assert_eq!(process.unset.contains(ENV_RUNTIME_ENV), !stamped);
+    }
+}
+
+#[test]
 fn process_compiler_appends_subagent_reminder_for_native_adapters() {
     let project = tempfile::tempdir().expect("project");
     for kind in ["claude", "qwen", "droid"] {

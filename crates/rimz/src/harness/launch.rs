@@ -901,6 +901,7 @@ fn compile_agent_process_with_extra_env(
     if reminders.runtime_env {
         env.insert(ENV_RUNTIME_ENV.to_owned(), "1".to_owned());
     } else {
+        env.remove(ENV_RUNTIME_ENV);
         unset.insert(ENV_RUNTIME_ENV.to_owned());
     }
     let mut process = CompiledAgentProcess {
