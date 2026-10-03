@@ -70,6 +70,26 @@ Only clocks need a timekeeper. A signal task and a `rimz wait` watcher are fired
 
 Missed time is never made up in bulk. A task a clock has not seen before is armed rather than fired, so adding one sets nothing off; a task that was already armed and came due while nothing kept time fires once when a clock next sees it, then resumes its schedule. A week of missed 02:00 occurrences does not arrive as a week of fires.
 
+## Leave an agent in each ready worktree
+
+When a team finishes a lane, you may still want someone watching its PR: a fixer to handle later CI failures or conflicts, then a cleanup agent after merge. Opening those panes by hand for every lane repeats the same handoff. A resident loop makes that one standing rule instead.
+
+With your `fixer` and `yagni` agent profiles and `reflect-notes` command cell configured, these two tasks cover every RimZ-owned worktree:
+
+```sh
+rimz loop add fixer --when 'team.stage=Done && ci=passed && pr=open' --each-worktree \
+  --agent 'reflect-notes,fixer' --stay --stop-team \
+  --subscribe ci.failed --subscribe pr.conflicted --prompt 'Watch this PR and repair CI failures or conflicts.'
+rimz loop add yagni --when 'pr=merged' --each-worktree \
+  --agent yagni --stay --prompt 'Review the merged work for unnecessary complexity and propose focused cleanup.'
+```
+
+The fixer rule waits until the board is Done and CI passes on an open PR. It stops that checkout's team, opens the layout in a background tab without moving your focus, and gives its prompt leader standing subscriptions scoped to that checkout. The yagni rule opens an agent after merge. Both leave ordinary agents running on the lane, rather than closing a supervised pane after one turn.
+
+Keep a room running for CI and PR conditions to be observed. Lanes already meeting a rule qualify too. GitHub sees PRs already merged or closed; Gitea needs the room to have observed the checkout's PR while it was open, and room teardown or reset forgets that observation. Each task launches only once per checkout, even if the condition turns false and true again, the room restarts, or you edit the task under the same name. The project root and worktrees RimZ does not own are not included.
+
+Use `rimz loop show fixer` to see launched checkouts and their leader handles, `rimz loop logs fixer` for each fire, and `rimz stats --assists` for the launch history. From an owned worktree, `rimz loop fire fixer` explicitly launches there again; removing the task clears its launch memory. A leader's subscriptions retire when its session ends.
+
 ## Wake a running agent
 
 An `until nc -z localhost 3000; do sleep 1; done` loop waits for a service, and `tail -F build.log | grep -m1 READY` waits for a log line. Both observe the right thing, but run in the agent's shell tool and hold its turn open while nothing needs its attention. A deploy is baking, the agent has nothing to do until it is ready, and the follow-up otherwise falls to you.

@@ -504,6 +504,9 @@ fn has_agent_runs_section(task: &LoadedTask) -> bool {
 
 pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let Some(task) = load_task(&args.name, globals)? else {
+        if args.json {
+            bail!("no loop task named {}; see rimz loop list", args.name);
+        }
         // A failed lookup falls through to `logs`, whose own lookup warns once.
         if let Ok(Some((root, in_flight))) = in_flight_without_row(&args.name, globals) {
             return show_in_flight(&args, &root, &in_flight);
@@ -534,12 +537,49 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         &args.name,
         project_root_for_globals(globals).as_deref(),
     );
+    let launches = if entry.stay {
+        rimz::harness::schedule::launch_ledger::load(&StatePaths::for_project_root(&root)?)?
+            .remove(&args.name)
+            .unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
+    if args.json {
+        writeln!(
+            ui::out(),
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({ "task": args.name, "entry": entry, "launches": launches, "runs": records })
+            )?
+        )?;
+        return Ok(());
+    }
     let show_agent_runs = has_agent_runs_section(&task);
     let in_flight = displayed_in_flight(in_flight_run(&args.name, &root));
 
     let mut out = ui::out();
     write_show_headline(&mut out, &args.name, &timing, now)?;
-    condition::write_show(&mut out, task.entry(), &timing)?;
+    if !launches.is_empty() {
+        writeln!(out, "\nLAUNCHES")?;
+        for (checkout, launch) in &launches {
+            writeln!(
+                out,
+                "  {}  @{}  {}",
+                checkout.display(),
+                launch.leader,
+                launch.at
+            )?;
+        }
+    }
+    if entry.each_worktree {
+        writeln!(
+            out,
+            "condition: evaluated per owned worktree · {} launched",
+            launches.len()
+        )?;
+    } else {
+        condition::write_show(&mut out, task.entry(), &timing)?;
+    }
     if let Some((verdict, style)) = verdict_line(&records, now) {
         writeln!(out, "  {}", ui::paint(style, &verdict))?;
     }
@@ -1129,7 +1169,7 @@ pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
 fn record_is_good(record: &LoopRunRecord) -> bool {
     matches!(
         record.result,
-        LoopRunResult::Completed | LoopRunResult::Delivered
+        LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched
     ) || matches!(record.result, LoopRunResult::CheckSkipped)
         && record
             .check
@@ -1231,7 +1271,9 @@ pub(super) struct ResultMark {
 
 pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
     let (glyph, style) = match result {
-        LoopRunResult::Completed | LoopRunResult::Delivered => ("✓", ui::palette::good()),
+        LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
+            ("✓", ui::palette::good())
+        }
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
         | LoopRunResult::TimedOut
@@ -1301,14 +1343,21 @@ fn record_exit(record: &LoopRunRecord) -> Option<String> {
 }
 
 fn record_note(record: &LoopRunRecord) -> Option<String> {
-    record
+    let note = record
         .error
         .as_deref()
         .map(first_line)
         .or_else(|| check_failure_line(record))
         .or_else(|| record.last_message.as_deref().map(first_line))
         .or_else(|| record.target.as_deref().map(first_line))
-        .map(|note| truncate_note(note, NOTE_MAX))
+        .map(|note| truncate_note(note, NOTE_MAX));
+    match (&record.checkout, note) {
+        (Some(checkout), Some(note)) if !note.is_empty() => {
+            Some(format!("{} {note}", checkout.display()))
+        }
+        (Some(checkout), _) => Some(checkout.display().to_string()),
+        (None, note) => note,
+    }
 }
 
 fn check_failure_line(record: &LoopRunRecord) -> Option<&str> {

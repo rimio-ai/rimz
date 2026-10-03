@@ -47,6 +47,7 @@ fn room_badge_names_the_external_timer_only_without_a_room() {
 
 fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
+        checkout: None,
         task: "wait".to_owned(),
         root: None,
         at: Timestamp::from_second(second).expect("timestamp"),
@@ -67,6 +68,15 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         input_tokens: None,
         output_tokens: None,
     }
+}
+
+#[test]
+fn checkout_without_a_note_has_no_trailing_separator() {
+    let mut row = record(0, LoopRunResult::Launched);
+    row.checkout = Some(PathBuf::from("/repo/lane"));
+    assert_eq!(record_note(&row).as_deref(), Some("/repo/lane"));
+    row.target = Some("@fixer".into());
+    assert_eq!(record_note(&row).as_deref(), Some("/repo/lane @fixer"));
 }
 
 #[test]

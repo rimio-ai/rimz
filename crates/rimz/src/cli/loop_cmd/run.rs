@@ -34,6 +34,7 @@ pub(super) fn run_one(
     keep: bool,
     signal: Option<rimz::harness::schedule::signal::Signal>,
     condition: Option<rimz::harness::schedule::when::ConditionEvidence>,
+    checkout: Option<PathBuf>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let catalog = task_catalog(globals)?;
@@ -42,6 +43,7 @@ pub(super) fn run_one(
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let entry = loaded.entry().clone();
+    let checkout = resident_checkout(&entry, mode, checkout)?;
     let source = loaded.source();
     gate_project_trust(name, &entry, source, mode)?;
     let key = loaded.key(name);
@@ -92,9 +94,12 @@ pub(super) fn run_one(
         check_echo,
         started,
     )?
-    .with_condition(condition);
+    .with_condition(condition)
+    .with_checkout(checkout);
     let mut plan = fire.prepare(&mut |root| {
-        if mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly) {
+        if !entry.stay
+            && (mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly))
+        {
             return Ok(());
         }
         let state = StatePaths::for_project_root(root)?;
@@ -128,6 +133,59 @@ pub(super) fn run_one(
     }
     let finished = match plan {
         Err(err) => record_task_error(&mut fire, name, &entry, err)?,
+        Ok(rimz::harness::schedule::runner::TaskFirePlan::AlreadyLaunched) => return Ok(()),
+        Ok(rimz::harness::schedule::runner::TaskFirePlan::Resident {
+            root,
+            cwd,
+            spec,
+            prompt,
+        }) => {
+            let effect = (|| {
+                let mut launch_globals = globals.clone();
+                launch_globals.root = Some(root);
+                crate::cli::check_launch_room(&launch_globals)?;
+                let ctx = crate::cli::ctx::Ctx::open(&launch_globals)?;
+                let stopped_team = if entry.stop_team {
+                    stop_checkout_team(&ctx, &launch_globals, &cwd)?
+                } else {
+                    None
+                };
+                let mut launch = crate::cli::agents_cmd::AgentLaunchArgs {
+                    spec: Some(spec),
+                    prompt: Some(prompt),
+                    ..Default::default()
+                };
+                launch.cohort.new_tab = true;
+                launch.cohort.bg = true;
+                launch.overrides.ask = entry.mode.as_deref() == Some("ask");
+                launch.overrides.yolo = entry.mode.as_deref() == Some("yolo");
+                launch.overrides.effort = entry.effort.clone();
+                let launched = crate::cli::agents_cmd::launch::launch_resolved(
+                    launch,
+                    &launch_globals,
+                    false,
+                    &ctx,
+                    MachineConfig::load_lenient(),
+                    Some(cwd),
+                    Some(name),
+                )?
+                .context("resident launch aborted")?;
+                let leader = launched
+                    .leader_index
+                    .and_then(|index| launched.identities.get(index))
+                    .context("resident layout has no prompt leader")?;
+                Ok(rimz::harness::schedule::runner::TaskFireEffect::Resident {
+                    leader: leader.name.clone(),
+                    handles: launched
+                        .identities
+                        .iter()
+                        .map(|identity| format!("@{}", identity.name))
+                        .collect(),
+                    stopped_team,
+                })
+            })();
+            finish_task_effect(&mut fire, effect, name, &entry)?
+        }
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Done(finished)) => finished,
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Spawn(prepared)) => {
             let mut run_globals = globals.clone();
@@ -154,6 +212,72 @@ pub(super) fn run_one(
         std::process::exit(code);
     }
     Ok(())
+}
+
+fn stop_checkout_team(
+    ctx: &crate::cli::ctx::Ctx,
+    globals: &GlobalFlags,
+    cwd: &Path,
+) -> Result<Option<String>> {
+    let snapshot = ctx.alive_snapshot()?;
+    let Some(hold) = rimz::harness::resume::inspect_team_hold(&snapshot.agents, cwd) else {
+        return Ok(None);
+    };
+    let checkout = rimz::utils::path::normalize_path_lexical(cwd);
+    let mut tracker = crate::cli::agents_cmd::StopTracker::default();
+    let mut stopped = false;
+    for member in rimz::address::team_cohorts(&snapshot.agents)
+        .into_iter()
+        .filter(|cohort| cohort.team == hold.team)
+        .flat_map(|cohort| cohort.members)
+        .filter(|member| {
+            member.worktree_path.as_deref().is_some_and(|path| {
+                rimz::utils::path::normalize_path_lexical(Path::new(path)) == checkout
+            })
+        })
+    {
+        stopped |=
+            crate::cli::agents_cmd::stop_resolved(ctx, globals, &snapshot, member, &mut tracker)?;
+    }
+    Ok(stopped.then_some(hold.team))
+}
+
+fn resident_checkout(
+    entry: &TaskEntry,
+    mode: LoopRunMode,
+    requested: Option<PathBuf>,
+) -> Result<Option<PathBuf>> {
+    if !entry.each_worktree {
+        if requested.is_some() {
+            bail!("--cwd on loop run requires an --each-worktree task");
+        }
+        return Ok(None);
+    }
+    if !entry.stay {
+        bail!("--each-worktree requires --stay");
+    }
+    let owned: Vec<_> = rimz::worktree::discover_owned(&entry.resolved_root())?
+        .into_iter()
+        .map(|worktree| rimz::utils::path::normalize_path_lexical(&worktree.marker.worktree_path))
+        .collect();
+    if mode == LoopRunMode::Scheduled {
+        let requested = requested.context("--each-worktree needs a checkout from the scheduler; use loop tick or loop fire from an owned worktree")?;
+        let requested = rimz::utils::path::normalize_path_lexical(&requested);
+        if let Some(checkout) = owned.into_iter().find(|checkout| *checkout == requested) {
+            return Ok(Some(checkout));
+        }
+        bail!(
+            "{} is not a RimZ-owned worktree of this task's project",
+            requested.display()
+        );
+    }
+    let cwd = std::env::current_dir()?.canonicalize()?;
+    let checkout = owned.into_iter().filter_map(|checkout| {
+        let canonical = checkout.canonicalize().ok()?;
+        cwd.starts_with(&canonical).then_some((canonical.components().count(), checkout))
+    }).max_by_key(|(depth, _)| *depth).map(|(_, path)| path)
+        .context("fire this --each-worktree task from inside a RimZ-owned worktree, not the project root")?;
+    Ok(Some(checkout))
 }
 
 fn gate_project_trust(

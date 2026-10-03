@@ -5,6 +5,243 @@ use crate::config::TaskEntry;
 
 const NAME: &str = "task";
 
+fn worktree_tasks(
+    hold: Option<&str>,
+) -> (
+    tempfile::TempDir,
+    BTreeMap<String, LoadedTask>,
+    Vec<PathBuf>,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let owned: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|name| root.path().join(name))
+        .collect();
+    for path in &owned {
+        std::fs::create_dir(path).unwrap();
+    }
+    let tasks = one(loaded(TaskEntry {
+        root: root.path().to_owned(),
+        agent: Some("claude".into()),
+        prompt: Some("repair".into()),
+        stay: true,
+        each_worktree: true,
+        when: Some(vec!["team.stage=Done".into()]),
+        hold: hold.map(str::to_owned),
+        ..Default::default()
+    }));
+    (root, tasks, owned)
+}
+
+#[test]
+fn worktree_scopes_normalize_marker_components() {
+    let (root, tasks, _) = worktree_tasks(None);
+    let owned = vec![root.path().join("b/../a")];
+    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &owned);
+    let scope = scoped.values().next().unwrap();
+    assert_eq!(
+        scope.checkout.as_deref(),
+        Some(root.path().join("a").as_path())
+    );
+}
+
+#[test]
+fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
+    let (_root, tasks, owned) = worktree_tasks(None);
+    let now = zdt(2026, 6, 24, 8, 0, 0);
+    std::fs::write(owned[0].join("blackboard.md"), "Stage: Done\n").unwrap();
+    std::fs::write(owned[1].join("blackboard.md"), "Stage: Review\n").unwrap();
+    let mut ledger = super::super::launch_ledger::Ledger::new();
+    for stage in [None, Some("Review"), Some("Done")] {
+        if let Some(stage) = stage {
+            std::fs::write(owned[0].join("blackboard.md"), format!("Stage: {stage}\n")).unwrap();
+        }
+        let scoped = scoped_tasks(&tasks, &ledger, &owned);
+        assert_eq!(scoped.len(), if ledger.is_empty() { 2 } else { 1 });
+        let planned: BTreeMap<_, _> = scoped
+            .iter()
+            .map(|(key, scoped)| (key.clone(), scoped.task.clone()))
+            .collect();
+        let windows = when::WindowReadings::new(None, now.timestamp());
+        let expr = when::WhenExpr::parse(&["team.stage=Done".into()]).unwrap();
+        let verdicts = scoped
+            .iter()
+            .map(|(key, scoped)| {
+                (
+                    key.clone(),
+                    when::evaluate(
+                        &expr,
+                        scoped.checkout.as_deref().unwrap(),
+                        None,
+                        None,
+                        None,
+                        &windows,
+                    ),
+                )
+            })
+            .collect();
+        let (_, stamps, _) = plan(
+            &planned,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &now,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let (actions, _, _) = plan(
+            &planned,
+            &stamps,
+            &BTreeMap::new(),
+            &now,
+            &BTreeMap::new(),
+            &verdicts,
+        );
+        if ledger.is_empty() {
+            assert_eq!(actions.len(), 1);
+            assert_eq!(actions[0].1, Action::Fire);
+            assert_eq!(scoped[&actions[0].0].checkout.as_ref(), Some(&owned[0]));
+            ledger.insert(
+                NAME.into(),
+                BTreeMap::from([(
+                    owned[0].clone(),
+                    super::super::launch_ledger::LaunchRecord {
+                        at: now.timestamp(),
+                        leader: "otter".into(),
+                    },
+                )]),
+            );
+        } else {
+            assert!(actions.is_empty());
+            assert!(
+                scoped
+                    .values()
+                    .all(|task| task.checkout.as_ref() != Some(&owned[0]))
+            );
+        }
+    }
+}
+
+#[test]
+fn worktree_retries_use_each_checkouts_last_fire() {
+    let (_root, tasks, owned) = worktree_tasks(None);
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &owned);
+    let planned = scoped
+        .iter()
+        .map(|(key, scope)| (key.clone(), scope.task.clone()))
+        .collect();
+    let mut stamps = BTreeMap::new();
+    let mut states = BTreeMap::new();
+    let mut verdicts = BTreeMap::new();
+    for (key, scope) in &scoped {
+        stamps.insert(
+            key.clone(),
+            seconds_before(
+                now.timestamp(),
+                if scope.checkout.as_ref() == Some(&owned[0]) {
+                    300
+                } else {
+                    299
+                },
+            ),
+        );
+        states.insert(
+            key.clone(),
+            WhenState {
+                fingerprint: Some(("team.stage=Done".into(), None, scope.task.entry().run_dir())),
+                since: seconds_before(now.timestamp(), 600),
+                fired: true,
+            },
+        );
+        verdicts.insert(
+            key.clone(),
+            Verdict {
+                ok: true,
+                readings: BTreeMap::new(),
+            },
+        );
+    }
+    let (actions, next_stamps, _) = plan(
+        &planned,
+        &stamps,
+        &BTreeMap::new(),
+        &now,
+        &states,
+        &verdicts,
+    );
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].1, Action::Fire);
+    assert_eq!(scoped[&actions[0].0].checkout.as_ref(), Some(&owned[0]));
+    for (key, scope) in &scoped {
+        assert_eq!(
+            next_stamps[key],
+            if scope.checkout.as_ref() == Some(&owned[0]) {
+                now.timestamp()
+            } else {
+                stamps[key]
+            }
+        );
+    }
+}
+
+#[test]
+fn worktree_holds_have_independent_clocks() {
+    let (_root, tasks, owned) = worktree_tasks(Some("30m"));
+    let now = zdt(2026, 6, 24, 8, 0, 0);
+    let scoped = scoped_tasks(&tasks, &BTreeMap::new(), &owned);
+    assert_eq!(scoped.len(), 2);
+    let planned: BTreeMap<_, _> = scoped
+        .iter()
+        .map(|(key, scoped)| (key.clone(), scoped.task.clone()))
+        .collect();
+    let (_, mut stamps, mut states) = plan(
+        &planned,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &now,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    for (minute, expected) in [
+        (0, vec![]),
+        (20, vec![]),
+        (30, vec![&owned[0]]),
+        (50, vec![&owned[0], &owned[1]]),
+    ] {
+        let tick = zdt(2026, 6, 24, 8, minute, 0);
+        let verdicts = scoped
+            .iter()
+            .map(|(key, scope)| {
+                (
+                    key.clone(),
+                    Verdict {
+                        ok: minute >= 20 || scope.checkout.as_ref() == Some(&owned[0]),
+                        readings: BTreeMap::new(),
+                    },
+                )
+            })
+            .collect();
+        let (actions, next_stamps, next_states) = plan(
+            &planned,
+            &stamps,
+            &BTreeMap::new(),
+            &tick,
+            &states,
+            &verdicts,
+        );
+        assert!(actions.iter().all(|(_, action)| *action == Action::Fire));
+        assert_eq!(
+            actions
+                .iter()
+                .map(|(key, _)| scoped[key].checkout.as_ref().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        stamps = next_stamps;
+        states = next_states;
+    }
+}
+
 #[test]
 fn condition_write_failure_preserves_clock_fires() {
     let root = tempfile::tempdir().unwrap();
@@ -295,6 +532,90 @@ fn condition_tick(
 }
 
 #[test]
+fn resident_conditions_retry_at_five_minutes_until_ledgered() {
+    let root = tempfile::tempdir().unwrap();
+    let now = zdt(2026, 6, 24, 8, 0, 0);
+    for stay in [true, false] {
+        let tasks = one(loaded(TaskEntry {
+            root: root.path().to_owned(),
+            agent: Some("claude".into()),
+            prompt: Some("repair".into()),
+            stay,
+            when: Some(vec!["team.stage=Done".into()]),
+            ..Default::default()
+        }));
+        let verdicts = one(Verdict {
+            ok: true,
+            readings: BTreeMap::new(),
+        });
+        let (_, mut stamps, mut states) = plan(
+            &tasks,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &now,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        for (minute, second, expected) in [
+            (0, 0, true),
+            (4, 59, false),
+            (5, 0, stay),
+            (9, 59, false),
+            (10, 0, stay),
+        ] {
+            let tick = zdt(2026, 6, 24, 8, minute, second);
+            let (actions, next_stamps, next_states) =
+                plan(&tasks, &stamps, &BTreeMap::new(), &tick, &states, &verdicts);
+            assert_eq!(
+                actions,
+                if expected {
+                    vec![(NAME.into(), Action::Fire)]
+                } else {
+                    vec![]
+                },
+                "stay={stay}, {tick}"
+            );
+            assert_eq!(next_states[NAME].since, now.timestamp());
+            assert!(next_states[NAME].fired);
+            stamps = next_stamps;
+            states = next_states;
+        }
+        if !stay {
+            continue;
+        }
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let runtime = RuntimePaths::for_state(&paths).unwrap();
+        crate::disk::atomic::write_temp_then_rename(
+            &super::super::launch_ledger::path(&paths),
+            &one(BTreeMap::from([(
+                root.path().to_owned(),
+                super::super::launch_ledger::LaunchRecord {
+                    at: now.timestamp(),
+                    leader: "otter".into(),
+                },
+            )])),
+        )
+        .unwrap();
+        write_temp_then_rename_cache(&state_path(&runtime), &stamps).unwrap();
+        write_temp_then_rename_cache(&when_state_path(&runtime), &states).unwrap();
+        std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        for hour in [9, 10] {
+            assert!(
+                fire_tasks(
+                    &runtime,
+                    Some(root.path()),
+                    tasks.clone(),
+                    &zdt(2026, 6, 24, hour, 0, 0),
+                    LoopRunHost::Detached,
+                    None
+                )
+                .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
 fn condition_first_sight_arms_without_a_verdict() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let (actions, stamps, states) = condition_tick(None, None, None, None, false, &now);
@@ -435,6 +756,7 @@ fn loop_run_hosts_render_precise_argv() {
         NAME,
         Some(r#"{"name":"deploy.done"}"#),
         None,
+        None,
     );
     assert_eq!(
         loop_run_command(LoopRunHost::Detached, exe, &args, NAME),
@@ -523,6 +845,7 @@ fn all_loop_run_hosts_suppress_subprocesses_in_unit_tests() {
                 &task("/missing-loop-test-root", "1m"),
                 Some(root),
                 NAME,
+                None,
                 None,
                 None,
                 host

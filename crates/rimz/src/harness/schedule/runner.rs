@@ -24,6 +24,7 @@ use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
+use super::super::assist_log::{self, Assist, AssistRecord};
 use super::{LOOP_TASK_ENV, fire::deadline_expired_at};
 use crate::agents::PermissionMode;
 use crate::agents::account::{AccountsCache, ProviderStatus, read_accounts_cache};
@@ -142,12 +143,24 @@ pub struct PreparedDelivery {
 #[derive(Clone, Debug)]
 pub enum TaskFirePlan {
     Done(TaskFireFinished),
+    AlreadyLaunched,
+    Resident {
+        root: PathBuf,
+        cwd: PathBuf,
+        spec: String,
+        prompt: String,
+    },
     Spawn(PreparedSpawn),
     Deliver(PreparedDelivery),
 }
 
 #[derive(Debug)]
 pub enum TaskFireEffect {
+    Resident {
+        leader: String,
+        handles: Vec<String>,
+        stopped_team: Option<String>,
+    },
     Spawn(SupervisedRunOutcome),
     Delivered(crate::ids::MessageId),
     TargetGone,
@@ -155,6 +168,7 @@ pub enum TaskFireEffect {
 
 #[derive(Clone, Debug)]
 enum PendingEffect {
+    Resident,
     Spawn {
         check: Option<CheckRecord>,
         stream: bool,
@@ -321,6 +335,7 @@ pub struct TaskFire<'a> {
     check_trip: Option<CheckTrip>,
     signal: Option<TriggerSignal>,
     condition: Option<super::when::ConditionEvidence>,
+    checkout: Option<PathBuf>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
     run_lock_path: fn(&str, &TaskEntry) -> Result<PathBuf>,
@@ -365,6 +380,7 @@ impl<'a> TaskFire<'a> {
             check_trip: None,
             signal,
             condition: None,
+            checkout: None,
             started,
             run_lock: None,
             run_lock_path,
@@ -382,10 +398,24 @@ impl<'a> TaskFire<'a> {
         self
     }
 
+    pub fn with_checkout(mut self, checkout: Option<PathBuf>) -> Self {
+        self.checkout = checkout;
+        self
+    }
+
+    fn launch_checkout(&self) -> PathBuf {
+        self.checkout
+            .clone()
+            .unwrap_or_else(|| self.entry.run_dir())
+    }
+
     pub fn prepare(
         &mut self,
         before_check: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
+        if self.entry.stay {
+            return self.prepare_resident(before_check);
+        }
         if let Some(done) = self.prepare_scope_gates()? {
             return Ok(TaskFirePlan::Done(done));
         }
@@ -393,17 +423,8 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::Done(done));
         }
 
-        if deadline_expired_at(&self.entry, self.now) {
-            if self.mode == LoopRunMode::Scheduled {
-                self.remove_schedule()?;
-            }
-            return Ok(TaskFirePlan::Done(self.record_terminal_with(
-                LoopRunResult::Expired,
-                LoopRunPresentation::default(),
-                TaskFireNotice::None,
-                None,
-                |_| {},
-            )));
+        if let Some(done) = self.prepare_deadline()? {
+            return Ok(TaskFirePlan::Done(done));
         }
 
         let fired_check = match self.prepare_check(before_check)? {
@@ -423,6 +444,113 @@ impl<'a> TaskFire<'a> {
                 unreachable!("check-only action is completed by prepare_check")
             }
         }
+    }
+
+    fn prepare_resident(
+        &mut self,
+        before_launch: &mut dyn FnMut(&Path) -> Result<()>,
+    ) -> Result<TaskFirePlan> {
+        if let Some(done) = self.prepare_run_lock()? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        let root = self.entry.resolved_root();
+        let paths = StatePaths::for_project_root(&root)?;
+        let cwd = self.launch_checkout();
+        if self.mode == LoopRunMode::Scheduled
+            && super::launch_ledger::load(&paths)?
+                .get(&self.name)
+                .is_some_and(|launches| launches.contains_key(&cwd))
+        {
+            self.finished = true;
+            return Ok(TaskFirePlan::AlreadyLaunched);
+        }
+        if let Some(done) = self.prepare_resident_scope_gates(&cwd)? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        if let Some(done) = self.prepare_deadline()? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        let TaskAction::Spawn(spec) = self
+            .action
+            .take()
+            .context("resident task already prepared")?
+        else {
+            bail!("--stay requires an agent layout");
+        };
+        let prompt = self.resolve_effect_prompt(None)?;
+        before_launch(&root)?;
+        self.pending = Some(PendingEffect::Resident);
+        Ok(TaskFirePlan::Resident {
+            root,
+            cwd,
+            spec,
+            prompt,
+        })
+    }
+
+    fn prepare_deadline(&mut self) -> Result<Option<TaskFireFinished>> {
+        if !deadline_expired_at(&self.entry, self.now) {
+            return Ok(None);
+        }
+        if self.mode == LoopRunMode::Scheduled {
+            self.remove_schedule()?;
+        }
+        Ok(Some(self.record_terminal_with(
+            LoopRunResult::Expired,
+            LoopRunPresentation::default(),
+            TaskFireNotice::None,
+            None,
+            |_| {},
+        )))
+    }
+
+    fn prepare_resident_scope_gates(&mut self, cwd: &Path) -> Result<Option<TaskFireFinished>> {
+        let workspace = WorkspaceResolver::resolve(cwd, Some(self.entry.resolved_root()))?;
+        let state = StatePaths::for_project_root(&workspace.project_root)?;
+        let runtime = RuntimePaths::for_state(&state)?;
+        let mut effective = crate::config::effective::load(&self.config, &workspace.project_root)?;
+        let availability = crate::harness::plan::LaunchAvailability::read(
+            &runtime,
+            &state,
+            &self.config,
+            self.now,
+        );
+        effective.route(
+            &self.config.tiers,
+            crate::config::effective::ProfileScope::Agents,
+            self.entry.agent.as_deref(),
+            None,
+            None,
+            None,
+            |kind, model| availability.unavailable(kind, model),
+        )?;
+        let layout = crate::harness::plan::resolve_launch(
+            &effective,
+            crate::config::effective::ProfileScope::Agents,
+            &self.config.agents.commands,
+            self.entry.agent.as_deref(),
+            None,
+        )?;
+        for cell in layout.layout.agent_cells() {
+            let resolved = ResolvedSingleAgentLaunch {
+                kind: cell.kind.as_str().to_owned(),
+                args: cell.args.clone(),
+                model: cell.launch.model.clone(),
+            };
+            let login = task_login(&LaunchLogin::RoomDefault, &cell.kind, &runtime)?;
+            let mut scope = FireScope::new(
+                cell.kind.clone(),
+                runtime.clone(),
+                state.clone(),
+                None,
+                login,
+            );
+            scope.managed_launch = resolve_managed_spawn_state(&self.entry, &workspace, &resolved)?;
+            if let Some((result, reason)) = self.scope_refusal(&scope) {
+                return Ok(Some(self.record_gate(result, reason)));
+            }
+        }
+        Ok(None)
     }
 
     fn prepare_scope_gates(&mut self) -> Result<Option<TaskFireFinished>> {
@@ -480,7 +608,16 @@ impl<'a> TaskFire<'a> {
     }
 
     fn prepare_run_lock(&mut self) -> Result<Option<TaskFireFinished>> {
-        let path = (self.run_lock_path)(&self.name, &self.entry)?;
+        let name = if self.entry.each_worktree {
+            format!(
+                "{}-{}",
+                self.name,
+                WorkspaceId::from_project_root(&self.launch_checkout())
+            )
+        } else {
+            self.name.clone()
+        };
+        let path = (self.run_lock_path)(&name, &self.entry)?;
         match acquire_run_lock(&path)? {
             RunLockAttempt::Acquired(guard) => {
                 self.run_lock = Some(guard);
@@ -513,6 +650,46 @@ impl<'a> TaskFire<'a> {
             .take()
             .context("loop task has no prepared effect to finish")?;
         match (pending, effect) {
+            (
+                PendingEffect::Resident,
+                TaskFireEffect::Resident {
+                    leader,
+                    handles,
+                    stopped_team,
+                },
+            ) => {
+                let cwd = self.launch_checkout();
+                let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
+                let assist = AssistRecord {
+                    at: Timestamp::now(),
+                    assist: Assist::ResidentLaunch {
+                        task: self.name.clone(),
+                        checkout: cwd.clone(),
+                        condition: self.condition.clone(),
+                        stopped_team,
+                        handles,
+                    },
+                };
+                super::launch_ledger_store::record(
+                    &paths,
+                    &self.name,
+                    &cwd,
+                    super::launch_ledger::LaunchRecord {
+                        at: assist.at,
+                        leader: leader.clone(),
+                    },
+                    || assist_log::try_append(&assist),
+                )?;
+                Ok(self.record_terminal_with(
+                    LoopRunResult::Launched,
+                    LoopRunPresentation::default(),
+                    TaskFireNotice::None,
+                    None,
+                    |record| {
+                        record.target = Some(format!("@{leader}"));
+                    },
+                ))
+            }
             (PendingEffect::Spawn { check, stream }, TaskFireEffect::Spawn(outcome)) => {
                 let mut record = self.terminal_record(LoopRunResult::Completed);
                 let (presentation, notice) =
@@ -883,6 +1060,9 @@ impl<'a> TaskFire<'a> {
             payload: signal.payload.clone(),
         });
         record.condition = self.condition.clone();
+        if self.entry.stay {
+            record.checkout = Some(self.launch_checkout());
+        }
         record
     }
 

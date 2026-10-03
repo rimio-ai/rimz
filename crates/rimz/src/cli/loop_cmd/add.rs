@@ -16,6 +16,9 @@ enum AddTaskAction {
         resolved: ResolvedSingleAgentLaunch,
         mode: Option<String>,
     },
+    Stay {
+        kind: String,
+    },
     Deliver {
         target: TaskTarget,
         selector: Option<schedule::signal::SignalSelector>,
@@ -28,6 +31,7 @@ impl AddTaskAction {
     fn provider_kind(&self) -> Option<&str> {
         match self {
             Self::Spawn { resolved, .. } => Some(resolved.kind()),
+            Self::Stay { kind } => Some(kind),
             Self::Deliver { target, .. } => Some(target.kind.as_str()),
             Self::CheckOnly => None,
         }
@@ -91,7 +95,9 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let shape = schedule::TaskShape::compile(&args.name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
     let task_action = shape.action().map_err(Clone::clone)?;
-    preflight_entry(task_action, resolved_for_preflight.as_ref(), login.as_ref())?;
+    if !entry.stay {
+        preflight_entry(task_action, resolved_for_preflight.as_ref(), login.as_ref())?;
+    }
     let catalog = TaskCatalog::load(Some(&project_root))?;
     let project_pre_state = args
         .project
@@ -298,6 +304,113 @@ fn add_delivery(
 
 fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     schedule::validate_name(&args.name)?;
+    if args.stay && args.wait.is_some() {
+        bail!("--stay cannot use --wait; it launches a new agent layout");
+    }
+    if args.stay && args.agent.is_none() {
+        bail!("--stay requires --agent with a layout to launch");
+    }
+    for (used, flag) in [
+        (args.each_worktree, "--each-worktree"),
+        (args.stop_team, "--stop-team"),
+        (!args.subscribe.is_empty(), "--subscribe"),
+    ] {
+        if used && !args.stay {
+            bail!("{flag} requires --stay; it applies to resident layouts");
+        }
+    }
+    if args.each_worktree && args.when.is_empty() {
+        bail!("--each-worktree requires --when; fan-out supports conditions only");
+    }
+    if args.stay {
+        for (used, flag, reason) in [
+            (
+                args.account.is_some(),
+                "--account",
+                "resident layouts use the room's accounts; omit --account or --stay",
+            ),
+            (
+                args.max_attempts.is_some(),
+                "--max-attempts",
+                "resident layouts are not supervised retries",
+            ),
+            (
+                args.budget_per_day.is_some(),
+                "--budget-per-day",
+                "resident layouts have no per-fire spend accounting",
+            ),
+            (
+                args.check.is_some(),
+                "--check",
+                "resident launches do not run check commands",
+            ),
+            (
+                args.verify.is_some(),
+                "--verify",
+                "resident layouts are not supervised turns",
+            ),
+            (
+                args.budget.is_some(),
+                "--budget",
+                "resident layouts have no supervised run budget",
+            ),
+            (
+                args.surplus.is_some(),
+                "--surplus",
+                "resident layouts have no bounded run spend",
+            ),
+            (
+                args.surplus_after.is_some(),
+                "--surplus-after",
+                "resident layouts have no bounded run spend",
+            ),
+            (
+                args.timeout.is_some(),
+                "--timeout",
+                "resident agents remain open",
+            ),
+            (
+                args.system_prompt_file.is_some(),
+                "--system-prompt-file",
+                "resident layouts use their profiles' system prompts",
+            ),
+            (
+                args.worktree.is_some(),
+                "--worktree",
+                "resident layouts launch in the condition's checkout",
+            ),
+            (
+                args.once,
+                "--once",
+                "resident launches are deduplicated per checkout, not per task",
+            ),
+            (
+                !args.subscribe.is_empty()
+                    && (args.in_after.is_some()
+                        || (args.at.is_some() && args.every.is_none())
+                        || args.after_reset.is_some()),
+                "--subscribe",
+                "one-shot triggers remove the task before registration; use --every, --cron, or --when",
+            ),
+            (
+                args.project,
+                "--project",
+                "resident launch state is machine-local",
+            ),
+        ] {
+            if used {
+                bail!("--stay cannot use {flag}; {reason}");
+            }
+        }
+    }
+    for signal in &args.subscribe {
+        schedule::parse_signal_selector(&args.name, signal, None)?;
+        if signal == "agent" || signal.starts_with("agent.") {
+            bail!(
+                "--subscribe cannot use agent signals without an explicit other-agent match; use a scoped `rimz loop add --wait --signal` instead"
+            );
+        }
+    }
     let project_error = args.project.then(|| {
         [
             (
@@ -411,6 +524,7 @@ fn resolve_add_action(
     kind: TaskActionKind,
 ) -> Result<AddTaskAction> {
     let mut action = match kind {
+        TaskActionKind::Spawn if args.stay => resolve_resident_action(args, workspace)?,
         TaskActionKind::Spawn => {
             let spec = args.agent.as_deref().unwrap_or_default();
             let resolved =
@@ -431,6 +545,90 @@ fn resolve_add_action(
         *mode = args.mode.as_deref().map(parse_mode).transpose()?;
     }
     Ok(action)
+}
+
+fn resolve_resident_action(
+    args: &AddArgs,
+    workspace: &rimz::ResolvedWorkspace,
+) -> Result<AddTaskAction> {
+    let machine = MachineConfig::load_lenient();
+    let mut effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
+    let state = StatePaths::for_project_root(&workspace.project_root)?;
+    let runtime = rimz::RuntimePaths::for_state(&state)?;
+    let availability =
+        rimz::harness::plan::LaunchAvailability::read(&runtime, &state, &machine, Timestamp::now());
+    effective.route(
+        &machine.tiers,
+        rimz::config::effective::ProfileScope::Agents,
+        args.agent.as_deref(),
+        None,
+        None,
+        None,
+        |kind, model| availability.unavailable(kind, model),
+    )?;
+    let resolved = rimz::harness::plan::resolve_launch(
+        &effective,
+        rimz::config::effective::ProfileScope::Agents,
+        &machine.agents.commands,
+        args.agent.as_deref(),
+        None,
+    )?;
+    let team = resolved
+        .team_name
+        .as_ref()
+        .and_then(|name| resolved.teams.0.get(name));
+    for signal in &args.subscribe {
+        let selector = schedule::parse_signal_selector(&args.name, signal, None)?;
+        match arm::default_signal_match_key(&selector, &BTreeMap::new()) {
+            Some("path")
+                if !args.each_worktree && workspace.worktree_root == workspace.project_root =>
+            {
+                bail!(
+                    "--subscribe {signal} needs a checkout scope; use --each-worktree with --when, or --root <worktree>"
+                );
+            }
+            Some("instance") if team.is_none() => {
+                bail!("--subscribe {signal} needs a team layout; choose a team with --agent");
+            }
+            _ => {}
+        }
+    }
+    let leader = rimz::harness::spec::prompt_leader(&resolved.layout, team)
+        .context("--stay and --subscribe need a layout with a prompt leader")?;
+    // prompt_leader returns an index into this layout's agent cells.
+    let cell = resolved
+        .layout
+        .agent_cells()
+        .nth(leader)
+        .expect("validated prompt leader");
+    let kind = cell.kind.as_str();
+    if !args.subscribe.is_empty() {
+        let adapter = rimz::agents::find_definition(kind)
+            .with_context(|| format!("unknown agent kind `{kind}`"))?;
+        let logins = rimz::agents::RoomLoginSet::for_runtime(&runtime);
+        let login = logins.default_login(kind).with_context(|| {
+            format!("cannot resolve the room's {kind} account; run `rimz accounts list`")
+        })?;
+        if let Err(error) = rimz::agents::preflight_hooks(
+            adapter,
+            &logins.env(&login),
+            rimz::agents::TurnLifecycleNeed::NotUnsupported,
+        ) {
+            let fix = match &error {
+                rimz::agents::HookPreflightErr::HooksUntrusted { fix, .. } => fix.clone(),
+                rimz::agents::HookPreflightErr::TurnLifecycleUnsupported { .. } => {
+                    "choose a prompt leader whose provider supports registration hooks".to_owned()
+                }
+                _ => format!("install supported hooks with `rimz hooks install {kind}`"),
+            };
+            bail!(
+                "--subscribe needs the prompt leader's registration hooks: {kind}: {error}; {fix}"
+            );
+        }
+    }
+    Ok(AddTaskAction::Stay {
+        kind: kind.to_owned(),
+    })
 }
 
 /// A scheduled turn needs a deadline it can reach, so `--timeout 0s` is refused
@@ -485,8 +683,10 @@ fn build_task_entry(
     let on = args.on.as_deref().map(parse_check_on).transpose()?;
     let matches = parse_matches(&args.matches)?;
     let timing = resolve_add_timing(args)?;
-    if matches!(action, AddTaskAction::Spawn { .. })
-        && args.prompt.is_none()
+    if matches!(
+        action,
+        AddTaskAction::Spawn { .. } | AddTaskAction::Stay { .. }
+    ) && args.prompt.is_none()
         && args.prompt_file.is_none()
     {
         bail!(
@@ -496,6 +696,18 @@ fn build_task_entry(
     }
     let uses_check_timeout = args.check.is_some();
     let mut entry = TaskEntry {
+        stay: args.stay,
+        each_worktree: args.each_worktree,
+        stop_team: args.stop_team,
+        subscribe: args
+            .subscribe
+            .iter()
+            .map(|signal| rimz::config::TeamSignalBinding {
+                signal: signal.clone(),
+                matches: BTreeMap::new(),
+                prompt: None,
+            })
+            .collect(),
         prompt: args.prompt.clone(),
         prompt_file: args.prompt_file.clone(),
         check: args.check.clone(),
@@ -519,6 +731,11 @@ fn build_task_entry(
     };
     let mut resolved_for_preflight = None;
     match action {
+        AddTaskAction::Stay { .. } => {
+            entry.agent = args.agent.clone();
+            entry.mode = args.mode.as_deref().map(parse_mode).transpose()?;
+            entry.effort = args.effort.clone();
+        }
         AddTaskAction::Spawn { resolved, mode, .. } => {
             resolved_for_preflight = Some(resolved);
             entry.agent = args.agent.clone();
@@ -825,6 +1042,30 @@ fn write_add_feedback(
     after_reset: Option<&AfterReset>,
 ) -> Result<()> {
     match action {
+        TaskAction::Spawn(agent) if entry.stay => {
+            if entry.each_worktree {
+                writeln!(
+                    out,
+                    "action: leaves resident layout {agent} in each matching owned worktree"
+                )?;
+            } else {
+                writeln!(
+                    out,
+                    "action: leaves resident layout {agent} in {}",
+                    entry.run_dir().display()
+                )?;
+            }
+            if entry.stop_team {
+                writeln!(out, "before launch: stops the team holding the checkout")?;
+            }
+            for binding in &entry.subscribe {
+                writeln!(
+                    out,
+                    "subscription: {} for the prompt leader",
+                    binding.signal
+                )?;
+            }
+        }
         TaskAction::Spawn(agent) => {
             let account = entry
                 .account
@@ -932,4 +1173,92 @@ fn resolve_deadline(raw: &str) -> Result<Timestamp> {
         .checked_add(duration)
         .context("resolving --until against the configured clock")?
         .timestamp())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::FromArgMatches;
+
+    fn args(extra: &[&str]) -> AddArgs {
+        let matches = AddArgs::augment_args(clap::Command::new("add"))
+            .try_get_matches_from(["add", "resident"].into_iter().chain(extra.iter().copied()))
+            .unwrap();
+        AddArgs::from_arg_matches(&matches).unwrap()
+    }
+
+    #[test]
+    fn resident_subscriptions_reject_one_shot_triggers() {
+        for trigger in [["--in", "5m"], ["--at", "12:00"], ["--after-reset", "5h"]] {
+            let argv = ["--agent", "claude", "--stay"]
+                .into_iter()
+                .chain(trigger)
+                .collect::<Vec<_>>();
+            assert!(validate_add_args(&args(&argv)).is_ok());
+            let argv = argv
+                .into_iter()
+                .chain(["--subscribe", "ci.failed"])
+                .collect::<Vec<_>>();
+            let error =
+                validate_add_args(&args(&argv)).expect_err("one-shot cannot retain subscriptions");
+            assert!(error.to_string().contains("--subscribe"), "{error}");
+        }
+    }
+
+    #[test]
+    fn resident_flags_require_their_launch_and_trigger() {
+        for (argv, flag) in [
+            (vec!["--stay", "--wait"], "--wait"),
+            (vec!["--stay", "--check", "true"], "--agent"),
+            (
+                vec!["--agent", "claude", "--each-worktree", "--when", "pr=open"],
+                "--stay",
+            ),
+            (
+                vec![
+                    "--agent",
+                    "claude",
+                    "--stay",
+                    "--each-worktree",
+                    "--signal",
+                    "pr.merged",
+                ],
+                "--when",
+            ),
+            (
+                vec!["--agent", "claude", "--subscribe", "ci.failed"],
+                "--stay",
+            ),
+            (vec!["--agent", "claude", "--stop-team"], "--stay"),
+        ] {
+            let error = validate_add_args(&args(&argv)).expect_err("invalid resident flags");
+            assert!(error.to_string().contains(flag), "{error}");
+        }
+    }
+
+    #[test]
+    fn resident_launch_rejects_supervised_and_one_shot_options() {
+        for flags in [
+            vec!["--check", "true"],
+            vec!["--verify", "true"],
+            vec!["--max-attempts", "2", "--verify", "true"],
+            vec!["--budget", "$2"],
+            vec!["--budget-per-day", "$4", "--budget", "$2"],
+            vec!["--surplus", "1.5x"],
+            vec!["--surplus-after", "3d"],
+            vec!["--timeout", "1h"],
+            vec!["--system-prompt-file", "/prompt"],
+            vec!["--worktree", "lane"],
+            vec!["--once"],
+            vec!["--project"],
+        ] {
+            let argv = ["--agent", "claude", "--stay", "--when", "pr=open"]
+                .into_iter()
+                .chain(flags.iter().copied())
+                .collect::<Vec<_>>();
+            let error = validate_add_args(&args(&argv)).expect_err("unsupported resident option");
+            assert!(error.to_string().contains(flags[0]), "{error}");
+            assert!(error.to_string().contains("--stay"), "{error}");
+        }
+    }
 }

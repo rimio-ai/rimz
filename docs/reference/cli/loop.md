@@ -30,7 +30,7 @@ rimz loop fire watchdog
 | `rimz loop logs <NAME>` | Full forensics for a task's recent runs. |
 | `rimz loop timer install\|status\|remove` | Manage the machine-wide timer. |
 
-Every command takes the [global flags](../cli.md#global-flags). No `loop` command prints JSON.
+Every command takes the [global flags](../cli.md#global-flags). `loop show --json` prints structured task, launch, and run records. It fails if the task no longer exists; without `--json`, `show` can still display its retained history.
 
 ## Add a task
 
@@ -44,7 +44,21 @@ Every command takes the [global flags](../cli.md#global-flags). No `loop` comman
 | Wake a live agent | `--wait [<ADDRESS>]`: pins one live session now; see [waits and checks](#waits-and-checks). | Optional. |
 | Run a command | `--check <CMD>` with no other action. Records `completed`, `failed`, or `timed out`. | None. |
 
-`--check` combined with `--agent` or `--wait` is a guard: the command runs first, and the action runs only on the outcome `--on` names. `--agent` refuses a kind whose hooks are not installed, because a scheduled turn reports completion through them.
+`--check` combined with `--agent` or `--wait` is a guard: the command runs first, and the action runs only on the outcome `--on` names. A supervised `--agent` task refuses a kind whose hooks are not installed, because a scheduled turn reports completion through them.
+
+`--agent <SPEC> --stay` opens ordinary agents in a new background tab on the checkout's channel, leaves their panes open, and returns without supervising a turn. It accepts the same layout grammar as `rimz agents`, requires a prompt leader and a prompt, and accepts `--effort`. With `--stay`, `--mode ask` and `--mode yolo` override the layout; `--mode auto` leaves each profile its own mode. A missing room is opened detached. Scheduled fires launch only once per task and checkout; changing the task under the same name preserves that memory. `loop fire NAME` launches again, and `loop remove NAME` clears the launch records. `loop show NAME` lists launched checkouts, times, and leader handles; `--json` includes those records and run history. Logs identify each launch's checkout and leader.
+
+A resident condition task retries a failed or skipped fire that leaves no launch record after 5 minutes from that checkout's last fire, while the task is enabled, unpaused, and the condition remains true. A recorded launch suppresses further scheduled fires. Failures remain subject to the task's strike limit; budget skips add no strike. Strikes are per task, so one checkout that keeps failing disables the task for every checkout.
+
+`--each-worktree` requires both `--stay` and `--when`. Repeatable `--subscribe <SIGNAL>` and `--stop-team` require `--stay`; subscriptions also require the prompt leader's installed, trusted registration hooks. CI and PR subscriptions need `--each-worktree` or `--root <worktree>`; team subscriptions need a team layout. Subscriptions cannot use one-shot triggers (`--in`, `--at` without `--every`, or `--after-reset`), because the task disappears before registration. Agent-family subscriptions need a separately scoped `loop add --wait --signal` task. `--stay` refuses `--account`, `--check`, `--verify`, `--max-attempts`, `--budget`, `--budget-per-day`, `--surplus`, `--surplus-after`, `--timeout`, `--system-prompt-file`, `--worktree`, `--once`, `--wait`, and `--project`.
+
+At registration, the resident prompt leader arms each `--subscribe` as a standing subscription named `loop-<task>-<agent>-<n>`, with an ordinal chosen to avoid name collisions. CI and PR signals match that agent's checkout, not other lanes. Re-registering does not duplicate subscriptions, and ending the session retires them. Removing the launch task before the leader registers arms nothing. After `rimz loop remove NAME`, a live leader keeps the subscriptions it already armed until its session ends; remove one sooner by its own name, `rimz loop remove loop-<task>-<agent>-<n>`.
+
+`--stop-team` finds the team holding the launch checkout and stops its live members before opening the resident layout. It retires their subscriptions too. Other checkout cohorts are not selected, no team is a no-op, and any member that cannot stop fails the fire without launching or recording that checkout as launched.
+
+Each successful resident launch also appears in `rimz stats --assists`, with its task, checkout, launched handles, condition evidence when present, and the team stopped if any. `rimz stats --json` includes these events and the `resident_launches` count.
+
+With `--each-worktree`, each RimZ-owned checkout has its own condition and `--for` hold, even without a resident pane. The project root and unmanaged worktrees are excluded. Already-matching checkouts are eligible when the task is added. On GitHub this includes PRs already merged or closed; on Gitea the checkout's PR must have been observed open while the room ran. Room teardown and reset clear the PR cache, so Gitea loses that observation. Launched checkouts stay excluded across condition changes, task replacement, and room teardown. Several eligible checkouts may launch on the same tick. Manual `loop fire NAME` targets the owned checkout containing your current directory and refuses elsewhere; it does not fire every checkout.
 
 ### Triggers
 
@@ -57,7 +71,7 @@ Every command takes the [global flags](../cli.md#global-flags). No `loop` comman
 | Raw cron | `--cron "<5 fields>"` | Per the expression. |
 | Poll-until | `--every <DUR> --until <DUR> --check <CMD>` plus `--agent` or `--wait` | Until the guard fires the action or the deadline passes. |
 | Signal | `--signal <NAME\|FAMILY.*>`, narrowed by `--match` | On every delivering signal, or once with `--once`; see [signals](#signals). |
-| Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period; `--once` retires after the first fire. |
+| Condition | `--when <EXPR>` with optional `--for <DUR>` | Once per continuously true period, except resident retries; `--once` retires after the first fire. |
 
 The trigger values follow these rules:
 
@@ -80,7 +94,7 @@ Add refuses what a [window condition](#conditions) refuses, and also a window th
 
 ### Conditions
 
-`--when 'team.stage=Done && ci=passed' --for 30m` waits for both readings to stay true for 30 minutes. Evaluation uses the clock tick, not signal history: CI can pass before or after the board reaches Done. The first tick arms without evaluating. A false tick resets the hold; a fired standing task re-arms after a false tick. Holds start at the first true observation, never at a board timestamp, and reset when the room's runtime state is removed.
+`--when 'team.stage=Done && ci=passed' --for 30m` waits for both readings to stay true for 30 minutes. Evaluation uses the clock tick, not signal history: CI can pass before or after the board reaches Done. The first tick arms without evaluating. A false tick resets the hold; a fired standing task without `--stay` re-arms after a false tick. Holds start at the first true observation, never at a board timestamp, and reset when the room's runtime state is removed.
 
 Expressions accept `!`, `&&`, `||`, and parentheses, in that precedence order. A term is `key=value` or `key=value1,value2` (either value); a window key instead takes `key>=N`, `key<=N`, `key>N`, or `key<N`, with `N` a whole percent from `0` to `100`. Repeating `--when` ANDs the clauses. Whitespace between tokens is ignored; values use letters, digits, `_`, `.`, or `-`. Window percents are the only numbers, and there are no other literals and no functions. Use `!ci=failed`, not `ci!=failed`; a window key refuses `=` and `!=`, and for an exact percent `window.5h.left>=40 && window.5h.left<=40` reads the same.
 
@@ -88,6 +102,7 @@ Expressions accept `!`, `&&`, `||`, and parentheses, in that precedence order. A
 | --- | --- | --- |
 | `team.stage` | `Done` and stages declared by any team in the effective configuration, case-sensitive | The scoped checkout's `blackboard.md` Stage line. |
 | `ci` | `passed`, `failed`, `pending` | The room sidebar's last-known CI result. A live runnable condition keeps its checkout in the sidebar's probe set, with or without a pane; removing the task releases it. Without a fresh sidebar it is unknown, including under the external timer. |
+| `pr` | `open`, `merged`, `closed` | The room sidebar's last-known PR state for the checkout. Like `ci`, a live condition keeps its checkout probed without a pane. Unknown with no PR link or no sidebar source; branch CI alone does not imply a PR state. |
 | `window.5h.left`, `window.7d.left` | A comparison with a whole percent, `0` to `100` | Percent left in the task provider's 5-hour or 7-day window: `100` minus the cached usage, projected to the tick, so a window whose reset has passed reads `100`. A limit the provider has lifted reads `100`. Unknown without a cached reading of that window. The provider is the kind `--agent` or `--wait` resolves to at add, recorded as `provider` on the row. The account is the room's current one for that provider, or the task's `--account`, whose reading is the last one stored for it: a room refreshes only its current account for the provider and the accounts its agents run on. |
 
 An unknown reading makes its term false, but `!` is boolean NOT: `!ci=failed` is true when CI is unknown. Use `ci=passed,pending` for known and not failed. A failed CI probe leaves the sidebar's last-known reading in place.
@@ -96,7 +111,7 @@ A window condition is checked against the provider's cache at add, which refuses
 
 Scope is the checkout where the task was added, or `--root <worktree path>`. From the project-root checkout CI means trunk CI. `--worktree` still chooses the agent pane or wait target, not condition scope. `--when` conflicts with `--at`, `--every`, `--cron`, `--in`, `--signal`, and `--until`. `--for` requires `--when` and a positive duration in `s`, `m`, `h`, or `d`. `--project --when` is not yet supported; add without `--project`.
 
-The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout>`, and `now: waiting · team.stage: Review, ci: unknown` (or `holding 0s/30m` when already true); a window term reads as `now: waiting · window.5h.left: 8`. Without a room, a CI condition also prints `ci readings come from the room's sidebar; the loop timer alone never sees them`.
+The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout>`, and `now: waiting · team.stage: Review, ci: unknown` (or `holding 0s/30m` when already true); a window term reads as `now: waiting · window.5h.left: 8`. Without a room, a CI or PR condition also prints `ci and pr readings come from the room's sidebar; the loop timer alone never sees them`.
 
 `--wait --when` pins the live session like other waits. A live subscription with the same target session, canonical expression, hold, project root, and scoped checkout prints `already subscribed as <name>` without rewriting it, even if its prompt or `--once` differs. Identical conditions on different worktrees remain separate waits.
 
@@ -104,6 +119,10 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
+| `--stay` | `--agent` | Open a resident layout in a background tab, once per checkout. |
+| `--each-worktree` | `--stay --when` | Evaluate and launch separately per RimZ-owned worktree. |
+| `--subscribe <SIGNAL>` | `--stay` | Arm a standing subscription for the prompt leader at registration; repeatable. |
+| `--stop-team` | `--stay` | Stop the checkout's live team before launching; a failed stop aborts the fire. |
 | `--prompt <TEXT>`, `--prompt-file <PATH>` | `--agent`, `--wait` | The prompt the action delivers. The two conflict. |
 | `--check <CMD>` | all | Shell command to run; alone it is the action, otherwise the guard. |
 | `--when <EXPR>` | all | Repeatable state condition; see [conditions](#conditions). |
@@ -355,7 +374,7 @@ Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and 
 | `waiting · team.stage: Review, ci: unknown` | Condition readings, in expression order; the whole expression is false. |
 | `holding 12m/30m` | Continuously true since the observed start of the hold. |
 | `due` | A clock fire is due, or a condition without `--for` is true and awaiting its next tick. |
-| `fired` | Already fired in this true period; waits for a false tick to re-arm. |
+| `fired` | Already fired in this true period; waits for a false tick to re-arm, except resident retries described above. |
 | `disabled`, `disabled · N strikes`, `disabled · enable to arm` | Held until enabled; the last is a project task not yet enabled here. |
 | `paused · in 2h` | Paused until then. |
 | `blocked · trust` | A project task whose project is not trusted. |
@@ -394,7 +413,7 @@ A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind)
 
 Condition runs in `loop logs` include `when: <expression> · held <duration>` and a JSON readings line. The record keeps the canonical expression, configured hold, observed held milliseconds, and readings; manual fires do not synthesize readings.
 
-`loop rename <name> <new-name>` moves the task to the new key in its store. The new name must differ and be free. The task re-arms, so an interval task next fires one interval after the rename.
+`loop rename <name> <new-name>` moves the task to the new key in its store. The new name must differ and be free. A task with recorded resident launches cannot be renamed because its resident leaders retain the task name. Edit it with `loop add` under the same name, or remove and re-add under a new name (which relaunches its checkouts). A resident task without recorded launches can be renamed. The task re-arms, so an interval task next fires one interval after the rename.
 
 `loop remove <name>` deletes the task from its store and prints ``removed loop task `<name>` ``, or ``no loop task named `<name>` `` when none exists. Run history stays readable. For a project task, both commands print the [trust result](#project-tasks).
 

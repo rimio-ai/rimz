@@ -392,8 +392,7 @@ pub fn react_to_lifecycle(
         }
         let member = audit
             .as_ref()
-            .and_then(|audit| find_agent(&audit.agents, &event.kind, &event.agent_id))
-            .filter(|member| member.team.is_some());
+            .and_then(|audit| find_agent(&audit.agents, &event.kind, &event.agent_id));
         let registered_member = member.filter(|member| {
             matches!(event.signal, LifecycleSignal::Registered)
                 && event.parent_agent_id.is_none()
@@ -406,6 +405,21 @@ pub fn react_to_lifecycle(
                 })
                 .ok()
         });
+        if let (Some(audit), Some(member)) = (&audit, registered_member)
+            && let Some(name) = member.loop_task.as_deref()
+            && let Some(task) =
+                TaskCatalog::load_lenient(Some(&workspace.project_root)).for_run(name)
+            && let Err(err) = team::arm_loop(
+                workspace,
+                &audit.agents,
+                member,
+                name,
+                &task.entry().subscribe,
+            )
+        {
+            warn!(task = %name, error = %err, "lifecycle: failed to arm loop signal bindings");
+        }
+        let member = member.filter(|member| member.team.is_some());
         if let (Some(audit), Some(member), Some(team)) =
             (&audit, registered_member, registered_team.as_ref())
             && let Err(err) = team::arm_member(workspace, &audit.agents, member, team)

@@ -81,6 +81,7 @@ pub enum DeliveryProvenance {
         reader: Option<String>,
     },
     Loop,
+    Resident(String),
     Team(TeamInstanceId),
 }
 
@@ -143,7 +144,8 @@ pub fn arm_delivery(
     if let Some(name) = name
         && catalog.visible().get(name).is_some_and(|task| {
             matches!(task.source(), super::catalog::TaskSource::Project { .. })
-                || (entry.team.is_some() && task.source() == super::catalog::TaskSource::Config)
+                || ((entry.team.is_some() || entry.loop_task.is_some())
+                    && task.source() == super::catalog::TaskSource::Config)
         })
     {
         return Err(ArmFailure::ConfigOwned(name.to_owned()));
@@ -161,7 +163,7 @@ pub fn arm_delivery(
     if duplicate {
         return Ok(ArmOutcome::AlreadySubscribed { name });
     }
-    if entry.team.is_none() {
+    if entry.team.is_none() && entry.loop_task.is_none() {
         super::config_edit::remove(super::config_edit::TaskStore::Machine, &name)
             .map_err(|err| ArmFailure::State(err.into()))?;
     }
@@ -217,8 +219,8 @@ pub enum RetireScope {
     /// Every row: the session is over and its identity will not come back.
     Session,
     /// Only the rows no later registration re-arms. A same-session
-    /// `agents restart` is a continuation, so the declared bindings of the
-    /// role carry over rather than depending on an order nothing enforces.
+    /// `agents restart` is a continuation, so team and resident-loop bindings
+    /// carry over rather than depending on an order nothing enforces.
     UnrestorableOnly,
 }
 
@@ -227,8 +229,8 @@ pub enum RetireScope {
 /// strike overlays.
 ///
 /// Returns how many of the removed rows nothing arms again: self waits and
-/// `loop add --wait` rows. Team-declared bindings, which `team::arm_member`
-/// restores at the role's next registration, stay out of that count.
+/// `loop add --wait` rows. Team and resident-loop bindings, restored at the
+/// member's next registration, stay out of that count.
 /// Overlay cleanup is best-effort and warns instead of failing, so the count is
 /// reported whatever the overlays do; `Err` means the durable map could not be
 /// rewritten and nothing was removed.
@@ -246,7 +248,7 @@ pub fn retire_session(
         .map_err(|err| RetireFailure(err.to_string()))?;
     let mut dropped = 0;
     for (name, entry) in &retired {
-        if entry.team.is_none() {
+        if entry.team.is_none() && entry.loop_task.is_none() {
             dropped += 1;
         }
         let key = super::arming::TaskKey::for_task(
@@ -333,6 +335,21 @@ pub enum DeliveryScopeFailure {
     SelfSignal,
 }
 
+pub fn default_signal_match_key(
+    selector: &SignalSelector,
+    matches: &BTreeMap<String, String>,
+) -> Option<&'static str> {
+    match selector.family() {
+        "ci" | "pr" if !matches.contains_key("path") && !matches.contains_key("branch") => {
+            Some("path")
+        }
+        "team" if !matches.contains_key("team") && !matches.contains_key("instance") => {
+            Some("instance")
+        }
+        _ => None,
+    }
+}
+
 pub fn default_signal_matches(
     workspace: &ResolvedWorkspace,
     agents: &[AgentState],
@@ -340,8 +357,8 @@ pub fn default_signal_matches(
     selector: &SignalSelector,
     matches: &mut BTreeMap<String, String>,
 ) -> Result<(), DeliveryScopeFailure> {
-    match selector.family() {
-        "ci" | "pr" if !matches.contains_key("path") && !matches.contains_key("branch") => {
+    match default_signal_match_key(selector, matches) {
+        Some("path") => {
             let path = scope
                 .worktree_path
                 .as_deref()
@@ -352,7 +369,7 @@ pub fn default_signal_matches(
             }
             matches.insert("path".to_owned(), path.display().to_string());
         }
-        "team" if !matches.contains_key("team") && !matches.contains_key("instance") => {
+        Some("instance") => {
             let cohort = crate::address::team_cohorts(agents)
                 .into_iter()
                 .find(|cohort| cohort.contains(scope))
@@ -412,17 +429,18 @@ fn build_entry(
             "self waits require a timer or watched command without a prompt or guard",
         ));
     }
-    if matches!(spec.provenance, DeliveryProvenance::Team(_))
-        && !matches!(
-            spec.trigger,
-            DeliveryTrigger::Signal {
-                lifetime: SubscriptionLifetime::Standing,
-                ..
-            }
-        )
-    {
+    if matches!(
+        spec.provenance,
+        DeliveryProvenance::Team(_) | DeliveryProvenance::Resident(_)
+    ) && !matches!(
+        spec.trigger,
+        DeliveryTrigger::Signal {
+            lifetime: SubscriptionLifetime::Standing,
+            ..
+        }
+    ) {
         return Err(ArmFailure::InvalidProvenance(
-            "team bindings require a standing signal subscription",
+            "declared bindings require a standing signal subscription",
         ));
     }
     let mut entry = TaskEntry {
@@ -437,6 +455,10 @@ fn build_entry(
     let reader = match spec.provenance {
         DeliveryProvenance::Team(instance) => {
             entry.team = Some(instance);
+            None
+        }
+        DeliveryProvenance::Resident(task) => {
+            entry.loop_task = Some(task);
             None
         }
         DeliveryProvenance::SelfWait { reader } => reader,

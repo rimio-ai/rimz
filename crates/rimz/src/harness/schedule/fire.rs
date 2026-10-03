@@ -34,6 +34,59 @@ enum Action {
 }
 
 const WATCH_LOST_GRACE_SECS: i64 = 30;
+const RESIDENT_RETRY_SECS: i64 = 5 * 60;
+
+struct ScopedTask {
+    name: String,
+    checkout: Option<PathBuf>,
+    task: LoadedTask,
+}
+
+fn scoped_tasks(
+    tasks: &BTreeMap<String, LoadedTask>,
+    ledger: &super::launch_ledger::Ledger,
+    owned: &[PathBuf],
+) -> BTreeMap<String, ScopedTask> {
+    let mut scoped = BTreeMap::new();
+    for (name, task) in tasks {
+        let entry = task.entry();
+        let launches = ledger.get(name);
+        if !entry.each_worktree {
+            if entry.stay
+                && launches.is_some_and(|launches| launches.contains_key(&entry.run_dir()))
+            {
+                continue;
+            }
+            scoped.insert(
+                name.clone(),
+                ScopedTask {
+                    name: name.clone(),
+                    checkout: None,
+                    task: task.clone(),
+                },
+            );
+            continue;
+        }
+        for checkout in owned {
+            let checkout = crate::utils::path::normalize_path_lexical(checkout);
+            if launches.is_some_and(|launches| launches.contains_key(&checkout)) {
+                continue;
+            }
+            // A tuple of strings is always JSON-serializable; unlike concatenation, it cannot collide with another pair.
+            let key = serde_json::to_string(&(name, checkout.to_string_lossy()))
+                .expect("string tuple serializes");
+            scoped.insert(
+                key,
+                ScopedTask {
+                    name: name.clone(),
+                    checkout: Some(checkout),
+                    task: task.clone(),
+                },
+            );
+        }
+    }
+    scoped
+}
 
 /// Whether a launch actually put a runner on the host. A `NotStarted` launch
 /// has already recorded its own `start failed` row.
@@ -79,14 +132,51 @@ pub fn fire_due_tasks(
 fn fire_tasks(
     runtime: &RuntimePaths,
     project_root: Option<&Path>,
-    tasks: BTreeMap<String, LoadedTask>,
+    mut tasks: BTreeMap<String, LoadedTask>,
     now: &Zoned,
     host: LoopRunHost,
     ci_source: Option<&CiSource>,
 ) -> Vec<String> {
     let path = state_path(runtime);
     let state = read_state(&path);
-    let arming = arming::load();
+    let mut arming = arming::load();
+    let ledger = if tasks.values().any(|task| task.entry().stay) {
+        match super::launch_ledger::load_room(runtime, project_root) {
+            Ok(ledger) => ledger,
+            Err(error) => {
+                tracing::warn!(%error, "resident loop ledger unavailable");
+                tasks.retain(|_, task| !task.entry().stay);
+                BTreeMap::new()
+            }
+        }
+    } else {
+        BTreeMap::new()
+    };
+    let owned = tasks
+        .values()
+        .find(|task| task.entry().each_worktree)
+        .map(|task| {
+            crate::worktree::discover_owned(project_root.unwrap_or(&task.entry().resolved_root()))
+        })
+        .transpose()
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "enumerating loop worktrees");
+            None
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|worktree| worktree.marker.worktree_path)
+        .collect::<Vec<_>>();
+    let scoped = scoped_tasks(&tasks, &ledger, &owned);
+    for (key, scope) in &scoped {
+        if let Some(record) = arming.get(&scope.task.key(&scope.name)).copied() {
+            arming.insert(scope.task.key(key), record);
+        }
+    }
+    let tasks: BTreeMap<_, _> = scoped
+        .iter()
+        .map(|(key, scope)| (key.clone(), scope.task.clone()))
+        .collect();
     let when_states = last_when_states(runtime);
     let windows = when::WindowReadings::new(Some(runtime), now.timestamp());
     let verdicts = tasks
@@ -103,7 +193,10 @@ fn fire_tasks(
                     name.clone(),
                     when::evaluate(
                         expr,
-                        &task.entry().run_dir(),
+                        &scoped[name]
+                            .checkout
+                            .clone()
+                            .unwrap_or_else(|| task.entry().run_dir()),
                         ci_source,
                         task.entry().provider.as_ref(),
                         task.entry().account.as_ref(),
@@ -168,13 +261,14 @@ fn fire_tasks(
                     runtime,
                     &tasks[&name],
                     project_root,
-                    &name,
+                    &scoped[&name].name,
                     None,
                     condition.as_ref(),
+                    scoped[&name].checkout.as_deref(),
                     host,
                 ) == LaunchOutcome::Started
                 {
-                    fired.push(name);
+                    fired.push(scoped[&name].name.clone());
                 }
             }
             Action::WatchLost => {
@@ -213,6 +307,7 @@ fn fire_tasks(
                     project_root,
                     &name,
                     Some(&signal),
+                    None,
                     None,
                     host,
                 ) == LaunchOutcome::Started
@@ -356,7 +451,11 @@ fn plan(
                 let elapsed =
                     u128::try_from(now.timestamp().duration_since(state.since).as_millis())
                         .unwrap_or(0);
-                if !state.fired && elapsed >= hold.map_or(0, |duration| duration.as_millis()) {
+                let retry_due = task.entry().stay
+                    && now.timestamp().duration_since(last_fire).as_secs() >= RESIDENT_RETRY_SECS;
+                if (!state.fired || retry_due)
+                    && elapsed >= hold.map_or(0, |duration| duration.as_millis())
+                {
                     actions.push((name.clone(), Action::Fire));
                     next_state.insert(name.clone(), now.timestamp());
                     state.fired = true;
@@ -459,6 +558,10 @@ fn when_state_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.lane_path("loop-when.json")
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit task, trigger and checkout at the helper boundary"
+)]
 pub(super) fn spawn_loop_run(
     runtime: &RuntimePaths,
     task: &LoadedTask,
@@ -466,21 +569,25 @@ pub(super) fn spawn_loop_run(
     name: &str,
     signal: Option<&Signal>,
     condition: Option<&ConditionEvidence>,
+    checkout: Option<&Path>,
     host: LoopRunHost,
 ) -> LaunchOutcome {
     let encoded = match encode_signal(signal) {
         Ok(encoded) => encoded,
-        Err(reason) => return record_start_failed(task, name, signal, condition, reason),
+        Err(reason) => return record_start_failed(task, name, signal, condition, checkout, reason),
     };
     let encoded_condition = match condition.map(serde_json::to_string).transpose() {
         Ok(encoded) => encoded,
-        Err(err) => return record_start_failed(task, name, signal, condition, err.to_string()),
+        Err(err) => {
+            return record_start_failed(task, name, signal, condition, checkout, err.to_string());
+        }
     };
     let args = loop_run_args(
         project_root,
         name,
         encoded.as_deref(),
         encoded_condition.as_deref(),
+        checkout,
     );
     let (program, args) = loop_run_command(host, &crate::proc::rimz_exe(), &args, name);
     tracing::info!(
@@ -501,14 +608,25 @@ pub(super) fn spawn_loop_run(
                     &logs_dir(),
                     name,
                     &task.entry().resolved_root(),
+                    checkout,
                     before,
                 )
+                && !(task.entry().stay
+                    && super::launch_ledger::load_room(runtime, project_root).is_ok_and(|ledger| {
+                        let scope = checkout
+                            .map(Path::to_path_buf)
+                            .unwrap_or_else(|| task.entry().run_dir());
+                        ledger
+                            .get(name)
+                            .is_some_and(|launches| launches.contains_key(&scope))
+                    }))
             {
                 return record_start_failed(
                     task,
                     name,
                     signal,
                     condition,
+                    checkout,
                     "runner exited before the scope hand-off and left no history row".to_owned(),
                 );
             }
@@ -521,7 +639,7 @@ pub(super) fn spawn_loop_run(
                 error = &err as &dyn std::error::Error,
                 "sidebar: failed to spawn loop task",
             );
-            return record_start_failed(task, name, signal, condition, err.to_string());
+            return record_start_failed(task, name, signal, condition, checkout, err.to_string());
         }
     }
     LaunchOutcome::Started
@@ -532,6 +650,7 @@ fn record_start_failed(
     name: &str,
     signal: Option<&Signal>,
     condition: Option<&ConditionEvidence>,
+    checkout: Option<&Path>,
     reason: String,
 ) -> LaunchOutcome {
     let mut record =
@@ -543,6 +662,13 @@ fn record_start_failed(
         payload: signal.payload.clone(),
     });
     record.condition = condition.cloned();
+    if task.entry().stay {
+        record.checkout = Some(
+            checkout
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| task.entry().run_dir()),
+        );
+    }
     run_log::record_transition(task, &record);
     LaunchOutcome::NotStarted
 }
@@ -645,10 +771,16 @@ pub(super) fn wait_loop_run(
 ) -> LaunchOutcome {
     let encoded = match encode_signal(Some(signal)) {
         Ok(encoded) => encoded,
-        Err(reason) => return record_start_failed(task, name, Some(signal), None, reason),
+        Err(reason) => return record_start_failed(task, name, Some(signal), None, None, reason),
     };
     let mut command = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
-    command.args(loop_run_args(project_root, name, encoded.as_deref(), None));
+    command.args(loop_run_args(
+        project_root,
+        name,
+        encoded.as_deref(),
+        None,
+        None,
+    ));
     // A loop run is not the arming agent's work, as on the detached path.
     crate::child_process::restore_user_temp_env(&mut command);
     match command.status() {
@@ -656,7 +788,7 @@ pub(super) fn wait_loop_run(
         Ok(status) => tracing::warn!(task = name, %status, "watched wait delivery failed"),
         Err(err) => {
             tracing::warn!(task = name, error = %err, "running watched wait delivery");
-            return record_start_failed(task, name, Some(signal), None, err.to_string());
+            return record_start_failed(task, name, Some(signal), None, None, err.to_string());
         }
     }
     LaunchOutcome::Started
@@ -667,6 +799,7 @@ fn loop_run_args(
     name: &str,
     signal_json: Option<&str>,
     condition_json: Option<&str>,
+    checkout: Option<&Path>,
 ) -> Vec<OsString> {
     let mut args = Vec::<OsString>::new();
     if let Some(project_root) = project_root {
@@ -676,6 +809,9 @@ fn loop_run_args(
         ]);
     }
     args.extend([OsString::from("loop"), OsString::from("run"), name.into()]);
+    if let Some(checkout) = checkout {
+        args.extend([OsString::from("--cwd"), checkout.as_os_str().to_owned()]);
+    }
     if let Some(signal_json) = signal_json {
         args.extend([OsString::from("--signal-json"), signal_json.into()]);
     }

@@ -51,13 +51,93 @@ pub(super) fn validate_resume_inputs(
 }
 
 pub(super) fn launch_layout(
-    mut args: AgentsArgs,
+    args: AgentsArgs,
     globals: &GlobalFlags,
     allow_in_place: bool,
 ) -> Result<()> {
     if args.launch.cohort.resume {
         validate_resume_inputs(&args.launch, ResumeEntrance::Flag)?;
     }
+    if args.launch.cohort.fresh
+        && args
+            .launch
+            .cohort
+            .worktree
+            .as_deref()
+            .is_none_or(|name| name.trim().is_empty())
+    {
+        bail!("--fresh needs a named worktree (-w NAME) whose prior cohort it replaces");
+    }
+    let machine_config = machine_config();
+    if args.launch.cohort.worktree.is_some() || args.launch.cohort.from_pr.is_some() {
+        crate::cli::require_worktree_config(&machine_config)?;
+    }
+    crate::cli::check_launch_room(globals)?;
+    let ctx = Ctx::open(globals)?;
+    let cwd = crate::cli::resolve_launch_cwd(args.launch.cwd.as_deref(), ctx.store.paths())?;
+    if let Some(launched) = launch_resolved(
+        args.launch,
+        globals,
+        allow_in_place,
+        &ctx,
+        machine_config,
+        cwd,
+        None,
+    )? {
+        launched.write_receipt(ctx.store.paths())?;
+    }
+    Ok(())
+}
+
+pub(in crate::cli) struct LaunchedLayout {
+    pub(in crate::cli) identities: Vec<AgentLaunchIdentity>,
+    pub(in crate::cli) leader_index: Option<usize>,
+    team: Option<(String, rimz::config::Team)>,
+    channel: Option<String>,
+    cwd: PathBuf,
+    in_place: bool,
+    peer: Option<rimz::store::run::RunRecord>,
+}
+
+impl LaunchedLayout {
+    fn write_receipt(&self, paths: &rimz::StatePaths) -> Result<()> {
+        if self.in_place {
+            return Ok(());
+        }
+        write_launch_receipt(
+            &mut render::out(),
+            &LaunchReceipt {
+                team: self.team.as_ref().map(|(name, team)| (name.as_str(), team)),
+                channel: self.channel.as_deref(),
+                cwd: &self.cwd,
+                identities: &self.identities,
+                leader_index: self.leader_index,
+                terminal_width: render::terminal_columns(100),
+            },
+        )?;
+        write_peer_receipt(
+            &mut render::out(),
+            &self.identities,
+            self.peer.as_ref(),
+            paths,
+        )
+    }
+}
+
+/// Launch into an already-resolved host cwd without changing its lexical identity.
+pub(in crate::cli) fn launch_resolved(
+    launch: AgentLaunchArgs,
+    globals: &GlobalFlags,
+    allow_in_place: bool,
+    ctx: &Ctx,
+    machine_config: Arc<rimz::config::MachineConfig>,
+    cwd: Option<PathBuf>,
+    loop_task: Option<&str>,
+) -> Result<Option<LaunchedLayout>> {
+    let mut args = AgentsArgs {
+        launch,
+        ..Default::default()
+    };
     let explicit_worktree_name = args
         .launch
         .cohort
@@ -67,18 +147,8 @@ pub(super) fn launch_layout(
         .filter(|name| !name.is_empty())
         .map(|name| rimz::worktree::parse_requested_name(name).map(|requested| requested.name))
         .transpose()?;
-    if args.launch.cohort.fresh && explicit_worktree_name.is_none() {
-        bail!("--fresh needs a named worktree (-w NAME) whose prior cohort it replaces");
-    }
-    let machine_config = machine_config();
     let worktree_launch =
         args.launch.cohort.worktree.is_some() || args.launch.cohort.from_pr.is_some();
-    if worktree_launch {
-        crate::cli::require_worktree_config(&machine_config)?;
-    }
-    crate::cli::check_launch_room(globals)?;
-    let ctx = Ctx::open(globals)?;
-    let cwd = crate::cli::resolve_launch_cwd(args.launch.cwd.as_deref(), ctx.store.paths())?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     report_unknown_config_keys(&machine_config)?;
@@ -148,10 +218,16 @@ pub(super) fn launch_layout(
         && let Some(name) = team_name.as_deref()
         && let Some(team) = team
     {
+        let mut launch_workspace = workspace.clone();
+        if loop_task.is_some()
+            && let Some(cwd) = &cwd
+        {
+            launch_workspace.worktree_root = cwd.clone();
+        }
         rimz::harness::schedule::team::validate_launch(
             name,
             team,
-            workspace,
+            &launch_workspace,
             explicit_worktree_name.as_deref(),
         )?;
     }
@@ -218,7 +294,7 @@ pub(super) fn launch_layout(
             args,
             globals,
             allow_in_place,
-            &ctx,
+            ctx,
             &machine_config,
             &teams,
             &effective.profiles,
@@ -229,7 +305,8 @@ pub(super) fn launch_layout(
             ancestry.as_ref(),
             focus,
             checked_folder_trust,
-        );
+        )
+        .map(|()| None);
     }
     let channel_launch = args.launch.cohort.channel.is_some();
     let placement = apply_in_place_downgrade(
@@ -249,7 +326,7 @@ pub(super) fn launch_layout(
     let mux = room.mux_name();
     let backend = room.backend();
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(workspace)? {
-        return Ok(());
+        return Ok(None);
     }
 
     let cells = cohort_cells(&layout);
@@ -376,7 +453,7 @@ pub(super) fn launch_layout(
             args.launch.cohort.fresh,
             focus,
         )? {
-            reconcile::Reconciled::Done => return Ok(()),
+            reconcile::Reconciled::Done => return Ok(None),
             reconcile::Reconciled::Resume(path) => {
                 validate_resume_inputs(&args.launch, ResumeEntrance::Reconcile)?;
                 let layout = resolve_finalized_layout(
@@ -405,13 +482,13 @@ pub(super) fn launch_layout(
                     )?
                     .is_none()
                 {
-                    return Ok(());
+                    return Ok(None);
                 }
                 return launch_resume_layout(
                     args,
                     globals,
                     allow_in_place,
-                    &ctx,
+                    ctx,
                     &machine_config,
                     &teams,
                     &effective.profiles,
@@ -422,7 +499,8 @@ pub(super) fn launch_layout(
                     ancestry.as_ref(),
                     focus,
                     checked_folder_trust,
-                );
+                )
+                .map(|()| None);
             }
             reconcile::Reconciled::Continue => {}
             reconcile::Reconciled::Removed => checkout = None,
@@ -447,7 +525,7 @@ pub(super) fn launch_layout(
         ),
     }?;
     let Some(launch) = launch else {
-        return Ok(());
+        return Ok(None);
     };
     if let Some(team) = team {
         rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_patterns());
@@ -475,6 +553,9 @@ pub(super) fn launch_layout(
     )?;
     for (request, login) in launch_requests.iter_mut().zip(preflighted_logins) {
         request.login = rimz::store::writer::LaunchLogin::Pinned(login);
+    }
+    if let Some(index) = prompt_agent_index {
+        launch_requests[index].launch.loop_task = loop_task.map(str::to_owned);
     }
     let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,
@@ -559,26 +640,18 @@ pub(super) fn launch_layout(
         || rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities()),
     )
     .inspect_err(|_| fail_peer_prompt())?;
-    if !in_place {
-        write_launch_receipt(
-            &mut render::out(),
-            &LaunchReceipt {
-                team: team_name.as_deref().zip(team),
-                channel: room_channel.as_deref(),
-                cwd: &cwd,
-                identities: launch_batch.identities(),
-                leader_index: receipt_leader_index,
-                terminal_width: render::terminal_columns(100),
-            },
-        )?;
-        write_peer_receipt(
-            &mut render::out(),
-            launch_batch.identities(),
-            peer_prompt.as_ref().map(|(_, run)| run),
-            store.paths(),
-        )?;
-    }
-    Ok(())
+    Ok(Some(LaunchedLayout {
+        identities: launch_batch.identities().to_vec(),
+        leader_index: receipt_leader_index,
+        team: team_name
+            .as_deref()
+            .zip(team)
+            .map(|(name, team)| (name.to_owned(), team.clone())),
+        channel: room_channel,
+        cwd,
+        in_place,
+        peer: peer_prompt.map(|(_, run)| run),
+    }))
 }
 
 fn team_hold_guidance(

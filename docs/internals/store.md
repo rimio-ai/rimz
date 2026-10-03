@@ -89,6 +89,7 @@ records/agents-carryover.json                 agent rollup carried across rotati
 records/messages/messages.jsonl               live message queue
 records/channels.json                         named channels
 records/loop-instances.json                   loop and wait rows
+records/loop-launches.json                    resident loop launches by task and checkout
 records/boot.json                             last host boot id
 records/live-roster.json                      producer's last pane-backed live agent set
 records/pending-recovery.json                 lost agents awaiting the user's recovery decision
@@ -241,6 +242,8 @@ Message records get the same tolerance outside the log. A record's `sender` can 
 `session.rebirth` clears pane stamps and never ends a session. A reborn mux session renumbers panes from zero, so every stamp recorded before the boundary names a pane that no longer exists, and clearing them keeps a prior incarnation's session off a reused pane id. Each resumed wrapper then appends `agent.attached` to re-establish its launch identity, placement, and owning process. An attach event without a launch identity cannot create a row.
 
 Lifecycle records inherit from the rollup instead of repeating themselves. High-cadence progress events omit `transcript_path`, worktree, pane identity, role, team, channel, profile, and the smart-compact stamp, and the reducer carries them forward from the prior row. Missing optional keys decode as absent, and `runtime_owner` is serialized on lifecycle records when present; the reducer carries a prior owner forward when it is absent. That keeps the hot log compact under a busy fleet.
+
+Resident loop launches stamp `LaunchParams.loop_task` on the prompt leader before opening its pane. The reducer carries it into `AgentState.loop_task`, through provisional adoption, subsequent observations and event-log rotation, like the team identity. Registration reads that durable task name to arm subscriptions, not the launch ledger. The additive field defaults to absent in old records; snapshot version 32 and rollup-cache version 26 rebuild pre-field caches.
 
 ### Crash recovery
 

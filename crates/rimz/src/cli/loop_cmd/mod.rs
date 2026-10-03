@@ -127,13 +127,25 @@ enum TimerSubcmd {
 struct AddArgs {
     /// Task name (letters, digits, `-`, `_`).
     name: String,
-    /// Kind, profile, or virtual cell; launches a fresh supervised pane.
+    /// Kind, profile, or virtual cell; with --stay, an ordinary agent layout.
     #[arg(
         long,
         conflicts_with = "wait",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
     )]
     agent: Option<String>,
+    /// Leave the agent layout running as ordinary room agents.
+    #[arg(long)]
+    stay: bool,
+    /// Evaluate a condition in each RimZ-owned worktree.
+    #[arg(long)]
+    each_worktree: bool,
+    /// Arm a standing signal subscription for the layout's prompt leader.
+    #[arg(long, value_name = "SIGNAL")]
+    subscribe: Vec<String>,
+    /// Stop the team holding the checkout before launching the layout.
+    #[arg(long)]
+    stop_team: bool,
     /// Live agent to wake through the message path; resolved and pinned now.
     #[arg(
         long,
@@ -260,6 +272,8 @@ struct NameArgs {
 struct RunArgs {
     name: String,
     #[arg(long, hide = true)]
+    cwd: Option<PathBuf>,
+    #[arg(long, hide = true)]
     signal_json: Option<String>,
     #[arg(long, hide = true, conflicts_with = "signal_json")]
     condition_json: Option<String>,
@@ -310,6 +324,9 @@ struct RenameArgs {
 
 #[derive(Debug, Args)]
 struct ShowArgs {
+    /// Print the task, launch ledger and run history as JSON.
+    #[arg(long)]
+    json: bool,
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]
@@ -368,6 +385,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
             args.keep,
             None,
             None,
+            None,
             globals,
         ),
         LoopSubcmd::Run(args) => {
@@ -389,6 +407,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
                 false,
                 signal,
                 condition,
+                args.cwd,
                 globals,
             )
         }
