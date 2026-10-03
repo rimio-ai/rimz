@@ -807,7 +807,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         &input.signal,
         lifecycle::LifecycleSignal::Ended | lifecycle::LifecycleSignal::Registered
     );
-    let completed_compaction = fold_lifecycle(
+    let retires_usage = fold_lifecycle(
         &mut state,
         input.prior,
         input.event.timestamp,
@@ -831,7 +831,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     let default_window = crate::agents::spec_by_kind(input.kind.as_str())
         .and_then(|definition| definition.default_context_window);
     let mut carried_usage = input.prior.map(|prior| prior.usage.clone());
-    if completed_compaction && let Some(carried) = &mut carried_usage {
+    if retires_usage && let Some(carried) = &mut carried_usage {
         if let Some(occupancy) = usage_occupancy(carried) {
             state.retired_context_tokens = Some(occupancy);
         }
@@ -1034,7 +1034,9 @@ fn assemble_launch_state(
     state
 }
 
-/// Returns whether this event completed a compaction.
+/// Returns whether this event retires the usage measured before a
+/// compaction: a completed bracket close, or a successful end whose open was
+/// lost. `compaction_count` stays on the bracket close alone.
 fn fold_lifecycle(
     state: &mut AgentState,
     prior: Option<&AgentState>,
@@ -1176,7 +1178,22 @@ fn fold_lifecycle(
         state.superseded_turn_id,
         state.interrupted_turn_id,
     ) = lifecycle::turn_ids_after(turn_ids, &signal, opened_turn);
-    completed_compaction
+    // A successful end with no open bracket is a compaction whose open was
+    // lost, unless the usage was already retired and only compaction ends have
+    // arrived since: then it is the same compaction reported again (Claude
+    // sends `PostCompact` and a compact `SessionStart`), and what the row
+    // carries is the post-compaction figure.
+    let already_retired = prior.is_some_and(|prior| prior.compaction_retired);
+    let retires_usage = completed_compaction
+        || (!already_retired
+            && matches!(
+                signal,
+                lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
+            ));
+    state.compaction_retired = retires_usage
+        || (already_retired
+            && matches!(signal, lifecycle::LifecycleSignal::CompactionEnded { .. }));
+    retires_usage
 }
 
 struct WorktreeProjection {

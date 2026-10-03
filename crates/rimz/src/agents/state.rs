@@ -912,6 +912,11 @@ pub struct AgentState {
     /// compaction that retires a known reading replaces it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retired_context_tokens: Option<u64>,
+    /// A compaction retired the carried usage and only compaction ends have
+    /// arrived since, so a further end is that compaction reported again and
+    /// retires nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compaction_retired: bool,
     /// The next input must not be another compaction. Set by a sent compact
     /// command or successful manual compaction; cleared only by `TurnStarted`.
     /// Registration preserves it; delivery acknowledgements do not rearm it.
@@ -1056,6 +1061,7 @@ impl AgentState {
             tool_repeat: None,
             last_compact_command_tokens: None,
             retired_context_tokens: None,
+            compaction_retired: false,
             compacted_awaiting_prompt: None,
             last_seen: at,
             last_activity: at,
