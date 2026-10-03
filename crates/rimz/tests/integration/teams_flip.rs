@@ -388,7 +388,15 @@ impl Fixture {
     }
 
     fn hook(&self, role: &str, event: &str, pane: Option<&str>) {
+        self.feed(role, event, pane, false);
+    }
+
+    /// One hook's stdout; `runtime_env` feeds it as a launch stamped with the runtime switch does.
+    fn feed(&self, role: &str, event: &str, pane: Option<&str>, runtime_env: bool) -> String {
         let mut command = self.command();
+        if runtime_env {
+            command.env(rimz::harness::launch::ENV_RUNTIME_ENV, "1");
+        }
         command
             .args(["hooks", "feed", "--source", "claude"])
             .env(rimz::harness::launch::ENV_AGENT_NAME, role)
@@ -415,7 +423,7 @@ impl Fixture {
             )
             .wait_with_output()
             .unwrap();
-        success(output);
+        success(output)
     }
 
     fn running(&self, role: &str, pane: Option<&str>) {
@@ -618,6 +626,36 @@ fn transcript_renders_flips_in_the_lane() {
         .unwrap_or_default();
     assert!(flip_line.starts_with("⇢ Build → Review  "), "{human}");
     assert!(flip_line.ends_with("  Review the seam."), "{human}");
+}
+
+#[test]
+fn prompt_submit_lists_a_memory_file_written_after_launch_once() {
+    let fixture = Fixture::new();
+    fixture.seed("coder", None);
+    fixture.hook("coder", "SessionStart", None);
+    std::fs::write(fixture.env.project_root.join("plan-notes.md"), "plan\n").unwrap();
+    assert_eq!(
+        fixture.feed("coder", "UserPromptSubmit", None, false),
+        "",
+        "a launch without the switch"
+    );
+    let reply: serde_json::Value =
+        serde_json::from_str(&fixture.feed("coder", "UserPromptSubmit", None, true)).unwrap();
+    let reply = &reply["hookSpecificOutput"];
+    assert_eq!(reply["hookEventName"], "UserPromptSubmit");
+    let context = reply["additionalContext"].as_str().unwrap();
+    assert!(
+        context.starts_with(
+            "<system_reminder>\n### Environment\n\nSampled as this prompt was submitted.\n\n```\n$ ls blackboard.md *-notes.md\nplan-notes.md\n```"
+        ),
+        "{context}"
+    );
+    assert!(context.ends_with("</system_reminder>"), "{context}");
+    assert_eq!(
+        fixture.feed("coder", "UserPromptSubmit", None, true),
+        "",
+        "the second prompt of the same conversation"
+    );
 }
 
 #[test]

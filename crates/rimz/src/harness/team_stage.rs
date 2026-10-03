@@ -485,14 +485,17 @@ pub fn react_to_lifecycle(
 }
 
 #[derive(Debug, thiserror::Error)]
-enum MemberTeamErr {
+pub(super) enum MemberTeamErr {
     #[error(transparent)]
     Machine(#[from] crate::config::ConfigErr),
     #[error(transparent)]
     Effective(#[from] crate::config::effective::EffectiveConfigErr),
 }
 
-fn load_member_team(workspace: &ResolvedWorkspace, name: &str) -> Result<Team, MemberTeamErr> {
+pub(super) fn load_member_team(
+    workspace: &ResolvedWorkspace,
+    name: &str,
+) -> Result<Team, MemberTeamErr> {
     let machine = MachineConfig::load()?;
     let effective = crate::config::effective::load(&machine, &workspace.project_root)?;
     effective.block_untrusted_reference(

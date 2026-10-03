@@ -25,6 +25,7 @@ pub mod resume;
 pub mod run;
 pub mod run_timeout;
 pub mod run_wake;
+pub mod runtime_env;
 pub mod schedule;
 pub mod scratch;
 pub mod spec;

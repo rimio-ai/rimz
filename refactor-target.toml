@@ -411,7 +411,8 @@ path = "crates/rimz/src/harness"
 # Window conditions: the lazy window reading both evaluation callers build, and the add-time resolver with its refusals (+4).
 # `--after-reset`: its add-time resolver and the reset it reports to both `loop add` paths (+2).
 # `rimz gc` sweeps orphan account budget ledgers and reports the typed sweep result (+2).
-surface-budget = 638
+# The prompt-submit Environment sampler and its launch switch cross the harness/CLI hook seam (+4).
+surface-budget = 642
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -930,7 +931,7 @@ allowed-dependencies = [
 # Fresh requests and selectively redacted process plans serve launch inspection.
 # Argument rejection uses the existing action accessor (+1).
 # `validate_agent_shell` and its error serve room start and config set (+2).
-surface-budget = 45
+surface-budget = 46
 
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"

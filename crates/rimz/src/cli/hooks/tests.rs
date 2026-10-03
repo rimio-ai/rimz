@@ -58,6 +58,137 @@ fn hooks_test_store() -> (tempfile::TempDir, rimz::Store) {
 }
 
 #[test]
+fn runtime_env_context_reaches_the_first_root_prompt_of_each_session() {
+    use rimz::agents::HookReply;
+    use rimz::harness::launch::ENV_RUNTIME_ENV;
+
+    if std::env::var_os("RIMZ_TEST_RUNTIME_ENV_FEED").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                concat!(
+                    module_path!(),
+                    "::runtime_env_context_reaches_the_first_root_prompt_of_each_session"
+                )
+                .split_once("::")
+                .unwrap()
+                .1,
+                "--nocapture",
+            ])
+            .env("RIMZ_TEST_RUNTIME_ENV_FEED", "1")
+            .env(ENV_RUNTIME_ENV, "1")
+            .env_remove(rimz::harness::launch::ENV_RUN_ID)
+            .env_remove(rimz::harness::launch::ENV_AGENT_ID)
+            .env_remove(rimz::harness::launch::ENV_AGENT_NAME)
+            .env_remove(rimz::harness::launch::ENV_TEAM)
+            .env("RIMZ_BIN", "/nonexistent/rimz")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let (_dir, store) = hooks_test_store();
+    let repo = tempfile::tempdir().unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["commit", "-q", "--allow-empty", "-m", "initial"],
+    ] {
+        let status = std::process::Command::new("git")
+            .current_dir(repo.path())
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+    let submit =
+        |session: &str, prompt: &str, native_child: bool, owner: rimz::pane::RuntimeOwnerKind| {
+            let mut payload =
+                serde_json::json!({"session_id":session, "cwd":repo.path(), "prompt":prompt});
+            if native_child {
+                payload["agent_id"] = serde_json::json!("native-child");
+            }
+            let mut decoded = adapter.decode_hook("UserPromptSubmit", &payload).unwrap();
+            handle_lifecycle_hook(
+                &hooks_test_workspace(Some("main")),
+                &store,
+                adapter,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner {
+                    pid: Some(std::process::id()),
+                    kind: owner,
+                },
+                &hooks_test_globals(),
+            )
+            .unwrap();
+            match decoded.reply() {
+                HookReply::Silent => None,
+                HookReply::Json(reply) => {
+                    assert_eq!(
+                        reply["hookSpecificOutput"]["hookEventName"],
+                        "UserPromptSubmit"
+                    );
+                    reply["hookSpecificOutput"]["additionalContext"]
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                }
+            }
+        };
+    use rimz::pane::RuntimeOwnerKind::{Agent, Daemon};
+    let feed = |session, native_child, owner| submit(session, "work", native_child, owner);
+    assert_eq!(feed("daemon-owned", false, Daemon), None);
+    assert_eq!(feed("root", true, Agent), None, "a native child's prompt");
+    let first = feed("root", false, Agent).expect("the first root prompt");
+    assert!(
+        first.starts_with(
+            "<system_reminder>\n### Environment\n\nSampled as this prompt was submitted.\n\n```\n$ git status --short --branch\n## main\n$ git log -5 --oneline\n"
+        ),
+        "{first}"
+    );
+    assert_eq!(feed("root", false, Agent), None, "the same session again");
+    assert!(feed("resumed", false, Agent).is_some(), "a new session id");
+
+    use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+    let root = rimz::testkit::agent_state("claude", "root", jiff::Timestamp::now());
+    let notice = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &root,
+        "Implement is yours.".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::Stage,
+    });
+    store
+        .record_sent_batch(std::slice::from_ref(&notice), "hooks-test")
+        .unwrap();
+    let staged = submit(
+        "root",
+        "Type: STAGE\nFrom: @rimz\nContent:\nImplement is yours.",
+        false,
+        Agent,
+    );
+    assert!(
+        store.list_messages().unwrap().is_empty(),
+        "the prompt confirmed the stage notice as delivered"
+    );
+    assert_eq!(
+        staged.as_deref(),
+        Some(first.as_str()),
+        "a delivered stage notice"
+    );
+    assert_eq!(feed("root", false, Agent), None, "the next plain prompt");
+}
+
+#[test]
 fn deadline_context_reaches_only_the_root_post_tool_consumer_once() {
     use rimz::agents::HookReply;
     use rimz::harness::launch::ENV_RUN_ID;
