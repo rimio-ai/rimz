@@ -54,6 +54,8 @@ A resident condition task retries a failed or skipped fire that leaves no launch
 
 At registration, the resident prompt leader arms each `--subscribe` as a standing subscription named `loop-<task>-<agent>-<binding index>`. CI and PR signals match that agent's checkout, not other lanes. Re-registering does not duplicate subscriptions, and ending the session retires them. Removing the launch task before the leader registers arms nothing.
 
+`--stop-team` finds the team holding the launch checkout and stops its live members before opening the resident layout. It retires their subscriptions too. Other checkout cohorts are not selected, no team is a no-op, and any member that cannot stop fails the fire without launching or recording that checkout as launched.
+
 With `--each-worktree`, each RimZ-owned checkout has its own condition and `--for` hold, even without a resident pane. The project root and unmanaged worktrees are excluded. Already-matching checkouts are eligible when the task is added. On GitHub this includes PRs already merged or closed; on Gitea the checkout's PR must have been observed open while the room ran. Room teardown and reset clear the PR cache, so Gitea loses that observation. Launched checkouts stay excluded across condition changes, task replacement, and room teardown. Several eligible checkouts may launch on the same tick. Manual `loop fire NAME` targets the owned checkout containing your current directory and refuses elsewhere; it does not fire every checkout.
 
 ### Triggers
@@ -118,7 +120,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | `--stay` | `--agent` | Open a resident layout in a background tab, once per checkout. |
 | `--each-worktree` | `--stay --when` | Evaluate and launch separately per RimZ-owned worktree. |
 | `--subscribe <SIGNAL>` | `--stay` | Arm a standing subscription for the prompt leader at registration; repeatable. |
-| `--stop-team` | `--stay` | Request stopping the checkout's team before the resident launch. |
+| `--stop-team` | `--stay` | Stop the checkout's live team before launching; a failed stop aborts the fire. |
 | `--prompt <TEXT>`, `--prompt-file <PATH>` | `--agent`, `--wait` | The prompt the action delivers. The two conflict. |
 | `--check <CMD>` | all | Shell command to run; alone it is the action, otherwise the guard. |
 | `--when <EXPR>` | all | Repeatable state condition; see [conditions](#conditions). |

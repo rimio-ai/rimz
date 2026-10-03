@@ -145,6 +145,9 @@ pub(super) fn run_one(
                 launch_globals.root = Some(root);
                 crate::cli::check_launch_room(&launch_globals)?;
                 let ctx = crate::cli::ctx::Ctx::open(&launch_globals)?;
+                if entry.stop_team {
+                    stop_checkout_team(&ctx, &launch_globals, &cwd)?;
+                }
                 let mut launch = crate::cli::agents_cmd::AgentLaunchArgs {
                     spec: Some(spec),
                     prompt: Some(prompt),
@@ -201,6 +204,34 @@ pub(super) fn run_one(
         std::process::exit(code);
     }
     Ok(())
+}
+
+fn stop_checkout_team(
+    ctx: &crate::cli::ctx::Ctx,
+    globals: &GlobalFlags,
+    cwd: &Path,
+) -> Result<Option<String>> {
+    let snapshot = ctx.alive_snapshot()?;
+    let Some(hold) = rimz::harness::resume::inspect_team_hold(&snapshot.agents, cwd) else {
+        return Ok(None);
+    };
+    let checkout = rimz::utils::path::normalize_path_lexical(cwd);
+    let mut tracker = crate::cli::agents_cmd::StopTracker::default();
+    let mut stopped = false;
+    for member in rimz::address::team_cohorts(&snapshot.agents)
+        .into_iter()
+        .filter(|cohort| cohort.team == hold.team)
+        .flat_map(|cohort| cohort.members)
+        .filter(|member| {
+            member.worktree_path.as_deref().is_some_and(|path| {
+                rimz::utils::path::normalize_path_lexical(Path::new(path)) == checkout
+            })
+        })
+    {
+        stopped |=
+            crate::cli::agents_cmd::stop_resolved(ctx, globals, &snapshot, member, &mut tracker)?;
+    }
+    Ok(stopped.then_some(hold.team))
 }
 
 fn resident_checkout(
