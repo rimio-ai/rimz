@@ -613,3 +613,74 @@ fn a_broken_project_config_warns_and_marks_no_account() {
         );
     }
 }
+
+#[test]
+fn a_history_entry_on_another_filesystem_stays_in_the_account_home_and_out_of_the_pool() {
+    use std::os::unix::fs::MetadataExt;
+
+    let device = |path: &std::path::Path| std::fs::metadata(path).map(|meta| meta.dev()).ok();
+    let probe = Env::new();
+    let home_device = device(&probe.home_root);
+    let Some(foreign) = ["/dev/shm", "/tmp", "/var/tmp"]
+        .into_iter()
+        .map(std::path::Path::new)
+        .filter(|root| device(root).is_some_and(|dev| Some(dev) != home_device))
+        .find_map(|root| tempfile::tempdir_in(root).ok())
+    else {
+        crate::common::skip("no writable filesystem apart from the fixture HOME");
+        return;
+    };
+
+    // One fixture per layout: the account home beside the default home, then
+    // on another filesystem. Returns the default pool's spend and `add`'s stdout.
+    let run = |env: &Env, home: &std::path::Path| -> (String, String) {
+        let session = home.join("projects/repo/session.jsonl");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        let now = rimz::agents::spending::unix_secs_now();
+        let tod = now % 86_400;
+        std::fs::write(
+            &session,
+            format!(
+                r#"{{"timestamp":"{}T{:02}:{:02}:{:02}.000Z","costUSD":0.25,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":1200,"output_tokens":80}}}}}}"#,
+                rimz::agents::spending::utc_date(now),
+                tod / 3_600,
+                (tod % 3_600) / 60,
+                tod % 60
+            ) + "\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(env.home_root.join(".claude")).unwrap();
+        let added = succeeded(&accounts(
+            env,
+            &["add", "claude", "work", "--home", home.to_str().unwrap()],
+        ));
+        succeeded(&env.rimz().arg("stats").output().unwrap());
+        let budget = env
+            .rimz()
+            .args(["budget", "--account", "claude"])
+            .output()
+            .unwrap();
+        (succeeded(&budget), added)
+    };
+
+    let local = Env::new();
+    let (spend, added) = run(&local, &local.home_root.join("work"));
+    assert!(spend.contains("spend:  $0.25 today"), "{spend}\n{added}");
+
+    let env = Env::new();
+    let native = env.home_root.join(".claude");
+    let home = foreign.path().join("work");
+    let (spend, added) = run(&env, &home);
+    assert!(
+        added.contains(&format!(
+            "{} stays in the account home; it cannot move to {} on another filesystem",
+            home.join("projects").display(),
+            native.display()
+        )),
+        "{added}"
+    );
+    let entry = std::fs::symlink_metadata(home.join("projects")).unwrap();
+    assert!(entry.is_dir(), "{added}");
+    assert!(std::fs::symlink_metadata(native.join("projects")).is_err());
+    assert!(spend.contains("spend:  $0.00 today"), "{spend}\n{added}");
+}
