@@ -88,7 +88,7 @@ RimZ writes no credentials and never writes inside a private name. Private names
 
 Rerunning `add` leaves the config entry alone unless `--history` rewrites that field, creates the home if missing, brings the links to the account's mode, and refreshes hooks. Correct links remain unchanged and print `already linked to <default-home>`. This also repairs a link replaced by a provider save, moving the replacement to `.rimz-aside`. `--home` on a rerun must name the same directory. An agent launch on a named account runs the same link step before it starts the provider, prints the moved-aside and left-in-place lines as warnings, and refuses on the same error.
 
-`add` refuses these cases. The live-agent checks count agents with a pane attached, so the unstarted seats of one team launch never block each other, and run before any entry changes, but after first-declaration config writing and home creation; that declaration remains for a rerun. The other checks, including resolved-home and exported-home checks, precede those writes.
+`add` refuses these cases. The live-agent checks count agents with a pane attached unless their recorded process has died, so the unstarted seats of one team launch never block each other, and run before any entry changes, but after first-declaration config writing and home creation; that declaration remains for a rerun. The other checks, including resolved-home and exported-home checks, precede those writes.
 
 | Case | Error |
 | --- | --- |
@@ -100,6 +100,8 @@ Rerunning `add` leaves the config entry alone unless `--history` rewrites that f
 | `--home` differs from the existing account's home | `` <kind> account `<name>` already lives at `<home>`; rerun without --home, or remove the account first `` |
 | The home breaks a [home rule](#kinds-names-and-homes) | `` `accounts.<kind>.<name>.home` is `<home>`, ... `` with the rule it breaks |
 | The shell exports `CLAUDE_CONFIG_DIR` or `CODEX_HOME` pointing at any declared named account of that kind (also checked on reruns) | `` `CODEX_HOME` is exported as `<home>`, the home of codex account `<exported-name>`; unset `CODEX_HOME` so `default` resolves to codex's own home, e.g. `env -u CODEX_HOME rimz accounts add codex <name>` `` |
+
+Sessions a Codex remote-control daemon runs on the account are not counted, so end them before you switch the account's history.
 
 ## `use`
 
