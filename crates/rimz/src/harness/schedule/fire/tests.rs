@@ -130,6 +130,76 @@ fn window_condition_reads_the_provider_window_under_the_elder() {
     assert_eq!(tick(), vec![NAME]);
 }
 
+#[test]
+fn window_conditions_read_each_tasks_own_account_in_one_pass() {
+    use crate::agents::{
+        AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache, WindowSpan,
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    let entry = |used| RateLimitCacheEntry {
+        limits: AgentRateLimits {
+            windows: vec![RateLimitWindow {
+                used_percentage: Some(used),
+                resets_at: Some(seconds_before(now.timestamp(), -3_600)),
+                duration_mins: Some(WindowSpan::FiveHour.minutes()),
+                ..RateLimitWindow::default()
+            }],
+        },
+        ..Default::default()
+    };
+    let prior = seconds_before(now.timestamp(), 60);
+    write_temp_then_rename_cache(
+        &state_path(&runtime),
+        &BTreeMap::from([("pinned".to_owned(), prior), ("room".to_owned(), prior)]),
+    )
+    .unwrap();
+    let task = |account: Option<&str>| {
+        loaded(TaskEntry {
+            root: root.path().to_owned(),
+            agent: Some("claude".to_owned()),
+            prompt: Some("do it".to_owned()),
+            when: Some(vec!["window.5h.left>=40".to_owned()]),
+            provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
+            account: account.map(|name| name.parse().unwrap()),
+            ..TaskEntry::default()
+        })
+    };
+    let tasks = BTreeMap::from([
+        ("pinned".to_owned(), task(Some("work"))),
+        ("room".to_owned(), task(None)),
+    ]);
+    for (room_used, work_used, fired) in [(92, 10, "pinned"), (10, 92, "room")] {
+        write_temp_then_rename_cache(
+            &runtime.shared_rate_limits_path(),
+            &RateLimitsCache {
+                entries: BTreeMap::from([
+                    ("claude@default".parse().unwrap(), entry(room_used)),
+                    ("claude@work".parse().unwrap(), entry(work_used)),
+                ]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        std::fs::remove_file(when_state_path(&runtime)).ok();
+        assert_eq!(
+            fire_tasks(
+                &runtime,
+                Some(root.path()),
+                tasks.clone(),
+                &now,
+                LoopRunHost::Detached,
+                None,
+            ),
+            vec![fired]
+        );
+    }
+}
+
 fn condition_state(hold: Option<u64>, since: Timestamp, fired: bool) -> WhenState {
     WhenState {
         fingerprint: Some((

@@ -32,6 +32,7 @@ fn reading(entry: &TaskEntry, expr: &WhenExpr) -> Verdict {
         &entry.run_dir(),
         source.as_ref(),
         entry.provider.as_ref(),
+        entry.account.as_ref(),
         &windows,
     )
 }
