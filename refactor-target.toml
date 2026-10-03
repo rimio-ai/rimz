@@ -584,7 +584,8 @@ path = "crates/rimz/src/store"
 # Explicit launch-login requests and room-default switching share the locked account boundary (+2).
 # Per-login provider panels expose their cache and renderer identity.
 # `RunStatus::label` is the one human run-status label the CLI tables and pending waits share (pass 31d).
-surface-budget = 348
+# The pending-recovery record parks lost agents for the rebirth boundary and settlement (+5).
+surface-budget = 353
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -825,7 +826,8 @@ allowed-dependencies = [
     "disk::paths",
     "workspace::record",
 ]
-surface-budget = 30
+# The pending-recovery record module (+1).
+surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"

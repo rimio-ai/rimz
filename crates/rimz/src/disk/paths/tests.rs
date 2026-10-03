@@ -29,6 +29,7 @@ impl StatePaths {
             self.channels_record.clone(),
             self.boot_marker.clone(),
             self.live_roster.clone(),
+            self.pending_recovery.clone(),
             self.last_death_marker.clone(),
             self.doctor_watermark.clone(),
             self.auto_gc_stamp.clone(),
@@ -653,6 +654,10 @@ fn state_paths_resolve_under_the_home() {
     assert_eq!(
         paths.live_roster,
         paths.root.join("records/live-roster.json")
+    );
+    assert_eq!(
+        paths.pending_recovery,
+        paths.root.join("records/pending-recovery.json")
     );
     assert_eq!(paths.workspace_lock.file_name().unwrap(), "workspace.lock");
     assert_eq!(paths.events_log, paths.root.join("log/events.log.jsonl"));
