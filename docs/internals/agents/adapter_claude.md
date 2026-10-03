@@ -185,6 +185,8 @@ Claude names the session log in every hook payload's `transcript_path`. For the 
 
 The four components travel with their total so the card can show where the window went: a warm session is mostly cache reads, and 250k tokens of cache reuse reads very differently from 250k of fresh input. A readable transcript with no assistant usage yet reports `total_tokens = 0` and leaves the split `None`.
 
+A finished compaction writes a `{"type":"system","subtype":"compact_boundary","compactMetadata":{…}}` record, and no usage-bearing record follows it until the next API call. This shape is observed in transcripts on disk, not documented upstream. Every usage record older than the boundary was measured before the compaction, so a boundary met first in the newest-first walk ends it: the reading is `total_tokens = compactMetadata.postTokens` with no split, or no reading at all when `postTokens` is absent. A usage record newer than the boundary wins as before. A hook that fires before the boundary is written still re-reads the old record, which the rollup [withholds by value](./model.md#the-compaction-bracket).
+
 ### Context window
 
 The transcript writes only the bare model id, so the gauge's divisor comes from elsewhere. A `[1m]` marker on the hook payload's model sets 1,000,000 tokens. Otherwise `context_window_for_model` uses the model's exact `max_input_tokens` from the shared price book, and an unknown model leaves the window unset so the spec default of 200,000 applies. A marker-less hook never lowers an established window. The statusline's `context_window_size` comes first in projection precedence, so neither inferred value overrides a provider-reported window.
