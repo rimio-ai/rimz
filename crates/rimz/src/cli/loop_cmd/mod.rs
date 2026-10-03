@@ -322,6 +322,9 @@ struct RenameArgs {
 
 #[derive(Debug, Args)]
 struct ShowArgs {
+    /// Print the task, launch ledger and run history as JSON.
+    #[arg(long)]
+    json: bool,
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::loop_tasks
     ))]

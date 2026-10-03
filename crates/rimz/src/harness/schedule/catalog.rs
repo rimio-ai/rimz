@@ -290,6 +290,12 @@ impl TaskCatalog {
             return Ok(TaskMutation::default());
         };
         let changed = remove_definition(name, task)?;
+        if changed && task.entry().stay {
+            super::launch_ledger_store::remove(
+                &StatePaths::for_project_root(&task.entry().resolved_root())?,
+                name,
+            )?;
+        }
         let key = task.key(name);
         let cleared_overlays = clear_overlays(&key)?;
         Ok(TaskMutation {
@@ -305,6 +311,17 @@ impl TaskCatalog {
         let Some(task) = self.visible.get(name) else {
             return Ok(TaskMutation::default());
         };
+        if task.entry().stay
+            && super::launch_ledger::load(&StatePaths::for_project_root(
+                &task.entry().resolved_root(),
+            )?)?
+            .get(name)
+            .is_some_and(|launches| !launches.is_empty())
+        {
+            bail!(
+                "cannot rename loop task `{name}`: its resident leaders record the task name; edit it with `rimz loop add {name}`, or remove and re-add under the new name (which relaunches its checkouts)"
+            );
+        }
         let changed = match task.source() {
             TaskSource::Config => {
                 config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?
