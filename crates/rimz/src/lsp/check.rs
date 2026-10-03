@@ -22,12 +22,25 @@ pub enum Mode {
 }
 
 pub fn run(
-    notes: &Path,
+    notes: &[PathBuf],
     root: &Path,
     entries: &[registry::Entry],
     servers: &BTreeMap<String, crate::config::LspServerConfig>,
     mode: Mode,
+) -> Result<Vec<Result<Report, query::QueryErr>>, query::QueryErr> {
+    let mut context = Context::new(root, entries, servers)?;
+    Ok(notes
+        .iter()
+        .map(|notes| check_file(notes, &mut context, mode))
+        .collect())
+}
+
+fn check_file(
+    notes: &Path,
+    context: &mut Context<'_>,
+    mode: Mode,
 ) -> Result<Report, query::QueryErr> {
+    let root = context.checkout;
     let source = std::fs::read_to_string(notes)
         .map_err(|error| {
             std::io::Error::new(
@@ -36,12 +49,11 @@ pub fn run(
             )
         })
         .map_err(LspErr::from)?;
-    let mut context = Context::new(root, entries, servers)?;
     let (source, fixes, ambiguous) = if mode == Mode::Check {
         (source, None, None)
     } else {
         let hints = mode == Mode::FixHints;
-        let (updated, fixes, ambiguous) = fix::rewrite(&source, &mut context, hints)?;
+        let (updated, fixes, ambiguous) = fix::rewrite(&source, context, hints)?;
         if !fixes.is_empty() {
             let target = std::fs::canonicalize(notes).map_err(LspErr::from)?;
             crate::disk::atomic::write_bytes_atomically(&target, updated.as_bytes())
@@ -92,6 +104,7 @@ struct Context<'a> {
     servers: &'a BTreeMap<String, crate::config::LspServerConfig>,
     files: Vec<PathBuf>,
     outlines: BTreeMap<PathBuf, FileOutline>,
+    failures: BTreeMap<String, query::QueryErr>,
 }
 
 struct FileOutline {
@@ -139,6 +152,7 @@ impl<'a> Context<'a> {
             servers,
             files,
             outlines: BTreeMap::new(),
+            failures: BTreeMap::new(),
         })
     }
 
@@ -189,6 +203,26 @@ impl<'a> Context<'a> {
     }
 
     fn outline(&mut self, path: &Path) -> Result<Option<&FileOutline>, query::QueryErr> {
+        let (checkout, entries, servers) = (self.checkout, self.entries, self.servers);
+        self.outline_with(
+            path,
+            || query::select(checkout, entries.to_vec(), servers, None, Some(path)),
+            |server, path| {
+                query::execute(
+                    server,
+                    query::Verb::Symbols,
+                    &query::Target::File(path.to_owned()),
+                )
+            },
+        )
+    }
+
+    fn outline_with(
+        &mut self,
+        path: &Path,
+        select: impl FnOnce() -> Result<registry::Entry, query::QueryErr>,
+        request: impl FnOnce(&registry::Entry, &Path) -> Result<query::Output, query::QueryErr>,
+    ) -> Result<Option<&FileOutline>, query::QueryErr> {
         let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
         if !self
             .servers
@@ -201,19 +235,28 @@ impl<'a> Context<'a> {
         let file = match self.outlines.entry(path.to_owned()) {
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => {
-                let server = query::select(
-                    self.checkout,
-                    self.entries.to_vec(),
-                    self.servers,
-                    None,
-                    Some(path),
-                )?;
-                let query::Output::Answer { result, .. } = query::execute(
-                    &server,
-                    query::Verb::Symbols,
-                    &query::Target::File(path.to_owned()),
-                )?
-                else {
+                // Selection probes broker liveness, so check the memo before selecting again.
+                let mut candidates = self.entries.iter().filter(|entry| {
+                    entry.root == self.checkout
+                        && self.servers.get(&entry.server).is_some_and(|config| {
+                            config.extensions.iter().any(|ext| ext == extension)
+                        })
+                });
+                let server = candidates.next().filter(|_| candidates.next().is_none());
+                if let Some(error) = server
+                    .and_then(|server| self.failures.get(&server.server))
+                    .and_then(Self::server_error)
+                {
+                    return Err(error);
+                }
+                let result = select().and_then(|server| request(&server, path));
+                if let Err(error) = &result
+                    && let Some(error) = Self::server_error(error)
+                    && let Some(server) = server
+                {
+                    self.failures.insert(server.server.clone(), error);
+                }
+                let query::Output::Answer { result, .. } = result? else {
                     return Err(LspErr::Protocol(
                         "document symbols returned a lookup outcome".into(),
                     )
@@ -226,6 +269,20 @@ impl<'a> Context<'a> {
             }
         };
         Ok(Some(file))
+    }
+
+    fn server_error(error: &query::QueryErr) -> Option<query::QueryErr> {
+        match error {
+            query::QueryErr::Unavailable { root, reason } => Some(query::QueryErr::Unavailable {
+                root: root.clone(),
+                reason: reason.clone(),
+            }),
+            query::QueryErr::Indexing { server, seconds } => Some(query::QueryErr::Indexing {
+                server: server.clone(),
+                seconds: *seconds,
+            }),
+            query::QueryErr::Failed(_) => None,
+        }
     }
 }
 

@@ -1731,7 +1731,7 @@ rimz lsp callers
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz lsp check
-    <file>  [action=set takes=1..=1 required]
+    <files>  [action=append takes=1..=inf required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --fix  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]

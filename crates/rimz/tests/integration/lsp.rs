@@ -1088,6 +1088,145 @@ fn lsp_check_fix_hints_inserts_hints_for_single_items() {
 }
 
 #[test]
+fn lsp_check_multiple_files() {
+    let env = Env::new();
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    for (file, source) in [
+        ("lib.rs", "struct Type;\n"),
+        ("ok.md", "`lib.rs::Type`\n"),
+        ("other.md", "`lib.rs::Type`\n"),
+        ("bad.md", "`gone.rs::absent`\n"),
+    ] {
+        std::fs::write(env.project_root.join(file), source).unwrap();
+    }
+    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    let single = |file: &str| env.rimz().args(["lsp", "check", file]).output().unwrap();
+    let ok = single("ok.md");
+    let other = single("other.md");
+    let bad = single("bad.md");
+    let missing = single("missing.md");
+    let missing_error = String::from_utf8(missing.stderr).unwrap();
+    let missing_error = missing_error.trim().strip_prefix("error: ").unwrap();
+    let error_line = format!("missing.md  error  {missing_error}\n");
+    let mut failures = Vec::new();
+    for (files, code, expected) in [
+        (
+            ["ok.md", "other.md"],
+            0,
+            [ok.stdout.clone(), other.stdout].concat(),
+        ),
+        (
+            ["ok.md", "bad.md"],
+            7,
+            [ok.stdout.clone(), bad.stdout.clone()].concat(),
+        ),
+        (
+            ["missing.md", "ok.md"],
+            1,
+            [error_line.as_bytes(), &ok.stdout].concat(),
+        ),
+        (
+            ["missing.md", "bad.md"],
+            1,
+            [error_line.as_bytes(), &bad.stdout].concat(),
+        ),
+        (
+            ["ok.md", "ok.md"],
+            0,
+            [ok.stdout.clone(), ok.stdout].concat(),
+        ),
+    ] {
+        let output = env
+            .rimz()
+            .args(["lsp", "check"])
+            .args(files)
+            .output()
+            .unwrap();
+        if output.status.code() != Some(code)
+            || output.stdout != expected
+            || !output.stderr.is_empty()
+        {
+            failures.push(format!("{files:?}: {output:?}"));
+        }
+    }
+    let single_json = env
+        .rimz()
+        .args(["lsp", "check", "ok.md", "--json"])
+        .output()
+        .unwrap();
+    let mut checked: Value = serde_json::from_slice(&single_json.stdout).unwrap();
+    checked["exit"] = json!(0);
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "ok.md", "missing.md", "--json"])
+        .output()
+        .unwrap();
+    if output.status.code() != Some(1)
+        || !output.stderr.is_empty()
+        || serde_json::from_slice::<Value>(&output.stdout).ok()
+            != Some(json!([
+                checked, {"notes":"missing.md", "exit":1, "error":missing_error}
+            ]))
+    {
+        failures.push(format!("json: {output:?}"));
+    }
+    for file in ["ok.md", "other.md"] {
+        std::fs::write(env.project_root.join(file), "`lib.rs::Type` (~90-99)\n").unwrap();
+    }
+    let output = env
+        .rimz()
+        .args([
+            "lsp",
+            "check",
+            "ok.md",
+            "missing.md",
+            "other.md",
+            "--fix",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let fixed = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
+    if output.status.code() != Some(1)
+        || !output.stderr.is_empty()
+        || fixed[0]["fixes"].as_array().map(Vec::len) != Some(1)
+        || fixed[2]["fixes"].as_array().map(Vec::len) != Some(1)
+        || ["ok.md", "other.md"].iter().any(|file| {
+            std::fs::read_to_string(env.project_root.join(file))
+                .unwrap()
+                .contains("90-99")
+        })
+    {
+        failures.push(format!("fix: {output:?}"));
+    }
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "ok.md", "other.md"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    if output.status.code() != Some(3)
+        || !output.stderr.is_empty()
+        || text.lines().count() != 2
+        || !text.starts_with("ok.md  error  ")
+        || !text.contains("\nother.md  error  ")
+    {
+        failures.push(format!("unavailable: {output:?}"));
+    }
+    env.rimz().args(["lsp", "check"]).assert().code(2);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn lsp_check_reports_anchor_failures_and_coverage() {
     use serde_json::{Value, json};
 

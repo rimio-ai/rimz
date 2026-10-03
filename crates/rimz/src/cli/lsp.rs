@@ -63,9 +63,10 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// Check every path::symbol anchor in a Markdown file against the outline.
+    /// Check every path::symbol anchor in Markdown files against the outline.
     Check {
-        file: PathBuf,
+        #[arg(value_name = "FILE", required = true)]
+        files: Vec<PathBuf>,
         #[arg(long)]
         json: bool,
         /// Complete a short path that one file's symbol singles out, and rewrite existing hints for uniquely resolved saved symbols.
@@ -205,7 +206,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             return Ok(());
         }
         Command::Check {
-            file,
+            files,
             json,
             fix,
             hints,
@@ -216,21 +217,55 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                 (true, true) => check::Mode::FixHints,
             };
             let context = query_context(globals)?;
-            let report = match check::run(
-                &file,
+            let reports = match check::run(
+                &files,
                 &context.root,
                 &context.entries,
                 &context.servers,
                 mode,
             ) {
-                Ok(report) => report,
+                Ok(reports) => reports,
                 Err(error) => return query_error(error),
             };
             let mut out = render::out();
-            write!(out, "{}", report.render(json)?)?;
+            let multiple = files.len() > 1;
+            let mut code = 0;
+            let mut values = Vec::new();
+            for (file, result) in files.iter().zip(reports) {
+                match result {
+                    Ok(report) => {
+                        code = query_exit(code, report.exit_code());
+                        if multiple && json {
+                            let mut value = serde_json::to_value(&report)?;
+                            value["exit"] = report.exit_code().into();
+                            values.push(value);
+                        } else {
+                            write!(out, "{}", report.render(json)?)?;
+                        }
+                    }
+                    Err(error) => {
+                        if !multiple {
+                            return query_error(error);
+                        }
+                        code = query_exit(code, error.exit_code());
+                        if json {
+                            values.push(serde_json::json!({
+                                "notes": file.display().to_string(),
+                                "exit": error.exit_code(),
+                                "error": error.to_string(),
+                            }));
+                        } else {
+                            writeln!(out, "{}  error  {error}", file.display())?;
+                        }
+                    }
+                }
+            }
+            if multiple && json {
+                writeln!(out, "{}", serde_json::to_string_pretty(&values)?)?;
+            }
             out.flush()?;
-            if report.exit_code() != 0 {
-                std::process::exit(report.exit_code());
+            if code != 0 {
+                std::process::exit(code);
             }
             return Ok(());
         }
@@ -367,7 +402,7 @@ struct QueryContext {
 }
 
 fn query_exit(current: i32, next: i32) -> i32 {
-    [3, 4, 1, 6, 5, 0]
+    [3, 4, 1, 7, 6, 5, 0]
         .into_iter()
         .find(|code| *code == current || *code == next)
         .unwrap_or(0)
@@ -805,7 +840,7 @@ mod tests {
 
     #[test]
     fn query_exit_uses_severity_not_argument_order() {
-        let codes = [0, 5, 6, 1, 4, 3];
+        let codes = [0, 5, 6, 7, 1, 4, 3];
         for (rank, code) in codes.iter().enumerate() {
             for other in &codes[..=rank] {
                 assert_eq!(query_exit(*code, *other), *code);

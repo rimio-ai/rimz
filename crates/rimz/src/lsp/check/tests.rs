@@ -1,6 +1,86 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn outline_requests_stop_after_server_failure() {
+    let mut servers = BTreeMap::from([(
+        "rust".into(),
+        serde_json::from_value(json!({
+            "command": ["stub"], "extensions": ["rs", "shared"], "root-markers": []
+        }))
+        .unwrap(),
+    )]);
+    servers.insert(
+        "other".into(),
+        serde_json::from_value(json!({
+            "command": ["stub"], "extensions": ["shared"], "root-markers": []
+        }))
+        .unwrap(),
+    );
+    let entry: registry::Entry = serde_json::from_value(json!({
+        "root":"/checkout", "server":"rust", "nonce":"test",
+        "broker_pid":std::process::id(),
+        "broker_start_token":crate::proc::process_start_token(std::process::id()).unwrap(),
+        "state":"ready", "started_at_ms":0, "estimate_bytes":0,
+        "settings_hash":"", "request_count":0, "peak_rss_kb":0, "leases":[]
+    }))
+    .unwrap();
+    let mut other = entry.clone();
+    other.server = "other".into();
+    let entries = [entry, other];
+    let mut counts = Vec::new();
+    for code in [3, 4, 1] {
+        let mut context = Context {
+            checkout: Path::new("/checkout"),
+            entries: &entries,
+            servers: &servers,
+            files: Vec::new(),
+            outlines: BTreeMap::new(),
+            failures: BTreeMap::new(),
+        };
+        let mut requests = 0;
+        let mut errors = Vec::new();
+        for file in ["first.rs", "second.rs"] {
+            let error = context
+                .outline_with(
+                    Path::new(file),
+                    || Ok(entries[0].clone()),
+                    |_, requested| {
+                        assert_eq!(requested, Path::new(file));
+                        requests += 1;
+                        Err(match code {
+                            3 => query::QueryErr::Unavailable {
+                                root: "/checkout".into(),
+                                reason: query::UnavailableReason::Crashed,
+                            },
+                            4 => query::QueryErr::Indexing {
+                                server: "rust".into(),
+                                seconds: 110,
+                            },
+                            _ => LspErr::Protocol("bad outline".into()).into(),
+                        })
+                    },
+                )
+                .err()
+                .unwrap();
+            assert_eq!(error.exit_code(), code);
+            errors.push(error.to_string());
+        }
+        assert_eq!(errors[0], errors[1]);
+        counts.push(requests);
+        let error = context
+            .outline_with(
+                Path::new("ambiguous.shared"),
+                || Err(LspErr::Configuration("multiple language servers".into()).into()),
+                |_, _| panic!("ambiguous server selection must not issue an outline request"),
+            )
+            .err()
+            .unwrap();
+        assert_eq!(error.exit_code(), 1);
+    }
+    assert_eq!(counts, [1, 1, 2]);
+}
+
 fn anchor(text: &str) -> Anchor {
     extract(&format!("`{text}`")).pop().unwrap()
 }
@@ -41,6 +121,7 @@ fn rewrite_in(
         entries: &[],
         servers: &servers,
         files: files.iter().map(|(path, ..)| path.into()).collect(),
+        failures: BTreeMap::new(),
         outlines: files
             .into_iter()
             .map(|(path, nodes, dirty)| (path.into(), FileOutline { nodes, dirty }))
@@ -646,7 +727,10 @@ fn external_only_report_needs_no_server_or_checkout_path() {
     let notes = root.path().join("notes.md");
     let text = "o/r@v1:absent.rs::f (~12)";
     std::fs::write(&notes, format!("`{text}`")).unwrap();
-    let report = run(&notes, root.path(), &[], &BTreeMap::new(), Mode::Check).unwrap();
+    let report = run(&[notes], root.path(), &[], &BTreeMap::new(), Mode::Check)
+        .unwrap()
+        .remove(0)
+        .unwrap();
     assert_eq!(report.exit_code(), 0);
     let rendered = report.render(false).unwrap();
     assert_eq!(rendered.lines().count(), 1);

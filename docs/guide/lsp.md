@@ -150,6 +150,12 @@ A note can name a symbol that does not exist or point at an old line. Before han
 rimz lsp check notes.md
 ```
 
+When a hand-off spans several notes files, check them together; each gets its own result, even if another cannot be read:
+
+```sh
+rimz lsp check notes.md plan.md
+```
+
 When a symbol still exists but its line hint has drifted, refresh the hint instead of editing each number by hand. The same pass repairs a common slip: a bare file name such as `install.rs` that several files in the checkout share, which the check otherwise flags as an ambiguous path.
 
 ```sh
