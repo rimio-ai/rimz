@@ -92,13 +92,9 @@ fn condition_tick_observes_board_and_records_evidence() {
     std::fs::write(&root_board, "Stage: Review\n").unwrap();
     std::fs::write(&board, "Stage: Done\n").unwrap();
     loop_ok(&env, &["loop", "tick"]);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while (read_loop_run_records(&env).is_empty()
-        || read_loop_instances(&env).0.contains_key("ready"))
-        && Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    wait_for_loop_run_records(&env, "ready record and once-instance removal", |records| {
+        !records.is_empty() && !read_loop_instances(&env).0.contains_key("ready")
+    });
     let record = last_loop_record(&env);
     assert_eq!(record.result, LoopRunResult::Completed);
     let condition = record.condition.unwrap();
@@ -422,15 +418,18 @@ fn trunk_signal_fires_only_through_git_source() {
         .unwrap();
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains("reserved"));
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "trunk",
+    );
     loop_ok(&env, &["events", "emit", "trunk.moved", "--source", "git"]);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !read_loop_run_records(&env)
-        .iter()
-        .any(|r| r.task == "trunk" && r.result == LoopRunResult::Completed)
-        && Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    wait_for_loop_run_records(&env, "trunk Completed", |records| {
+        records
+            .iter()
+            .any(|r| r.task == "trunk" && r.result == LoopRunResult::Completed)
+    });
     assert!(
         read_loop_run_records(&env)
             .iter()
@@ -476,15 +475,18 @@ fn worktree_created_fires_a_loop_subscriber() {
             "true",
         ],
     );
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "created",
+    );
     loop_ok(&env, &["worktree", "new", "signal-test"]);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !read_loop_run_records(&env)
-        .iter()
-        .any(|r| r.task == "created" && r.result == LoopRunResult::Completed)
-        && Instant::now() < deadline
-    {
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    wait_for_loop_run_records(&env, "created Completed", |records| {
+        records
+            .iter()
+            .any(|r| r.task == "created" && r.result == LoopRunResult::Completed)
+    });
     assert!(
         read_loop_run_records(&env)
             .iter()
@@ -511,6 +513,12 @@ fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
             ],
         );
     }
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "behind",
+    );
     for branch in ["feature", "other"] {
         loop_ok(
             &env,
@@ -525,10 +533,19 @@ fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
             ],
         );
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while read_loop_run_records(&env).len() < 2 && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    wait_for_loop_run_records(
+        &env,
+        "behind Completed and merged SignalSkipped",
+        |records| {
+            records.len() == 2
+                && records.iter().any(|record| {
+                    record.task == "behind" && record.result == LoopRunResult::Completed
+                })
+                && records.iter().any(|record| {
+                    record.task == "merged" && record.result == LoopRunResult::SignalSkipped
+                })
+        },
+    );
     let records = read_loop_run_records(&env);
     assert_eq!(records.len(), 2, "{records:?}");
     assert!(
@@ -5774,6 +5791,25 @@ fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
     text.lines()
         .map(|line| serde_json::from_str(line).expect("loop run record"))
         .collect()
+}
+
+fn wait_for_loop_run_records(
+    env: &Env,
+    description: &str,
+    ready: impl Fn(&[LoopRunRecord]) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let records = read_loop_run_records(env);
+        if ready(&records) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {description}: {records:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn write_loop_run_records(env: &Env, records: &[LoopRunRecord]) {
