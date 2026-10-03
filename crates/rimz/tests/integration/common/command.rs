@@ -24,8 +24,9 @@ const AMBIENT_SESSION_KEYS: [&str; 1] = ["INVOCATION_ID"];
 
 /// Provider state and config paths outside the home key each adapter declares
 /// through `config_home_env_keys`, which [`provider_home_keys`] reads directly.
-const PROVIDER_SIDECAR_KEYS: [&str; 8] = [
+const PROVIDER_SIDECAR_KEYS: [&str; 9] = [
     "AMP_DATA_DIR",
+    "CODEX_SQLITE_HOME",
     "COPILOT_OTEL_FILE_EXPORTER_PATH",
     "GROK_AUTH_PATH",
     "PI_AGENT_DIR",
