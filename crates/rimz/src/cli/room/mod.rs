@@ -56,6 +56,46 @@ enum ResumePromptMode {
     Silent,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecoveryOpening {
+    Inline,
+    Deferred,
+    Parked,
+}
+
+fn recovery_opening(
+    disposition: RebirthDisposition,
+    panes: usize,
+    can_open: bool,
+    will_attach: bool,
+) -> RecoveryOpening {
+    if !disposition.recovers() || panes == 0 || can_open {
+        RecoveryOpening::Inline
+    } else if will_attach {
+        RecoveryOpening::Deferred
+    } else {
+        RecoveryOpening::Parked
+    }
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct DeferredRecoveryArgs {
+    #[arg(long)]
+    request: String,
+}
+
+pub(crate) fn recover_deferred(args: DeferredRecoveryArgs) -> Result<()> {
+    let resume = RoomContext::complete_deferred_recovery(
+        serde_json::from_str(&args.request)?,
+        machine_config(),
+    )?;
+    for launch in &resume.team_launches {
+        rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
+    }
+    report_resume(&resume);
+    Ok(())
+}
+
 enum RoomEntry<'a> {
     Start {
         workspace: rimz::ResolvedWorkspace,
@@ -643,6 +683,20 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             background_view,
             cwd,
         )?;
+        if was_live {
+            let will_attach = attach_action(
+                entry.mode(),
+                std::io::stdin().is_terminal(),
+                std::io::stdout().is_terminal(),
+                inside_selected_mux(mux),
+            ) == AttachAction::Launch;
+            recover_parked_agents(
+                &context,
+                entry.no_resume(),
+                entry.resume_prompt_mode(),
+                will_attach,
+            )?;
+        }
         ReadyRoom::Managed(Box::new(context))
     } else {
         ReadyRoom::External {
@@ -676,7 +730,8 @@ fn birth_managed_room(
     background_view: Option<rimz::remote_control::ReadinessSnapshot>,
     cwd: std::path::PathBuf,
 ) -> Result<()> {
-    let rebirth = if preflight_health.is_some() {
+    let was_live = preflight_health.is_some();
+    let rebirth = if was_live {
         NormalRebirth::Live
     } else {
         match context.inspect_rebirth(no_resume) {
@@ -687,20 +742,8 @@ fn birth_managed_room(
                 {
                     report_previous_session_death(death);
                 }
-                let recovery_off = no_resume || !machine_config().resume.on_rebirth;
-                let disposition = prompt_disposition(&preview, resume_prompt, recovery_off)?;
-                if disposition.recovers() && preview.requires_sandbox() {
-                    rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
-                }
-                if disposition.recovers() {
-                    for root in plan.checkout_roots() {
-                        if let Err(error) =
-                            crate::cli::lsp_admission::admit(root, &machine_config())
-                        {
-                            tracing::warn!(%error, "language-server admission skipped; recovering without it");
-                        }
-                    }
-                }
+                let disposition = prompt_disposition(&preview, resume_prompt)?;
+                preflight_recovery(&plan, disposition)?;
                 NormalRebirth::Selected {
                     plan: Box::new(plan),
                     disposition,
@@ -731,6 +774,81 @@ fn birth_managed_room(
         rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
     }
     report_resume(&outcome.resume);
+    Ok(())
+}
+
+/// Offer the agents an earlier unattended birth parked to the user now
+/// attending the live room. Nobody unattended is asked, so they stay parked.
+fn recover_parked_agents(
+    context: &RoomContext,
+    no_resume: bool,
+    resume_prompt: ResumePromptMode,
+    will_attach: bool,
+) -> Result<()> {
+    if resume_prompt != ResumePromptMode::Interactive {
+        return Ok(());
+    }
+    let plan = match context.inspect_parked_recovery(no_resume) {
+        Ok(plan) => plan,
+        Err(err) => {
+            tracing::warn!(workspace = %context.workspace_id(), error = %err, "parked recovery inspection skipped");
+            return Ok(());
+        }
+    };
+    let preview = plan.preview();
+    if preview.candidate_count() == 0 {
+        return Ok(());
+    }
+    let disposition = prompt_disposition(&preview, resume_prompt)?;
+    preflight_recovery(&plan, disposition)?;
+    match recovery_opening(
+        disposition,
+        preview.pane_count(),
+        context.backend().can_open_tab(context.session_name()),
+        will_attach,
+    ) {
+        RecoveryOpening::Inline => {}
+        RecoveryOpening::Deferred => {
+            let count = preview.pane_count();
+            context.defer_parked_recovery(plan, disposition)?;
+            writeln!(
+                crate::cli::render::err(),
+                "rimz: {count} agent{} will resume once the room is attached",
+                if count == 1 { "" } else { "s" },
+            )?;
+            return Ok(());
+        }
+        RecoveryOpening::Parked => {
+            writeln!(
+                crate::cli::render::err(),
+                "rimz: agents stay parked; attach with rimz start to recover them"
+            )?;
+            return Ok(());
+        }
+    }
+    let resume = context.settle_parked_recovery(plan, disposition);
+    for launch in &resume.team_launches {
+        rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
+    }
+    report_resume(&resume);
+    Ok(())
+}
+
+fn preflight_recovery(
+    plan: &rimz::harness::rebirth::RebirthPlan,
+    disposition: RebirthDisposition,
+) -> Result<()> {
+    if !disposition.recovers() {
+        return Ok(());
+    }
+    if plan.preview().requires_sandbox() {
+        rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
+    }
+    for root in plan.checkout_roots() {
+        if let Err(error) = crate::cli::lsp_admission::admit(root, &machine_config()) {
+            tracing::warn!(%error, "language-server admission skipped; recovering without it");
+        }
+    }
     Ok(())
 }
 
@@ -1109,32 +1227,82 @@ fn rimz_socket_environment_preflight(project_root: &Path) -> Result<()> {
         .context("checking RimZ runtime socket budget")
 }
 
-/// Nobody is asked unless the mode is interactive and the plan resumes
-/// something, and a disposition nobody chose ends no agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecoveryQuestion {
+    /// Resume what the plan can resume; default yes.
+    Recover,
+    /// End the candidates the plan cannot resume; default no.
+    DropRest,
+}
+
+/// Who decides what happens to the recovery candidates. Only an interactive
+/// start reaches a disposition that ends an agent: by its answers, or by
+/// having switched recovery off.
+fn choose_disposition(
+    mode: ResumePromptMode,
+    recovery_off: bool,
+    resumable: usize,
+    unresumable: usize,
+    mut ask: impl FnMut(RecoveryQuestion) -> Result<bool>,
+) -> Result<RebirthDisposition> {
+    match (mode, recovery_off) {
+        (ResumePromptMode::Silent, true) => return Ok(RebirthDisposition::Defer),
+        (ResumePromptMode::Silent, false) => return Ok(RebirthDisposition::RecoverKeep),
+        (ResumePromptMode::Interactive, true) => return Ok(RebirthDisposition::Decline),
+        (ResumePromptMode::Interactive, false) => {}
+    }
+    if resumable > 0 && !ask(RecoveryQuestion::Recover)? {
+        return Ok(RebirthDisposition::Decline);
+    }
+    if unresumable > 0 && ask(RecoveryQuestion::DropRest)? {
+        return Ok(RebirthDisposition::RecoverDrop);
+    }
+    Ok(RebirthDisposition::RecoverKeep)
+}
+
 fn prompt_disposition(
     plan: &rimz::harness::rebirth::RebirthPreview,
     mode: ResumePromptMode,
-    recovery_off: bool,
 ) -> Result<RebirthDisposition> {
-    if mode == ResumePromptMode::Silent && recovery_off {
-        return Ok(RebirthDisposition::Defer);
-    }
-    let agents = plan.pane_count();
-    if agents == 0 || mode == ResumePromptMode::Silent {
-        return Ok(RebirthDisposition::RecoverKeep);
-    }
-    let labels = plan.labels().join(", ");
-    if confirm_with_default(
-        &format!(
-            "Recover {agents} agent{} ({labels})?",
-            if agents == 1 { "" } else { "s" },
-        ),
-        true,
-    )? {
-        Ok(RebirthDisposition::RecoverKeep)
-    } else {
-        Ok(RebirthDisposition::Decline)
-    }
+    let plural = |count: usize| if count == 1 { "" } else { "s" };
+    let resumable = plan.pane_count();
+    let unresumable = plan.unresumable();
+    choose_disposition(
+        mode,
+        plan.recovery_off(),
+        resumable,
+        unresumable.len(),
+        |question| match question {
+            RecoveryQuestion::Recover => confirm_with_default(
+                &format!(
+                    "Recover {resumable} agent{} ({})?",
+                    plural(resumable),
+                    plan.labels().join(", "),
+                ),
+                true,
+            ),
+            RecoveryQuestion::DropRest => {
+                let mut err = std::io::stderr().lock();
+                writeln!(err, "rimz: cannot be resumed:")?;
+                for agent in unresumable {
+                    let reason = agent
+                        .reason
+                        .as_ref()
+                        .map_or_else(|| "cannot be resumed".into(), |reason| reason.label());
+                    writeln!(err, "  {} ({reason})", agent.label)?;
+                }
+                drop(err);
+                confirm_with_default(
+                    &format!(
+                        "Drop {} agent{} (No keeps them for the next start)?",
+                        unresumable.len(),
+                        plural(unresumable.len()),
+                    ),
+                    false,
+                )
+            }
+        },
+    )
 }
 
 fn finish_attach(ready: ReadyRoom, mode: AttachMode) -> Result<()> {

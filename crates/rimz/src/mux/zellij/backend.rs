@@ -761,9 +761,12 @@ impl ZellijBackend {
         let config = crate::config::MachineConfig::load_lenient();
         let theme = &config.theme;
         let (before, before_materialized) = named_tab_counts(&tabs, tab_name, theme);
+        let mut created_tab = None;
         for attempt in 0..super::NEW_TAB_ATTEMPTS {
             if attempt > 0 {
-                let tabs = self.list_tabs(session)?;
+                let tabs = self
+                    .list_tabs(session)
+                    .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
                 let (named, materialized) = named_tab_counts(&tabs, tab_name, theme);
                 if named > before {
                     self.wait_for_named_tab_materialized(
@@ -772,16 +775,24 @@ impl ZellijBackend {
                         before_materialized,
                         materialized,
                         theme,
-                    )?;
+                    )
+                    .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
                     return Ok(());
                 }
             }
-            self.zellij_action(session)
+            let output = self
+                .zellij_action(session)
                 .args(args.iter().cloned())
                 .run()?;
+            created_tab = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok();
             let deadline = Instant::now() + super::NEW_TAB_CONFIRM_WINDOW;
             loop {
-                let tabs = self.list_tabs(session)?;
+                let tabs = self
+                    .list_tabs(session)
+                    .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
                 let (named, materialized) = named_tab_counts(&tabs, tab_name, theme);
                 if named > before {
                     self.wait_for_named_tab_materialized(
@@ -790,7 +801,8 @@ impl ZellijBackend {
                         before_materialized,
                         materialized,
                         theme,
-                    )?;
+                    )
+                    .inspect_err(|_| self.close_unconfirmed_tab(session, created_tab))?;
                     return Ok(());
                 }
                 if Instant::now() >= deadline {
@@ -799,10 +811,23 @@ impl ZellijBackend {
                 std::thread::sleep(super::NEW_TAB_CONFIRM_STEP);
             }
         }
+        self.close_unconfirmed_tab(session, created_tab);
         Err(output_error(format!(
             "new-tab '{tab_name}' did not appear after {} attempts",
             super::NEW_TAB_ATTEMPTS
         )))
+    }
+
+    fn close_unconfirmed_tab(&self, session: &str, tab: Option<u64>) {
+        // Never close a namesake: new-tab returns the stable id it created.
+        if let Some(tab) = tab
+            && let Err(error) = self
+                .zellij_action(session)
+                .args(["close-tab", "--tab-id", &tab.to_string()])
+                .run()
+        {
+            tracing::warn!(%session, tab, %error, "could not close unconfirmed tab");
+        }
     }
 
     fn wait_for_named_tab_materialized(
@@ -1693,6 +1718,10 @@ impl MuxBackend for ZellijBackend {
             }
         }
         Ok(())
+    }
+
+    fn can_open_tab(&self, session: &str) -> bool {
+        self.session_can_open_tab(session)
     }
 
     fn rename_tab(

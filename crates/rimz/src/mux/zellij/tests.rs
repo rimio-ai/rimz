@@ -2010,6 +2010,71 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn tab_opening_accepts_a_client_focused_on_a_plugin_or_terminal() {
+    for (pane, expected) in [("plugin_7", true), ("terminal_7", true), ("", false)] {
+        let (_temp, shim) = zellij_shim(&format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.45.1'; else printf '1 {pane}\\n'; fi\n"
+        ));
+        assert_eq!(
+            ZellijBackend::with_program_for_test(&shim).can_open_tab("test"),
+            expected,
+            "client focused on {pane:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unconfirmed_tab_is_closed_by_id_without_closing_an_existing_namesake() {
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); tab="$dir/tab-created"
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.1\n'; exit 0; fi
+case " $* " in
+  *" action new-tab "*) touch "$tab"; printf '7\n' ;;
+  *" action list-tabs "*)
+    printf '[{"name":"work","tab_id":2,"selectable_tiled_panes_count":1}'
+    if [ -f "$tab" ]; then printf ',{"name":"work","tab_id":7,"selectable_tiled_panes_count":0}'; fi
+    printf ']\n' ;;
+esac
+"#,
+    );
+    let error = room
+        .backend(&shim)
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: "work".into(),
+            panes: LayoutPanes {
+                columns: vec![LayoutColumn {
+                    panes: vec![PaneCmd {
+                        argv: vec!["sleep".into(), "600".into()],
+                        name: None,
+                    }],
+                    stacked: false,
+                }],
+                focused_pane: 0,
+            },
+            focus: true,
+            dock_sidebar: true,
+            after: None,
+            sidebar: room.sidebar_options(120),
+        })
+        .expect_err("unmaterialized tab");
+    assert!(error.to_string().contains("did not materialize"), "{error}");
+    let log = shim_log(&temp);
+    assert_eq!(command_count(&log, "action new-tab "), 1, "{log}");
+    assert_eq!(
+        command_count(&log, "action close-tab --tab-id 7"),
+        1,
+        "{log}"
+    );
+    assert!(!log.contains("action close-tab --tab-id 2"), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
 fn open_tab_moves_by_tab_id_on_zellij_044() {
     assert_open_tab_move_confirmation("0.44.3", true);
 }

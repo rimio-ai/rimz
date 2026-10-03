@@ -315,6 +315,10 @@ impl StatePaths {
         Class::Locks.path_under(&self.root).join(name)
     }
 
+    pub(crate) fn recovery_log(&self) -> PathBuf {
+        Class::Log.path_under(&self.root).join("recovery.log")
+    }
+
     pub fn ensure_dirs(&self) -> Result<()> {
         mkdir_p(&self.snapshots_dir)?;
         mkdir_p(&self.runs_dir)?;

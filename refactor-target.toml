@@ -334,7 +334,8 @@ allowed-dependencies = [
 # A named account's home is linked under one machine-wide lock path (+1).
 # RuntimePaths owns the account budget ledger and its lock path (+2).
 # The ledger sweep reads an account ledger file name back to its account component (+1).
-surface-budget = 209
+# Detached recovery owns a classed state log (+1).
+surface-budget = 210
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -417,7 +418,10 @@ path = "crates/rimz/src/harness"
 # A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
 # A loop task's one account resolution serves the runner and `loop add`: `task_login` (+1).
 # Rebirth settlement takes a disposition and previews the unresumable agents; the plan reads skips by session (+5).
-surface-budget = 650
+# The preview says recovery was switched off, and a live settlement opens its tabs through the room (+2).
+# Deferred consent scopes a fresh live inspection to offered identities (+3).
+# Birth calls rebirth::park_roster before session creation so parking can refuse (+1).
+surface-budget = 656
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -465,7 +469,8 @@ path = "crates/rimz/src/mux"
 # The resolved Zellij session option list is one public type plus its resolver,
 # consumed by the live backend tests that prove room options at the multiplexer.
 # `MuxBackend::require_pane_in_session` is the room-membership check `pane send` and `pane capture` run before any pane I/O (+1).
-surface-budget = 252
+# Room entry asks the backend whether it can open a tab before attach (+1).
+surface-budget = 253
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -533,7 +538,9 @@ upward-dependencies = [
 # Birth-login selection stands apart from the all-account check room entry adds, since a supervised launch checks only its own account (+1).
 # A launch on a named account counts that account's other live agents (+1).
 # A live reattach inspects and settles the parked recovery candidates (+2).
-surface-budget = 61
+# Lane resume and live settlement open a resume tab through one room entry (+1).
+# The detached helper carries opaque, scoped recovery consent (+1).
+surface-budget = 63
 
 [[module]]
 path = "crates/rimz/src/sidebar"
@@ -669,7 +676,8 @@ surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/cli/room"
-surface-budget = 12
+# Hidden deferred-recovery arguments and dispatch entry (+2).
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/cli/remote.rs"

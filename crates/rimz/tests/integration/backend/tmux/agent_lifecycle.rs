@@ -820,6 +820,12 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         ))
         .expect("ensure pre-crash session");
     server.tmux(&["kill-server"]);
+    // The rebirth boundary parks the roster's agents before it deletes the roster.
+    std::fs::write(
+        &store.paths().pending_recovery,
+        serde_json::json!({"version": 1, "agents": [(&kind, agent_id)]}).to_string(),
+    )
+    .expect("park pre-crash agent");
     store
         .append_event(&rimz::EventEnvelope::session_rebirth(
             workspace.workspace_id.clone(),
@@ -850,6 +856,8 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
     let ready = env.home_root.join("reborn-codex-ready");
     let command = tmux_direct_resume_command(&env, &agent_bin, &ready, "codex", agent_id);
     let (_stub_dir, stub) = sidebar_command_stub();
+    // The recovering settlement takes the resumed agent out of the record.
+    std::fs::remove_file(&store.paths().pending_recovery).expect("settle resumed agent");
     server
         .backend
         .open_tab(&TabOptions {

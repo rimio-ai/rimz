@@ -250,6 +250,8 @@ struct ResolvedLane {
 /// skipped agent stays visible rather than silently lost.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResumeSkipReason {
+    /// The checkout is absent; recovery keeps the agent until a drop decision.
+    WorktreeGone,
     /// The agent's kind has no resume CLI (`crate::agents::capabilities::LaunchCapability::resume_command`).
     NoResumeSupport,
     /// The session id names a conversation the provider never persisted, so
@@ -270,6 +272,7 @@ pub enum ResumeSkipReason {
 impl ResumeSkipReason {
     pub fn label(&self) -> std::borrow::Cow<'_, str> {
         match self {
+            Self::WorktreeGone => "worktree gone",
             Self::NoResumeSupport => "no resume CLI",
             Self::NoConversation => "no saved conversation",
             Self::OverCap => "over the resume cap",

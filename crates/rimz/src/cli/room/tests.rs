@@ -1,12 +1,43 @@
 use std::path::PathBuf;
 
 use super::{
-    ResumePromptMode, birth_socket_name, blocks_room_start, resume_prompt_mode,
-    tmux_version_preflight, write_project_trust_offer_to,
+    RecoveryQuestion, ResumePromptMode, birth_socket_name, blocks_room_start, choose_disposition,
+    resume_prompt_mode, tmux_version_preflight, write_project_trust_offer_to,
 };
+use rimz::harness::rebirth::RebirthDisposition;
 
 use rimz::ids::MuxName;
 use rimz::trust::{BirthPromptOffer, SurfaceSummary};
+
+#[test]
+fn recovery_opening_waits_only_for_recoverable_tabs_with_an_attach() {
+    use super::{RecoveryOpening, recovery_opening};
+    for disposition in [
+        RebirthDisposition::Defer,
+        RebirthDisposition::Decline,
+        RebirthDisposition::RecoverKeep,
+        RebirthDisposition::RecoverDrop,
+    ] {
+        for panes in [0, 2] {
+            for can_open in [false, true] {
+                for will_attach in [false, true] {
+                    let expected = if !disposition.recovers() || panes == 0 || can_open {
+                        RecoveryOpening::Inline
+                    } else if will_attach {
+                        RecoveryOpening::Deferred
+                    } else {
+                        RecoveryOpening::Parked
+                    };
+                    assert_eq!(
+                        recovery_opening(disposition, panes, can_open, will_attach),
+                        expected,
+                        "{disposition:?}, panes={panes}, can_open={can_open}, will_attach={will_attach}"
+                    );
+                }
+            }
+        }
+    }
+}
 
 fn folder_trust_row(kind: &'static str, grantable: bool) -> rimz::agents::FolderTrustRow {
     rimz::agents::FolderTrustRow {
@@ -183,6 +214,90 @@ fn resume_prompt_mode_uses_tty_or_confirm_flag() {
         ResumePromptMode::Interactive
     );
     assert_eq!(resume_prompt_mode(false, false), ResumePromptMode::Silent);
+}
+
+#[test]
+fn recovery_disposition_follows_who_was_asked_and_what_they_answered() {
+    use RebirthDisposition::{Decline, Defer, RecoverDrop, RecoverKeep};
+    use RecoveryQuestion::{DropRest, Recover};
+    use ResumePromptMode::{Interactive, Silent};
+    // (mode, recovery off, resumable, unresumable, recover answer, drop answer)
+    //   => (disposition, questions asked)
+    let table: [(_, _, _, _, _, _, _, &[RecoveryQuestion]); 13] = [
+        (Silent, true, 0, 3, true, true, Defer, &[]),
+        (Silent, false, 2, 3, true, true, RecoverKeep, &[]),
+        (Silent, false, 0, 3, true, true, RecoverKeep, &[]),
+        (Interactive, true, 0, 3, true, true, Decline, &[]),
+        (Interactive, true, 0, 0, true, true, Decline, &[]),
+        (Interactive, false, 0, 0, true, true, RecoverKeep, &[]),
+        (
+            Interactive,
+            false,
+            2,
+            0,
+            true,
+            true,
+            RecoverKeep,
+            &[Recover],
+        ),
+        (Interactive, false, 2, 0, false, true, Decline, &[Recover]),
+        (Interactive, false, 2, 3, false, true, Decline, &[Recover]),
+        (
+            Interactive,
+            false,
+            2,
+            3,
+            true,
+            false,
+            RecoverKeep,
+            &[Recover, DropRest],
+        ),
+        (
+            Interactive,
+            false,
+            2,
+            3,
+            true,
+            true,
+            RecoverDrop,
+            &[Recover, DropRest],
+        ),
+        (
+            Interactive,
+            false,
+            0,
+            3,
+            true,
+            false,
+            RecoverKeep,
+            &[DropRest],
+        ),
+        (
+            Interactive,
+            false,
+            0,
+            3,
+            false,
+            true,
+            RecoverDrop,
+            &[DropRest],
+        ),
+    ];
+    for (mode, recovery_off, resumable, unresumable, recover, drop_rest, expected, asks) in table {
+        let mut asked = Vec::new();
+        let disposition =
+            choose_disposition(mode, recovery_off, resumable, unresumable, |question| {
+                asked.push(question);
+                Ok(match question {
+                    Recover => recover,
+                    DropRest => drop_rest,
+                })
+            })
+            .expect("choose");
+        let case = format!("{mode:?} off={recovery_off} {resumable}/{unresumable}");
+        assert_eq!(disposition, expected, "{case}");
+        assert_eq!(asked, asks, "{case}");
+    }
 }
 
 #[test]
