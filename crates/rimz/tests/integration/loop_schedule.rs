@@ -5311,7 +5311,7 @@ fn loop_add_pins_a_declared_account_and_refuses_the_rest() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     add_claude_account(&env, "work");
-    let pinned = |name: &'static str, agent: &'static str, account: &'static str| {
+    let pinned = |name: &'static str, agent: &'static str, pin: &'static str| {
         vec![
             "loop",
             "add",
@@ -5319,7 +5319,7 @@ fn loop_add_pins_a_declared_account_and_refuses_the_rest() {
             "--agent",
             agent,
             "--account",
-            account,
+            pin,
             "--prompt",
             "x",
             "--every",
@@ -5442,7 +5442,7 @@ fn loop_fire_skips_when_its_pinned_account_cannot_run() {
 #[cfg(unix)]
 #[test]
 fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
-    for (account, stamp) in [("work", Some("work")), ("default", None)] {
+    for (pin, stamp) in [("work", Some("work")), ("default", None)] {
         let env = Env::new();
         env.install_agent_hooks("codex");
         trust_codex_preflight_hooks(&env);
@@ -5527,7 +5527,7 @@ fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
                 "--agent",
                 "codex",
                 "--account",
-                account,
+                pin,
                 "--prompt",
                 "fix it",
                 "--every",
@@ -5565,7 +5565,7 @@ fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
         assert_eq!(
             launched.login.as_ref().map(|name| name.as_str()),
             stamp,
-            "task pinned to `{account}`"
+            "task pinned to `{pin}`"
         );
         let stopped = command().args(["loop", "stop", "spawn"]).output().unwrap();
         assert!(

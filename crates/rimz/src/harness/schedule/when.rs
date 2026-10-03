@@ -957,16 +957,15 @@ mod tests {
         assert!(!check("window.5h.left>=0", None).ok);
         assert!(!check("window.5h.left>=0", Some(&AgentKind::new_unchecked("pi"))).ok);
         // A row's account reads its own stored window, never the room's.
-        for (account, left) in [
+        for (pin, left) in [
             (Some("default"), Some("40")),
             (Some("work"), Some("90")),
             (Some("idle"), None),
         ] {
             assert_eq!(
-                read("window.5h.left>=0", Some(&claude), account).readings["window.5h.left"]
-                    .as_deref(),
+                read("window.5h.left>=0", Some(&claude), pin).readings["window.5h.left"].as_deref(),
                 left,
-                "{account:?}"
+                "{pin:?}"
             );
         }
     }
