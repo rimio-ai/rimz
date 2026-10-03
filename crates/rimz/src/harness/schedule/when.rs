@@ -13,8 +13,8 @@ use crate::forge::pr_state::PrStateCache;
 use crate::ids::{AgentKind, LoginKey, LoginName};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
-/// Checkout scopes whose live loop conditions need sidebar CI probes.
-pub(crate) fn ci_scopes(
+/// Checkout scopes whose live loop conditions need sidebar CI or PR probes.
+pub(crate) fn probe_scopes(
     runtime: &crate::RuntimePaths,
     project_root: Option<&Path>,
 ) -> BTreeSet<String> {
@@ -33,13 +33,16 @@ pub(crate) fn ci_scopes(
                 return None;
             };
             let scope = task.entry().run_dir();
-            (expr.terms().any(|term| term.key == "ci") && scope.is_dir())
-                .then(|| scope.to_string_lossy().into_owned())
+            (expr
+                .terms()
+                .any(|term| matches!(term.key.as_str(), "ci" | "pr"))
+                && scope.is_dir())
+            .then(|| scope.to_string_lossy().into_owned())
         })
         .collect()
 }
 
-/// A room's last-known CI reading. Absence of this source means unknown CI.
+/// A room's last-known CI and PR readings. Absence of this source means unknown.
 pub struct CiSource(PrStateCache);
 
 impl CiSource {
@@ -152,6 +155,20 @@ pub fn evaluate(
             .entry(term.key.clone())
             .or_insert_with(|| match term.key.as_str() {
                 "team.stage" => crate::harness::scratch::board_stage(scope).map(|stage| stage.name),
+                "pr" => ci_source.and_then(|source| {
+                    source
+                        .0
+                        .states
+                        .get(scope.to_string_lossy().as_ref())
+                        .map(|link| {
+                            match link.state {
+                                WorktreePrState::Open => "open",
+                                WorktreePrState::Merged => "merged",
+                                WorktreePrState::Closed => "closed",
+                            }
+                            .to_owned()
+                        })
+                }),
                 "ci" => ci_source.and_then(|source| {
                     let key = scope.to_string_lossy();
                     source
@@ -175,7 +192,7 @@ pub fn evaluate(
                 key => {
                     // WhenExpr can only be constructed through the key-validating parser.
                     let span = window_span(key)
-                        .expect("the parser admits only team.stage, ci, and window keys");
+                        .expect("the parser admits only team.stage, ci, pr, and window keys");
                     provider.and_then(|kind| windows.left(kind, account, span))
                 }
             });
@@ -525,10 +542,10 @@ impl Parser<'_> {
                     self.rest().trim()
                 )));
             }
-            if key != "team.stage" && key != "ci" {
-                return Err(
-                    self.error("unknown key; keys: team.stage, ci, window.5h.left, window.7d.left")
-                );
+            if !matches!(key.as_str(), "team.stage" | "ci" | "pr") {
+                return Err(self.error(
+                    "unknown key; keys: team.stage, ci, pr, window.5h.left, window.7d.left",
+                ));
             }
             if Op::COMPARISONS.iter().any(|op| self.take(op.token())) {
                 let value = self.word()?;
@@ -561,6 +578,13 @@ impl Parser<'_> {
                     .any(|value| !matches!(value.as_str(), "passed" | "failed" | "pending"))
             {
                 return Err(self.error("unknown ci value; values: passed, failed, pending"));
+            }
+            if key == "pr"
+                && values
+                    .iter()
+                    .any(|value| !matches!(value.as_str(), "open" | "merged" | "closed"))
+            {
+                return Err(self.error("unknown pr value; values: open, merged, closed"));
             }
             Node::Term(WhenTerm {
                 key,
@@ -629,6 +653,42 @@ mod tests {
 
     fn no_windows() -> WindowReadings<'static> {
         WindowReadings::fixed(Timestamp::now(), BTreeMap::new())
+    }
+
+    #[test]
+    fn pr_reads_link_state_and_requires_a_scoped_link() {
+        let scope = Path::new("/checkout");
+        for state in ["open", "merged", "closed"] {
+            let parsed = WhenExpr::parse(&[format!("pr={state}")]);
+            assert!(parsed.is_ok(), "pr state must parse: {parsed:?}");
+            let expr = parsed.unwrap();
+            let cache = CiSource(PrStateCache {
+                states: BTreeMap::from([(
+                    scope.display().to_string(),
+                    serde_json::from_value(serde_json::json!({"state": state})).unwrap(),
+                )]),
+                ..PrStateCache::default()
+            });
+            let verdict = evaluate(&expr, scope, Some(&cache), None, None, &no_windows());
+            assert!(verdict.ok);
+            assert_eq!(verdict.readings["pr"].as_deref(), Some(state));
+            for source in [None, Some(&cache)] {
+                let verdict = evaluate(
+                    &expr,
+                    Path::new("/missing"),
+                    source,
+                    None,
+                    None,
+                    &no_windows(),
+                );
+                assert!(!verdict.ok);
+                assert_eq!(verdict.readings["pr"], None);
+            }
+        }
+        let error = WhenExpr::parse(&["pr=pending".to_owned()]).unwrap_err();
+        assert!(error.to_string().contains("values: open, merged, closed"));
+        let error = WhenExpr::parse(&["unknown=value".to_owned()]).unwrap_err();
+        assert!(error.to_string().contains("team.stage, ci, pr,"));
     }
 
     #[test]
@@ -818,11 +878,11 @@ mod tests {
         for (input, hint) in [
             (
                 "agent=idle",
-                "team.stage, ci, window.5h.left, window.7d.left",
+                "team.stage, ci, pr, window.5h.left, window.7d.left",
             ),
             (
                 "window.1h.left>=40",
-                "team.stage, ci, window.5h.left, window.7d.left",
+                "team.stage, ci, pr, window.5h.left, window.7d.left",
             ),
             ("ci=green", "passed, failed, pending"),
             ("ci!=failed", "!ci=failed"),

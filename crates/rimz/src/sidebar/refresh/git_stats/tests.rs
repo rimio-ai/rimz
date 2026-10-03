@@ -46,6 +46,14 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
     let tasks = Tasks(BTreeMap::from([
         ("live".to_owned(), entry.clone()),
         (
+            "pr".to_owned(),
+            TaskEntry {
+                dir: Some(root.path().to_owned()),
+                when: Some(vec!["pr=merged".to_owned()]),
+                ..entry.clone()
+            },
+        ),
+        (
             "disabled".to_owned(),
             TaskEntry {
                 dir: Some(root.path().to_owned()),
@@ -108,10 +116,16 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
     )
     .unwrap();
     let snapshot = SidebarSnapshot::build(runtime.workspace_id.clone(), vec![], Timestamp::now());
-    let needed = needed_worktree_paths(&snapshot, when::ci_scopes(&runtime, Some(root.path())));
-    assert_eq!(needed, vec![scope.display().to_string()]);
+    let needed = needed_worktree_paths(&snapshot, when::probe_scopes(&runtime, Some(root.path())));
+    assert_eq!(
+        needed,
+        vec![
+            root.path().display().to_string(),
+            scope.display().to_string()
+        ]
+    );
     std::fs::remove_file(catalog_path).unwrap();
-    assert!(when::ci_scopes(&runtime, Some(root.path())).is_empty());
+    assert!(when::probe_scopes(&runtime, Some(root.path())).is_empty());
 }
 
 #[test]

@@ -204,7 +204,7 @@ pub(super) fn refresh_diff_stats_for(
     // Focus tiers edit-sensitive facts first; activity still keeps recently
     // worked background worktrees on the hot TTL while the rest decay to idle.
     let condition_scopes =
-        crate::harness::schedule::when::ci_scopes(runtime, snapshot.project_root.as_deref());
+        crate::harness::schedule::when::probe_scopes(runtime, snapshot.project_root.as_deref());
     let needed = needed_worktree_paths(snapshot, condition_scopes);
     let focused = focused_worktree_paths(snapshot);
     let hot = hot_worktree_paths(snapshot);
