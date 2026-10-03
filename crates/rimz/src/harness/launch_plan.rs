@@ -449,6 +449,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                     .agent_skills_dir(request.identity.name.as_deref()),
                 provider_home,
                 provider_home_env_keys: adapter.config_home_env_keys(),
+                default_home: (!login.is_default())
+                    .then(|| login.default_home(inputs.ambient_env))
+                    .flatten(),
                 skills: sandbox::SkillInputs {
                     kind: request.kind.as_str(),
                     home: adapter.skills_home(&env),
