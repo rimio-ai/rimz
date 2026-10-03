@@ -228,8 +228,8 @@ pub(super) fn blocked_project_logins(state: crate::trust::TrustState) -> String 
     )
 }
 
-/// Live pane-backed agents per account across every live room, each room read
-/// without creating its store.
+/// Live agents per account across every live room, each room read without
+/// creating its store.
 pub fn live_agents_by_login() -> Result<BTreeMap<LoginKey, usize>, super::LiveRoomErr> {
     let mut counts = BTreeMap::new();
     for agents in live_room_agents()? {
@@ -241,7 +241,16 @@ pub fn live_agents_by_login() -> Result<BTreeMap<LoginKey, usize>, super::LiveRo
 /// Agents on `account` whose provider can be writing, across every live room,
 /// besides the `launching` one. A row counts once a pane is attached to it: a
 /// seat of a batch that has not started and a row a rebirth recovered have
-/// none.
+/// none. Every producer of the launch wrapper places it in a pane, a
+/// supervised headless run included (held by the `deep` journey's
+/// `tmux_supervised_run_holds_its_account_history_link_until_it_dies` and its
+/// Zellij twin), and the wrapper links the account before it binds that pane
+/// and starts the provider. A row whose recorded owner process is dead does
+/// not count: a room's published rollup can still hold it when the launch
+/// failed or was killed after its pane was bound.
+///
+/// Known limit: sessions a Codex remote-control daemon runs on the account
+/// have no pane and no account stamp, so they are not counted.
 pub fn other_live_agents_on(
     account: &LoginKey,
     launching: &[crate::ids::AgentSessionId],
