@@ -243,6 +243,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             stop_team: false,
             subscribe: Vec::new(),
             team: None,
+            loop_task: None,
             wait: Some(TaskTarget {
                 kind: crate::ids::AgentKind::new_unchecked("claude"),
                 session: "session-1".into(),

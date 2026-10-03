@@ -754,6 +754,9 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     if let Some(team) = &launch.team {
         state.team = Some(team.clone());
     }
+    if let Some(task) = &launch.loop_task {
+        state.loop_task = Some(task.clone());
+    }
     if let Some(launch_group) = &launch.launch_group {
         state.launch_group = Some(launch_group.clone());
     }
@@ -959,6 +962,7 @@ fn inherit_launch_identity(
     successor.effective_isolation = predecessor.effective_isolation;
     successor.role.clone_from(&predecessor.role);
     successor.team.clone_from(&predecessor.team);
+    successor.loop_task.clone_from(&predecessor.loop_task);
     successor.launch_group.clone_from(&predecessor.launch_group);
     successor.launch_ordinal = predecessor.launch_ordinal;
     successor.channel.clone_from(&predecessor.channel);

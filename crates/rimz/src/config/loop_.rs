@@ -83,6 +83,8 @@ pub struct TaskEntry {
     pub wait_meta: Option<WaitMeta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<crate::ids::TeamInstanceId>,
+    #[serde(rename = "loop-task", skip_serializing_if = "Option::is_none")]
+    pub loop_task: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     #[serde(rename = "prompt-file", skip_serializing_if = "Option::is_none")]

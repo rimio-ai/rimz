@@ -143,12 +143,13 @@ pub(super) fn insert_delivery(
                 && current.resolved_root() == entry.resolved_root()
                 && current.when == entry.when
                 && current.hold == entry.hold
+                && (entry.loop_task.is_none() || current.loop_task == entry.loop_task)
                 && (entry.when.is_none() || current.run_dir() == entry.run_dir())
         })
     {
         return Ok((name.clone(), true));
     }
-    let name = name.map(ToOwned::to_owned).unwrap_or_else(|| {
+    let mut name = name.map(ToOwned::to_owned).unwrap_or_else(|| {
         let petname = crate::agents::petname::mint(
             tasks
                 .keys()
@@ -157,6 +158,24 @@ pub(super) fn insert_delivery(
         );
         format!("wait-{petname}")
     });
+    if entry.loop_task.is_some() {
+        let prefix = name
+            .rsplit_once('-')
+            .map_or(name.as_str(), |(prefix, _)| prefix)
+            .to_owned();
+        let mut ordinal = 1;
+        while taken.contains(&name)
+            || tasks.get(&name).is_some_and(|current| {
+                current.loop_task != entry.loop_task
+                    || current.wait != entry.wait
+                    || current.signal != entry.signal
+                    || current.matches != entry.matches
+            })
+        {
+            name = format!("{prefix}-{ordinal}");
+            ordinal += 1;
+        }
+    }
     let key = super::arming::TaskKey::for_task(
         &name,
         super::catalog::TaskSource::Instance,
@@ -178,7 +197,10 @@ pub(super) fn retire_session(
     mutate(paths, |tasks| {
         let names = tasks
             .iter()
-            .filter(|(_, entry)| entry.team.is_none() || scope == super::arm::RetireScope::Session)
+            .filter(|(_, entry)| {
+                (entry.team.is_none() && entry.loop_task.is_none())
+                    || scope == super::arm::RetireScope::Session
+            })
             .filter(|(_, entry)| {
                 entry.wait.as_ref().is_some_and(|target| {
                     target.kind == kind.as_str() && target.session == session.as_str()
@@ -282,6 +304,36 @@ mod tests {
             Some(Some("wait"))
         );
         assert!(!rename(&paths, "wait", "later").expect("rename absent"));
+    }
+
+    #[test]
+    fn resident_name_collision_preserves_both_subscribers() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = StatePaths::for_project_root(dir.path()).unwrap();
+        let subscriber = |task: &str, session: &str| TaskEntry {
+            root: dir.path().to_owned(),
+            loop_task: Some(task.into()),
+            signal: Some("ci.failed".into()),
+            wait: Some(crate::config::TaskTarget {
+                kind: crate::ids::AgentKind::new_unchecked("claude"),
+                session: session.into(),
+                handle: session.into(),
+            }),
+            ..Default::default()
+        };
+        let first = subscriber("repair-a", "otter");
+        let second = subscriber("repair", "a-otter");
+        let name = "loop-repair-a-otter-1";
+        let (a, _) = insert_delivery(&paths, Some(name), &first, &BTreeSet::new()).unwrap();
+        let (b, _) = insert_delivery(&paths, Some(name), &second, &BTreeSet::new()).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(load_from(&paths.root).0.len(), 2);
+        for (entry, expected) in [(&first, &a), (&second, &b)] {
+            let (actual, duplicate) =
+                insert_delivery(&paths, Some(name), entry, &BTreeSet::new()).unwrap();
+            assert_eq!(&actual, expected);
+            assert!(duplicate);
+        }
     }
 
     /// A same-session `agents restart` is a continuation, so its retirement

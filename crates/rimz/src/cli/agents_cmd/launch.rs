@@ -132,7 +132,7 @@ pub(in crate::cli) fn launch_resolved(
     ctx: &Ctx,
     machine_config: Arc<rimz::config::MachineConfig>,
     cwd: Option<PathBuf>,
-    _loop_task: Option<&str>,
+    loop_task: Option<&str>,
 ) -> Result<Option<LaunchedLayout>> {
     let mut args = AgentsArgs {
         launch,
@@ -553,6 +553,9 @@ pub(in crate::cli) fn launch_resolved(
     )?;
     for (request, login) in launch_requests.iter_mut().zip(preflighted_logins) {
         request.login = rimz::store::writer::LaunchLogin::Pinned(login);
+    }
+    if let Some(index) = prompt_agent_index {
+        launch_requests[index].launch.loop_task = loop_task.map(str::to_owned);
     }
     let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,

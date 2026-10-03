@@ -50,7 +50,7 @@ macro_rules! lifetime_fields {
     };
 }
 
-lifetime_fields!(transcript_path; account_key; role, team, channel, profile, login, tier, record);
+lifetime_fields!(transcript_path; account_key; role, team, loop_task, channel, profile, login, tier, record);
 
 pub(crate) const MAX_SIGNAL_NAME_BYTES: usize = 64;
 

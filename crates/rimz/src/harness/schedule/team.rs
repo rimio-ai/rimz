@@ -1,4 +1,4 @@
-//! Team-declared standing subscriptions pinned to registered member sessions.
+//! Team and resident-loop standing subscriptions pinned to registered root sessions.
 
 use std::collections::BTreeSet;
 
@@ -7,7 +7,7 @@ use super::arm::{
     SubscriptionLifetime, TaskName,
 };
 use crate::agents::AgentState;
-use crate::config::{TaskTarget, Team};
+use crate::config::{TaskTarget, Team, TeamSignalBinding};
 use crate::ids::TeamInstanceId;
 use crate::workspace::ResolvedWorkspace;
 
@@ -59,10 +59,7 @@ pub fn validate_launch(
         let result = (|| -> Result<(), TeamBindingFailure> {
             let selector =
                 super::parse_signal_selector(name, &binding.signal, Some(&binding.matches))?;
-            if matches!(selector.family(), "ci" | "pr")
-                && !binding.matches.contains_key("path")
-                && !binding.matches.contains_key("branch")
-            {
+            if arm::default_signal_match_key(&selector, &binding.matches) == Some("path") {
                 return Err(TeamBindingFailure::RootCheckout);
             }
             Ok(())
@@ -116,32 +113,15 @@ pub(crate) fn arm_member(
                 }
                 ordinal += 1;
             };
-            let selector = super::parse_signal_selector(
-                &task_name.to_string(),
-                &binding.signal,
-                Some(&binding.matches),
-            )?;
-            let mut matches = binding.matches.clone();
-            arm::default_signal_matches(workspace, agents, member, &selector, &mut matches)?;
-            arm::validate_self_signal(&selector, &matches, &target)?;
-            Ok(DeliverySpec {
-                name: DeliveryName::Named(task_name),
-                target: target.clone(),
-                trigger: DeliveryTrigger::Signal {
-                    selector,
-                    matches,
-                    lifetime: SubscriptionLifetime::Standing,
-                },
-                prompt: binding
-                    .prompt
-                    .clone()
-                    .map_or(DeliveryPrompt::None, DeliveryPrompt::Inline),
-                provenance: DeliveryProvenance::Team(instance.clone()),
-                check: None,
-                deadline: None,
-                max_strikes: None,
-                surplus: None,
-            })
+            binding_spec(
+                workspace,
+                agents,
+                member,
+                &target,
+                task_name,
+                binding,
+                DeliveryProvenance::Team(instance.clone()),
+            )
         })();
         specs.push((
             index + 1,
@@ -163,6 +143,88 @@ pub(crate) fn arm_member(
         })?;
     }
     Ok(count)
+}
+
+pub(crate) fn arm_loop(
+    workspace: &ResolvedWorkspace,
+    agents: &[AgentState],
+    member: &AgentState,
+    task: &str,
+    bindings: &[TeamSignalBinding],
+) -> Result<usize, TeamBindingFailure> {
+    let catalog = super::catalog::TaskCatalog::load(Some(&workspace.project_root))
+        .map_err(|err| arm::ArmFailure::State(err.into()))?;
+    let peers: Vec<_> = agents.iter().collect();
+    let handle = crate::address::agent_handle(member, &peers, true);
+    let target = TaskTarget {
+        kind: member.kind.clone(),
+        session: member.agent_id.clone(),
+        handle,
+    };
+    let mut specs = Vec::new();
+    for (index, binding) in bindings.iter().enumerate() {
+        let name = format!(
+            "loop-{task}-{}-{}",
+            member.name.as_deref().unwrap_or(member.agent_id.as_str()),
+            index + 1
+        );
+        if catalog
+            .visible()
+            .get(&name)
+            .is_some_and(|row| row.source() != super::catalog::TaskSource::Instance)
+        {
+            return Err(arm::ArmFailure::ConfigOwned(name).into());
+        }
+        let name = name.parse()?;
+        specs.push(binding_spec(
+            workspace,
+            agents,
+            member,
+            &target,
+            name,
+            binding,
+            DeliveryProvenance::Resident(task.to_owned()),
+        )?);
+    }
+    let count = specs.len();
+    for spec in specs {
+        arm::arm_delivery(workspace, spec)?;
+    }
+    Ok(count)
+}
+
+fn binding_spec(
+    workspace: &ResolvedWorkspace,
+    agents: &[AgentState],
+    member: &AgentState,
+    target: &TaskTarget,
+    name: TaskName,
+    binding: &TeamSignalBinding,
+    provenance: DeliveryProvenance,
+) -> Result<DeliverySpec, TeamBindingFailure> {
+    let selector =
+        super::parse_signal_selector(&name.to_string(), &binding.signal, Some(&binding.matches))?;
+    let mut matches = binding.matches.clone();
+    arm::default_signal_matches(workspace, agents, member, &selector, &mut matches)?;
+    arm::validate_self_signal(&selector, &matches, target)?;
+    Ok(DeliverySpec {
+        name: DeliveryName::Named(name),
+        target: target.clone(),
+        trigger: DeliveryTrigger::Signal {
+            selector,
+            matches,
+            lifetime: SubscriptionLifetime::Standing,
+        },
+        prompt: binding
+            .prompt
+            .clone()
+            .map_or(DeliveryPrompt::None, DeliveryPrompt::Inline),
+        provenance,
+        check: None,
+        deadline: None,
+        max_strikes: None,
+        surplus: None,
+    })
 }
 
 fn member_task_name(

@@ -431,6 +431,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             effort: None,
             budget: None,
             team: None,
+            loop_task: None,
             launch_group: None,
             launch_ordinal: None,
             channel: None,
