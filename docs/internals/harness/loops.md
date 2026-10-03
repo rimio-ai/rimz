@@ -552,7 +552,7 @@ The assist log is that invariant's record: `~/.rimz/logs/assists.log.jsonl`, acc
 
 | `Assist` variant | Writer | Records |
 | --- | --- | --- |
-| `auto_redeem` | the detached redeem helper | provider, decision reason, request id, available credits, soonest expiry, the natural reset it beat, consume outcome or error, whether a reset occurred, and refreshed window stamps |
+| `auto_redeem` | the detached redeem helper | provider, account (`login`, absent on records older than the field), decision reason, request id, available credits, soonest expiry, the natural reset it beat, consume outcome or error, whether a reset occurred, and refreshed window stamps |
 | `tier_fallback` | interactive and supervised launch, once the launch is placed; team lane restore after each tab opens, rebirth after birth succeeds at session granularity ([fleet.md](./fleet.md#every-path-that-builds-a-launch-layout) lists each path and the best-effort tmux seeding gap) | launched kind, agent id, optional label, profile, tier, model entry as configured (alias or full ID), and usage skips (`logged_out`, `exhausted` with optional reset, or `daily_cap` with spend and cap); one record per steered agent, none for explain or static exclusions |
 | `auto_continue` | the detached continue helper | typed provider and session ids, display handle, park class, original park timestamp, delivery verdict, and the durable message id |
 | `auto_compact` | the message delivery path, after a compact command lands | target session, display handle, threshold, occupied context when known, and the durable compact-command message id |

@@ -32,12 +32,7 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
                     snapshot,
                 );
             }
-            append_report(
-                request.login.kind.as_str(),
-                request.request_id,
-                &redeemed.report,
-                None,
-            );
+            append_report(&request.login, request.request_id, &redeemed.report, None);
             if published {
                 let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
             }
@@ -46,7 +41,7 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
         Err(err) => {
             if let Some(report) = err.attempted_report() {
                 append_report(
-                    request.login.kind.as_str(),
+                    &request.login,
                     request.request_id,
                     report,
                     Some(err.to_string()),
@@ -59,7 +54,7 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
 }
 
 fn append_report(
-    kind: &str,
+    login: &rimz::ids::LoginKey,
     request_id: uuid::Uuid,
     report: &rimz::harness::auto_redeem::RedeemReport,
     error: Option<String>,
@@ -72,7 +67,8 @@ fn append_report(
     rimz::harness::assist_log::append(&AssistRecord {
         at: jiff::Timestamp::now(),
         assist: Assist::AutoRedeem {
-            kind: kind.to_owned(),
+            kind: login.kind.to_string(),
+            login: Some(login.name.clone()),
             reason: report.reason,
             request_id: request_id.to_string(),
             credits: report.credits,

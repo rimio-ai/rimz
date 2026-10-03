@@ -73,20 +73,123 @@ fn account_usage_runtime() -> (tempfile::TempDir, RuntimePaths) {
     (dir, runtime)
 }
 
+fn spare_room() -> (LoginKey, RoomLoginSet) {
+    let accounts = toml::from_str("[codex.spare]\nhome = '/srv/spare'\n").unwrap();
+    let catalog = crate::agents::LoginCatalog::from_config(&accounts).unwrap();
+    let set = RoomLoginSet::new(Some(Default::default()), Some(catalog), BTreeMap::new());
+    ("codex@spare".parse().unwrap(), set)
+}
+
 #[test]
-fn claimed_usage_refuses_and_cancels_a_different_room_login() {
+fn claimed_usage_refuses_and_cancels_a_login_outside_the_catalog() {
     let (_dir, runtime) = account_usage_runtime();
-    let work: LoginKey = "claude@work".parse().unwrap();
-    let claim = claim_provider_account_usage(&runtime, &work, None).unwrap();
-    assert!(!refresh_claimed_account_usage_with(
+    let (_, set) = spare_room();
+    for refused in ["codex@gone", "claude@work"] {
+        let refused: LoginKey = refused.parse().unwrap();
+        let claim = claim_provider_account_usage(&runtime, &refused, None).unwrap();
+        assert!(!refresh_claimed_account_usage_with(
+            &runtime,
+            &refused,
+            claim,
+            &set,
+            |_, _, _| unreachable!("an undeclared login must not be probed"),
+            |_, _| unreachable!("an undeclared login must not be probed"),
+        ));
+        assert!(!account_usage_claim_matches(&runtime, &refused, claim));
+        assert!(claim_provider_account_usage(&runtime, &refused, None).is_some());
+    }
+}
+
+#[test]
+fn claimed_usage_reads_an_idle_account_by_the_direct_probe_alone() {
+    let (_dir, runtime) = account_usage_runtime();
+    let (spare, set) = spare_room();
+    let claim = claim_provider_account_usage(&runtime, &spare, None).unwrap();
+    let credits = crate::agents::ResetCredits {
+        count: 2,
+        soonest_expiry: None,
+        expiries: Vec::new(),
+        effect: crate::agents::RedeemEffect::RestartsWindow,
+    };
+    assert!(refresh_claimed_account_usage_with(
         &runtime,
-        &work,
+        &spare,
         claim,
-        &RoomLoginSet::native(),
-        |_, _| unreachable!("an unused login must not be probed"),
+        &set,
+        |_, _, _| unreachable!("the room's app server speaks for the room's own login"),
+        |_, env| {
+            assert_eq!(
+                env.get("CODEX_HOME").map(String::as_str),
+                Some("/srv/spare")
+            );
+            crate::agents::AccountUsageProbe::Found {
+                identity: Default::default(),
+                snapshot: AccountUsageSnapshot {
+                    rate_limits: Some(usage_windows(12)),
+                    reset_credits: Some(credits.clone()),
+                    ..Default::default()
+                },
+            }
+        },
     ));
-    assert!(!account_usage_claim_matches(&runtime, &work, claim));
-    assert!(claim_provider_account_usage(&runtime, &work, None).is_some());
+    let entry = super::super::credits::read_credits_cache(&runtime.shared_credits_path()).logins
+        [&spare]
+        .clone();
+    assert_eq!(entry.reset_credits, Some(credits));
+    assert_eq!(entry.direct_query_claim, None);
+    assert_ne!(entry.oauth_read_at_ms, 0);
+    assert_eq!(
+        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries[&spare]
+            .limits
+            .windows[0]
+            .used_percentage,
+        Some(12)
+    );
+}
+
+#[test]
+fn idle_accounts_are_claimed_on_their_own_floor_beside_the_in_use_cadence() {
+    let (_dir, runtime) = account_usage_runtime();
+    let (spare, set) = spare_room();
+    let default_key: LoginKey = "codex@default".parse().unwrap();
+    let hour_ms = 60 * 60 * 1_000;
+    let attempted = |ago_ms: u64| ProviderCreditsEntry {
+        oauth_read_at_ms: crate::utils::time::unix_now_ms() - ago_ms,
+        ok: true,
+        ..Default::default()
+    };
+    let snapshot = snapshot_with_panels(
+        runtime.workspace_id.clone(),
+        vec![provider_panel("codex", Vec::new())],
+    );
+    let spawned = |spare_entry: Option<ProviderCreditsEntry>| {
+        let mut logins = BTreeMap::from([(default_key.clone(), attempted(hour_ms))]);
+        logins.extend(spare_entry.map(|entry| (spare.clone(), entry)));
+        super::super::credits::write_credits_cache(
+            &runtime.shared_credits_path(),
+            &CreditsCache {
+                logins,
+                ..Default::default()
+            },
+        );
+        let mut spawned = Vec::new();
+        refresh_account_usage_with(&snapshot, &runtime, &set, |_, key, _| {
+            spawned.push(key.to_string());
+            true
+        });
+        spawned
+    };
+
+    assert_eq!(spawned(None), ["codex@default", "codex@spare"]);
+    assert_eq!(
+        spawned(Some(attempted(hour_ms))),
+        ["codex@default"],
+        "an hour-old read is due for the in-use login alone"
+    );
+    assert_eq!(
+        spawned(Some(attempted(4 * hour_ms))),
+        ["codex@default", "codex@spare"]
+    );
 }
 
 #[test]
@@ -110,6 +213,7 @@ fn claimed_usage_keeps_refreshing_a_live_agents_old_login() {
         &work,
         claim,
         &set,
+        |adapter, runtime, env| adapter.probe_realtime_account_usage(runtime, env),
         |_, env| {
             assert_eq!(
                 env.get("CLAUDE_CONFIG_DIR").map(String::as_str),

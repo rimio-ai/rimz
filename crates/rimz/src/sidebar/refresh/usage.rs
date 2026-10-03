@@ -18,8 +18,8 @@ use crate::store::snapshot::SidebarSnapshot;
 
 use super::accounts::cached_account_usage_hint;
 use super::credits::{
-    account_usage_claim_matches, cancel_provider_account_usage_claim, claim_provider_account_usage,
-    complete_provider_account_usage, merge_provider_realtime_usage,
+    account_usage_claim_matches, cancel_provider_account_usage_claim, claim_idle_account_usage,
+    claim_provider_account_usage, complete_provider_account_usage, merge_provider_realtime_usage,
     renew_provider_account_usage_claim,
 };
 use super::rate_limits::{drop_login_rate_limits, merge_account_rate_limits};
@@ -33,7 +33,8 @@ pub struct AccountUsageRefreshRequest {
     pub claim_id: Uuid,
 }
 
-/// Claim and spawn each metered provider's direct account-usage refresh.
+/// Claim and spawn each metered provider's direct account-usage refresh, then
+/// each idle account's.
 pub(super) fn refresh_account_usage(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
@@ -65,31 +66,58 @@ fn refresh_account_usage_with(
             trace_claim(runtime, kind, "login_unresolved", started.elapsed());
             continue;
         };
-        let key = login.key();
-        let Some(adapter) = crate::agents::find_definition(kind) else {
-            trace_claim(runtime, kind, "adapter_missing", started.elapsed());
-            continue;
-        };
-        if !adapter.spec().capabilities.direct_account_usage {
-            trace_claim(runtime, kind, "unsupported", started.elapsed());
-            continue;
-        }
-        let cached_hint = cached_account_usage_hint(runtime, &key);
-        let Some(claim_id) = claim_provider_account_usage(runtime, &key, cached_hint) else {
-            trace_claim(runtime, kind, "not_due", started.elapsed());
-            continue;
-        };
-        trace_claim(runtime, kind, "claimed", started.elapsed());
-        let spawn_started = Instant::now();
-        let spawned = spawn(runtime, &key, claim_id);
-        trace::record(runtime, || TraceEvent::HelperSpawn {
-            kind,
-            outcome: if spawned { "spawned" } else { "failed" },
-            elapsed_ms: duration_ms(spawn_started.elapsed()),
-        });
-        if !spawned {
-            cancel_provider_account_usage_claim(runtime, &key, claim_id);
-        }
+        claim_and_spawn(
+            runtime,
+            &login.key(),
+            started,
+            claim_provider_account_usage,
+            &mut spawn,
+        );
+    }
+    // An idle account has no panel: auto-redeem's expiry rescue is its one
+    // reader, so it is claimed on the slow idle floor.
+    for login in crate::harness::auto_redeem::idle_logins(logins) {
+        claim_and_spawn(
+            runtime,
+            &login.key(),
+            Instant::now(),
+            claim_idle_account_usage,
+            &mut spawn,
+        );
+    }
+}
+
+fn claim_and_spawn(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    started: Instant,
+    claim: fn(&RuntimePaths, &LoginKey, Option<AccountUsageIdentity>) -> Option<Uuid>,
+    spawn: &mut impl FnMut(&RuntimePaths, &LoginKey, Uuid) -> bool,
+) {
+    let kind = key.kind.as_str();
+    let Some(adapter) = crate::agents::find_definition(kind) else {
+        trace_claim(runtime, kind, "adapter_missing", started.elapsed());
+        return;
+    };
+    if !adapter.spec().capabilities.direct_account_usage {
+        trace_claim(runtime, kind, "unsupported", started.elapsed());
+        return;
+    }
+    let cached_hint = cached_account_usage_hint(runtime, key);
+    let Some(claim_id) = claim(runtime, key, cached_hint) else {
+        trace_claim(runtime, kind, "not_due", started.elapsed());
+        return;
+    };
+    trace_claim(runtime, kind, "claimed", started.elapsed());
+    let spawn_started = Instant::now();
+    let spawned = spawn(runtime, key, claim_id);
+    trace::record(runtime, || TraceEvent::HelperSpawn {
+        kind,
+        outcome: if spawned { "spawned" } else { "failed" },
+        elapsed_ms: duration_ms(spawn_started.elapsed()),
+    });
+    if !spawned {
+        cancel_provider_account_usage_claim(runtime, key, claim_id);
     }
 }
 
@@ -103,7 +131,8 @@ fn trace_claim(runtime: &RuntimePaths, kind: &str, outcome: &str, elapsed: Durat
 }
 
 /// Run one producer-created claim. The helper validates the nonce before any
-/// provider call; late or superseded workers leave both caches untouched.
+/// provider call; late or superseded workers leave both caches untouched. A
+/// login neither in use nor an idle account cancels its claim.
 pub fn refresh_claimed_account_usage(
     runtime: &RuntimePaths,
     key: &LoginKey,
@@ -114,6 +143,7 @@ pub fn refresh_claimed_account_usage(
         key,
         claim_id,
         &crate::store::room_logins_in_use(runtime),
+        |adapter, runtime, env| adapter.probe_realtime_account_usage(runtime, env),
         |adapter, env| adapter.probe_account_usage(env),
     )
 }
@@ -123,6 +153,11 @@ fn refresh_claimed_account_usage_with(
     key: &LoginKey,
     claim_id: Uuid,
     set: &RoomLoginSet,
+    probe_realtime: impl FnOnce(
+        &crate::agents::AgentDefinition,
+        &RuntimePaths,
+        &std::collections::BTreeMap<String, String>,
+    ) -> Option<AccountUsageSnapshot>,
     probe: impl FnOnce(
         &crate::agents::AgentDefinition,
         &std::collections::BTreeMap<String, String>,
@@ -130,13 +165,24 @@ fn refresh_claimed_account_usage_with(
 ) -> bool {
     let started = Instant::now();
     let kind = key.kind.as_str();
-    let Some(login) = set
-        .in_use(kind)
-        .into_iter()
-        .find(|login| login.key() == *key)
-    else {
+    let is_key = |login: &ProviderLogin| login.key() == *key;
+    let in_use = set.in_use(kind).into_iter().find(is_key);
+    let idle = in_use.is_none();
+    let Some(login) = in_use.or_else(|| {
+        crate::harness::auto_redeem::idle_logins(set)
+            .into_iter()
+            .find(is_key)
+    }) else {
         cancel_provider_account_usage_claim(runtime, key, claim_id);
-        trace_usage_helper(runtime, kind, "login_unused", 0, 0, 0, started.elapsed());
+        trace_usage_helper(
+            runtime,
+            kind,
+            "login_undeclared",
+            0,
+            0,
+            0,
+            started.elapsed(),
+        );
         return false;
     };
     let login_env = set.env(&login);
@@ -155,7 +201,13 @@ fn refresh_claimed_account_usage_with(
         return false;
     };
     let realtime_started = Instant::now();
-    let realtime = adapter.probe_realtime_account_usage(runtime, &login_env);
+    // The realtime leg asks this room's app server, which speaks for the
+    // room's own login; an idle account is read by the direct probe alone.
+    let realtime = if idle {
+        None
+    } else {
+        probe_realtime(adapter, runtime, &login_env)
+    };
     let realtime_ms = duration_ms(realtime_started.elapsed());
     if !account_usage_claim_matches(runtime, key, claim_id) {
         trace_usage_helper(

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -15,7 +16,8 @@ use crate::agents::{
 use crate::config::AccountsConfig;
 use crate::ids::LoginKey;
 use crate::sidebar::timing::{
-    ACCOUNT_USAGE_CLAIM_TTL, CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
+    ACCOUNT_USAGE_CLAIM_TTL, CREDITS_DISPLAY_MAX_AGE, IDLE_OAUTH_USAGE_TTL,
+    OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
 };
 use crate::store::snapshot::{SidebarSnapshot, format_plan_label};
 use crate::utils::time::unix_now_ms;
@@ -295,9 +297,36 @@ fn claim_provider_account_usage_with_hint_at(
     now_ms: u64,
     nonce: Uuid,
 ) -> Option<Uuid> {
-    claim_provider_account_usage_locked(runtime, key, now_ms, nonce, |entry| {
+    claim_provider_account_usage_locked(runtime, key, now_ms, nonce, Duration::ZERO, |entry| {
         cache_derived_claim_identity(entry, cached_hint)
     })
+}
+
+/// Claim one due direct read of an idle account: the ordinary claim, held to
+/// `IDLE_OAUTH_USAGE_TTL` since the last attempt of any room and any outcome.
+pub(super) fn claim_idle_account_usage(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    cached_hint: Option<AccountUsageIdentity>,
+) -> Option<Uuid> {
+    claim_idle_account_usage_at(runtime, key, cached_hint, unix_now_ms(), Uuid::now_v7())
+}
+
+fn claim_idle_account_usage_at(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    cached_hint: Option<AccountUsageIdentity>,
+    now_ms: u64,
+    nonce: Uuid,
+) -> Option<Uuid> {
+    claim_provider_account_usage_locked(
+        runtime,
+        key,
+        now_ms,
+        nonce,
+        IDLE_OAUTH_USAGE_TTL,
+        |entry| cache_derived_claim_identity(entry, cached_hint),
+    )
 }
 
 #[cfg(test)]
@@ -308,7 +337,7 @@ fn claim_provider_account_usage_at(
     now_ms: u64,
     nonce: Uuid,
 ) -> Option<Uuid> {
-    claim_provider_account_usage_locked(runtime, key, now_ms, nonce, |_| identity)
+    claim_provider_account_usage_locked(runtime, key, now_ms, nonce, Duration::ZERO, |_| identity)
 }
 
 fn claim_provider_account_usage_locked(
@@ -316,6 +345,7 @@ fn claim_provider_account_usage_locked(
     key: &LoginKey,
     now_ms: u64,
     nonce: Uuid,
+    floor: Duration,
     identity: impl FnOnce(&ProviderCreditsEntry) -> AccountUsageIdentity,
 ) -> Option<Uuid> {
     let path = runtime.shared_credits_path();
@@ -325,9 +355,12 @@ fn claim_provider_account_usage_locked(
     let mut cache = read_credits_cache(&path);
     let entry = cache.logins.entry(key.to_owned()).or_default();
     let identity = identity(entry);
+    let inside_floor = entry.oauth_read_at_ms != 0
+        && now_ms.saturating_sub(entry.oauth_read_at_ms) < floor.as_millis() as u64;
     if entry.direct_query_claim.as_ref().is_some_and(|claim| {
         now_ms.saturating_sub(claim.claimed_at_ms) <= ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64
-    }) || oauth_read_is_fresh(entry, now_ms, &identity)
+    }) || inside_floor
+        || oauth_read_is_fresh(entry, now_ms, &identity)
     {
         return None;
     }
@@ -532,6 +565,33 @@ fn claim_account_key_changed(
 fn entry_is_displayable(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {
     entry.ok
         && now_ms.saturating_sub(entry.observed_at_ms) <= CREDITS_DISPLAY_MAX_AGE.as_millis() as u64
+}
+
+/// The cached reset credits of each idle account, for auto-redeem's expiry
+/// rescue. An idle account gets no panel, so its credits reach the harness
+/// here, under the staleness line a panel's credits are held to.
+pub(super) fn idle_reset_credits(
+    runtime: &RuntimePaths,
+    logins: &RoomLoginSet,
+) -> BTreeMap<LoginKey, ResetCredits> {
+    let cache = read_credits_cache(&runtime.shared_credits_path());
+    idle_reset_credits_with(&cache, logins, unix_now_ms())
+}
+
+fn idle_reset_credits_with(
+    cache: &CreditsCache,
+    logins: &RoomLoginSet,
+    now_ms: u64,
+) -> BTreeMap<LoginKey, ResetCredits> {
+    crate::harness::auto_redeem::idle_logins(logins)
+        .into_iter()
+        .filter_map(|login| {
+            let key = login.key();
+            let entry = cache.logins.get(&key)?;
+            let credits = entry.reset_credits.clone()?;
+            entry_is_displayable(entry, now_ms).then_some((key, credits))
+        })
+        .collect()
 }
 
 pub(in crate::sidebar) fn apply_credits_cache(

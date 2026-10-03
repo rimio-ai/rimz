@@ -1540,6 +1540,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             at: ts(4_000),
             assist: Assist::AutoRedeem {
                 kind: "codex".to_owned(),
+                login: Some("spare".parse().unwrap()),
                 reason: RedeemReason::ExpiryRescue,
                 request_id: "request-1".to_owned(),
                 credits: 1,
@@ -1681,7 +1682,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("expiry rescue → budget reset ✓"))
+            .any(|line| line.contains("codex@spare credit — expiry rescue → budget reset ✓"))
     );
     assert!(
         lines
@@ -1880,6 +1881,7 @@ fn assists_load_scopes_the_log_to_the_selected_window() {
         at: jiff::Timestamp::from_second(DAY_SECS).unwrap(),
         assist: Assist::AutoRedeem {
             kind: "codex".to_owned(),
+            login: None,
             reason: RedeemReason::ExpiryRescue,
             request_id: "old".to_owned(),
             credits: 1,

@@ -833,6 +833,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     ];
     redeem_credits(
         std::slice::from_ref(&panel),
+        &BTreeMap::new(),
         &closed,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -863,6 +864,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     ));
     redeem_credits(
         std::slice::from_ref(&panel),
+        &BTreeMap::new(),
         &open,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -889,6 +891,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
 
     redeem_credits(
         std::slice::from_ref(&panel),
+        &BTreeMap::new(),
         &open,
         &runtime,
         &crate::agents::RoomLoginSet::native(),
@@ -939,8 +942,168 @@ fn spawn_failure_cancels_only_its_matching_reservation() {
     assert!(read_stamp(&path).is_none());
 }
 
+fn rate_limit_entry(
+    windows: &[(u32, u8)],
+    now: Timestamp,
+) -> crate::agents::account::RateLimitCacheEntry {
+    crate::agents::account::RateLimitCacheEntry {
+        limits: AgentRateLimits {
+            windows: windows
+                .iter()
+                .map(|(duration_mins, used_percentage)| RateLimitWindow {
+                    used_percentage: Some(*used_percentage),
+                    resets_at: Some(now + Duration::from_secs(3 * 86_400)),
+                    duration_mins: Some(*duration_mins),
+                    observed_at: Some(now),
+                    source: crate::agents::context::WindowSource::Authoritative,
+                    ..Default::default()
+                })
+                .collect(),
+        },
+        ..Default::default()
+    }
+}
+
 #[test]
-fn redeem_keeps_a_live_old_login_and_cancels_only_after_it_ends() {
+fn an_idle_account_spawns_a_rescue_only_at_expiry_whatever_its_cached_windows_read() {
+    let now = ts(1_700_000_000);
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let key = |name: &str| format!("codex@{name}").parse::<LoginKey>().unwrap();
+    let default = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND));
+    let mut cache = crate::agents::account::RateLimitsCache::default();
+    cache.entries.extend([
+        (
+            default.clone(),
+            rate_limit_entry(&[(300, 0), (10_080, 0)], now),
+        ),
+        (
+            key("used"),
+            rate_limit_entry(&[(300, 0), (10_080, 40)], now),
+        ),
+        (key("spent"), rate_limit_entry(&[(10_080, 100)], now)),
+        (
+            key("unused"),
+            rate_limit_entry(&[(300, 0), (10_080, 0)], now),
+        ),
+    ]);
+    // A fresh Codex 5h window reads 1% with its reset a full window out; the
+    // same 1% on a running clock is usage.
+    for (name, five_hour_reset) in [("fresh", 300 * 60), ("running", 2 * 3_600)] {
+        let mut entry = rate_limit_entry(&[(300, 1), (10_080, 0)], now);
+        entry.limits.windows[0].resets_at = Some(now + Duration::from_secs(five_hour_reset));
+        cache.entries.insert(key(name), entry);
+    }
+    write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &cache).unwrap();
+    let dying = credits(now, Some(Duration::from_secs(20 * 60)));
+    let idle_credits = BTreeMap::from([
+        (key("fresh"), dying.clone()),
+        (key("running"), dying.clone()),
+        (key("used"), dying.clone()),
+        (
+            key("spent"),
+            credits(now, Some(Duration::from_secs(10 * 86_400))),
+        ),
+        (key("unused"), dying.clone()),
+        (key("unknown"), dying.clone()),
+    ]);
+    let mut panel = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
+    panel.reset_credits = Some(dying);
+    let config = ResumeConfig {
+        auto_redeem: true,
+        ..Default::default()
+    };
+
+    let mut spawned = Vec::new();
+    redeem_credits_with(
+        std::slice::from_ref(&panel),
+        &idle_credits,
+        &[],
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config,
+        now,
+        |_, key, reason, _, limit_paused| {
+            spawned.push((key.to_string(), reason, limit_paused));
+            true
+        },
+    );
+
+    let rescue = |name: &str| (format!("codex@{name}"), RedeemReason::ExpiryRescue, false);
+    assert_eq!(
+        spawned,
+        [
+            rescue("default"),
+            rescue("fresh"),
+            rescue("running"),
+            rescue("unknown"),
+            rescue("unused"),
+            rescue("used")
+        ],
+        "a dying credit spawns the helper whatever the cached windows read, since the \
+         unused-window skip is the helper's on its fresh read; a spent window alone \
+         redeems nothing"
+    );
+    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key("unused"))).is_some());
+    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key("spent"))).is_none());
+    assert!(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(&default)).is_some());
+    assert!(
+        read_rate_stamp(&runtime.shared_auto_redeem_rate_path(&key("used"))).is_none(),
+        "burn-rate sampling stays with in-use logins"
+    );
+}
+
+#[test]
+fn the_helper_judges_an_idle_login_as_rescue_only_whatever_the_request_carried() {
+    let now = ts(1_700_000_000);
+    let config = ResumeConfig {
+        auto_redeem: true,
+        ..Default::default()
+    };
+    let blocked = spent_capacity(now, Duration::from_secs(3 * 86_400));
+    let held = credits(now, Some(Duration::from_secs(10 * 86_400)));
+    let dying = credits(now, Some(Duration::from_secs(20 * 60)));
+    let fresh = |idle, capacity: Option<&ProviderCapacity>, credits: &ResetCredits| {
+        fresh_verdict(idle, capacity, credits, None, &config, true, now)
+    };
+    assert_eq!(
+        fresh(false, Some(&blocked), &held),
+        Some(RedeemReason::BlockedGain)
+    );
+    assert_eq!(fresh(true, Some(&blocked), &held), None);
+    assert_eq!(
+        fresh(true, Some(&blocked), &dying),
+        Some(RedeemReason::ExpiryRescue)
+    );
+    assert_eq!(fresh(true, None, &dying), Some(RedeemReason::ExpiryRescue));
+    let unused = capacity_started_at(now, 0);
+    assert_eq!(fresh(true, Some(&unused), &dying), None);
+    let five_hour = |used_percentage, reset_secs| RateLimitWindow {
+        used_percentage: Some(used_percentage),
+        resets_at: Some(now + Duration::from_secs(reset_secs)),
+        duration_mins: Some(300),
+        observed_at: Some(now),
+        ..Default::default()
+    };
+    let mut not_started = unused.clone();
+    not_started.windows.push(five_hour(1, 300 * 60));
+    assert_eq!(fresh(true, Some(&not_started), &dying), None);
+    let mut running = unused.clone();
+    running.windows.push(five_hour(1, 2 * 3_600));
+    assert_eq!(
+        fresh(true, Some(&running), &dying),
+        Some(RedeemReason::ExpiryRescue)
+    );
+    assert_eq!(
+        fresh(false, Some(&unused), &dying),
+        Some(RedeemReason::ExpiryRescue)
+    );
+}
+
+#[test]
+fn redeem_keeps_a_live_old_login_continues_idle_once_it_ends_and_cancels_an_undeclared_key() {
     let now = ts(1_700_000_000);
     let dir = tempfile::tempdir().unwrap();
     let runtime =
@@ -968,17 +1131,55 @@ fn redeem_keeps_a_live_old_login_and_cancels_only_after_it_ends() {
         now,
         "request"
     ));
-    let selected = redeem_login(
-        &runtime,
-        &key,
-        "request",
-        &logins.clone().with_agents(&[agent.clone()]),
+    let in_use = logins.clone().with_agents(&[agent.clone()]);
+    let (selected, idle) = redeem_login(&runtime, &key, "request", &in_use).unwrap();
+    assert_eq!((selected.key(), idle), (key.clone(), false));
+    assert!(idle_logins(&in_use).is_empty());
+    // A room whose record cannot be read knows no default of its own, so
+    // every declared login, `default` included, is idle: rescue only.
+    let unreadable = crate::agents::RoomLoginSet::new(
+        None,
+        Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
+        Default::default(),
     );
-    assert_eq!(selected.map(|login| login.key()), Some(key.clone()));
-    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key)).is_some());
+    assert_eq!(
+        idle_logins(&unreadable)
+            .iter()
+            .map(|login| login.key().to_string())
+            .collect::<Vec<_>>(),
+        ["codex@default", "codex@work"]
+    );
+    let (_, idle) = redeem_login(&runtime, &key, "request", &unreadable).unwrap();
+    assert!(idle);
+
     agent.ended_at = Some(now);
-    assert!(redeem_login(&runtime, &key, "request", &logins.with_agents(&[agent])).is_none());
-    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key)).is_none());
+    let ended = logins.with_agents(&[agent]);
+    assert_eq!(
+        idle_logins(&ended)
+            .iter()
+            .map(|login| login.key())
+            .collect::<Vec<_>>(),
+        std::slice::from_ref(&key)
+    );
+    let (selected, idle) = redeem_login(&runtime, &key, "request", &ended)
+        .expect("a declared login no longer in use continues as idle");
+    assert_eq!((selected.key(), idle), (key.clone(), true));
+    assert_eq!(
+        ended.env(&selected).get("CODEX_HOME").map(String::as_str),
+        Some("/srv/work")
+    );
+    assert!(read_stamp(&runtime.shared_auto_redeem_path(&key)).is_some());
+
+    let gone: LoginKey = "codex@gone".parse().unwrap();
+    assert!(reserve_attempt(
+        &runtime,
+        &gone,
+        RedeemReason::ExpiryRescue,
+        now,
+        "request"
+    ));
+    assert!(redeem_login(&runtime, &gone, "request", &ended).is_none());
+    assert!(read_stamp(&runtime.shared_auto_redeem_path(&gone)).is_none());
 }
 
 #[test]

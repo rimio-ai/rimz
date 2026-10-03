@@ -1060,3 +1060,143 @@ fn realtime_write_preserves_attempt_and_claim() {
         Some(0)
     );
 }
+
+fn spare_room() -> (LoginKey, RoomLoginSet) {
+    let accounts = toml::from_str("[codex.spare]\nhome = \"/srv/rimz-test-spare\"\n").unwrap();
+    let room = RoomLoginSet::new(
+        Some(Default::default()),
+        Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
+        BTreeMap::new(),
+    );
+    ("codex@spare".parse().unwrap(), room)
+}
+
+#[test]
+fn idle_reset_credits_hold_the_display_staleness_line_and_skip_in_use_logins() {
+    let (spare, room) = spare_room();
+    let default_key: LoginKey = "codex@default".parse().unwrap();
+    let now_ms = 10 * CREDITS_DISPLAY_MAX_AGE.as_millis() as u64;
+    let credits = ResetCredits {
+        count: 1,
+        soonest_expiry: None,
+        expiries: Vec::new(),
+        effect: crate::agents::RedeemEffect::RestartsWindow,
+    };
+    let entry = |ok, observed_at_ms| ProviderCreditsEntry {
+        observed_at_ms,
+        ok,
+        reset_credits: Some(credits.clone()),
+        ..Default::default()
+    };
+    let idle = |spare_entry: ProviderCreditsEntry, room: &RoomLoginSet| {
+        let cache = CreditsCache {
+            logins: BTreeMap::from([
+                (default_key.clone(), entry(true, now_ms)),
+                (spare.clone(), spare_entry),
+            ]),
+            ..Default::default()
+        };
+        idle_reset_credits_with(&cache, room, now_ms)
+    };
+
+    assert_eq!(
+        idle(entry(true, now_ms), &room),
+        BTreeMap::from([(spare.clone(), credits.clone())]),
+        "the in-use default login never appears in the idle input"
+    );
+    assert!(idle(entry(false, now_ms), &room).is_empty());
+    let stale = now_ms - CREDITS_DISPLAY_MAX_AGE.as_millis() as u64 - 1;
+    assert!(idle(entry(true, stale), &room).is_empty());
+    let unloaded = RoomLoginSet::new(Some(Default::default()), None, BTreeMap::new());
+    assert!(idle(entry(true, now_ms), &unloaded).is_empty());
+}
+
+#[test]
+fn idle_claim_waits_its_floor_after_every_outcome_and_yields_to_a_live_claim() {
+    let read_at = 1_000_000;
+    let floor = IDLE_OAUTH_USAGE_TTL.as_millis() as u64;
+    let key: LoginKey = "codex@spare".parse().unwrap();
+    let attempted = ProviderCreditsEntry {
+        oauth_read_at_ms: read_at,
+        credentials_stamp: Some(7),
+        ..Default::default()
+    };
+    let changed_credentials = Some(identity(Some(8), None, ProviderAccountScope::KindWide));
+    for (outcome, entry, hint) in [
+        (
+            "success",
+            ProviderCreditsEntry {
+                ok: true,
+                ..attempted.clone()
+            },
+            None,
+        ),
+        ("transient failure", attempted.clone(), None),
+        (
+            "settled auth",
+            ProviderCreditsEntry {
+                auth_settled: true,
+                ..attempted.clone()
+            },
+            None,
+        ),
+        (
+            "changed credentials",
+            attempted.clone(),
+            changed_credentials,
+        ),
+    ] {
+        let (_dir, runtime) = runtime();
+        write_credits_cache(
+            &runtime.shared_credits_path(),
+            &CreditsCache {
+                logins: BTreeMap::from([(key.clone(), entry)]),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            claim_idle_account_usage_at(
+                &runtime,
+                &key,
+                hint.clone(),
+                read_at + floor - 1,
+                nonce(1)
+            ),
+            None,
+            "inside the floor after {outcome}"
+        );
+        assert_eq!(
+            claim_provider_account_usage_with_hint_at(
+                &runtime,
+                &key,
+                hint.clone(),
+                read_at + floor - 1,
+                nonce(2)
+            ),
+            Some(nonce(2)),
+            "an in-use claim keeps its own cadence after {outcome}"
+        );
+        assert_eq!(
+            claim_idle_account_usage_at(&runtime, &key, hint.clone(), read_at + floor, nonce(3)),
+            None,
+            "another room's live claim blocks the idle lane after {outcome}"
+        );
+        assert!(cancel_provider_account_usage_claim(
+            &runtime,
+            &key,
+            nonce(2)
+        ));
+        assert_eq!(
+            claim_idle_account_usage_at(&runtime, &key, hint, read_at + floor, nonce(4)),
+            Some(nonce(4)),
+            "due at the floor after {outcome}"
+        );
+    }
+
+    let (_dir, runtime) = runtime();
+    assert_eq!(
+        claim_idle_account_usage_at(&runtime, &key, None, read_at, nonce(5)),
+        Some(nonce(5)),
+        "an account never attempted is due at once"
+    );
+}

@@ -45,6 +45,10 @@ pub enum Assist {
     },
     AutoRedeem {
         kind: String,
+        /// The account the credit was redeemed on; records older than the
+        /// field carry none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        login: Option<crate::ids::LoginName>,
         reason: RedeemReason,
         request_id: String,
         credits: u32,
@@ -236,6 +240,7 @@ mod tests {
             at: ts(at),
             assist: Assist::AutoRedeem {
                 kind: "codex".to_owned(),
+                login: Some("work".parse().expect("login name")),
                 reason: RedeemReason::ExpiryRescue,
                 request_id: request_id.into(),
                 credits: 2,
@@ -386,6 +391,18 @@ mod tests {
             let decoded: AssistRecord = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(decoded, record);
         }
+    }
+
+    #[test]
+    fn a_redeem_record_names_its_account_and_reads_without_one() {
+        let mut json = serde_json::to_value(redeem(20, "request-1")).expect("serialize");
+        assert_eq!(json["login"], "work");
+        json.as_object_mut().expect("object").remove("login");
+        let older: AssistRecord = serde_json::from_value(json).expect("deserialize");
+        assert!(matches!(
+            older.assist,
+            Assist::AutoRedeem { login: None, .. }
+        ));
     }
 
     #[test]
