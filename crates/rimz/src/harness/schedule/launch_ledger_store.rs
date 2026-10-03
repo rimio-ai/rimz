@@ -12,9 +12,15 @@ pub(super) enum LedgerWriteErr {
     Lock(#[from] crate::disk::lock::LockErr),
     #[error(transparent)]
     Write(#[from] crate::disk::atomic::AtomicErr),
+    #[error("recording resident launch assist: {0}")]
+    Completion(#[source] std::io::Error),
 }
 
-fn mutate(paths: &crate::StatePaths, edit: impl FnOnce(&mut Ledger)) -> Result<(), LedgerWriteErr> {
+fn mutate(
+    paths: &crate::StatePaths,
+    edit: impl FnOnce(&mut Ledger),
+    after_write: impl FnOnce() -> std::io::Result<()>,
+) -> Result<(), LedgerWriteErr> {
     let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.lock_path("loop-launches.lock"))?;
     let mut ledger = launch_ledger::load(paths)?;
     let before = ledger.clone();
@@ -26,6 +32,12 @@ fn mutate(paths: &crate::StatePaths, edit: impl FnOnce(&mut Ledger)) -> Result<(
     if ledger != before {
         crate::disk::atomic::write_temp_then_rename(&launch_ledger::path(paths), &ledger)?;
     }
+    if let Err(error) = after_write() {
+        if ledger != before {
+            crate::disk::atomic::write_temp_then_rename(&launch_ledger::path(paths), &before)?;
+        }
+        return Err(LedgerWriteErr::Completion(error));
+    }
     Ok(())
 }
 
@@ -34,22 +46,31 @@ pub(super) fn record(
     task: &str,
     checkout: &Path,
     record: LaunchRecord,
+    after_write: impl FnOnce() -> std::io::Result<()>,
 ) -> Result<(), LedgerWriteErr> {
-    mutate(paths, |ledger| {
-        ledger
-            .entry(task.to_owned())
-            .or_default()
-            .insert(checkout.to_owned(), record);
-    })
+    mutate(
+        paths,
+        |ledger| {
+            ledger
+                .entry(task.to_owned())
+                .or_default()
+                .insert(checkout.to_owned(), record);
+        },
+        after_write,
+    )
 }
 
 pub(super) fn remove(paths: &crate::StatePaths, task: &str) -> Result<(), LedgerWriteErr> {
     if !launch_ledger::load(paths)?.contains_key(task) {
         return Ok(());
     }
-    mutate(paths, |ledger| {
-        ledger.remove(task);
-    })
+    mutate(
+        paths,
+        |ledger| {
+            ledger.remove(task);
+        },
+        || Ok(()),
+    )
 }
 
 #[cfg(test)]
@@ -141,8 +162,8 @@ mod tests {
             at: jiff::Timestamp::now(),
             leader: "otter".into(),
         };
-        record(&paths, "fixer", &checkout, launch.clone()).unwrap();
-        record(&paths, "yagni", &checkout, launch.clone()).unwrap();
+        record(&paths, "fixer", &checkout, launch.clone(), || Ok(())).unwrap();
+        record(&paths, "yagni", &checkout, launch.clone(), || Ok(())).unwrap();
         assert_eq!(
             launch_ledger::load(&paths).unwrap()["fixer"][&checkout],
             launch
@@ -163,16 +184,43 @@ mod tests {
             at: jiff::Timestamp::now(),
             leader: "otter".into(),
         };
-        record(&paths, "fixer", &gone, launch.clone()).unwrap();
+        record(&paths, "fixer", &gone, launch.clone(), || Ok(())).unwrap();
         std::fs::remove_dir(&gone).unwrap();
-        record(&paths, "fixer", home.path(), launch.clone()).unwrap();
+        record(&paths, "fixer", home.path(), launch.clone(), || Ok(())).unwrap();
         let replacement = LaunchRecord {
             leader: "fox".into(),
             ..launch
         };
-        record(&paths, "fixer", home.path(), replacement.clone()).unwrap();
+        record(&paths, "fixer", home.path(), replacement.clone(), || Ok(())).unwrap();
         let ledger = launch_ledger::load(&paths).unwrap();
         assert_eq!(ledger["fixer"].len(), 1);
         assert_eq!(ledger["fixer"][home.path()], replacement);
+    }
+
+    #[test]
+    fn failed_completion_rolls_back_only_the_attempted_launch() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = crate::StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+        let launch = LaunchRecord {
+            at: jiff::Timestamp::now(),
+            leader: "otter".into(),
+        };
+        record(&paths, "fixer", home.path(), launch.clone(), || Ok(())).unwrap();
+        let before = launch_ledger::load(&paths).unwrap();
+        for task in ["yagni", "fixer"] {
+            let replacement = LaunchRecord {
+                leader: "fox".into(),
+                ..launch.clone()
+            };
+            let result = record(&paths, task, home.path(), replacement.clone(), || {
+                assert_eq!(
+                    launch_ledger::load(&paths).unwrap()[task][home.path()],
+                    replacement
+                );
+                Err(std::io::Error::other("assist append failed"))
+            });
+            assert!(result.is_err());
+            assert_eq!(launch_ledger::load(&paths).unwrap(), before);
+        }
     }
 }
