@@ -6,6 +6,7 @@ Topic detail lives in [fleet.md](../../../../docs/internals/harness/fleet.md) (s
 
 ## Boundaries
 
+- Resident loop launches stamp only the prompt leader's durable `loop_task`. `team_stage` uses it at root registration to load subscriptions; `schedule/team.rs` shares the standing-binding builder between team and loop registrations. Arming is a lifecycle write, never part of the read-only condition planner or ledger reader.
 - The harness owns the checkout and channel team-hold rules (`resume::inspect_team_hold` and `resume::inspect_channel_hold`) a fresh team launch refuses on.
 - `run/peer.rs::record_run_delivery` records confirmed delivery under the acknowledgment's existing workspace lock: a hook run id naming a subagent run selects answer stamping; otherwise, including a foreground `-p` peer's own run id, it enrolls launcher-opened peer turns.
 - `team_prompt.rs` owns the embedded consensus, its read-only inspection copy under the definitions root (published, never read back), and the team prompt layer's derivation; `spec` decides the layer once per role cell at team compile, and `prompt_compose` composes it after the role's own prompt.

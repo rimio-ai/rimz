@@ -426,7 +426,9 @@ path = "crates/rimz/src/harness"
 # Supervised launch planning and verify settlement leave the CLI: plan +2, run +2 with three transitions made private (+1).
 # Resident launch ledger records and strict reads cross the planner/CLI seam (+5).
 # Fan-out helpers hand the marker checkout to the runner without re-resolving it (+1).
-surface-budget = 664
+# Root registration shares resident-loop subscription arming with the team binding builder (+1).
+# Add-time subscription validation shares the registration scope-key predicate (+1).
+surface-budget = 666
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

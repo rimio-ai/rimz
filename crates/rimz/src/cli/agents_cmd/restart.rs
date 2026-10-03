@@ -266,6 +266,7 @@ pub(in crate::cli) fn relaunch_request(
         tier: posture.launch.tier.clone(),
         role: agent.role.clone(),
         team: agent.team.clone(),
+        loop_task: agent.loop_task.clone(),
         launch_group: agent.launch_group.clone(),
         launch_ordinal: agent.launch_ordinal,
         channel: agent.channel.clone(),
@@ -430,6 +431,7 @@ fn append_fresh_launch(
     request.launch.isolation = agent.isolation;
     request.launch.role = agent.role.clone();
     request.launch.team = agent.team.clone();
+    request.launch.loop_task = agent.loop_task.clone();
     request.launch.launch_group = agent.launch_group.clone();
     request.launch.launch_ordinal = agent.launch_ordinal;
     request.launch.channel = agent.channel.clone();
