@@ -717,7 +717,10 @@ fn refresh_wire_path(
             context_window_size,
             used_percentage: context_window_size.map(|window| percentage(input, window)),
             remaining_percentage: None,
-            current_context_tokens: None,
+            // A step's count includes its output and sits beside that step's
+            // split. A compaction or clear leaves only the older step's split
+            // in the tail, so the count is published to outrank it.
+            current_context_tokens: wire::context_replaced_since_step(records).then_some(input),
             current_usage: Some(AgentCurrentUsage {
                 input_tokens: latest_usage
                     .as_ref()
