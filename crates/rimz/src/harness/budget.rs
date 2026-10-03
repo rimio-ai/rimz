@@ -367,6 +367,75 @@ fn account_ledger_file(runtime: &RuntimePaths, key: &LoginKey) -> ScopeLedgerFil
     }
 }
 
+/// What [`sweep_orphan_account_ledgers`] removed, or would under a dry run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AccountLedgerSweep {
+    pub ledgers: usize,
+    pub bytes: u64,
+}
+
+/// Remove every account ledger no history pool addresses: a name without `@`,
+/// the shape before named accounts, and the own-key ledger of a declared
+/// account whose pool is another key. A ledger whose lock is held stays for
+/// the next run, and a dry run removes, locks, and creates nothing.
+pub fn sweep_orphan_account_ledgers(
+    runtime: &RuntimePaths,
+    config: &MachineConfig,
+    dry_run: bool,
+) -> AccountLedgerSweep {
+    // Built forward from the catalog, so a hashed kind needs no decoder and an
+    // accounts config that does not load names no pooled account.
+    let pooled: BTreeSet<String> = LoginCatalog::from_config(&config.accounts)
+        .map(|catalog| {
+            catalog
+                .all()
+                .map(|login| login.key())
+                .filter(|key| catalog.pool(key) != *key)
+                .map(|key| account_ledger_component(&key))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut sweep = AccountLedgerSweep::default();
+    let Ok(entries) = std::fs::read_dir(&runtime.persistent_shared_root) else {
+        return sweep;
+    };
+    for path in entries.flatten().map(|entry| entry.path()) {
+        let Some(component) = RuntimePaths::account_budget_ledger_component(&path) else {
+            continue;
+        };
+        if component.contains('@') && !pooled.contains(component) {
+            continue;
+        }
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if !dry_run {
+            let lock_path = runtime.shared_account_budget_lock(component);
+            let _held = match crate::disk::lock::WorkspaceLock::try_acquire(&lock_path) {
+                Ok(Some(held)) => held,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::debug!(path = %lock_path.display(), %error, "orphan account ledger lock unavailable");
+                    continue;
+                }
+            };
+            // Store durability contract: a lock file is unlinked only while
+            // this process holds it, whatever became of the ledger.
+            let ledger_removed = std::fs::remove_file(&path);
+            if let Err(error) = std::fs::remove_file(&lock_path) {
+                tracing::debug!(path = %lock_path.display(), %error, "orphan account ledger lock kept");
+            }
+            if let Err(error) = ledger_removed {
+                tracing::debug!(path = %path.display(), %error, "orphan account ledger kept");
+                continue;
+            }
+        }
+        sweep.ledgers += 1;
+        sweep.bytes = sweep.bytes.saturating_add(metadata.len());
+    }
+    sweep
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ScopeLedgerWriteError {
     #[error(transparent)]
