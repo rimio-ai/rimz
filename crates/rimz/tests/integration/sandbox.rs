@@ -1490,6 +1490,84 @@ fn a_shared_account_writes_its_history_into_the_default_home_under_both_isolatio
 }
 
 #[test]
+fn a_sandboxed_named_account_reaches_a_default_home_under_tmp_outside_home() {
+    if !available() {
+        return;
+    }
+    // A shared account links its history into the provider's own home, and a
+    // standalone one its settings: both reach through the account home.
+    for history in ["shared", "standalone"] {
+        let env = Env::new();
+        let work = env.home_root.join("work");
+        // The provider's own home, moved by its native override to a `/tmp`
+        // path no rebound root contains: the temp unit mounted over `/tmp`
+        // hides it unless the mount plan rebinds it.
+        let native_root = tempfile::tempdir_in("/tmp").unwrap();
+        let native = native_root.path().join("codex-home");
+        assert!(!native.starts_with(&env.home_root));
+        std::fs::create_dir_all(native.join("sessions")).unwrap();
+        std::fs::write(native.join("AGENTS.md"), "native manual").unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        let config = env.rimz_home().join("config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            config,
+            format!(
+                "[agents]\nisolation = \"sandbox\"\n[accounts.codex.work]\nhome = {:?}\nhistory = {history:?}\n",
+                work.to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        let shim_dir = write_env_dump_shim(&env, "codex");
+        std::fs::write(
+            shim_dir.join("codex"),
+            "#!/bin/sh\ncat \"$CODEX_HOME/AGENTS.md\" > \"$CODEX_HOME/seen\"\n\
+             if [ -d \"$CODEX_HOME/sessions\" ]; then printf turn > \"$CODEX_HOME/sessions/rollout.jsonl\"; fi\n",
+        )
+        .unwrap();
+        env.write_config(
+            &env.project_root,
+            &format!(
+                "[[agents]]\nname = \"codex\"\nenv = {{ PATH = {:?} }}\n",
+                path_with_front(&shim_dir).to_str().unwrap()
+            ),
+        );
+        env.rimz()
+            .args(["trust", "grant"])
+            .assert_success_within_timeout("grant trusted provider PATH");
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
+        request.identity.params.login = Some("work".parse().unwrap());
+        env.rimz()
+            .args(exec_args(&env, &request))
+            .env("CODEX_HOME", &native)
+            .env("SHELL", "/definitely/not/a/shell")
+            .assert_success_within_timeout("launch on a named account");
+        assert_eq!(
+            std::fs::read_link(work.join("AGENTS.md")).unwrap(),
+            native.join("AGENTS.md"),
+            "{history}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(work.join("seen")).unwrap(),
+            "native manual",
+            "{history}"
+        );
+        if history == "shared" {
+            assert_eq!(
+                std::fs::read_link(work.join("sessions")).unwrap(),
+                native.join("sessions")
+            );
+            assert_eq!(
+                std::fs::read_to_string(native.join("sessions/rollout.jsonl")).unwrap(),
+                "turn"
+            );
+        } else {
+            assert!(!work.join("sessions").is_symlink());
+        }
+    }
+}
+
+#[test]
 fn sandbox_skills_under_host_use_provider_switches() {
     let env = Env::new();
     let shell = write_fake_login_shell(&env, "host-skills-shell", &[]);
