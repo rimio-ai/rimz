@@ -110,6 +110,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `harness.idle_compact` | `off`, `on` (default), or a duration such as `25m`; see [idle compaction](../../guide/configuration.md#idle-compaction) |
 | `harness.budget`, `accounts.budget.<kind>` | an amount ending in `/day` |
 | `accounts.use.<kind>` | an account name or `default`; declaration is checked at room birth, not by `set`. Prefer [`rimz accounts use --global`](./accounts.md#use) to select or clear it. The container and deeper paths are not settable. |
+| `accounts.<kind>.<name>.history` | `shared` or `standalone`; `set` only declares the mode, and `rimz accounts add <kind> <name>` or the next launch on the account links or unlinks its history. `get` reports `shared` as unset, since absent means shared. |
 | `harness.turn_budget` | a dollar amount such as `3` or `$2.50` |
 | `resume.auto_redeem_min_gain` | a duration |
 | `gc.older_than` | a duration such as `8h` or `3d` |

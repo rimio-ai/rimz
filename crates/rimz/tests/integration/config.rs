@@ -1455,3 +1455,109 @@ fn setup_yes_preserves_template_comments_for_untouched_config() {
         "tmux optional override comment should stay attached:\n{text}"
     );
 }
+
+#[test]
+fn config_set_account_history_declares_the_pool_and_leaves_links_to_accounts_add() {
+    let env = Env::new();
+    let rimz = || {
+        let mut command = env.rimz();
+        command
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME");
+        command
+    };
+    let stdout = |assert: assert_cmd::assert::Assert| {
+        String::from_utf8_lossy(&assert.get_output().stdout).into_owned()
+    };
+    let native = env.home_root.join(".claude");
+    std::fs::create_dir_all(native.join("projects")).unwrap();
+    let claude_home = env.home_root.join("claude-work");
+    for kind in ["claude", "codex"] {
+        let home = env.home_root.join(format!("{kind}-work"));
+        rimz()
+            .args([
+                "accounts",
+                "add",
+                kind,
+                "work",
+                "--home",
+                home.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+        let key = format!("accounts.{kind}.work.history");
+        for (mode, scope) in [("standalone", "work"), ("shared", "default")] {
+            rimz()
+                .args(["config", "set", &key, mode])
+                .assert()
+                .success();
+            let declared: toml::Table =
+                toml::from_str(&std::fs::read_to_string(machine_config_path(&env)).unwrap())
+                    .unwrap();
+            assert_eq!(
+                declared["accounts"][kind]["work"]["history"].as_str(),
+                Some(mode),
+                "{declared}"
+            );
+            // `get` reads the loaded config, which omits the shared default.
+            let get = rimz().args(["config", "get", &key]).assert();
+            if mode == "standalone" {
+                assert_eq!(stdout(get.success()).trim(), mode);
+            } else {
+                let failed = get.failure();
+                let stderr = String::from_utf8_lossy(&failed.get_output().stderr);
+                assert!(
+                    stderr.contains(&format!("config key `{key}` is unset")),
+                    "{stderr}"
+                );
+            }
+            let rows: Vec<serde_json::Value> = serde_json::from_str(&stdout(
+                rimz()
+                    .args(["accounts", "list", "--json"])
+                    .assert()
+                    .success(),
+            ))
+            .unwrap();
+            let row = rows
+                .iter()
+                .find(|row| row["kind"] == kind && row["name"] == "work")
+                .unwrap_or_else(|| panic!("no {kind} work row: {rows:?}"));
+            assert_eq!(row["history"], mode, "{kind}");
+            rimz()
+                .args(["budget", "--account", &format!("{kind}@work")])
+                .assert()
+                .success()
+                .stdout(contains(format!("scope:  {kind}@{scope} account")));
+        }
+        let config = machine_config_path(&env);
+        let before = std::fs::read(&config).unwrap();
+        rimz()
+            .args(["config", "set", &key, "pooled"])
+            .assert()
+            .failure()
+            .stderr(contains("shared").and(contains("standalone")));
+        assert_eq!(std::fs::read(&config).unwrap(), before, "{kind}");
+    }
+
+    // `set` only declares the mode: the shared link stays until `accounts add`
+    // reconciles the account's links.
+    let link = claude_home.join("projects");
+    assert_eq!(std::fs::read_link(&link).unwrap(), native.join("projects"));
+    rimz()
+        .args([
+            "config",
+            "set",
+            "accounts.claude.work.history",
+            "standalone",
+        ])
+        .assert()
+        .success();
+    assert_eq!(std::fs::read_link(&link).unwrap(), native.join("projects"));
+    rimz()
+        .args(["accounts", "add", "claude", "work"])
+        .assert()
+        .success()
+        .stdout(contains("unlinked from"));
+    assert!(!link.exists() && !link.is_symlink());
+    assert!(native.join("projects").is_dir());
+}
