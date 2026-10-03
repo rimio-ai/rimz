@@ -414,7 +414,8 @@ path = "crates/rimz/src/harness"
 # `rimz gc` sweeps orphan account budget ledgers and reports the typed sweep result (+2).
 # The prompt-submit Environment sampler and its launch switch cross the harness/CLI hook seam (+4).
 # A loop run in flight is looked up by name and root, its row gone or not (+1).
-surface-budget = 643
+# A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
+surface-budget = 644
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -878,7 +879,8 @@ allowed-dependencies = [
 # One fork-free usage snapshot supplies all fresh-launch tier walks.
 # Stamped cohort resume reapplies explicit presets through the shared cell finalizer.
 # Record replay shares the finalizer's preset argv application (+1).
-surface-budget = 39
+# A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
+surface-budget = 40
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"

@@ -402,6 +402,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         loop_task: None,
         passthrough: Vec::new(),
         managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,
+        login: rimz::store::writer::LaunchLogin::RoomDefault,
     }
 }
 
@@ -441,6 +442,7 @@ fn tier_override_changes_the_supervised_launch_runtime() {
         &machine,
         rimz::config::effective::ProfileScope::Agents,
         None,
+        |_| rimz::store::writer::LaunchLogin::RoomDefault,
     )
     .unwrap();
     let cell = resolved.layout.agent_cells().next().unwrap();
@@ -465,6 +467,7 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         &rimz::config::MachineConfig::default(),
         rimz::config::effective::ProfileScope::Agents,
         None,
+        |_| rimz::store::writer::LaunchLogin::RoomDefault,
     )
     .expect("prepare supervised launch")
     .layout;
@@ -612,6 +615,7 @@ fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
         &rimz::config::MachineConfig::default(),
         rimz::config::effective::ProfileScope::Subagents,
         None,
+        |_| rimz::store::writer::LaunchLogin::RoomDefault,
     )
     .expect_err("spec-like prompt");
     assert!(

@@ -14,7 +14,10 @@ use rimz::mux::{
     own_pane_id,
 };
 use rimz::store::run::{RunRecord, RunStatus};
-use rimz::store::{writer::AgentLaunchBatch, writer::AgentLaunchName, writer::AgentLaunchScope};
+use rimz::store::{
+    writer::AgentLaunchBatch, writer::AgentLaunchName, writer::AgentLaunchScope,
+    writer::LaunchLogin,
+};
 use std::borrow::Cow;
 use std::io::{IsTerminal as _, Write as _};
 use std::sync::Arc;
@@ -70,15 +73,17 @@ pub(super) fn prepare_supervised_launch_layout(
     machine_config: &rimz::config::MachineConfig,
     scope: rimz::config::effective::ProfileScope,
     isolation: Option<rimz::config::Isolation>,
+    login: impl Fn(&AgentKind) -> LaunchLogin,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let mut effective = rimz::config::effective::load(machine_config, &workspace.project_root)?;
     let state = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = rimz::RuntimePaths::for_state(&state)?;
-    let availability = rimz::harness::plan::LaunchAvailability::read(
+    let availability = rimz::harness::plan::LaunchAvailability::read_as(
         &runtime,
         &state,
         machine_config,
         jiff::Timestamp::now(),
+        login,
     );
     let routed = effective.route(
         &machine_config.tiers,
@@ -444,6 +449,22 @@ fn open_attempt_pane(
     Ok(())
 }
 
+/// The account a supervised launch of `kind` runs under: the request's pin,
+/// else a subagent's same-kind parent's account, else the room default.
+fn launch_login(
+    request: &SupervisedRunRequest,
+    caller: Option<&rimz::agents::AgentState>,
+    kind: &AgentKind,
+) -> LaunchLogin {
+    if request.login != LaunchLogin::RoomDefault {
+        return request.login.clone();
+    }
+    match caller.filter(|caller| request.subagent && &caller.kind == kind) {
+        Some(caller) => LaunchLogin::Pinned(caller.login.clone().unwrap_or_default()),
+        None => LaunchLogin::RoomDefault,
+    }
+}
+
 fn prepare_supervised(
     request: &SupervisedRunRequest,
     presentation: &SupervisedPresentation,
@@ -521,6 +542,7 @@ fn prepare_supervised(
         &machine_config,
         scope,
         isolation,
+        |kind| launch_login(request, caller, kind),
     )?;
     let team_name = resolved.team_name;
     let mut layout = resolved.layout;
@@ -595,7 +617,7 @@ fn prepare_supervised(
         &rimz::ids::RoomLogins::new(),
         false,
     )?;
-    let login = rimz::store::writer::LaunchLogin::RoomDefault.resolve(
+    let login = launch_login(request, caller, &agent_cell.kind).resolve(
         &agent_cell.kind,
         &logins,
         &machine_config.accounts,
@@ -728,7 +750,7 @@ fn execute_attempt(
         prepared.ancestry.as_ref(),
     )?;
     for request in &mut launch_requests {
-        request.login = rimz::store::writer::LaunchLogin::Pinned(prepared.login.clone());
+        request.login = LaunchLogin::Pinned(prepared.login.clone());
         if attempt > 0
             && let AgentLaunchName::Explicit(name) = &request.name
         {
