@@ -62,13 +62,21 @@ where
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 
-/// One triggered loop wake-up. `agent` spawns a supervised turn and `wait`
-/// delivers to a pinned session.
+/// One triggered loop wake-up. `agent` names a supervised turn or resident
+/// layout; `wait` delivers to a pinned session.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stay: bool,
+    #[serde(rename = "each-worktree", skip_serializing_if = "std::ops::Not::not")]
+    pub each_worktree: bool,
+    #[serde(rename = "stop-team", skip_serializing_if = "std::ops::Not::not")]
+    pub stop_team: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subscribe: Vec<super::TeamSignalBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<TaskTarget>,
     #[serde(rename = "wait-meta", skip_serializing_if = "Option::is_none")]

@@ -93,6 +93,16 @@ pub(super) fn run_one(
         started,
     )?
     .with_condition(condition);
+    if entry.stay {
+        return record_task_error(
+            &mut fire,
+            name,
+            &entry,
+            anyhow::anyhow!(
+                "--stay launches are not available in this version; disable this task until resident launch support is installed"
+            ),
+        ).map(|_| ());
+    }
     let mut plan = fire.prepare(&mut |root| {
         if mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly) {
             return Ok(());

@@ -127,13 +127,25 @@ enum TimerSubcmd {
 struct AddArgs {
     /// Task name (letters, digits, `-`, `_`).
     name: String,
-    /// Kind, profile, or virtual cell; launches a fresh supervised pane.
+    /// Kind, profile, or virtual cell; with --stay, an ordinary agent layout.
     #[arg(
         long,
         conflicts_with = "wait",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
     )]
     agent: Option<String>,
+    /// Leave the agent layout running as ordinary room agents.
+    #[arg(long)]
+    stay: bool,
+    /// Evaluate a condition in each RimZ-owned worktree.
+    #[arg(long)]
+    each_worktree: bool,
+    /// Arm a standing signal subscription for the layout's prompt leader.
+    #[arg(long, value_name = "SIGNAL")]
+    subscribe: Vec<String>,
+    /// Stop the team holding the checkout before launching the layout.
+    #[arg(long)]
+    stop_team: bool,
     /// Live agent to wake through the message path; resolved and pinned now.
     #[arg(
         long,
