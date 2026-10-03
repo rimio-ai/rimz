@@ -117,6 +117,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | `--worktree <NAME>` | `--agent`, `--wait` | Channel or worktree that hosts the transient pane, or that resolves the `--wait` address. |
 | `--mode auto\|ask\|yolo` | `--agent` | Permission posture for the turn. |
 | `--effort <EFFORT>` | `--agent` | Reasoning effort passed to the agent. |
+| `--account <NAME>` | `--agent` | Named account of the agent's provider that every fire runs on; see [the account pin](#the-account-pin). |
 | `--system-prompt-file <PATH>` | `--agent` | Replace the agent's base system prompt with a file's contents. |
 | `--budget <AMOUNT[/day]>` | `--agent` | Dollar cap for each spawned run. |
 | `--budget-per-day <AMOUNT>` | `--agent` with `--budget` | Daily dollar cap for the task; see [budgets](#budgets). |
@@ -124,7 +125,15 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | `--root <PATH>` | all | Project whose room hosts the task. Default `.`. |
 | `--project` | `--agent`, check-only | Write the task to the project's `.rimz/config.toml`; see [project tasks](#project-tasks). |
 
-`--mode`, `--effort`, `--system-prompt-file`, `--budget`, and `--budget-per-day` are refused on `--wait` and check-only tasks, and `--worktree` on check-only tasks.
+`--mode`, `--effort`, `--account`, `--system-prompt-file`, `--budget`, and `--budget-per-day` are refused on `--wait` and check-only tasks, and `--worktree` on check-only tasks.
+
+### The account pin
+
+Without `--account`, each fire takes the room's current account for the agent's provider, so `rimz accounts use` moves the task with the room. `--account <NAME>` holds the task on one [named account](./accounts.md) whatever the room selects: the fire launches on it, and its hooks preflight, daily caps, surplus gate, and window triggers read it. `--account default` pins the provider's own home.
+
+The flag takes a bare name, where `rimz start --account` takes `KIND=NAME`: a task has one agent, so the provider is the one its `--agent` spec resolves to. Add refuses a name that provider does not declare, a provider without named accounts, and an account whose home is missing or unhooked, each with the `rimz accounts` fix. The row stores the name alone as `account`. A tier-routed spec that lands on another provider at fire time resolves the name against that provider, and runs on that provider's account of the same name when it declares one.
+
+The receipt, `rimz loop show`, and `rimz loop list` name the pin beside the agent, as `claude · account work`.
 
 ### The receipt
 

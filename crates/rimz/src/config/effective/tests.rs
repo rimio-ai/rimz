@@ -668,7 +668,7 @@ fn trusted_project_tasks_load_with_project_root_and_prompt_paths() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\nagent = \"codex\"\nprompt-file = \"prompts/wait.md\"\nsystem-prompt-file = \"prompts/system.md\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nagent = \"codex\"\naccount = \"work\"\nprompt-file = \"prompts/wait.md\"\nsystem-prompt-file = \"prompts/system.md\"\nevery = \"day\"\nat = \"08:00\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
 
@@ -678,6 +678,7 @@ fn trusted_project_tasks_load_with_project_root_and_prompt_paths() {
     assert_eq!(loaded.state, TrustState::Trusted);
     assert_eq!(loaded.config_path, project.path().join(".rimz/config.toml"));
     assert_eq!(wait.root, project.path());
+    assert_eq!(wait.account, Some("work".parse().expect("login name")));
     assert_eq!(
         wait.prompt_file.as_ref(),
         Some(&project.path().join(".rimz/prompts/wait.md"))

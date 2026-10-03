@@ -5290,6 +5290,78 @@ fn loop_add_rejects_agent_signal_self_waits() {
     );
 }
 
+fn add_claude_account(env: &Env, name: &str) -> std::path::PathBuf {
+    let home = env.home_root.join(format!("claude-{name}"));
+    let output = env
+        .rimz()
+        .args(["accounts", "add", "claude", name, "--home"])
+        .arg(&home)
+        .output()
+        .expect("rimz accounts add");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    home
+}
+
+#[test]
+fn loop_add_pins_a_declared_account_and_refuses_the_rest() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    add_claude_account(&env, "work");
+    let pinned = |name: &'static str, agent: &'static str, account: &'static str| {
+        vec![
+            "loop",
+            "add",
+            name,
+            "--agent",
+            agent,
+            "--account",
+            account,
+            "--prompt",
+            "x",
+            "--every",
+            "15m",
+        ]
+    };
+
+    let (_, undeclared) = loop_fail(&env, &pinned("ghost", "claude", "ghost"));
+    assert!(
+        undeclared.contains(
+            "unknown claude account `ghost`; configured: default, work; run `rimz accounts add claude ghost`"
+        ),
+        "{undeclared}"
+    );
+    let (_, unsupported) = loop_fail(&env, &pinned("unsupported", "grok", "work"));
+    assert!(
+        unsupported.contains("grok has no named accounts; only `default` is available"),
+        "{unsupported}"
+    );
+    assert!(
+        !loop_config_path(&env).exists(),
+        "a refused add writes no row"
+    );
+
+    let added = loop_ok(&env, &pinned("held", "claude", "work"));
+    assert!(
+        added.contains("action: launches a fresh claude pane on account `work` in "),
+        "{added}"
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("loop config"))
+            .expect("parse loop config");
+    assert_eq!(
+        config.tasks.0["held"].account,
+        Some("work".parse().expect("login name"))
+    );
+    for view in [&["loop", "show", "held"][..], &["loop", "list"]] {
+        let shown = loop_ok(&env, view);
+        assert!(shown.contains("claude · account work"), "{shown}");
+    }
+}
+
 #[test]
 fn loop_add_rejects_invalid_action_shapes() {
     let env = Env::new();
@@ -5374,6 +5446,36 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "15m",
             ],
             "`check-flags` uses --check without an agent action, so --worktree, --mode, --effort, --budget, --budget-per-day, --system-prompt-file only apply to --agent tasks",
+        ),
+        (
+            vec![
+                "loop",
+                "add",
+                "wait-account",
+                "--wait",
+                "@claude",
+                "--account",
+                "work",
+                "--every",
+                "15m",
+                "--prompt",
+                "x",
+            ],
+            "`wait-account` uses --wait, so --account only apply to --agent tasks",
+        ),
+        (
+            vec![
+                "loop",
+                "add",
+                "check-account",
+                "--check",
+                "true",
+                "--account",
+                "work",
+                "--every",
+                "15m",
+            ],
+            "`check-account` uses --check without an agent action, so --account only apply to --agent tasks",
         ),
         (
             vec![

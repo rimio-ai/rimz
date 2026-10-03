@@ -137,6 +137,9 @@ pub struct TaskEntry {
     /// The provider whose windows the row's `window.*` terms read, recorded at add.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<crate::ids::AgentKind>,
+    /// The provider account every fire of an `agent` task runs on; unset follows the room.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<crate::ids::LoginName>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -588,6 +591,7 @@ mod tests {
             )])),
             once: Some(true),
             deadline: Some(deadline),
+            account: Some("work".parse().expect("login name")),
             ..TaskEntry::default()
         };
         let tasks = Tasks(BTreeMap::from([("ci".to_owned(), entry.clone())]));
@@ -672,6 +676,12 @@ mod tests {
         assert!(toml.contains("[tasks.ci.match]"), "{toml}");
         assert!(toml.contains("branch = \"feature\""), "{toml}");
         assert!(toml.contains("once = true"), "{toml}");
+        assert!(toml.contains("account = \"work\""), "{toml}");
+        assert!(
+            !toml::to_string(&TaskEntry::default())
+                .expect("unpinned toml")
+                .contains("account")
+        );
 
         let json = serde_json::to_string(&loop_config.tasks).expect("json");
         let json_round: Tasks = serde_json::from_str(&json).expect("json round trip");

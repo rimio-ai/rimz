@@ -79,6 +79,13 @@ pub enum LaunchLogin {
     Pinned(crate::ids::LoginName),
 }
 
+impl From<Option<crate::ids::LoginName>> for LaunchLogin {
+    /// A named pin, or the room default when nothing is pinned.
+    fn from(pin: Option<crate::ids::LoginName>) -> Self {
+        pin.map_or(Self::RoomDefault, Self::Pinned)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentLaunchRequest {
     pub kind: AgentKind,

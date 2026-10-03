@@ -354,6 +354,22 @@ fn task_action_from_entry_maps_field_combinations() {
             "loop task `task` sets `max-attempts` to 0; use at least 1",
         ),
         (
+            TaskEntry {
+                account: Some("work".parse().expect("login name")),
+                check: Some("true".to_owned()),
+                ..TaskEntry::default()
+            },
+            "loop task `task` sets `account` without `agent`; an account pin needs a supervised agent run",
+        ),
+        (
+            TaskEntry {
+                account: Some("work".parse().expect("login name")),
+                wait: Some(wait_target()),
+                ..TaskEntry::default()
+            },
+            "loop task `task` sets `account` without `agent`; an account pin needs a supervised agent run",
+        ),
+        (
             TaskEntry::default(),
             "loop task `task` needs `agent`, `wait`, or `check`",
         ),

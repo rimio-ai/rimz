@@ -1427,6 +1427,7 @@ rimz loop
 
 rimz loop add
     <name>  [action=set takes=1..=1 required]
+    --account <NAME>  [action=set takes=1..=1]
     --after-reset <5h|7d>  [action=set takes=1..=1]
     --agent <AGENT>  [action=set takes=1..=1]
     --at <AT>  [action=set takes=1..=1]

@@ -77,6 +77,10 @@ pub enum TaskActionErr {
         "loop task `{name}` sets `verify` without `agent`; verification needs a supervised agent run"
     )]
     VerifyWithoutAgent { name: String },
+    #[error(
+        "loop task `{name}` sets `account` without `agent`; an account pin needs a supervised agent run"
+    )]
+    AccountWithoutAgent { name: String },
     #[error("loop task `{name}` sets `max-attempts` without `verify`")]
     AttemptsWithoutVerify { name: String },
     #[error("loop task `{name}` sets `max-attempts` to 0; use at least 1")]
@@ -91,6 +95,11 @@ impl TaskAction {
     fn from_entry(name: &str, entry: &TaskEntry) -> Result<Self, TaskActionErr> {
         if entry.verify.is_some() && entry.agent.is_none() {
             return Err(TaskActionErr::VerifyWithoutAgent {
+                name: name.to_owned(),
+            });
+        }
+        if entry.account.is_some() && entry.agent.is_none() {
+            return Err(TaskActionErr::AccountWithoutAgent {
                 name: name.to_owned(),
             });
         }

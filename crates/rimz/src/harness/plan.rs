@@ -381,17 +381,23 @@ impl ResolvedSingleAgentLaunch {
 }
 
 /// Resolve one loop launch while keeping effective-config and trust policy in
-/// the launch planner.
+/// the launch planner; tier routing judges every kind on `login`.
 pub fn resolve_single_agent_launch(
     spec: &str,
     workspace: &crate::workspace::ResolvedWorkspace,
+    login: &crate::store::writer::LaunchLogin,
 ) -> Result<ResolvedSingleAgentLaunch> {
     let machine_config = crate::config::MachineConfig::load_lenient();
     let mut launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
     let state = StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = RuntimePaths::for_state(&state)?;
-    let availability =
-        LaunchAvailability::read(&runtime, &state, &machine_config, jiff::Timestamp::now());
+    let availability = LaunchAvailability::read_as(
+        &runtime,
+        &state,
+        &machine_config,
+        jiff::Timestamp::now(),
+        |_| login.clone(),
+    );
     launch.route(
         &machine_config.tiers,
         crate::config::effective::ProfileScope::Agents,
