@@ -132,6 +132,11 @@ pub fn write_path_shim(dir: &Path, program: &str, body: &str) -> PathBuf {
 /// Account probes (`codex login status`, `claude auth status`) exit before any
 /// session work, so a sidebar probe never registers an agent or reads as a
 /// launch to a test tracing invocations.
+///
+/// The hook order is load-bearing: `PostToolUse` is the last hook before the
+/// `RIMZ_TEST_AGENT_SLEEP_MS` sleep, and
+/// `journey::deep::wait_for_quiet_account_run` reads its landing as the run
+/// having settled into that sleep.
 #[cfg(unix)]
 pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
     assert!(matches!(agent, "codex" | "claude"));
