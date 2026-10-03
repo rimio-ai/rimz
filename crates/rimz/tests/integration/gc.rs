@@ -843,6 +843,40 @@ fn gc_unattended_records_the_assist_and_stamp_unless_auto_is_off() {
     }
 }
 
+#[test]
+fn gc_removes_the_ledger_a_shared_account_left_behind() {
+    let env = Env::new();
+    let rt = env.runtime_paths();
+    rt.ensure_dirs().expect("runtime dirs");
+    std::fs::create_dir_all(&rt.persistent_shared_root).expect("mkdir providers cache");
+    write_machine_config(
+        &env,
+        "[accounts.claude.work]\nhome = \"/srv/gc-test-work\"\n",
+    );
+    let orphan = rt
+        .persistent_shared_root
+        .join("budget.account.claude@work.json");
+    let pool = rt
+        .persistent_shared_root
+        .join("budget.account.claude@default.json");
+    for path in [&orphan, &pool] {
+        std::fs::write(path, b"{}").expect("write ledger");
+    }
+    let gc_json = |args: &[&str]| {
+        let assert = env.rimz().args(args).assert().success();
+        serde_json::from_slice::<serde_json::Value>(&assert.get_output().stdout).expect("gc json")
+    };
+
+    let preview = gc_json(&["gc", "--dry-run", "--json"]);
+    assert_eq!(preview["budget_ledgers_removed"], 1, "{preview}");
+    assert!(orphan.exists(), "a dry run keeps the ledger");
+
+    let swept = gc_json(&["gc", "--json"]);
+    assert_eq!(swept["budget_ledgers_removed"], 1, "{swept}");
+    assert!(!orphan.exists(), "the shared account's own ledger is gone");
+    assert!(pool.exists(), "the pool's ledger stays");
+}
+
 fn write_machine_config(env: &Env, text: &str) {
     let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");

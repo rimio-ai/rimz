@@ -146,7 +146,8 @@ fn auto_gc_assist(
             + outcome.runtime.sidebar_sockets_removed
             + outcome.runtime.probe_markers_removed
             + outcome.temps.files_removed
-            + outcome.runtime.state_files_removed,
+            + outcome.runtime.state_files_removed
+            + outcome.budget_ledgers.ledgers,
         messages_archived,
         problems: problem_count(&outcome),
         error,
@@ -255,6 +256,12 @@ fn sweep(
         GcScope::Room => gc::collect_room_orphan_temps(paths, older_than, dry_run)?,
         GcScope::Machine => gc::collect_orphan_temps(older_than, dry_run),
     };
+    spinner.set("sweeping orphan account budget ledgers…");
+    let budget_ledgers = rimz::harness::budget::sweep_orphan_account_ledgers(
+        &rimz::RuntimePaths::shared(),
+        &MachineConfig::load_lenient(),
+        dry_run,
+    );
     let worktrees = sweep_worktrees(workspace, globals, &spinner, dry_run);
     Ok(GcOutcome {
         scope,
@@ -266,6 +273,7 @@ fn sweep(
         store_maintenance,
         schedules_reaped,
         wait_logs_pruned,
+        budget_ledgers,
         prune,
         worktrees,
     })
@@ -282,6 +290,7 @@ struct GcOutcome {
     store_maintenance: StoreMaintenance,
     schedules_reaped: usize,
     wait_logs_pruned: usize,
+    budget_ledgers: rimz::harness::budget::AccountLedgerSweep,
     prune: gc::WorkspacePruneReport,
     worktrees: WorktreeSweepStatus,
 }
@@ -292,6 +301,7 @@ impl GcOutcome {
             .bytes_removed
             .saturating_add(self.runtime.state_bytes_removed)
             .saturating_add(self.temps.bytes_removed)
+            .saturating_add(self.budget_ledgers.bytes)
             .saturating_add(self.prune.bytes_removed())
             .saturating_add(self.worktrees.bytes())
     }
@@ -722,13 +732,17 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
 }
 
 fn render_runtime(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
-    let items = runtime_items(&out.runtime);
+    let items = runtime_items(out);
+    let bytes = out
+        .runtime
+        .bytes_removed
+        .saturating_add(out.budget_ledgers.bytes);
     if items > 0 {
         let item_count = plural(items, "stale file", "stale files");
         let outcome = if out.dry_run {
             format!(
                 "would remove {item_count} · {} — {}",
-                fmt_bytes(out.runtime.bytes_removed),
+                fmt_bytes(bytes),
                 plural(
                     out.runtime.runtime_roots_scanned,
                     "root scanned",
@@ -738,7 +752,7 @@ fn render_runtime(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         } else {
             format!(
                 "{item_count} · {} — {}",
-                fmt_bytes(out.runtime.bytes_removed),
+                fmt_bytes(bytes),
                 plural(
                     out.runtime.runtime_roots_scanned,
                     "root scanned",
@@ -755,7 +769,7 @@ fn render_runtime(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         render_subline(
             w,
             palette::muted(),
-            &format!("{action}: {}", runtime_breakdown(&out.runtime)),
+            &format!("{action}: {}", runtime_breakdown(out)),
         )
     } else {
         render_row(
@@ -1009,6 +1023,7 @@ struct JsonReport {
     carryover_pruned: usize,
     schedules_reaped: usize,
     wait_logs_pruned: usize,
+    budget_ledgers_removed: usize,
     repair: Option<JsonRepair>,
     store_maintenance: &'static str,
 }
@@ -1035,6 +1050,7 @@ impl From<&GcOutcome> for JsonReport {
             carryover_pruned: carryover_pruned(&out.store_maintenance),
             schedules_reaped: out.schedules_reaped,
             wait_logs_pruned: out.wait_logs_pruned,
+            budget_ledgers_removed: out.budget_ledgers.ledgers,
             repair: repair_outcome(&out.store_maintenance).map(JsonRepair::from),
             store_maintenance: out.store_maintenance.status_json(),
         }
@@ -1292,21 +1308,29 @@ fn prune_reason_json(reason: gc::PruneReason) -> &'static str {
     }
 }
 
-fn runtime_items(report: &gc::GcReport) -> usize {
+fn runtime_items(out: &GcOutcome) -> usize {
+    let report = &out.runtime;
     report.heartbeat_files_removed
         + report.sidebar_sockets_removed
         + report.sidecar_files_removed
         + report.probe_markers_removed
         + report.dirs_removed
+        + out.budget_ledgers.ledgers
 }
 
-fn runtime_breakdown(report: &gc::GcReport) -> String {
+fn runtime_breakdown(out: &GcOutcome) -> String {
+    let report = &out.runtime;
     [
         (report.heartbeat_files_removed, "heartbeat", "heartbeats"),
         (report.sidebar_sockets_removed, "socket", "sockets"),
         (report.sidecar_files_removed, "sidecar", "sidecars"),
         (report.probe_markers_removed, "probe", "probes"),
         (report.dirs_removed, "dir", "dirs"),
+        (
+            out.budget_ledgers.ledgers,
+            "account budget ledger",
+            "account budget ledgers",
+        ),
     ]
     .into_iter()
     .filter(|(count, _, _)| *count > 0)
@@ -1327,6 +1351,7 @@ mod tests {
     #[test]
     fn gc_json_and_assist_report_classes() {
         let mut outcome = GcOutcome::default();
+        outcome.budget_ledgers.ledgers = 2;
         outcome.runtime.rooms.push(gc::RoomReport {
             name: "test-abcd".to_owned(),
             classes: vec![gc::ClassReport {
@@ -1356,6 +1381,7 @@ mod tests {
         );
         let json = serde_json::to_value(assist).unwrap();
         assert_eq!(json["class_bytes"]["audit"], 12);
+        assert_eq!(json["files_removed"], 2);
         assert_eq!(json["scope"], "room");
     }
 
@@ -1441,6 +1467,9 @@ mod tests {
         assert!(out.contains("merged, branch deleted"));
         assert!(out.contains("removed: gc-info"));
         assert!(out.contains("merged, branch kept (not proven merged)"));
+        assert!(out.contains(
+            "removed: 1 heartbeat · 2 sidecars · 1 probe · 1 dir · 1 account budget ledger"
+        ));
         assert!(out.contains("message archive failed: archive boom"));
         assert!(out.contains("✗ failed: /repo-worktrees/wip — remove boom"));
         assert!(
@@ -1462,7 +1491,8 @@ mod tests {
         assert!(out.contains("kept: shell — in use"));
         assert!(out.contains("kept: pending — not merged yet"));
         assert!(out.contains("would prune 1 · 2 KB"));
-        assert!(out.contains("would remove 5 stale files"));
+        assert!(out.contains("would remove 6 stale files · 13 KB"));
+        assert!(out.contains("probe · 1 dir · 1 account budget ledger"));
         assert!(out.contains("would remove 2 orphaned"));
         assert!(out.contains("would remove: demo"));
         assert!(out.contains("would prune: ws_0123456789abcdef01234567"));
@@ -1529,6 +1559,7 @@ mod tests {
             "project_root_gone"
         );
         assert_eq!(value["runtime"]["roots_scanned"], 2);
+        assert_eq!(value["budget_ledgers_removed"], 1);
         assert_eq!(value["messages"]["archived"], 1);
         assert_eq!(value["messages"]["reconciled"], 1);
         assert_eq!(value["repair"]["bytes_truncated"], 9);
@@ -1627,6 +1658,10 @@ mod tests {
             },
             schedules_reaped: usize::from(!dry_run),
             wait_logs_pruned: usize::from(!dry_run),
+            budget_ledgers: rimz::harness::budget::AccountLedgerSweep {
+                ledgers: 1,
+                bytes: 40,
+            },
             prune: gc::WorkspacePruneReport {
                 removed: vec![gc::RemovedWorkspace {
                     workspace_id: Some(

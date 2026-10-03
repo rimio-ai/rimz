@@ -106,7 +106,7 @@ A daily cap in the per-machine config's `[accounts.budget]` table follows the hi
 claude = "100/day"
 ```
 
-With `work` shared, a room on `work` parks when `default` and the shared accounts have spent $100 between them today. Declare `work` with `history = "standalone"` and it parks on its own $100, whatever `default` has spent. The caps and what lifts a park are in [budgets](./budget.md#cap-the-room-and-the-account).
+With `work` shared, a room on `work` parks when `default` and the shared accounts have spent $100 between them today. Declare `work` with `history = "standalone"` and it parks on its own $100, whatever `default` has spent. A raise or clear made while `work` was standalone stays with that account and does not follow it into the shared cap: once `work` is shared again, the next `rimz gc` drops it. The caps and what lifts a park are in [budgets](./budget.md#cap-the-room-and-the-account).
 
 `rimz stats` and the spend totals read the provider's own home and every standalone account home, so your spend history covers all of them whichever room you are standing in. `default` and the shared accounts of a provider are one history, so they are one spend figure: a shared account's dashboard block shows that shared spend beside the account's own plan, limits, and credits.
 

@@ -74,9 +74,11 @@ Both daily reads are guarded against the wrong day. Each compares the cache's `d
 | `lanes/budget.scopes.json` | room runtime `lanes/` | per-agent turn entries (baseline, park, throttle), plus each agent's fleet and account waiver, park threshold, and interrupt throttle |
 | `records/budget.fleet.json` | room state | standing fleet override, raise, or disable; durable CLI-only writes |
 | `lanes/budget.fleet-park.json` | room runtime | producer-owned park stamp; the CLI clears it on mutation |
-| `budget.account.<kind>@<account>.json` | machine-shared state root | one account: a runtime raise or disable, and the park stamp |
+| `budget.account.<kind>@<account>.json` | `~/.rimz/cache/providers/`, its lock in runtime `shared/` | one account: a runtime raise or disable, and the park stamp |
 
 The room runtime root is `RuntimePaths::root`; the account ledger sits under `RuntimePaths::persistent_shared_root`, with its lock file under `shared_root`. A kind name with characters outside ASCII alphanumerics, `-`, and `_` is replaced in the filename by `kind-` and 16 hex characters of its SHA-256 (`account_ledger_component`).
+
+An account ledger is read only through its history pool's key, so a shared account's own ledger and a kind-only `budget.account.<kind>.json` from before named accounts are never read. `rimz gc` removes them in either scope through `sweep_orphan_account_ledgers` ([store.md → Maintenance](../store.md#maintenance)).
 
 The agent digest comes from [`store/sidecar.rs`](../../../crates/rimz/src/store/sidecar.rs): the first 32 hex characters of a SHA-256 over the kind and session id, which keeps session ids out of filenames. Auto-continue parks (`lanes/auto-continue.<digest>.json`) and idle-compaction fire records (`live/idle-compact/<digest>.json`) use the same digest.
 
