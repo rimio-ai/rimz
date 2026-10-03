@@ -44,7 +44,9 @@ Every command takes the [global flags](../cli.md#global-flags). No `loop` comman
 | Wake a live agent | `--wait [<ADDRESS>]`: pins one live session now; see [waits and checks](#waits-and-checks). | Optional. |
 | Run a command | `--check <CMD>` with no other action. Records `completed`, `failed`, or `timed out`. | None. |
 
-`--check` combined with `--agent` or `--wait` is a guard: the command runs first, and the action runs only on the outcome `--on` names. `--agent` refuses a kind whose hooks are not installed, because a scheduled turn reports completion through them.
+`--check` combined with `--agent` or `--wait` is a guard: the command runs first, and the action runs only on the outcome `--on` names. A supervised `--agent` task refuses a kind whose hooks are not installed, because a scheduled turn reports completion through them.
+
+Resident launch options can be saved, but resident fires are not available in this version: firing a `--stay` task records an error rather than starting a supervised turn. `--agent <SPEC> --stay` accepts the same layout grammar as `rimz agents`, requires a prompt leader and a prompt, and accepts `--mode auto|ask|yolo` and `--effort`. `--each-worktree` requires both `--stay` and `--when`. Repeatable `--subscribe <SIGNAL>` and `--stop-team` require `--stay`; subscriptions also require the prompt leader's installed, trusted registration hooks. Agent-family subscriptions need a separately scoped `loop add --wait --signal` task. `--stay` refuses `--check`, `--verify`, `--max-attempts`, `--budget`, `--budget-per-day`, `--surplus`, `--surplus-after`, `--timeout`, `--system-prompt-file`, `--worktree`, `--once`, `--wait`, and `--project`.
 
 ### Triggers
 
@@ -105,6 +107,10 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
+| `--stay` | `--agent` | Save a resident layout task. Fires are not available yet. |
+| `--each-worktree` | `--stay --when` | Request condition evaluation per RimZ-owned worktree. |
+| `--subscribe <SIGNAL>` | `--stay` | Request a standing subscription for the prompt leader; repeatable. |
+| `--stop-team` | `--stay` | Request stopping the checkout's team before the resident launch. |
 | `--prompt <TEXT>`, `--prompt-file <PATH>` | `--agent`, `--wait` | The prompt the action delivers. The two conflict. |
 | `--check <CMD>` | all | Shell command to run; alone it is the action, otherwise the guard. |
 | `--when <EXPR>` | all | Repeatable state condition; see [conditions](#conditions). |

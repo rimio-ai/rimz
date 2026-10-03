@@ -199,12 +199,49 @@ fn root_tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resident_fields_round_trip_machine_and_instance_rows() {
+        let source = r#"
+agent = "claude,codex"
+root = "/repo"
+stay = true
+each-worktree = true
+stop-team = true
+subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "repair" }]
+"#;
+        let entry: TaskEntry = toml::from_str(source).unwrap();
+        let table = task_entry_table(&entry, true).unwrap();
+        for field in ["stay", "each-worktree", "stop-team", "subscribe"] {
+            assert!(table.contains_key(field), "machine row lost {field}");
+        }
+        let decoded: TaskEntry = toml_edit::de::from_document(DocumentMut::from(table)).unwrap();
+        assert_eq!(decoded, entry);
+        let instances = crate::config::Tasks(std::collections::BTreeMap::from([(
+            "resident".to_owned(),
+            entry,
+        )]));
+        let json = serde_json::to_value(&instances).unwrap();
+        assert_eq!(json["resident"]["stay"], true);
+        assert_eq!(
+            json["resident"]["subscribe"][0]["match"]["branch"],
+            "feature"
+        );
+        assert_eq!(
+            serde_json::from_value::<crate::config::Tasks>(json).unwrap(),
+            instances
+        );
+    }
     use crate::config::{CheckOn, TaskTarget};
 
     #[test]
     fn task_entry_serialization_uses_canonical_schema_and_store_policy() {
         let entry = TaskEntry {
             agent: Some("claude".to_owned()),
+            stay: false,
+            each_worktree: false,
+            stop_team: false,
+            subscribe: Vec::new(),
             team: None,
             wait: Some(TaskTarget {
                 kind: crate::ids::AgentKind::new_unchecked("claude"),
