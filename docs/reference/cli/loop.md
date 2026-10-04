@@ -276,7 +276,7 @@ detail: {"a":1}
 env: prod
 ```
 
-A condition fire prints its readings by the same rule, `team.stage: Done`, with `unknown` for a reading that had no value. A manual `loop fire` of a signal task delivers `fired by hand [<task>]` with no field lines. The run record keeps the signal name and payload, truncating a payload over 4 KiB. For a task still registered, `rimz loop show <task> --json` prints those records whole; a fired `--once` task is no longer registered. `rimz loop logs <task>` shows the signal name, not its payload.
+A condition fire prints its readings by the same rule, `team.stage: Done`, with `unknown` for a reading that had no value. A manual `loop fire` of a signal task delivers `fired by hand [<task>]` with no field lines. The run record keeps the signal name and payload, truncating a payload over 4 KiB. `rimz loop logs <task>` prints the payload as one JSON line under each run's `signal:` line, and still reads the retained runs of a fired `--once` task. For a task still registered, `rimz loop show <task> --json` prints those records whole.
 
 Project tasks may use `--signal` and `--match`, and a subscription satisfies their repeat requirement.
 
@@ -449,7 +449,7 @@ A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind)
 
 ## Rename and remove
 
-Condition runs in `loop logs` include `when: <expression> · held <duration>` and a JSON readings line. The record keeps the canonical expression, configured hold, observed held milliseconds, and readings; manual fires do not synthesize readings.
+Condition runs in `loop logs` include `when: <expression> · held <duration>` and a JSON readings line. The record keeps the canonical expression, configured hold, observed held milliseconds, and readings; manual fires do not synthesize readings. Signal runs include `signal: <name>` and, when the signal carried fields, a JSON payload line.
 
 `loop rename <name> <new-name>` moves the task to the new key in its store. The new name must differ and be free. A task with recorded resident launches cannot be renamed because its resident leaders retain the task name. Edit it with `loop add` under the same name, or remove and re-add under a new name (which relaunches its checkouts). A resident task without recorded launches can be renamed. The task re-arms, so an interval task next fires one interval after the rename.
 

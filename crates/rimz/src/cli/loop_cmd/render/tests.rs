@@ -1247,6 +1247,40 @@ fn agent_runs_are_newest_first() {
 }
 
 #[test]
+fn loop_logs_forensics_print_a_signal_payload_under_its_name() {
+    use super::super::run_report::{Forensics, write_record_forensics};
+    use rimz::harness::schedule::run_log::SignalRecord;
+
+    let render = |payload: serde_json::Map<String, serde_json::Value>| {
+        let mut detail = record(20, LoopRunResult::Delivered);
+        detail.signal = Some(SignalRecord {
+            name: "deploy.finished".parse().expect("signal name"),
+            payload,
+        });
+        let mut out = Vec::new();
+        write_record_forensics(
+            &mut out,
+            None,
+            &detail,
+            ui::prose::Prose::Raw,
+            Forensics::Full,
+        )
+        .unwrap();
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+    };
+
+    let payload = serde_json::json!({"detail": {"a": 1}, "env": "prod"});
+    let out = render(payload.as_object().expect("object").clone());
+    assert!(
+        out.contains("  signal: deploy.finished\n  {\"detail\":{\"a\":1},\"env\":\"prod\"}\n"),
+        "{out}"
+    );
+
+    let out = render(serde_json::Map::new());
+    assert!(out.ends_with("  signal: deploy.finished\n"), "{out}");
+}
+
+#[test]
 fn failure_pointer_links_to_filtered_logs_without_full_forensics() {
     let mut failure = record(20, LoopRunResult::Errored);
     failure.mode = Some(LoopRunMode::Scheduled);
