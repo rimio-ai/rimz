@@ -1,0 +1,28 @@
+name: Cache cleanup
+
+# A PR's cache entries live on its merge ref, which only that PR can read, so
+# they are dead weight against the repository quota once it closes.
+#
+# `pull_request_target` gives a fork PR's run a token that can delete; the
+# `pull_request` token is read-only there. The event is privileged, so this
+# workflow never checks out or runs anything from the PR: the one piece of
+# event data it uses is the PR number, passed through `env`.
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  delete:
+    name: delete the PR's cache entries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Delete the merge ref's cache entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh cache delete --all --succeed-on-no-caches --ref "refs/pull/${PR_NUMBER}/merge"

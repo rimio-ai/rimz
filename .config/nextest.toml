@@ -17,10 +17,10 @@
 #
 # Server count is not the whole load story. The live tests are latency-sensitive
 # — each spawns a `zellij`/`tmux` CLI client that must round-trip to its server
-# within a deadline — so the CI layout matters too. Each CI job now runs on its
-# own 64-core runner, so workflows leave nextest's global thread count uncapped.
-# The binding concurrency control is the per-run live server caps in
-# `[test-groups]`, not `NEXTEST_TEST_THREADS`.
+# within a deadline — so the CI layout matters too. Each CI job runs on its own
+# runner (`ubuntu-latest` on GitHub), and workflows leave nextest's global
+# thread count uncapped. The binding concurrency control is the per-run live
+# server caps in `[test-groups]`, not `NEXTEST_TEST_THREADS`.
 #
 # Retries absorb the startup races that slip through under load (a different
 # test each time — momentary contention, not a real failure): a starved runner
@@ -103,7 +103,7 @@ failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }
 
 # `live` runs both mux backends in one nextest process, letting tmux and Zellij
-# co-schedule on 64-core CI while each stays bounded by its per-backend group.
+# co-schedule in CI while each stays bounded by its per-backend group.
 # Together, `live` and `journey` are the exact complement of `gate`.
 # Inherits the live-server groups and the retry budget from `default`.
 [profile.live]
