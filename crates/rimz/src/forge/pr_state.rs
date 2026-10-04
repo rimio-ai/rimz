@@ -86,6 +86,26 @@ pub(crate) struct OpenPrFacts {
     pub(crate) behind_by: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) mergeability: Option<SettledMergeability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) queue: Option<PrQueueFact>,
+}
+
+/// Where an open PR stands with the merge queue. `at` and `reason` are the
+/// forge's strings verbatim; a removal by merge is no fact.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub(crate) enum PrQueueFact {
+    Queued {
+        at: String,
+    },
+    Dequeued {
+        at: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        /// The queue's own commit, whose checks decided the removal.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

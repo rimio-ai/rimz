@@ -509,6 +509,113 @@ fn builds_github_bulk_query_with_ordered_escaped_aliases() {
     );
     assert_eq!(query.matches("pullRequests(").count(), 4);
     assert_eq!(query.matches(": object(").count(), 2);
+    let queue_fields = "mergeQueueEntry { enqueuedAt } timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { nodes { ... on RemovedFromMergeQueueEvent { createdAt reason beforeCommit { oid } } } }";
+    let facts = query.split("facts").skip(1).map(|alias| {
+        alias
+            .split(" pr1:")
+            .next()
+            .unwrap()
+            .split(" sha0:")
+            .next()
+            .unwrap()
+    });
+    assert_eq!(facts.clone().count(), 2);
+    assert!(facts.clone().all(|alias| alias.contains(queue_fields)));
+    assert_eq!(query.matches(queue_fields).count(), 2);
+    assert_eq!(query.matches("mergeQueueEntry").count(), 2);
+    assert_eq!(query.matches("timelineItems").count(), 2);
+}
+
+#[test]
+fn parses_github_merge_queue_facts() {
+    use pr_state::PrQueueFact;
+    use serde_json::json;
+
+    let removal = |reason: Value, commit: Value| json!({"nodes": [null, {"createdAt": "2026-10-03T12:46:03Z", "reason": reason, "beforeCommit": commit}]});
+    let dequeued = |reason: Option<&str>, commit: Option<&str>| {
+        Some(PrQueueFact::Dequeued {
+            at: "2026-10-03T12:46:03Z".into(),
+            reason: reason.map(str::to_owned),
+            commit: commit.map(str::to_owned),
+        })
+    };
+    let queued = Some(PrQueueFact::Queued {
+        at: "2026-10-03T12:28:46Z".into(),
+    });
+    let entry = json!({"enqueuedAt": "2026-10-03T12:28:46Z"});
+    for (label, queue_entry, timeline, expected) in [
+        ("absent fields", None, None, None),
+        (
+            "never queued",
+            Some(json!(null)),
+            Some(json!({"nodes": []})),
+            None,
+        ),
+        (
+            "null nodes",
+            Some(json!(null)),
+            Some(json!({"nodes": null})),
+            None,
+        ),
+        (
+            "queued",
+            Some(entry.clone()),
+            Some(json!({"nodes": []})),
+            queued.clone(),
+        ),
+        (
+            "re-queued after a removal",
+            Some(entry),
+            Some(removal(json!("failed_checks"), json!({"oid": "queue-a"}))),
+            queued,
+        ),
+        (
+            "failed checks",
+            Some(json!(null)),
+            Some(removal(json!("failed_checks"), json!({"oid": "queue-a"}))),
+            dequeued(Some("failed_checks"), Some("queue-a")),
+        ),
+        (
+            "manual",
+            Some(json!(null)),
+            Some(removal(json!("manual"), json!(null))),
+            dequeued(Some("manual"), None),
+        ),
+        (
+            "a reason this build has never seen",
+            Some(json!(null)),
+            Some(removal(json!("queue_cleared"), json!(null))),
+            dequeued(Some("queue_cleared"), None),
+        ),
+        (
+            "no reason",
+            Some(json!(null)),
+            Some(removal(json!(null), json!(null))),
+            dequeued(None, None),
+        ),
+        (
+            "merged",
+            Some(json!(null)),
+            Some(removal(json!("merged"), json!({"oid": "queue-a"}))),
+            None,
+        ),
+    ] {
+        let mut facts = json!({"number": 42, "headRefOid": "head-a", "mergeable": "MERGEABLE",
+            "isCrossRepository": false, "baseRef": null});
+        if let Some(queue_entry) = queue_entry {
+            facts["mergeQueueEntry"] = queue_entry;
+        }
+        if let Some(timeline) = timeline {
+            facts["timelineItems"] = timeline;
+        }
+        let raw = json!({"data": {"repository": {
+            "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
+            "facts0": {"nodes": [facts]}
+        }}});
+        let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+        let open = response.prs[0].as_ref().unwrap().open.as_ref().unwrap();
+        assert_eq!(open.queue, expected, "{label}");
+    }
 }
 
 #[test]
@@ -552,6 +659,7 @@ fn parses_github_open_pr_facts_and_unknown_bases() {
                     base,
                     behind_by,
                     mergeability: expected.clone(),
+                    queue: None,
                 })
             );
         }
@@ -600,6 +708,68 @@ fn github_facts_errors_are_scoped() {
     ] {
         raw["errors"][0]["path"] = path;
         assert!(parse_github_bulk_response(false, &raw.to_string(), 1, 0).is_err());
+    }
+}
+
+#[test]
+fn github_queue_field_errors_fail_the_probe() {
+    use serde_json::json;
+
+    // A queued PR whose last removal is older: a nulled entry would read as dequeued.
+    let mut raw = json!({"data": {"repository": {
+        "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
+        "facts0": {"nodes": [{"number": 42, "headRefOid": "head-a",
+            "mergeable": "MERGEABLE", "isCrossRepository": false,
+            "baseRef": {"name": "main", "compare": null},
+            "mergeQueueEntry": {"enqueuedAt": "2026-10-03T13:00:00Z"},
+            "timelineItems": {"nodes": [{"createdAt": "2026-10-03T12:46:03Z",
+                "reason": "failed_checks", "beforeCommit": {"oid": "queue-a"}}]}}]}
+    }}, "errors": [{"type": "NOT_FOUND",
+        "path": ["repository", "facts0", "nodes", 0, "baseRef", "compare"],
+        "message": "Could not resolve head ref 'feature'."}]});
+    let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+    assert_eq!(
+        response.prs[0]
+            .as_ref()
+            .unwrap()
+            .open
+            .as_ref()
+            .unwrap()
+            .queue,
+        Some(pr_state::PrQueueFact::Queued {
+            at: "2026-10-03T13:00:00Z".into()
+        }),
+        "a compare error keeps the healthy queue fact"
+    );
+
+    raw["data"]["repository"]["facts0"]["nodes"][0]["mergeQueueEntry"] = json!(null);
+    for path in [
+        json!(["repository", "facts0", "nodes", 0, "mergeQueueEntry"]),
+        json!([
+            "repository",
+            "facts0",
+            "nodes",
+            0,
+            "mergeQueueEntry",
+            "enqueuedAt"
+        ]),
+        json!(["repository", "facts0", "nodes", 0, "timelineItems"]),
+        json!([
+            "repository",
+            "facts0",
+            "nodes",
+            0,
+            "timelineItems",
+            "nodes",
+            0,
+            "beforeCommit"
+        ]),
+    ] {
+        raw["errors"][0]["path"] = path.clone();
+        assert!(
+            parse_github_bulk_response(false, &raw.to_string(), 1, 0).is_err(),
+            "{path}"
+        );
     }
 }
 

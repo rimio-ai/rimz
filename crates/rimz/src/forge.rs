@@ -587,7 +587,7 @@ pub(crate) fn github_bulk_query(
             graphql_string(branch)
         ));
         fields.push(format!(
-            "facts{index}: pullRequests(first: 1, headRefName: {}, states: [OPEN], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number headRefOid mergeable isCrossRepository baseRef {{ name compare(headRef: {}) {{ behindBy }} }} }} }}",
+            "facts{index}: pullRequests(first: 1, headRefName: {}, states: [OPEN], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number headRefOid mergeable isCrossRepository baseRef {{ name compare(headRef: {}) {{ behindBy }} }} mergeQueueEntry {{ enqueuedAt }} timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {{ nodes {{ ... on RemovedFromMergeQueueEvent {{ createdAt reason beforeCommit {{ oid }} }} }} }} }} }}",
             graphql_string(branch),
             graphql_string(branch)
         ));
@@ -647,6 +647,34 @@ pub(crate) fn parse_github_bulk_response(
         mergeable: String,
         is_cross_repository: bool,
         base_ref: Option<BaseRef>,
+        #[serde(default)]
+        merge_queue_entry: Option<QueueEntry>,
+        #[serde(default)]
+        timeline_items: Option<QueueRemovals>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct QueueEntry {
+        enqueued_at: String,
+    }
+
+    #[derive(Deserialize)]
+    struct QueueRemovals {
+        nodes: Option<Vec<Option<QueueRemoval>>>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct QueueRemoval {
+        created_at: Option<String>,
+        reason: Option<String>,
+        before_commit: Option<CommitOid>,
+    }
+
+    #[derive(Deserialize)]
+    struct CommitOid {
+        oid: String,
     }
 
     #[derive(Deserialize)]
@@ -710,6 +738,12 @@ pub(crate) fn parse_github_bulk_response(
         }) else {
             return Err("github GraphQL response contains errors".to_owned());
         };
+        // A nulled queue field would read as "not queued" and surface a stale removal.
+        let queue_field =
+            |segment: &Value| matches!(segment.as_str(), Some("mergeQueueEntry" | "timelineItems"));
+        if path.is_some_and(|path| path.iter().any(queue_field)) {
+            return Err("github GraphQL response has a merge-queue field error".to_owned());
+        }
         failed_facts.insert(alias);
     }
     let repository = response
@@ -779,6 +813,24 @@ pub(crate) fn parse_github_bulk_response(
                 "CONFLICTING" => Some(pr_state::SettledMergeability::Conflicting(head.clone())),
                 _ => None,
             };
+            let queue = match facts.merge_queue_entry {
+                Some(entry) => Some(pr_state::PrQueueFact::Queued {
+                    at: entry.enqueued_at,
+                }),
+                None => facts
+                    .timeline_items
+                    .and_then(|removals| removals.nodes)
+                    .and_then(|nodes| nodes.into_iter().flatten().next_back())
+                    // A removal by merge belongs to `pr.merged`, even while the PR still reads open.
+                    .filter(|removal| removal.reason.as_deref() != Some("merged"))
+                    .and_then(|removal| {
+                        Some(pr_state::PrQueueFact::Dequeued {
+                            at: removal.created_at?,
+                            reason: removal.reason,
+                            commit: removal.before_commit.and_then(|commit| nonempty(commit.oid)),
+                        })
+                    }),
+            };
             pr.open = Some(pr_state::OpenPrFacts {
                 head,
                 base: facts.base_ref.as_ref().map(|base| base.name.clone()),
@@ -790,6 +842,7 @@ pub(crate) fn parse_github_bulk_response(
                     .and_then(|base| base.compare)
                     .map(|compare| compare.behind_by),
                 mergeability,
+                queue,
             });
         }
         prs.push(best);

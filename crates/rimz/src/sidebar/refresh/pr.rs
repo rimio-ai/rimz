@@ -13,7 +13,9 @@ use std::time::Duration;
 use super::git_line;
 use crate::RuntimePaths;
 use crate::disk::single_flight::{Coalesced, ProducerGuard};
-use crate::forge::pr_state::{PrLink, PrStateCache, RepoProbe, TargetStamp, read_pr_state_cache};
+use crate::forge::pr_state::{
+    PrLink, PrQueueFact, PrStateCache, RepoProbe, TargetStamp, read_pr_state_cache,
+};
 use crate::forge::{self, ForgeCli};
 use crate::sidebar::refresh::git_stats::{
     DiffStatsCache, focused_worktree_paths, hot_worktree_paths, is_trunk_branch,
@@ -228,10 +230,17 @@ fn repo_tier_ttl(repo_hot: bool) -> Duration {
     }
 }
 
+/// A verdict is on its way for `path`: its CI is pending, or the merge queue
+/// is running CI on its PR.
 fn path_has_pending_ci(cache: &PrStateCache, path: &str) -> bool {
     cache.states.get(path).is_some_and(|link| {
         matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged)
             && link.ci == Some(WorktreeCi::Pending)
+            || link.state == WorktreePrState::Open
+                && matches!(
+                    link.open.as_ref().and_then(|facts| facts.queue.as_ref()),
+                    Some(PrQueueFact::Queued { .. })
+                )
     }) || cache.branch_ci.get(path) == Some(&WorktreeCi::Pending)
 }
 

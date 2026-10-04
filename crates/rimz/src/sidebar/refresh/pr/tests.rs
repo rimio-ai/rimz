@@ -605,6 +605,7 @@ fn github_projection_carries_only_owned_same_pr_settled_mergeability() {
         base: Some("main".into()),
         behind_by: Some(1),
         mergeability: Some(SettledMergeability::Conflicting("head-a".into())),
+        queue: None,
     });
     let project = |prior_link: PrLink, state, mergeability| {
         let plan = plan_github_queries(&group).remove(0);
@@ -616,6 +617,7 @@ fn github_projection_carries_only_owned_same_pr_settled_mergeability() {
                     base: Some("main".into()),
                     behind_by: Some(2),
                     mergeability,
+                    queue: None,
                 }),
                 number: 42,
                 state,
@@ -870,21 +872,44 @@ fn github_group_failure_carries_complete_prior_truth() {
     let group = repo_group(vec![
         target("/repo/merged", "merged"),
         target("/repo/no-pr", "no-pr"),
+        target("/repo/queued", "queued"),
     ]);
-    let prior = BTreeMap::from([(
-        "/repo/merged".to_owned(),
-        PrLink {
-            open: None,
-            stack: Default::default(),
-            branch: Some("merged".to_owned()),
-            incarnation: None,
-            state: WorktreePrState::Merged,
-            number: Some(91),
-            url: Some("https://github.com/org/repo/pull/91".to_owned()),
-            ci: Some(WorktreeCi::Failing),
-            merge_sha: Some("merge-sha".to_owned()),
-        },
-    )]);
+    let queued = PrLink {
+        open: Some(crate::forge::pr_state::OpenPrFacts {
+            head: "head-a".into(),
+            base: Some("main".into()),
+            behind_by: None,
+            mergeability: None,
+            queue: Some(crate::forge::pr_state::PrQueueFact::Queued {
+                at: "2026-10-03T13:00:00Z".into(),
+            }),
+        }),
+        stack: Default::default(),
+        branch: Some("queued".to_owned()),
+        incarnation: None,
+        state: WorktreePrState::Open,
+        number: Some(42),
+        url: None,
+        ci: None,
+        merge_sha: None,
+    };
+    let prior = BTreeMap::from([
+        ("/repo/queued".to_owned(), queued),
+        (
+            "/repo/merged".to_owned(),
+            PrLink {
+                open: None,
+                stack: Default::default(),
+                branch: Some("merged".to_owned()),
+                incarnation: None,
+                state: WorktreePrState::Merged,
+                number: Some(91),
+                url: Some("https://github.com/org/repo/pull/91".to_owned()),
+                ci: Some(WorktreeCi::Failing),
+                merge_sha: Some("merge-sha".to_owned()),
+            },
+        ),
+    ]);
     let prior_branch_ci = BTreeMap::from([("/repo/no-pr".to_owned(), WorktreeCi::Passing)]);
 
     let probe = failed_repo_group_probe("gh:github.com:org/repo", &group, &prior, &prior_branch_ci);
@@ -1097,6 +1122,132 @@ fn legacy_pr_link_defaults_new_fields_to_unknown() {
     assert_eq!(link.branch, None);
     assert_eq!(link.open, None);
     assert!(serde_json::to_value(&link).unwrap().get("open").is_none());
+}
+
+#[test]
+fn queue_fact_round_trips_and_caches_without_one_still_load() {
+    use crate::forge::pr_state::PrQueueFact;
+
+    let old: PrStateCache = serde_json::from_str(
+        r#"{"states":{"/repo/a":{"state":"open","number":91,"open":{"head":"head-a","base":"main"}}},"branch_ci":{}}"#,
+    )
+    .unwrap();
+    assert_eq!(old.states["/repo/a"].open.as_ref().unwrap().queue, None);
+    assert!(
+        serde_json::to_value(&old).unwrap()["states"]["/repo/a"]["open"]
+            .get("queue")
+            .is_none()
+    );
+
+    for (record, fact) in [
+        (
+            serde_json::json!({"state": "queued", "at": "2026-10-03T12:28:46Z"}),
+            PrQueueFact::Queued {
+                at: "2026-10-03T12:28:46Z".into(),
+            },
+        ),
+        (
+            serde_json::json!({"state": "dequeued", "at": "2026-10-03T12:46:03Z", "reason": "failed_checks", "commit": "3ba93ec"}),
+            PrQueueFact::Dequeued {
+                at: "2026-10-03T12:46:03Z".into(),
+                reason: Some("failed_checks".into()),
+                commit: Some("3ba93ec".into()),
+            },
+        ),
+        (
+            serde_json::json!({"state": "dequeued", "at": "2026-10-03T12:46:03Z", "reason": "manual"}),
+            PrQueueFact::Dequeued {
+                at: "2026-10-03T12:46:03Z".into(),
+                reason: Some("manual".into()),
+                commit: None,
+            },
+        ),
+    ] {
+        let mut cache = old.clone();
+        cache
+            .states
+            .get_mut("/repo/a")
+            .unwrap()
+            .open
+            .as_mut()
+            .unwrap()
+            .queue = Some(fact);
+        let encoded = serde_json::to_value(&cache).unwrap();
+        assert_eq!(encoded["states"]["/repo/a"]["open"]["queue"], record);
+        let decoded: PrStateCache = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.states, cache.states);
+    }
+}
+
+#[test]
+fn queued_pr_keeps_repo_on_hot_ttl_and_a_dequeued_one_does_not() {
+    use crate::forge::pr_state::{OpenPrFacts, PrQueueFact};
+
+    let repo_key = "gh:github.com:org/repo".to_owned();
+    let needed = vec!["/repo/a".to_owned()];
+    let mut cache = PrStateCache::default();
+    cache.repos.insert(
+        repo_key.clone(),
+        RepoProbe {
+            refreshed_at_ms: 1_000,
+            ok: true,
+            consecutive_failures: 0,
+        },
+    );
+    cache.path_repos.insert(needed[0].clone(), repo_key.clone());
+    cache.head_seen.insert(needed[0].clone(), "sha".to_owned());
+    let groups = group_targets(vec![target("/repo/a", "a")]);
+    let now_ms = 1_001 + PR_STATE_HOT_TTL.as_millis() as u64;
+
+    for (queue, hot) in [
+        (
+            PrQueueFact::Queued {
+                at: "2026-10-03T12:28:46Z".into(),
+            },
+            true,
+        ),
+        (
+            PrQueueFact::Dequeued {
+                at: "2026-10-03T12:46:03Z".into(),
+                reason: Some("failed_checks".into()),
+                commit: None,
+            },
+            false,
+        ),
+    ] {
+        let mut link = target("/repo/a", "a").pr_link(
+            WorktreePrState::Open,
+            91,
+            Some(WorktreeCi::Passing),
+            None,
+        );
+        link.open = Some(OpenPrFacts {
+            head: "head-a".into(),
+            base: Some("main".into()),
+            behind_by: None,
+            mergeability: None,
+            queue: Some(queue),
+        });
+        cache.states.insert(needed[0].clone(), link);
+        assert_eq!(
+            cached_due_repo_keys(
+                &cache,
+                &needed,
+                &DiffStatsCache::default(),
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                now_ms,
+            )
+            .unwrap()
+            .contains(&repo_key),
+            hot
+        );
+        assert_eq!(
+            due_repo_keys(&groups, &cache, &BTreeSet::new(), &BTreeSet::new(), now_ms)
+                .contains(&repo_key),
+            hot
+        );
+    }
 }
 
 #[test]
