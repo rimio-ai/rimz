@@ -1004,7 +1004,7 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
     };
     let body = fire.resolve_effect_prompt(Some(&check)).unwrap();
     assert!(
-        body.starts_with("waited on deploy.failed\nfired [deployment]\n"),
+        body.starts_with("waited on deploy.failed\nfired [deployment]\nbranch: feature\n\n"),
         "{body}"
     );
     assert!(
@@ -1058,10 +1058,11 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
         when: "team.stage=Done".to_owned(),
         hold: Some("30m".to_owned()),
         held_ms: 1_800_000,
-        readings: std::collections::BTreeMap::from([(
-            "team.stage".to_owned(),
-            Some("Done".to_owned()),
-        )]),
+        readings: std::collections::BTreeMap::from([
+            ("ci.log".to_owned(), Some("red\nlog".to_owned())),
+            ("pr.state".to_owned(), None),
+            ("team.stage".to_owned(), Some("Done".to_owned())),
+        ]),
     };
     let mut fire = TaskFire::new(
         "ship",
@@ -1079,7 +1080,7 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
     .with_condition(Some(evidence.clone()));
     assert_eq!(
         fire.resolve_effect_prompt(None).unwrap(),
-        "waited on team.stage=Done\nheld 30m [ship]\n{\"team.stage\":\"Done\"}\n\nInspect {{branch}}"
+        "waited on team.stage=Done\nheld 30m [ship]\nci.log: \"red\\nlog\"\npr.state: unknown\nteam.stage: Done\n\nInspect {{branch}}"
     );
     let record = fire.terminal_record(LoopRunResult::Completed);
     assert_eq!(

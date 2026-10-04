@@ -239,17 +239,44 @@ Firing runs in the emitting process, with no queue. A signal reaches only the ta
 
 `--signal --wait` with the same target session, selector, matches, and root as a live subscription prints `already subscribed as <name>` and writes nothing, even when the prompt or `--once` differ.
 
-A signal fire's prompt opens with a headline, the task name, and the payload as one JSON line with a `signal` key added, then the task's `--prompt`:
+A signal fire's prompt opens with a subject line and a verdict line carrying the task name, then the task's `--prompt`:
 
 ```text
-waited on ci.failed on feat-x (PR #91)
-fired [ci-fix]
-{"branch":"feat-x",…,"number":91,…,"signal":"ci.failed"}
+waited on ci.failed on check-multi #729 @88824c2
+fired after 12m [ci-fix]
 
 read the failing job and fix it
 ```
 
-The sample shortens the payload, which carries every field the signal has. The headline adds the branch and PR number for `ci` and `pr` signals, the handle for `agent`, and the instance for `team`. A manual `loop fire` of a signal task delivers `fired by hand [<task>]` with no payload line. The run record keeps the signal name and payload, truncating a payload over 4 KiB.
+A built-in signal carries only what `gh`, `tea`, `git`, or `rimz` cannot answer from the branch and `#N`; the worktree path, the repository, and the PR and checks URLs stay out of the message. Each signal has its own subject:
+
+| Signal | Subject |
+| --- | --- |
+| `ci.*` | `ci.failed on <branch> #<number> @<head>` |
+| `pr.opened`, `pr.merged`, `pr.closed`, `pr.queued` | `pr.merged on <branch> #<number>` |
+| `pr.behind` | `pr.behind on <branch> #<number> · <behind_by> behind <base>` |
+| `pr.conflicted` | `pr.conflicted on <branch> #<number> · with <base>` |
+| `pr.dequeued` | `pr.dequeued on <branch> #<number> · <reason>` |
+| `trunk.moved` | `trunk.moved on <trunk> <from>..<to>` |
+| `worktree.created` | `worktree.created <name> from <base>` |
+| `worktree.removed` | `worktree.removed <name>`, plus ` · branch deleted` when the branch went with it |
+| `agent.*` | `agent.idle <handle>`, or the session id for a card with no name |
+| `team.idle`, `team.waiting`, `team.ended` | `team.idle <instance>` |
+| `team.failed` | `team.failed <instance> · <member>` |
+| `team.stage` | `team.stage <instance> · <from> -> <to>` |
+
+A segment whose field the payload lacks is left out with its separator, so a branch with no pull request reads `ci.failed on check-multi @88824c2`. A commit prints its first seven characters. `@<head>` is the worktree's HEAD when the verdict was read, which is the commit the verdict is about unless the branch has unpushed commits. Any other name in a built-in family prints its family's leading segment alone. `pr.dequeued` adds one line, `queue checks: <url>`, since nothing else names the queue commit.
+
+A signal outside the built-in families prints one `key: value` line per top-level payload field, in key order, under the verdict: a string bare and anything else as compact JSON. A key or a string holding a line break prints JSON-quoted, so one field is always one line. `rimz events emit deploy.finished --json '{"env":"prod","detail":{"a":1}}'` delivers:
+
+```text
+waited on deploy.finished
+fired [smoke]
+detail: {"a":1}
+env: prod
+```
+
+A condition fire prints its readings by the same rule, `team.stage: Done`, with `unknown` for a reading that had no value. A manual `loop fire` of a signal task delivers `fired by hand [<task>]` with no field lines. The run record keeps the signal name and payload, truncating a payload over 4 KiB. For a task still registered, `rimz loop show <task> --json` prints those records whole; a fired `--once` task is no longer registered. `rimz loop logs <task>` shows the signal name, not its payload.
 
 Project tasks may use `--signal` and `--match`, and a subscription satisfies their repeat requirement.
 

@@ -3788,12 +3788,7 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
         "{}",
         message.text
     );
-    let evidence: serde_json::Value =
-        serde_json::from_str(message.text.lines().nth(2).unwrap()).unwrap();
-    assert_eq!(
-        evidence,
-        serde_json::json!({"signal": "deploy.finished", "outcome": "failure"})
-    );
+    assert_eq!(message.text.lines().nth(2), Some("outcome: failure"));
     assert!(message.text.ends_with("\n\nInspect deployment"));
 
     let show = loop_ok(&env, &["loop", "show", "ci-wait"]);

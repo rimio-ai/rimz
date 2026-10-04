@@ -148,7 +148,7 @@ Use `pr.dequeued` to learn that the merge queue rejected your PR. The queue test
 
 Subscribe to one name or to a whole family: `--signal ci.failed` for the red verdict, `--signal 'ci.*'` for any verdict. Either subscription observes every name in the family, and what it does with the ones it did not ask for is the useful part. A subscription to `ci.failed` sees the green build too, records it as a skip, and stays quiet; a branch that goes green never wakes an agent that only asked for red. A signal that fails a `--match`, from another branch or another cohort, is ignored outright.
 
-`rimz loop add ci-red --signal ci.failed --wait`, run from an agent pane, keeps listening until you remove it; `--once` retires it after one delivery, and a subscription has no deadline. A matching signal arrives from `@rimz` with `Type: SIGNAL`, the signal name and scope, and the JSON payload, followed by an optional loop prompt. If the agent is working, delivery parks for its next turn boundary.
+`rimz loop add ci-red --signal ci.failed --wait`, run from an agent pane, keeps listening until you remove it; `--once` retires it after one delivery, and a subscription has no deadline. A matching signal arrives from `@rimz` with `Type: SIGNAL`, a one-line subject such as `ci.failed on check-multi #729 @88824c2`, and an optional loop prompt; the [loop reference](../reference/cli/loop.md#signals) lists the subject each signal prints and how to read the retained payload. If the agent is working, delivery parks for its next turn boundary.
 
 RimZ fills in the scope so the ordinary subscription needs no flags: a CI or PR subscription watches the caller's worktree, a team subscription its own cohort, and a lifecycle subscription has to name another agent. A CI or PR subscription armed from the root checkout requires an explicit scope; supply a branch or path, use `--match branch='*'` for every checkout RimZ watches, work in a linked worktree, or watch `gh run watch --exit-status` as a command instead. The [loop reference](../reference/cli/loop.md#caller-scoped-defaults) owns these defaults.
 
@@ -169,7 +169,7 @@ emitted deploy.finished (evt_01a07076a71c72e09f0461533909ceb1) · fired 1 tasks
   smoke
 ```
 
-A CI job's last step, a git hook, a deploy script, a cron line, another agent: each one emits, and every wait and task subscribed to that family fires. Names are lowercase dot-separated words outside the seven reserved families, and the payload is one JSON object whose top-level fields `--match` filters on and the woken agent reads.
+A CI job's last step, a git hook, a deploy script, a cron line, another agent: each one emits, and every wait and task subscribed to that family fires. Names are lowercase dot-separated words outside the seven reserved families, and the payload is one JSON object whose top-level fields `--match` filters on and the woken agent reads, one `key: value` line each.
 
 Your own families observe and skip like the built-in ones, so it pays to name them by outcome. An agent waiting with `rimz loop add deploy-red --signal deploy.failed --wait --once` is woken by `deploy.failed`, left armed and quiet by `deploy.finished`, and untouched by anything outside the `deploy` family.
 

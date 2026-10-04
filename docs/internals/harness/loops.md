@@ -309,7 +309,8 @@ A delivery, signal, or watch prompt goes through `compose_wait`: the wait line, 
 | --- | --- |
 | timer | `waited <delay> [<name>]` |
 | watch | `WatchSpec::headline`, `WatchVerdict::label`, the name, and `output: <agent-visible path> (<FileSummary::label>)` when a path is present and the file is non-empty; only command watches say `no output` for an empty file. The tail is never inlined; a file pattern match includes its matched-line preview. |
-| signal | `waited on <subject>`, `fired [<name>]`, and compact JSON with the fired `signal` name; the subject adds branch and PR for forge signals, the handle for agents, or the instance for teams |
+| signal | `waited on <subject>` and `fired [<name>]`. `signal_headline` builds the subject per name from the payload, dropping a segment whose key is absent or mistyped; the [subject table](../../reference/cli/loop.md#signals) is the contract. A built-in family adds no line, except `pr.dequeued`'s `queue checks:` line; any other family adds one `key: value` line per top-level payload field. No line is the payload as JSON. |
+| condition | `waited on <expr>`, `held <hold> [<name>]` or `fired [<name>]`, then one `key: value` line per reading, `unknown` for one with no value |
 | manual fire | `fired by hand` |
 
 Self waits carry no note and no armer line. A check-in appends its stop and next-alarm commands.

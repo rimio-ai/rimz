@@ -338,12 +338,42 @@ fn watch_lost_keeps_output_summary_path_and_note() {
     );
 }
 
+fn fired(name: &str, payload: Value) -> String {
+    compose_wait(
+        "wait-test",
+        &task(),
+        None,
+        Evidence::Signal(&signal(name, payload)),
+        "",
+        now(),
+    )
+}
+
+fn forge(extra: Value) -> Value {
+    let mut payload = serde_json::json!({
+        "branch": "check-multi",
+        "checks_url": "https://github.com/rimio-ai/rimz/commit/88824c2c52b8/checks",
+        "head": "88824c2c52b8f12ec95df2fbaf57d4fa2122ad87",
+        "number": 729,
+        "path": "/work/rimz-worktrees/check-multi",
+        "repo": "gh:github.com:rimio-ai/rimz",
+        "url": "https://github.com/rimio-ai/rimz/pull/729",
+    });
+    payload
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    payload
+}
+
+fn without(mut payload: Value, key: &str) -> Value {
+    payload.as_object_mut().unwrap().remove(key);
+    payload
+}
+
 #[test]
-fn signal_uses_elapsed_time_and_compact_canonical_payload() {
-    let signal = signal(
-        "ci.failed",
-        serde_json::json!({"branch":"feat-x","number":91,"signal":"not-canonical"}),
-    );
+fn signal_uses_elapsed_time_and_carries_no_payload_line() {
+    let signal = signal("ci.failed", forge(serde_json::json!({})));
     assert_eq!(
         compose_wait(
             "wait-test",
@@ -353,46 +383,288 @@ fn signal_uses_elapsed_time_and_compact_canonical_payload() {
             "",
             now()
         ),
-        "waited on ci.failed on feat-x (PR #91)\nfired after 18m [wait-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"ci.failed\"}"
+        "waited on ci.failed on check-multi #729 @88824c2\nfired after 18m [wait-test]"
     );
 }
 
 #[test]
-fn signal_without_metadata_keeps_scope_and_has_no_elapsed_time() {
-    for (name, payload, expected) in [
+fn builtin_signal_is_one_subject_line_from_its_full_payload() {
+    let worktree = serde_json::json!({
+        "name": "temp-env",
+        "branch": "temp-env-branch",
+        "path": "/work/rimz-worktrees/temp-env",
+        "repo": "/work/rimz",
+        "base": "main",
+        "from_pr": 12,
+        "branch_deleted": true,
+    });
+    let agent = serde_json::json!({
+        "kind": "claude",
+        "session": "sess-1",
+        "status": "idle",
+        "errored": false,
+        "handle": "@coder",
+        "parent": "@planner",
+    });
+    let team = serde_json::json!({
+        "team": "recon",
+        "instance": "recon#lane-loops",
+        "member": "@coder#lane-loops",
+        "members": [{"handle": "@coder#lane-loops", "status": "idle"}],
+    });
+    let stage = serde_json::json!({
+        "team": "recon",
+        "instance": "recon#lane-loops",
+        "to": "Review",
+        "by": "coder",
+        "board": "/work/blackboard.md",
+        "at": "2026-01-01T14:02:00Z",
+        "from": "Implement",
+        "owner": "reviewer",
+        "note": "ready",
+    });
+    let behind =
+        serde_json::json!({"state": "open", "pr_head": "abc", "base": "main", "behind_by": 3});
+    let queue = serde_json::json!({
+        "state": "open",
+        "pr_head": "abc",
+        "base": "main",
+        "queued_at": "2026-01-01T14:02:00Z",
+    });
+    for (name, payload, subject) in [
+        (
+            "ci.passed",
+            forge(serde_json::json!({})),
+            "ci.passed on check-multi #729 @88824c2",
+        ),
+        (
+            "ci.custom",
+            forge(serde_json::json!({})),
+            "ci.custom on check-multi #729 @88824c2",
+        ),
+        (
+            "ci.failed",
+            without(forge(serde_json::json!({})), "number"),
+            "ci.failed on check-multi @88824c2",
+        ),
+        (
+            "ci.failed",
+            without(forge(serde_json::json!({})), "head"),
+            "ci.failed on check-multi #729",
+        ),
+        (
+            "ci.failed",
+            forge(serde_json::json!({"head": "88824", "number": "729"})),
+            "ci.failed on check-multi @88824",
+        ),
+        (
+            "pr.opened",
+            forge(serde_json::json!({"state": "open"})),
+            "pr.opened on check-multi #729",
+        ),
         (
             "pr.merged",
-            serde_json::json!({"branch":"feat-x","number":91}),
-            "waited on pr.merged on feat-x (PR #91)\nfired [wait-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"pr.merged\"}",
+            forge(serde_json::json!({"state": "merged"})),
+            "pr.merged on check-multi #729",
         ),
         (
-            "agent.idle",
-            serde_json::json!({"handle":"@coder"}),
-            "waited on agent.idle @coder\nfired [wait-test]\n{\"handle\":\"@coder\",\"signal\":\"agent.idle\"}",
+            "pr.closed",
+            forge(serde_json::json!({"state": "closed"})),
+            "pr.closed on check-multi #729",
         ),
         (
-            "team.idle",
-            serde_json::json!({"instance":"forge#feat-x"}),
-            "waited on team.idle forge#feat-x\nfired [wait-test]\n{\"instance\":\"forge#feat-x\",\"signal\":\"team.idle\"}",
+            "pr.queued",
+            forge(queue.clone()),
+            "pr.queued on check-multi #729",
         ),
         (
-            "deploy.finished",
-            serde_json::json!({}),
-            "waited on deploy.finished\nfired [wait-test]\n{\"signal\":\"deploy.finished\"}",
+            "pr.something",
+            forge(behind.clone()),
+            "pr.something on check-multi #729",
+        ),
+        (
+            "pr.behind",
+            forge(behind.clone()),
+            "pr.behind on check-multi #729 · 3 behind main",
+        ),
+        (
+            "pr.behind",
+            without(forge(behind.clone()), "base"),
+            "pr.behind on check-multi #729 · 3 behind",
+        ),
+        (
+            "pr.behind",
+            without(forge(behind.clone()), "behind_by"),
+            "pr.behind on check-multi #729",
+        ),
+        (
+            "pr.conflicted",
+            forge(behind.clone()),
+            "pr.conflicted on check-multi #729 · with main",
+        ),
+        (
+            "pr.conflicted",
+            without(forge(behind), "base"),
+            "pr.conflicted on check-multi #729",
+        ),
+        (
+            "pr.dequeued",
+            forge(queue),
+            "pr.dequeued on check-multi #729",
+        ),
+        (
+            "trunk.moved",
+            serde_json::json!({
+                "trunk": "main",
+                "from": "aa24051f00000000",
+                "to": "1bcceb9f00000000",
+                "repo": "/work/rimz",
+            }),
+            "trunk.moved on main aa24051..1bcceb9",
+        ),
+        (
+            "trunk.moved",
+            serde_json::json!({"trunk": "main", "to": "1bcceb9f00000000", "repo": "/work/rimz"}),
+            "trunk.moved on main",
+        ),
+        (
+            "worktree.created",
+            without(worktree.clone(), "branch_deleted"),
+            "worktree.created temp-env from main",
+        ),
+        (
+            "worktree.removed",
+            worktree.clone(),
+            "worktree.removed temp-env · branch deleted",
+        ),
+        (
+            "worktree.removed",
+            {
+                let mut kept = worktree.clone();
+                kept["branch_deleted"] = false.into();
+                kept
+            },
+            "worktree.removed temp-env",
+        ),
+        ("worktree.renamed", worktree, "worktree.renamed temp-env"),
+        ("agent.idle", agent.clone(), "agent.idle @coder"),
+        (
+            "agent.ended",
+            without(agent, "handle"),
+            "agent.ended sess-1",
+        ),
+        ("team.idle", team.clone(), "team.idle recon#lane-loops"),
+        (
+            "team.waiting",
+            team.clone(),
+            "team.waiting recon#lane-loops",
+        ),
+        ("team.ended", team.clone(), "team.ended recon#lane-loops"),
+        ("team.paused", team.clone(), "team.paused recon#lane-loops"),
+        (
+            "team.failed",
+            team.clone(),
+            "team.failed recon#lane-loops · @coder",
+        ),
+        (
+            "team.failed",
+            without(team, "member"),
+            "team.failed recon#lane-loops",
+        ),
+        (
+            "team.stage",
+            stage.clone(),
+            "team.stage recon#lane-loops · Implement -> Review",
+        ),
+        (
+            "team.stage",
+            without(stage, "from"),
+            "team.stage recon#lane-loops · Review",
         ),
     ] {
         assert_eq!(
-            compose_wait(
-                "wait-test",
-                &task(),
-                None,
-                Evidence::Signal(&signal(name, payload)),
-                "",
-                now()
-            ),
-            expected
+            fired(name, payload),
+            format!("waited on {subject}\nfired [wait-test]"),
+            "{name}"
         );
     }
+}
+
+#[test]
+fn dequeued_pr_names_its_reason_and_keeps_the_queue_checks_line() {
+    let dequeued = forge(serde_json::json!({
+        "state": "open",
+        "pr_head": "abc",
+        "base": "main",
+        "dequeued_at": "2026-01-01T14:02:00Z",
+        "reason": "FAILED_CHECKS",
+        "queue_checks_url": "https://github.com/rimio-ai/rimz/commit/feed/checks",
+    }));
+    for (payload, expected) in [
+        (
+            dequeued.clone(),
+            "waited on pr.dequeued on check-multi #729 · FAILED_CHECKS\nfired [wait-test]\nqueue checks: https://github.com/rimio-ai/rimz/commit/feed/checks",
+        ),
+        (
+            without(dequeued.clone(), "reason"),
+            "waited on pr.dequeued on check-multi #729\nfired [wait-test]\nqueue checks: https://github.com/rimio-ai/rimz/commit/feed/checks",
+        ),
+        (
+            without(dequeued, "queue_checks_url"),
+            "waited on pr.dequeued on check-multi #729 · FAILED_CHECKS\nfired [wait-test]",
+        ),
+    ] {
+        assert_eq!(fired("pr.dequeued", payload), expected);
+    }
+}
+
+#[test]
+fn custom_signal_prints_one_line_per_field_in_key_order() {
+    assert_eq!(
+        fired(
+            "deploy.finished",
+            serde_json::json!({
+                "signal": "not-canonical",
+                "env": "prod",
+                "attempt": 2,
+                "detail": {"a": 1},
+                "log": "first\nsecond",
+                "path": "/srv/app",
+                "ok": null,
+                "a\nkey": "x",
+            })
+        ),
+        "waited on deploy.finished\nfired [wait-test]\n\"a\\nkey\": x\nattempt: 2\ndetail: {\"a\":1}\nenv: prod\nlog: \"first\\nsecond\"\nok: null\npath: /srv/app\nsignal: not-canonical"
+    );
+    assert_eq!(
+        fired("deploy.finished", serde_json::json!({})),
+        "waited on deploy.finished\nfired [wait-test]"
+    );
+}
+
+#[test]
+fn condition_readings_print_one_line_each_and_name_a_missing_one() {
+    let condition = super::super::super::when::ConditionEvidence {
+        when: "team.stage=Done".to_owned(),
+        hold: None,
+        held_ms: 0,
+        readings: std::collections::BTreeMap::from([
+            ("team.stage".to_owned(), Some("Done".to_owned())),
+            ("pr.state".to_owned(), None),
+            ("a\rkey".to_owned(), Some("plain".to_owned())),
+        ]),
+    };
+    assert_eq!(
+        compose_wait(
+            "ship",
+            &task(),
+            None,
+            Evidence::Condition(&condition),
+            "",
+            now()
+        ),
+        "waited on team.stage=Done\nfired [ship]\n\"a\\rkey\": plain\npr.state: unknown\nteam.stage: Done"
+    );
 }
 
 #[test]
@@ -487,7 +759,7 @@ fn signal_note_is_verbatim_regardless_of_armer() {
                 "  the migration window is open\n{{branch}}  \n",
                 now()
             ),
-            "waited on ci.passed on feat-x (PR #91)\nfired after 18m [wait-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"ci.passed\"}\n\n  the migration window is open\n{{branch}}  \n"
+            "waited on ci.passed on feat-x #91\nfired after 18m [wait-test]\n\n  the migration window is open\n{{branch}}  \n"
         );
     }
 }
@@ -506,6 +778,6 @@ fn signal_note_and_guard_evidence_remain_after_wait_body() {
     let outcome = super::super::CheckOutcome::new(false, false, "failed guard".to_owned(), Some(1));
     assert_eq!(
         super::super::augment_prompt(body, "false", &outcome),
-        "waited on deploy.failed\nfired [deployment]\n{\"branch\":\"feature\",\"signal\":\"deploy.failed\"}\n\nInspect {{branch}}\n\n--- check `false` exited 1 ---\nfailed guard"
+        "waited on deploy.failed\nfired [deployment]\nbranch: feature\n\nInspect {{branch}}\n\n--- check `false` exited 1 ---\nfailed guard"
     );
 }
