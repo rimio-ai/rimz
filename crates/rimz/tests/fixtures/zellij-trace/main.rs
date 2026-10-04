@@ -2,6 +2,7 @@
 //!
 //! Writes one `argv0\targv1\t...\n` line per invocation to `$RIMZ_TEST_ZELLIJ_LOG`, then returns a small zellij-shaped response or applies stateful filesystem side effects.
 //! Tests set `$RIMZ_TEST_ZELLIJ_MODE` for injected write and session-birth failures.
+//! `$RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE` makes `action close-pane` exit non-zero after logging it.
 //! `$RIMZ_TEST_ZELLIJ_VERSION` overrides the default 0.44.3 version.
 //! `$RIMZ_TEST_ZELLIJ_TRACE_CONTEXT` prefixes each trace with its pane context; `list-tabs` reflects recorded tab launches.
 
@@ -74,6 +75,12 @@ fn main() {
         if env::var_os("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB").is_some() {
             std::process::exit(1);
         }
+    }
+    if has_pair(cli, "action", "close-pane")
+        && env::var_os("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE").is_some()
+    {
+        write_stderr("simulated zellij close-pane failure");
+        std::process::exit(1);
     }
     match classify_invocation(cli) {
         Invocation::Version => write_stdout(&format!(

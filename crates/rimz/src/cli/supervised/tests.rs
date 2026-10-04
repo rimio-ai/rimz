@@ -606,6 +606,73 @@ fn stop_backstop_uses_late_recorded_pane_id() {
     assert_eq!(resolved.session_name, "rimz-test");
 }
 
+/// The backstop's verdict is a listing or a close: `listed` answers each
+/// listing in turn (the last answer repeats), `None` standing for a listing
+/// that could not be read.
+#[test]
+fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
+    use super::pane::settle_stopped_run_pane;
+    let settle = |listings: &[Option<bool>], close_ok: bool, recorded: bool| {
+        let fixture = RunFixture::new(RunStatus::Canceled);
+        if recorded {
+            rimz::harness::run::record_pane(
+                fixture.store.paths(),
+                &fixture.record.run_id,
+                PaneId::from_parts(MuxName::Tmux, "%8"),
+            )
+            .unwrap();
+        }
+        let mut listings = listings.iter().copied();
+        let mut last = None;
+        let mut closes = 0;
+        let verdict = settle_stopped_run_pane(
+            &fixture.store,
+            "rimz-test",
+            &fixture.record,
+            Duration::ZERO,
+            |_| {
+                last = listings.next().or(last);
+                last.expect("a scripted listing")
+            },
+            |_| {
+                closes += 1;
+                if close_ok {
+                    Ok(())
+                } else {
+                    Err(rimz::mux::MuxErr::SessionNotFound {
+                        session: "rimz-test".to_owned(),
+                    })
+                }
+            },
+        );
+        (verdict.map_err(|open| open.to_string()), closes)
+    };
+    let open = Err(
+        "pane tmux:%8 is still open: session `rimz-test` is not active; rerun the stop to close it"
+            .to_owned(),
+    );
+
+    assert_eq!(settle(&[Some(false)], false, true), (Ok(()), 0));
+    assert_eq!(settle(&[Some(true)], false, true), (open.clone(), 1));
+    assert_eq!(settle(&[Some(true), Some(false)], false, true), (Ok(()), 1));
+    assert_eq!(settle(&[None], true, true), (Ok(()), 1));
+    assert_eq!(settle(&[None], false, true), (open, 1));
+    assert_eq!(
+        settle(&[], false, false),
+        (Ok(()), 0),
+        "a run with no pane has nothing to close"
+    );
+
+    let unresolved = super::pane::PaneOpen {
+        pane: None,
+        reason: "no multiplexer found".to_owned(),
+    };
+    assert_eq!(
+        StopRunErr::from(unresolved).to_string(),
+        "the run's pane was not closed: no multiplexer found; rerun the stop to close it"
+    );
+}
+
 #[test]
 fn stream_event_shapes_are_ndjson_ready() {
     let value = serde_json::to_value(RunStreamEvent::End {

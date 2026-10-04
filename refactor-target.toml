@@ -444,7 +444,7 @@ path = "crates/rimz/src/harness"
 # `WhenExpr::reads_forge` replaces the CLI's hand copy of the forge condition keys (+1).
 # The exec wrapper's startup-relaunch decision and its `ProviderExit` input (+2).
 # `RebirthPlan::settle` returns a `SeededRecovery` whose tabs a birth seeds and whose `confirm` settles each tab on its outcome, replacing `materialize` and `settle_live` (+3).
-surface-budget = 686
+surface-budget = 687
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -689,7 +689,7 @@ surface-budget = 60
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
 path = "crates/rimz/src/cli/supervised"
-surface-budget = 36
+surface-budget = 38
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"

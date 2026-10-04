@@ -836,21 +836,26 @@ fn verify_phase(
 }
 
 fn close_attempt_pane(prepared: &PreparedRun, room: &rimz::room::RoomContext, record: &RunRecord) {
-    if record.status == RunStatus::Canceled {
+    let closed = if record.status == RunStatus::Canceled {
         supervised::pane::close_stopped_run_pane_after_grace(
             room.backend(),
             &prepared.store,
             &prepared.workspace.session_name,
             record,
             supervised::pane::STOP_BACKSTOP_GRACE,
-        );
+        )
+        .map_err(|open| open.to_string())
     } else {
         supervised::pane::close_run_pane(
             room.backend(),
             &prepared.store,
             &prepared.workspace.session_name,
             record,
-        );
+        )
+        .map_err(|err| err.to_string())
+    };
+    if let Err(error) = closed {
+        tracing::debug!(run_id = %record.run_id, %error, "run cleanup left the pane open");
     }
 }
 

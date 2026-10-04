@@ -49,22 +49,24 @@ pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> R
     if pending().as_ref() != Some(&stop) {
         return Ok(());
     }
-    // A stop that goes through retires the session, and with it the request;
-    // a failed one leaves the request armed for the producer's next ask.
-    let outcome = stop_resolved(&ctx, globals, &snapshot, agent, &mut StopTracker::default());
+    // A stop that closes the agent's pane retires the session, and with it the
+    // request; one that leaves the pane open leaves the request armed for the
+    // producer's next ask.
+    let outcome = stop_resolved(&ctx, globals, &snapshot, agent, &mut StopTracker::default())?;
     rimz::harness::assist_log::append(&AssistRecord {
         at: Timestamp::now(),
         assist: Assist::IdleStop {
             kind: request.kind,
             agent_id: request.agent_id,
-            label: request.label,
             idle_secs,
             idle_after_secs: stop.after_secs,
             requested_by: stop.requested_by,
-            stopped: outcome.is_ok(),
-            error: outcome.as_ref().err().map(|err| format!("{err:#}")),
+            stopped: outcome.root_closed(),
+            error: outcome.error(),
+            label: request.label.clone(),
         },
     });
-    outcome.context("stopping the idle agent")?;
-    Ok(())
+    outcome
+        .into_result(&request.label)
+        .context("stopping the idle agent")
 }
