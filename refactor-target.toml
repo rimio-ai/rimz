@@ -347,7 +347,8 @@ path = "crates/rimz/src/forge"
 # Shared same-repository PR graph and stack walk feed sidebar enrichment.
 # Forge signal vocabulary is shared with CLI admission.
 # Open PR facts and settled-at mergeability cross the parser/projection seam.
-surface-budget = 46
+# The merge-queue fact crosses the same seam to the poll cadence and its readers (+1).
+surface-budget = 47
 
 [[module]]
 path = "crates/rimz/src/harness"
