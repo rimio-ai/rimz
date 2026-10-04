@@ -5,9 +5,10 @@ use anyhow::{Context, Result};
 use jiff::Timestamp;
 
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::harness::idle_stop::{IdleStopHelperRequest, Verdict, decide};
+use rimz::harness::idle_stop::{IdleStopHelperRequest, Verdict, closing_with, decide};
 use rimz::store::snapshot::find_agent;
 
+use super::stop::stop_run;
 use super::{Ctx, GlobalFlags, StopTracker, stop_resolved};
 
 pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> Result<()> {
@@ -18,22 +19,36 @@ pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> R
     let Some(agent) = find_agent(&snapshot.agents, &request.kind, &request.agent_id) else {
         return Ok(());
     };
-    let Some(stop) = rimz::store::idle_stop::read(ctx.store.paths())
-        .into_iter()
-        .find(|pending| pending.kind == request.kind && pending.agent_id == request.agent_id)
-        .map(|pending| pending.stop)
-    else {
+    let pending = || {
+        rimz::store::idle_stop::read(ctx.store.paths())
+            .into_iter()
+            .find(|pending| pending.kind == request.kind && pending.agent_id == request.agent_id)
+            .map(|pending| pending.stop)
+    };
+    let Some(stop) = pending() else {
         return Ok(());
     };
     if snapshot.live_agent_pane(&request.kind, &request.agent_id) != Some(request.pane_id) {
         return Ok(());
     }
-    let verdict = decide(&ctx.store, agent, &stop, Timestamp::now())
+    let verdict = decide(&ctx.store, &snapshot.agents, agent, &stop, Timestamp::now())
         .context("deciding whether the idle stop is due")?;
     let Verdict::Stop { idle_secs } = verdict else {
         tracing::debug!(agent = %request.label, ?verdict, "idle stop held");
         return Ok(());
     };
+    // `decide` matches runs by session; the stop picks one by name, which
+    // another kind's or session's live run can share.
+    for target in std::iter::once(agent).chain(closing_with(&snapshot.agents, agent)) {
+        if stop_run(&ctx.store, target)?.is_some_and(|run| !run.status.is_terminal()) {
+            tracing::debug!(agent = %request.label, "idle stop held: it would cancel a run");
+            return Ok(());
+        }
+    }
+    // A request withdrawn or replaced while this helper read is not this one.
+    if pending().as_ref() != Some(&stop) {
+        return Ok(());
+    }
     // A stop that goes through retires the session, and with it the request;
     // a failed one leaves the request armed for the producer's next ask.
     let outcome = stop_resolved(&ctx, globals, &snapshot, agent, &mut StopTracker::default());
