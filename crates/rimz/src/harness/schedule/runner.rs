@@ -614,16 +614,12 @@ impl<'a> TaskFire<'a> {
     }
 
     fn prepare_run_lock(&mut self) -> Result<Option<TaskFireFinished>> {
-        let name = if self.entry.each_worktree {
-            format!(
-                "{}-{}",
-                self.name,
-                WorkspaceId::from_project_root(&self.launch_checkout())
-            )
-        } else {
-            self.name.clone()
-        };
-        let path = (self.run_lock_path)(&name, &self.entry)?;
+        let checkout = self
+            .entry
+            .each_worktree
+            .then(|| WorkspaceId::from_project_root(&self.launch_checkout()));
+        let file = run_lock_file_name(&self.name, checkout.as_ref());
+        let path = (self.run_lock_path)(&file, &self.entry)?;
         match acquire_run_lock(&path)? {
             RunLockAttempt::Acquired(guard) => {
                 self.run_lock = Some(guard);
@@ -1626,7 +1622,7 @@ pub struct InFlightRun {
 /// The run of task `name` in flight under `root`. The run lock decides; the run
 /// record is read only while the lock is held, so a stale record is no run.
 pub fn in_flight_run(name: &str, root: &Path) -> Result<Option<InFlightRun>> {
-    let RunLockState::Held(holder) = probe_run_lock_path(&root_run_lock_path(name, root)?)? else {
+    let Some((_, holder)) = held_run_lock(name, root)? else {
         return Ok(None);
     };
     let project_root = WorkspaceResolver::persisted_project_root(root)
@@ -1663,8 +1659,7 @@ pub fn stop_task(
     root: &Path,
     cancel: impl FnOnce(Option<&ResolvedWorkspace>, StatePaths, Option<&RunRecord>) -> Result<()>,
 ) -> Result<StopOutcome> {
-    let lock = root_run_lock_path(name, root)?;
-    let RunLockState::Held(holder) = probe_run_lock_path(&lock)? else {
+    let Some((lock, holder)) = held_run_lock(name, root)? else {
         return Ok(StopOutcome::NoActiveRun);
     };
 
@@ -1783,8 +1778,44 @@ fn acquire_run_lock(path: &Path) -> Result<RunLockAttempt> {
 }
 
 pub fn probe_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockState> {
-    let path = run_lock_path(name, entry)?;
-    probe_run_lock_path(&path)
+    Ok(match held_run_lock(name, &entry.resolved_root())? {
+        Some((_, holder)) => RunLockState::Held(holder),
+        None => RunLockState::Available,
+    })
+}
+
+/// The held run lock of task `name` under `root`, with its holder. A fan-out
+/// task holds one lock per checkout; the earliest-started holder is the one
+/// reported, a holderless lock last.
+fn held_run_lock(name: &str, root: &Path) -> Result<Option<(PathBuf, Option<RunLockInfo>)>> {
+    let locks = run_lock_runtime(root)?.locks_dir;
+    let entries = match std::fs::read_dir(&locks) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("listing loop run locks `{}`", locks.display()));
+        }
+    };
+    let mut held = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.with_context(|| format!("listing loop run locks `{}`", locks.display()))?;
+        if !entry
+            .file_name()
+            .to_str()
+            .is_some_and(|file| is_run_lock_of(file, name))
+        {
+            continue;
+        }
+        let path = entry.path();
+        if let RunLockState::Held(holder) = probe_run_lock_path(&path)? {
+            held.push((path, holder));
+        }
+    }
+    Ok(held
+        .into_iter()
+        .min_by_key(|(_, holder)| (holder.is_none(), holder.map(|info| info.started_at))))
 }
 
 fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
@@ -1804,14 +1835,32 @@ fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
     probe_run_lock_file(file, path)
 }
 
-fn run_lock_path(name: &str, entry: &TaskEntry) -> Result<PathBuf> {
-    root_run_lock_path(name, &entry.resolved_root())
+fn run_lock_path(file: &str, entry: &TaskEntry) -> Result<PathBuf> {
+    Ok(run_lock_runtime(&entry.resolved_root())?.lock_path(file))
 }
 
-fn root_run_lock_path(name: &str, root: &Path) -> Result<PathBuf> {
+fn run_lock_runtime(root: &Path) -> Result<RuntimePaths> {
     let state = StatePaths::for_project_root(root).context("locating loop task state")?;
-    let runtime = RuntimePaths::for_state(&state).context("locating loop task runtime")?;
-    Ok(runtime.lock_path(format!("loop-run-{name}.lock")))
+    RuntimePaths::for_state(&state).context("locating loop task runtime")
+}
+
+/// The one spelling of a run lock's file name. `checkout` names the launch
+/// checkout of a fan-out fire, which locks per checkout.
+fn run_lock_file_name(name: &str, checkout: Option<&WorkspaceId>) -> String {
+    match checkout {
+        Some(checkout) => format!("loop-run-{name}-{checkout}.lock"),
+        None => format!("loop-run-{name}.lock"),
+    }
+}
+
+/// Whether `file` is task `name`'s run lock, bare or per-checkout.
+fn is_run_lock_of(file: &str, name: &str) -> bool {
+    let checkout = file
+        .strip_suffix(".lock")
+        .and_then(|stem| stem.rsplit_once('-'))
+        .and_then(|(_, id)| WorkspaceId::parse(id).ok());
+    file == run_lock_file_name(name, None)
+        || checkout.is_some_and(|checkout| file == run_lock_file_name(name, Some(&checkout)))
 }
 
 fn signal_run_lock_holder(info: &RunLockInfo) -> Result<()> {

@@ -90,7 +90,7 @@ fn worktree_run_locks_do_not_overlap_other_checkouts() {
         )
         .unwrap()
         .with_checkout(Some(root.path().join(checkout)));
-        fire.run_lock_path = |name, entry| Ok(entry.root.join(format!("{name}.lock")));
+        fire.run_lock_path = |file, entry| Ok(entry.root.join(file));
         fire
     };
     let mut first = make("a");
@@ -107,6 +107,99 @@ fn worktree_run_locks_do_not_overlap_other_checkouts() {
     assert!(
         matches!(same.prepare(&mut |_| Ok(())).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped)
     );
+}
+
+#[test]
+fn worktree_fire_lock_is_found_by_the_task_lookups() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        agent: Some("claude".into()),
+        prompt: Some("repair".into()),
+        stay: true,
+        each_worktree: true,
+        ..Default::default()
+    };
+    let mut fire = TaskFire::new(
+        "fixer",
+        LoadedTask::new("fixer", entry.clone(), catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap()
+    .with_checkout(Some(root.path().join("a")));
+    assert!(matches!(
+        fire.prepare(&mut |_| Ok(())).unwrap(),
+        TaskFirePlan::Resident { .. }
+    ));
+
+    let pid = std::process::id();
+    assert!(matches!(
+        probe_run_lock("fixer", &entry).unwrap(),
+        RunLockState::Held(Some(info)) if info.pid == pid
+    ));
+    let in_flight = in_flight_run("fixer", root.path())
+        .unwrap()
+        .expect("the per-checkout lock is the task's run in flight");
+    assert_eq!(in_flight.holder.map(|info| info.pid), Some(pid));
+    drop(fire);
+    assert!(matches!(
+        probe_run_lock("fixer", &entry).unwrap(),
+        RunLockState::Available
+    ));
+}
+
+#[test]
+fn task_lookup_reports_the_earliest_holder_among_its_held_locks() {
+    let root = tempfile::tempdir().unwrap();
+    let entry = TaskEntry {
+        root: root.path().to_owned(),
+        ..TaskEntry::default()
+    };
+    let locks = RuntimePaths::for_project_root(root.path())
+        .unwrap()
+        .locks_dir;
+    std::fs::create_dir_all(&locks).unwrap();
+    let write = |file: &str, pid: u32, started_at: i64| {
+        let path = locks.join(file);
+        let info = RunLockInfo {
+            pid,
+            started_at: Timestamp::from_second(started_at).unwrap(),
+        };
+        std::fs::write(&path, serde_json::to_vec(&info).unwrap()).unwrap();
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap()
+    };
+    let later = write("loop-run-fixer-ws_0123456789abcdef01234567.lock", 11, 200);
+    let earlier = write("loop-run-fixer-ws_89abcdef0123456789abcdef.lock", 22, 100);
+    let _free = write("loop-run-fixer.lock", 33, 50);
+    let other_task = write("loop-run-fixer-nightly.lock", 44, 10);
+    other_task.try_lock().unwrap();
+    let holder = || match probe_run_lock("fixer", &entry).unwrap() {
+        RunLockState::Held(holder) => holder.map(|info| info.pid),
+        RunLockState::Available => None,
+    };
+
+    assert_eq!(holder(), None, "a free lock file is no run");
+    later.try_lock().unwrap();
+    assert_eq!(holder(), Some(11));
+    earlier.try_lock().unwrap();
+    assert_eq!(holder(), Some(22));
+    let holderless = locks.join("loop-run-fixer-ws_ffffffffffffffffffffffff.lock");
+    std::fs::write(&holderless, "").unwrap();
+    let holderless = std::fs::File::open(holderless).unwrap();
+    holderless.try_lock().unwrap();
+    assert_eq!(holder(), Some(22), "a holderless lock sorts last");
 }
 
 #[test]
@@ -767,10 +860,10 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
             Instant::now(),
         )
         .unwrap();
-        fire.run_lock_path = |name, entry| {
+        fire.run_lock_path = |file, entry| {
             let runtime =
                 RuntimePaths::under(WorkspaceId::from_project_root(&entry.root), &entry.root)?;
-            Ok(runtime.lock_path(format!("loop-run-{name}.lock")))
+            Ok(runtime.lock_path(file))
         };
         fire
     };

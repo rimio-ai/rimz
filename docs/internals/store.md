@@ -118,10 +118,10 @@ shared/                                       room-wide shared files
 out/<reader>/<name>[.<n>|.<run_id>].output    child and peer responses
 out/<reader>/<wait-name>.output               watched-command output
 locks/*.lock                                 workspace, publish, subagent-zone, loop-instances,
-                                             loop-run-<name>, loop-watch-<name>, message-sweep,
-                                             sidebar-launch, snapshot, topology-writer,
-                                             authoritative-pane-probe, focus-anchor, pr-state,
-                                             diff-stats, budget.fleet, and sidecar locks
+                                             loop-run-<name>[-<checkout id>], loop-watch-<name>,
+                                             message-sweep, sidebar-launch, snapshot,
+                                             topology-writer, authoritative-pane-probe, focus-anchor,
+                                             pr-state, diff-stats, budget.fleet, and sidecar locks
 workspace.json                               room record, layout: 2
 rimz                                         stable room executable
 ```
