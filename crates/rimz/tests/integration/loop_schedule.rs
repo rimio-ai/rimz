@@ -5892,7 +5892,7 @@ fn manual_fire_forwards_interrupt_to_the_check_group() {
         let check = if ignores_interrupt {
             "trap '' INT; printf ready > check-ready; sleep 30"
         } else {
-            "trap 'printf stopped > interrupted; exit 130' INT; printf ready > check-ready; sleep 30"
+            "trap 'exit 130' INT; sh -c 'trap \"printf stopped > interrupted; kill \\$!; exit 130\" INT; sleep 30 & printf ready > check-ready; wait'"
         };
         let mut args = vec![
             "loop",
