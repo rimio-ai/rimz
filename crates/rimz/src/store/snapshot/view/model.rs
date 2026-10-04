@@ -161,6 +161,14 @@ pub enum WorktreePrState {
     Merged,
 }
 
+/// Where an open pull request stands with its forge's merge queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreePrQueue {
+    Queued,
+    Dequeued,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorktreeCi {
@@ -329,6 +337,9 @@ pub struct SidebarWorktreeGroup {
     /// Best-effort pull-request state for this worktree's branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_state: Option<WorktreePrState>,
+    /// Best-effort merge-queue state of this worktree's open pull request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_queue: Option<WorktreePrQueue>,
     /// Best-effort CI verdict for the trunk's branch or the branch's open/merged pull request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<WorktreeCi>,
@@ -548,6 +559,7 @@ mod tests {
             landed: None,
             trunk_sync: None,
             pr_state: None,
+            pr_queue: None,
             ci: None,
             pr_number: None,
             pr_url: None,

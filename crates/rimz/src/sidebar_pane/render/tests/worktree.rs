@@ -1179,6 +1179,53 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
 }
 
 #[test]
+fn render_merge_queue_marker_replaces_the_open_pr_glyph() {
+    use crate::store::snapshot::{WorktreePrQueue, WorktreePrState, WorktreeTrunkSync};
+    let mut snapshot = pristine_worktree_with_pr_state(Some(WorktreePrState::Open));
+    for (set, glyph) in [("unicode", "⇉"), ("nerd_font", "\u{f4db}")] {
+        snapshot.theme.glyphs.set = Some(set.to_owned());
+        let theme = Theme::fixed_for_theme(false, &snapshot.theme);
+        let group = &mut snapshot.worktree_groups[0];
+        group.trunk_sync = Some(WorktreeTrunkSync::Pristine);
+        group.pr_state = Some(WorktreePrState::Open);
+        for (queue, component) in [
+            (WorktreePrQueue::Queued, Component::WorktreePrOpen),
+            (WorktreePrQueue::Dequeued, Component::WorktreeCiFailing),
+        ] {
+            snapshot.worktree_groups[0].pr_queue = Some(queue);
+            let lines = group_lines(&snapshot, &theme, 0);
+            let marker = lines[0]
+                .spans
+                .iter()
+                .find(|span| span.content.as_ref() == format!("{glyph} main"))
+                .unwrap_or_else(|| panic!("{set} {queue:?} marker: {:?}", lines[0]));
+            assert_eq!(marker.style, theme.styled(component, Modifier::empty()));
+        }
+
+        let header = |snapshot: &SidebarSnapshot| {
+            let lines = group_lines(snapshot, &theme, 0);
+            lines[0]
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        for state in [WorktreePrState::Merged, WorktreePrState::Closed] {
+            snapshot.worktree_groups[0].pr_state = Some(state);
+            assert!(!header(&snapshot).contains(glyph), "{set} {state:?}");
+        }
+        snapshot.worktree_groups[0].pr_state = Some(WorktreePrState::Open);
+        snapshot.worktree_groups[0].trunk_sync = Some(WorktreeTrunkSync::Reconciling);
+        let reconciling = header(&snapshot);
+        assert!(!reconciling.contains(glyph), "{set}: {reconciling}");
+        assert!(
+            reconciling.contains(theme.glyph(GlyphRole::WorktreeReconciling)),
+            "{set}: {reconciling}"
+        );
+    }
+}
+
+#[test]
 fn render_branch_ci_without_a_pr_badge() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);

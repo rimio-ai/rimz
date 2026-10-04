@@ -40,7 +40,8 @@ pub use model::{
     DailyBudgetView, PipelinePosition, PrStack, PresenceSample, RedeemForecast, RemoteControlBadge,
     SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
     SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarWorktreeGroup,
-    SidebarWorktreeKind, StackPr, WorktreeCi, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
+    SidebarWorktreeKind, StackPr, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
+    lead_unread_row,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;

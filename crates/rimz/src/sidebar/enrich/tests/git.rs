@@ -115,7 +115,17 @@ fn pr_state_projection_uses_the_given_map() {
     states.insert(
         worktree.display().to_string(),
         PrLink {
-            open: None,
+            open: Some(crate::forge::pr_state::OpenPrFacts {
+                head: "head".to_owned(),
+                base: None,
+                behind_by: None,
+                mergeability: None,
+                queue: Some(crate::forge::pr_state::PrQueueFact::Dequeued {
+                    at: "2026-10-03T12:46:03Z".to_owned(),
+                    reason: None,
+                    commit: None,
+                }),
+            }),
             stack: Default::default(),
             branch: None,
             incarnation: None,
@@ -135,6 +145,10 @@ fn pr_state_projection_uses_the_given_map() {
     assert_eq!(
         snapshot.worktree_groups[0].ci,
         Some(crate::store::snapshot::WorktreeCi::Passing)
+    );
+    assert_eq!(
+        snapshot.worktree_groups[0].pr_queue,
+        Some(crate::store::snapshot::WorktreePrQueue::Dequeued)
     );
 
     states.insert(
@@ -161,6 +175,7 @@ fn pr_state_projection_uses_the_given_map() {
         snapshot.worktree_groups[0].ci,
         Some(crate::store::snapshot::WorktreeCi::Failing)
     );
+    assert_eq!(snapshot.worktree_groups[0].pr_queue, None);
 
     snapshot.worktree_groups[0].pr_number = Some(69);
     project_pr_state_map(

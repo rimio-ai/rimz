@@ -11,7 +11,7 @@ use crate::agents::AgentStatus;
 use crate::config::GlyphRole;
 use crate::store::snapshot::{
     PipelinePosition, SidebarPipeline, SidebarStatusCount, SidebarWorktreeGroup,
-    SidebarWorktreeKind, WorktreeCi, WorktreePrState, WorktreeTrunkSync,
+    SidebarWorktreeKind, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
 };
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -772,9 +772,11 @@ fn ci_marker(ci: WorktreeCi) -> (GlyphRole, Component) {
 
 /// The trunk marker glyph and tone, by descending priority: a live local
 /// rebase/merge (`⟳`), then the forge PR verdict (merged `✓` / closed `✕` /
-/// open `⑃`), then the local trunk relationship (merged `✓` / pristine `≡` /
-/// diverged branch `⑂`). `None` for the trunk worktree itself (`trunk_sync`
-/// `None`), whose header keeps the plain cluster.
+/// open `⑃`, or `⇉` while the open PR carries a merge-queue fact: open tone
+/// when queued, failing-CI tone when dequeued), then the local trunk
+/// relationship (merged `✓` / pristine `≡` / diverged branch `⑂`). `None` for
+/// the trunk worktree itself (`trunk_sync` `None`), whose header keeps the
+/// plain cluster.
 fn trunk_marker(group: &SidebarWorktreeGroup) -> Option<(GlyphRole, Component)> {
     let sync = group.trunk_sync?;
     if sync == WorktreeTrunkSync::Reconciling {
@@ -784,7 +786,15 @@ fn trunk_marker(group: &SidebarWorktreeGroup) -> Option<(GlyphRole, Component)> 
         ));
     }
     if let Some(state) = group.pr_state {
-        return Some(pr_state_marker(state));
+        return Some(match (state, group.pr_queue) {
+            (WorktreePrState::Open, Some(WorktreePrQueue::Queued)) => {
+                (GlyphRole::WorktreePrQueue, Component::WorktreePrOpen)
+            }
+            (WorktreePrState::Open, Some(WorktreePrQueue::Dequeued)) => {
+                (GlyphRole::WorktreePrQueue, Component::WorktreeCiFailing)
+            }
+            _ => pr_state_marker(state),
+        });
     }
     Some(match sync {
         WorktreeTrunkSync::Merged => (GlyphRole::WorktreeTrunkMerge, Component::WorktreeMerged),

@@ -109,6 +109,7 @@ glyph_roles! {
         WorktreeTrunkMerge => "trunk_merge",
         WorktreePrOpen => "pr_open",
         WorktreePrClosed => "pr_closed",
+        WorktreePrQueue => "pr_queue",
         WorktreePrStack => "pr_stack",
         WorktreeCiPassing => "ci_passing",
         WorktreeCiFailing => "ci_failing",

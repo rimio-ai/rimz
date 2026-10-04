@@ -218,6 +218,7 @@ impl SidebarSnapshot {
                     landed: None,
                     trunk_sync: None,
                     pr_state: None,
+                    pr_queue: None,
                     ci: None,
                     pr_number: None,
                     pr_url: None,

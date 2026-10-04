@@ -114,7 +114,7 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | `→` (`worktree.pr_stack`) | the next level of a PR stack |
 | `⇡3 ⇣1` | commits ahead of and behind the trunk |
 | `+127 -43` | lines added and removed against the trunk |
-| `⟳` `✓` `✕` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
+| `⟳` `✓` `✕` `⇉` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
 | `▸` | a collapsed finished group |
 | `+3 more` / `− less` | hidden idle rows; click to expand or collapse |
 
@@ -411,6 +411,7 @@ On the right: commits ahead of and behind the trunk with zero counts left out, t
 | `⟳ main` | a local rebase, merge, or cherry-pick is in progress |
 | `✓ main`, with `#N` on the left | the pull request merged; muted, and the commit and line figures are dropped |
 | `✕ main` | the pull request closed unmerged; red, and the figures stay |
+| `⇉ main` | the open pull request is in the merge queue; red when the queue removed it without merging it |
 | `⑃ main` | the pull request is open |
 | `✓ main`, no `#N` | no pull request, and the trunk already contains the work: safe to remove |
 | `≡ main` | pristine: a clean tree with no commits of its own, at the trunk's tip |

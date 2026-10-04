@@ -887,6 +887,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             landed: None,
             trunk_sync: None,
             pr_state: None,
+            pr_queue: None,
             ci: None,
             pr_number: None,
             pr_url: None,

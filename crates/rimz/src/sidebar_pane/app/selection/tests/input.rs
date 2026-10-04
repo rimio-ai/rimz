@@ -974,6 +974,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         landed: None,
         trunk_sync: None,
         pr_state: None,
+        pr_queue: None,
         ci: None,
         pr_number: None,
         pr_url: None,
