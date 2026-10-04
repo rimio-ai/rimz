@@ -341,7 +341,8 @@ allowed-dependencies = [
 # RuntimePaths owns the account budget ledger and its lock path (+2).
 # The ledger sweep reads an account ledger file name back to its account component (+1).
 # Detached recovery owns a classed state log (+1).
-surface-budget = 210
+# Reset detaches each state directory it removes through one classed helper (+1).
+surface-budget = 211
 
 [[module]]
 path = "crates/rimz/src/forge"
