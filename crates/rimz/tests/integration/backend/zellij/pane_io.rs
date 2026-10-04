@@ -928,12 +928,24 @@ fn pane_send_and_capture_refuse_a_suppressed_pane_until_it_returns() {
         &here,
     );
     let room = LiveZellijSession::from_namespace(crate::common::ZellijNamespace::new(), &here);
+    let backend = room.backend();
+    // The fixture suppresses the pane with `new-pane --in-place --pane-id`,
+    // which Zellij 0.44 does not have.
+    let minor = backend
+        .version()
+        .expect("zellij version")
+        .split('.')
+        .nth(1)
+        .and_then(|value| value.parse::<u32>().ok());
+    if minor.is_none_or(|minor| minor < 45) {
+        crate::common::skip("zellij below 0.45");
+        return;
+    }
     let xdg = room.path();
     std::fs::write(xdg.join(".zshrc"), "# hermetic test shell\n")
         .expect("write test shell profile");
     room.create_background();
     let shell = wait_for_pane_count(xdg, &here, 1)[0].pane_id.clone();
-    let backend = room.backend();
     let screen = || {
         backend
             .capture_pane(&shell, &here, None, false)
