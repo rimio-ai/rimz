@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -94,6 +94,64 @@ enum Operation {
     },
 }
 
+/// Accepted connections that still owe a reply, so terminal shutdown can wait for them.
+#[derive(Default)]
+pub(super) struct Requests {
+    open: Mutex<Open>,
+    answered: Condvar,
+}
+
+#[derive(Default)]
+struct Open {
+    closing: bool,
+    streams: Vec<Arc<UnixStream>>,
+}
+
+struct Owed<'a> {
+    requests: &'a Requests,
+    stream: Arc<UnixStream>,
+}
+
+impl Requests {
+    /// Refuses a connection once the drain has begun: nothing is read that cannot be answered.
+    fn enroll(&self, stream: &Arc<UnixStream>) -> Option<Owed<'_>> {
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        if open.closing {
+            return None;
+        }
+        open.streams.push(stream.clone());
+        Some(Owed {
+            requests: self,
+            stream: stream.clone(),
+        })
+    }
+
+    /// Ends reads still waiting for a request line, waits up to `bound` for
+    /// every owed reply, and returns how many it abandoned.
+    pub(super) fn drain(&self, bound: Duration) -> usize {
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        open.closing = true;
+        for stream in &open.streams {
+            let _ = stream.shutdown(std::net::Shutdown::Read);
+        }
+        self.answered
+            .wait_timeout_while(open, bound, |open| !open.streams.is_empty())
+            .unwrap_or_else(|e| e.into_inner())
+            .0
+            .streams
+            .len()
+    }
+}
+
+impl Drop for Owed<'_> {
+    fn drop(&mut self) {
+        let mut open = self.requests.open.lock().unwrap_or_else(|e| e.into_inner());
+        open.streams
+            .retain(|stream| !Arc::ptr_eq(stream, &self.stream));
+        self.requests.answered.notify_all();
+    }
+}
+
 pub(super) fn listen(listener: UnixListener, shared: Arc<Shared>) {
     std::thread::spawn(move || {
         loop {
@@ -128,10 +186,14 @@ pub(super) fn listen(listener: UnixListener, shared: Arc<Shared>) {
 }
 
 fn handle(stream: UnixStream, shared: &Shared) -> Result<()> {
+    let stream = Arc::new(stream);
+    let Some(owed) = shared.requests.enroll(&stream) else {
+        return Ok(());
+    };
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut line = String::new();
-    let mut reader = BufReader::new(&stream);
+    let mut reader = BufReader::new(&*stream);
     reader.by_ref().take(1024 * 1024).read_line(&mut line)?;
     let mut attached = None;
     let response = if !line.ends_with('\n') {
@@ -178,8 +240,12 @@ fn handle(stream: UnixStream, shared: &Shared) -> Result<()> {
             .nonce
     );
     let result = (|| {
-        serde_json::to_writer(&stream, &response)?;
-        (&stream).write_all(b"\n")?;
+        let mut reply = serde_json::to_vec(&response)?;
+        reply.push(b'\n');
+        let written = (&*stream).write_all(&reply);
+        // An attached editor's end belongs to the router's `Close` from here on.
+        drop(owed);
+        written?;
         if let Some(id) = attached {
             stream.set_read_timeout(None)?;
             stream.set_write_timeout(None)?;
@@ -377,7 +443,35 @@ mod tests {
     use super::*;
     use crate::lsp::broker::{Lifecycle, Model, Readiness};
     use crate::lsp::registry::Entry;
-    use std::sync::{Condvar, Mutex};
+
+    #[test]
+    fn drain_waits_for_owed_replies_and_gives_up_at_its_bound() {
+        let requests = Requests::default();
+        let (_client, server) = UnixStream::pair().unwrap();
+        let (first, second) = (Arc::new(server.try_clone().unwrap()), Arc::new(server));
+        let abandoned = requests.enroll(&first).unwrap();
+        let owed = requests.enroll(&second).unwrap();
+        assert_eq!(requests.drain(Duration::from_millis(20)), 2);
+        drop(abandoned);
+        let released = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let draining = scope.spawn(|| {
+                let abandoned = requests.drain(Duration::from_secs(30));
+                (
+                    abandoned,
+                    released.load(std::sync::atomic::Ordering::SeqCst),
+                )
+            });
+            std::thread::sleep(Duration::from_millis(20));
+            released.store(true, std::sync::atomic::Ordering::SeqCst);
+            drop(owed);
+            assert_eq!(draining.join().unwrap(), (0, true));
+        });
+        assert!(
+            requests.enroll(&first).is_none(),
+            "a drained broker reads no further request"
+        );
+    }
 
     #[test]
     fn query_at_consumer_never_returns_empty_results_while_indexing() {
@@ -405,6 +499,7 @@ mod tests {
             changed: Condvar::new(),
             started: Instant::now(),
             in_flight: std::sync::atomic::AtomicUsize::new(0),
+            requests: Requests::default(),
         };
         let response = query(&shared, "workspace/symbol", json!({"query": "symbol"}), 1).unwrap();
         assert!(response.get("indexing").is_some());
@@ -521,5 +616,32 @@ mod tests {
         assert_eq!(response["error"]["code"], -32003, "{response}");
         assert_eq!(response["error"]["message"], "crashed");
         assert!(asked.elapsed() < Duration::from_secs(2));
+
+        // A connection that has sent nothing is owed nothing: the drain ends its read.
+        let (client, server) = UnixStream::pair().unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| handle(server, &shared).unwrap());
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while shared.requests.open.lock().unwrap().streams.is_empty() {
+                assert!(
+                    Instant::now() < deadline,
+                    "a connection enrolls before it reads"
+                );
+                std::thread::yield_now();
+            }
+            let draining = Instant::now();
+            assert_eq!(shared.requests.drain(Duration::from_secs(30)), 0);
+            assert!(
+                draining.elapsed() < Duration::from_secs(4),
+                "the drain waited out an idle connection's read timeout"
+            );
+            let mut line = String::new();
+            BufReader::new(&client).read_line(&mut line).unwrap();
+            let response: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(
+                response["error"]["message"],
+                "language-server protocol: incomplete request"
+            );
+        });
     }
 }
