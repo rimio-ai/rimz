@@ -113,8 +113,9 @@ failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }
 
 # A retried pass hides its failed attempts from the console summary, so the
-# retrying tiers keep a JUnit report (`<target-dir>/nextest/<profile>/junit.xml`)
-# that records every failed attempt with its output. CI uploads it as an artifact.
+# retrying tiers keep a JUnit report that records every failed attempt with its
+# output. nextest writes it to `target/nextest/<profile>/junit.xml` under the
+# workspace root, whatever `CARGO_TARGET_DIR` is. CI uploads it as an artifact.
 [profile.live.junit]
 path = "junit.xml"
 store-success-output = false

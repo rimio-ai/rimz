@@ -261,8 +261,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nextest-junit
-          path: target/ci/nextest/*/junit.xml
-          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+          if-no-files-found: error
 
       - name: sccache stats
         if: always()
