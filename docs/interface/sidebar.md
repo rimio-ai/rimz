@@ -411,7 +411,7 @@ On the right: commits ahead of and behind the trunk with zero counts left out, t
 | `⟳ main` | a local rebase, merge, or cherry-pick is in progress |
 | `✓ main`, with `#N` on the left | the pull request merged; muted, and the commit and line figures are dropped |
 | `✕ main` | the pull request closed unmerged; red, and the figures stay |
-| `⇉ main` | the open pull request is in the merge queue; red when the queue removed it without merging it |
+| `⇉ main` (` main` with Nerd Fonts, `worktree.pr_queue`) | the open pull request is in the merge queue; red when the queue removed it without merging it |
 | `⑃ main` | the pull request is open |
 | `✓ main`, no `#N` | no pull request, and the trunk already contains the work: safe to remove |
 | `≡ main` | pristine: a clean tree with no commits of its own, at the trunk's tip |
