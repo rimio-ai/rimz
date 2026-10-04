@@ -829,8 +829,11 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 || "on a signal".to_owned(),
                 |code| format!("with code {code}"),
             );
-            let startup =
-                rimz::utils::time::format_duration_compact(Duration::from_secs(startup_ms / 1000));
+            let startup = if *startup_ms < 1000 {
+                "<1s".to_owned()
+            } else {
+                rimz::utils::time::format_duration_compact(Duration::from_secs(startup_ms / 1000))
+            };
             let outcome = if *relaunched {
                 "launched once more"
             } else {
@@ -1229,14 +1232,14 @@ mod tests {
 
     #[test]
     fn launch_retries_count_relaunches_and_preserve_spawn_failures() {
-        let records = [true, false]
+        let records = [(false, 999), (false, 1000), (true, 17_250)]
             .into_iter()
-            .map(|relaunched| {
+            .map(|(relaunched, startup_ms)| {
                 serde_json::from_value::<AssistRecord>(serde_json::json!({
                     "at": "2026-01-01T00:00:00Z", "assist": "launch_retry",
                     "kind": "codex", "label": "@otter",
                     "run_id": "run_0123456789abcdef0123456789abcdef",
-                    "exit_code": 1, "startup_ms": 17_250, "relaunched": relaunched,
+                    "exit_code": 1, "startup_ms": startup_ms, "relaunched": relaunched,
                     "error": if relaunched { None } else { Some("codex: not found\ncaused by") }
                 }))
                 .expect("launch retry assist wire format")
@@ -1265,12 +1268,13 @@ mod tests {
             )),
             "{lines:?}"
         );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("relaunch failed (codex: not found)")),
-            "{lines:?}"
-        );
+        assert_eq!(json["events"][2]["startup_ms"], 999);
+        for startup in ["<1s", "1s"] {
+            let failed = format!(
+                "after {startup} before its session opened — relaunch failed (codex: not found)"
+            );
+            assert!(lines.iter().any(|line| line.contains(&failed)), "{lines:?}");
+        }
         let forensic = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
         assert!(
             forensic.contains("run run_0123456789abcdef0123456789abcdef"),
