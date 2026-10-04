@@ -537,7 +537,8 @@ pub(crate) fn capture_failure_tail(
     }
 }
 
-/// A stopped run's pane that was not confirmed closed.
+/// A stopped run's pane that was not confirmed closed. The caller names the
+/// stop that retries the close.
 #[derive(Debug)]
 pub(crate) struct PaneOpen {
     pub(super) pane: Option<PaneId>,
@@ -550,11 +551,9 @@ impl std::fmt::Display for PaneOpen {
             Some(pane) => write!(f, "pane {pane} is still open")?,
             None => f.write_str("the run's pane was not closed")?,
         }
-        write!(f, ": {}; rerun the stop to close it", self.reason)
+        write!(f, ": {}", self.reason)
     }
 }
-
-impl std::error::Error for PaneOpen {}
 
 pub(super) fn close_stopped_run_pane_after_grace(
     backend: &dyn rimz::mux::MuxBackend,

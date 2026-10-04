@@ -5984,7 +5984,7 @@ fn loop_stop_cancels_a_spawn_run_in_an_unroomed_project() {
 }
 
 /// The run stops and its lock is released, then the command fails naming
-/// the pane it could not close.
+/// the pane it could not close and the stop that does close it.
 #[cfg(unix)]
 #[test]
 fn loop_stop_fails_after_stopping_a_run_whose_pane_stays_open() {
@@ -6120,8 +6120,11 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
             String::from_utf8_lossy(&stopped.stdout).contains("loop `spawn`: stopped"),
             "{stopped:?}"
         );
+        let retry = format!("run `rimz agents stop {}` to close it", run.run_id);
         assert!(
-            stderr.contains("is still open") && stderr.contains("rerun the stop"),
+            stderr.contains("is still open")
+                && stderr.contains(&retry)
+                && !stderr.contains("rerun the stop"),
             "{stderr}"
         );
     }
@@ -6142,6 +6145,29 @@ fn loop_stop_of_a_spawn_run(pane_open: bool) {
         .open(lock_path)
         .unwrap();
     released.try_lock().expect("loop lock released");
+    drop(released);
+    if pane_open {
+        let closes = || {
+            std::fs::read_to_string(env.project_root.join("spawn.log"))
+                .unwrap()
+                .matches("close-pane")
+                .count()
+        };
+        assert_eq!(closes(), 1);
+        let again = command().args(["loop", "stop", "spawn"]).output().unwrap();
+        assert!(again.status.success(), "{again:?}");
+        assert_eq!(closes(), 1, "a second loop stop never reaches the pane");
+        let retried = command()
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                r#"[{"id":51,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            )
+            .args(["agents", "stop", run.run_id.as_str()])
+            .output()
+            .unwrap();
+        assert!(retried.status.success(), "{retried:?}");
+        assert_eq!(closes(), 2, "the named stop closes the run's pane");
+    }
     for entry in std::fs::read_dir(env.rimz_home().join("ws")).unwrap() {
         let name = entry.unwrap().file_name();
         let name = name.to_string_lossy();

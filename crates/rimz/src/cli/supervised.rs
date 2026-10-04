@@ -149,8 +149,8 @@ pub(crate) enum StopRunErr {
     #[error(transparent)]
     NotCanceled(anyhow::Error),
     /// The run is terminal and its pane was not confirmed closed.
-    #[error(transparent)]
-    PaneOpen(#[from] pane::PaneOpen),
+    #[error("{0}; rerun the stop to close it")]
+    PaneOpen(pane::PaneOpen),
 }
 
 /// Cancel a live supervised run, then reclaim its pane after the existing
@@ -165,19 +165,20 @@ pub(crate) fn stop_supervised_run(
     run: &RunRecord,
 ) -> std::result::Result<(), StopRunErr> {
     cancel_supervised_run(store, run).map_err(StopRunErr::NotCanceled)?;
-    let backend =
-        pane::backend_for_workspace_session(workspace, globals).map_err(|err| pane::PaneOpen {
+    let backend = pane::backend_for_workspace_session(workspace, globals).map_err(|err| {
+        StopRunErr::PaneOpen(pane::PaneOpen {
             pane: None,
             reason: format!("{err:#}"),
-        })?;
+        })
+    })?;
     pane::close_stopped_run_pane_after_grace(
         backend.as_ref(),
         store,
         &workspace.session_name,
         run,
         pane::STOP_BACKSTOP_GRACE,
-    )?;
-    Ok(())
+    )
+    .map_err(StopRunErr::PaneOpen)
 }
 
 pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Result<()> {
