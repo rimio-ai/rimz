@@ -2421,13 +2421,68 @@ fn action_runs(temp: &tempfile::TempDir) -> u32 {
         .expect("numeric run count")
 }
 
-/// Put a socket-dir entry for `session` where the backend's commands look.
+/// Pin `spec`'s socket directory inside the fixture, so no socket entry lands
+/// in a `ZELLIJ_SOCKET_DIR` the test process inherited.
+#[cfg(unix)]
+fn pinned(temp: &tempfile::TempDir, spec: CommandSpec) -> CommandSpec {
+    spec.env(
+        "ZELLIJ_SOCKET_DIR",
+        temp.path().join("sock").to_string_lossy(),
+    )
+}
+
+/// Put a socket-dir entry for `session` where a pinned command looks.
 #[cfg(unix)]
 fn leave_session_socket(temp: &tempfile::TempDir, session: &str) {
-    let socket =
-        socket::socket_headroom_with_xdg_override(session, Some(&temp.path().join("run"))).path;
+    let socket = socket::spec_socket_path(&pinned(temp, CommandSpec::new("zellij")), session);
     std::fs::create_dir_all(socket.parent().expect("socket dir")).expect("socket dir");
     std::fs::write(socket, "").expect("socket entry");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_spec_socket_path_follows_the_commands_own_environment() {
+    let spec = CommandSpec::new("zellij")
+        .env("XDG_RUNTIME_DIR", "/x")
+        .env("TMPDIR", "/t");
+    let set = spec.clone().env("ZELLIJ_SOCKET_DIR", "/s");
+    assert_eq!(
+        socket::spec_socket_path(&set, "room"),
+        Path::new("/s/contract_version_1/room")
+    );
+    // A removed key is unset in the child whatever this process exports.
+    let removed = spec.env_remove("ZELLIJ_SOCKET_DIR");
+    let xdg_home = if cfg!(target_os = "linux") {
+        "/x/zellij/contract_version_1/room"
+    } else {
+        "/t"
+    };
+    assert!(socket::spec_socket_path(&removed, "room").starts_with(xdg_home));
+    let no_xdg = CommandSpec::new("zellij")
+        .env("TMPDIR", "/t")
+        .env_remove("ZELLIJ_SOCKET_DIR")
+        .env_remove("XDG_RUNTIME_DIR");
+    assert!(
+        socket::spec_socket_path(&no_xdg, "room").starts_with("/t"),
+        "falls to the command's TMPDIR"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rerun_that_outlasts_the_deadline_reports_the_callers_bound() {
+    let (temp, backend) = counting_action_shim(&format!(
+        "if [ \"$n\" -lt 2 ]; then {REFUSE}; fi; exec sleep 30"
+    ));
+    leave_session_socket(&temp, "rimz-test");
+
+    let err = pinned(&temp, backend.zellij_action("rimz-test"))
+        .arg("new-pane")
+        .run_with_timeout(Duration::from_secs(1))
+        .expect_err("the rerun hangs");
+
+    assert!(matches!(err, MuxErr::Timeout { seconds: 1, .. }), "{err:?}");
+    assert_eq!(action_runs(&temp), 2);
 }
 
 #[cfg(unix)]
@@ -2442,8 +2497,7 @@ fn a_refusal_of_a_live_session_is_rerun_until_the_action_lands() {
         ));
         leave_session_socket(&temp, "rimz-test");
 
-        let output = backend
-            .session_action(session)
+        let output = pinned(&temp, backend.session_action(session))
             .arg("new-pane")
             .run()
             .expect("the refusal clears");
@@ -2459,8 +2513,7 @@ fn a_refusal_that_never_clears_stops_at_its_bound() {
     let (temp, backend) = counting_action_shim(REFUSE);
     leave_session_socket(&temp, "rimz-test");
 
-    let err = backend
-        .zellij_action("rimz-test")
+    let err = pinned(&temp, backend.zellij_action("rimz-test"))
         .arg("new-pane")
         .run()
         .expect_err("the refusal stands");
@@ -2474,8 +2527,7 @@ fn a_refusal_that_never_clears_stops_at_its_bound() {
 fn an_absent_session_and_an_unrelated_failure_are_answered_once() {
     // No socket: the session is gone, and its refusal is the answer.
     let (temp, backend) = counting_action_shim(REFUSE);
-    let err = backend
-        .zellij_action("rimz-test")
+    let err = pinned(&temp, backend.zellij_action("rimz-test"))
         .arg("new-pane")
         .run()
         .expect_err("absent session");
@@ -2487,8 +2539,7 @@ fn an_absent_session_and_an_unrelated_failure_are_answered_once() {
 
     // Another session's socket does not vouch for the named one.
     leave_session_socket(&temp, "rimz-other");
-    backend
-        .zellij_action("rimz-test")
+    pinned(&temp, backend.zellij_action("rimz-test"))
         .arg("new-pane")
         .run()
         .expect_err("absent session beside a live one");
@@ -2497,8 +2548,7 @@ fn an_absent_session_and_an_unrelated_failure_are_answered_once() {
     // A live session's own failure may follow a dispatched action.
     let (temp, backend) = counting_action_shim("printf 'pane not found\\n' >&2; exit 1");
     leave_session_socket(&temp, "rimz-test");
-    backend
-        .zellij_action("rimz-test")
+    pinned(&temp, backend.zellij_action("rimz-test"))
         .arg("close-pane")
         .run()
         .expect_err("unrelated failure");
@@ -2507,8 +2557,7 @@ fn an_absent_session_and_an_unrelated_failure_are_answered_once() {
     // The banner on a successful exit is the caller's to classify.
     let (temp, backend) = counting_action_shim("printf 'There is no active session!\\n' >&2");
     leave_session_socket(&temp, "rimz-test");
-    backend
-        .zellij_action("rimz-test")
+    pinned(&temp, backend.zellij_action("rimz-test"))
         .arg("list-panes")
         .run()
         .expect("exit 0");
