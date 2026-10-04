@@ -407,7 +407,7 @@ fn live_targets(sweep_dead: bool) -> (Vec<LiveTarget>, usize) {
                 dead_swept += recovery::sweep_orphan_processes(
                     ws.workspace_id.as_str(),
                     &ws.session_name,
-                    false,
+                    recovery::SweepScope::LivenessProbe,
                 )
                 .signalled
                 .len();

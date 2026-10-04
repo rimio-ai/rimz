@@ -475,7 +475,8 @@ path = "crates/rimz/src/mux"
 # consumed by the live backend tests that prove room options at the multiplexer.
 # `MuxBackend::require_pane_in_session` is the room-membership check `pane send` and `pane capture` run before any pane I/O (+1).
 # Room entry asks the backend whether it can open a tab before attach (+1).
-surface-budget = 253
+# `SweepScope` names the process sweep's two scopes in place of a bool (+1).
+surface-budget = 254
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -782,13 +783,14 @@ surface-budget = 16
 [[module]]
 path = "crates/rimz/src/mux/recovery.rs"
 # Hook writers carry the room identity through the shared workspace environment pin.
+# The sweep scope names what teardown may kill that reload's liveness probe may not.
 allowed-dependencies = [
     "ids",
     "mux",
     "proc",
     "workspace",
 ]
-surface-budget = 14
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/mux/zellij/session.rs"

@@ -34,15 +34,26 @@ fn names_session(cmdline: &str, session_name: &str) -> bool {
         .any(|token| token == session_name)
 }
 
+/// What a process sweep may kill beyond the room's respawnable sidebar and
+/// app-server daemons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SweepScope {
+    /// The session is already killed: also sweep its pure mux server and reap
+    /// the `rimz hooks feed` processes pinned to the workspace.
+    Teardown,
+    /// The session only reads as gone and may be live: kill nothing more.
+    LivenessProbe,
+}
+
 /// Classify an orphaned room process and carry the environment-domain guard
 /// required before signalling it. The exact session scopes both server and
-/// daemon matches; `include_mux_server` controls pure server matches only.
+/// daemon matches; [`SweepScope::Teardown`] admits pure server matches.
 #[cfg(any(unix, test))]
 fn classify_sweep_target(
     cmdline: &str,
     session_name: &str,
     workspace_id: &str,
-    include_mux_server: bool,
+    scope: SweepScope,
 ) -> Option<RequiredDomainCheck> {
     if !names_session(cmdline, session_name) {
         return None;
@@ -50,7 +61,7 @@ fn classify_sweep_target(
     let mux_server = cmdline.contains("--server");
     let workspace_daemon = cmdline.contains(workspace_id)
         && (cmdline.contains("sidebar") || cmdline.contains("app-server"));
-    if !(include_mux_server && mux_server || workspace_daemon) {
+    if !(scope == SweepScope::Teardown && mux_server || workspace_daemon) {
         return None;
     }
     Some(if mux_server {
@@ -69,7 +80,7 @@ fn select_sweep_targets(
     session_name: &str,
     workspace_id: &str,
     protected: &HashSet<u32>,
-    include_mux_server: bool,
+    scope: SweepScope,
     hook_identity: impl Fn(u32) -> Option<(Vec<std::ffi::OsString>, String)>,
 ) -> Vec<(u32, RequiredDomainCheck)> {
     procs
@@ -77,31 +88,26 @@ fn select_sweep_targets(
         .filter(|proc| proc.real_uid == my_uid)
         .filter(|proc| !protected.contains(&proc.pid))
         .filter_map(|proc| {
-            classify_sweep_target(
-                &proc.cmdline,
-                session_name,
-                workspace_id,
-                include_mux_server,
-            )
-            .or_else(|| {
-                // Hooks can outlive their pane and publish caches. Only an
-                // explicit teardown may reap them, not reload's liveness probe.
-                if !include_mux_server || !proc.cmdline.contains("hooks feed") {
-                    return None;
-                }
-                let (argv, pin) = hook_identity(proc.pid)?;
-                let [program, command, subcommand, ..] = argv.as_slice() else {
-                    return None;
-                };
-                (std::path::Path::new(program)
-                    .file_name()
-                    .is_some_and(|name| name == "rimz")
-                    && command == "hooks"
-                    && subcommand == "feed"
-                    && pin == workspace_id)
-                    .then_some(RequiredDomainCheck::World)
-            })
-            .map(|check| (proc.pid, check))
+            classify_sweep_target(&proc.cmdline, session_name, workspace_id, scope)
+                .or_else(|| {
+                    // Hooks can outlive their pane and publish caches. Only an
+                    // explicit teardown may reap them, not reload's liveness probe.
+                    if scope != SweepScope::Teardown || !proc.cmdline.contains("hooks feed") {
+                        return None;
+                    }
+                    let (argv, pin) = hook_identity(proc.pid)?;
+                    let [program, command, subcommand, ..] = argv.as_slice() else {
+                        return None;
+                    };
+                    (std::path::Path::new(program)
+                        .file_name()
+                        .is_some_and(|name| name == "rimz")
+                        && command == "hooks"
+                        && subcommand == "feed"
+                        && pin == workspace_id)
+                        .then_some(RequiredDomainCheck::World)
+                })
+                .map(|check| (proc.pid, check))
         })
         .collect()
 }
@@ -123,16 +129,16 @@ pub(crate) fn protected_pids(procs: &[ProcInfo], self_pid: u32) -> HashSet<u32> 
 
 /// Sweep this user's orphaned server / leaked daemons for `(workspace, session)`
 /// (SIGTERM→grace→SIGKILL), excluding the caller and its ancestors. `rimz reset`
-/// runs it after killing the session (`include_mux_server: true`); `rimz reload`
+/// runs it after killing the session ([`SweepScope::Teardown`]); `rimz reload`
 /// runs it for a workspace whose session a probe read as gone, reaping only
-/// respawnable sidebar/app-server leftovers (`include_mux_server: false`) so a
+/// respawnable sidebar/app-server leftovers ([`SweepScope::LivenessProbe`]) so a
 /// misread live session is never destroyed.
 /// Teardown also reaps hook feeds carrying this workspace's inherited pin.
 #[cfg(unix)]
 pub(crate) fn sweep_orphan_processes(
     workspace_id: &str,
     session_name: &str,
-    include_mux_server: bool,
+    scope: SweepScope,
 ) -> KillOutcome {
     let procs = crate::proc::list_processes();
     let protected = protected_pids(&procs, std::process::id());
@@ -143,7 +149,7 @@ pub(crate) fn sweep_orphan_processes(
         session_name,
         workspace_id,
         &protected,
-        include_mux_server,
+        scope,
         |pid| {
             Some((
                 crate::proc::argv(pid)?,
@@ -167,7 +173,7 @@ pub(crate) fn sweep_orphan_processes(
 pub(crate) fn sweep_orphan_processes(
     _workspace_id: &str,
     _session_name: &str,
-    _include_mux_server: bool,
+    _scope: SweepScope,
 ) -> KillOutcome {
     KillOutcome::default()
 }
@@ -432,7 +438,15 @@ mod tests {
         ];
         let protected = HashSet::new();
         assert_eq!(
-            select_sweep_targets(&procs, me, SESSION, WS, &protected, true, |_| None),
+            select_sweep_targets(
+                &procs,
+                me,
+                SESSION,
+                WS,
+                &protected,
+                SweepScope::Teardown,
+                |_| None
+            ),
             vec![
                 (10, RequiredDomainCheck::Mux(MuxName::Zellij)),
                 (11, RequiredDomainCheck::World),
@@ -445,7 +459,15 @@ mod tests {
         // probe that misread a live session as gone can only reap respawnable
         // daemons, never tear the session down.
         assert_eq!(
-            select_sweep_targets(&procs, me, SESSION, WS, &protected, false, |_| None),
+            select_sweep_targets(
+                &procs,
+                me,
+                SESSION,
+                WS,
+                &protected,
+                SweepScope::LivenessProbe,
+                |_| None
+            ),
             vec![
                 (11, RequiredDomainCheck::World),
                 (12, RequiredDomainCheck::World),
@@ -477,7 +499,15 @@ mod tests {
         assert!(protected.contains(&101));
         assert!(protected.contains(&100));
         assert!(protected.contains(&1));
-        let got = select_sweep_targets(&procs, me, SESSION, WS, &protected, true, |_| None);
+        let got = select_sweep_targets(
+            &procs,
+            me,
+            SESSION,
+            WS,
+            &protected,
+            SweepScope::Teardown,
+            |_| None,
+        );
         assert_eq!(got, vec![(10, RequiredDomainCheck::Mux(MuxName::Zellij))]);
     }
 
@@ -506,13 +536,29 @@ mod tests {
         };
         let protected = HashSet::from([15]);
         assert_eq!(
-            select_sweep_targets(&procs, 1000, SESSION, WS, &protected, true, hook_identity),
+            select_sweep_targets(
+                &procs,
+                1000,
+                SESSION,
+                WS,
+                &protected,
+                SweepScope::Teardown,
+                hook_identity
+            ),
             vec![(10, RequiredDomainCheck::World)],
             "a room's hook writer can outlive its mux without naming the session in argv",
         );
         assert!(
-            select_sweep_targets(&procs, 1000, SESSION, WS, &protected, false, hook_identity)
-                .is_empty(),
+            select_sweep_targets(
+                &procs,
+                1000,
+                SESSION,
+                WS,
+                &protected,
+                SweepScope::LivenessProbe,
+                hook_identity
+            )
+            .is_empty(),
             "reload must not kill hooks on a possibly mistaken dead-session probe",
         );
     }
@@ -543,14 +589,20 @@ mod tests {
         for name in ["repo-abcdef", "other-repo-abcd", "repo-abcd-suffix"] {
             let server = format!("zellij --server /run/zellij/contract_version_1/{name}");
             let sidebar = format!("rimz sidebar serve --workspace-id {WS} --session-name {name}");
-            assert_eq!(classify_sweep_target(&server, "repo-abcd", WS, true), None);
-            assert_eq!(classify_sweep_target(&sidebar, "repo-abcd", WS, true), None);
+            assert_eq!(
+                classify_sweep_target(&server, "repo-abcd", WS, SweepScope::Teardown),
+                None
+            );
+            assert_eq!(
+                classify_sweep_target(&sidebar, "repo-abcd", WS, SweepScope::Teardown),
+                None
+            );
             assert!(!is_sidebar_serve(&sidebar, WS, "repo-abcd"));
         }
         for suffix in ["", " ", "/", "\t"] {
             let server = format!("zellij --server /run/zellij/repo-abcd{suffix}");
             assert_eq!(
-                classify_sweep_target(&server, "repo-abcd", WS, true),
+                classify_sweep_target(&server, "repo-abcd", WS, SweepScope::Teardown),
                 Some(RequiredDomainCheck::Mux(MuxName::Zellij))
             );
         }

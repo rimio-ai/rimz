@@ -96,9 +96,12 @@ pub fn teardown_room(
     let cache_removed = backend.purge_resurrection_cache(session_name);
     // The session is already a corpse (killed above), so sweeping its lingering
     // mux server is cleanup, not destruction.
-    let processes_swept =
-        crate::mux::recovery::sweep_orphan_processes(workspace_id.as_str(), session_name, true)
-            .signalled;
+    let processes_swept = crate::mux::recovery::sweep_orphan_processes(
+        workspace_id.as_str(),
+        session_name,
+        crate::mux::recovery::SweepScope::Teardown,
+    )
+    .signalled;
     // A dying producer can publish after kill_session returns. Restore only
     // after the sweep's exit barrier, before callers touch workspace records.
     if let Some(roster) = roster
