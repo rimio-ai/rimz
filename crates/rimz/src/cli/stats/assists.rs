@@ -26,6 +26,7 @@ pub(super) struct AssistRollup {
     pub(super) compacts: usize,
     pub(super) keepalives: usize,
     pub(super) idle_stops: usize,
+    pub(super) launch_retries: usize,
     pub(super) restores: usize,
     pub(super) restored_sessions: usize,
     pub(super) sweeps: usize,
@@ -151,6 +152,18 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    LaunchRetry {
+        at: Timestamp,
+        kind: AgentKind,
+        label: String,
+        run_id: rimz::RunId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        startup_ms: u64,
+        relaunched: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     FlipCompact {
         at: Timestamp,
         kind: AgentKind,
@@ -235,6 +248,9 @@ impl AssistStats {
                     rollup.keepalives += usize::from(*delivered)
                 }
                 AssistEvent::IdleStop { stopped, .. } => rollup.idle_stops += usize::from(*stopped),
+                AssistEvent::LaunchRetry { relaunched, .. } => {
+                    rollup.launch_retries += usize::from(*relaunched);
+                }
                 AssistEvent::IdleCompact { delivered, .. }
                 | AssistEvent::FlipCompact { delivered, .. } => {
                     rollup.compacts += usize::from(*delivered);
@@ -416,6 +432,24 @@ impl AssistEvent {
                 stopped,
                 error,
             },
+            Assist::LaunchRetry {
+                kind,
+                label,
+                run_id,
+                exit_code,
+                startup_ms,
+                relaunched,
+                error,
+            } => Self::LaunchRetry {
+                at: record.at,
+                kind,
+                label,
+                run_id,
+                exit_code,
+                startup_ms,
+                relaunched,
+                error,
+            },
             Assist::IdleCompact {
                 kind,
                 agent_id,
@@ -513,6 +547,7 @@ impl AssistEvent {
             | Self::Compact { at, .. }
             | Self::IdleCompact { at, .. }
             | Self::IdleStop { at, .. }
+            | Self::LaunchRetry { at, .. }
             | Self::CacheKeepalive { at, .. }
             | Self::FlipCompact { at, .. }
             | Self::Resume { at, .. }
@@ -612,6 +647,9 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     }
     if rollup.idle_stops > 0 {
         rows.push(("Idle stop:", rollup.idle_stops.to_string()));
+    }
+    if rollup.launch_retries > 0 {
+        rows.push(("Launch retry:", rollup.launch_retries.to_string()));
     }
     if rollup.redeems > 0 {
         let mut value = rollup.redeems.to_string();
@@ -776,6 +814,34 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 "{time} ■ {label} idle {outcome} after {} (threshold {}){requester}{error}",
                 compact(*idle_secs),
                 compact(*idle_after_secs),
+            )
+        }
+        AssistEvent::LaunchRetry {
+            kind,
+            label,
+            exit_code,
+            startup_ms,
+            relaunched,
+            error,
+            ..
+        } => {
+            let exit = exit_code.map_or_else(
+                || "on a signal".to_owned(),
+                |code| format!("with code {code}"),
+            );
+            let startup =
+                rimz::utils::time::format_duration_compact(Duration::from_secs(startup_ms / 1000));
+            let outcome = if *relaunched {
+                "launched once more"
+            } else {
+                "relaunch failed"
+            };
+            let error = error
+                .as_deref()
+                .map(|error| format!(" ({})", first_line(error)))
+                .unwrap_or_default();
+            format!(
+                "{time} ↺ {label} {kind} exited {exit} after {startup} before its session opened — {outcome}{error}"
             )
         }
         AssistEvent::IdleCompact {
@@ -963,6 +1029,9 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         AssistEvent::IdleStop {
             agent_id, stopped, ..
         } => format!("{at} {benefit} · agent {agent_id} · stopped {stopped}"),
+        AssistEvent::LaunchRetry {
+            run_id, relaunched, ..
+        } => format!("{at} {benefit} · run {run_id} · relaunched {relaunched}"),
         AssistEvent::IdleCompact {
             agent_id,
             message_id,
@@ -1156,6 +1225,57 @@ mod tests {
         assert!(json["events"][0].get("stopped").is_none(), "{json}");
         let line = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
         assert!(!line.contains("took over"), "{line}");
+    }
+
+    #[test]
+    fn launch_retries_count_relaunches_and_preserve_spawn_failures() {
+        let records = [true, false]
+            .into_iter()
+            .map(|relaunched| {
+                serde_json::from_value::<AssistRecord>(serde_json::json!({
+                    "at": "2026-01-01T00:00:00Z", "assist": "launch_retry",
+                    "kind": "codex", "label": "@otter",
+                    "run_id": "run_0123456789abcdef0123456789abcdef",
+                    "exit_code": 1, "startup_ms": 17_250, "relaunched": relaunched,
+                    "error": if relaunched { None } else { Some("codex: not found\ncaused by") }
+                }))
+                .expect("launch retry assist wire format")
+            })
+            .collect();
+        let stats = AssistStats::from_records("all", records);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["rollup"]["launch_retries"], 1);
+        assert_eq!(json["events"][0]["assist"], "launch_retry");
+        assert_eq!(json["events"][0]["exit_code"], 1);
+        assert_eq!(json["events"][0]["startup_ms"], 17_250);
+        assert_eq!(
+            json["events"][0]["run_id"],
+            "run_0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(category_rows(&stats.rollup).len(), 1);
+        assert!(category_rows(&stats.rollup)[0].contains("Launch retry:"));
+        let lines = stats
+            .events
+            .iter()
+            .map(|event| benefit_line(event, &jiff::tz::TimeZone::UTC))
+            .collect::<Vec<_>>();
+        assert!(
+            lines.iter().any(|line| line.contains(
+                "@otter codex exited with code 1 after 17s before its session opened — launched once more"
+            )),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("relaunch failed (codex: not found)")),
+            "{lines:?}"
+        );
+        let forensic = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+        assert!(
+            forensic.contains("run run_0123456789abcdef0123456789abcdef"),
+            "{forensic}"
+        );
     }
 
     #[test]

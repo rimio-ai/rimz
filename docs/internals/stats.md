@@ -198,6 +198,7 @@ Assists come from the account-global assist log, which [loops.md](./harness/loop
 | `Auto-continue:` | delivered continues, with the summed recovered hours |
 | `Auto-compact:` | every `auto_compact` record, plus delivered `idle_compact` and `flip_compact` records |
 | `Idle stop:` | `idle_stop` records whose stop went through |
+| `Launch retry:` | `launch_retry` records whose second spawn succeeded |
 | `Auto-redeem:` | redeem attempts, with the `reset` outcomes |
 | `Auto-resume:` | rebirth restores, with the agents they brought back |
 | `Auto-gc:` | completed automatic gc sweeps, with the bytes they reclaimed |

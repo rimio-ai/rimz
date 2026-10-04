@@ -1659,6 +1659,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             compacts: 2,
             keepalives: 0,
             idle_stops: 0,
+            launch_retries: 0,
             restores: 1,
             restored_sessions: 2,
             sweeps: 1,

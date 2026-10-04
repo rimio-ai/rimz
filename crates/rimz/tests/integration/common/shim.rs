@@ -133,6 +133,11 @@ pub fn write_path_shim(dir: &Path, program: &str, body: &str) -> PathBuf {
 /// session work, so a sidebar probe never registers an agent or reads as a
 /// launch to a test tracing invocations.
 ///
+/// `RIMZ_TEST_AGENT_LAUNCH_LOG` names a file that gains one line per session
+/// launch (a hook helper's `app-server` call is not one), and the first
+/// `RIMZ_TEST_AGENT_STARTUP_DEATHS` of those launches exit 7 before any hook,
+/// each printing its launch number alone, so a narrow pane cannot wrap it.
+///
 /// The hook order is load-bearing: `PostToolUse` is the last hook before the
 /// `RIMZ_TEST_AGENT_SLEEP_MS` sleep, and
 /// `journey::deep::wait_for_quiet_account_run` reads its landing as the run
@@ -162,6 +167,15 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
          if [ \"$agent\" = claude ] && [ \"${{1:-}}\" = auth ]; then\n\
            printf 'Not logged in\\n' >&2\n\
            exit 1\n\
+         fi\n\
+         launch_log=${{RIMZ_TEST_AGENT_LAUNCH_LOG:-}}\n\
+         if [ -n \"$launch_log\" ] && [ \"${{1:-}}\" != app-server ]; then\n\
+           printf 'launch\\n' >> \"$launch_log\"\n\
+           launches=$(($(wc -l < \"$launch_log\")))\n\
+           if [ \"$launches\" -le \"${{RIMZ_TEST_AGENT_STARTUP_DEATHS:-0}}\" ]; then\n\
+             printf '%s\\n' \"$launches\" >&2\n\
+             exit 7\n\
+           fi\n\
          fi\n\
          session=${{RIMZ_TEST_AGENT_SESSION:-sess-hook-agent}}\n\
          worktree=${{PWD:-.}}\n\

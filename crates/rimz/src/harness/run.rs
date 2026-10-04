@@ -431,6 +431,33 @@ pub fn record_provider_process(
     .map(|(record, ())| record)
 }
 
+/// What the exec wrapper saw when its provider process exited.
+#[derive(Clone, Copy, Debug)]
+pub struct ProviderExit {
+    /// A `rimz subagents` launch, not a resume of one.
+    pub fresh_subagent: bool,
+    pub success: bool,
+    /// The wrapper ended the provider itself.
+    pub abrupt: bool,
+    /// A stop or interrupt signal reached the wrapper.
+    pub signaled: bool,
+    /// This wrapper already spawned its provider a second time.
+    pub relaunched: bool,
+}
+
+/// Whether a provider exit is a startup death the wrapper answers by spawning
+/// the same command once more. `Pending` means RimZ accepted no lifecycle
+/// observation for the run. It does not prove the provider did nothing: one
+/// that acts before its first hook and then exits nonzero may repeat that work.
+pub fn startup_relaunch_due(record: &RunRecord, exit: ProviderExit) -> bool {
+    record.status == RunStatus::Pending
+        && exit.fresh_subagent
+        && !exit.success
+        && !exit.abrupt
+        && !exit.signaled
+        && !exit.relaunched
+}
+
 pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Result<RunRecord> {
     update_record(paths, run_id, |record, _| {
         if record.failure_tail.is_some() {

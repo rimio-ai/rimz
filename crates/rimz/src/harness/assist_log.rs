@@ -135,6 +135,21 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// A subagent whose provider exited before opening a session, and the
+    /// one relaunch the exec wrapper answered it with.
+    LaunchRetry {
+        kind: AgentKind,
+        label: String,
+        run_id: crate::ids::RunId,
+        /// The first process's exit code; absent when a signal killed it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        /// Spawn to exit of the first process.
+        startup_ms: u64,
+        relaunched: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     FlipCompact {
         kind: AgentKind,
         agent_id: AgentSessionId,
@@ -433,11 +448,32 @@ mod tests {
                     error: Some("agent coder has no bound pane".into()),
                 },
             },
+            AssistRecord {
+                at: ts(20),
+                assist: Assist::LaunchRetry {
+                    kind: AgentKind::new_unchecked("codex"),
+                    label: "@otter".into(),
+                    run_id: crate::ids::RunId::parse("run_0123456789abcdef0123456789abcdef")
+                        .expect("run id"),
+                    exit_code: None,
+                    startup_ms: 17_250,
+                    relaunched: false,
+                    error: Some("No such file or directory".into()),
+                },
+            },
         ] {
             let json = serde_json::to_string(&record).expect("serialize");
             let decoded: AssistRecord = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(decoded, record);
         }
+        let retried = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "launch_retry", "kind": "codex",
+            "label": "@otter", "run_id": "run_0123456789abcdef0123456789abcdef",
+            "exit_code": 1, "startup_ms": 17250, "relaunched": true
+        });
+        let decoded = serde_json::from_value::<AssistRecord>(retried.clone());
+        assert!(decoded.is_ok(), "launch retry is an assist: {decoded:?}");
+        assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), retried);
         let stopped = serde_json::json!({
             "at": "2026-06-02T12:00:00Z", "assist": "idle_stop", "kind": "claude",
             "agent_id": "session-1", "label": "@coder", "idle_secs": 200,
