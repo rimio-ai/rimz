@@ -265,7 +265,7 @@ Repository loop tasks each own a directory under [loops/](../../loops/README.md)
 
 Run one Cargo-family command at a time in a worktree. Concurrent builds only wait on the same target-directory lock: batch focused names in one `cargo xtask test` invocation, let that run finish before starting `gate`, and use `check` for an early broad compile signal. Reserve `test-archive` plus partitioned execution for genuinely large CI suites.
 
-Escalate past `gate` when the change touches the matching surface: `cargo xtask test -P live` for live-backend and deep-mux-smoke coverage, `cargo xtask test -P journey` for rendered journeys, `cargo xtask externals` when dependencies change, and `cargo xtask ci` for both checks and the full suite.
+Escalate past `gate` when the change touches the matching surface: `cargo xtask test -P live` for live-backend and deep-mux-smoke coverage, `cargo xtask test -P journey` for rendered journeys, `cargo xtask externals` when dependencies change, and `cargo xtask ci` for both checks and the full suite. Run `cargo xtask build-plugin` before a live Zellij verification: without the presence wasm the plugin-dependent live tests self-skip, and the self-skip report beneath the summary is the only sign that they were counted as passes without being exercised.
 
 Two wall clocks bound a run, so a wedged compile, test process, or multiplexer costs a bounded wait instead of the caller's patience:
 
