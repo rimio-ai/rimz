@@ -39,10 +39,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The rimz-ci image keeps the no-persistence job container model while
-    # starting warm: Rust, cargo plugins, cargo-vet, tmux, Zellij, mold,
-    # sccache, and the release toolchain are baked once by ci-image.yml. The
-    # workspace path stays stable for cargo cache keys, concurrent jobs stay
-    # isolated, and every run skips per-job toolchain bootstrap.
+    # starting warm: Rust, cargo plugins, cargo-vet, the cargo registry, tmux,
+    # Zellij, mold, sccache, and the release toolchain are baked once by
+    # ci-image.yml. No job restores a registry cache: cargo fetches only what
+    # Cargo.lock gained since the image was built. The workspace path stays
+    # stable for cargo cache keys, concurrent jobs stay isolated, and every run
+    # skips per-job toolchain bootstrap.
     container:
       image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
       options: --init
@@ -68,16 +70,6 @@ jobs:
 
       - name: Trust checkout for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Cargo registry cache
-        # rust-cache keeps the registry and git index warm; sccache owns
-        # compiled artifact reuse.
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target/ci"
-          prefix-key: "rimz-ci"
-          cache-bin: false
-          cache-targets: false
 
       - name: Configure sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -134,15 +126,6 @@ jobs:
 
       - name: Trust checkout for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Cargo registry cache
-        # A warm registry/index feeds deny local yanked data and trims vet egress.
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target/ci"
-          prefix-key: "rimz-ci"
-          cache-bin: false
-          cache-targets: false
 
       - name: Configure sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -234,14 +217,6 @@ jobs:
 
       - name: Trust checkout for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Cargo registry cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target/ci"
-          prefix-key: "rimz-ci"
-          cache-bin: false
-          cache-targets: false
 
       - name: Configure sccache
         uses: mozilla-actions/sccache-action@v0.0.11
