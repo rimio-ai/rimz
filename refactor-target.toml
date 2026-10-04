@@ -433,7 +433,8 @@ path = "crates/rimz/src/harness"
 # Root registration shares resident-loop subscription arming with the team binding builder (+1).
 # Add-time subscription validation shares the registration scope-key predicate (+1).
 # The resident takeover selector and its open-turn verdict cross the scheduler/CLI seam (+4).
-surface-budget = 671
+# The idle-stop decision and helper request cross the library/CLI seam; the producer hook crosses to sidebar refresh.
+surface-budget = 678
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
