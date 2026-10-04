@@ -23,9 +23,13 @@ fn run_with_timeout_kills_a_hung_child() {
     let started = std::time::Instant::now();
     let err = CommandSpec::new("sleep")
         .arg("30")
-        .run_with_timeout(Duration::from_millis(100))
+        .run_with_timeout(Duration::from_secs(1))
         .expect_err("the deadline fires");
-    assert!(matches!(err, MuxErr::Timeout { .. }), "got: {err}");
+    // The error names the caller's bound, not what was left of it.
+    assert!(
+        matches!(err, MuxErr::Timeout { seconds: 1, .. }),
+        "got: {err}"
+    );
     // The kill lands and the waiter reaps promptly — well under the child's
     // own 30s sleep. Loose bound so a loaded CI box never flakes.
     assert!(

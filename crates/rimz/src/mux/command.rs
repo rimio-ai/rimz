@@ -190,7 +190,7 @@ impl CommandSpec {
         let started = Instant::now();
         let mut reruns = 0;
         let result = loop {
-            let result = self.run_bounded_inner(timeout.saturating_sub(started.elapsed()));
+            let result = self.run_bounded_inner(timeout, started);
             let Some(retry) = self.refusal_retry else {
                 break result;
             };
@@ -241,8 +241,9 @@ impl CommandSpec {
         Ok(output)
     }
 
-    fn run_bounded_inner(&self, timeout: Duration) -> Result<Output> {
-        let started = Instant::now();
+    /// One spawn under the caller's `timeout`, counted from `started` so a
+    /// rerun waits only what is left while the error still names the bound.
+    fn run_bounded_inner(&self, timeout: Duration, started: Instant) -> Result<Output> {
         crate::proc::testkit::count_spawn();
         let mut child = self
             .to_command()

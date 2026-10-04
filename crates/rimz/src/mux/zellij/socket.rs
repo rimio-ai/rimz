@@ -65,8 +65,7 @@ pub(super) fn refused_live_session(spec: &CommandSpec, output: &Output) -> bool 
         .iter()
         .position(|arg| arg == "--session")
         .and_then(|flag| spec.args.get(flag + 1));
-    let xdg = spec.env.get("XDG_RUNTIME_DIR").map(Path::new);
-    let socket = socket_headroom_with_xdg_override(session.map_or("", String::as_str), xdg).path;
+    let socket = spec_socket_path(spec, session.map_or("", String::as_str));
     if session.is_some() {
         return socket.symlink_metadata().is_ok();
     }
@@ -77,6 +76,24 @@ pub(super) fn refused_live_session(spec: &CommandSpec, output: &Output) -> bool 
             .flatten()
             .any(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
     })
+}
+
+/// Where the Zellij child `spec` starts looks for `session`'s socket.
+pub(super) fn spec_socket_path(spec: &CommandSpec, session: &str) -> PathBuf {
+    // The child's own environment: a key the spec sets or removes outranks
+    // what this process exports.
+    let child_env = |key: &str| match spec.env.get(key) {
+        Some(value) => Some(PathBuf::from(value)).filter(|path| !path.as_os_str().is_empty()),
+        None if spec.env_remove.contains(key) => None,
+        None => env_path(key),
+    };
+    expected_socket_path_from(
+        session,
+        child_env("ZELLIJ_SOCKET_DIR").as_deref(),
+        child_env("XDG_RUNTIME_DIR").as_deref(),
+        &child_env("TMPDIR").unwrap_or_else(|| PathBuf::from("/tmp")),
+        &current_uid(),
+    )
 }
 
 fn socket_headroom_from(
