@@ -259,7 +259,8 @@ path = "crates/rimz/src/cli"
 # Launch cwd and prompt-file resolution share the caller tmp reversal (+1).
 # `main` maps the scenes' shared usage error to exit 2 (+1).
 # The `accounts use` line is built once for both commands' switch hints (+1).
-surface-budget = 31
+# The position's standing and its in-room check serve providers and accounts list (+1).
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/config"

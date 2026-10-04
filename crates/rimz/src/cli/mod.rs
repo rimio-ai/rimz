@@ -954,6 +954,19 @@ pub(crate) fn pinned_room_root() -> Option<PathBuf> {
         .and_then(|(id, root)| rimz::workspace::verify_pin(&id, &PathBuf::from(root)))
 }
 
+/// The standing at the caller's position, and whether the caller runs inside
+/// the room there, where `rimz accounts use` can move it.
+pub(crate) fn position_standing(
+    globals: &GlobalFlags,
+    config: &rimz::config::MachineConfig,
+) -> Result<(rimz::room::AccountStanding, bool)> {
+    let position = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let standing = rimz::room::AccountStanding::at(&position.project_root, config)?;
+    let in_room = pinned_room_root()
+        .is_some_and(|pin| pin.canonicalize().ok() == position.project_root.canonicalize().ok());
+    Ok((standing, in_room))
+}
+
 /// The `rimz accounts use` line that moves `kind`'s marker to `name` from the
 /// layer deciding it; `None` when project config decides it or nothing does,
 /// since no form moves the marker then.

@@ -50,7 +50,7 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
         .ensure_shared_dirs()
         .context("preparing shared provider cache paths")?;
     let config = MachineConfig::load_lenient();
-    let (standing, in_room) = match position_standing(globals, &config) {
+    let (standing, in_room) = match super::position_standing(globals, &config) {
         Ok(standing) => standing,
         Err(error) => {
             writeln!(
@@ -180,19 +180,6 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
         })
         .collect();
     render::finish(write_overview(&mut out, &reports, now, &deciding, in_room))
-}
-
-/// The standing at the caller's position, and whether the caller runs inside
-/// the room there, where `rimz accounts use` can move it.
-fn position_standing(
-    globals: &GlobalFlags,
-    config: &MachineConfig,
-) -> Result<(AccountStanding, bool)> {
-    let position = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let standing = AccountStanding::at(&position.project_root, config)?;
-    let in_room = super::pinned_room_root()
-        .is_some_and(|pin| pin.canonicalize().ok() == position.project_root.canonicalize().ok());
-    Ok((standing, in_room))
 }
 
 fn validate_kind(kind: Option<&str>) -> Result<()> {
