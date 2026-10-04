@@ -60,22 +60,22 @@ fn send_keys_separates_dash_leading_text_from_zellij_options() {
     let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
 
     backend
-        .send_keys(&pane, None, "- keep the open questions")
+        .send_keys(&pane, "room-a", "- keep the open questions")
         .expect("send literal text");
 
     assert_eq!(
         shim_log(&temp).trim(),
-        "action write-chars --pane-id terminal_7 -- - keep the open questions"
+        "--session room-a action write-chars --pane-id terminal_7 -- - keep the open questions"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn pane_io_names_the_session_when_given_one() {
+fn every_pane_io_action_names_the_session() {
     let (temp, shim) = support::logging_shim();
     let backend = ZellijBackend::with_program_for_test(&shim);
     let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
-    let session = Some("room-a");
+    let session = "room-a";
 
     backend.send_keys(&pane, session, "hi").expect("send keys");
     backend
@@ -111,7 +111,9 @@ fn paste_text_chunks_large_byte_streams_without_changing_bytes() {
         let (temp, shim) = support::logging_shim();
         let backend = ZellijBackend::with_program_for_test(&shim);
         let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
-        backend.paste_text(&pane, None, &text).expect("paste text");
+        backend
+            .paste_text(&pane, "room-a", &text)
+            .expect("paste text");
         let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
         let expected =
             format!("{BRACKET_PASTE_OPEN}{normalized}{BRACKET_PASTE_CLOSE}").into_bytes();
@@ -123,7 +125,7 @@ fn paste_text_chunks_large_byte_streams_without_changing_bytes() {
         let mut actual = Vec::new();
         for line in log.lines() {
             let bytes = line
-                .strip_prefix("action write --pane-id terminal_7 ")
+                .strip_prefix("--session room-a action write --pane-id terminal_7 ")
                 .expect("targeted byte write")
                 .split_whitespace()
                 .map(|byte| byte.parse::<u8>().expect("decimal byte"))
@@ -157,14 +159,14 @@ touch "$dir/first-chunk"
     let backend = ZellijBackend::with_program_for_test(&shim);
     let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
     let err = backend
-        .paste_text(&pane, None, &"x".repeat(20 * 1024))
+        .paste_text(&pane, "room-a", &"x".repeat(20 * 1024))
         .expect_err("second chunk fails");
     assert!(err.to_string().contains("chunk failed"));
     let log = shim_log(&temp);
     let writes = log
         .lines()
         .map(|line| {
-            line.strip_prefix("action write --pane-id terminal_7 ")
+            line.strip_prefix("--session room-a action write --pane-id terminal_7 ")
                 .expect("targeted byte write")
                 .split_whitespace()
                 .map(|byte| byte.parse::<u8>().expect("decimal byte"))

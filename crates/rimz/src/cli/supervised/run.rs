@@ -1020,7 +1020,9 @@ fn record_failure_tail_before_cleanup(
     let Some(pane) = supervised::pane::resolve_run_pane(store, session_name, &record) else {
         return record;
     };
-    let Some(tail) = supervised::pane::capture_failure_tail(backend, &pane.pane_id) else {
+    let Some(tail) =
+        supervised::pane::capture_failure_tail(backend, &pane.pane_id, &pane.session_name)
+    else {
         return record;
     };
     match rimz::harness::run::record_failure_tail(store.paths(), &record.run_id, &tail) {

@@ -1302,7 +1302,7 @@ impl MuxBackend for ZellijBackend {
     fn capture_pane(
         &self,
         pane: &PaneId,
-        session: Option<&str>,
+        session: &str,
         lines: Option<u16>,
         ansi: bool,
     ) -> Result<PaneCapture> {
@@ -1310,7 +1310,7 @@ impl MuxBackend for ZellijBackend {
         let target = ZellijPaneId::try_from(pane)
             .map_err(output_error)?
             .action_target();
-        let mut spec = self.session_action(session).arg("dump-screen");
+        let mut spec = self.zellij_action(session).arg("dump-screen");
         if ansi {
             spec = spec.arg("-a");
         }
@@ -1331,31 +1331,31 @@ impl MuxBackend for ZellijBackend {
         })
     }
 
-    fn send_keys(&self, pane: &PaneId, session: Option<&str>, text: &str) -> Result<()> {
+    fn send_keys(&self, pane: &PaneId, session: &str, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let target = ZellijPaneId::try_from(pane)
             .map_err(output_error)?
             .action_target();
-        self.session_action(session)
+        self.zellij_action(session)
             .args(["write-chars", "--pane-id", &target, "--", text])
             .run()
             .map(|_| ())
     }
 
-    fn send_key(&self, pane: &PaneId, session: Option<&str>, key: NamedKey) -> Result<()> {
+    fn send_key(&self, pane: &PaneId, session: &str, key: NamedKey) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let target = ZellijPaneId::try_from(pane)
             .map_err(output_error)?
             .action_target();
         let bytes = key.write_bytes().iter().map(u8::to_string);
-        self.session_action(session)
+        self.zellij_action(session)
             .args(["write", "--pane-id", &target])
             .args(bytes)
             .run()
             .map(|_| ())
     }
 
-    fn paste_text(&self, pane: &PaneId, session: Option<&str>, text: &str) -> Result<()> {
+    fn paste_text(&self, pane: &PaneId, session: &str, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let payload = paste_payload(text);
         let target = ZellijPaneId::try_from(pane)
@@ -1369,13 +1369,13 @@ impl MuxBackend for ZellijBackend {
             .collect::<Vec<_>>();
         for chunk in bytes.chunks(super::ZELLIJ_WRITE_CHUNK) {
             if let Err(err) = self
-                .session_action(session)
+                .zellij_action(session)
                 .args(["write", "--pane-id", &target])
                 .args(chunk.iter().map(u8::to_string))
                 .run()
             {
                 let _ = self
-                    .session_action(session)
+                    .zellij_action(session)
                     .args(["write", "--pane-id", &target])
                     .args(BRACKET_PASTE_CLOSE.bytes().map(|byte| byte.to_string()))
                     .run();

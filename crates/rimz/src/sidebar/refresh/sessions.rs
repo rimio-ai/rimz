@@ -264,7 +264,8 @@ fn session_pane_from_snapshot<'a>(
     snapshot: &'a SidebarSnapshot,
     kind: &str,
     session_id: &str,
-) -> Option<&'a PaneId> {
+) -> Option<(&'a PaneId, &'a str)> {
+    let session = snapshot.pane_session_name.as_deref()?;
     snapshot
         .agent_panes
         .iter()
@@ -275,23 +276,25 @@ fn session_pane_from_snapshot<'a>(
                     .as_ref()
                     .is_some_and(|agent_id| agent_id.as_str() == session_id)
         })
-        .map(|pane| &pane.pane_id)
+        .map(|pane| (&pane.pane_id, session))
 }
 
+/// `pane` is the agent's pane with the session that holds it; a pane whose
+/// session is unknown is not read.
 pub fn confirm_codex_turn_death_from_pane(
     runtime: &RuntimePaths,
     login: &LoginKey,
-    pane: Option<&PaneId>,
+    pane: Option<(&PaneId, &str)>,
     error: &mut AgentTurnError,
 ) {
     if !crate::agents::session::turn_death_needs_pane_confirmation("codex", error) {
         return;
     }
-    if let Some(pane) = pane {
+    if let Some((pane, session)) = pane {
         let backend = crate::mux::backend_for(pane.mux());
         let lines = Some(CODEX_TURN_DEATH_CAPTURE_LINES);
         // rimz-invariant: codex-turn-death-confirmation
-        if let Ok(capture) = backend.capture_pane(pane, None, lines, false) {
+        if let Ok(capture) = backend.capture_pane(pane, session, lines, false) {
             crate::agents::session::refine_turn_death_from_frame("codex", error, &capture.raw_text);
         }
     }

@@ -9,7 +9,7 @@ use super::{MuxBackend, MuxErr, Result, backend_for};
 
 pub struct PaneWriter {
     pane: PaneId,
-    session: Option<String>,
+    session: String,
     backend: Box<dyn MuxBackend>,
     _lock: WorkspaceLock,
 }
@@ -17,7 +17,7 @@ pub struct PaneWriter {
 impl PaneWriter {
     /// Wait for any in-flight write to finish, bounded by the workspace lock timeout.
     /// Every write addresses `session` (see [`MuxBackend::send_keys`]).
-    pub fn open(runtime: &RuntimePaths, pane: &PaneId, session: Option<&str>) -> Result<Self> {
+    pub fn open(runtime: &RuntimePaths, pane: &PaneId, session: &str) -> Result<Self> {
         #[cfg(feature = "testkit")]
         crate::testkit::rendezvous("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK");
         let lock = WorkspaceLock::acquire(&runtime.pane_write_lock(pane)).map_err(|source| {
@@ -28,24 +28,21 @@ impl PaneWriter {
         })?;
         Ok(Self {
             pane: pane.clone(),
-            session: session.map(str::to_owned),
+            session: session.to_owned(),
             backend: backend_for(pane.mux()),
             _lock: lock,
         })
     }
 
     pub fn type_text(&self, text: &str) -> Result<()> {
-        self.backend
-            .send_keys(&self.pane, self.session.as_deref(), text)
+        self.backend.send_keys(&self.pane, &self.session, text)
     }
 
     pub fn paste(&self, text: &str) -> Result<()> {
-        self.backend
-            .paste_text(&self.pane, self.session.as_deref(), text)
+        self.backend.paste_text(&self.pane, &self.session, text)
     }
 
     pub fn press(&self, key: NamedKey) -> Result<()> {
-        self.backend
-            .send_key(&self.pane, self.session.as_deref(), key)
+        self.backend.send_key(&self.pane, &self.session, key)
     }
 }

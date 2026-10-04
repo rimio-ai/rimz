@@ -85,7 +85,11 @@ pub(super) fn send_batch_to_live_pane(
     let head = batch
         .first()
         .expect("send_batch_to_live_pane requires at least one message");
-    let writer = PaneWriter::open(store.runtime_paths(), &target.pane_id, None)?;
+    let writer = PaneWriter::open(
+        store.runtime_paths(),
+        &target.pane_id,
+        &workspace.session_name,
+    )?;
     // Decide under the pane lock: a resting agent gets a plain send, since the
     // key would cancel the very turn this paste starts.
     let interrupt = if send.kind == DeliveryKind::Interrupt {

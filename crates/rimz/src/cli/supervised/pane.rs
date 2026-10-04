@@ -516,9 +516,10 @@ pub(super) fn close_run_pane(
 pub(crate) fn capture_failure_tail(
     backend: &dyn rimz::mux::MuxBackend,
     pane_id: &PaneId,
+    session_name: &str,
 ) -> Option<String> {
     // rimz-invariant: run-failure-capture
-    let capture = match backend.capture_pane(pane_id, None, None, false) {
+    let capture = match backend.capture_pane(pane_id, session_name, None, false) {
         Ok(capture) => capture,
         Err(err) => {
             tracing::debug!(

@@ -267,7 +267,9 @@ fn wait_for_text(path: &Path, needle: &str, server: &TmuxServer, pane: &PaneId) 
         assert!(
             Instant::now() < deadline,
             "receiver did not record {needle:?}: {:?}",
-            server.backend.capture_pane(pane, None, Some(30), false)
+            server
+                .backend
+                .capture_pane(pane, ANY_SESSION, Some(30), false)
         );
         thread::sleep(Duration::from_millis(25));
     }

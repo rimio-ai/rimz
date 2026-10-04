@@ -2464,6 +2464,15 @@ fn steer_enter_modes_respect_discrete_submit_key() {
     );
 
     assert_text_then_enter(&trace_log, &user_message("y"));
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let lines = trace_lines(&trace_log);
+    assert!(
+        lines
+            .iter()
+            .filter(|line| line.contains("\taction\twrite\t"))
+            .all(|line| line.contains(&format!("\t--session\t{session}\taction\twrite\t"))),
+        "the paste and the submit key name the room's session {session}; trace: {lines:?}"
+    );
 
     let trace_log = env.project_root.join("zellij-steer-quiet-trace.log");
     run_success(
@@ -5347,13 +5356,13 @@ fn pane_writer_lock_is_shared_across_workspaces_and_released_on_drop() {
     let pane = PaneId::parse("tmux:%3").unwrap();
     let other = PaneId::parse("tmux:%4").unwrap();
     assert_eq!(first.pane_write_lock(&pane), second.pane_write_lock(&pane));
-    let writer = PaneWriter::open(&first, &pane, None).unwrap();
+    let writer = PaneWriter::open(&first, &pane, "room").unwrap();
     assert!(
         WorkspaceLock::try_acquire(&second.pane_write_lock(&pane))
             .unwrap()
             .is_none()
     );
-    let other_writer = PaneWriter::open(&second, &other, None).unwrap();
+    let other_writer = PaneWriter::open(&second, &other, "room").unwrap();
     drop(writer);
     assert!(
         WorkspaceLock::try_acquire(&second.pane_write_lock(&pane))

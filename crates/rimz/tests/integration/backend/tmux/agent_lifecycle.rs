@@ -105,11 +105,11 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
         .expect("quoted launch");
         server
             .backend
-            .send_keys(&anchor, None, &launch)
+            .send_keys(&anchor, ANY_SESSION, &launch)
             .expect("type profile launch");
         server
             .backend
-            .send_key(&anchor, None, NamedKey::Enter)
+            .send_key(&anchor, ANY_SESSION, NamedKey::Enter)
             .expect("launch profile");
         let deadline = Instant::now() + Duration::from_secs(10);
         while !ready.exists() {
@@ -118,7 +118,7 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
                 "{isolation} profile did not start: {:?}",
                 server
                     .backend
-                    .capture_pane(&anchor, None, Some(30), false)
+                    .capture_pane(&anchor, ANY_SESSION, Some(30), false)
                     .map(|capture| capture.raw_text),
             );
             thread::sleep(Duration::from_millis(50));
@@ -2105,7 +2105,7 @@ fn failing_close_pane_agent_drops_to_shell() {
         .backend
         .send_keys(
             &pane_id,
-            None,
+            ANY_SESSION,
             &format!("printf rimz-shell-ready > {}\n", shell_marker.display()),
         )
         .expect("send shell marker command");

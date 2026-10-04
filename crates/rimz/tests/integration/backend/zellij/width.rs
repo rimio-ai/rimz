@@ -30,7 +30,9 @@ fn renderer_width_keys_hold_their_live_zellij_step() {
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", listed.id));
     let initial = listed.pane_columns;
 
-    backend.send_keys(&pane, None, "d").expect("send wider key");
+    backend
+        .send_keys(&pane, &name, "d")
+        .expect("send wider key");
     let wider = wait_for_sidebar_columns_matching(
         xdg,
         &name,
@@ -46,7 +48,7 @@ fn renderer_width_keys_hold_their_live_zellij_step() {
     );
 
     backend
-        .send_keys(&pane, None, "a")
+        .send_keys(&pane, &name, "a")
         .expect("send narrower key");
     let narrower = wait_for_sidebar_columns_matching(
         xdg,

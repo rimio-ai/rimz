@@ -196,8 +196,10 @@ fn clientless_recovery_waits_for_attach_and_opens_each_tab_once() {
     );
 }
 
+/// A steer and a self-wait wake, each sent from outside any pane, land on the
+/// agent's pane while a second Zellij session is live beside the room.
 #[test]
-fn self_wait_steers_to_live_consumer_when_idle_and_working() {
+fn steer_and_self_wait_reach_the_live_consumer_among_two_sessions() {
     require_zellij!();
 
     for working in [false, true] {
@@ -297,6 +299,49 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
             .expect("registered live agent");
         assert_eq!(agent.status, expected_status);
 
+        let second = room
+            .command()
+            .args(["attach", "--create-background", "second"])
+            .bounded_output()
+            .expect("create second session");
+        assert!(
+            second.status.success(),
+            "second session (working={working})"
+        );
+        let screen = || {
+            backend
+                .capture_pane(&pane_id, room.name(), Some(100), false)
+                .map(|capture| capture.raw_text)
+                .map_err(|err| err.to_string())
+        };
+        let steer = env
+            .rimz()
+            .env("XDG_RUNTIME_DIR", xdg)
+            .args(["--mux", "zellij", "message", "--steer", "@planner"])
+            .args(["--", "TWO_ROOM_STEER"])
+            .bounded_output()
+            .expect("steer the live agent");
+        assert!(
+            steer.status.success(),
+            "steer failed (working={working}): {}",
+            String::from_utf8_lossy(&steer.stderr),
+        );
+        poll_until(
+            Duration::from_secs(20),
+            screen,
+            |capture| capture.contains("TWO_ROOM_STEER"),
+            &format!("steer text in the agent's live pane (working={working})"),
+        );
+        let second_pane = wait_for_pane_count(xdg, "second", 1)[0].pane_id.clone();
+        let second_text = backend
+            .capture_pane(&second_pane, "second", Some(100), false)
+            .expect("capture second session")
+            .raw_text;
+        assert!(
+            !second_text.contains("TWO_ROOM_STEER"),
+            "steer text leaked into the second session (working={working}): {second_text}"
+        );
+
         let output = env
             .rimz()
             .env("XDG_RUNTIME_DIR", xdg)
@@ -319,12 +364,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
         );
         poll_until(
             Duration::from_secs(20),
-            || {
-                backend
-                    .capture_pane(&pane_id, None, Some(100), false)
-                    .map(|capture| capture.raw_text)
-                    .map_err(|err| err.to_string())
-            },
+            screen,
             |capture| capture.contains("Type: WAIT") && capture.contains("self-wait-marker"),
             &format!("self wait in original live pane (working={working})"),
         );

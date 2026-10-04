@@ -336,7 +336,7 @@ A record whose agent has simply not reached a qualifying boundary is not failing
 
 `mux::PaneWriter` holds one per-pane advisory lock, at `RuntimePaths::pane_write_lock`, across a whole write batch: any compact-first command, every typed segment and pacing delay, the prompt paste, the `Sent` transition, and the final Enter. `rimz answer` and `rimz pane send` take the same lock, from any workspace. Different pane ids are independent; identical Zellij pane ids in separate sessions share a lock, conservatively. Steer waits for the lock instead of preempting another writer. Acquisition times out after 30 seconds as a mux error and follows the ordinary send-error recovery. Because the lock covers the gap between `Sent` and Enter, dispatch does not treat `Sent` records as blocking a fresh boundary send.
 
-`PaneWriter::open` takes the session its writes address. `rimz pane send` passes the resolved room's session, after checking that the room holds the pane, so its writes reach that room's Zellij session from outside any pane. `rimz message`, `rimz answer`, and the budget parker pass none: their Zellij writes act on the caller's ambient session, which is the room's when they run inside it. tmux ignores the session, because its pane ids are server-global.
+`PaneWriter::open` requires the session its writes address, and every writer passes the resolved room's session, so a write reaches that room's Zellij session from outside any pane. `rimz pane send` first checks that the room holds the pane, because a raw pane id reaches it with no lookup; `rimz message`, `rimz answer`, and the budget parker take their target from a fresh listing of that session. tmux ignores the session, because its pane ids are server-global.
 
 ### Paste, then submit
 
