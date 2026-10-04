@@ -686,7 +686,7 @@ Several references form a join. Text mode prints each final answer in completion
 | Flag | Effect |
 | --- | --- |
 | `--any` | Return when the first target finishes, successfully or not, printing its answer block (or a one-entry map with `--json`). The other targets keep running. Conflicts with `--stream`. |
-| `--timeout <DURATION>` | Cap the whole wait. On expiry `wait` exits `124` and leaves the targets running; text mode names each unfinished target on stderr as `--- <name> (timed out) ---`, and JSON mode marks them `timed_out`. |
+| `--timeout <DURATION>` | Cap the whole wait. On expiry `wait` exits `124` and leaves the targets running; text mode names each unfinished target on stderr as `--- <name> (timed out) ---`, and JSON mode marks them `timed_out`. A single reference reports the same way, its `--json` being the one-entry result map. |
 | `--stream` | Tail the transcript while waiting. One reference only. |
 | `--from-start` | With `--stream`, replay from the top first. |
 | `--json` | Labeled result map; with `--stream`, NDJSON run events. |

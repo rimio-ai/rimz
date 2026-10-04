@@ -231,7 +231,8 @@ impl WaitStyle {
         settled: &[usize],
     ) -> Result<()> {
         match self {
-            Self::Single { .. } => Ok(()),
+            Self::Single { json: true } => print_timeout_json(waits),
+            Self::Single { json: false } => print_pending_timeouts(waits),
             Self::Any { json } | Self::All { json } => {
                 report_settled_disappearances(waits, settled)?;
                 if json {

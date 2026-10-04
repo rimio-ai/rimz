@@ -5022,6 +5022,38 @@ fn wait_multi_timeout_exits_124() {
 }
 
 #[test]
+fn wait_single_timeout_names_the_pending_target() {
+    let env = Env::new();
+    let store = env.store();
+    let otter = create_running_named_run(&env, &store, "swift-otter");
+
+    let out = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "--timeout", "0s"])
+        .output()
+        .expect("run timed single-target wait");
+    assert_eq!(out.status.code(), Some(124));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "--- swift-otter (timed out) ---\n"
+    );
+
+    let out = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "--timeout", "0s", "--json"])
+        .output()
+        .expect("run timed single-target JSON wait");
+    assert_eq!(out.status.code(), Some(124));
+    let result: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("timed wait result map");
+    assert_eq!(result["swift-otter"]["status"], "timed_out");
+    assert_eq!(result["swift-otter"]["exit"], 124);
+    let pending = rimz::harness::run::load(store.paths(), &otter.run_id).expect("load pending run");
+    assert_eq!(pending.status, RunStatus::Running);
+}
+
+#[test]
 fn wait_multi_json_timeout_stamps_pending_entries() {
     let env = Env::new();
     let store = env.store();
