@@ -643,6 +643,92 @@ fn custom_signal_prints_one_line_per_field_in_key_order() {
 }
 
 #[test]
+fn builtin_subject_quotes_a_segment_holding_a_line_break() {
+    let broken = "x\ny";
+    let payload = serde_json::json!({
+        "branch": broken,
+        "head": "88824\rc2c52b8",
+        "number": 7,
+        "base": broken,
+        "behind_by": 3,
+        "reason": broken,
+        "queue_checks_url": broken,
+        "trunk": broken,
+        "from": broken,
+        "to": broken,
+        "name": broken,
+        "handle": broken,
+        "session": "s\rid",
+        "instance": broken,
+        "member": "x\ny#lane",
+    });
+    let q = r#""x\ny""#;
+    for (name, payload, subject) in [
+        (
+            "ci.failed",
+            payload.clone(),
+            format!(r#"ci.failed on {q} #7 @"88824\rc""#),
+        ),
+        (
+            "pr.behind",
+            payload.clone(),
+            format!("pr.behind on {q} #7 · 3 behind {q}"),
+        ),
+        (
+            "pr.conflicted",
+            payload.clone(),
+            format!("pr.conflicted on {q} #7 · with {q}"),
+        ),
+        (
+            "pr.dequeued",
+            without(payload.clone(), "queue_checks_url"),
+            format!("pr.dequeued on {q} #7 · {q}"),
+        ),
+        (
+            "trunk.moved",
+            payload.clone(),
+            format!("trunk.moved on {q} {q}..{q}"),
+        ),
+        (
+            "worktree.created",
+            payload.clone(),
+            format!("worktree.created {q} from {q}"),
+        ),
+        ("agent.idle", payload.clone(), format!("agent.idle {q}")),
+        (
+            "agent.idle",
+            without(payload.clone(), "handle"),
+            r#"agent.idle "s\rid""#.to_owned(),
+        ),
+        (
+            "team.failed",
+            payload.clone(),
+            format!("team.failed {q} · {q}"),
+        ),
+        (
+            "team.stage",
+            payload.clone(),
+            format!("team.stage {q} · {q} -> {q}"),
+        ),
+        (
+            "team.stage",
+            without(payload.clone(), "from"),
+            format!("team.stage {q} · {q}"),
+        ),
+    ] {
+        assert_eq!(
+            fired(name, payload),
+            format!("waited on {subject}\nfired [wait-test]"),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        fired("pr.dequeued", payload).lines().nth(2),
+        Some(format!("queue checks: {q}").as_str())
+    );
+}
+
+#[test]
 fn condition_readings_print_one_line_each_and_name_a_missing_one() {
     let condition = super::super::super::when::ConditionEvidence {
         when: "team.stage=Done".to_owned(),
