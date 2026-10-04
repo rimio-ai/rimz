@@ -302,11 +302,10 @@ fn kimi_questions(event_name: &str, parsed: &payloads::KimiHookPayload) -> Vec<A
 
 fn kimi_turn_error(event_name: &str, parsed: &payloads::KimiHookPayload) -> Option<AgentTurnError> {
     (event_name == "StopFailure").then(|| {
-        let label = parsed
-            .error_message
-            .as_deref()
-            .or(parsed.error_type.as_deref())
-            .and_then(crate::agents::context::cap_turn_error_label);
+        let label = [&parsed.error_message, &parsed.error_type]
+            .into_iter()
+            .flatten()
+            .find_map(|text| crate::agents::context::cap_turn_error_label(text));
         AgentTurnError {
             class: TurnErrorClass::classify_label(label.as_deref()),
             at: Timestamp::now(),

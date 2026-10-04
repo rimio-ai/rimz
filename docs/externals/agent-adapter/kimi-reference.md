@@ -210,7 +210,7 @@ Payload sources are `agent/agentExternalHooksService.ts` and `session/sessionExt
 - `SessionStart` fires when a session is created (`startup`) or reopened (`resume`). A fork does not fire it at creation; the fork fires `resume` when it is opened.
 - `UserPromptSubmit` fires only for prompts whose origin kind is `user`, including steers into a running turn (`is_steer: true`). `SubagentStart` and `SubagentStop` carry the full prompt text and the subagent's full result summary.
 - `Stop` fires when a step finishes with a finish reason other than `tool_calls` or `filtered` and no requests are pending, so it runs before the turn closes.
-- `StopFailure` fires when a turn ends with reason `failed` and an error. `Interrupt` fires when a turn ends with reason `cancelled` (the docs add that timeouts and programmatic aborts do not fire it). A turn blocked by `UserPromptSubmit` fires neither `Stop`, `StopFailure`, nor `Interrupt`.
+- `StopFailure` fires when a turn ends with reason `failed` and an error. Its `error_type` is the error class name (for example `APIProviderQuotaExhaustedError`), and `error_message` is copied untrimmed, so it can be blank. `Interrupt` fires when a turn ends with reason `cancelled` (the docs add that timeouts and programmatic aborts do not fire it). A turn blocked by `UserPromptSubmit` fires neither `Stop`, `StopFailure`, nor `Interrupt`.
 - `PermissionRequest` and `PermissionResult` fire only when the permission policy resolves to ask; see [Approvals](#approvals).
 
 ### Output and exit semantics
