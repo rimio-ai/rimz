@@ -44,7 +44,7 @@ Ctrl+C on a blocking run cancels it cleanly: exit `130`, the agent stopped, the 
 
 A few flag-combination refusals exit `1` rather than `2`, but either way nothing ran, no run record was written, and the reason is on stderr. Caps are the exception to the whole split: a cap exits `125` whether it refused the launch or stopped a turn already under way.
 
-On success, stdout carries the final assistant answer and nothing else, so it pipes cleanly. A failed, timed-out, or canceled run prints its status, the captured pane tail, and the transcript path on stderr, leaving stdout uncontaminated. Branch on the code first, then on the text:
+On success, stdout carries the final assistant answer and nothing else, so it pipes cleanly. A failed, timed-out, or canceled run prints its status, the failure reason (the launch error or the captured pane tail), and the transcript path on stderr, leaving stdout uncontaminated. Branch on the code first, then on the text:
 
 ```sh
 if answer=$(rimz agents claude -p "Run the migration audit; reply PASS or FAIL."); then
@@ -107,7 +107,7 @@ An exit code tells you the turn ended. These two flags let the run prove the wor
 rimz agents codex -p --verify "cargo xtask test auth" --max-attempts 3 "Fix the failing auth test."
 ```
 
-**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times in a fresh session, appending the previous attempt's captured pane tail to the original prompt inside a `<previous-attempt-failure>` block. Timeout and budget caps apply to each attempt; timeouts, budget stops, and cancels stay terminal, and the last attempt decides the command's exit code.
+**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times in a fresh session, appending the previous attempt's failure reason (the launch error or the captured pane tail) to the original prompt inside a `<previous-attempt-failure>` block. Timeout and budget caps apply to each attempt; timeouts, budget stops, and cancels stay terminal, and the last attempt decides the command's exit code.
 
 ```sh
 rimz agents codex -p --retries 1 --timeout 30m "Fix the failing checks."
