@@ -6,6 +6,10 @@ on:
       tag:
         description: image tag (defaults to date+sha)
         required: false
+      tag_only:
+        description: push only the tag and leave rimz-ci:latest where it is
+        type: boolean
+        default: false
   schedule:
     # Weekly refresh keeps the baked RustSec DB and Cargo registry warm.
     - cron: "0 4 * * 1"
@@ -39,6 +43,7 @@ jobs:
       - name: Resolve image ref
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
+          TAG_ONLY: ${{ inputs.tag_only }}
         run: |
           set -euo pipefail
           host="ghcr.io"
@@ -50,7 +55,16 @@ jobs:
           fi
           echo "REGISTRY_HOST=$host" >> "$GITHUB_ENV"
           echo "IMAGE=${host}/${owner}/rimz-ci:${tag}" >> "$GITHUB_ENV"
-          echo "LATEST_IMAGE=${host}/${owner}/rimz-ci:latest" >> "$GITHUB_ENV"
+          # A tag-only build is a branch image: LATEST_IMAGE stays unset so no
+          # later step tags or pushes `latest`, and the tag itself may not be it.
+          if [ "$TAG_ONLY" = "true" ]; then
+            if [ "$tag" = "latest" ]; then
+              echo "::error::tag_only leaves rimz-ci:latest alone; pass a tag other than latest"
+              exit 1
+            fi
+          else
+            echo "LATEST_IMAGE=${host}/${owner}/rimz-ci:latest" >> "$GITHUB_ENV"
+          fi
 
       - name: Build and push image
         env:
@@ -70,12 +84,18 @@ jobs:
           # GitHub API resolution off the 60-per-hour anonymous quota that
           # shared runner egress addresses exhaust. A secret mount keeps it out
           # of image history, where --build-arg would leave it.
+          tags=(-t "$IMAGE")
+          if [ -n "${LATEST_IMAGE:-}" ]; then
+            tags+=(-t "$LATEST_IMAGE")
+          fi
           docker build --pull -f ci/Dockerfile \
             --secret id=github_token,env=TOKEN \
-            -t "$IMAGE" -t "$LATEST_IMAGE" .
+            "${tags[@]}" .
           if [ "$PUSH" = "true" ]; then
             docker push "$IMAGE"
-            docker push "$LATEST_IMAGE"
+            if [ -n "${LATEST_IMAGE:-}" ]; then
+              docker push "$LATEST_IMAGE"
+            fi
           fi
 
       - name: Publish summary
@@ -83,17 +103,31 @@ jobs:
           IS_PR: ${{ github.event_name == 'pull_request' }}
         run: |
           set -euo pipefail
-          if [ "$IS_PR" = "true" ]; then
-            {
+          {
+            if [ "$IS_PR" = "true" ]; then
               echo "### Validated CI image build (not pushed)"
-              echo
-              echo "- \`${IMAGE}\`"
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            {
+            else
               echo "### Published CI image"
-              echo
-              echo "- \`${IMAGE}\`"
+            fi
+            echo
+            echo "- \`${IMAGE}\`"
+            if [ "$IS_PR" != "true" ] && [ -n "${LATEST_IMAGE:-}" ]; then
               echo "- \`${LATEST_IMAGE}\`"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+            fi
+            # Sizes are the unpacked layers on the builder, newest layer first;
+            # a pull moves the compressed form, so compare builds, not bytes.
+            docker image inspect --format '{{.Size}}' "$IMAGE" |
+              awk '{ printf "\nTotal size: %.1f MB (unpacked)\n\n", $1 / 1e6 }'
+            echo "| MB | Layer |"
+            echo "|---:|---|"
+            docker history --no-trunc --human=false --format '{{.Size}}{{"\t"}}{{.CreatedBy}}' "$IMAGE" |
+              awk -F '\t' '$1 > 0 {
+                cmd = $2
+                sub(/^RUN (\|[0-9]+ .* )?\/bin\/sh -c /, "RUN ", cmd)
+                sub(/ # buildkit$/, "", cmd)
+                gsub(/`/, "\047", cmd)
+                cmd = substr(cmd, 1, 120)
+                gsub(/\|/, "\\|", cmd)
+                printf "| %.1f | `%s` |\n", $1 / 1e6, cmd
+              }'
+          } >> "$GITHUB_STEP_SUMMARY"

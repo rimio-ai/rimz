@@ -31,11 +31,11 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 # tmux and Python come from source/uv below, not apt: Debian trixie ships
 # tmux 3.5a and Python 3.13, both below the versions CI targets. libevent,
 # ncurses, and bison are the tmux build deps (build-essential/pkg-config cover
-# the rest).
+# the rest). bubblewrap is what the sandbox-isolation tests launch agents in.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git gh curl ca-certificates xz-utils \
       build-essential pkg-config libssl-dev \
-      libevent-dev libncurses-dev bison chromium \
+      libevent-dev libncurses-dev bison chromium bubblewrap \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
@@ -161,6 +161,7 @@ RUN rustc -V \
  && zellij --version \
  && ttyd --version \
  && chromium --version \
+ && bwrap --version \
  && mold --version \
  && zig version \
  && rcodesign --version \
