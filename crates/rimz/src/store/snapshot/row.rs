@@ -308,7 +308,7 @@ pub struct AgentCard {
     pub pending_waits: Vec<PendingWait>,
     /// The pending `stop --when-idle` request, copied from the enriched rollup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idle_stop: Option<crate::agents::IdleStop>,
+    pub idle_stop: Option<crate::agents::PendingIdleStop>,
     /// Background shells the session is running, copied from the rollup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background_shells: Vec<BackgroundShell>,

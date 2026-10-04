@@ -159,8 +159,8 @@ upward-dependencies = ["address"]
 # RoomLoginSet::declared and ProviderCapacity::known_unused give auto-redeem its idle accounts and their unused-window evidence (+2).
 # ProviderLogin::local_sessions discovers a provider home and stamps each observation with its account (+1).
 # The idle-stop request body is shared by the store record and the agent rollup (+2).
-# 968: `IdleStop::label`, the one wording of a pending idle stop shared by `agents show` and the card.
-surface-budget = 968
+# 970: `PendingIdleStop`, the projected idle stop with its due time, and its `label`, the one wording shared by `agents show` and the card.
+surface-budget = 970
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

@@ -375,10 +375,7 @@ pub(super) fn render_activity_section(
             .unwrap_or_default();
         kv.push(
             "idle_stop",
-            render::cell(format!(
-                "{}{requester}",
-                pending.stop.label(pending.due_at, now)
-            )),
+            render::cell(format!("{}{requester}", pending.label(now))),
         );
     }
     if let Some(ask) = ask {

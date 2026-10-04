@@ -3,7 +3,7 @@
 use jiff::Timestamp;
 
 use crate::agents::{
-    BackgroundShell, IdleStop, PendingWait, PendingWaitTrigger, single_line_description,
+    BackgroundShell, PendingIdleStop, PendingWait, PendingWaitTrigger, single_line_description,
     usable_description,
 };
 use crate::proc::command::{command_program_basename, program_label};
@@ -31,7 +31,7 @@ pub(super) fn wait_entry_lines(
     ctx: &RowCtx<'_>,
     waits: &[PendingWait],
     shells: &[BackgroundShell],
-    idle_stop: Option<&IdleStop>,
+    idle_stop: Option<&PendingIdleStop>,
 ) -> Vec<Line<'static>> {
     let (signals, others): (Vec<_>, Vec<_>) = visible_waits(waits).partition(|wait| {
         matches!(
@@ -50,9 +50,9 @@ pub(super) fn wait_entry_lines(
                 ctx,
                 ctx.theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
                 "stop",
-                Some(stop.label(None, ctx.now)),
+                Some(stop.label(ctx.now)),
                 None,
-                Some(stop.requested_at),
+                Some(stop.stop.requested_at),
             )
         }))
     {

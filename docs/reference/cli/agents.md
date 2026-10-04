@@ -722,9 +722,9 @@ The agent stops only when all of this holds at one check:
 - its turn has ended cleanly, and it is not waiting on your input, parked on a budget or provider limit, compacting, or running background work;
 - nothing is owed to it: no armed wait, no subagent or launched team still to report, no message queued or scheduled for it, and no open supervised run or peer turn, so a soft stop never cancels a run;
 - for a team seat, the team's board reads `Done`. A seat whose checkout has no board is held;
-- it has rested for the whole duration, measured from the later of its last turn end and the request. A new turn before then restarts the clock.
+- it has rested for the whole duration, never a fraction of a second less, measured from the later of its last turn end and the request. A new turn before then restarts the clock.
 
-Timing is best effort. The check runs on the room's refresh, which a running sidebar drives, so the stop comes after the duration, never at a wall-clock instant. While pending, the request shows as `idle_stop` in `rimz agents show`, in the `show` and `list` JSON, and as a `stop` entry under the card's `⧖ waits`. It ends with the session: a plain `stop`, a restart into a new session, or the agent exiting removes it, and a stop that fails leaves it armed for the next check. Each attempt is recorded as an `idle_stop` assist in [`rimz stats`](./stats.md#the-assist-timeline).
+Timing is best effort. The check runs on the room's refresh, which a running sidebar drives, so the stop comes after the duration, never at a wall-clock instant. While pending, the request shows as `idle_stop` in `rimz agents show`, in the `show` and `list` JSON, and as a `stop` entry under the card's `⧖ waits`. It ends with the session: a plain `stop`, a restart into a new session, or the agent exiting removes it, [`rimz reset`](./maintenance.md#reset-a-wedged-room) drops every pending request so a resumed agent never inherits one, and a stop that fails leaves it armed for the next check. Each attempt is recorded as an `idle_stop` assist in [`rimz stats`](./stats.md#the-assist-timeline).
 
 A soft-stopped agent comes back like any stopped one: `rimz agents resume` reopens its place and resumes the provider session.
 
