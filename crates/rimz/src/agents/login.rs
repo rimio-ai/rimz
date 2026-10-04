@@ -604,6 +604,8 @@ pub enum AccountStatus {
     HomeMissing,
     HooksMissing,
     HooksUntrusted,
+    /// The home is set up, and the provider reports no login in it.
+    LoggedOut,
     Unavailable,
 }
 
@@ -629,6 +631,7 @@ impl AccountStatus {
             Self::HomeMissing => "home missing",
             Self::HooksMissing => "hooks missing",
             Self::HooksUntrusted => "hooks untrusted",
+            Self::LoggedOut => "logged out",
             Self::Unavailable => "unavailable",
         }
     }

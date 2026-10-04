@@ -4,12 +4,10 @@ use std::process::Output;
 
 use serde_json::{Value, json};
 
-use crate::common::Env;
+use crate::common::{Env, hermetic_providers as hermetic, provider_bin};
 
 fn accounts(env: &Env, args: &[&str]) -> Output {
-    env.rimz()
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("CODEX_HOME")
+    hermetic(env, &mut env.rimz())
         .arg("accounts")
         .args(args)
         .output()
@@ -82,8 +80,7 @@ fn room_account_switch_changes_only_the_room_default() {
     );
 
     let claude_rows = |command: &mut std::process::Command| -> Vec<Value> {
-        let output = command
-            .env_remove("CLAUDE_CONFIG_DIR")
+        let output = hermetic(&env, command)
             .args(["accounts", "list", "--json"])
             .output()
             .unwrap();
@@ -304,7 +301,9 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
             "status": "ready",
             "active": false,
             "default_for": [],
-            "agents": 0
+            "agents": 0,
+            "windows": [],
+            "metered": null
         })
     );
 
@@ -576,18 +575,11 @@ fn a_broken_project_config_warns_and_marks_no_account() {
     let project = env.project_root.join(".rimz");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(project.join("config.toml"), "[accounts").unwrap();
-    let empty_path = env.home_root.join("empty-path");
-    std::fs::create_dir_all(&empty_path).unwrap();
     for args in [
         &["accounts", "list", "--json"][..],
         &["providers", "--json", "--all"][..],
     ] {
-        let output = env
-            .rimz()
-            .env_remove("CLAUDE_CONFIG_DIR")
-            .env_remove("CODEX_HOME")
-            .env("PATH", &empty_path)
-            .env("RIMZ_OAUTH_USAGE_OFFLINE", "1")
+        let output = hermetic(&env, &mut env.rimz())
             .args(args)
             .output()
             .expect("run rimz");
@@ -612,6 +604,81 @@ fn a_broken_project_config_warns_and_marks_no_account() {
             "{args:?}: machine scopes stay"
         );
     }
+}
+
+/// A fake `claude` whose `auth status` answers from a file the test rewrites,
+/// and logs each probe.
+#[cfg(unix)]
+fn write_fake_claude(env: &Env) -> (std::path::PathBuf, std::path::PathBuf) {
+    let answer = env.home_root.join("claude-auth");
+    let log = env.home_root.join("claude-probes");
+    crate::common::write_path_shim(
+        &provider_bin(env),
+        "claude",
+        &format!(
+            "case \"$*\" in\n  \"auth status\") echo probe >> '{log}'; . '{answer}';;\n  *) echo 0.0.0;;\nesac",
+            log = log.display(),
+            answer = answer.display()
+        ),
+    );
+    (answer, log)
+}
+
+#[cfg(unix)]
+#[test]
+fn list_probes_a_logged_out_account_again_on_every_run() {
+    const LOGGED_OUT: &str = "/bin/echo '{\"loggedIn\": false, \"authMethod\": \"none\"}'; exit 1";
+    const LOGGED_IN: &str = "/bin/echo '{\"loggedIn\": true, \"authMethod\": \"claude.ai\", \"subscriptionType\": \"max\"}'";
+    let env = Env::new();
+    let home = env.home_root.join("work home");
+    succeeded(&accounts(
+        &env,
+        &["add", "claude", "work", "--home", home.to_str().unwrap()],
+    ));
+    let (answer, log) = write_fake_claude(&env);
+    let work = || -> Value {
+        let rows: Value =
+            serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["kind"] == "claude" && row["name"] == "work")
+            .cloned()
+            .expect("work row")
+    };
+    let probes = || {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+
+    std::fs::write(&answer, LOGGED_OUT).unwrap();
+    let row = work();
+    assert_eq!(row["status"], "logged_out", "{row}");
+    assert_eq!(
+        row["problem"],
+        format!(
+            "claude account `work` is logged out; log in once: CLAUDE_CONFIG_DIR='{}' claude",
+            home.display()
+        )
+    );
+    let text = succeeded(&accounts(&env, &["list"]));
+    assert!(text.contains("  logged out  "), "{text}");
+    assert!(text.lines().all(|line| line.trim_end() == line), "{text:?}");
+    // Both accounts answered logged out within the TTL, and both are asked again.
+    let cold = probes();
+    assert_eq!(work()["status"], "logged_out");
+    assert_eq!(probes(), cold + 2, "each cached logout is probed once more");
+
+    std::fs::write(&answer, LOGGED_IN).unwrap();
+    let row = work();
+    assert_eq!(row["status"], "ready", "a login made since shows at once");
+    assert_eq!(row.get("problem"), None, "{row}");
+    assert_eq!(row["metered"], true, "{row}");
+    let settled = probes();
+    assert_eq!(work()["status"], "ready");
+    assert_eq!(probes(), settled, "a logged-in record keeps the due rule");
 }
 
 #[test]
@@ -756,19 +823,33 @@ fn accounts_add_refuses_a_history_switch_only_while_the_codex_daemon_has_session
     )
     .unwrap();
 
-    let switch = ["add", "codex", "work", "--history", "standalone"];
+    // The daemon check reads the stand-in's start time with the host `ps`,
+    // which the hermetic provider `PATH` would hide; `add` probes no provider.
+    let switch = || {
+        env.rimz()
+            .args([
+                "accounts",
+                "add",
+                "codex",
+                "work",
+                "--history",
+                "standalone",
+            ])
+            .output()
+            .expect("run rimz accounts add")
+    };
     let toggle = "`rimz config set remote_control.codex false`, rerun, then set it back to `true`";
     let config = "or remove `history = \"standalone\"` from `[accounts.codex.work]`";
 
     // A daemon that cannot be asked may hold a session.
-    let silent = accounts(&env, &switch);
+    let silent = switch();
     let after_silent = std::fs::read_link(&sessions);
     let loaded = serve_loaded_threads(&home);
     loaded.lock().unwrap().push("thread-a".to_owned());
-    let holding = accounts(&env, &switch);
+    let holding = switch();
     let after_holding = std::fs::read_link(&sessions);
     loaded.lock().unwrap().clear();
-    let idle = accounts(&env, &switch);
+    let idle = switch();
     let still_running = daemon.try_wait().expect("poll the stand-in daemon");
     daemon.kill().expect("kill the stand-in daemon");
     daemon.wait().expect("reap the stand-in daemon");

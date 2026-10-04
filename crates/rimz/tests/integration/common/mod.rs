@@ -45,6 +45,7 @@ pub use payloads::{
 };
 #[cfg(unix)]
 pub use shim::{cargo_bin, zellij_trace_shim};
+pub use shim::{hermetic_providers, provider_bin};
 #[cfg(unix)]
 pub use shim::{
     path_with_front, write_env_dump_shim, write_failing_agent_shim, write_fake_bash_shell,

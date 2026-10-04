@@ -225,7 +225,7 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `SANDBOX` | Isolation mode, bubblewrap path and version, mount probe result. |
 | `HOOKS` | Agents reporting to RimZ, a row with the fix for each agent whose hooks need a command, agents not found on the machine. |
 | `FOLDER TRUST` | Conditional on a resolved workspace. Detected agents' folder-trust decisions under this room's accounts (native defaults outside a room). A decided summary and undecided rows with account and fix; JSON: `folder_trust.ready.rows`. |
-| `ACCOUNTS` | Conditional. Each named account's home and status (`ready` or the problem), and the layers it is the default for in the [`rimz accounts list`](./accounts.md#list) words: `this room`, `this project`, `new rooms`. Dangling selections carry a problem and fix. JSON rows include `room` and `machine_default`. |
+| `ACCOUNTS` | Conditional. Each named account's home and status (`ready` or the problem), and the layers it is the default for: `this room`, `this project`, `new rooms` ([`rimz accounts list`](./accounts.md#list) explains each layer). Dangling selections carry a problem and fix. JSON rows include `room` and `machine_default`. |
 | `AGENT PLUGINS` | Conditional. Each plugin manifest, its validation result, and its probes. |
 | `LOOP TASKS` | Configured loop tasks with target, trigger, root, room state, and loop timer state. Warns when a live clock task has neither an open room nor an active timer. |
 | `LSP` | Machine-wide shared servers in `rimz lsp list` order, recorded crash exit/stderr, and the last memory refusal or queue timeout. Current-checkout startup checks follow the table, with causes and fixes. |
