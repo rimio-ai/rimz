@@ -135,9 +135,9 @@ pub(crate) use registry::{resumed_session_id_for_root, resumed_session_id_from_c
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode};
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, AskDelivery, BudgetPark,
-    BudgetScope, BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, OpenAsk, PendingWait,
-    PendingWaitTrigger, QueuedAsk, TurnCompletion, is_stalled, is_tool_looping, is_turn_dead,
-    settled_outcome, single_line_description,
+    BudgetScope, BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, IdleStop, OpenAsk,
+    PendingWait, PendingWaitTrigger, QueuedAsk, TurnCompletion, is_stalled, is_tool_looping,
+    is_turn_dead, settled_outcome, single_line_description,
 };
 pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_description};
 use tools::ToolErr;
