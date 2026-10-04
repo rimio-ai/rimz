@@ -341,6 +341,98 @@ exit 0
     );
 }
 
+const LIST_PANES: &str = "action list-panes --all --json";
+
+#[cfg(unix)]
+#[test]
+fn pane_room_check_reruns_a_transient_empty_listing() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+case $(wc -l < "$dir/zellij.log") in
+  1) exit 0 ;;
+  2) printf ' \n'; exit 0 ;;
+esac
+printf '[{"id":0,"is_plugin":false}]\n'
+"#,
+    );
+
+    ZellijBackend::with_program_for_test(&shim)
+        .require_pane_in_session(
+            &PaneId::from_parts(crate::MuxName::Zellij, "terminal_0"),
+            "rimz-test",
+        )
+        .expect("the pane is in the room once the listing answers");
+
+    assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn pane_listing_reruns_only_an_empty_success() {
+    use crate::mux::MuxErr;
+
+    let (temp, shim) = support::pane_roster_shim("[]");
+    let listed = ZellijBackend::with_program_for_test(&shim)
+        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(5))
+        .expect("an empty roster is an answer");
+    assert!(listed.is_empty());
+    assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 1);
+
+    let (temp, shim) = support::pane_roster_shim("[{");
+    let err = ZellijBackend::with_program_for_test(&shim)
+        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(5))
+        .expect_err("malformed JSON is not an answer");
+    assert!(matches!(err, MuxErr::Output { .. }), "{err}");
+    assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 1);
+
+    let (temp, shim) = support::failing_roster_shim();
+    let err = ZellijBackend::with_program_for_test(&shim)
+        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(5))
+        .expect_err("a failed listing is not an answer");
+    assert!(matches!(err, MuxErr::Command { .. }), "{err}");
+    assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 1);
+
+    let (temp, shim) = support::logging_shim();
+    let err = ZellijBackend::with_program_for_test(&shim)
+        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(5))
+        .expect_err("a listing that stays empty is not an answer");
+    assert!(
+        err.to_string()
+            .contains("`list-panes --all --json` returned no output on every attempt"),
+        "{err}"
+    );
+    assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 5);
+}
+
+#[cfg(unix)]
+#[test]
+fn pane_listing_rerun_stays_inside_the_caller_budget() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$(wc -l < "$dir/zellij.log")" -eq 1 ]; then sleep 1; exit 0; fi
+exec sleep 30
+"#,
+    );
+    let started = std::time::Instant::now();
+
+    let err = ZellijBackend::with_program_for_test(&shim)
+        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(2))
+        .expect_err("the rerun hangs");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "the rerun restarted the budget: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(err, crate::mux::MuxErr::Timeout { seconds: 2, .. }),
+        "{err}"
+    );
+    assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 2);
+}
+
 #[cfg(unix)]
 #[test]
 fn rename_tab_resolves_the_anchor_to_a_stable_id() {

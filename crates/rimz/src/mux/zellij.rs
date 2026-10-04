@@ -92,9 +92,10 @@ const TOPOLOGY_CACHE_POLL_STEP: Duration = Duration::from_millis(50);
 /// it is publishing before stale instances are retired.
 const PRESENCE_RETIRE_PROOF_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// `list-tabs` can hit an action-client startup race during busy session ticks.
-const LIST_TABS_ATTEMPTS: u32 = 5;
-const LIST_TABS_RETRY_DELAY: Duration = Duration::from_millis(50);
+/// A tab or pane listing can hit an action-client startup race during busy
+/// session ticks and answer a successful empty stdout.
+const TRANSIENT_EMPTY_ATTEMPTS: u32 = 5;
+const TRANSIENT_EMPTY_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// Reruns of a command Zellij's client refused before dispatch while the
 /// session's socket is still on disk (`socket::refused_live_session`). The

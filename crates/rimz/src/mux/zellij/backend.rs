@@ -548,11 +548,38 @@ impl ZellijBackend {
             Some(session_name) => self.zellij_action(session_name),
             None => self.cmd().arg("action"),
         };
-        let output = spec
-            .args(["list-panes", "--all", "--json"])
-            .run_with_timeout(timeout)?;
-        serde_json::from_slice(&output.stdout)
-            .map_err(|err| output_error(format!("parsing `list-panes --all --json`: {err}")))
+        let spec = spec.args(["list-panes", "--all", "--json"]);
+        let deadline = Instant::now() + timeout;
+        let mut remaining = timeout;
+        for attempt in 0..super::TRANSIENT_EMPTY_ATTEMPTS {
+            if attempt > 0 {
+                let Some(wait_budget) = deadline_remaining(deadline) else {
+                    break;
+                };
+                std::thread::sleep(super::TRANSIENT_EMPTY_RETRY_DELAY.min(wait_budget));
+                let Some(next_budget) = deadline_remaining(deadline) else {
+                    break;
+                };
+                remaining = next_budget;
+            }
+            let output = spec.run_with_timeout(remaining).map_err(|err| match err {
+                // A rerun runs on what is left of the budget; the caller reads its own bound.
+                MuxErr::Timeout { program, args, .. } => MuxErr::Timeout {
+                    program,
+                    args,
+                    seconds: timeout.as_secs(),
+                },
+                err => err,
+            })?;
+            if !is_transient_empty(&output.stdout) {
+                return serde_json::from_slice(&output.stdout).map_err(|err| {
+                    output_error(format!("parsing `list-panes --all --json`: {err}"))
+                });
+            }
+        }
+        Err(output_error(
+            "`list-panes --all --json` returned no output on every attempt",
+        ))
     }
 
     fn live_session_health(&self, name: &str) -> SessionHealth {
@@ -855,9 +882,9 @@ impl ZellijBackend {
     }
 
     pub(super) fn list_tabs(&self, session: &str) -> Result<Vec<RawTab>> {
-        for attempt in 0..super::LIST_TABS_ATTEMPTS {
+        for attempt in 0..super::TRANSIENT_EMPTY_ATTEMPTS {
             if attempt > 0 {
-                std::thread::sleep(super::LIST_TABS_RETRY_DELAY);
+                std::thread::sleep(super::TRANSIENT_EMPTY_RETRY_DELAY);
             }
             let output = self
                 .zellij_action(session)
@@ -881,7 +908,7 @@ impl ZellijBackend {
         }
         Err(output_error(format!(
             "list-tabs returned no output after {} attempts",
-            super::LIST_TABS_ATTEMPTS
+            super::TRANSIENT_EMPTY_ATTEMPTS
         )))
     }
 }
