@@ -158,6 +158,22 @@ fn board_done(agent: &AgentState) -> bool {
         .is_some_and(|stage| stage.name == crate::config::DONE_STAGE)
 }
 
+/// Attach each pending request to its session's rollup row, for the card and
+/// `agents show`. Enrich-only: the durable record stays the truth.
+pub(crate) fn project_requests(snapshot: &mut SidebarSnapshot, paths: &StatePaths) {
+    let requests = crate::store::idle_stop::read(paths);
+    for agent in &mut snapshot.agents {
+        agent.idle_stop = requests
+            .iter()
+            .find(|request| {
+                agent.ended_at.is_none()
+                    && request.kind == agent.kind
+                    && request.agent_id == agent.agent_id
+            })
+            .map(|request| request.stop.clone());
+    }
+}
+
 /// Ask a helper to stop each agent whose request is due on the rollup's terms.
 pub(crate) fn stop_idle_agents(
     snapshot: &SidebarSnapshot,
@@ -520,6 +536,49 @@ mod tests {
             verdict(&store, &agent, &stop, DUE),
             Verdict::Stop { idle_secs: 180 }
         );
+    }
+
+    #[test]
+    fn requests_project_onto_their_sessions_and_stale_ones_clear() {
+        let (_dir, store) = fixture();
+        let (agent, stop) = rested();
+        let (mut other, _) = rested();
+        other.agent_id = "session-2".into();
+        other.idle_stop = Some(stop.clone());
+        crate::store::idle_stop::arm(
+            store.paths(),
+            IdleStopRequest {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                stop: stop.clone(),
+            },
+        )
+        .expect("arm");
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            store.paths().workspace_id.clone(),
+            vec![agent, other],
+            ts(DUE),
+        );
+        project_requests(&mut snapshot, store.paths());
+        let pending = |id: &str| {
+            find_agent(
+                &snapshot.agents,
+                &AgentKind::new_unchecked("claude"),
+                &id.into(),
+            )
+            .expect("agent")
+            .idle_stop
+            .clone()
+        };
+        assert_eq!(pending("session-1"), Some(stop.clone()));
+        assert_eq!(pending("session-2"), None);
+
+        assert_eq!(stop.label(None, ts(DUE)), "after 3m idle");
+        assert_eq!(
+            stop.label(Some(ts(DUE)), ts(DUE - 61)),
+            "after 3m idle, in 2m"
+        );
+        assert_eq!(stop.label(Some(ts(DUE)), ts(DUE)), "after 3m idle, due");
     }
 
     #[test]

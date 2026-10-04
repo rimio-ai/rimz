@@ -306,6 +306,9 @@ pub struct AgentCard {
     /// Every armed one-shot delivery, soonest first, copied from the enriched rollup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_waits: Vec<PendingWait>,
+    /// The pending `stop --when-idle` request, copied from the enriched rollup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_stop: Option<crate::agents::IdleStop>,
     /// Background shells the session is running, copied from the rollup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background_shells: Vec<BackgroundShell>,
@@ -412,6 +415,7 @@ impl Default for AgentCard {
             status: AgentStatus::Idle,
             queued_asks: Vec::new(),
             pending_waits: Vec::new(),
+            idle_stop: None,
             background_shells: Vec::new(),
             phase: TurnPhase::Idle,
             task: None,

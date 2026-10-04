@@ -366,6 +366,21 @@ pub(super) fn render_activity_section(
                 .fg(render::palette::alarm()),
         );
     }
+    if let Some(pending) = agent.idle_stop.as_ref() {
+        let requester = pending
+            .stop
+            .requested_by
+            .as_deref()
+            .map(|by| format!(" ({by})"))
+            .unwrap_or_default();
+        kv.push(
+            "idle_stop",
+            render::cell(format!(
+                "{}{requester}",
+                pending.stop.label(pending.due_at, now)
+            )),
+        );
+    }
     if let Some(ask) = ask {
         kv.push(
             "ask",

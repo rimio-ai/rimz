@@ -300,15 +300,16 @@ Selecting a card only appends lines below it. When the selected agent belongs to
 A card with waits uses the same entry layout:
 
 ```
-▌  ⧖ waits (4)                                       ▐
+▌  ⧖ waits (5)                                       ▐
 ▌    ◷ timer · in 12m                           ◑ 18m▐
 ▌    ⣾ pid · 16776                              ◔  3m▐
 ▌    ⣾ command · cargo                          ◔  4m▐
 ▌      cargo xtask gate --name foo_test              ▐
 ▌    ⌁ signal · pr.merged                       ●  1h▐
+▌    ◷ stop · after 3m idle                     ◔  2m▐
 ```
 
-`⧉ subagents (N)` counts every child the session has spawned, both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md), for as long as RimZ retains the session's history. Their known cost sits on the right. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md) plus, for Claude, the shell commands it left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`.
+`⧉ subagents (N)` counts every child the session has spawned, both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md), for as long as RimZ retains the session's history. Their known cost sits on the right. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md), a pending [`stop --when-idle`](../reference/cli/agents.md#stop) request, and, for Claude, the shell commands it left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`.
 
 Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card, and that choice outranks selection and `card_density` until the sidebar restarts. In `compact` density, select the card first to reach the line.
 
@@ -325,6 +326,7 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 | file | working spinner | `file · app.log changes`, or ``file · app.log matches `<pattern>` `` | time since armed | never |
 | background shell | working spinner | `shell ·` description, else program name, else just `shell` | time since RimZ first saw it | command when known, with the program path trimmed |
 | signal | `⌁` | `signal · pr.merged` (selector) | time since armed | never |
+| idle stop | `◷` | `stop · after 3m idle` (the requested rest) | time since requested | never |
 
 Entries list in a fixed order, and opening more of the list only appends rows:
 

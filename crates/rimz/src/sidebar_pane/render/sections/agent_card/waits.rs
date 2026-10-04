@@ -1,9 +1,10 @@
-//! Type-led wait entries share the subagent layout and pin armed age right. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells, with signals last. Subagent waits use the child's own row instead.
+//! Type-led wait entries share the subagent layout and pin armed age right. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, file, and team waits take one line. Live watches retain the working animation; timers, signals, and teams use static leads. Waits precede background shells, with signals last and a pending idle stop after them. Subagent waits use the child's own row instead.
 
 use jiff::Timestamp;
 
 use crate::agents::{
-    BackgroundShell, PendingWait, PendingWaitTrigger, single_line_description, usable_description,
+    BackgroundShell, IdleStop, PendingWait, PendingWaitTrigger, single_line_description,
+    usable_description,
 };
 use crate::proc::command::{command_program_basename, program_label};
 
@@ -30,6 +31,7 @@ pub(super) fn wait_entry_lines(
     ctx: &RowCtx<'_>,
     waits: &[PendingWait],
     shells: &[BackgroundShell],
+    idle_stop: Option<&IdleStop>,
 ) -> Vec<Line<'static>> {
     let (signals, others): (Vec<_>, Vec<_>) = visible_waits(waits).partition(|wait| {
         matches!(
@@ -43,6 +45,16 @@ pub(super) fn wait_entry_lines(
         .map(|wait| wait_entry(ctx, wait))
         .chain(shells.iter().map(|shell| shell_entry(ctx, shell)))
         .chain(signals.into_iter().map(|wait| wait_entry(ctx, wait)))
+        .chain(idle_stop.map(|stop| {
+            entry(
+                ctx,
+                ctx.theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
+                "stop",
+                Some(stop.label(None, ctx.now)),
+                None,
+                Some(stop.requested_at),
+            )
+        }))
     {
         push_entry(ctx, &mut lines, entry);
     }

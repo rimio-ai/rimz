@@ -143,6 +143,24 @@ pub struct IdleStop {
     pub requested_by: Option<String>,
 }
 
+impl IdleStop {
+    /// `after 3m idle`, then `, due` or `, in 2m` while the rest clock runs.
+    pub fn label(&self, due: Option<Timestamp>, now: Timestamp) -> String {
+        let after = crate::utils::time::format_duration_compact(std::time::Duration::from_secs(
+            self.after_secs,
+        ));
+        let clock = match due {
+            None => String::new(),
+            Some(due) if due <= now => ", due".to_owned(),
+            Some(due) => {
+                let minutes = (due.duration_since(now).as_secs() as u64).div_ceil(60);
+                format!(", in {}", crate::theme::fmt::duration_label(minutes))
+            }
+        };
+        format!("after {after} idle{clock}")
+    }
+}
+
 /// One pending wake aimed at this session, projected from the loop catalog or launched runs during enrichment. Never folded from the log.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingWait {
@@ -828,6 +846,10 @@ pub struct AgentState {
     /// Loop-catalog projection rebuilt at enrichment, never reduced from events.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_waits: Vec<PendingWait>,
+    /// The pending `stop --when-idle` request, attached at enrichment from its
+    /// durable record and never reduced from events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_stop: Option<IdleStop>,
     /// Background shells this session is running, folded from adapter hook
     /// reports and carried forward; cleared when the session ends or
     /// re-registers. Independent of the `Parked` phase.
@@ -1055,6 +1077,7 @@ impl AgentState {
             context: None,
             budget_park: None,
             pending_waits: Vec::new(),
+            idle_stop: None,
             background_shells: Vec::new(),
             subagent_description: None,
             subagent_cost_usd: None,
