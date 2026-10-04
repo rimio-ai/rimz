@@ -942,18 +942,20 @@ pub trait MuxBackend: Send + Sync {
             .map(|listing| listing.panes.into_iter().map(|listed| listed.pane_id));
         require_held_pane(pane, session, held)
     }
-    /// Pane reads and writes take the pane's session like [`Self::focus_pane`]:
-    /// Zellij addresses `Some(session)` explicitly and lets `None` resolve from
-    /// the caller's environment; tmux ignores it.
+    /// Pane reads and writes always name the pane's session. Zellij pane ids
+    /// are session-scoped, and a session-less action from a caller outside any
+    /// pane exits 0 without doing anything once two sessions are live, so the
+    /// caller's environment is never trusted to pick the session; tmux ignores
+    /// it because pane ids are server-global.
     fn capture_pane(
         &self,
         pane: &PaneId,
-        session: Option<&str>,
+        session: &str,
         lines: Option<u16>,
         ansi: bool,
     ) -> Result<PaneCapture>;
-    fn send_keys(&self, pane: &PaneId, session: Option<&str>, text: &str) -> Result<()>;
-    fn send_key(&self, pane: &PaneId, session: Option<&str>, key: NamedKey) -> Result<()>;
+    fn send_keys(&self, pane: &PaneId, session: &str, text: &str) -> Result<()>;
+    fn send_key(&self, pane: &PaneId, session: &str, key: NamedKey) -> Result<()>;
     /// Inject `text` into the pane as one bracketed paste (`ESC[200~` …
     /// `ESC[201~`), so an agent composer takes the whole payload as pasted
     /// content and a following submit Enter reads as a keystroke instead of a
@@ -964,7 +966,7 @@ pub trait MuxBackend: Send + Sync {
     /// markers literally, so the raw [`Self::send_keys`] path stays for generic
     /// pane sends. The submit Enter is not included; callers follow with
     /// [`Self::send_key`] so the trailing `\r` lands outside the paste.
-    fn paste_text(&self, pane: &PaneId, session: Option<&str>, text: &str) -> Result<()>;
+    fn paste_text(&self, pane: &PaneId, session: &str, text: &str) -> Result<()>;
     /// Birth (or heal) the session's working view with its sidebar. When `daemon`
     /// is `Some`, the session is born with that `sidebar | content | hosts…`
     /// view leading and the working view focused second. Zellij can move later

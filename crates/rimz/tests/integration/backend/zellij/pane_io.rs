@@ -214,7 +214,7 @@ fn split_pane_injects_env_vars() {
         "Zellij split pane missed the injected RIMZ_TEST_VAR",
     );
     ZellijBackend::with_runtime_dir(xdg)
-        .capture_pane(&target, None, Some(1), true)
+        .capture_pane(&target, room.name(), Some(1), true)
         .expect("capture split target with scrollback and ANSI");
 }
 
@@ -488,10 +488,10 @@ fn paste_text_encodes_newlines_and_delivers_exact_pty_bytes() {
                 return Ok(bytes);
             }
             backend
-                .send_keys(&pane_id, None, &shell_marker_command)
+                .send_keys(&pane_id, room.name(), &shell_marker_command)
                 .map_err(|err| err.to_string())?;
             backend
-                .send_key(&pane_id, None, NamedKey::Enter)
+                .send_key(&pane_id, room.name(), NamedKey::Enter)
                 .map_err(|err| err.to_string())?;
             std::fs::read(&shell_ready).map_err(|err| err.to_string())
         },
@@ -501,7 +501,7 @@ fn paste_text_encodes_newlines_and_delivers_exact_pty_bytes() {
     backend
         .send_keys(
             &pane_id,
-            None,
+            room.name(),
             &format!(
                 "stty raw -echo; printf ready > {}; dd bs=1 count={} of={} 2>/dev/null; stty sane",
                 reader_ready.display(),
@@ -511,7 +511,7 @@ fn paste_text_encodes_newlines_and_delivers_exact_pty_bytes() {
         )
         .expect("type raw paste reader");
     backend
-        .send_key(&pane_id, None, NamedKey::Enter)
+        .send_key(&pane_id, room.name(), NamedKey::Enter)
         .expect("start raw paste reader");
     std::fs::write(&shell_release, b"release").expect("release synchronized shell");
     poll_until(
@@ -522,7 +522,7 @@ fn paste_text_encodes_newlines_and_delivers_exact_pty_bytes() {
     );
 
     backend
-        .paste_text(&pane_id, None, payload)
+        .paste_text(&pane_id, room.name(), payload)
         .expect("paste_text");
     let actual = poll_until(
         Duration::from_secs(10),
@@ -548,7 +548,7 @@ fn semantic_answer_keys_reach_a_live_pane() {
     backend
         .send_keys(
             &pane_id,
-            None,
+            room.name(),
             &format!(
                 "stty raw -echo; dd bs=1 count=4 of={} 2>/dev/null; stty sane",
                 key_bytes.display()
@@ -556,14 +556,14 @@ fn semantic_answer_keys_reach_a_live_pane() {
         )
         .expect("type raw key reader");
     backend
-        .send_key(&pane_id, None, NamedKey::Enter)
+        .send_key(&pane_id, room.name(), NamedKey::Enter)
         .expect("start raw key reader");
     // Queue writes in PTY order; stty's TCSANOW mode switch preserves pending input, so keep this delay-free.
     backend
-        .send_key(&pane_id, None, NamedKey::Escape)
+        .send_key(&pane_id, room.name(), NamedKey::Escape)
         .expect("send escape");
     backend
-        .send_key(&pane_id, None, NamedKey::ShiftTab)
+        .send_key(&pane_id, room.name(), NamedKey::ShiftTab)
         .expect("send shift-tab");
 
     let bytes = poll_until(
@@ -694,7 +694,7 @@ fn pane_send_and_capture_address_the_resolved_room_among_two_sessions() {
         Duration::from_secs(10),
         || {
             backend
-                .capture_pane(&here_pane, Some(&here), None, false)
+                .capture_pane(&here_pane, &here, None, false)
                 .map_err(|err| err.to_string())
         },
         |capture| !capture.raw_text.trim().is_empty(),
@@ -739,14 +739,14 @@ fn pane_send_and_capture_address_the_resolved_room_among_two_sessions() {
         Duration::from_secs(10),
         || {
             backend
-                .capture_pane(&here_pane, Some(&here), None, false)
+                .capture_pane(&here_pane, &here, None, false)
                 .map_err(|err| err.to_string())
         },
         |capture| ran(&capture.raw_text),
         "mark delivered into the resolved room",
     );
     let other_text = backend
-        .capture_pane(&other_pane, Some(&other), None, false)
+        .capture_pane(&other_pane, &other, None, false)
         .expect("capture other room")
         .raw_text;
     assert!(!other_text.contains("TWO_ROOM_MARK"), "{other_text}");
@@ -936,7 +936,7 @@ fn pane_send_and_capture_refuse_a_suppressed_pane_until_it_returns() {
     let backend = room.backend();
     let screen = || {
         backend
-            .capture_pane(&shell, Some(&here), None, false)
+            .capture_pane(&shell, &here, None, false)
             .map_err(|err| err.to_string())
     };
     let shows = |text: &str, mark: &str| text.lines().any(|line| line.trim() == mark);

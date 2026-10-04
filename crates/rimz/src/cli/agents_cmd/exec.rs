@@ -1432,7 +1432,9 @@ fn record_own_run_failure_tail(context: &RunExecContext, globals: &GlobalFlags) 
         return;
     };
     let backend = rimz::mux::backend_for(mux);
-    let Some(tail) = supervised::pane::capture_failure_tail(backend.as_ref(), &own) else {
+    let Some(tail) =
+        supervised::pane::capture_failure_tail(backend.as_ref(), &own, &context.session_name)
+    else {
         return;
     };
     if let Err(err) =

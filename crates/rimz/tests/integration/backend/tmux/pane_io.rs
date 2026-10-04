@@ -142,7 +142,7 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
     let pane_id = panes[0].pane_id.clone();
     server
         .backend
-        .send_keys(&pane_id, None, "printf rimz-marker-io\n")
+        .send_keys(&pane_id, ANY_SESSION, "printf rimz-marker-io\n")
         .expect("send_keys");
     let capture = capture_pane_until(
         &server.backend,
@@ -156,11 +156,11 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
     );
     server
         .backend
-        .send_keys(&pane_id, None, "printf rimz-marker-key")
+        .send_keys(&pane_id, ANY_SESSION, "printf rimz-marker-key")
         .expect("send_keys");
     server
         .backend
-        .send_key(&pane_id, None, NamedKey::Enter)
+        .send_key(&pane_id, ANY_SESSION, NamedKey::Enter)
         .expect("send_key");
     let capture = capture_pane_until(
         &server.backend,
@@ -176,7 +176,7 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
     server
         .backend
         .send_keys(
-            &pane_id, None,
+            &pane_id, ANY_SESSION,
             &format!(
                 "stty raw -echo; dd bs=1 count=4 of={} 2>/dev/null; stty sane; printf '\\nrimz-raw-reader-ready\\n'",
                 key_bytes.display()
@@ -185,16 +185,16 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
         .expect("type raw key reader");
     server
         .backend
-        .send_key(&pane_id, None, NamedKey::Enter)
+        .send_key(&pane_id, ANY_SESSION, NamedKey::Enter)
         .expect("start raw key reader");
     thread::sleep(Duration::from_millis(100));
     server
         .backend
-        .send_key(&pane_id, None, NamedKey::Escape)
+        .send_key(&pane_id, ANY_SESSION, NamedKey::Escape)
         .expect("send escape");
     server
         .backend
-        .send_key(&pane_id, None, NamedKey::ShiftTab)
+        .send_key(&pane_id, ANY_SESSION, NamedKey::ShiftTab)
         .expect("send shift-tab");
     let deadline = Instant::now() + Duration::from_secs(2);
     let bytes = loop {
@@ -225,7 +225,7 @@ fn pane_io_round_trips_keys_named_keys_and_bracketed_paste() {
     let payload = "-rf rimz-paste-marker";
     server
         .backend
-        .paste_text(&pane_id, None, payload)
+        .paste_text(&pane_id, ANY_SESSION, payload)
         .expect("paste_text");
     let capture = capture_pane_until(
         &server.backend,
@@ -261,7 +261,7 @@ fn send_keys_works_with_presence_watch_as_only_client() {
     server.wait_for_control_client("headless");
     server
         .backend
-        .send_keys(&pane_id, None, "printf rimz-watch-send\n")
+        .send_keys(&pane_id, ANY_SESSION, "printf rimz-watch-send\n")
         .expect("send_keys under presence watch");
     let capture = capture_pane_until(
         &server.backend,
@@ -349,7 +349,7 @@ fn pane_send_and_capture_refuse_a_pane_from_another_room() {
     let text = rooms
         .server
         .backend
-        .capture_pane(&rooms.other_pane, None, None, false)
+        .capture_pane(&rooms.other_pane, ANY_SESSION, None, false)
         .expect("capture other room")
         .raw_text;
     assert!(

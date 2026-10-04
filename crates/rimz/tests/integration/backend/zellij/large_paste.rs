@@ -52,7 +52,9 @@ fn large_zellij_paste_delivers_exact_pty_bytes() {
         |bytes| bytes == b"ready",
         "raw reader readiness",
     );
-    backend.paste_text(&pane, None, &text).expect("large paste");
+    backend
+        .paste_text(&pane, room.name(), &text)
+        .expect("large paste");
     let actual = poll_until(
         Duration::from_secs(10),
         || std::fs::read(&received).map_err(|err| err.to_string()),

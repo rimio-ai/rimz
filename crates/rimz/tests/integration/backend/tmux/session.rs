@@ -362,11 +362,11 @@ fn ensure_session_applies_room_contract() {
         .clone();
     server
         .backend
-        .send_keys(&work_pane, None, copilot.to_string_lossy().as_ref())
+        .send_keys(&work_pane, ANY_SESSION, copilot.to_string_lossy().as_ref())
         .expect("type direct copilot shim");
     server
         .backend
-        .send_key(&work_pane, None, NamedKey::Enter)
+        .send_key(&work_pane, ANY_SESSION, NamedKey::Enter)
         .expect("run direct copilot shim");
     let deadline = Instant::now() + Duration::from_secs(5);
     while !marker.exists() && Instant::now() < deadline {

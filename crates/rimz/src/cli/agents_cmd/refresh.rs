@@ -24,9 +24,12 @@ pub(super) struct RefreshArgs {
 
 pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    let snapshot = ctx
+    let mut snapshot = ctx
         .resolution_snapshot()
         .context("reading agent snapshot")?;
+    // A resolution snapshot lists the room's own session without recording its
+    // name, and a turn-death pane read needs the pane's session.
+    snapshot.pane_session_name = Some(ctx.workspace.session_name.clone());
     let runtime = ctx.runtime();
     runtime.ensure_dirs().context("preparing runtime dirs")?;
     let current_channel = ctx.channel();

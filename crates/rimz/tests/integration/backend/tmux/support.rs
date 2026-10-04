@@ -25,6 +25,10 @@ pub(super) use crate::common::{
     CommandTimeoutExt, Env, ScrubSessionEnvExt, write_failing_agent_shim,
 };
 
+/// tmux pane ids are server-global, so its pane I/O ignores the session the
+/// trait requires.
+pub(super) const ANY_SESSION: &str = "";
+
 pub(super) fn tiled_column(panes: Vec<PaneCmd>) -> LayoutColumn {
     LayoutColumn {
         panes,
@@ -136,7 +140,7 @@ pub(super) fn capture_pane_until(
     let deadline = Instant::now() + budget;
     let mut last = String::new();
     loop {
-        if let Ok(capture) = backend.capture_pane(pane_id, None, None, false) {
+        if let Ok(capture) = backend.capture_pane(pane_id, ANY_SESSION, None, false) {
             last = capture.raw_text;
             if last.contains(needle) {
                 return last;
@@ -160,7 +164,7 @@ pub(super) fn find_pane_with_capture_until(
     loop {
         last.clear();
         for pane_id in pane_ids {
-            match backend.capture_pane(pane_id, None, None, false) {
+            match backend.capture_pane(pane_id, ANY_SESSION, None, false) {
                 Ok(capture) => {
                     if capture.raw_text.contains(needle) {
                         return (pane_id.clone(), capture.raw_text);

@@ -563,7 +563,7 @@ fn capture(
     json: bool,
     ansi: bool,
 ) -> Result<()> {
-    let capture = backend.capture_pane(pane, Some(session_name), lines, ansi)?;
+    let capture = backend.capture_pane(pane, session_name, lines, ansi)?;
     if json {
         render::json_pretty(&capture)?;
     } else {
@@ -741,7 +741,7 @@ fn send(
     if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
         bail!("expected text, --key, or --enter");
     }
-    let writer = PaneWriter::open(runtime, pane, Some(session_name))?;
+    let writer = PaneWriter::open(runtime, pane, session_name)?;
     if let Some(text) = text.filter(|text| !text.is_empty()) {
         writer.type_text(text)?;
     }

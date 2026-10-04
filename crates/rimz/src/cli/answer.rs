@@ -113,7 +113,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let target = live
         .live_agent_pane(&pane_kind, &pane_agent_id)
         .unwrap_or_else(|| answer_exit(2, &format!("{handle} has no live bound pane")));
-    let writer = PaneWriter::open(store.runtime_paths(), &target, None)
+    let writer = PaneWriter::open(store.runtime_paths(), &target, &ctx.workspace.session_name)
         .unwrap_or_else(|err| answer_exit(2, &format!("sending answer to {handle}: {err}")));
 
     // Re-read immediately before the first keystroke. This is the compare half

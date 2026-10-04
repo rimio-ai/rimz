@@ -130,7 +130,8 @@ fn confirm_turn_death_from_pane(
     rimz::sidebar::refresh::sessions::confirm_codex_turn_death_from_pane(
         runtime,
         login,
-        pane.as_ref(),
+        pane.as_ref()
+            .map(|(pane, session)| (pane, session.as_str())),
         error,
     );
 }
@@ -140,7 +141,7 @@ fn session_pane(
     workspace_id: &WorkspaceId,
     kind: &str,
     session_id: &str,
-) -> Option<PaneId> {
+) -> Option<(PaneId, String)> {
     let paths = StatePaths::for_workspace(workspace_id.clone()).ok()?;
     let record = record::read(&paths.workspace_record).ok()?;
     let store = Store::open(paths, runtime.clone()).ok()?;
@@ -165,5 +166,5 @@ fn session_pane(
                     .as_ref()
                     .is_some_and(|agent_id| agent_id.as_str() == session_id)
         })
-        .map(|pane| pane.pane_id)
+        .map(|pane| (pane.pane_id, workspace.session_name))
 }
