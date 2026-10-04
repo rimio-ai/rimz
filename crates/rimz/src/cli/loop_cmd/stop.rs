@@ -23,8 +23,13 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
                 ) {
                     // The run did stop: the lock wait and the SIGTERM backstop
                     // still apply, and the open pane fails the command after them.
+                    // A second `loop stop` finds the lock released and never
+                    // reaches the pane, so the fix names the run's own stop.
                     Err(StopRunErr::PaneOpen(open)) => {
-                        pane_open = Some(open);
+                        pane_open = Some(format!(
+                            "loop `{name}`: {open}; run `rimz agents stop {}` to close it",
+                            record.run_id
+                        ));
                         Ok(())
                     }
                     Err(StopRunErr::NotCanceled(err)) => Err(err),
@@ -35,7 +40,7 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
         }
     });
     let outcome = match (outcome, &pane_open) {
-        (Err(err), Some(open)) => return Err(err.context(format!("loop `{name}`: {open}"))),
+        (Err(err), Some(open)) => return Err(err.context(open.clone())),
         (outcome, _) => outcome?,
     };
     match outcome {
@@ -47,7 +52,7 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
         }
     }
     if let Some(open) = pane_open {
-        bail!("loop `{name}`: {open}");
+        bail!(open);
     }
     Ok(())
 }

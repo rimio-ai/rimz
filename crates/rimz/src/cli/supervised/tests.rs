@@ -619,7 +619,7 @@ fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
         SessionGone,
     }
     use Listing::{Absent, Present, SessionGone, Unreadable};
-    let settle = |listings: &[Listing], close_ok: bool, recorded: bool| {
+    let settle_within = |grace: Duration, listings: &[Listing], close_ok: bool, recorded: bool| {
         let fixture = RunFixture::new(RunStatus::Canceled);
         if recorded {
             rimz::harness::run::record_pane(
@@ -632,12 +632,14 @@ fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
         let mut listings = listings.iter().copied();
         let mut last = None;
         let mut closes = 0;
+        let mut listed = 0;
         let verdict = settle_stopped_run_pane(
             &fixture.store,
             "rimz-test",
             &fixture.record,
-            Duration::ZERO,
+            grace,
             |pane| {
+                listed += 1;
                 last = listings.next().or(last);
                 match last.expect("a scripted listing") {
                     Present => Ok(true),
@@ -663,7 +665,12 @@ fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
                 }
             },
         );
-        (verdict.map_err(|open| open.to_string()), closes)
+        let verdict = verdict.map_err(|open| StopRunErr::PaneOpen(open).to_string());
+        (verdict, closes, listed)
+    };
+    let settle = |listings: &[Listing], close_ok: bool, recorded: bool| {
+        let (verdict, closes, _) = settle_within(Duration::ZERO, listings, close_ok, recorded);
+        (verdict, closes)
     };
     let open = Err(
         "pane tmux:%8 is still open: could not parse mux output from `tmux`: close refused; rerun the stop to close it"
@@ -690,13 +697,18 @@ fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
         (Ok(()), 0),
         "a run with no pane rimz can name has nothing to close"
     );
+    assert_eq!(
+        settle_within(Duration::from_secs(1), &[Unreadable, Absent], false, true),
+        (Ok(()), 0, 2),
+        "a listing error before the deadline is retried, not returned"
+    );
 
     let unresolved = super::pane::PaneOpen {
         pane: None,
         reason: "no multiplexer found".to_owned(),
     };
     assert_eq!(
-        StopRunErr::from(unresolved).to_string(),
+        StopRunErr::PaneOpen(unresolved).to_string(),
         "the run's pane was not closed: no multiplexer found; rerun the stop to close it"
     );
 }
