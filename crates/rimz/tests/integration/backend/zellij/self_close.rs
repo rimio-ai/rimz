@@ -35,10 +35,7 @@ fn sidebar_self_closes_when_its_tab_empties() {
         crate::common::skip("rimz binary not built");
         return;
     }
-    let Some(wasm) = presence_wasm_artifact() else {
-        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
-        return;
-    };
+    let wasm = presence_wasm_artifact();
     match zellij::capabilities() {
         Ok(caps)
             if caps

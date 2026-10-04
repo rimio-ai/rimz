@@ -256,17 +256,17 @@ jobs:
       - name: cargo xtask test (gate)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile gate
+          mold -run cargo xtask test --deny-skips --profile gate
 
       - name: cargo xtask test (live)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile live
+          mold -run cargo xtask test --deny-skips --profile live
 
       - name: cargo xtask test (journey)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile journey
+          mold -run cargo xtask test --deny-skips --profile journey
 
       # A green run still carries each flaky test's failed first attempt here.
       - name: Upload nextest JUnit reports

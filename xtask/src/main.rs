@@ -115,7 +115,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "test",
         summary: "Run nextest filters, batch exact --name selections, or discover tests with --list.",
-        runs: "cargo nextest run --workspace --all-features --locked [--name <test>]... [nextest filter]...; --list uses cargo nextest list",
+        runs: "cargo nextest run --workspace --all-features --locked [--name <test>]... [nextest filter]...; --list uses cargo nextest list; --deny-skips fails a run whose self-skip reason .config/allowed-test-skips.txt does not list",
     },
     TaskInfo {
         name: "test-archive",
