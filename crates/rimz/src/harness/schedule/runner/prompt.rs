@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use serde_json::{Map, Value};
 
 use crate::config::{TaskEntry, WaitMeta, WatchSpec};
-use crate::harness::schedule::signal::{Signal, elapsed_label};
+use crate::harness::schedule::signal::{Signal, elapsed_label, match_value};
 
 pub(super) enum Evidence<'a> {
     Scheduled,
@@ -148,7 +148,7 @@ fn signal_headline(signal: &Signal) -> String {
     match signal.name.family() {
         family @ ("ci" | "pr") => {
             if let Some(branch) = text("branch") {
-                headline.push_str(&format!(" on {branch}"));
+                headline.push_str(&format!(" on {}", one_line(branch)));
             }
             if let Some(number) = payload.get("number").and_then(Value::as_u64) {
                 headline.push_str(&format!(" #{number}"));
@@ -156,7 +156,7 @@ fn signal_headline(signal: &Signal) -> String {
             if family == "ci"
                 && let Some(head) = text("head")
             {
-                headline.push_str(&format!(" @{}", short_sha(head)));
+                headline.push_str(&format!(" @{}", one_line(short_sha(head))));
             }
         }
         "agent" => {
@@ -169,7 +169,7 @@ fn signal_headline(signal: &Signal) -> String {
         }
         "trunk" => {
             if let Some(trunk) = text("trunk") {
-                headline.push_str(&format!(" on {trunk}"));
+                headline.push_str(&format!(" on {}", one_line(trunk)));
             }
         }
         "worktree" => append_identity(&mut headline, payload, "name"),
@@ -185,22 +185,23 @@ fn signal_headline(signal: &Signal) -> String {
         }
         "pr.conflicted" => {
             if let Some(base) = text("base") {
-                headline.push_str(&format!(" · with {base}"));
+                headline.push_str(&format!(" · with {}", one_line(base)));
             }
         }
         "pr.dequeued" => {
             if let Some(reason) = text("reason") {
-                headline.push_str(&format!(" · {reason}"));
+                headline.push_str(&format!(" · {}", one_line(reason)));
             }
         }
         "trunk.moved" => {
             if let (Some(from), Some(to)) = (text("from"), text("to")) {
-                headline.push_str(&format!(" {}..{}", short_sha(from), short_sha(to)));
+                let (from, to) = (one_line(short_sha(from)), one_line(short_sha(to)));
+                headline.push_str(&format!(" {from}..{to}"));
             }
         }
         "worktree.created" => {
             if let Some(base) = text("base") {
-                headline.push_str(&format!(" from {base}"));
+                headline.push_str(&format!(" from {}", one_line(base)));
             }
         }
         "worktree.removed" => {
@@ -211,12 +212,12 @@ fn signal_headline(signal: &Signal) -> String {
         "team.failed" => {
             if let Some(member) = text("member") {
                 let handle = member.split('#').next().unwrap_or(member);
-                headline.push_str(&format!(" · {handle}"));
+                headline.push_str(&format!(" · {}", one_line(handle)));
             }
         }
         "team.stage" => {
-            if let Some(to) = text("to") {
-                match text("from") {
+            if let Some(to) = text("to").map(one_line) {
+                match text("from").map(one_line) {
                     Some(from) => headline.push_str(&format!(" · {from} -> {to}")),
                     None => headline.push_str(&format!(" · {to}")),
                 }
@@ -234,7 +235,7 @@ fn signal_details(signal: &Signal) -> Vec<String> {
         return signal
             .payload
             .iter()
-            .map(|(key, value)| format!("{}: {}", one_line(key), field_value(value)))
+            .map(|(key, value)| format!("{}: {}", one_line(key), one_line(&match_value(value))))
             .collect();
     }
     if signal.name.as_str() != "pr.dequeued" {
@@ -245,20 +246,13 @@ fn signal_details(signal: &Signal) -> Vec<String> {
         .payload
         .get("queue_checks_url")
         .and_then(Value::as_str)
-        .map(|url| format!("queue checks: {url}"))
+        .map(|url| format!("queue checks: {}", one_line(url)))
         .into_iter()
         .collect()
 }
 
-fn field_value(value: &Value) -> String {
-    match value {
-        Value::String(text) => one_line(text),
-        other => other.to_string(),
-    }
-}
-
-/// A key or string value bare, or JSON-quoted when it holds a line break, so
-/// one field stays one line.
+/// A key, value, or subject segment bare, or JSON-quoted when it holds a line
+/// break, so it stays on its one line.
 fn one_line(text: &str) -> String {
     if text.contains(['\n', '\r']) {
         return Value::from(text).to_string();
@@ -273,7 +267,7 @@ fn short_sha(sha: &str) -> &str {
 fn append_identity(headline: &mut String, payload: &Map<String, Value>, key: &str) {
     if let Some(identity) = payload.get(key).and_then(Value::as_str) {
         headline.push(' ');
-        headline.push_str(identity);
+        headline.push_str(&one_line(identity));
     }
 }
 
