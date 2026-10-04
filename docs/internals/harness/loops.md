@@ -249,6 +249,8 @@ A room can be born between the tick's heartbeat check and its state write. That 
 | 7 | the poll-until `deadline` | `expired` |
 | 8 | the `check` command and its polarity | `skipped`, or a check-only terminal result |
 
+A fire refused at any gate is spent: nothing queues or replays it, and the next attempt is the next trigger.
+
 Gate 1 trips when the day's spend has reached the cap, or when spend plus the per-run `budget` would exceed it. A `budget-per-day` without a `budget` is an error.
 
 Gate 2 resolves the task's login once: the row's `account`, else the room's current account for the kind. Gates 3 to 5, the hooks preflight, tier routing, and the request's `login` all use that one resolution, so a pinned task is judged and launched on its own account and never on the room's. The gate runs before the caps because they read the account. It skips rather than errors because the fix is outside the task: the status cache holds only a room's current account and the accounts its agents run on (`RoomLoginSet::in_use`), so the logged-out skip needs a positive record and an account with none proceeds to launch. A home without trusted hooks passes this gate and fails the preflight as `error`. The supervised launch resolves the pin again for the kind its own routing pass lands on, so `TaskFire::finish_error` records a pinned fire's `LoginErr` as the same `account skipped`, by downcast and with the gate's wording; every other launch error, and any error on an unpinned task, stays `error`.

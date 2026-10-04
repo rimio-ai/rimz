@@ -70,6 +70,59 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
     }
 }
 
+fn check(code: Option<i32>, output: &str) -> CheckRecord {
+    CheckRecord {
+        output_path: None,
+        code,
+        timed_out: false,
+        output: output.to_owned(),
+    }
+}
+
+/// An overlap as `prepare_run_lock` records it: a note no two fires share.
+fn overlap(second: i64) -> LoopRunRecord {
+    let mut row = record(second, LoopRunResult::Overlapped);
+    row.mode = Some(LoopRunMode::Scheduled);
+    row.duration_ms = Some(0);
+    row.error = Some(format!(
+        "previous run still active (pid {}, started {second}m ago) — skipped",
+        4_000 + second
+    ));
+    row
+}
+
+fn scheduled(second: i64, result: LoopRunResult) -> LoopRunRecord {
+    let mut row = record(second, result);
+    row.mode = Some(LoopRunMode::Scheduled);
+    row
+}
+
+fn runs_table(records: &[LoopRunRecord], limit: usize) -> String {
+    let mut out = Vec::new();
+    write_runs_table(
+        &mut out,
+        records,
+        limit,
+        Timestamp::from_second(100).unwrap(),
+    )
+    .unwrap();
+    anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
+fn last_run(records: &[LoopRunRecord]) -> String {
+    let mut out = Vec::new();
+    write_last_run(
+        &mut out,
+        "wait",
+        &TaskEntry::default(),
+        records,
+        Timestamp::from_second(100).unwrap(),
+        ui::prose::Prose::Raw,
+    )
+    .unwrap();
+    anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
 #[test]
 fn checkout_without_a_note_has_no_trailing_separator() {
     let mut row = record(0, LoopRunResult::Launched);
@@ -223,33 +276,49 @@ fn spend_label_renders_today_last_and_cost_window() {
 }
 
 #[test]
-fn verdict_uses_the_latest_conclusive_streak() {
+fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
     let now = Timestamp::from_second(50).unwrap();
     let failed = record(10, LoopRunResult::Failed);
     let mut passed_check = record(20, LoopRunResult::CheckSkipped);
-    passed_check.check = Some(CheckRecord {
-        output_path: None,
-        code: Some(0),
-        timed_out: false,
-        output: "ok".to_owned(),
-    });
+    passed_check.check = Some(check(Some(0), "ok"));
     let neutral = record(30, LoopRunResult::Overlapped);
-    let completed = record(40, LoopRunResult::Completed);
+    let mut completed = record(40, LoopRunResult::Completed);
+    completed.duration_ms = Some(5_000);
 
     let (healthy, style) = verdict_line(
         &[failed, passed_check, neutral.clone(), completed.clone()],
         now,
     )
     .unwrap();
-    assert_eq!(healthy, "✓ healthy · completed ×2 since 30s ago");
+    assert_eq!(
+        healthy,
+        "✓ healthy · last run 10s ago, completed in 5.0s · 2 in a row since a failure 40s ago"
+    );
     assert_eq!(style, ui::palette::good());
 
     let errored = record(40, LoopRunResult::Errored);
     let failed = record(20, LoopRunResult::Failed);
-    let (failing, style) =
-        verdict_line(&[completed, failed, neutral.clone(), errored], now).unwrap();
-    assert_eq!(failing, "✗ failing · error ×2 since 30s ago");
+    let (failing, style) = verdict_line(
+        &[completed.clone(), failed, neutral.clone(), errored.clone()],
+        now,
+    )
+    .unwrap();
+    assert_eq!(
+        failing,
+        "✗ failing · last run 10s ago, error · 2 in a row since a good run 10s ago"
+    );
     assert_eq!(style, ui::palette::alarm());
+
+    let (first, _) = verdict_line(&[completed.clone(), errored], now).unwrap();
+    assert_eq!(
+        first,
+        "✗ failing · last run 10s ago, error · first since a good run 10s ago"
+    );
+    let (unbounded, _) = verdict_line(&[completed.clone(), completed], now).unwrap();
+    assert_eq!(
+        unbounded,
+        "✓ healthy · last run 10s ago, completed in 5.0s · 2 in a row"
+    );
     assert!(verdict_line(&[neutral], now).is_none());
 }
 
@@ -774,14 +843,33 @@ fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
 }
 
 #[test]
-fn detail_indices_include_prior_failure_when_latest_detail_shadows_it() {
+fn detail_indices_point_at_the_current_failure_only_when_a_later_run_shadows_it() {
     let mut error = record(10, LoopRunResult::Errored);
     error.error = Some("reading prompt-file\nmissing".to_owned());
     let mut failed = record(20, LoopRunResult::Failed);
     failed.run_id = Some("run_0123456789abcdef01234567".to_owned());
-    let records = vec![error, failed];
+    let mut records = vec![error, failed];
+    assert_eq!(detail_indices(&records), (Some(1), None));
 
-    assert_eq!(detail_indices(&records), (Some(1), Some(0)));
+    let mut skipped = record(30, LoopRunResult::BudgetSkipped);
+    skipped.error = Some("daily budget reached".to_owned());
+    records.push(skipped);
+    assert_eq!(detail_indices(&records), (Some(2), Some(1)));
+
+    let mut recovered = record(40, LoopRunResult::Completed);
+    recovered.check = Some(check(Some(0), "ok"));
+    records.push(recovered);
+    assert_eq!(detail_indices(&records), (Some(3), None));
+}
+
+#[test]
+fn detail_indices_skip_a_trailing_overlap() {
+    let mut completed = record(10, LoopRunResult::Completed);
+    completed.check = Some(check(Some(0), "ok"));
+    let records = vec![completed, overlap(20)];
+
+    assert_eq!(detail_indices(&records), (Some(0), None));
+    assert!(last_run(&records).contains("LAST RUN — ✓ completed"));
 }
 
 #[test]
@@ -793,7 +881,7 @@ fn detail_indices_pick_a_newer_launch_over_an_older_failure() {
     launched.target = Some("@fixer".to_owned());
     let records = vec![error, launched];
 
-    assert_eq!(detail_indices(&records), (Some(1), Some(0)));
+    assert_eq!(detail_indices(&records), (Some(1), None));
 }
 
 #[test]
@@ -815,6 +903,7 @@ fn render_record_detail_titles_status_age_and_mode() {
         &entry,
         &detail,
         "LAST FAILURE",
+        "rimz loop logs wait -n 1",
         Timestamp::from_second(30).expect("timestamp"),
         ui::prose::Prose::Raw,
     )
@@ -849,6 +938,7 @@ fn render_record_detail_marks_failed_check_output() {
         &entry,
         &detail,
         "LAST FAILURE",
+        "rimz loop logs wait -n 1",
         Timestamp::from_second(30).expect("timestamp"),
         ui::prose::Prose::Raw,
     )
@@ -859,6 +949,259 @@ fn render_record_detail_marks_failed_check_output() {
     let out = anstream::adapter::strip_str(&raw).to_string();
     assert!(out.contains("LAST FAILURE — ✗ failed (exit 2)"));
     assert!(out.contains("  │ first line\n  │ second line"));
+}
+
+#[test]
+fn last_run_header_carries_duration_exit_and_signal() {
+    let mut completed = scheduled(90, LoopRunResult::Completed);
+    completed.duration_ms = Some(5_000);
+    completed.check = Some(check(Some(0), "ok"));
+    completed.signal = Some(rimz::harness::schedule::run_log::SignalRecord {
+        name: "trunk.moved".parse().unwrap(),
+        payload: Default::default(),
+    });
+
+    let out = last_run(&[completed.clone()]);
+    assert!(
+        out.contains("LAST RUN — ✓ completed · 10s ago · 5.0s · exit 0 · signal trunk.moved\n"),
+        "{out}"
+    );
+    assert!(!out.contains("signal:"), "{out}");
+
+    completed.mode = Some(LoopRunMode::Manual);
+    completed.signal = None;
+    let out = last_run(&[completed]);
+    assert!(
+        out.contains("LAST RUN — ✓ completed · 10s ago · 5.0s · exit 0 · manual\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn last_run_cuts_a_passing_check_to_its_tail_and_points_at_the_rest() {
+    let seven = "l1\nl2\nl3\nl4\nl5\nl6\nl7\n";
+    let mut passed = scheduled(80, LoopRunResult::Completed);
+    passed.check = Some(check(Some(0), seven));
+    let out = last_run(&[passed.clone(), overlap(90)]);
+    assert!(
+        out.contains("exit 0\n  │ l3\n  │ l4\n  │ l5\n  │ l6\n  │ l7\n"),
+        "{out}"
+    );
+    assert!(
+        out.ends_with("  full output: rimz loop logs wait -n 2\n"),
+        "{out}"
+    );
+
+    passed.check = Some(check(Some(0), "l1\nl2\nl3\nl4\nl5\n"));
+    let out = last_run(&[passed]);
+    assert!(out.contains("  │ l1\n  │ l2\n"), "{out}");
+    assert!(!out.contains("full output"), "{out}");
+
+    let mut failed = scheduled(80, LoopRunResult::Failed);
+    failed.check = Some(check(Some(1), seven));
+    let mut gated = scheduled(80, LoopRunResult::CheckSkipped);
+    gated.check = Some(check(Some(1), seven));
+    for record in [failed, gated] {
+        let out = last_run(&[record]);
+        assert!(out.contains("  │ l1\n  │ l2\n  │ l3\n"), "{out}");
+        assert!(!out.contains("full output"), "{out}");
+    }
+}
+
+#[test]
+fn overlaps_fold_into_the_run_that_follows_them() {
+    let mut records = (1..=4).map(overlap).collect::<Vec<_>>();
+    let mut failed = scheduled(5, LoopRunResult::Failed);
+    failed.error = Some("checkout changed".to_owned());
+    records.push(failed);
+
+    let rows = collapsed_run_rows(&records);
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].count, rows[0].skipped), (1, 4));
+    let table = runs_table(&records, 10);
+    assert!(!table.contains("overlapped"), "{table}");
+    assert!(
+        table.contains("checkout changed · 4 fires skipped, run already active"),
+        "{table}"
+    );
+    assert!(
+        table.contains("RECENT RUNS (newest first · 5 of 5)"),
+        "{table}"
+    );
+
+    let records = vec![
+        scheduled(10, LoopRunResult::Completed),
+        overlap(20),
+        scheduled(30, LoopRunResult::Completed),
+    ];
+    let rows = collapsed_run_rows(&records);
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].count, rows[0].skipped), (2, 1));
+    let table = runs_table(&records, 10);
+    assert!(table.contains("✓ completed ×2"), "{table}");
+    assert!(
+        table.contains("1 fire skipped, run already active"),
+        "{table}"
+    );
+}
+
+#[test]
+fn trailing_overlaps_keep_a_row_and_mark_the_verdict() {
+    let mut records = vec![
+        scheduled(10, LoopRunResult::Completed),
+        overlap(20),
+        overlap(30),
+    ];
+    let table = runs_table(&records, 10);
+    assert!(
+        table.find("○ overlapped ×2").unwrap() < table.find("✓ completed").unwrap(),
+        "{table}"
+    );
+    assert_eq!(
+        stale_clause(&records, false).as_deref(),
+        Some("last 2 fires skipped, nothing has run since")
+    );
+    assert_eq!(
+        stale_clause(&records, true).as_deref(),
+        Some("2 fires skipped while the active run holds the lock")
+    );
+
+    records.push(scheduled(40, LoopRunResult::Completed));
+    assert_eq!(
+        stale_clause(&records, false).as_deref(),
+        Some("2 fires skipped during the last run, nothing has run since")
+    );
+    assert_eq!(stale_clause(&records, true), None);
+
+    records.push(scheduled(50, LoopRunResult::Completed));
+    assert_eq!(stale_clause(&records, false), None);
+    assert_eq!(
+        stale_clause(&[overlap(10)], false).as_deref(),
+        Some("last fire skipped, nothing has run since")
+    );
+
+    // A fire refused at an earlier gate ran nothing: it is neither the run a
+    // skipped fire waits for nor a skipped fire itself, and it does not end a count.
+    let completed = |second| scheduled(second, LoopRunResult::Completed);
+    for refused in [
+        LoopRunResult::BudgetSkipped,
+        LoopRunResult::AccountSkipped,
+        LoopRunResult::SurplusSkipped,
+        LoopRunResult::SignalSkipped,
+    ] {
+        let refused = |second| scheduled(second, refused);
+        let clause = |records: &[LoopRunRecord], has_active_run| {
+            stale_clause(records, has_active_run).unwrap_or_default()
+        };
+        assert_eq!(
+            clause(&[overlap(10), completed(20), refused(30)], false),
+            "1 fire skipped during the last run, nothing has run since"
+        );
+        assert_eq!(clause(&[overlap(10), completed(20), refused(30)], true), "");
+        assert_eq!(
+            clause(&[completed(10), overlap(20), refused(30)], true),
+            "1 fire skipped while the active run holds the lock"
+        );
+        assert_eq!(
+            clause(&[completed(10), overlap(20), refused(30)], false),
+            "last fire skipped, nothing has run since"
+        );
+        assert_eq!(
+            clause(&[overlap(10), refused(20)], false),
+            "last fire skipped, nothing has run since"
+        );
+        assert_eq!(
+            clause(
+                &[
+                    completed(10),
+                    overlap(20),
+                    refused(30),
+                    overlap(40),
+                    completed(50)
+                ],
+                false
+            ),
+            "2 fires skipped during the last run, nothing has run since"
+        );
+        assert_eq!(
+            clause(
+                &[
+                    completed(10),
+                    refused(20),
+                    overlap(30),
+                    refused(40),
+                    overlap(50)
+                ],
+                false
+            ),
+            "last 2 fires skipped, nothing has run since"
+        );
+        assert_eq!(clause(&[completed(10), refused(20)], false), "");
+        assert_eq!(clause(&[refused(10)], false), "");
+    }
+}
+
+#[test]
+fn runs_table_is_newest_first_and_limits_from_the_newest() {
+    let records = vec![
+        scheduled(10, LoopRunResult::Failed),
+        scheduled(20, LoopRunResult::Completed),
+    ];
+    let table = runs_table(&records, 10);
+    assert!(
+        table.find("✓ completed").unwrap() < table.find("✗ failed").unwrap(),
+        "{table}"
+    );
+
+    let table = runs_table(&records, 1);
+    assert!(table.contains("✓ completed"), "{table}");
+    assert!(!table.contains("✗ failed"), "{table}");
+    assert!(
+        table.contains("RECENT RUNS (newest first · 1 of 2)"),
+        "{table}"
+    );
+}
+
+#[test]
+fn runs_table_drops_uniform_mode_and_empty_cost() {
+    let mut records = vec![
+        scheduled(10, LoopRunResult::Failed),
+        scheduled(20, LoopRunResult::Completed),
+    ];
+    let table = runs_table(&records, 10);
+    assert!(
+        !table.contains("MODE") && !table.contains("COST"),
+        "{table}"
+    );
+
+    let mut manual = record(30, LoopRunResult::Failed);
+    manual.mode = Some(LoopRunMode::Manual);
+    manual.cost_usd = Some(0.25);
+    records.push(manual);
+    let table = runs_table(&records, 10);
+    assert!(table.contains("MODE"), "{table}");
+    assert!(table.contains("manual"), "{table}");
+    assert!(table.contains("COST"), "{table}");
+    assert!(table.contains("$0.25"), "{table}");
+}
+
+#[test]
+fn agent_runs_are_newest_first() {
+    let mut out = Vec::new();
+    write_agent_runs(
+        &mut out,
+        &[
+            record(10, LoopRunResult::TargetGone),
+            record(20, LoopRunResult::Delivered),
+        ],
+        Timestamp::from_second(100).unwrap(),
+    )
+    .unwrap();
+    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(
+        out.find("delivered").unwrap() < out.find("target gone").unwrap(),
+        "{out}"
+    );
 }
 
 #[test]
@@ -946,6 +1289,7 @@ fn watch_history_uses_verdict_words_and_output_path() {
                 &TaskEntry::default(),
                 &detail,
                 "last run",
+                "rimz loop logs wait -n 1",
                 Timestamp::from_second(30).unwrap(),
                 ui::prose::Prose::Raw,
             )

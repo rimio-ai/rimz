@@ -397,11 +397,35 @@ fn outcome_failure_tail(summary: &RunSummary<'_>) -> Option<String> {
     (!tail.trim().is_empty()).then(|| tail.to_owned())
 }
 
+/// How much of a record `write_record_forensics` prints: `loop logs` prints it
+/// whole, `loop show` a summary whose header already names the signal.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Forensics {
+    Full,
+    Summary,
+}
+
+const SUMMARY_CHECK_LINES: usize = 5;
+
+/// The tail a summary prints in place of a passing check's output, when that
+/// output is longer. A failed check keeps every line.
+fn summary_check_tail<'a>(record: &LoopRunRecord, check: &'a CheckRecord) -> Option<&'a str> {
+    if render::record_is_failure(record) || check.timed_out || check.code != Some(0) {
+        return None;
+    }
+    let output = check.output.trim_end();
+    let (cut, _) = output.rmatch_indices('\n').nth(SUMMARY_CHECK_LINES - 1)?;
+    Some(&output[cut + 1..])
+}
+
+/// `full_output` is the `loop logs` command whose first block is this record,
+/// printed when the summary cut its check output.
 pub(super) fn render_record_detail(
     out: &mut impl Write,
     entry: &TaskEntry,
     record: &LoopRunRecord,
     title: &str,
+    full_output: &str,
     now: Timestamp,
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
@@ -412,17 +436,33 @@ pub(super) fn render_record_detail(
         "{}",
         ui::paint(status.style, &format!("{} {}", status.glyph, status.label))
     )?;
-    write!(
-        out,
-        " · {} · {}",
-        ui::rel_age(record.at, now),
-        record.mode.map_or("legacy", LoopRunMode::label)
-    )?;
+    write!(out, " · {}", ui::rel_age(record.at, now))?;
+    if let Some(took) = render::run_duration_label(record) {
+        write!(out, " · {took}")?;
+    }
     if let Some(exit) = detail_exit_segment(record) {
         write!(out, " · {exit}")?;
     }
+    if record.mode != Some(LoopRunMode::Scheduled) {
+        write!(
+            out,
+            " · {}",
+            record.mode.map_or("legacy", LoopRunMode::label)
+        )?;
+    }
+    if let Some(signal) = &record.signal {
+        write!(out, " · signal {}", signal.name.as_str())?;
+    }
     writeln!(out)?;
-    write_record_forensics(out, Some(entry), record, prose)
+    write_record_forensics(out, Some(entry), record, prose, Forensics::Summary)?;
+    let is_cut = record
+        .check
+        .as_ref()
+        .is_some_and(|check| summary_check_tail(record, check).is_some());
+    if is_cut {
+        write_detail_link(out, "full output", full_output)?;
+    }
+    Ok(())
 }
 
 pub(super) fn write_failure_pointer(
@@ -461,6 +501,7 @@ pub(super) fn write_record_forensics(
     entry: Option<&TaskEntry>,
     record: &LoopRunRecord,
     prose: ui::prose::Prose,
+    detail: Forensics,
 ) -> std::io::Result<()> {
     let run_record = record
         .run_id
@@ -474,7 +515,7 @@ pub(super) fn write_record_forensics(
     {
         write_detail_link(out, "leader", leader)?;
     }
-    write_check_section(out, record, run_record.as_ref(), prose)?;
+    write_check_section(out, record, run_record.as_ref(), prose, detail)?;
     write_verify_section(out, run_record.as_ref())?;
     if let Some(spend) = record_spend_label(record) {
         writeln!(
@@ -483,7 +524,9 @@ pub(super) fn write_record_forensics(
             ui::paint(ui::palette::muted(), &format!("  cost: {spend}"))
         )?;
     }
-    if let Some(signal) = &record.signal {
+    if detail == Forensics::Full
+        && let Some(signal) = &record.signal
+    {
         write_detail_link(out, "signal", signal.name.as_str())?;
     }
     if let Some(condition) = &record.condition {
@@ -505,6 +548,7 @@ fn write_check_section(
     record: &LoopRunRecord,
     run_record: Option<&rimz::store::run::RunRecord>,
     prose: ui::prose::Prose,
+    detail: Forensics,
 ) -> std::io::Result<()> {
     if let Some(check) = &record.check {
         if let Some(path) = &check.output_path {
@@ -515,7 +559,11 @@ fn write_check_section(
         } else {
             None
         };
-        write_gutter_block(out, first_style, &check.output)?;
+        let tail = match detail {
+            Forensics::Full => None,
+            Forensics::Summary => summary_check_tail(record, check),
+        };
+        write_gutter_block(out, first_style, tail.unwrap_or(&check.output))?;
     }
     if let Some(error) = &record.error {
         write_detail_label(out, "error")?;

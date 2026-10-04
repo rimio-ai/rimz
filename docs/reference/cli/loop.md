@@ -390,13 +390,19 @@ Footers count tasks blocked by trust and project tasks not yet enabled, with the
 
 A condition adds a `condition: <NEXT text>` block immediately below the trigger. Each leaf term appears in expression order, followed by `✓` or `✗` for that term's truth and its current reading (`unknown` if absent). Negation applies to the expression, not the leaf's glyph.
 
-`loop show <name>` opens with the task's schedule and next fire or hold, a health verdict from the latest conclusive run, and the task's facts: action, check, root (and `dir` for a linked worktree), source, effective timeout, budgets, surplus gate, spend, and `strikes N/max` once a strike is recorded. An active run adds its run id and the `loop stop` command. For a fired one-shot whose run is still active, the task row is already gone: `show` says the one-shot fired, prints the active run (`run in progress`, its run id, holder PID and start), the agent, and the `loop stop` command, then any recorded runs as `loop logs` prints them. The sections below follow:
+`loop show <name>` answers whether the task is working, then shows its evidence. It opens with the task's schedule and next fire or hold, then a health verdict from the latest conclusive run: its age, its status and duration, and the streak (how many consecutive conclusive runs ended the same way, and the age of the failure or good run that bounds the streak). An active run adds an `active` line with its run id, holder PID and start, and the `loop stop` command. For a fired one-shot whose run is still active, the task row is already gone: `show` says the one-shot fired, prints the active run (`run in progress`, its run id, holder PID and start), the agent, and the `loop stop` command, then any recorded runs as `loop logs` prints them.
+
+A fire refused because the previous run was still active is spent: nothing queues or replays it. The run that refused it started before that fire, so the verdict says, in the warning tone, when such fires have had no run since: fires skipped while the active run holds the lock, fires skipped after the last run, or, when no run is active, fires skipped during the last run. A fire refused at another gate (`budget skipped`, `account skipped`, `surplus skipped`, `signal skipped`) ran nothing, so it does not clear the warning.
+
+The sections below follow in this order, and the task's facts close the screen: action and check (one `task` row for a check-only task), `verify`, root (and `dir` for a linked worktree), source, effective timeout, budgets, surplus gate, spend, and `strikes N/max` once a strike is recorded.
 
 | Section | Contents |
 | --- | --- |
-| `AGENT RUNS` | Check-gated `--agent` and `--wait` tasks only: how many fires escalated to the action, the total and average cost across every escalated run the log still holds that recorded one, and the five latest attempts. |
-| `RECENT RUNS` | The latest runs, identical consecutive runs collapsed into one row. `-n, --runs <N>` sets how many, default `10`. |
-| `LAST RUN` | The newest run in full; an older last failure becomes a pointer to `loop logs`. |
+| `LAST RUN` | The newest run that is not an overlapped fire. The header carries status, age, duration, exit, `manual` for a hand fire, and the signal that fired it. The body is what `loop logs` prints for that run, except that a passing check prints its last five lines, followed by the `loop logs` command whose first block is this run. A failed check prints every line. While the task is failing and a newer run that is not the failure takes this section, a `last failure` pointer to `loop logs --failed` follows; a healthy task prints none. |
+| `AGENT RUNS` | Check-gated `--agent` and `--wait` tasks only: how many fires escalated to the action, the total and average cost across every escalated run the log still holds that recorded one, and the five latest attempts, newest first. |
+| `RECENT RUNS` | The latest runs, newest first, identical consecutive runs collapsed into one row. An `overlapped` fire takes no row once a later run is recorded: it joins that run's `NOTE` as a count (`2 fires skipped, run already active`), and the runs on either side of it collapse. Overlapped fires with no later run keep one row at the top. The heading gives the runs these rows stand for out of the runs recorded. `-n, --runs <N>` sets how many rows, default `10`. `MODE` appears when the rows differ in mode, `COST` and `TOKENS` when a row has one. |
+
+`loop logs` and `loop show --json` keep one entry per fire, overlapped fires included.
 
 A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind).
 

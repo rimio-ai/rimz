@@ -3508,7 +3508,7 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
     assert!(message.text.ends_with("\n\nInspect deployment"));
 
     let show = loop_ok(&env, &["loop", "show", "ci-wait"]);
-    assert!(show.contains("signal: deploy.finished"), "{show}");
+    assert!(show.contains(" · signal deploy.finished\n"), "{show}");
     assert!(
         show.contains(&format!("message: {}", message.message_id)),
         "{show}"
@@ -3723,8 +3723,8 @@ fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
     assert_eq!((task.max_attempts, task.max_strikes), (Some(4), Some(5)));
     let show = loop_ok(&env, &["loop", "show", "bounded"]);
     assert!(
-        show.contains("verify: cargo xtask gate (up to 4 attempts)")
-            && show.contains("timeout: 3h (default)"),
+        show.contains("\n  verify:  cargo xtask gate (up to 4 attempts)\n")
+            && show.contains("\n  timeout: 3h (default)\n"),
         "{show}"
     );
 
@@ -5016,8 +5016,7 @@ fn loop_show_surfaces_spawn_failure_tail_and_prior_error() {
         show.contains("LAST RUN — ✗ failed (exit 1)")
             && show.contains("agent startup failed\n  │ missing binary")
             && show.contains("transcript: /tmp/rimz-transcript.jsonl")
-            && show.contains("last failure — ✗ error")
-            && show.contains("rimz loop logs forensics --failed"),
+            && !show.contains("last failure"),
         "{show}"
     );
     assert!(!show.contains("caused by: not found"), "{show}");
@@ -5252,8 +5251,19 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
         list.lines()
             .any(|line| { line.trim_start().starts_with("legacy") && line.contains("completed") })
             && show.contains("✓ completed")
-            && show.contains("MODE"),
+            && show.contains("RECENT RUNS (newest first · 1 of 1)")
+            && !show.contains("MODE")
+            && !show.contains("last failure"),
         "{list}\n{show}"
+    );
+    assert_eq!(
+        show.lines().rev().take(3).collect::<Vec<_>>()[2],
+        "  task:   check · true",
+        "{show}"
+    );
+    assert!(
+        show.lines().last().unwrap().starts_with("  source: "),
+        "{show}"
     );
 }
 
@@ -5294,12 +5304,20 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     );
     let show = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
-        show.contains("overlapped")
-            && show.contains("run in progress")
-            && show.contains("pid 42424")
-            && show.contains("started 25m ago"),
+        show.contains("  1 fire skipped while the active run holds the lock\n")
+            && show.contains("  active: run in progress · pid 42424 · started 25m ago\n")
+            && show.contains("○ overlapped")
+            && !show.contains("LAST RUN"),
         "{show}"
     );
+    let logs = loop_ok(&env, &["loop", "logs", "busy"]);
+    assert!(
+        logs.contains("○ overlapped")
+            && logs.contains("previous run still active (pid 42424, started 25m ago) — skipped"),
+        "{logs}"
+    );
+    let json = loop_ok(&env, &["loop", "show", "busy", "--json"]);
+    assert!(json.contains("\"result\": \"overlapped\""), "{json}");
     lock_file.unlock().expect("unlock loop run lock");
 }
 
