@@ -440,7 +440,6 @@ path = "crates/rimz/src/harness"
 # 679: `idle_stop::project_requests`, the enrich-time projection of pending idle stops onto their agents.
 # 680: `idle_stop::closing_with`, the cascade the idle-stop helper guards run by run before it stops.
 # `WhenExpr::reads_forge` replaces the CLI's hand copy of the forge condition keys (+1).
-# 681: `WhenExpr::reads_forge`.
 surface-budget = 681
 
 [[module]]
@@ -617,7 +616,8 @@ path = "crates/rimz/src/store"
 # `RunStatus::label` is the one human run-status label the CLI tables and pending waits share (pass 31d).
 # The pending-recovery record parks lost agents for the rebirth boundary and settlement (+5).
 # The idle-stop request record: its codec module, entry, error, read, arm and withdraw (+6).
-surface-budget = 359
+# The snapshot carries an open PR's merge-queue state to the header marker as `WorktreePrQueue` (+1).
+surface-budget = 360
 
 [[module]]
 path = "crates/rimz/src/theme"

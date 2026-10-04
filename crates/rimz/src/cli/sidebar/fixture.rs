@@ -141,6 +141,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
         landed: spec.landed,
         trunk_sync: spec.trunk_sync,
         pr_state: spec.pr_state,
+        pr_queue: None,
         ci: spec.ci,
         pr_number: spec.pr_number,
         pr_url: None,

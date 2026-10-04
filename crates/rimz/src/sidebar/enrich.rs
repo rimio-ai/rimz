@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::agents::spending::SpendingCaches;
-use crate::forge::pr_state::{PrLink, read_pr_state_cache};
+use crate::forge::pr_state::{PrLink, PrQueueFact, read_pr_state_cache};
 use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::Store;
@@ -18,7 +18,8 @@ use crate::store::snapshot::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, RemoteControlBadge, ResumeOutcome,
     RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence,
     SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
-    TruthNotice, WorktreeCi, WorktreePrState, WorktreeTrunkSync, compute_lazy_agent_pairings,
+    TruthNotice, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync,
+    compute_lazy_agent_pairings,
 };
 use crate::{RuntimePaths, StatePaths};
 use jiff::Timestamp;
@@ -283,6 +284,7 @@ fn project_pr_state_map(
         });
         if trunk {
             group.pr_state = None;
+            group.pr_queue = None;
             group.ci = branch_ci.get(path).copied();
             group.pr_number = None;
             group.pr_url = None;
@@ -291,6 +293,10 @@ fn project_pr_state_map(
         let link = states.get(path);
         group.pr_stack = link.map(|link| link.stack.clone()).unwrap_or_default();
         group.pr_state = link.map(|link| link.state);
+        group.pr_queue = link.and_then(PrLink::queue).map(|queue| match queue {
+            PrQueueFact::Queued { .. } => WorktreePrQueue::Queued,
+            PrQueueFact::Dequeued { .. } => WorktreePrQueue::Dequeued,
+        });
         group.ci = match link {
             Some(link) if matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged) => {
                 link.ci

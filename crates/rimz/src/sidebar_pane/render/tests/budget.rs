@@ -212,6 +212,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 landed: None,
                 trunk_sync: None,
                 pr_state: None,
+                pr_queue: None,
                 ci: None,
                 pr_number: None,
                 pr_url: None,
