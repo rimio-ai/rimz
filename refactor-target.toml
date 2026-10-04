@@ -596,7 +596,8 @@ path = "crates/rimz/src/sidebar"
 # Account-cache types and status projection now belong to agents.
 # Consumers import those types directly; the refresh re-exports are gone.
 # Roster publication confirms the existing election without the fetch-start memo (+1).
-surface-budget = 225
+# One login's projected panel serves providers and accounts list (+1).
+surface-budget = 226
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"

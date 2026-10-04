@@ -958,6 +958,36 @@ pub fn provider_panels_from_caches(
     snapshot.providers
 }
 
+/// One login's panel from the published caches: its kind's panel under the
+/// native selection for `default`, under a selection naming it otherwise.
+pub fn provider_panel_for_login(
+    runtime: &RuntimePaths,
+    login: &crate::agents::ProviderLogin,
+    catalog: Option<&crate::agents::LoginCatalog>,
+    config: &crate::config::MachineConfig,
+    account: Option<crate::agents::AgentAccount>,
+    provider_spending: &crate::agents::spending::ProviderSpendingCache,
+) -> Option<SidebarProviderPanel> {
+    let logins = if login.name().is_default() {
+        crate::agents::RoomLoginSet::native()
+    } else {
+        let selection =
+            crate::ids::RoomLogins::from([(login.kind().clone(), login.name().clone())]);
+        crate::agents::RoomLoginSet::new(
+            Some(selection),
+            catalog.cloned(),
+            crate::agents::ambient_env(),
+        )
+    };
+    let accounts = account
+        .map(|account| (login.key(), account))
+        .into_iter()
+        .collect();
+    provider_panels_from_caches(runtime, &logins, config, accounts, provider_spending)
+        .into_iter()
+        .find(|panel| panel.kind == login.kind().as_str())
+}
+
 /// Which of the room's logins earn a provider block in one fold.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum PanelScope {
