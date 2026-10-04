@@ -1395,6 +1395,10 @@ impl crate::agents::capabilities::RuntimeControlCapability for CodexAdapter {
     fn runtime_control_advisory(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
         app_server::daemon::updater_skew(login_env).map(|skew| skew.to_string())
     }
+
+    fn runtime_control_writes_history(&self, login_env: &BTreeMap<String, String>) -> bool {
+        app_server::daemon::writes_history(login_env)
+    }
 }
 
 /// One Codex hook payload, parsed once by event name: exactly one typed

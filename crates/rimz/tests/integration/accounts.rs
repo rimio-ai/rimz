@@ -684,3 +684,57 @@ fn a_history_entry_on_another_filesystem_stays_in_the_account_home_and_out_of_th
     assert!(std::fs::symlink_metadata(native.join("projects")).is_err());
     assert!(spend.contains("spend:  $0.00 today"), "{spend}\n{added}");
 }
+
+#[test]
+fn accounts_add_refuses_a_history_switch_under_a_live_codex_daemon() {
+    let env = Env::new();
+    let home = env.home_root.join("codex-work");
+    let home_arg = home.display().to_string();
+    succeeded(&accounts(
+        &env,
+        &["add", "codex", "work", "--home", &home_arg],
+    ));
+    let sessions = home.join("sessions");
+    let linked = std::fs::read_link(&sessions).expect("a shared account links its sessions");
+
+    // The record Codex keeps for its app-server, naming a process this test owns.
+    let mut daemon = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("spawn the stand-in daemon");
+    let pid = daemon.id().to_string();
+    let started = std::process::Command::new("ps")
+        .args(["-p", &pid, "-o", "lstart="])
+        .output()
+        .expect("ps");
+    let state_dir = home.join("app-server-daemon");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(
+        state_dir.join("app-server.pid"),
+        json!({
+            "pid": daemon.id(),
+            "processStartTime": String::from_utf8_lossy(&started.stdout).trim(),
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let switch = ["add", "codex", "work", "--history", "standalone"];
+    let refused = accounts(&env, &switch);
+    daemon.kill().expect("kill the stand-in daemon");
+    daemon.wait().expect("reap the stand-in daemon");
+    let error = failed(&refused);
+    assert!(error.contains("cannot unlink `"), "{error}");
+    assert!(
+        error.contains("a remote-control daemon on the account writes through that link"),
+        "{error}"
+    );
+    assert!(
+        error.contains("`rimz config set remote_control.codex false`"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_link(&sessions).unwrap(), linked);
+
+    succeeded(&accounts(&env, &switch));
+    assert!(std::fs::symlink_metadata(&sessions).is_err());
+}

@@ -43,6 +43,17 @@ impl Fixture {
     }
 
     fn run_with(&self, shared: bool, agents: Option<usize>) -> Result<ShareReport, ShareErr> {
+        self.run_under(shared, agents, false)
+    }
+
+    /// A reconcile with `daemon` answering whether a history-writing daemon
+    /// runs under the account home.
+    fn run_under(
+        &self,
+        shared: bool,
+        agents: Option<usize>,
+        daemon: bool,
+    ) -> Result<ShareReport, ShareErr> {
         reconcile_homes(
             &Homes {
                 adapter: super::super::definition_by_kind(self.account.kind.as_str()).unwrap(),
@@ -51,6 +62,7 @@ impl Fixture {
                 default: &self.native,
                 shared,
                 lock: &self.lock,
+                daemon_writes: &|| daemon,
             },
             &|| agents,
         )
@@ -381,6 +393,7 @@ fn a_file_conflict_never_asks_about_live_agents() {
             default: &home.native,
             shared: true,
             lock: &home.lock,
+            daemon_writes: &|| panic!("a file moves aside under any daemon"),
         },
         &|| -> Option<usize> { panic!("a file moves aside under any agent") },
     )
@@ -525,6 +538,7 @@ fn same_home_through_symlink_refuses_without_changes() {
             default: &native,
             shared: true,
             lock: &temp.path().join("account.lock"),
+            daemon_writes: &|| false,
         },
         &|| Some(0),
     )
@@ -675,6 +689,7 @@ fn run_unguarded(home: &Fixture, shared: bool) -> ShareReport {
             default: &home.native,
             shared,
             lock: &home.lock,
+            daemon_writes: &|| panic!("an unshared name never waits on a daemon"),
         },
         &|| -> Option<usize> { panic!("an unshared name never waits on live agents") },
     )
@@ -849,4 +864,102 @@ fn a_link_at_an_unshared_name_that_points_elsewhere_survives() {
             elsewhere
         );
     }
+}
+
+/// Every entry of a home with what it is: a link's target, a file's bytes.
+fn contents(home: &Path) -> Vec<(PathBuf, String)> {
+    let mut found = Vec::new();
+    let mut pending = vec![home.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let kind = fs::symlink_metadata(&path).unwrap().file_type();
+            let what = if kind.is_symlink() {
+                format!("-> {}", fs::read_link(&path).unwrap().display())
+            } else if kind.is_dir() {
+                pending.push(path.clone());
+                "dir".to_owned()
+            } else {
+                fs::read_to_string(&path).unwrap()
+            };
+            found.push((path, what));
+        }
+    }
+    found.sort();
+    found
+}
+
+#[test]
+fn a_live_daemon_refuses_a_directory_set_aside_and_leaves_the_home_as_it_was() {
+    let home = Fixture::new("codex");
+    fs::create_dir_all(home.native.join("sessions")).unwrap();
+    fs::create_dir_all(home.named.join("sessions/2026")).unwrap();
+    fs::write(home.named.join("sessions/2026/rollout.jsonl"), "live").unwrap();
+    fs::write(home.named.join("history.jsonl"), "account").unwrap();
+    fs::write(home.native.join("history.jsonl"), "default").unwrap();
+    let before = contents(&home.named);
+
+    let error = home.run_under(true, Some(0), true).unwrap_err();
+    assert!(
+        matches!(&error, ShareErr::LiveDaemon { entry, .. } if entry == "sessions"),
+        "{error}"
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "cannot share `sessions` of codex@work with {}: a remote-control daemon on the account writes to the copy in its home, which would move aside under it; stop it with `rimz config set remote_control.codex false`, rerun, then set it back to `true`, or set `history = \"standalone\"` under `[accounts.codex.work]`",
+            home.native.display()
+        )
+    );
+    assert_eq!(contents(&home.named), before);
+
+    // Agents are asked first, so their refusal stands under a daemon too.
+    for agents in [Some(1), None] {
+        let error = home.run_under(true, agents, true).unwrap_err();
+        assert!(matches!(error, ShareErr::LiveAgents { .. }), "{error}");
+    }
+    assert_eq!(contents(&home.named), before);
+
+    // The recorded process gone, the directory moves.
+    let report = home.run_under(true, Some(0), false).unwrap();
+    assert!(
+        report
+            .set_aside
+            .contains(&(home.named.join("sessions"), home.aside().join("sessions")))
+    );
+}
+
+#[test]
+fn a_live_daemon_refuses_the_unlink_of_a_directory_and_leaves_the_link() {
+    let home = Fixture::new("codex");
+    fs::create_dir_all(home.native.join("sessions")).unwrap();
+    fs::write(home.native.join("history.jsonl"), "typed").unwrap();
+    home.run(true);
+    let before = contents(&home.named);
+
+    let error = home.run_under(false, Some(0), true).unwrap_err();
+    assert!(
+        matches!(&error, ShareErr::LiveDaemonUnlink { .. }),
+        "{error}"
+    );
+    let text = error.to_string();
+    assert!(text.contains("cannot unlink `"), "{text}");
+    assert!(
+        text.contains(&format!("of codex@work from {}: a remote-control daemon on the account writes through that link, which would be removed under it; stop it with `rimz config set remote_control.codex false`, rerun, then set it back to `true`, or remove `history = \"standalone\"` from `[accounts.codex.work]`", home.native.display())),
+        "{text}"
+    );
+    assert_eq!(contents(&home.named), before);
+    let error = home.run_under(false, Some(1), true).unwrap_err();
+    assert!(
+        matches!(error, ShareErr::LiveAgentsUnlink { .. }),
+        "{error}"
+    );
+
+    assert!(
+        !home
+            .run_under(false, Some(0), false)
+            .unwrap()
+            .unlinked
+            .is_empty()
+    );
 }

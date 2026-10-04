@@ -811,9 +811,9 @@ pub enum RoomLoginErr {
     Login(#[from] LoginErr),
 }
 
-/// The account of every live pane-backed agent: ended rows and provider
-/// subagents run on no account of their own.
-pub(crate) fn live_login_keys(agents: &[super::AgentState]) -> impl Iterator<Item = LoginKey> + '_ {
+/// The account of every live root agent, with a pane or without: ended rows
+/// and provider subagents run on no account of their own.
+fn live_login_keys(agents: &[super::AgentState]) -> impl Iterator<Item = LoginKey> + '_ {
     agents
         .iter()
         .filter(|agent| agent.ended_at.is_none() && !agent.is_provider_subagent())
@@ -846,7 +846,7 @@ pub struct RoomLoginSet {
 }
 
 impl RoomLoginSet {
-    /// Include live pane-backed agents' stamps alongside the room defaults.
+    /// Include live root agents' stamps alongside the room defaults.
     pub fn with_agents(mut self, agents: &[super::AgentState]) -> Self {
         self.live_logins = live_login_keys(agents).collect();
         self

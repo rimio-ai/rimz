@@ -94,6 +94,8 @@ Rerunning `add` leaves the config entry alone unless `--history` rewrites that f
 | --- | --- |
 | A directory, or a link to one elsewhere, would move aside while another agent runs on the account, or the live rooms cannot be read | `` cannot share `<entry>` of <account> with <default-home>: <N> live agent(s) on the account write to the copy in its home, which would move aside under them; end those agents, or set `history = "standalone"` under `[accounts.<kind>.<name>]` `` |
 | A link to a directory would be removed, after a switch to `standalone`, while another agent runs on the account, or the live rooms cannot be read | `` cannot unlink `<entry>` of <account> from <default-home>: <N> live agent(s) on the account write through that link, which would be removed under them; end those agents, or remove `history = "standalone"` from `[accounts.<kind>.<name>]` `` |
+| A directory, or a link to one elsewhere, would move aside while a Codex remote-control daemon runs on the account | `` cannot share `<entry>` of <account> with <default-home>: a remote-control daemon on the account writes to the copy in its home, which would move aside under it; stop it with `rimz config set remote_control.<kind> false`, rerun, then set it back to `true`, or set `history = "standalone"` under `[accounts.<kind>.<name>]` `` |
+| A link to a directory would be removed, after a switch to `standalone`, while a Codex remote-control daemon runs on the account | `` cannot unlink `<entry>` of <account> from <default-home>: a remote-control daemon on the account writes through that link, which would be removed under it; stop it with `rimz config set remote_control.<kind> false`, rerun, then set it back to `true`, or remove `history = "standalone"` from `[accounts.<kind>.<name>]` `` |
 | The home resolves through links to the provider's own home | `` `--home` names the provider's own home, which is the `default` account (<home>); choose another home `` |
 | `NAME` is `default` | `` `default` is <kind>'s own home and needs no declaring; choose another name `` |
 | `NAME` breaks the name rules | `` invalid account name `<name>`; expected 1-32 characters of ... `` |
@@ -101,7 +103,7 @@ Rerunning `add` leaves the config entry alone unless `--history` rewrites that f
 | The home breaks a [home rule](#kinds-names-and-homes) | `` `accounts.<kind>.<name>.home` is `<home>`, ... `` with the rule it breaks |
 | The shell exports `CLAUDE_CONFIG_DIR` or `CODEX_HOME` pointing at any declared named account of that kind (also checked on reruns) | `` `CODEX_HOME` is exported as `<home>`, the home of codex account `<exported-name>`; unset `CODEX_HOME` so `default` resolves to codex's own home, e.g. `env -u CODEX_HOME rimz accounts add codex <name>` `` |
 
-Sessions a Codex remote-control daemon runs on the account are not counted, so end them before you switch the account's history.
+The daemon check runs once no agent is counted, and refuses while the daemon runs under the account's home, whether or not it has a session open.
 
 ## `use`
 
@@ -153,7 +155,7 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `this project` | The trusted project's selection for its kind. |
 | `new rooms` | The machine's `[accounts.use]` selection, or `default` when the machine selects nothing for its kind. |
 
-`AGENTS` counts the live agents on the account across every live room, `-` for none. When the rooms cannot be listed, or one live room's agents cannot be read, the column reads `–` and a warning on stderr names the cause.
+`AGENTS` counts the agents on the account that the [live-agent checks of `add`](#add) count, across every live room, `-` for none. A remote-control daemon is not an agent and is not counted here. When the rooms cannot be listed, or one live room's agents cannot be read, the column reads `–` and a warning on stderr names the cause.
 
 `HISTORY` is the account's `history` mode, `shared` or `standalone`, and `-` for `default` and for a selected account nothing declares.
 

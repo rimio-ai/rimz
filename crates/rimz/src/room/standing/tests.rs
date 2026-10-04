@@ -225,8 +225,10 @@ fn deciding_layer_names_who_moves_the_active_account() {
     assert_eq!(project.deciding(&claude), Some(Deciding::Machine));
 }
 
+#[cfg(unix)]
 #[test]
-fn live_counts_stamped_and_unstamped_agents_but_never_ended_or_provider_subagents() {
+fn the_agents_column_is_the_refusal_count_with_nothing_launching() {
+    use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
     let agent = |login: Option<&str>| {
         let mut agent = AgentState::seed(
             kind("codex"),
@@ -235,25 +237,59 @@ fn live_counts_stamped_and_unstamped_agents_but_never_ended_or_provider_subagent
             jiff::Timestamp::UNIX_EPOCH,
         );
         agent.login = login.map(name);
+        agent.pane = Some(crate::pane::PaneRef::from_id(
+            crate::ids::PaneId::from_parts(crate::MuxName::Tmux, "%1"),
+        ));
         agent
     };
+    let mut paneless = agent(Some("team"));
+    paneless.pane = None;
+    let mut dead_owner = agent(Some("team"));
+    dead_owner.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "root",
+        u32::MAX,
+        None,
+    ));
     let mut ended = agent(Some("team"));
     ended.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
     let mut native_child = agent(Some("team"));
     native_child.parent_agent_id = Some("root".into());
+    // A remote conversation the account's daemon serves: its owner lives and
+    // it has no pane, so the daemon's own record speaks for it.
+    let mut daemon_session = agent(Some("team"));
+    daemon_session.pane = None;
+    daemon_session.runtime_owner = Some(crate::store::runtime::current_process_owner(
+        RuntimeOwnerKind::Daemon,
+        "root",
+    ));
+    let room = [
+        agent(Some("team")),
+        agent(None),
+        paneless,
+        dead_owner,
+        ended,
+        native_child,
+        daemon_session,
+    ];
+    let other_room = [agent(Some("team"))];
+
     let mut counts = BTreeMap::new();
-    count_live_logins(
-        &mut counts,
-        &[agent(Some("team")), agent(None), ended, native_child],
-    );
-    count_live_logins(&mut counts, &[agent(Some("team"))]);
+    count_live_logins(&mut counts, &room);
+    count_live_logins(&mut counts, &other_room);
+    let team = LoginKey::new(kind("codex"), name("team"));
+    let native = LoginKey::new(kind("codex"), LoginName::default_login());
     assert_eq!(
         counts,
-        BTreeMap::from([
-            (LoginKey::new(kind("codex"), LoginName::default_login()), 1),
-            (LoginKey::new(kind("codex"), name("team")), 2),
-        ])
+        BTreeMap::from([(native.clone(), 1), (team.clone(), 2)])
     );
+    for (account, column) in counts {
+        let refusal: usize = [&room[..], &other_room[..]]
+            .iter()
+            .map(|agents| count_others_on(agents, &account, &[]))
+            .sum();
+        assert_eq!(column, refusal, "{account}");
+    }
 }
 
 #[test]
