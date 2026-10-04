@@ -2628,25 +2628,33 @@ fn declare_shared_work_account(env: &Env) -> PathBuf {
 
 /// Make the room publish a rollup that holds `agent`, which the count then
 /// serves as long as nothing else writes. A publish runs at most once a
-/// second, so the write that triggers it waits past that interval.
+/// second, so the write that triggers it waits past that interval; a write
+/// that still lands inside it leaves the rollup behind the log, so write
+/// again until the rollup is seen fresh.
 fn publish_room_rollup_with(env: &Env, agent: &rimz::ids::AgentSessionId) {
-    std::thread::sleep(Duration::from_millis(1_100));
-    let emitted = env
-        .rimz()
-        .args(["events", "emit", "account.check"])
-        .bounded_output_within(Duration::from_secs(30))
-        .expect("emit a signal into the room");
-    assert!(emitted.status.success(), "emit failed: {emitted:?}");
     let store = env.store();
     let deadline = Instant::now() + CAPTURE_BUDGET;
-    while !rimz::store::snapshot::read_fresh_latest(store.paths())
-        .is_some_and(|rollup| rollup.agents.iter().any(|row| row.agent_id == *agent))
-    {
+    loop {
+        std::thread::sleep(Duration::from_millis(1_100));
+        let emitted = env
+            .rimz()
+            .args(["events", "emit", "account.check"])
+            .bounded_output_within(Duration::from_secs(30))
+            .expect("emit a signal into the room");
+        assert!(emitted.status.success(), "emit failed: {emitted:?}");
+        let settled = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < settled {
+            if rimz::store::snapshot::read_fresh_latest(store.paths())
+                .is_some_and(|rollup| rollup.agents.iter().any(|row| row.agent_id == *agent))
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert!(
             Instant::now() < deadline,
             "the room never published a fresh rollup"
         );
-        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -2702,17 +2710,28 @@ fn assert_history_switch_follows_the_run(
     publish_room_rollup_with(env, &agent.agent_id);
     // Kill the wrapper with its provider, so nothing settles the run and the
     // rollup the room last published still says the agent is live.
-    let provider = agent.runtime_owner.as_ref().expect("provider owner").pid;
+    let owner = agent.runtime_owner.as_ref().expect("provider owner");
+    let provider = owner.pid;
     let wrapper = rimz::proc::comm_and_ppid(provider)
         .map(|(_, ppid)| ppid)
         .expect("provider parent process");
-    let killed = Command::new("kill")
-        .args(["-KILL", &wrapper.to_string(), &provider.to_string()])
-        .bounded_output()
-        .expect("kill the run's wrapper and provider");
-    assert!(killed.status.success(), "kill run: {killed:?}");
+    // The wrapper's death hangs up the pane, which can take the provider and
+    // have it reaped before its own signal is sent; only the wrapper's kill
+    // must find its process.
+    for (pid, must_exist) in [(wrapper, true), (provider, false)] {
+        let killed = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .bounded_output()
+            .expect("kill the run's wrapper and provider");
+        assert!(
+            killed.status.success() || !must_exist,
+            "kill run: {killed:?}"
+        );
+    }
+    // Wait on the liveness the account count reads, which a zombie awaiting
+    // its reaper already fails.
     let deadline = Instant::now() + CAPTURE_BUDGET;
-    while rimz::proc::comm_and_ppid(provider).is_some() {
+    while rimz::proc::process_is_live(provider, owner.process_start.as_deref()) {
         assert!(Instant::now() < deadline, "provider did not exit");
         std::thread::sleep(Duration::from_millis(50));
     }
