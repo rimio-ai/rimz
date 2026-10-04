@@ -462,6 +462,12 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
             "account skipped",
         ),
         (
+            LoopRunResult::TakeoverBlocked,
+            "○",
+            ui::palette::warn(),
+            "takeover blocked",
+        ),
+        (
             LoopRunResult::CheckSkipped,
             "○",
             ui::palette::muted(),
@@ -664,6 +670,29 @@ fn show_headline_keeps_blocked_before_pause() {
 }
 
 #[test]
+fn blocked_takeover_names_its_checkout_and_blocker_in_the_last_run_cell() {
+    let mut blocked = record(10, LoopRunResult::TakeoverBlocked);
+    blocked.checkout = Some(PathBuf::from("/repo-worktrees/auth"));
+    blocked.error = Some("@coder#auth is working".to_owned());
+    let stats = run_log::LoopRunStats {
+        runs: 1,
+        streak: 1,
+        last: blocked,
+        spend_today_usd: 0.0,
+    };
+    let (_, cell) = last_run_cells(&stats, Timestamp::from_second(20).unwrap());
+    let mut table = ui::Table::new(["LAST"]);
+    table.row([cell]);
+    let mut out = Vec::new();
+    table.render(&mut out).unwrap();
+    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(
+        out.contains("○ takeover blocked · /repo-worktrees/auth @coder#auth is working"),
+        "{out}"
+    );
+}
+
+#[test]
 fn record_exit_maps_terminal_spawn_results_only_with_run_id() {
     for (result, expected) in [
         (LoopRunResult::Completed, Some("0")),
@@ -683,6 +712,7 @@ fn record_exit_maps_terminal_spawn_results_only_with_run_id() {
         (LoopRunResult::Errored, None),
         (LoopRunResult::StartFailed, None),
         (LoopRunResult::Overlapped, None),
+        (LoopRunResult::TakeoverBlocked, None),
     ] {
         let mut run = record(10, result);
         assert_eq!(record_exit(&run), None, "{result:?} without run_id");

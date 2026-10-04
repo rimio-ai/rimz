@@ -215,6 +215,7 @@ pub enum LoopRunResult {
     Errored,
     StartFailed,
     Overlapped,
+    TakeoverBlocked,
 }
 
 impl LoopRunResult {
@@ -249,6 +250,7 @@ impl LoopRunResult {
             Self::Errored => "error",
             Self::StartFailed => "start failed",
             Self::Overlapped => "overlapped",
+            Self::TakeoverBlocked => "takeover blocked",
         }
     }
 }

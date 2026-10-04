@@ -31,8 +31,9 @@ pub enum Assist {
         checkout: PathBuf,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         condition: Option<super::schedule::when::ConditionEvidence>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        stopped_team: Option<String>,
+        /// Handles of the checkout occupants the launch took over from.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        stopped: Vec<String>,
         handles: Vec<String>,
     },
     ModelAlias {
@@ -395,6 +396,16 @@ mod tests {
                 },
             },
             restored(20),
+            AssistRecord {
+                at: ts(20),
+                assist: Assist::ResidentLaunch {
+                    task: "sweep".into(),
+                    checkout: "/repo-worktrees/auth".into(),
+                    condition: None,
+                    stopped: vec!["@coder#auth".into()],
+                    handles: vec!["@sweep".into()],
+                },
+            },
         ] {
             let json = serde_json::to_string(&record).expect("serialize");
             let decoded: AssistRecord = serde_json::from_str(&json).expect("deserialize");

@@ -431,7 +431,8 @@ path = "crates/rimz/src/harness"
 # Fan-out helpers hand the marker checkout to the runner without re-resolving it (+1).
 # Root registration shares resident-loop subscription arming with the team binding builder (+1).
 # Add-time subscription validation shares the registration scope-key predicate (+1).
-surface-budget = 667
+# The resident takeover selector and its open-turn verdict cross the scheduler/CLI seam (+4).
+surface-budget = 671
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

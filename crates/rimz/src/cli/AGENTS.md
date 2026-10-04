@@ -28,7 +28,7 @@ A handler parses, calls the domain, and presents; the knowledge lives in its own
 
 ## Boundaries
 
-- The resident loop helper reuses `agents_cmd::stop_resolved` before launching. Team selection is by the launch checkout, not the printing `teams stop` wrapper.
+- The resident loop helper reuses `agents_cmd::stop_resolved` before launching. The harness selects the launch checkout's occupants and what blocks a takeover (`schedule::takeover`); the helper gathers the snapshot and owned worktrees, stops, and presents.
 - Human colors come from `render::palette` accessors, state tones come from typed `render::status` helpers, and provider names and handles come from `palette::identity`. Agent prose reaches a human through `render::prose::Prose`: markdown on a styled stdout and raw text when piped; one-line previews stay snippets. JSON, hook stdout, pane capture, scripting values, and streaming protocols stay raw.
 - The CLI is compiled into the binary crate (`main.rs` owns its module) and reaches library items only through `rimz::`, so any item a handler calls must be `pub` in the library; `pub(crate)` is invisible here. A new `pub` item needs its `refactor-target.toml` admission (root [Testing](../../../../AGENTS.md#testing)).
 - A command module's internals are private: one command never imports another command's functions or types. Shared logic moves to the domain module that owns the knowledge, or to a shared CLI-layer module when it is pure presentation.

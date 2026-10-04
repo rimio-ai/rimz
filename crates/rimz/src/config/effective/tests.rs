@@ -879,7 +879,7 @@ fn project_tasks_accept_signals_and_reject_machine_only_trigger_fields() {
         ("once", "true"),
         ("stay", "true"),
         ("each-worktree", "true"),
-        ("stop-team", "true"),
+        ("takeover", "true"),
         ("subscribe", "[{ signal = \"ci.failed\" }]"),
     ] {
         write_project_config(

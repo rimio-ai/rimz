@@ -4,6 +4,8 @@ use super::run_report::{
     RunSummary, write_check_trip_line, write_manual_verdict, write_run_summary,
 };
 use super::*;
+use rimz::harness::schedule::takeover::{self, Takeover};
+use std::ops::ControlFlow;
 
 // ---- run --------------------------------------------------------------------
 
@@ -142,13 +144,16 @@ pub(super) fn run_one(
         }) => {
             let effect = (|| {
                 let mut launch_globals = globals.clone();
-                launch_globals.root = Some(root);
+                launch_globals.root = Some(root.clone());
                 crate::cli::check_launch_room(&launch_globals)?;
                 let ctx = crate::cli::ctx::Ctx::open(&launch_globals)?;
-                let stopped_team = if entry.stop_team {
-                    stop_checkout_team(&ctx, &launch_globals, &cwd)?
+                let stopped = if entry.takeover {
+                    match take_over_checkout(&ctx, &launch_globals, &root, &cwd)? {
+                        ControlFlow::Continue(stopped) => stopped,
+                        ControlFlow::Break(blocked) => return Ok(blocked),
+                    }
                 } else {
-                    None
+                    Vec::new()
                 };
                 let mut launch = crate::cli::agents_cmd::AgentLaunchArgs {
                     spec: Some(spec),
@@ -181,7 +186,7 @@ pub(super) fn run_one(
                         .iter()
                         .map(|identity| format!("@{}", identity.name))
                         .collect(),
-                    stopped_team,
+                    stopped,
                 })
             })();
             finish_task_effect(&mut fire, effect, name, &entry)?
@@ -214,32 +219,48 @@ pub(super) fn run_one(
     Ok(())
 }
 
-fn stop_checkout_team(
+/// Stop every agent occupying the launch checkout and return their handles for
+/// the launch to record, or stop none and break with the blocked effect.
+fn take_over_checkout(
     ctx: &crate::cli::ctx::Ctx,
     globals: &GlobalFlags,
+    root: &Path,
     cwd: &Path,
-) -> Result<Option<String>> {
+) -> Result<ControlFlow<rimz::harness::schedule::runner::TaskFireEffect, Vec<String>>> {
     let snapshot = ctx.alive_snapshot()?;
-    let Some(hold) = rimz::harness::resume::inspect_team_hold(&snapshot.agents, cwd) else {
-        return Ok(None);
+    let owned: Vec<PathBuf> = match rimz::worktree::discover_owned(root) {
+        Ok(owned) => owned
+            .into_iter()
+            .map(|worktree| worktree.marker.worktree_path)
+            .collect(),
+        Err(rimz::worktree::WorktreeErr::NotRepo) => Vec::new(),
+        Err(err) => return Err(err.into()),
     };
-    let checkout = rimz::utils::path::normalize_path_lexical(cwd);
+    let peers = rimz::address::addressable_agents(&snapshot);
+    let handle =
+        |agent: &rimz::agents::AgentState| rimz::address::agent_handle(agent, &peers, true);
+    let occupants = match takeover::plan(&snapshot.agents, cwd, &owned, Timestamp::now()) {
+        Takeover::Stop(occupants) => occupants,
+        Takeover::Blocked(blockers) => {
+            return Ok(ControlFlow::Break(
+                rimz::harness::schedule::runner::TaskFireEffect::TakeoverBlocked {
+                    blockers: blockers
+                        .into_iter()
+                        .map(|(agent, turn)| (handle(agent), turn))
+                        .collect(),
+                },
+            ));
+        }
+    };
     let mut tracker = crate::cli::agents_cmd::StopTracker::default();
-    let mut stopped = false;
-    for member in rimz::address::team_cohorts(&snapshot.agents)
-        .into_iter()
-        .filter(|cohort| cohort.team == hold.team)
-        .flat_map(|cohort| cohort.members)
-        .filter(|member| {
-            member.worktree_path.as_deref().is_some_and(|path| {
-                rimz::utils::path::normalize_path_lexical(Path::new(path)) == checkout
-            })
-        })
-    {
-        stopped |=
-            crate::cli::agents_cmd::stop_resolved(ctx, globals, &snapshot, member, &mut tracker)?;
+    for occupant in &occupants {
+        // `false` is an occupant its parent's stop already took; an error
+        // fails the fire, so every occupant is stopped once the loop ends.
+        crate::cli::agents_cmd::stop_resolved(ctx, globals, &snapshot, occupant, &mut tracker)?;
     }
-    Ok(stopped.then_some(hold.team))
+    Ok(ControlFlow::Continue(
+        occupants.into_iter().map(handle).collect(),
+    ))
 }
 
 fn resident_checkout(

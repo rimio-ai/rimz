@@ -73,8 +73,8 @@ pub struct TaskEntry {
     pub stay: bool,
     #[serde(rename = "each-worktree", skip_serializing_if = "std::ops::Not::not")]
     pub each_worktree: bool,
-    #[serde(rename = "stop-team", skip_serializing_if = "std::ops::Not::not")]
-    pub stop_team: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub takeover: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub subscribe: Vec<super::TeamSignalBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]

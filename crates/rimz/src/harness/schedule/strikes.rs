@@ -61,6 +61,7 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::SurplusSkipped
         | LoopRunResult::AccountSkipped
         | LoopRunResult::Overlapped
+        | LoopRunResult::TakeoverBlocked
         | LoopRunResult::StartFailed
         | LoopRunResult::Canceled
         | LoopRunResult::SignalSkipped
@@ -220,6 +221,10 @@ mod tests {
         );
         assert_eq!(
             classify(&record(LoopRunResult::AccountSkipped, None)),
+            Signal::Neutral
+        );
+        assert_eq!(
+            classify(&record(LoopRunResult::TakeoverBlocked, None)),
             Signal::Neutral
         );
         for result in [

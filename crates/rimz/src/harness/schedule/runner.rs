@@ -159,7 +159,13 @@ pub enum TaskFireEffect {
     Resident {
         leader: String,
         handles: Vec<String>,
-        stopped_team: Option<String>,
+        /// Handles of the checkout occupants a takeover stopped first.
+        stopped: Vec<String>,
+    },
+    /// A takeover found an open turn in the checkout; nothing was stopped or
+    /// launched.
+    TakeoverBlocked {
+        blockers: Vec<(String, super::takeover::OpenTurn)>,
     },
     Spawn(SupervisedRunOutcome),
     Delivered(crate::ids::MessageId),
@@ -655,7 +661,7 @@ impl<'a> TaskFire<'a> {
                 TaskFireEffect::Resident {
                     leader,
                     handles,
-                    stopped_team,
+                    stopped,
                 },
             ) => {
                 let cwd = self.launch_checkout();
@@ -666,7 +672,7 @@ impl<'a> TaskFire<'a> {
                         task: self.name.clone(),
                         checkout: cwd.clone(),
                         condition: self.condition.clone(),
-                        stopped_team,
+                        stopped,
                         handles,
                     },
                 };
@@ -690,6 +696,11 @@ impl<'a> TaskFire<'a> {
                     },
                 ))
             }
+            (PendingEffect::Resident, TaskFireEffect::TakeoverBlocked { blockers }) => Ok(self
+                .record_gate(
+                    LoopRunResult::TakeoverBlocked,
+                    super::takeover::blocked_reason(&blockers),
+                )),
             (PendingEffect::Spawn { check, stream }, TaskFireEffect::Spawn(outcome)) => {
                 let mut record = self.terminal_record(LoopRunResult::Completed);
                 let (presentation, notice) =
