@@ -101,7 +101,7 @@ fn wait_check_lists_elapsed_and_checkin_limit() {
         receipt.lines().next().unwrap().ends_with("(timeout 12m)"),
         "{receipt}"
     );
-    wait_until("watcher holds its lock", || {
+    wait_until(&env, "watcher holds its lock", || {
         let rows: serde_json::Value =
             serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
         rows[0]["watcher_pid"].is_u64()
@@ -521,7 +521,7 @@ fn canceling_pid_wait_leaves_the_existing_process_running() {
     );
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap();
-    wait_until("process watcher did not start", || {
+    wait_until(&env, "process watcher did not start", || {
         rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
             .unwrap()
             .is_some()
@@ -1088,31 +1088,22 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
         .paths()
         .out_reader_dir(Some("planner"))
         .join(format!("{name}.output"));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let watcher = loop {
-        if std::fs::read_to_string(&path).is_ok_and(|output| output == "started") {
-            break rimz::harness::schedule::signal::watcher_info(store.runtime_paths(), name)
-                .unwrap()
-                .unwrap();
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "watcher did not start"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    };
+    wait_until(&env, "watcher did not start", || {
+        std::fs::read_to_string(&path).is_ok_and(|output| output == "started")
+    });
+    let watcher = rimz::harness::schedule::signal::watcher_info(store.runtime_paths(), name)
+        .unwrap()
+        .unwrap();
     nix::sys::signal::kill(
         nix::unistd::Pid::from_raw(i32::try_from(watcher.pid).unwrap()),
         nix::sys::signal::Signal::SIGKILL,
     )
     .unwrap();
-    while rimz::harness::schedule::signal::watcher_info(store.runtime_paths(), name)
-        .unwrap()
-        .is_some()
-    {
-        assert!(std::time::Instant::now() < deadline, "watcher did not stop");
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
+    wait_until(&env, "watcher did not stop", || {
+        rimz::harness::schedule::signal::watcher_info(store.runtime_paths(), name)
+            .unwrap()
+            .is_none()
+    });
     let armed_at = jiff::Timestamp::now()
         .checked_sub(std::time::Duration::from_secs(60))
         .unwrap();
@@ -1283,8 +1274,10 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
             "--on {on}: {}",
             notice.text
         );
+        // The check-in clock starts at the shell's spawn, so it can fire
+        // before the command's first print lands.
         assert!(
-            notice.text.contains("(<1k tokens, 1 line) ["),
+            notice.text.contains("(<1k tokens, 1 line) [") || notice.text.contains("no output"),
             "{}",
             notice.text
         );
@@ -1311,7 +1304,14 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
             report["agent"]["pending_waits"][0]["trigger"]["kind"],
             "command"
         );
-        let pid: u32 = std::fs::read_to_string(&pid_path).unwrap().parse().unwrap();
+        let mut pid = None;
+        wait_until(&env, "command did not write its pid", || {
+            pid = std::fs::read_to_string(&pid_path)
+                .ok()
+                .and_then(|text| text.parse::<u32>().ok());
+            pid.is_some()
+        });
+        let pid = pid.unwrap();
         let observe_until = std::time::Instant::now() + std::time::Duration::from_millis(1200);
         while std::time::Instant::now() < observe_until {
             assert!(
@@ -1334,11 +1334,15 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
         let check = records[0].check.as_ref().unwrap();
         assert!(!check.timed_out);
         assert_eq!(check.code, None);
-        assert!(
-            notice
-                .text
-                .contains(&check.output_path.as_ref().unwrap().display().to_string())
-        );
+        if notice.text.contains("(<1k tokens, 1 line) [") {
+            assert!(
+                notice
+                    .text
+                    .contains(&check.output_path.as_ref().unwrap().display().to_string()),
+                "{}",
+                notice.text
+            );
+        }
 
         std::fs::write(&release, "").unwrap();
         let records = wait_for_wait_records(&env, 2);
@@ -1456,7 +1460,7 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
 
     std::fs::write(&release, "").unwrap();
     wait_for_no_wait_instances(&env);
-    wait_until("watcher did not finish its exit delivery", || {
+    wait_until(&env, "watcher did not finish its exit delivery", || {
         rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
             .unwrap()
             .is_none()
@@ -1534,7 +1538,7 @@ fn watcher_survives_retiring_its_own_row_mid_fire() {
     );
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap().to_owned();
-    wait_until("watcher did not start", || {
+    wait_until(&env, "watcher did not start", || {
         rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), &name)
             .unwrap()
             .is_some()
@@ -1555,6 +1559,7 @@ fn watcher_survives_retiring_its_own_row_mid_fire() {
     );
     assert_eq!(wait_for_wait_messages(&env, 1).len(), 1);
     wait_until(
+        &env,
         "the dead subscriber's watch row survived its own fire",
         || !wait_instances(&env).0.contains_key(&name),
     );
@@ -1627,7 +1632,7 @@ fn wait_cancel_all_stops_command_groups_and_prints_pending() {
                 ),
             ],
         );
-        wait_until("command group did not start", || {
+        wait_until(&env, "command group did not start", || {
             std::fs::read_to_string(&path).is_ok_and(|text| text.split_whitespace().count() == 2)
         });
         let command_pids = std::fs::read_to_string(&path).unwrap();
@@ -1644,7 +1649,7 @@ fn wait_cancel_all_stops_command_groups_and_prints_pending() {
         assert!(canceled.contains(&name), "{canceled}");
     }
     assert!(canceled.ends_with("no pending waits\n"), "{canceled}");
-    wait_until("cancel left watched descendants alive", || {
+    wait_until(&env, "cancel left watched descendants alive", || {
         pids.iter()
             .all(|pid| !rimz::proc::process_is_live(*pid, None))
     });
@@ -1766,25 +1771,39 @@ fn wait_rejects_removed_target_prompt_and_signal_flags() {
     }
 }
 
-fn wait_until(description: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+/// Liveness bound for every poll in this file. A watched wait delivers
+/// through three detached process starts, so a tighter bound measures the
+/// scheduler under load; a poll returns the moment its condition holds.
+const POLL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn wait_until(env: &Env, description: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + POLL_DEADLINE;
     while !ready() {
-        assert!(std::time::Instant::now() < deadline, "{description}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out: {description}; pending messages: {:?}; run records: {:?}",
+            env.store().list_pending_messages(),
+            wait_records(env)
+        );
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }
 
 fn wait_for_wait_messages(env: &Env, count: usize) -> Vec<MessageRecord> {
     let mut messages = Vec::new();
-    wait_until("expected durable wait message at the consumer", || {
-        messages = env.store().list_pending_messages().unwrap();
-        messages.len() >= count
-    });
+    wait_until(
+        env,
+        &format!("expected {count} durable wait messages at the consumer"),
+        || {
+            messages = env.store().list_pending_messages().unwrap();
+            messages.len() >= count
+        },
+    );
     messages
 }
 
 fn wait_for_no_wait_instances(env: &Env) {
-    wait_until("wait instance was not retired", || {
+    wait_until(env, "wait instance was not retired", || {
         wait_instances(env).0.is_empty()
     });
 }
@@ -1806,16 +1825,10 @@ fn wait_for_wait_records(
     env: &Env,
     count: usize,
 ) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let records = wait_records(env);
-        if records.len() >= count {
-            return records;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "expected {count} records, got {records:?}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
+    let mut records = Vec::new();
+    wait_until(env, &format!("expected {count} run records"), || {
+        records = wait_records(env);
+        records.len() >= count
+    });
+    records
 }
