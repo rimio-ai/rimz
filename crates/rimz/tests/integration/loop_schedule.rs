@@ -5802,10 +5802,12 @@ fn terminal_check_runs_interactive_shell_before_its_timeout() {
             "shell-probe",
             "--every",
             "15m",
+            // A bound on the failure only: the check exits on its own, and a
+            // shell stopped by terminal job control is what runs into it.
             "--timeout",
-            "1s",
+            "60s",
             "--check",
-            "bash -i -c 'printf shell-ready'; sleep 30",
+            "bash -i -c 'printf shell-ready'",
         ],
     );
     let pair = native_pty_system()
@@ -5832,7 +5834,7 @@ fn terminal_check_runs_interactive_shell_before_its_timeout() {
     drop(pair.master);
     output.join().unwrap();
     let check = last_loop_record(&env).check.unwrap();
-    assert!(check.timed_out);
+    assert!(!check.timed_out, "{}", check.output);
     assert!(check.output.contains("shell-ready"), "{}", check.output);
 }
 
