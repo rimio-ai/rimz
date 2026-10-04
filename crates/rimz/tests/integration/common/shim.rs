@@ -3,6 +3,27 @@ use std::path::{Path, PathBuf};
 
 use super::Env;
 
+/// The directory `hermetic_providers` puts alone on `PATH`; a test writes its
+/// fake provider executables here.
+pub fn provider_bin(env: &Env) -> PathBuf {
+    let bin = env.home_root.join("provider-bin");
+    std::fs::create_dir_all(&bin).expect("mkdir provider bin");
+    bin
+}
+
+/// `accounts list` probes each account's login and reads its usage, so every
+/// call runs where no host provider CLI is found and the usage API is off.
+pub fn hermetic_providers<'a>(
+    env: &Env,
+    command: &'a mut std::process::Command,
+) -> &'a mut std::process::Command {
+    command
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .env("PATH", provider_bin(env))
+        .env("RIMZ_OAUTH_USAGE_OFFLINE", "1")
+}
+
 #[cfg(unix)]
 pub(crate) fn write_gh_pr_head_shim(env: &Env, payload: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;

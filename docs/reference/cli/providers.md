@@ -17,7 +17,7 @@ rimz providers --json             # the report as a JSON array
 | `--refresh` | Ignore the cache lifetimes for this run: probe every login and re-read usage now ([How fresh the figures are](#how-fresh-the-figures-are)). |
 | `--json` | Print the [JSON report](#json-output) instead of text. |
 
-Of the [global flags](../cli.md#global-flags), `--color` applies, and `--root` selects the position whose active account gets the `●` marker, as in [`rimz accounts list`](./accounts.md); without it the position is the room you are in, else the project at the current directory. When the position's selection cannot be read (a project `.rimz/config.toml` with a TOML error, say), a warning on stderr carries the error and no account takes `●`; the command still prints and exits 0. The backend flags are accepted and change nothing. A probe that fails does not fail the command: the account prints with status `unavailable`.
+Of the [global flags](../cli.md#global-flags), `--color` applies, and `--root` selects the position whose active account gets the `●` marker, the position [`rimz accounts list`](./accounts.md#list) reads from; without it the position is the room you are in, else the project at the current directory. When the position's selection cannot be read (a project `.rimz/config.toml` with a TOML error, say), a warning on stderr carries the error and no account takes `●`; the command still prints and exits 0. The backend flags are accepted and change nothing. A probe that fails does not fail the command: the account prints with status `unavailable`.
 
 ## Which accounts appear
 

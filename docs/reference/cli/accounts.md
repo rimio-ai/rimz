@@ -9,7 +9,7 @@ rimz accounts add claude work                        # declare, link the home, i
 rimz accounts add codex personal --home ~/codex-me   # place the home yourself
 rimz accounts use codex personal                     # this room's account for future launches
 rimz accounts use --global codex personal            # machine selection for new rooms
-rimz accounts list                                   # every account and whether a room can use it
+rimz accounts list                                   # every account, its usage left, and whether a room can use it
 rimz accounts list --json
 rimz accounts remove claude work                     # forget the entry; the home stays on disk
 ```
@@ -133,29 +133,47 @@ new rooms now use claude account `work`; existing rooms, running or stopped, kee
 rimz accounts list [--json]
 ```
 
-`list` prints one table with a row per account of each supported kind, `default` first within its kind and an empty line between kinds, and then each problem on its own line with its fix:
+`list` prints one table with a row per account of each supported kind, `default` first within its kind and an empty line between kinds, then the legend for its two markers, a switch hint when the marked account runs low, and each problem on its own line with its fix:
 
 ```console
 $ rimz accounts list
-   KIND    NAME      STATUS           DEFAULT FOR  AGENTS  HISTORY  HOME
-   claude  default   ready            -            -       -        ~/.claude
-●  claude  work      ready            new rooms    -       shared   ~/.rimz/accounts/claude/work
+   KIND    NAME     STATUS           5h LEFT       7d LEFT       AGENTS  HISTORY  HOME
+○  claude  default  ready            100% · 3h31m  89% · 4d03h   -       -        ~/.claude
+●  claude  work     ready            98% · 4h21m   31% · 13h51m  -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default   hooks untrusted  new rooms    -       -        ~/.codex
-   codex   personal  hooks missing    -            -       shared   ~/codex-me
+●  codex   default  hooks untrusted  ∞             64% · 5d11h   -       -        ~/.codex
+●  this room   ○  new rooms
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
-RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run `rimz accounts add codex personal`
 ```
 
-`list` reads from a position: the room the command runs in, or the project at the current directory, or the one `--root` names. `●` marks the account a launch from there uses for its kind: the selection the room recorded at that root, running or stopped; without one, the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`, the order `rimz start` follows. When no room is recorded there and the project's account selection waits on `rimz trust grant`, no kind carries `●` and a warning on stderr names the fix, since `rimz start` would refuse. When the deciding selection names an account that is not declared, that kind carries no `●`; the account's `unavailable` row and problem line say why. When the position's selection cannot be read at all (a project `.rimz/config.toml` with a TOML error, say), a warning on stderr carries the error, no kind carries `●`, and `DEFAULT FOR` shows only the machine's `new rooms`; `list` still exits 0.
+`list` reads from a position: the room the command runs in, or the project at the current directory, or the one `--root` names. `●` marks the account a launch from there uses for its kind: the selection the room recorded at that root, running or stopped; without one, the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`, the order `rimz start` follows. When no room is recorded there and the project's account selection waits on `rimz trust grant`, no kind carries `●` and a warning on stderr names the fix, since `rimz start` would refuse. When the deciding selection names an account that is not declared, that kind carries no `●`; the account's `unavailable` row and problem line say why. When the position's selection cannot be read at all (a project `.rimz/config.toml` with a TOML error, say), a warning on stderr carries the error, no kind carries `●`, and the list marks only the machine's selections with `○`; `list` still exits 0.
 
-`DEFAULT FOR` names every layer that selects the account, in this order, or `-`:
+`○` marks the account new rooms start on, the machine's `[accounts.use]` selection or `default` when the machine selects nothing for the kind, on every kind where that is not the `●` account. A kind without `○` starts new rooms on its `●` account. When no account of a kind carries `●`, the new-rooms account still carries `○`.
 
-| Word | The account is |
+The legend line under the table names the layer that decides `●`, the highest among the kinds shown:
+
+| Legend | `●` is decided by |
 | --- | --- |
-| `this room` | The selection recorded by the room at the position. A kind the record leaves out is `default`. |
-| `this project` | The trusted project's selection for its kind. |
-| `new rooms` | The machine's `[accounts.use]` selection, or `default` when the machine selects nothing for its kind. |
+| `●  this room   ○  new rooms` | The selection recorded by the room at the position. A kind the record leaves out is `default`. |
+| `●  this project   ○  new rooms` | The trusted project's selection. A kind the project leaves out follows the machine's. |
+| `●  new rooms` | The machine's selection. `   ○  new rooms` follows only when some kind has no `●`, its machine selection not being declared, say, and so marks its new-rooms account `○`. |
+| `○  new rooms` | Nothing: the position's selection is blocked or unreadable. |
+
+`5h LEFT` and `7d LEFT` are the account's five-hour and seven-day usage windows, read as what is left, as [`rimz providers`](./providers.md) reads them: 100 minus the used percentage, or 100% before the window's clock starts, then the time until the window resets. A model-scoped window stays in [`rimz providers`](./providers.md).
+
+| Cell | Meaning |
+| --- | --- |
+| `85% · 2h46m` | 85% left; the window resets in 2 hours 46 minutes. |
+| `100% · ready` | The window's clock has not started. |
+| `85%` | 85% left, reset time unknown. |
+| `∞` | The limit is lifted, or the account has no subscription windows. |
+| `–` | Unknown: no reading yet, or the account is logged out or not declared. |
+
+To fill these columns `list` probes each account's login and runs the usage reads that are due, the same ones `rimz providers` runs, and re-probes an account its last probe found logged out. A cold run therefore waits on the provider, with a spinner on a terminal; a read that fails leaves the last stored reading.
+
+When the `●` account of a kind has 20% or less of its 5h or 7d window left and another logged-in account of the kind has more left on that window, two lines under the legend name the account with the most left and the command that switches to it: `rimz accounts use` when the room decides, `rimz accounts use --global` when the machine does. A kind the project decides gets no hint, and neither does a room-decided kind read from outside the room.
+
+On a terminal narrower than the table, `HOME` clips with `…` and every other column stays whole; piped output and `--json` are never clipped.
 
 `AGENTS` counts the agents on the account that the [live-agent checks of `add`](#add) count, across every live room, `-` for none. A remote-control daemon is not an agent and is not counted here. When the rooms cannot be listed, or one live room's agents cannot be read, the column reads `–` and a warning on stderr names the cause.
 
@@ -166,12 +184,13 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | Status | Meaning | Fix the problem line names |
 | --- | --- | --- |
 | `ready` | A room can launch into the account. | none |
+| `logged out` | The home and its hooks are in order, but the provider reports no login under it. A setup problem below wins over it. | The provider's login command under the home (`CLAUDE_CONFIG_DIR=<home> claude`, `CODEX_HOME=<home> codex`, or the bare command for `default`) |
 | `home missing` | The home is not a directory. | `rimz accounts add <kind> <name>`, or `rimz hooks install <kind>` for `default` |
 | `hooks missing` | The home lacks RimZ hooks. | `rimz accounts add <kind> <name>`, or `rimz hooks install <kind>` for `default` |
 | `hooks untrusted` | The hooks are installed but the provider has not trusted them. Codex gates new hooks behind its own trust step. | Start the provider under the home (`CODEX_HOME=<home> codex`, or plain `codex` for `default`), run `/hooks`, and trust the RimZ hooks |
 | `unavailable` | A room, project, or machine selection names an account that is not declared, or a kind without named accounts. | `rimz accounts add <kind> <name>`, or the command that clears the selection |
 
-`rimz start` refuses to launch into a named account with a problem status ([Accounts at start](./getting-started.md#accounts)); for `default` it walks the provider's own hook setup instead. `list` itself exits 0 whatever the statuses are.
+`rimz start` refuses to launch into a named account with a setup problem status ([Accounts at start](./getting-started.md#accounts)); for `default` it walks the provider's own hook setup instead. `list` itself exits 0 whatever the statuses are.
 
 `--json` prints an array with one object per row.
 
@@ -183,12 +202,14 @@ RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run 
 | `history` | `shared` or `standalone`; `null` for `default` and for a selected account nothing declares. |
 | `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
 | `problem` | The problem line with its fix. Present only when the account has a problem. |
-| `status` | The `STATUS` word in snake case: `ready`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. |
+| `status` | The `STATUS` word in snake case: `ready`, `logged_out`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. |
 | `active` | `true` on the account marked `●`. |
-| `default_for` | Always present: the `DEFAULT FOR` words in snake case (`this_room`, `this_project`, `new_rooms`), or `[]`. |
+| `default_for` | Always present: every layer that selects the account, of `this_room`, `this_project`, and `new_rooms`, or `[]`. |
 | `agents` | The `AGENTS` count, `0` for none, or `null` when the rooms or one live room's agents could not be read. |
+| `windows` | Always present: the account's 5h and 7d windows in used terms, each with `duration_mins` (`300` or `10080`) and, when known, `used_percentage`, `resets_at`, and `lifted`, the fields [`rimz providers --json`](./providers.md) uses; `[]` when there is no reading. |
+| `metered` | `true` for a subscription account, `false` for one without usage windows, `null` when unknown. |
 
-`rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use --global`, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` lists named accounts and the current room's selections in its ACCOUNTS section with the same `DEFAULT FOR` words; its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
+`rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use --global`, except inside a room born on that account, where RimZ exports the home itself. `rimz doctor` lists named accounts and the current room's selections in its ACCOUNTS section with a `DEFAULT FOR` column (`this room`, `this project`, `new rooms`); its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
 
 ## `remove`
 

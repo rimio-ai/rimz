@@ -3,19 +3,29 @@
 //! pass to a room's birth.
 
 use std::collections::BTreeMap;
-use std::io::Write as _;
+use std::io::{IsTerminal, Write as _};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use rimz::agents::{AccountStatus, BirthLoginErr, LoginCatalog, ProviderLogin};
+use jiff::Timestamp;
+use rimz::RuntimePaths;
+use rimz::agents::account::{ProviderStatus, WindowSpan};
+use rimz::agents::spending::read_provider_spending_cache;
+use rimz::agents::{AccountStatus, BirthLoginErr, LoginCatalog, ProviderLogin, RateLimitWindow};
 use rimz::config::{AccountHistory, AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
 use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
-use rimz::room::{AccountStanding, Scopes};
+use rimz::room::{AccountStanding, Deciding, Scopes};
+use rimz::sidebar::enrich::provider_panel_for_login;
+use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
 use rimz::utils::path::normalize_path_lexical;
 use serde::Serialize;
 
+use super::spinner::Spinner;
 use super::{GlobalFlags, render};
+
+const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 
 #[derive(Debug, Args)]
 pub struct AccountsArgs {
@@ -52,7 +62,7 @@ enum AccountsSubcmd {
         #[arg(long, value_name = "MODE")]
         history: Option<AccountHistory>,
     },
-    /// List every account with its home and whether a room can launch into it.
+    /// List every account with its 5h and 7d usage left, its home, and whether a room can launch into it.
     List {
         /// Emit the accounts as JSON.
         #[arg(long)]
@@ -207,21 +217,26 @@ fn add(
         writeln!(out, "{shared}")?;
     }
     crate::cli::hooks::install_hooks_into(definition, &login.env(&ambient), &mut out)?;
-    let home_override = login
-        .overrides(&ambient)
-        .into_iter()
-        .map(|(key, value)| {
-            // The home was just created, so it holds no NUL byte.
-            let value = shlex::try_quote(&value).expect("an existing path is shell-quotable");
-            format!("{key}={value}")
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
     render::finish(writeln!(
         out,
-        "{kind} account `{name}` lives at {}\n  log in once   {home_override} {kind}\n  use at birth  rimz start --account {kind}={name}\n  this room     rimz accounts use {kind} {name}\n  new rooms     rimz accounts use --global {kind} {name}",
-        render::home_relative(&home.display().to_string())
+        "{kind} account `{name}` lives at {}\n  log in once   {}\n  use at birth  rimz start --account {kind}={name}\n  this room     rimz accounts use {kind} {name}\n  new rooms     rimz accounts use --global {kind} {name}",
+        render::home_relative(&home.display().to_string()),
+        login_command(&login, &ambient)
     ))
+}
+
+/// The command that logs `login` in: its home overrides, then the kind. The
+/// caller names a login whose home exists, so its path holds no NUL byte.
+fn login_command(login: &ProviderLogin, ambient: &BTreeMap<String, String>) -> String {
+    login
+        .overrides(ambient)
+        .into_iter()
+        .map(|(key, value)| {
+            let value = shlex::try_quote(&value).expect("an existing path is shell-quotable");
+            format!("{key}={value} ")
+        })
+        .chain([login.kind().to_string()])
+        .collect()
 }
 
 fn lexical_home(login: &ProviderLogin) -> Option<PathBuf> {
@@ -325,22 +340,81 @@ struct AccountRow {
     /// Live agents on this account across every live room; `None` when the
     /// rooms could not be inventoried.
     agents: Option<usize>,
+    /// The unscoped 5h then 7d window the provider projection holds, in used
+    /// terms as `rimz providers --json` reports them.
+    windows: Vec<RateLimitWindow>,
+    /// `false` for an account without subscription windows.
+    metered: Option<bool>,
+    /// This run's login record; `None` for a row no declared login backs.
+    #[serde(skip)]
+    login: Option<ProviderStatus>,
 }
+
+impl AccountRow {
+    /// Fold this run's reading of the row's login into it. A logged-out
+    /// account whose setup is healthy takes the `logged out` status; a setup
+    /// problem stands, since it must be fixed first.
+    fn read(&mut self, reading: Option<&LoginReading>, login_command: impl FnOnce() -> String) {
+        let status = reading.map_or(ProviderStatus::Unavailable, |reading| reading.status);
+        self.login = Some(status);
+        let Some(reading) = reading else {
+            return;
+        };
+        self.metered = reading.metered;
+        self.windows.clone_from(&reading.windows);
+        if self.status == AccountStatus::Ready && status == ProviderStatus::LoggedOut {
+            self.status = AccountStatus::LoggedOut;
+            self.problem = Some(format!(
+                "{} account `{}` is logged out; log in once: {}",
+                self.kind,
+                self.name,
+                login_command()
+            ));
+        }
+    }
+
+    /// Whether this run's record says the account has no login, or the row
+    /// has no login at all: its windows are not its quota then.
+    fn without_login(&self) -> bool {
+        matches!(self.login, None | Some(ProviderStatus::LoggedOut))
+    }
+}
+
+/// What one run read about a login: its probe record and its panel.
+struct LoginReading {
+    status: ProviderStatus,
+    metered: Option<bool>,
+    windows: Vec<RateLimitWindow>,
+}
+
+/// The windows the list shows: the unscoped 5h and 7d ones, in that order.
+fn list_windows(windows: &[RateLimitWindow]) -> Vec<RateLimitWindow> {
+    WINDOW_SPANS
+        .into_iter()
+        .filter_map(|span| {
+            windows
+                .iter()
+                .find(|window| {
+                    window.scope.is_none() && window.duration_mins == Some(span.minutes())
+                })
+                .cloned()
+        })
+        .collect()
+}
+
+const WINDOW_SPANS: [WindowSpan; 2] = [WindowSpan::FiveHour, WindowSpan::SevenDay];
 
 fn list(globals: &GlobalFlags, json: bool) -> Result<()> {
     let machine = MachineConfig::load()?;
     let catalog = LoginCatalog::from_config(&machine.accounts)?;
-    let standing = match rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
-        .map_err(anyhow::Error::from)
-        .and_then(|position| AccountStanding::at(&position.project_root, &machine))
-    {
+    let (standing, in_room) = match super::position_standing(globals, &machine) {
         Ok(standing) => standing,
         Err(error) => {
             writeln!(
                 std::io::stderr().lock(),
                 "rimz: warning: cannot read the account selection here, so no account is marked: {error:#}"
             )?;
-            AccountStanding::unread(&machine)
+            (AccountStanding::unread(&machine), false)
         }
     };
     if let Some(blocked) = standing.blocked() {
@@ -356,18 +430,104 @@ fn list(globals: &GlobalFlags, json: bool) -> Result<()> {
             None
         }
     };
+    let terminal = std::io::stdout().is_terminal();
+    let readings = login_readings(&machine, &catalog, !json && terminal)?;
     let rows = account_rows(
         &machine.accounts,
         &catalog,
         &standing,
         &rimz::agents::ambient_env(),
         agents.as_ref(),
+        &readings,
     );
     if json {
         return render::json_pretty(&rows);
     }
+    let deciding = rows
+        .iter()
+        .filter_map(|row| Some((row.kind.clone(), standing.deciding(&row.kind)?)))
+        .collect();
     let mut out = render::out();
-    render::finish(write_accounts(&mut out, &rows))
+    render::finish(write_accounts(
+        &mut out,
+        &rows,
+        &deciding,
+        in_room,
+        Timestamp::now(),
+        terminal.then(|| render::terminal_columns(120)),
+    ))
+}
+
+/// Probe every listed login and refresh its usage on the cadence `rimz
+/// providers` follows, then read each one's panel from the published caches.
+fn login_readings(
+    machine: &MachineConfig,
+    catalog: &LoginCatalog,
+    spin: bool,
+) -> Result<BTreeMap<LoginKey, LoginReading>> {
+    let runtime = RuntimePaths::shared();
+    runtime
+        .ensure_shared_dirs()
+        .context("preparing shared provider cache paths")?;
+    let logins: Vec<ProviderLogin> = catalog
+        .all()
+        .filter(|login| machine.accounts.named(login.kind()).is_some())
+        .cloned()
+        .collect();
+    let spinner = spin.then(|| Spinner::delayed("Querying provider accounts", SPINNER_MIN_AGE));
+    let started_ms = rimz::utils::time::unix_now_ms();
+    let mut accounts = query_provider_accounts(&runtime, &logins, false);
+    // A cached logout rides the ten-minute TTL, so it is probed again on
+    // every run: a login made since the last list shows at once.
+    let logged_out: Vec<ProviderLogin> = logins
+        .iter()
+        .filter(|login| {
+            accounts.logins.get(&login.key()).is_some_and(|record| {
+                record.probed_at_ms < started_ms
+                    && ProviderStatus::from_record(Some(record)) == ProviderStatus::LoggedOut
+            })
+        })
+        .cloned()
+        .collect();
+    if !logged_out.is_empty() {
+        accounts = query_provider_accounts(&runtime, &logged_out, true);
+    }
+    if let Some(spinner) = &spinner {
+        spinner.set("Refreshing provider usage");
+    }
+    for login in &logins {
+        if ProviderStatus::from_record(accounts.logins.get(&login.key()))
+            == ProviderStatus::LoggedIn
+        {
+            refresh_provider_usage(&runtime, login, false);
+        }
+    }
+    drop(spinner);
+    let spending = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+    Ok(logins
+        .iter()
+        .map(|login| {
+            let record = accounts.logins.get(&login.key());
+            let account = record.and_then(|record| record.account.clone());
+            let probed_metered = account.as_ref().and_then(|account| account.metered);
+            let panel = provider_panel_for_login(
+                &runtime,
+                login,
+                Some(catalog),
+                machine,
+                account,
+                &spending,
+            );
+            let reading = LoginReading {
+                status: ProviderStatus::from_record(record),
+                metered: panel.as_ref().map(|panel| panel.metered).or(probed_metered),
+                windows: panel
+                    .as_ref()
+                    .map_or_else(Vec::new, |panel| list_windows(&panel.windows)),
+            };
+            (login.key(), reading)
+        })
+        .collect())
 }
 
 /// Every account of each kind that carries named accounts, `default` first,
@@ -378,6 +538,7 @@ fn account_rows(
     standing: &AccountStanding,
     ambient: &BTreeMap<String, String>,
     agents: Option<&BTreeMap<LoginKey, usize>>,
+    readings: &BTreeMap<LoginKey, LoginReading>,
 ) -> Vec<AccountRow> {
     let row =
         |kind: &AgentKind, name: &LoginName, home, problem: Option<BirthLoginErr>| AccountRow {
@@ -402,6 +563,9 @@ fn account_rows(
                     .copied()
                     .unwrap_or_default()
             }),
+            windows: Vec::new(),
+            metered: None,
+            login: None,
         };
     let mut rows: Vec<AccountRow> = catalog
         .all()
@@ -412,12 +576,16 @@ fn account_rows(
             } else {
                 ambient.clone()
             };
-            row(
+            let mut row = row(
                 login.kind(),
                 login.name(),
                 login.home_dir(&ambient),
                 login.health(&ambient).err(),
-            )
+            );
+            row.read(readings.get(&login.key()), || {
+                login_command(login, &ambient)
+            });
+            row
         })
         .collect();
     for key in standing.selected() {
@@ -439,17 +607,20 @@ fn account_rows(
     rows
 }
 
-fn write_accounts(w: &mut impl std::io::Write, rows: &[AccountRow]) -> std::io::Result<()> {
+fn write_accounts(
+    w: &mut impl std::io::Write,
+    rows: &[AccountRow],
+    deciding: &BTreeMap<AgentKind, Deciding>,
+    in_room: bool,
+    now: Timestamp,
+    width: Option<usize>,
+) -> std::io::Result<()> {
     let mut table = render::Table::new([
-        "",
-        "KIND",
-        "NAME",
-        "STATUS",
-        "DEFAULT FOR",
-        "AGENTS",
-        "HISTORY",
-        "HOME",
+        "", "KIND", "NAME", "STATUS", "5h LEFT", "7d LEFT", "AGENTS", "HISTORY", "HOME",
     ]);
+    if let Some(width) = width {
+        table = table.max_width(width);
+    }
     let mut previous: Option<&AgentKind> = None;
     for row in rows {
         if previous.is_some_and(|kind| *kind != row.kind) {
@@ -463,18 +634,22 @@ fn write_accounts(w: &mut impl std::io::Write, rows: &[AccountRow]) -> std::io::
                 cell
             }
         };
+        let [five_hour, seven_day] = WINDOW_SPANS.map(|span| window_cell(row, span, now));
         table.row([
             if row.active {
                 render::cell("●").fg(render::palette::accent())
+            } else if row.machine_default {
+                render::cell("○").fg(render::palette::muted())
             } else {
                 render::cell("")
             },
             render::cell(row.kind.as_str()).fg(render::palette::identity(row.kind.as_str())),
             muted(render::cell(row.name.as_str())),
             render::cell(row.status.as_str()).fg(render::status::account(row.status)),
-            render::cell(row.default_for.label()).dash(),
+            five_hour,
+            seven_day,
             match row.agents {
-                None => render::cell("–").fg(render::palette::faint()),
+                None => unknown_cell(),
                 Some(0) => render::cell("-").dash(),
                 Some(count) => render::cell(count.to_string()),
             },
@@ -493,10 +668,107 @@ fn write_accounts(w: &mut impl std::io::Write, rows: &[AccountRow]) -> std::io::
         ]);
     }
     table.render(w)?;
+    if let Some(legend) = legend(rows, deciding) {
+        writeln!(w, "{legend}")?;
+    }
+    for group in rows.chunk_by(|a, b| a.kind == b.kind) {
+        // A room's selection moves only from inside that room.
+        let deciding = deciding
+            .get(&group[0].kind)
+            .copied()
+            .filter(|deciding| in_room || *deciding != Deciding::Room);
+        if let Some((reason, command)) = switch_hint(group, now, deciding) {
+            writeln!(w, "  {reason}")?;
+            writeln!(w, "    {command}")?;
+        }
+    }
     for problem in rows.iter().filter_map(|row| row.problem.as_deref()) {
         writeln!(w, "{}", render::paint(render::palette::warn(), problem))?;
     }
     Ok(())
+}
+
+fn unknown_cell() -> render::Cell {
+    render::cell("–").fg(render::palette::faint())
+}
+
+/// One window's cell in left terms: `–` without a login or a reading, `∞`
+/// for an account without subscription windows or a lifted limit.
+fn window_cell(row: &AccountRow, span: WindowSpan, now: Timestamp) -> render::Cell {
+    if row.without_login() {
+        return unknown_cell();
+    }
+    if row.metered == Some(false) {
+        return render::cell("∞");
+    }
+    row.windows
+        .iter()
+        .find(|window| window.duration_mins == Some(span.minutes()))
+        .and_then(|window| render::window_cell(window, now))
+        .unwrap_or_else(unknown_cell)
+}
+
+/// What the two markers mean here: `●` by the highest layer deciding any
+/// kind shown, `○` wherever a row carries it or a room or project decides.
+fn legend(rows: &[AccountRow], deciding: &BTreeMap<AgentKind, Deciding>) -> Option<String> {
+    let layer = [Deciding::Room, Deciding::Project, Deciding::Machine]
+        .into_iter()
+        .find(|layer| {
+            rows.iter()
+                .any(|row| deciding.get(&row.kind) == Some(layer))
+        });
+    let active = layer.map(|layer| {
+        let words = match layer {
+            Deciding::Room => "this room",
+            Deciding::Project => "this project",
+            Deciding::Machine => "new rooms",
+        };
+        format!("{}  {words}", render::paint(render::palette::accent(), "●"))
+    });
+    let new_rooms = (matches!(layer, Some(Deciding::Room | Deciding::Project))
+        || rows.iter().any(|row| row.machine_default && !row.active))
+    .then(|| {
+        format!(
+            "{}  new rooms",
+            render::paint(render::palette::muted(), "○")
+        )
+    });
+    let halves: Vec<String> = active.into_iter().chain(new_rooms).collect();
+    (!halves.is_empty()).then(|| halves.join("   "))
+}
+
+/// The sentence and command that move one kind's marker to the ready,
+/// logged-in sibling with the most left, once the marked account has 20% or
+/// less of a window that sibling has strictly more of. A sibling with a setup
+/// problem is passed over: `rimz accounts use` would refuse it.
+fn switch_hint(
+    rows: &[AccountRow],
+    now: Timestamp,
+    deciding: Option<Deciding>,
+) -> Option<(String, String)> {
+    let active = rows.iter().find(|row| row.active && !row.without_login())?;
+    let siblings: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            !row.active
+                && row.status == AccountStatus::Ready
+                && row.login == Some(ProviderStatus::LoggedIn)
+        })
+        .map(|row| (&row.name, row.windows.as_slice()))
+        .collect();
+    let hint = rimz::agents::account::switch_hint(&active.windows, &siblings, now)?;
+    let command = super::accounts_use_command(deciding, active.kind.as_str(), hint.sibling)?;
+    Some((
+        format!(
+            "{} {} has {}% of its {} window left; {} has the most room:",
+            active.kind,
+            active.name,
+            hint.left,
+            rimz::theme::fmt::window_label(hint.window),
+            hint.sibling
+        ),
+        command,
+    ))
 }
 
 fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
@@ -620,222 +892,4 @@ pub(crate) fn requested_logins(flags: &[AccountFlag]) -> Result<RoomLogins> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::Parser;
-
-    #[derive(Debug, Parser)]
-    struct AccountsHarness {
-        #[command(flatten)]
-        args: AccountsArgs,
-    }
-
-    #[test]
-    fn use_targets_the_room_unless_global() {
-        for (argv, room) in [
-            (vec!["accounts", "use", "codex", "work"], true),
-            (vec!["accounts", "use", "--global", "codex", "work"], false),
-        ] {
-            let parsed = AccountsHarness::try_parse_from(&argv).expect("parse use");
-            let AccountsSubcmd::Use { global, .. } = parsed.args.command else {
-                panic!("{argv:?} parsed as another subcommand");
-            };
-            assert_eq!(!global, room, "{argv:?}");
-        }
-        AccountsHarness::try_parse_from(["accounts", "use", "--room", "codex", "work"])
-            .expect_err("--room is gone");
-    }
-
-    #[test]
-    fn add_takes_a_history_mode_and_refuses_an_unknown_one() {
-        let history = |argv: &[&str]| {
-            AccountsHarness::try_parse_from(argv).map(|parsed| match parsed.args.command {
-                AccountsSubcmd::Add { history, .. } => history,
-                other => panic!("{other:?} parsed as another subcommand"),
-            })
-        };
-        let add = ["accounts", "add", "claude", "work"];
-        assert_eq!(history(&add).unwrap(), None);
-        for (word, mode) in [
-            ("shared", AccountHistory::Shared),
-            ("standalone", AccountHistory::Standalone),
-        ] {
-            let argv = [&add[..], &["--history", word]].concat();
-            assert_eq!(history(&argv).unwrap(), Some(mode));
-        }
-        let error = history(&[&add[..], &["--history", "mine"]].concat())
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("shared") && error.contains("standalone"),
-            "{error}"
-        );
-    }
-
-    fn listed(
-        accounts: &str,
-        agents: Option<&BTreeMap<LoginKey, usize>>,
-    ) -> (Vec<AccountRow>, String) {
-        let machine = MachineConfig {
-            accounts: toml::from_str(accounts).unwrap(),
-            ..Default::default()
-        };
-        let catalog = LoginCatalog::from_config(&machine.accounts).unwrap();
-        let standing = AccountStanding::machine_only(&machine);
-        let ambient = BTreeMap::from([("HOME".to_owned(), "/nonexistent/u".to_owned())]);
-        let rows = account_rows(&machine.accounts, &catalog, &standing, &ambient, agents);
-        let mut stream = anstream::StripStream::new(Vec::new());
-        write_accounts(&mut stream, &rows).unwrap();
-        (rows, String::from_utf8(stream.into_inner()).unwrap())
-    }
-
-    #[test]
-    fn list_is_one_table_with_default_first_and_one_marker_per_kind() {
-        let counts = BTreeMap::from([(
-            LoginKey {
-                kind: AgentKind::new_unchecked("codex"),
-                name: "team".parse().unwrap(),
-            },
-            2,
-        )]);
-        let (rows, text) = listed(
-            "[claude.alpha]\nhome = \"/srv/alpha\"\n[codex.team]\nhome = \"/srv/team\"\nhistory = \"standalone\"\n[use]\ncodex = \"team\"\n",
-            Some(&counts),
-        );
-        let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(
-            lines.iter().filter(|line| line.contains("KIND")).count(),
-            1,
-            "{text}"
-        );
-        assert!(lines[0].starts_with("   KIND  "), "{text}");
-        assert!(lines[1].contains("claude  default"), "{text}");
-        assert!(lines[2].contains("claude  alpha"), "{text}");
-        assert_eq!(lines[3], "", "{text}");
-        assert!(lines[4].contains("codex   default"), "{text}");
-        assert!(lines[5].starts_with("●  codex   team"), "{text}");
-        assert_eq!(lines.iter().filter(|line| line.is_empty()).count(), 1);
-        for kind in ["claude", "codex"] {
-            assert_eq!(
-                lines
-                    .iter()
-                    .filter(|line| line.starts_with('●') && line.contains(kind))
-                    .count(),
-                1,
-                "{kind}: {text}"
-            );
-        }
-        assert!(
-            lines.iter().all(|line| line.trim_end() == *line),
-            "{text:?}"
-        );
-        assert!(
-            lines[5].contains("new rooms") && lines[5].contains("  2  "),
-            "{text}"
-        );
-        assert!(lines[1].contains("  -  "), "{text}");
-        assert!(!text.contains("native"), "{text}");
-        assert!(lines[0].contains("  AGENTS  HISTORY     HOME"), "{text}");
-        assert!(lines[1].contains("  -           /nonexistent"), "{text}");
-        assert!(lines[2].contains("  shared      /srv/alpha"), "{text}");
-        assert!(lines[5].contains("  standalone  /srv/team"), "{text}");
-        assert_eq!(
-            serde_json::to_value(&rows[0]).unwrap()["history"],
-            serde_json::Value::Null
-        );
-        assert_eq!(serde_json::to_value(&rows[1]).unwrap()["history"], "shared");
-        let team = serde_json::to_value(&rows[3]).unwrap();
-        assert_eq!(team["history"], "standalone");
-        assert_eq!(team["active"], true);
-        assert_eq!(team["default_for"], serde_json::json!(["new_rooms"]));
-        assert_eq!(team["agents"], 2);
-    }
-
-    #[test]
-    fn list_marks_unknown_agent_counts_and_undeclared_selections() {
-        let (rows, text) = listed("[use]\ncodex = \"gone\"\n", None);
-        let gone = rows
-            .iter()
-            .find(|row| row.name.as_str() == "gone")
-            .expect("an undeclared selection keeps a row");
-        assert_eq!(gone.status, AccountStatus::Unavailable);
-        assert!(!gone.active, "birth refuses an undeclared selection");
-        assert_eq!(gone.default_for.label(), "new rooms");
-        assert!(text.contains("unavailable"), "{text}");
-        assert!(
-            !text
-                .lines()
-                .any(|line| line.starts_with('●') && line.contains("codex")),
-            "{text}"
-        );
-        assert!(
-            text.lines()
-                .filter(|line| line.trim_start_matches(['●', ' ']).starts_with("codex   "))
-                .all(|line| line.contains("  –  ")),
-            "{text}"
-        );
-        let gone = serde_json::to_value(gone).unwrap();
-        assert_eq!(gone["agents"], serde_json::Value::Null);
-        assert_eq!(gone["status"], "unavailable");
-        assert_eq!(gone["active"], false);
-    }
-
-    #[test]
-    fn removed_notice_without_live_rooms_matches_reference() {
-        assert_eq!(
-            removed_notice(
-                &AgentKind::new_unchecked("claude"),
-                &"work".parse().unwrap(),
-                "~/.rimz/accounts/claude/work",
-                &[]
-            ),
-            "removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use claude default` for future launches"
-        );
-    }
-
-    #[test]
-    fn removed_notice_warns_about_live_room_defaults() {
-        for (live, warning) in [
-            (
-                vec!["rimz-one".to_owned()],
-                "warning: room rimz-one selects it as the default for new claude launches; add the account back or run `rimz accounts use claude default` inside each room",
-            ),
-            (
-                vec!["rimz-one".to_owned(), "rimz-two".to_owned()],
-                "warning: rooms rimz-one, rimz-two select it as the default for new claude launches; add the account back or run `rimz accounts use claude default` inside each room",
-            ),
-        ] {
-            let notice = removed_notice(
-                &AgentKind::new_unchecked("claude"),
-                &"work".parse().unwrap(),
-                "~/.rimz/accounts/claude/work",
-                &live,
-            );
-            assert_eq!(notice.lines().nth(1), Some(warning));
-            assert_eq!(notice.lines().count(), 2);
-        }
-    }
-
-    #[test]
-    fn account_flags_parse_kind_and_name_and_refuse_a_repeated_kind() {
-        let work = parse_account_flag("claude=work").expect("claude=work");
-        let default = parse_account_flag("codex=default").expect("codex=default");
-        assert_eq!(
-            requested_logins(&[work.clone(), default]).expect("one per kind"),
-            RoomLogins::from([
-                (AgentKind::new_unchecked("claude"), "work".parse().unwrap()),
-                (
-                    AgentKind::new_unchecked("codex"),
-                    LoginName::default_login()
-                ),
-            ])
-        );
-        assert!(parse_account_flag("claude").is_err());
-        assert!(parse_account_flag("nope=work").is_err());
-        assert!(parse_account_flag("claude=Work").is_err());
-
-        let personal = parse_account_flag("claude=personal").expect("claude=personal");
-        let err = requested_logins(&[work, personal]).unwrap_err();
-        assert!(err.to_string().contains("names claude twice"), "{err}");
-    }
-}
+mod tests;

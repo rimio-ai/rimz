@@ -45,23 +45,22 @@ Moving a directory out from under an agent that is writing into it would split i
 
 The account named `default` is the provider's own home and is never declared. It is whatever the provider CLI resolves for itself: `~/.claude` or `~/.codex`, unless you export `CLAUDE_CONFIG_DIR` or `CODEX_HOME` in the shell you start the room from. When that variable points at any declared named account's home, `add` refuses before writing anything, including on a rerun inside a room. Unset it for the command, for example `env -u CODEX_HOME rimz accounts add codex work`. Do not export one that points at a named account's home in your login shell: `default` would then launch into that account too. Select the account with `rimz accounts use` instead. `rimz accounts add` refuses to declare the provider's own home, including a `--home` symlink to it, and `rimz doctor` flags an exported-home conflict.
 
-`rimz accounts list` answers whose quota a launch from here will burn, and whether a room can use each account:
+`rimz accounts list` answers whose quota a launch from here will burn, how much of it each account has left, and whether a room can use each account:
 
 ```console
 $ rimz accounts list
-   KIND    NAME      STATUS           DEFAULT FOR  AGENTS  HISTORY  HOME
-   claude  default   ready            -            -       -        ~/.claude
-●  claude  work      ready            new rooms    -       shared   ~/.rimz/accounts/claude/work
+   KIND    NAME     STATUS           5h LEFT       7d LEFT       AGENTS  HISTORY  HOME
+○  claude  default  ready            100% · 3h31m  89% · 4d03h   -       -        ~/.claude
+●  claude  work     ready            98% · 4h21m   31% · 13h51m  -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default   hooks untrusted  new rooms    -       -        ~/.codex
-   codex   personal  hooks missing    -            -       shared   ~/codex-me
+●  codex   default  hooks untrusted  ∞             64% · 5d11h   -       -        ~/.codex
+●  this room   ○  new rooms
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
-RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run `rimz accounts add codex personal`
 ```
 
-`●` marks the account a launch from where you stand uses: inside a room, the room's selection; anywhere else, the account the next `rimz start` there would pick. `DEFAULT FOR` says which selection makes an account a default (`this room`, `this project`, `new rooms`), and `AGENTS` counts the agents running on it now across every live room. The [reference](../reference/cli/accounts.md#list) spells out the order the layers win in.
+`●` marks the account a launch from where you stand uses: inside a room, the room's selection; anywhere else, the account the next `rimz start` there would pick. `○` marks the account new rooms start on when that is a different one, and the line under the table names the selection that decides each marker (`this room`, `this project`, `new rooms`). `5h LEFT` and `7d LEFT` show how much of each usage window the account has left and how long until it resets, so you can pick the account to switch to; when the marked account has 20% or less of a window left and another logged-in account has more, the list prints the `rimz accounts use` command that moves you there. `AGENTS` counts the agents running on the account now across every live room. The [reference](../reference/cli/accounts.md#list) spells out the order the layers win in.
 
-An account reads `ready` once its home exists and holds trusted RimZ hooks. Anything else prints its own line under the table with the fix: for a named account, `home missing` and `hooks missing` both mean `rimz accounts add` never finished, so rerun it; for `default`, run `rimz hooks install <kind>`. `hooks untrusted` is Codex asking you to approve new hooks inside Codex itself, so an account you just declared stays there until you start Codex once under its home and trust them with `/hooks`. `rimz start` still offers to install and refresh the hooks in the provider's own home ([install agent hooks](./setup.md#install-agent-hooks)), so a `default` problem never stops a room from starting.
+An account reads `ready` once its home exists, holds trusted RimZ hooks, and has no known login problem; if the provider cannot report its login state, `ready` does not prove it is logged in. Anything else prints its own line under the table with the fix: `logged out` means the provider has no login under that home, and the line carries the login command; for a named account, `home missing` and `hooks missing` both mean `rimz accounts add` never finished, so rerun it; for `default`, run `rimz hooks install <kind>`. `hooks untrusted` is Codex asking you to approve new hooks inside Codex itself, so an account you just declared stays there until you start Codex once under its home and trust them with `/hooks`. `rimz start` still offers to install and refresh the hooks in the provider's own home ([install agent hooks](./setup.md#install-agent-hooks)), so a `default` problem never stops a room from starting.
 
 ## Start a room on an account
 

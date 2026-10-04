@@ -302,7 +302,7 @@ pub fn complete_realtime_account_usage(
     })
 }
 
-/// Refresh one provider's account usage for `rimz providers`, forcing a read
+/// Refresh one provider's account usage for `rimz providers` and `rimz accounts list`, forcing a read
 /// when requested or otherwise following its durable cadence.
 /// Cache publication remains nonce-guarded by the normal claim path.
 pub fn refresh_provider_usage(runtime: &RuntimePaths, login: &ProviderLogin, force: bool) -> bool {

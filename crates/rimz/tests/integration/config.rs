@@ -1512,7 +1512,7 @@ fn config_set_account_history_declares_the_pool_and_leaves_links_to_accounts_add
                 );
             }
             let rows: Vec<serde_json::Value> = serde_json::from_str(&stdout(
-                rimz()
+                crate::common::hermetic_providers(&env, &mut rimz())
                     .args(["accounts", "list", "--json"])
                     .assert()
                     .success(),

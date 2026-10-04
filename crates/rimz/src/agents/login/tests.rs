@@ -584,6 +584,11 @@ fn default_health_checks_the_provider_home_and_names_the_hooks_fix() {
         .unwrap();
     assert_eq!(default.health(&ambient), Ok(()));
     assert_eq!(AccountStatus::of(None).as_str(), "ready");
+    assert_eq!(AccountStatus::LoggedOut.as_str(), "logged out");
+    assert_eq!(
+        serde_json::to_value(AccountStatus::LoggedOut).unwrap(),
+        "logged_out"
+    );
     assert_eq!(
         serde_json::to_value(AccountStatus::HooksUntrusted).unwrap(),
         "hooks_untrusted"
