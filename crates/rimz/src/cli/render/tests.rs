@@ -554,3 +554,37 @@ fn suffixed_cells_measure_and_render_both_styles() {
         "PANE      VALUE\nx (self)  one\nplain     two\n"
     );
 }
+
+#[test]
+fn window_cell_reads_what_is_left_and_when_it_resets() {
+    use jiff::SignedDuration;
+    use rimz::agents::RateLimitWindow;
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let window = |used, resets_in_secs: Option<i64>| RateLimitWindow {
+        used_percentage: used,
+        resets_at: resets_in_secs.map(|secs| now + SignedDuration::from_secs(secs)),
+        duration_mins: Some(300),
+        ..Default::default()
+    };
+    let lifted = RateLimitWindow {
+        lifted: true,
+        used_percentage: Some(40),
+        ..Default::default()
+    };
+    for (window, left) in [
+        (window(Some(69), Some(3_720)), Some("31% · 1h02m")),
+        (
+            RateLimitWindow {
+                duration_mins: None,
+                ..window(Some(69), None)
+            },
+            Some("31%"),
+        ),
+        (window(Some(0), Some(5 * 3_600)), Some("100% · ready")),
+        (lifted, Some("∞")),
+        (window(None, Some(3_720)), None),
+    ] {
+        let text = window_cell(&window, now).map(|cell| strip(|w| cell.write_styled(w)));
+        assert_eq!(text.as_deref(), left);
+    }
+}

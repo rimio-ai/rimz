@@ -454,7 +454,8 @@ fn write_comparison(
                 .windows
                 .iter()
                 .find(|window| window_key(window) == *key)
-                .map_or_else(unknown_cell, |window| window_cell(window, now))
+                .and_then(|window| render::window_cell(window, now))
+                .unwrap_or_else(unknown_cell)
         }));
         if extra {
             cells.push(extra_cell(report.extra_credits.as_ref()));
@@ -475,31 +476,6 @@ fn write_comparison(
         writeln!(out, "    {command}")?;
     }
     Ok(())
-}
-
-/// What is left of a window, in the tone the sidebar's budget bar has there.
-fn percent_left_cell(left: u8) -> render::Cell {
-    cell(format!("{left}%")).fg(render::palette::budget(left))
-}
-
-fn window_cell(window: &RateLimitWindow, now: Timestamp) -> render::Cell {
-    if window.lifted {
-        return cell("∞");
-    }
-    let Some(left) = window.remaining_percentage(now) else {
-        return unknown_cell();
-    };
-    let percent = percent_left_cell(left);
-    if window.not_started(now) {
-        return percent.suffix("· ready", render::palette::body());
-    }
-    match window.resets_at {
-        Some(deadline) => percent.suffix(
-            format!("· {}", rimz::theme::fmt::reset_countdown(deadline, now)),
-            render::palette::body(),
-        ),
-        None => percent,
-    }
 }
 
 fn extra_cell(extra: Option<&ExtraCredits>) -> render::Cell {
@@ -773,7 +749,7 @@ fn window_spans(window: &RateLimitWindow, now: Timestamp) -> Option<Vec<render::
         )
     };
     Some(vec![
-        percent_left_cell(left),
+        render::percent_left_cell(left),
         cell(format!(" left · {tail}")),
     ])
 }
