@@ -19,6 +19,8 @@ pub enum ForgeSignal {
     PrClosed,
     PrBehind,
     PrConflicted,
+    PrQueued,
+    PrDequeued,
 }
 
 impl ForgeSignal {
@@ -30,6 +32,8 @@ impl ForgeSignal {
         Self::PrClosed,
         Self::PrBehind,
         Self::PrConflicted,
+        Self::PrQueued,
+        Self::PrDequeued,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -41,6 +45,8 @@ impl ForgeSignal {
             Self::PrClosed => "pr.closed",
             Self::PrBehind => "pr.behind",
             Self::PrConflicted => "pr.conflicted",
+            Self::PrQueued => "pr.queued",
+            Self::PrDequeued => "pr.dequeued",
         }
     }
 }

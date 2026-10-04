@@ -129,6 +129,221 @@ fn adverse_pr_payloads_distinguish_forge_and_local_heads() {
     assert_eq!(signals[1].1, conflict);
 }
 
+const ENQUEUED: &str = "2026-10-03T12:28:46Z";
+const REMOVED: &str = "2026-10-03T12:46:03Z";
+
+#[test]
+fn queue_signals_follow_enqueue_and_removal_timestamps() {
+    let failed = || removal(REMOVED, "failed_checks", Some("queue-a"));
+    for sequence in [
+        vec![
+            (Some(ENQUEUED), None, vec!["pr.queued"]),
+            (Some(ENQUEUED), None, vec![]),
+            (Some("2026-10-03T13:00:00Z"), None, vec!["pr.queued"]),
+        ],
+        vec![
+            (Some(ENQUEUED), None, vec!["pr.queued"]),
+            (None, Some(failed()), vec!["pr.dequeued"]),
+            (None, Some(failed()), vec![]),
+            (
+                Some("2026-10-03T13:00:00Z"),
+                Some(failed()),
+                vec!["pr.queued"],
+            ),
+            (
+                None,
+                Some(removal("2026-10-03T13:10:00Z", "manual", None)),
+                vec!["pr.dequeued"],
+            ),
+        ],
+        // A removal on a PR this room never saw queued still announces once.
+        vec![
+            (None, Some(failed()), vec!["pr.dequeued"]),
+            (None, Some(failed()), vec![]),
+        ],
+        vec![
+            (Some(ENQUEUED), None, vec!["pr.queued"]),
+            (
+                None,
+                Some(removal(REMOVED, "merged", Some("queue-a"))),
+                vec![],
+            ),
+        ],
+    ] {
+        let mut prior = pr_cache(WorktreePrState::Open, None);
+        for (entry, removed, expected) in sequence {
+            let next = queue_reading(&prior, "head-a", entry, removed.clone());
+            assert_eq!(
+                signal_names(&production_transitions(&prior, &next)),
+                expected,
+                "entry={entry:?}, removal={removed:?}"
+            );
+            prior = next;
+        }
+    }
+}
+
+#[test]
+fn a_new_push_does_not_repeat_a_standing_queue_signal() {
+    let prior = pr_cache(WorktreePrState::Open, None);
+    for (entry, removed) in [
+        (Some(ENQUEUED), None),
+        (None, Some(removal(REMOVED, "failed_checks", None))),
+    ] {
+        let seen = queue_reading(&prior, "head-a", entry, removed.clone());
+        let pushed = queue_reading(&seen, "head-b", entry, removed);
+        assert!(production_transitions(&seen, &pushed).is_empty());
+    }
+}
+
+#[test]
+fn queued_pr_that_merges_emits_only_merged() {
+    let open = pr_cache(WorktreePrState::Open, None);
+    let queued = queue_reading(&open, "head-a", Some(ENQUEUED), None);
+    for state in [WorktreePrState::Merged, WorktreePrState::Closed] {
+        let mut terminal = queued.clone();
+        terminal.states.get_mut(PATH).unwrap().state = state;
+        assert_eq!(
+            signal_names(&production_transitions(&queued, &terminal)),
+            vec![if state == WorktreePrState::Merged {
+                "pr.merged"
+            } else {
+                "pr.closed"
+            }]
+        );
+    }
+    // GitHub can show the removal a poll before the PR reads merged.
+    let removed = queue_reading(
+        &queued,
+        "head-a",
+        None,
+        Some(removal(REMOVED, "merged", None)),
+    );
+    assert!(production_transitions(&queued, &removed).is_empty());
+    assert_eq!(
+        signal_names(&production_transitions(
+            &removed,
+            &pr_cache(WorktreePrState::Merged, None)
+        )),
+        vec!["pr.merged"]
+    );
+}
+
+#[test]
+fn queue_signals_require_continuity_ownership_and_success() {
+    let prior = base_cache();
+    for (entry, removed, name) in [
+        (Some(ENQUEUED), None, "pr.queued"),
+        (
+            None,
+            Some(removal(REMOVED, "failed_checks", None)),
+            "pr.dequeued",
+        ),
+    ] {
+        let next = queue_reading(&prior, "head-a", entry, removed);
+        assert_eq!(
+            signal_names(&production_transitions(&prior, &next)),
+            vec!["pr.opened", name]
+        );
+        assert!(production_transitions(&PrStateCache::default(), &next).is_empty());
+
+        let mut failed = next.clone();
+        failed.repos.get_mut(REPO).unwrap().ok = false;
+        assert!(production_transitions(&prior, &failed).is_empty());
+
+        // A failed probe carries the last good link; the next good poll does not repeat it.
+        let mut carried = next.clone();
+        carried.repos.get_mut(REPO).unwrap().ok = false;
+        assert!(production_transitions(&next, &carried).is_empty());
+        assert!(production_transitions(&carried, &next).is_empty());
+
+        let mut changed_branch = next.clone();
+        changed_branch.target_seen.get_mut(PATH).unwrap().branch = "other".to_owned();
+        changed_branch.states.get_mut(PATH).unwrap().branch = Some("other".to_owned());
+        assert!(production_transitions(&prior, &changed_branch).is_empty());
+
+        let mut unowned = next.clone();
+        unowned.states.get_mut(PATH).unwrap().branch = Some("other".into());
+        assert!(production_transitions(&prior, &unowned).is_empty());
+    }
+}
+
+#[test]
+fn queue_payloads_keep_the_pr_head_apart_from_the_queue_timestamp() {
+    let prior = pr_cache(WorktreePrState::Open, None);
+    let context = json!({
+        "path": PATH, "branch": "feature", "repo": REPO,
+        "number": 42, "url": "https://github.com/org/repo/pull/42",
+        "head": "head-2", "checks_url": "https://github.com/org/repo/commit/head-2/checks",
+        "state": "open", "pr_head": "forge-head", "base": "main",
+    });
+    let expect = |extra: Value| {
+        let mut payload = context.as_object().unwrap().clone();
+        payload.extend(extra.as_object().unwrap().clone());
+        payload
+    };
+
+    let queued = queue_reading(&prior, "forge-head", Some(ENQUEUED), None);
+    let signals = production_transitions(&prior, &queued);
+    assert_eq!(signal_names(&signals), vec!["pr.queued"]);
+    assert_eq!(signals[0].1, expect(json!({"queued_at": ENQUEUED})));
+
+    let failed = queue_reading(
+        &queued,
+        "forge-head",
+        None,
+        Some(removal(REMOVED, "failed_checks", Some("queue-a"))),
+    );
+    let signals = production_transitions(&queued, &failed);
+    assert_eq!(signal_names(&signals), vec!["pr.dequeued"]);
+    assert_eq!(
+        signals[0].1,
+        expect(json!({
+            "dequeued_at": REMOVED, "reason": "failed_checks",
+            "queue_checks_url": "https://github.com/org/repo/commit/queue-a/checks",
+        }))
+    );
+
+    let manual = queue_reading(
+        &queued,
+        "forge-head",
+        None,
+        Some(removal(REMOVED, "manual", None)),
+    );
+    assert_eq!(
+        production_transitions(&queued, &manual)[0].1,
+        expect(json!({"dequeued_at": REMOVED, "reason": "manual"}))
+    );
+    let no_remote =
+        super::super::transitions::transitions(&queued, &failed, &BTreeMap::new()).remove(0);
+    assert!(!no_remote.1.contains_key("queue_checks_url"));
+}
+
+fn removal(at: &str, reason: &str, commit: Option<&str>) -> Value {
+    json!({"createdAt": at, "reason": reason, "beforeCommit": commit.map(|oid| json!({"oid": oid}))})
+}
+
+fn queue_reading(
+    prior: &PrStateCache,
+    head: &str,
+    entry: Option<&str>,
+    removal: Option<Value>,
+) -> PrStateCache {
+    let group = super::repo_group(vec![super::target(PATH, "feature")]);
+    let plan = plan_github_queries(&group).remove(0);
+    let raw = json!({"data": {"repository": {
+        "pr0": {"nodes": [{"number": 42, "state": "OPEN"}]},
+        "facts0": {"nodes": [{"number": 42, "headRefOid": head, "mergeable": "MERGEABLE", "isCrossRepository": false,
+            "baseRef": {"name": "main", "compare": {"behindBy": 0}},
+            "mergeQueueEntry": entry.map(|at| json!({"enqueuedAt": at})),
+            "timelineItems": {"nodes": removal.into_iter().collect::<Vec<_>>()}}]}
+    }}});
+    let response = forge::parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+    let mut cache = base_cache();
+    cache.states = project_github_group(&group, &[(plan, response)], &prior.states).0;
+    cache
+}
+
 fn open_reading(prior: &PrStateCache, head: &str, behind: u64, mergeable: &str) -> PrStateCache {
     let group = super::repo_group(vec![super::target(PATH, "feature")]);
     let plan = plan_github_queries(&group).remove(0);

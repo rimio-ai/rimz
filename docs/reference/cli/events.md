@@ -84,7 +84,7 @@ $ rimz events follow --replay
 | `source` | Appended by | Names |
 | --- | --- | --- |
 | `cli` | `rimz events emit` | Any valid name outside the reserved families. |
-| `forge` | The room's sidebar, when a worktree branch's CI or pull request changes state | `ci.passed`, `ci.failed`, `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted` |
+| `forge` | The room's sidebar, when a worktree branch's CI or pull request changes state | `ci.passed`, `ci.failed`, `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` |
 | `git` | The room's sidebar, when the project trunk ref moves | `trunk.moved` |
 | `worktree` | Successful managed worktree creation or removal | `worktree.created`, `worktree.removed` |
 | `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort | `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
@@ -144,13 +144,15 @@ error: signal name `ci.passed` is reserved for RimZ
 | `team` | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | `lifecycle` |
 | `team` | `team.stage` ([payload](./teams.md#the-teamstage-signal)) | `team` |
 | `ci` | `ci.passed`, `ci.failed` | `forge` |
-| `pr` | `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted` | `forge` |
+| `pr` | `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` | `forge` |
 | `trunk` | `trunk.moved` | `git` |
 | `worktree` | `worktree.created`, `worktree.removed` | `worktree` |
 | `wait` | `wait.<task-name>` | `watch` |
 
-The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the seven `ci` and `pr` names above. The hidden `--source git` accepts only `trunk.moved`; there is no CLI `worktree` source. These flags perform no caller check, so reserved families prevent name collisions, not authenticated provenance. What each built-in signal's payload carries is in [the loops guide](../../guide/loops.md#signals-the-rooms-event-bus) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
+The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the nine `ci` and `pr` names above. The hidden `--source git` accepts only `trunk.moved`; there is no CLI `worktree` source. These flags perform no caller check, so reserved families prevent name collisions, not authenticated provenance. What each built-in signal's payload carries is in [the loops guide](../../guide/loops.md#signals-the-rooms-event-bus) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
 
 `pr.opened` reports a newly observed open PR after a successful prior probe, not a PR already present when monitoring starts. `trunk.moved` reports a changed commit on the same trunk ref. Worktree signals follow successful managed operations, with creation after its hook succeeds; reuse and failed-creation rollback are silent. See [trunk and worktree signals](../../internals/harness/loops.md#trunk-and-worktree-signals) for the producer contract.
 
 `pr.behind` and `pr.conflicted` are GitHub-only signals for open PRs. They fire on entry (first sight included), or when the PR head changes while still behind or confirmed conflicting; repeated readings of the same head do not repeat the signal. Conflict detection waits for GitHub's settled mergeability reading. Both carry the `pr.merged` payload with `state: "open"`, plus `pr_head` (the forge head, or the head where conflicts were confirmed), `base` when known, and `behind_by` for `pr.behind` only. `head` remains the local worktree HEAD. Match them by `branch` or `path` just like `pr.merged`.
+
+`pr.queued` and `pr.dequeued` are GitHub-only signals for an open PR and the merge queue. `pr.queued` fires when the PR enters the queue, and again only for a later entry; `pr.dequeued` fires when it leaves the queue while still open, and again only for a later removal. Both fire on first sight, so a room that opens on a PR already sitting dequeued hears it once. A PR that merges out of the queue emits `pr.merged` and no `pr.dequeued`. Both carry the `pr.merged` payload with `state: "open"`, plus `pr_head` (the PR's head commit) and `base` when known. `pr.queued` adds `queued_at`; `pr.dequeued` adds `dequeued_at`, `reason` (GitHub's own string, such as `failed_checks` or `manual`), and `queue_checks_url`, the checks page of the queue's own commit, when GitHub names that commit. The timestamps are GitHub's.

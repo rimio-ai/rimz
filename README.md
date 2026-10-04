@@ -273,6 +273,8 @@ rimz wait --run 'gh run watch --exit-status' # a command exits, with its output 
 
 The GitHub-only signals `pr.behind` and `pr.conflicted` report an open PR falling behind its base or gaining confirmed conflicts, including on first sight. They fire on entry or a changed PR head while the state persists, not on repeated readings of the same head. Their PR payload has `state: "open"` and adds `pr_head`, `base` when known, and `behind_by` for `pr.behind`.
 
+GitHub's merge queue runs CI on its own commit, so a PR it rejects stays green. `pr.queued` and `pr.dequeued`, also GitHub-only, report an open PR entering the queue and leaving it without merging; `pr.dequeued` carries GitHub's `reason` and a `queue_checks_url` to the queue's failing checks.
+
 ```sh
 # Wake me when CI fails on the branch this agent is working on
 rimz loop add ci-red --signal ci.failed --wait
