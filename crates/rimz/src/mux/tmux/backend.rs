@@ -11,7 +11,7 @@ use super::options::{
     sidebar_serve_command, sidebar_width_option_set_cmd,
 };
 use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
-use super::window::{SplitAxis, TmuxPaneGeometry, companion_tmux_layout};
+use super::window::{SplitAxis, TmuxPaneGeometry, companion_tmux_layout, sanitize_window_name};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
 use crate::mux::companion_layout::{balance, plan_append};
@@ -20,10 +20,11 @@ use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec,
     CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, PaneListing,
-    ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement,
-    SplitTarget, TabOptions, WidthStep, WidthSyncOptions, ensure_pane_backend,
-    execute_reconcile_plan, group_reconcile_panes, memoized_version,
+    ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, ResumeTab, ResumeTabShape,
+    ResumeTabUnconfirmed, SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
+    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthStep,
+    WidthSyncOptions, confirm_resume_tab_shapes, ensure_pane_backend, execute_reconcile_plan,
+    group_reconcile_panes, memoized_version,
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 
@@ -885,6 +886,59 @@ impl MuxBackend for TmuxBackend {
         }
         self.lead_window(session, &opts.view.name);
         Ok(BackgroundViewLaunch::Launched)
+    }
+
+    fn confirm_resume_tabs(
+        &self,
+        session: &str,
+        tabs: &[ResumeTab],
+    ) -> Vec<std::result::Result<(), ResumeTabUnconfirmed>> {
+        if tabs.is_empty() {
+            return Vec::new();
+        }
+        // Seeding is synchronous on tmux, so one listing is the outcome.
+        let listing = match self.list_panes(PaneListOptions {
+            session_name: Some(session.to_owned()),
+            ..PaneListOptions::default()
+        }) {
+            Ok(listing) => listing,
+            Err(err) => {
+                return vec![Err(ResumeTabUnconfirmed::Unlisted(err.to_string())); tabs.len()];
+            }
+        };
+        let config = crate::config::MachineConfig::load_lenient();
+        let mut windows: Vec<(&str, ResumeTabShape)> = Vec::new();
+        for pane in &listing.panes {
+            let (Some(window), Some(name)) = (pane.view_id.as_deref(), pane.view_name.as_deref())
+            else {
+                continue;
+            };
+            let work = usize::from(!pane.is_rimz_sidebar() && !pane.is_floating);
+            match windows.iter_mut().find(|(id, _)| *id == window) {
+                Some((_, shape)) => shape.panes += work,
+                None => windows.push((
+                    window,
+                    ResumeTabShape {
+                        name: crate::theme::strip_status_glyph_suffix(name, &config.theme)
+                            .to_owned(),
+                        panes: work,
+                    },
+                )),
+            }
+        }
+        let live = windows
+            .into_iter()
+            .map(|(_, shape)| shape)
+            .collect::<Vec<_>>();
+        let planned = tabs
+            .iter()
+            .map(|tab| ResumeTabShape {
+                // The listing format writes a window name's commas as `_`.
+                name: sanitize_window_name(&tab.label).replace(',', "_"),
+                panes: tab.pane_count(),
+            })
+            .collect::<Vec<_>>();
+        confirm_resume_tab_shapes(&planned, &live)
     }
 
     fn open_tab(&self, opts: &TabOptions) -> Result<()> {

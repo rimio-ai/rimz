@@ -28,9 +28,10 @@ use crate::mux::tab_name::TabNameIntent;
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, CachedPaneRoster, ClientFocusOptions, ClientView,
     CommandSpec, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions,
-    PaneListing, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, SessionHealth,
-    SessionLiveness, SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
-    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthStep,
+    PaneListing, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, ResumeTab,
+    ResumeTabShape, ResumeTabUnconfirmed, SessionHealth, SessionLiveness, SessionOptions,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions,
+    SplitPlacement, SplitTarget, TabOptions, WidthStep, confirm_resume_tab_shapes,
     ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
@@ -913,6 +914,38 @@ impl ZellijBackend {
     }
 }
 
+/// Each live tab's name and its work panes: the terminal panes still running,
+/// besides the sidebar and floating overlays.
+pub(super) fn live_tab_shapes(
+    panes: &[RawListedPane],
+    theme: &crate::config::ThemeConfig,
+) -> Vec<ResumeTabShape> {
+    let mut tabs: Vec<(u64, ResumeTabShape)> = Vec::new();
+    for pane in panes {
+        let (Some(tab), Some(name)) = (pane.tab_id.or(pane.tab_position), pane.tab_name.as_deref())
+        else {
+            continue;
+        };
+        let work = usize::from(
+            !pane.is_plugin
+                && !pane.is_floating
+                && !pane.exited
+                && pane.title.as_deref() != Some(crate::pane::SIDEBAR_CHROME_TITLE),
+        );
+        match tabs.iter_mut().find(|(id, _)| *id == tab) {
+            Some((_, shape)) => shape.panes += work,
+            None => tabs.push((
+                tab,
+                ResumeTabShape {
+                    name: crate::theme::strip_status_glyph_suffix(name, theme).to_owned(),
+                    panes: work,
+                },
+            )),
+        }
+    }
+    tabs.into_iter().map(|(_, shape)| shape).collect()
+}
+
 fn named_tab_counts(
     tabs: &[RawTab],
     tab_name: &str,
@@ -1670,6 +1703,52 @@ impl MuxBackend for ZellijBackend {
             );
         }
         Ok(BackgroundViewLaunch::Launched)
+    }
+
+    fn confirm_resume_tabs(
+        &self,
+        session: &str,
+        tabs: &[ResumeTab],
+    ) -> Vec<std::result::Result<(), ResumeTabUnconfirmed>> {
+        if tabs.is_empty() {
+            return Vec::new();
+        }
+        let config = crate::config::MachineConfig::load_lenient();
+        let planned = tabs
+            .iter()
+            .map(|tab| ResumeTabShape {
+                name: tab.label.clone(),
+                panes: tab.pane_count(),
+            })
+            .collect::<Vec<_>>();
+        // Zellij applies a session layout asynchronously, so a tab may list
+        // before its panes do.
+        let deadline = Instant::now() + super::NEW_TAB_MATERIALIZE_WINDOW;
+        let mut last_observed = None;
+        while let Some(remaining) = deadline_remaining(deadline) {
+            let panes = match self.raw_listed_panes(Some(session), remaining) {
+                Ok(panes) => panes,
+                Err(MuxErr::Timeout { .. })
+                    if last_observed.is_some() && Instant::now() >= deadline =>
+                {
+                    break;
+                }
+                Err(err) => {
+                    return vec![Err(ResumeTabUnconfirmed::Unlisted(err.to_string())); tabs.len()];
+                }
+            };
+            let outcomes =
+                confirm_resume_tab_shapes(&planned, &live_tab_shapes(&panes, &config.theme));
+            if outcomes.iter().all(|outcome| outcome.is_ok()) {
+                return outcomes;
+            }
+            last_observed = Some(outcomes);
+            let Some(remaining) = deadline_remaining(deadline) else {
+                break;
+            };
+            std::thread::sleep(super::NEW_TAB_MATERIALIZE_STEP.min(remaining));
+        }
+        last_observed.unwrap_or_else(|| vec![Err(ResumeTabUnconfirmed::Absent); tabs.len()])
     }
 
     fn open_tab(&self, opts: &TabOptions) -> Result<()> {

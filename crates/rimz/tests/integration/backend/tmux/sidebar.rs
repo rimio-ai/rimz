@@ -870,3 +870,53 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         "resume seeding is idempotent on the window name"
     );
 }
+
+/// Resume confirmation reads the session's windows: a planned tab is open only
+/// when its own window holds its panes beside the hook-docked sidebar.
+#[test]
+fn confirm_resume_tabs_reports_each_planned_window() {
+    use rimz::mux::ResumeTabUnconfirmed;
+
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-confirm");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let work = TempDir::new().expect("resume cwd");
+    let seeded = super::super::identity_marker_tab(work.path(), "seeded", &[2]);
+    let sidebar = SidebarPaneOptions {
+        resume_tabs: vec![seeded.clone()],
+        ..sidebar_opts(server._tempdir.path(), "rimz-confirm", stub, Some(80))
+    };
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+    server.wait_for_panes("rimz-confirm:#seeded", 3);
+
+    let absent = super::super::identity_marker_tab(work.path(), "absent", &[1]);
+    let wider = super::super::identity_marker_tab(work.path(), "seeded", &[3]);
+    assert_eq!(
+        server
+            .backend
+            .confirm_resume_tabs("rimz-confirm", &[seeded.clone(), absent, seeded.clone()]),
+        [
+            Ok(()),
+            Err(ResumeTabUnconfirmed::Absent),
+            // One live window answers for one planned tab.
+            Err(ResumeTabUnconfirmed::Absent),
+        ]
+    );
+    assert_eq!(
+        server.backend.confirm_resume_tabs("rimz-confirm", &[wider]),
+        [Err(ResumeTabUnconfirmed::ShortOfPanes {
+            found: 2,
+            planned: 3
+        })]
+    );
+    assert!(matches!(
+        server
+            .backend
+            .confirm_resume_tabs("rimz-no-such-session", &[seeded])[..],
+        [Err(ResumeTabUnconfirmed::Unlisted(_))]
+    ));
+}

@@ -848,7 +848,7 @@ impl RecoveryPlan {
         session_name: &str,
         materializer: RecoveryMaterializer<'_>,
     ) -> anyhow::Result<MaterializedRecovery> {
-        let mut complete_resumed = self.base_resumed.clone();
+        let mut tab_agents = Vec::with_capacity(self.entries.len());
         let mut resume = ResumePlan {
             tabs: Vec::with_capacity(self.entries.len()),
             team_launches: Vec::new(),
@@ -860,14 +860,17 @@ impl RecoveryPlan {
         };
         for entry in self.entries {
             match entry {
-                RecoveryEntry::Flat(planned) => resume.tabs.push(planned.tab),
+                RecoveryEntry::Flat(planned) => {
+                    tab_agents.push(planned.resumed);
+                    resume.tabs.push(planned.tab);
+                }
                 RecoveryEntry::Team(planned) => {
                     let Some(store) = materializer.store() else {
                         continue;
                     };
                     match materialize_team_restore_tab(store, session_name, &self.teams, &planned) {
                         Ok((tab, batch)) => {
-                            complete_resumed.extend(RecoveryEntry::Team(planned).resumed_keys());
+                            tab_agents.push(RecoveryEntry::Team(planned).resumed_keys());
                             if let Some(batch) = batch {
                                 resume.team_launches.push(TeamTabLaunch {
                                     tab: resume.tabs.len(),
@@ -891,10 +894,7 @@ impl RecoveryPlan {
                 }
             }
         }
-        Ok(MaterializedRecovery {
-            resume,
-            resumed: complete_resumed,
-        })
+        Ok(MaterializedRecovery { resume, tab_agents })
     }
 }
 
@@ -917,7 +917,8 @@ impl<'a> RecoveryMaterializer<'a> {
 
 pub(super) struct MaterializedRecovery {
     pub(super) resume: ResumePlan,
-    pub(super) resumed: BTreeSet<(AgentKind, AgentSessionId)>,
+    /// The agents each of `resume.tabs` resumes, by position.
+    pub(super) tab_agents: Vec<BTreeSet<(AgentKind, AgentSessionId)>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

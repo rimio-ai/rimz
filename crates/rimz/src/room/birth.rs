@@ -191,18 +191,18 @@ impl RoomContext {
             .as_ref()
             .map(|readiness| self.background_view(readiness, refresh_ms));
 
-        let resume = match rebirth {
+        let seeded = match rebirth {
             Some(rebirth) => match rebirth {
-                NormalRebirth::Live => ResumePlan::default(),
+                NormalRebirth::Live => None,
                 NormalRebirth::Fresh => {
                     crate::harness::rebirth::record_boundary(
                         &self.workspace.workspace_id,
                         &self.workspace.session_name,
                     );
-                    ResumePlan::default()
+                    None
                 }
                 NormalRebirth::Selected { plan, disposition } => {
-                    (*plan).materialize(disposition, &self.workspace.session_name)
+                    Some((*plan).settle(disposition, &self.workspace.session_name))
                 }
             },
             None => {
@@ -212,14 +212,13 @@ impl RoomContext {
                         &self.workspace.session_name,
                     );
                 }
-                ResumePlan::default()
+                None
             }
         };
 
-        let resume_tabs = resume
-            .tabs
+        let resume_tabs = seeded
             .iter()
-            .chain(&resume.channel_tabs)
+            .flat_map(|seeded| seeded.tabs().iter().chain(seeded.channel_tabs()))
             .cloned()
             .collect();
         let sidebar = self.sidebar_options_with_resume(&cwd, resume_tabs, refresh_ms);
@@ -241,7 +240,23 @@ impl RoomContext {
             self.launch_background_view(options);
         }
 
-        let reset = self.ensure_healthy(&sidebar, daemon, recovery, preflight_health)?;
+        let health = self.ensure_healthy(&sidebar, daemon, recovery, preflight_health);
+        // Every seeding site has run by now, on a failed health gate too, so
+        // the session itself says which resume tabs opened.
+        let resume = seeded
+            .map(|seeded| {
+                let mut outcomes = self
+                    .backend
+                    .confirm_resume_tabs(&self.workspace.session_name, seeded.tabs())
+                    .into_iter();
+                seeded.confirm(|_, _| {
+                    outcomes
+                        .next()
+                        .unwrap_or(Err(crate::mux::ResumeTabUnconfirmed::Absent))
+                })
+            })
+            .unwrap_or_default();
+        let reset = health?;
         self.load_presence();
         Ok(BirthOutcome { resume, reset })
     }

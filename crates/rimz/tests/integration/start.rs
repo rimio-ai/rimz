@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::common::room::ShimRoom;
-use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env, zellij_trace_shim};
+use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env, path_with_front, zellij_trace_shim};
 
 const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
 
@@ -1130,4 +1130,181 @@ fn start_takes_project_accounts_only_under_trust() {
         room_logins(&env),
         Some(serde_json::json!({"claude": "default", "codex": "default"}))
     );
+}
+
+/// The consumer proof for a birth whose resume window never opened: the agent
+/// survives the reap in the pending record and the next attended start offers it.
+#[test]
+fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::store::event::EventKind;
+
+    let Ok(tmux) = which::which("tmux") else {
+        crate::common::skip("tmux not on PATH");
+        return;
+    };
+    let env = Env::new();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .expect("machine config");
+    let bin = env.home_root.join("recovery-bin");
+    std::fs::create_dir_all(&bin).expect("agent bin");
+    let claude = bin.join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '2.1.0'; exit 0; fi\nexec sleep 600\n",
+    )
+    .expect("claude shim");
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod claude shim");
+    // Fails the one command that opens a `#channel` resume window.
+    let failing = env.home_root.join("failing-tmux");
+    std::fs::create_dir_all(&failing).expect("tmux wrapper dir");
+    let wrapper = failing.join("tmux");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" new-window \"*\" -n ##\"*) exit 1 ;; esac\nexec {} \"$@\"\n",
+            shlex::try_quote(tmux.to_str().expect("tmux path is UTF-8"))
+                .expect("quote tmux executable")
+        ),
+    )
+    .expect("tmux wrapper");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod tmux wrapper");
+
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let worktree = env.project_root.join("alpha");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    let mut observation =
+        AgentLifecycleObservation::new(Some("alpha".into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("alpha".into());
+    observation.worktree_path = Some(worktree.display().to_string());
+    observation.worktree_branch = Some("alpha".into());
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .expect("register lost agent");
+    let lost = (
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("alpha"),
+    );
+    rimz::store::live_roster::publish(&store.paths().live_roster, [lost.clone()].into())
+        .expect("publish the dead session's roster");
+    let pending = || -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(&store.paths().pending_recovery).expect("record"))
+            .expect("pending-recovery JSON")
+    };
+    let ended = || {
+        env.read_events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.kind(),
+                    EventKind::AgentLifecycle(payload)
+                        if matches!(payload.observation.signal, LifecycleSignal::Ended)
+                )
+            })
+            .count()
+    };
+    let agent_path = path_with_front(&bin);
+
+    let birth = env
+        .rimz()
+        .env(
+            "PATH",
+            std::env::join_paths(
+                std::iter::once(failing.clone()).chain(std::env::split_paths(&agent_path)),
+            )
+            .expect("join PATH"),
+        )
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .bounded_output()
+        .expect("run the birth");
+    let stderr = String::from_utf8_lossy(&birth.stderr);
+    assert!(
+        birth.status.success(),
+        "an unopened tab is a warning: {stderr}"
+    );
+    assert!(
+        stderr.contains("could not open resumed tab #alpha")
+            && stderr.contains("stay pending for the next attended start"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("rimz: resumed"), "{stderr}");
+    assert_eq!(pending()["agents"], serde_json::json!([lost]));
+
+    // The next commit past the debounce stamp runs the reap.
+    let _ = std::fs::remove_file(store.paths().cache_dir.join("dead-reap.stamp"));
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &AgentLifecycleObservation::new(Some("bystander".into()), LifecycleSignal::Registered),
+        ))
+        .expect("a commit that drives the reap");
+    assert_eq!(pending()["agents"], serde_json::json!([lost]));
+    assert_eq!(ended(), 0, "the reap leaves a pending agent alone");
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open pty");
+    let mut command = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut command);
+    command.cwd(&env.project_root);
+    command.args(["--mux", "tmux", "start", "--no-attach"]);
+    command.env("PATH", &agent_path);
+    command.env("TERM", "dumb");
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn attended start");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+    let mut writer = pair.master.take_writer().expect("pty writer");
+    std::io::Write::write_all(&mut writer, b"y\n").expect("accept the recovery");
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll attended start") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    drop(writer);
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let status = status.unwrap_or_else(|| {
+        panic!("attended start did not finish within {COMMAND_TIMEOUT:?}:\n{output}")
+    });
+    assert!(status.success(), "attended start failed: {output}");
+    assert!(output.contains("Recover 1 agent (#alpha)?"), "{output}");
+    assert!(output.contains("rimz: resumed 1 agent: #alpha"), "{output}");
+    assert_eq!(pending()["agents"], serde_json::json!([]));
+    assert_eq!(ended(), 0);
 }

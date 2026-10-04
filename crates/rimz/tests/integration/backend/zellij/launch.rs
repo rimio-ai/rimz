@@ -310,6 +310,75 @@ fn ensure_clean_session_births_resume_panes_under_the_pane_pin() {
     super::super::assert_identity_markers(&tab, "feature");
 }
 
+/// Resume confirmation observes a session no client ever attached to: a
+/// planned tab is open only when its own tab holds its panes beside the sidebar.
+#[test]
+fn confirm_resume_tabs_reports_each_planned_tab_of_a_clientless_birth() {
+    use rimz::mux::ResumeTabUnconfirmed;
+
+    require_zellij!();
+
+    let room = LiveZellijSession::new("resumeconfirm");
+    let xdg = room.path();
+    let name = room.name().to_owned();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let work = TempDir::new().expect("resume cwd");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let seeded = super::super::identity_marker_tab(work.path(), "seeded", &[2]);
+    let thin = super::super::identity_marker_tab(work.path(), "thin", &[1]);
+    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-resumeconfirm"));
+    let opts = SidebarPaneOptions {
+        runtime: rimz::RuntimePaths::for_state_under(
+            &rimz::StatePaths::under(workspace_id.clone(), cwd.path()).expect("fixture state"),
+            cwd.path(),
+        ),
+        session_name: name.clone(),
+        workspace_id,
+        project_root: cwd.path().to_path_buf(),
+        extra_env: Default::default(),
+        cwd: cwd.path().to_path_buf(),
+        target: rimz::mux::SidebarTarget {
+            share: rimz::mux::WidthPermille::from_percent(25),
+            max_cols: std::num::NonZeroU16::new(30).expect("nonzero test width"),
+            pinned: false,
+        },
+        detected_view_size: None,
+        rimz_bin: stub,
+        pristine_birth: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: vec![seeded.clone(), thin.clone()],
+        refresh_ms: None,
+    };
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    publish_room_bin(xdg, &opts);
+    assert_eq!(
+        backend
+            .ensure_clean_session(&opts, None)
+            .expect("ensure_clean_session births the room with its resume tabs"),
+        SessionHealth::Reborn,
+    );
+
+    assert_eq!(
+        backend.confirm_resume_tabs(&name, &[seeded.clone(), thin]),
+        [Ok(()), Ok(())]
+    );
+    let absent = super::super::identity_marker_tab(work.path(), "absent", &[1]);
+    let wider = super::super::identity_marker_tab(work.path(), "thin", &[2]);
+    assert_eq!(
+        backend.confirm_resume_tabs(&name, &[seeded.clone(), absent, seeded, wider]),
+        [
+            Ok(()),
+            Err(ResumeTabUnconfirmed::Absent),
+            // One live tab answers for one planned tab.
+            Err(ResumeTabUnconfirmed::Absent),
+            Err(ResumeTabUnconfirmed::ShortOfPanes {
+                found: 1,
+                planned: 2
+            }),
+        ]
+    );
+}
+
 /// A *live* session that has no sidebar (the renderer self-closed or crashed
 /// while the session itself survived, or a prior launch was skipped and the
 /// session was born by a plain `attach --create`) must regain one on the next
