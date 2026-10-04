@@ -92,9 +92,7 @@ pub(super) fn write_no_room_hint(
     parsed: &schedule::ParsedTrigger,
 ) -> Result<()> {
     if let schedule::Trigger::Condition { expr, .. } = &parsed.trigger
-        && expr
-            .terms()
-            .any(|term| matches!(term.key.as_str(), "ci" | "pr"))
+        && expr.reads_forge()
     {
         writeln!(
             out,

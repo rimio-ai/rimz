@@ -236,11 +236,7 @@ fn path_has_pending_ci(cache: &PrStateCache, path: &str) -> bool {
     cache.states.get(path).is_some_and(|link| {
         matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged)
             && link.ci == Some(WorktreeCi::Pending)
-            || link.state == WorktreePrState::Open
-                && matches!(
-                    link.open.as_ref().and_then(|facts| facts.queue.as_ref()),
-                    Some(PrQueueFact::Queued { .. })
-                )
+            || matches!(link.queue(), Some(PrQueueFact::Queued { .. }))
     }) || cache.branch_ci.get(path) == Some(&WorktreeCi::Pending)
 }
 

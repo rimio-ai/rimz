@@ -76,6 +76,15 @@ pub struct PrLink {
     pub stack: PrStack,
 }
 
+impl PrLink {
+    /// The merge-queue fact of a link that is still open.
+    pub(crate) fn queue(&self) -> Option<&PrQueueFact> {
+        (self.state == WorktreePrState::Open)
+            .then_some(self.open.as_ref()?.queue.as_ref())
+            .flatten()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct OpenPrFacts {
     #[serde(default)]
