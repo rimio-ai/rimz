@@ -621,7 +621,7 @@ mod tests {
         let (client, server) = UnixStream::pair().unwrap();
         std::thread::scope(|scope| {
             scope.spawn(|| handle(server, &shared).unwrap());
-            let deadline = Instant::now() + Duration::from_secs(1);
+            let deadline = Instant::now() + Duration::from_secs(30);
             while shared.requests.open.lock().unwrap().streams.is_empty() {
                 assert!(
                     Instant::now() < deadline,

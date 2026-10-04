@@ -1334,15 +1334,13 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
         let check = records[0].check.as_ref().unwrap();
         assert!(!check.timed_out);
         assert_eq!(check.code, None);
-        if notice.text.contains("(<1k tokens, 1 line) [") {
-            assert!(
-                notice
-                    .text
-                    .contains(&check.output_path.as_ref().unwrap().display().to_string()),
-                "{}",
-                notice.text
-            );
-        }
+        let output_path = check.output_path.as_ref().unwrap().display().to_string();
+        assert_eq!(
+            notice.text.contains(&output_path),
+            notice.text.contains("(<1k tokens, 1 line) ["),
+            "{}",
+            notice.text
+        );
 
         std::fs::write(&release, "").unwrap();
         let records = wait_for_wait_records(&env, 2);
