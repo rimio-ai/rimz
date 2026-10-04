@@ -1722,7 +1722,7 @@ fn render_merged_worktree_uses_merge_glyph_on_left() {
 }
 
 #[test]
-fn render_reconciling_worktree_keeps_stats_and_merge_queue_marker() {
+fn render_reconciling_worktree_keeps_stats_and_reconciling_marker() {
     let codex = agent(
         "codex-1",
         "codex",
