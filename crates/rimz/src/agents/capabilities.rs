@@ -1030,6 +1030,12 @@ pub trait RuntimeControlCapability: CoreCapability {
     ) -> Option<PathBuf> {
         None
     }
+
+    /// Whether a provider daemon that writes session history runs under this
+    /// login's home. Read-only: it starts nothing and signals nothing.
+    fn runtime_control_writes_history(&self, _login_env: &BTreeMap<String, String>) -> bool {
+        false
+    }
 }
 
 /// Every capability an agent integration can implement, in one object.

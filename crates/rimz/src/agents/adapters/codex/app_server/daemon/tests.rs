@@ -316,3 +316,56 @@ fn pid_record_requires_upstream_identity_fields() {
     .expect("write zero pid record");
     assert!(read_pid_record(&path).is_none());
 }
+
+fn write_app_record(home: &Path, body: &str) {
+    let state_dir = home.join("app-server-daemon");
+    std::fs::create_dir_all(&state_dir).expect("mkdir");
+    std::fs::write(state_dir.join("app-server.pid"), body).expect("write record");
+}
+
+fn start_time(pid: u32) -> String {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+        .expect("ps");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn an_app_server_runs_under_a_home_only_while_its_recorded_process_lives() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    assert!(!app_server_runs_under(home), "no record");
+
+    let mut process = Command::new("sleep").arg("60").spawn().expect("spawn");
+    let pid = process.id();
+    let record = |start: &str| format!(r#"{{"pid":{pid},"processStartTime":"{start}"}}"#);
+
+    write_app_record(home, "{not json");
+    assert!(!app_server_runs_under(home), "malformed record");
+    write_app_record(home, &record("Thu Jan  1 00:00:00 1970"));
+    assert!(!app_server_runs_under(home), "another process's start time");
+
+    let started = start_time(pid);
+    write_app_record(home, &record(&started));
+    assert!(app_server_runs_under(home), "live process, true start time");
+    let env = BTreeMap::from([("CODEX_HOME".to_owned(), home.display().to_string())]);
+    assert!(writes_history(&env));
+    // The updater's record alone names no writer.
+    let other = tempfile::tempdir().expect("tempdir");
+    let state_dir = other.path().join("app-server-daemon");
+    std::fs::create_dir_all(&state_dir).expect("mkdir");
+    std::fs::write(state_dir.join("app-server-updater.pid"), record(&started)).expect("write");
+    assert!(!app_server_runs_under(other.path()), "updater record only");
+
+    // Unreaped, the killed process keeps its pid and start time as a zombie.
+    process.kill().expect("kill");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app_server_runs_under(home) {
+        assert!(Instant::now() < deadline, "zombie");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    process.wait().expect("wait");
+    assert!(!app_server_runs_under(home), "dead pid");
+}

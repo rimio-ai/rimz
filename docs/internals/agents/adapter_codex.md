@@ -281,6 +281,7 @@ RimZ-launched panes run embedded and never join the daemon or appear in the mobi
 - `ensure` recovers a stale updater, then starts the daemon. Recovery signals the updater only when its pid records, process start times, ownership, executable, argv, and sole zombie child match the known upstream stale shape.
 - `reconcile` retries once: after a stale recovery, or after a 3 second settle for a failed start, which absorbs the upstream stop-then-start teardown race.
 - `updater_skew` is a `rimz doctor` advisory. It fires only when the control socket exists, the updater pid still matches its recorded identity and uid, and its executable differs from the managed standalone binary. The message says the updater's next hourly pass converges on its own and prints the managed binary's `app-server daemon bootstrap --remote-control` repair, which restarts both processes under Codex's lifecycle lock.
+- `writes_history` answers the account-link reconciler's daemon question from `app-server.pid` alone, read-only ([Logins](./providers.md#logins)).
 
 The app-server client reuses this daemon as its second connection choice, and the loaded-thread reaper reads its `thread/loaded/list` ([session death](./instances.md#session-death)).
 

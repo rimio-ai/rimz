@@ -50,6 +50,30 @@ pub enum ShareErr {
         /// `None` when the live rooms could not be read.
         agents: Option<usize>,
     },
+    #[error(
+        "cannot share `{entry}` of {account} with {}: a remote-control daemon on the account writes to the copy in its home, which would move aside under it; stop it with `rimz config set remote_control.{} false`, rerun, then set it back to `true`, or set `history = \"standalone\"` under `[accounts.{}.{}]`",
+        default_home.display(),
+        account.kind,
+        account.kind,
+        account.name
+    )]
+    LiveDaemon {
+        account: LoginKey,
+        entry: String,
+        default_home: PathBuf,
+    },
+    #[error(
+        "cannot unlink `{entry}` of {account} from {}: a remote-control daemon on the account writes through that link, which would be removed under it; stop it with `rimz config set remote_control.{} false`, rerun, then set it back to `true`, or remove `history = \"standalone\"` from `[accounts.{}.{}]`",
+        default_home.display(),
+        account.kind,
+        account.kind,
+        account.name
+    )]
+    LiveDaemonUnlink {
+        account: LoginKey,
+        entry: String,
+        default_home: PathBuf,
+    },
     /// A failure after entries were already set aside, which a rerun would no
     /// longer report.
     #[error("{source}\n{}", warnings.join("\n"))]
@@ -272,7 +296,8 @@ pub fn check_distinct_homes(named_home: &Path, default_home: &Path) -> Result<()
 /// `default` has no links and answers `None`. `other_live_agents` counts the
 /// live agents on the account besides the one launching, or `None` when the
 /// live rooms cannot be read; it is asked only before a directory would move
-/// aside.
+/// aside, and so is the provider, once no agent is counted, for a daemon
+/// writing history under the account home.
 pub fn reconcile(
     login: &ProviderLogin,
     ambient: &BTreeMap<String, String>,
@@ -298,6 +323,9 @@ pub fn reconcile(
             shared: login.shares_history(),
             lock: &crate::disk::paths::account_lock(login.kind()),
             account: &account,
+            daemon_writes: &|| {
+                super::runtime_control::writes_history(login.kind().as_str(), &login.env(ambient))
+            },
         },
         other_live_agents,
     )
@@ -311,6 +339,8 @@ struct Homes<'a> {
     default: &'a Path,
     shared: bool,
     lock: &'a Path,
+    /// Whether a provider daemon that writes history runs under `named`.
+    daemon_writes: &'a dyn Fn() -> bool,
 }
 
 fn reconcile_homes(
@@ -374,9 +404,10 @@ fn reconcile_homes(
         }
     }
     // A provider appends by path, so a directory, or a link to one, leaves
-    // its slot only when no other agent on the account can be writing. A
-    // link at an unshared name is exempt: the provider must own that name in
-    // each home, so the link is the defect.
+    // its slot only when no other agent on the account can be writing and no
+    // provider daemon runs under the account home. A link at an unshared name
+    // is exempt: the provider must own that name in each home, so the link is
+    // the defect.
     let set_aside = plan
         .iter()
         .find(|planned| matches!(planned.action, Action::SetAside(_)) && planned.slot.is_dir())
@@ -389,7 +420,21 @@ fn reconcile_homes(
         let agents = other_live_agents();
         let account = homes.account.clone();
         match (agents, unlink) {
-            (Some(0), _) => {}
+            (Some(0), _) if !(homes.daemon_writes)() => {}
+            (Some(0), false) => {
+                return Err(ShareErr::LiveDaemon {
+                    account,
+                    entry,
+                    default_home,
+                });
+            }
+            (Some(0), true) => {
+                return Err(ShareErr::LiveDaemonUnlink {
+                    account,
+                    entry,
+                    default_home,
+                });
+            }
             (_, false) => {
                 return Err(ShareErr::LiveAgents {
                     account,

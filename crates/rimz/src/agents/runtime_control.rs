@@ -124,6 +124,13 @@ pub(crate) fn updater_advisory(kind: &str, login_env: &BTreeMap<String, String>)
     super::find_definition(kind)?.runtime_control_advisory(login_env)
 }
 
+/// Whether a daemon of `kind` that writes session history runs under this
+/// login's home.
+pub(crate) fn writes_history(kind: &str, login_env: &BTreeMap<String, String>) -> bool {
+    super::find_definition(kind)
+        .is_some_and(|definition| definition.runtime_control_writes_history(login_env))
+}
+
 pub(crate) fn wiring_input_path(
     kind: &str,
     login_env: &BTreeMap<String, String>,

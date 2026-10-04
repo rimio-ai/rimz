@@ -233,8 +233,9 @@ pub(super) fn blocked_project_logins(state: crate::trust::TrustState) -> String 
     )
 }
 
-/// Live agents per account across every live room, each room read without
-/// creating its store.
+/// Agents per account whose provider can be writing, across every live room,
+/// each room read without creating its store: for every account, the number
+/// [`other_live_agents_on`] answers with nothing launching.
 pub fn live_agents_by_login() -> Result<BTreeMap<LoginKey, usize>, super::LiveRoomErr> {
     let mut counts = BTreeMap::new();
     for agents in live_room_agents()? {
@@ -252,10 +253,9 @@ pub fn live_agents_by_login() -> Result<BTreeMap<LoginKey, usize>, super::LiveRo
 /// Zellij twin), and the wrapper links the account before it binds that pane
 /// and starts the provider. A row whose recorded owner process is dead does
 /// not count: a room's published rollup can still hold it when the launch
-/// failed or was killed after its pane was bound.
-///
-/// Known limit: sessions a Codex remote-control daemon runs on the account
-/// have no pane and no account stamp, so they are not counted.
+/// failed or was killed after its pane was bound. A session a remote-control
+/// daemon serves has no pane of its own and stays out: the account-link
+/// reconciler asks the provider for the daemon itself.
 pub fn other_live_agents_on(
     account: &LoginKey,
     launching: &[crate::ids::AgentSessionId],
@@ -288,9 +288,17 @@ fn live_room_agents() -> Result<Vec<Vec<crate::agents::AgentState>>, super::Live
 }
 
 fn count_live_logins(counts: &mut BTreeMap<LoginKey, usize>, agents: &[crate::agents::AgentState]) {
-    for key in crate::agents::live_login_keys(agents) {
-        *counts.entry(key).or_default() += 1;
+    for agent in agents.iter().filter(|agent| can_write(agent)) {
+        *counts.entry(agent.login_key()).or_default() += 1;
     }
+}
+
+/// Whether a provider behind this row can be writing its account's history.
+fn can_write(agent: &crate::agents::AgentState) -> bool {
+    agent.ended_at.is_none()
+        && agent.pane.is_some()
+        && !agent.is_provider_subagent()
+        && crate::store::runtime::agent_liveness(agent) != AgentLiveness::Dead
 }
 
 fn count_others_on(
@@ -301,12 +309,9 @@ fn count_others_on(
     agents
         .iter()
         .filter(|agent| {
-            agent.ended_at.is_none()
-                && agent.pane.is_some()
-                && !agent.is_provider_subagent()
+            can_write(agent)
                 && agent.login_key() == *account
                 && !launching.contains(&agent.agent_id)
-                && crate::store::runtime::agent_liveness(agent) != AgentLiveness::Dead
         })
         .count()
 }

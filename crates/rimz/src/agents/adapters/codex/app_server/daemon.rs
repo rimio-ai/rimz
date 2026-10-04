@@ -114,6 +114,22 @@ pub fn updater_skew(login_env: &BTreeMap<String, String>) -> Option<UpdaterSkew>
     updater_skew_under(&home)
 }
 
+/// Whether the app-server Codex recorded under this login's home is running:
+/// the process that appends the account's history by path. Read-only, and a
+/// record whose process cannot be confirmed answers no.
+pub fn writes_history(login_env: &BTreeMap<String, String>) -> bool {
+    CodexAdapter
+        .config_home(login_env)
+        .is_some_and(|home| app_server_runs_under(&home))
+}
+
+fn app_server_runs_under(home: &Path) -> bool {
+    read_pid_record(&home.join("app-server-daemon").join("app-server.pid")).is_some_and(|app| {
+        pid_record_matches(&app)
+            && crate::proc::stat_metrics(app.pid).is_some_and(|metrics| metrics.state != 'Z')
+    })
+}
+
 /// The daemon's control socket under a Codex home.
 pub(super) fn control_socket(home: &Path) -> PathBuf {
     home.join("app-server-control")
