@@ -673,10 +673,8 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
 /// newest run nor end a count of overlaps.
 fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<String> {
     let newest_run = records.iter().rposition(|record| !is_refused_fire(record));
-    let after = records[newest_run.map_or(0, |idx| idx + 1)..]
-        .iter()
-        .filter(|record| is_overlap(record))
-        .count();
+    let tail = &records[newest_run.map_or(0, |idx| idx + 1)..];
+    let after = tail.iter().filter(|record| is_overlap(record)).count();
     if after > 0 && has_active_run {
         return Some(format!(
             "{} skipped while the active run holds the lock",
@@ -684,12 +682,19 @@ fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<Strin
         ));
     }
     if after > 0 {
-        let last = if after == 1 {
-            "last fire".to_owned()
-        } else {
-            format!("last {after} fires")
+        // The counted overlaps are "the last fires" only when no fire refused
+        // at another gate sits among or after them.
+        let trailing = tail
+            .iter()
+            .rev()
+            .take_while(|record| is_overlap(record))
+            .count();
+        let skipped = match (trailing == after, after) {
+            (true, 1) => "last fire".to_owned(),
+            (true, _) => format!("last {after} fires"),
+            (false, _) => fires(after),
         };
-        return Some(format!("{last} skipped, nothing has run since"));
+        return Some(format!("{skipped} skipped, nothing has run since"));
     }
     if has_active_run {
         return None;
