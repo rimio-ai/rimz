@@ -191,12 +191,13 @@ Windows, models, and agents carry `tool_calls` and a per-name `tools` map, each 
 
 `--assists` (`assists.rs`) prints `assists (all)` with the non-zero category counts, then one forensic line per event, newest first, in the configured time zone; an empty log prints `no assists recorded`. It conflicts with `--json` and `--refresh`.
 
-Assists come from the account-global assist log, which [loops.md](./harness/loops.md#the-assist-log) owns along with what counts as an assist and how its records fold. `AssistStats::from_records` folds them into five panel categories, and the panel prints only those with a non-zero count:
+Assists come from the account-global assist log, which [loops.md](./harness/loops.md#the-assist-log) owns along with what counts as an assist and how its records fold. `AssistStats::from_records` folds them into panel categories, and the panel prints only those with a non-zero count:
 
 | Row | Counts |
 | --- | --- |
 | `Auto-continue:` | delivered continues, with the summed recovered hours |
 | `Auto-compact:` | every `auto_compact` record, plus delivered `idle_compact` and `flip_compact` records |
+| `Idle stop:` | `idle_stop` records whose stop went through |
 | `Auto-redeem:` | redeem attempts, with the `reset` outcomes |
 | `Auto-resume:` | rebirth restores, with the agents they brought back |
 | `Auto-gc:` | completed automatic gc sweeps, with the bytes they reclaimed |

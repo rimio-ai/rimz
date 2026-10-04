@@ -408,6 +408,10 @@ An idle team member can outlive its provider's warm prompt cache, so its next st
 
 The [configuration rules](./configuration.md#idle-compaction) define the provider timing, eligible team members, and role overrides. Each attempt leaves a durable command for boundary delivery and an assist record visible in `rimz stats --assists`, including the resolved idle threshold. Set `harness.idle_compact` to `off` to disable the machine default; explicit role overrides still apply.
 
+### Stop when idle
+
+An agent that has finished still holds its pane, its process, and a place in the roster. `rimz agents stop @coder --when-idle` hands the cleanup to the room: the agent stops once it has rested three minutes with nothing owed to it, and an agent can ask for its own exit with `@me` as its last act. A pending wait, an unreported subagent, a queued message, an open run, or a team board short of `Done` all hold the stop, and a new turn restarts the clock. Pass a duration to change the rest, or `off` to withdraw. The [stop reference](../reference/cli/agents.md#stop) has the exact rule; each stop shows in `rimz stats --assists`.
+
 ### Smart compaction
 
 Every agent CLI already compacts. `/compact` is the manual command: summarize the conversation and carry on against a fresh window. Auto-compaction is its fallback, firing when the context hits the ceiling, wherever the work happens to stand. Driving one agent by hand, you preempt the fallback without thinking about it: a task wraps up, you type `/compact` at the clean boundary, and the summary hands a finished state to whatever comes next.

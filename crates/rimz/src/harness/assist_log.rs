@@ -121,6 +121,20 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// A `stop --when-idle` request the helper acted on, whether or not the
+    /// stop went through.
+    IdleStop {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        label: String,
+        idle_secs: u64,
+        idle_after_secs: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requested_by: Option<String>,
+        stopped: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     FlipCompact {
         kind: AgentKind,
         agent_id: AgentSessionId,
@@ -406,11 +420,31 @@ mod tests {
                     handles: vec!["@sweep".into()],
                 },
             },
+            AssistRecord {
+                at: ts(20),
+                assist: Assist::IdleStop {
+                    kind: AgentKind::new_unchecked("claude"),
+                    agent_id: "session-1".into(),
+                    label: "@coder".into(),
+                    idle_secs: 200,
+                    idle_after_secs: 180,
+                    requested_by: Some("@lead".into()),
+                    stopped: false,
+                    error: Some("agent coder has no bound pane".into()),
+                },
+            },
         ] {
             let json = serde_json::to_string(&record).expect("serialize");
             let decoded: AssistRecord = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(decoded, record);
         }
+        let stopped = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "idle_stop", "kind": "claude",
+            "agent_id": "session-1", "label": "@coder", "idle_secs": 200,
+            "idle_after_secs": 180, "stopped": true
+        });
+        let decoded: AssistRecord = serde_json::from_value(stopped.clone()).expect("idle stop");
+        assert_eq!(serde_json::to_value(decoded).unwrap(), stopped);
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub(super) struct AssistRollup {
     pub(super) recovered_secs: u64,
     pub(super) compacts: usize,
     pub(super) keepalives: usize,
+    pub(super) idle_stops: usize,
     pub(super) restores: usize,
     pub(super) restored_sessions: usize,
     pub(super) sweeps: usize,
@@ -137,6 +138,19 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    IdleStop {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        label: String,
+        idle_secs: u64,
+        idle_after_secs: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        requested_by: Option<String>,
+        stopped: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     FlipCompact {
         at: Timestamp,
         kind: AgentKind,
@@ -220,6 +234,7 @@ impl AssistStats {
                 AssistEvent::CacheKeepalive { delivered, .. } => {
                     rollup.keepalives += usize::from(*delivered)
                 }
+                AssistEvent::IdleStop { stopped, .. } => rollup.idle_stops += usize::from(*stopped),
                 AssistEvent::IdleCompact { delivered, .. }
                 | AssistEvent::FlipCompact { delivered, .. } => {
                     rollup.compacts += usize::from(*delivered);
@@ -381,6 +396,26 @@ impl AssistEvent {
                 delivered,
                 error,
             },
+            Assist::IdleStop {
+                kind,
+                agent_id,
+                label,
+                idle_secs,
+                idle_after_secs,
+                requested_by,
+                stopped,
+                error,
+            } => Self::IdleStop {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                idle_secs,
+                idle_after_secs,
+                requested_by,
+                stopped,
+                error,
+            },
             Assist::IdleCompact {
                 kind,
                 agent_id,
@@ -477,6 +512,7 @@ impl AssistEvent {
             | Self::Continue { at, .. }
             | Self::Compact { at, .. }
             | Self::IdleCompact { at, .. }
+            | Self::IdleStop { at, .. }
             | Self::CacheKeepalive { at, .. }
             | Self::FlipCompact { at, .. }
             | Self::Resume { at, .. }
@@ -573,6 +609,9 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     }
     if rollup.keepalives > 0 {
         rows.push(("Keepalive:", rollup.keepalives.to_string()));
+    }
+    if rollup.idle_stops > 0 {
+        rows.push(("Idle stop:", rollup.idle_stops.to_string()));
     }
     if rollup.redeems > 0 {
         let mut value = rollup.redeems.to_string();
@@ -712,6 +751,32 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 .unwrap_or_default();
             let noun = if *waits == 1 { "wait" } else { "waits" };
             format!("{time} ◷ {agent} cache keepalive after {idle} — {waits} {noun} pending{error}")
+        }
+        AssistEvent::IdleStop {
+            label,
+            idle_secs,
+            idle_after_secs,
+            requested_by,
+            stopped,
+            error,
+            ..
+        } => {
+            let outcome = if *stopped { "stopped" } else { "stop failed" };
+            let compact =
+                |secs: u64| rimz::utils::time::format_duration_compact(Duration::from_secs(secs));
+            let requester = requested_by
+                .as_deref()
+                .map(|by| format!(" — requested by {by}"))
+                .unwrap_or_default();
+            let error = error
+                .as_deref()
+                .map(|error| format!(" ({})", first_line(error)))
+                .unwrap_or_default();
+            format!(
+                "{time} ■ {label} idle {outcome} after {} (threshold {}){requester}{error}",
+                compact(*idle_secs),
+                compact(*idle_after_secs),
+            )
         }
         AssistEvent::IdleCompact {
             kind,
@@ -895,6 +960,9 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             "{at} {benefit} · agent {agent_id} · message {message_id} · threshold {}",
             compact_threshold(*threshold),
         ),
+        AssistEvent::IdleStop {
+            agent_id, stopped, ..
+        } => format!("{at} {benefit} · agent {agent_id} · stopped {stopped}"),
         AssistEvent::IdleCompact {
             agent_id,
             message_id,
@@ -1088,6 +1156,45 @@ mod tests {
         assert!(json["events"][0].get("stopped").is_none(), "{json}");
         let line = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
         assert!(!line.contains("took over"), "{line}");
+    }
+
+    #[test]
+    fn idle_stop_stats_count_stops_and_preserve_failures() {
+        let records = [true, false]
+            .into_iter()
+            .map(|stopped| {
+                serde_json::from_value::<AssistRecord>(serde_json::json!({
+                    "at": "2026-01-01T00:00:00Z", "assist": "idle_stop",
+                    "kind": "claude", "agent_id": "session-1", "label": "@coder",
+                    "idle_secs": 200, "idle_after_secs": 180, "requested_by": "@lead",
+                    "stopped": stopped,
+                    "error": if stopped { None } else { Some("no bound pane") }
+                }))
+                .expect("idle stop assist wire format")
+            })
+            .collect();
+        let stats = AssistStats::from_records("all", records);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["rollup"]["idle_stops"], 1);
+        assert_eq!(json["events"][0]["assist"], "idle_stop");
+        assert_eq!(json["events"][0]["requested_by"], "@lead");
+        assert_eq!(category_rows(&stats.rollup).len(), 1);
+        assert!(category_rows(&stats.rollup)[0].contains("Idle stop:"));
+        let lines = stats
+            .events
+            .iter()
+            .map(|event| forensic_line(event, &jiff::tz::TimeZone::UTC))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            lines.contains("■ @coder idle stopped after 200s (threshold 3m) — requested by @lead"),
+            "{lines}"
+        );
+        assert!(lines.contains("agent session-1 · stopped true"), "{lines}");
+        assert!(
+            lines.contains("@coder idle stop failed after 200s (threshold 3m) — requested by @lead (no bound pane)"),
+            "{lines}"
+        );
     }
 
     #[test]

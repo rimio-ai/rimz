@@ -291,6 +291,8 @@ rimz agents help history
 
 rimz agents help idle-compact [hidden]
 
+rimz agents help idle-stop [hidden]
+
 rimz agents help launch
 
 rimz agents help list
@@ -339,6 +341,15 @@ rimz agents history
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz agents idle-compact [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --request <JSON>  [action=set takes=1..=1 required hidden]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz agents idle-stop [hidden]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
@@ -523,6 +534,7 @@ rimz agents stop
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
+    --when-idle <DURATION|off>  [action=set takes=0..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz agents subagent-digest [hidden]
@@ -927,6 +939,8 @@ rimz help agents fork
 rimz help agents history
 
 rimz help agents idle-compact [hidden]
+
+rimz help agents idle-stop [hidden]
 
 rimz help agents launch
 

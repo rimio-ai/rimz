@@ -309,6 +309,55 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     assert!(!profiles.iter().any(|entry| entry.name == "child-only"));
 }
 
+#[test]
+fn stop_when_idle_takes_an_optional_duration_or_off() {
+    use super::stop::WhenIdle;
+    let minutes = |minutes: u64| Some(WhenIdle::After(Duration::from_secs(minutes * 60)));
+    for (argv, expected) in [
+        (&["stop", "@coder"][..], None),
+        (&["stop", "@coder", "--when-idle"], minutes(3)),
+        (&["stop", "@coder", "--when-idle", "5m"], minutes(5)),
+        (&["stop", "@coder", "--when-idle=2h"], minutes(120)),
+        (&["stop", "--when-idle", "5m", "@coder"], minutes(5)),
+        (
+            &["stop", "@coder", "--when-idle", "0s"],
+            Some(WhenIdle::After(Duration::ZERO)),
+        ),
+        (
+            &["stop", "@coder", "--when-idle", "off"],
+            Some(WhenIdle::Off),
+        ),
+    ] {
+        let argv = [&["rimz"][..], argv].concat();
+        let Some(AgentsSubcmd::Stop {
+            reference,
+            all,
+            when_idle,
+        }) = parse_agents(&argv).command
+        else {
+            panic!("stop")
+        };
+        assert_eq!((reference.as_str(), all), ("@coder", false), "{argv:?}");
+        assert_eq!(when_idle, expected, "{argv:?}");
+    }
+
+    let misplaced = AgentsHarness::try_parse_from(["rimz", "stop", "--when-idle", "@me"])
+        .expect_err("a reference is not a duration")
+        .to_string();
+    assert!(
+        misplaced
+            .contains("put the reference before the flag (`rimz agents stop @me --when-idle`)"),
+        "{misplaced}"
+    );
+    for argv in [
+        &["rimz", "stop", "@coder", "--when-idle", "soon"][..],
+        &["rimz", "stop", "@coder", "--all", "--when-idle"],
+        &["rimz", "stop", "@coder", "--when-idle", "5m", "--all"],
+    ] {
+        assert!(AgentsHarness::try_parse_from(argv).is_err(), "{argv:?}");
+    }
+}
+
 fn parse_helper_argv(argv: Vec<String>) -> AgentsArgs {
     let argv = std::iter::once("rimz".to_owned()).chain(argv);
     let parsed = crate::cli::Cli::try_parse_from(argv).expect("parse helper argv");
@@ -349,6 +398,22 @@ fn hidden_helper_requests_round_trip_through_cli() {
         panic!("expected cache-keepalive");
     };
     assert_eq!(args.request, keepalive);
+
+    let idle_stop = rimz::harness::idle_stop::IdleStopHelperRequest {
+        workspace_id: workspace_id.clone(),
+        kind: kind.clone(),
+        agent_id: agent_id.clone(),
+        pane_id: pane_id.clone(),
+        label: "@coder # lane".into(),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "idle-stop",
+        &idle_stop,
+    ));
+    let Some(AgentsSubcmd::IdleStop(args)) = parsed.command else {
+        panic!("expected idle-stop");
+    };
+    assert_eq!(args.request, idle_stop);
 
     let auto_continue = AutoContinueRequest {
         workspace_id: workspace_id.clone(),

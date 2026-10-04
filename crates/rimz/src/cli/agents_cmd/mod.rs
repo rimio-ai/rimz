@@ -13,6 +13,7 @@ mod explain;
 mod fork;
 mod history;
 mod idle_compact;
+mod idle_stop;
 pub(in crate::cli) mod launch;
 mod launch_resolve;
 mod list;
@@ -88,6 +89,7 @@ use exec::run_exec;
 use fork::{ForkArgs, run_fork};
 use history::history_agent;
 use idle_compact::run_idle_compact;
+use idle_stop::run_idle_stop;
 use launch::*;
 use launch_resolve::*;
 use list::list_agents;
@@ -104,8 +106,8 @@ use run_timeout::run_timeout;
 pub(in crate::cli) use show::focus_resolved;
 use show::{focus_agent, show_agent};
 pub(in crate::cli) use stop::StopTracker;
-use stop::stop_agent;
 pub(in crate::cli) use stop::stop_resolved;
+use stop::{WhenIdle, parse_when_idle, stop_agent};
 use supervised::OutputFormat;
 use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};
@@ -520,6 +522,17 @@ enum AgentsSubcmd {
         /// Stop every agent the address matches.
         #[arg(long)]
         all: bool,
+        /// Stop the agent once it has rested this long with nothing owed
+        /// (`3m` when bare); `off` withdraws the request.
+        #[arg(
+            long,
+            value_name = "DURATION|off",
+            num_args = 0..=1,
+            default_missing_value = "3m",
+            value_parser = parse_when_idle,
+            conflicts_with = "all"
+        )]
+        when_idle: Option<WhenIdle>,
     },
     /// Stop an agent and relaunch it in place, resuming its session.
     Restart { reference: String },
@@ -574,6 +587,10 @@ enum AgentsSubcmd {
     /// before its provider prompt cache expires.
     #[command(hide = true)]
     IdleCompact(HelperRequestArgs<IdleCompactRequest>),
+    /// Hidden helper the producer spawns to stop an agent whose
+    /// `stop --when-idle` request is due.
+    #[command(hide = true)]
+    IdleStop(HelperRequestArgs<rimz::harness::idle_stop::IdleStopHelperRequest>),
     /// Hidden helper that refreshes a sleeping agent's prompt cache.
     #[command(hide = true)]
     CacheKeepalive(HelperRequestArgs<rimz::harness::cache_keepalive::CacheKeepaliveRequest>),
@@ -696,6 +713,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args.request),
         Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args.request),
+        Some(AgentsSubcmd::IdleStop(args)) => return run_idle_stop(args.request, globals),
         Some(AgentsSubcmd::CacheKeepalive(args)) => return cache_keepalive::run(args.request),
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args.request),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args.request),
@@ -755,7 +773,11 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }) => {
             return wait_agent(references, any, timeout, stream, from_start, json, globals);
         }
-        Some(AgentsSubcmd::Stop { reference, all }) => return stop_agent(reference, all, globals),
+        Some(AgentsSubcmd::Stop {
+            reference,
+            all,
+            when_idle,
+        }) => return stop_agent(reference, all, when_idle, globals),
         Some(AgentsSubcmd::Restart { reference }) => return restart_agent(reference, globals),
         Some(AgentsSubcmd::Compact {
             reference,

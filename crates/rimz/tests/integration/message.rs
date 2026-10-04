@@ -1522,6 +1522,177 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
 }
 
 #[test]
+fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run() {
+    use rimz::harness::idle_stop::IdleStopHelperRequest;
+    use rimz::store::run::{RunRecord, RunStatus};
+    for owed in [true, false] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        let pane_id = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
+        for (event, signal) in [
+            ("SessionStart", LifecycleSignal::Registered),
+            (
+                "UserPromptSubmit",
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+            (
+                "Stop",
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+        ] {
+            append_lifecycle(
+                &env,
+                "claude",
+                event,
+                "provider-session",
+                signal,
+                |observation| {
+                    observation.pane_id = Some(pane_id.clone());
+                },
+            );
+        }
+        let store = env.store();
+        let kind = AgentKind::new_unchecked("claude");
+        let mut run = RunRecord::new(
+            env.workspace_id.clone(),
+            kind.clone(),
+            rimz::agents::PermissionMode::Auto,
+            "task".to_owned(),
+            env.project_root.clone(),
+        );
+        run.agent_id = Some("provider-session".into());
+        run.status = RunStatus::Completed;
+        rimz::harness::run::create(store.paths(), &run).expect("create run");
+        let session = env.resolve_workspace(&env.project_root).session_name;
+        let mut pane = agent_pane(&env, "claude");
+        pane.session_name = session.clone();
+        let fixture = env.write_pane_fixture(std::slice::from_ref(&pane));
+        let frame = rimz::sidebar::frame::assemble_frame(
+            vec![pane],
+            rimz::utils::time::unix_now_ms(),
+            session,
+        );
+        rimz::disk::atomic::write_temp_then_rename_cache(
+            &store.runtime_paths().pane_frame_path(),
+            &frame,
+        )
+        .unwrap();
+
+        let stop = |args: &[&str]| {
+            let output = traced_rimz(&env, "idle-stop-trace.log")
+                .env("RIMZ_TEST_PANE_LIST", &fixture)
+                .args(["agents", "stop"])
+                .args(args)
+                .output()
+                .expect("agents stop --when-idle");
+            (
+                output.status.success(),
+                String::from_utf8_lossy(&output.stdout).into_owned()
+                    + &String::from_utf8_lossy(&output.stderr),
+            )
+        };
+        assert_eq!(
+            stop(&["@claude", "--when-idle", "off"]),
+            (
+                true,
+                "@claude#project has no pending idle stop\n".to_owned()
+            )
+        );
+        assert_eq!(
+            stop(&["@claude", "--when-idle"]),
+            (
+                true,
+                "@claude#project stops once idle for 3m with nothing owed\n".to_owned()
+            )
+        );
+        assert_eq!(
+            stop(&["@claude", "--when-idle", "0s"]),
+            (
+                true,
+                "@claude#project stops once idle for 0s with nothing owed (replaces the pending 3m request)\n"
+                    .to_owned()
+            )
+        );
+        let (ok, refusal) = stop(&[run.run_id.as_str(), "--when-idle"]);
+        assert!(
+            !ok && refusal.contains("names a run") && refusal.contains("rimz agents stop"),
+            "{refusal}"
+        );
+        let pending = rimz::store::idle_stop::read(store.paths());
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].stop.after_secs, 0);
+
+        if owed {
+            let agent = store.snapshot_cached().unwrap().agents.remove(0);
+            let message = MessageRecord::new(
+                env.workspace_id.clone(),
+                &agent,
+                "rebase first".to_owned(),
+                DeliveryGate::Done,
+            );
+            store.queue_message(&message, "idle-stop-test").unwrap();
+        }
+        run_success(
+            traced_rimz(&env, "idle-stop-trace.log")
+                .env("RIMZ_TEST_PANE_LIST", &fixture)
+                .args(rimz::child_process::agent_helper_argv(
+                    "idle-stop",
+                    &IdleStopHelperRequest {
+                        workspace_id: env.workspace_id.clone(),
+                        kind: kind.clone(),
+                        agent_id: "provider-session".into(),
+                        pane_id: pane_id.clone(),
+                        label: "@claude".into(),
+                    },
+                )),
+            "idle stop",
+        );
+        assert_eq!(
+            rimz::harness::run::load(store.paths(), &run.run_id).unwrap(),
+            run,
+            "a soft stop never rewrites a settled run"
+        );
+        let output = run_success(env.rimz().args(["stats", "--json"]), "assist stats");
+        let stats: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let assists = stats["assists"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["assist"] == "idle_stop")
+            .collect::<Vec<_>>();
+        if owed {
+            assert_eq!(rimz::store::idle_stop::read(store.paths()), pending);
+            assert!(
+                assists.is_empty(),
+                "a declined stop is no assist: {assists:?}"
+            );
+            assert_eq!(
+                stop(&["@claude", "--when-idle", "off"]),
+                (
+                    true,
+                    "withdrew the pending idle stop for @claude#project\n".to_owned()
+                )
+            );
+            assert!(rimz::store::idle_stop::read(store.paths()).is_empty());
+            continue;
+        }
+        assert!(
+            rimz::store::idle_stop::read(store.paths()).is_empty(),
+            "the stop retires the session's request"
+        );
+        assert_eq!(assists.len(), 1, "{assists:?}");
+        assert_eq!(assists[0]["stopped"], true, "{assists:?}");
+        assert_eq!(assists[0]["label"], "@claude");
+        assert_eq!(assists[0]["idle_after_secs"], 0);
+        assert_eq!(stats["assists"]["rollup"]["idle_stops"], 1);
+    }
+}
+
+#[test]
 fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
     use crate::common::wait::{register_calling_agent, wait_ok};
     use rimz::harness::cache_keepalive::CacheKeepaliveRequest;
