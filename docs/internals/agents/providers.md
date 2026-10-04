@@ -84,7 +84,7 @@ Where both exist, the live session's account wins because it is current. Windows
 | --- | --- | --- |
 | `Found(AgentAccount)` | a resolved login | `ACCOUNTS_TTL` (10 minutes) |
 | `LoggedOut` | the probe ran and found no login | `ACCOUNTS_TTL`, since login state rarely changes |
-| `Unavailable` | the probe could not complete: a binary that would not run, a non-zero exit, an unreadable file | `ACCOUNTS_RETRY_TTL` (10 seconds); the provider keeps its last-known facts and retries alone |
+| `Unavailable` | the probe could not complete: a binary that would not run, a non-zero exit that does not itself report a logout, an unreadable file | `ACCOUNTS_RETRY_TTL` (10 seconds); the provider keeps its last-known facts and retries alone |
 
 An adapter with no out-of-band login surface returns `LoggedOut`. The probe itself is a pure read; memoization lives in the producer's `accounts.json` publication. Each provider's mechanics (Claude's `claude auth status`, Codex's and Pi's auth-file read, Antigravity's verified loopback service) are in its adapter page.
 

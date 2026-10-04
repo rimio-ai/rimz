@@ -62,8 +62,8 @@ pub(crate) fn model_sub_cap_window(
 
 /// Probe Claude's account via `claude auth status` (JSON on stdout). Captures
 /// stdout only — never inherits stdio — so it stays quiet in a TUI. A spawn
-/// failure or non-zero exit is `Unavailable` (transient), not a logged-out
-/// account, so a missing-then-installed binary recovers on the short retry TTL.
+/// failure or timeout is `Unavailable` (transient), not a logged-out account,
+/// so a missing-then-installed binary recovers on the short retry TTL.
 pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     let mut command = Command::new("claude");
     command.args(["auth", "status"]).stdin(Stdio::null());
@@ -76,14 +76,28 @@ pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     ) else {
         return AccountProbe::Unavailable;
     };
-    if output.timed_out || !output.status.success() {
+    if output.timed_out {
         return AccountProbe::Unavailable;
     }
-    let mut probe = parse_claude_auth(&output.stdout);
+    let mut probe = exit_outcome(output.status.success(), &output.stdout);
     if let AccountProbe::Found(account) = &mut probe {
         account.credentials_updated_at_ms = super::oauth_usage::credentials_stamp(login_env);
     }
     probe
+}
+
+/// What one finished `claude auth status` run says. The CLI exits non-zero
+/// when logged out while still printing `"loggedIn": false`, so a failed exit
+/// is a logout only when its stdout says exactly that; any other failed exit,
+/// an error object included, is `Unavailable`.
+fn exit_outcome(succeeded: bool, stdout: &[u8]) -> AccountProbe {
+    if succeeded {
+        return parse_claude_auth(stdout);
+    }
+    match serde_json::from_slice::<ClaudeAuthStatus>(stdout) {
+        Ok(status) if status.logged_in == Some(false) => AccountProbe::LoggedOut,
+        _ => AccountProbe::Unavailable,
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -180,6 +194,38 @@ mod tests {
             parse_claude_auth(b"not json"),
             AccountProbe::Unavailable
         ));
+    }
+
+    #[test]
+    fn a_failed_exit_is_logged_out_only_on_a_confident_logout() {
+        let logged_out = br#"{ "loggedIn": false, "authMethod": "none" }"#;
+        assert!(matches!(
+            exit_outcome(false, logged_out),
+            AccountProbe::LoggedOut
+        ));
+        assert!(matches!(
+            exit_outcome(true, logged_out),
+            AccountProbe::LoggedOut
+        ));
+        for stdout in [
+            &b"not json"[..],
+            b"",
+            b"{}",
+            br#"{ "error": "auth service unreachable" }"#,
+            br#"{ "loggedIn": true, "authMethod": "claude.ai" }"#,
+        ] {
+            assert!(
+                matches!(exit_outcome(false, stdout), AccountProbe::Unavailable),
+                "{}",
+                String::from_utf8_lossy(stdout)
+            );
+        }
+        let json = br#"{ "loggedIn": true, "authMethod": "claude.ai" }"#;
+        found(exit_outcome(true, json), "a zero exit parses as before");
+        assert!(
+            matches!(exit_outcome(true, b"{}"), AccountProbe::LoggedOut),
+            "a zero exit parses as before"
+        );
     }
 
     #[test]
