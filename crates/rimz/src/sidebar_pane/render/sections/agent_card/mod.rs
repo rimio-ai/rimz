@@ -222,6 +222,7 @@ pub(super) fn row_lines(
                             ctx,
                             &agent.pending_waits,
                             &agent.background_shells,
+                            agent.idle_stop.as_ref(),
                         )
                         .into_iter()
                         .map(CardLine::from),
@@ -266,8 +267,9 @@ pub(super) fn row_lines(
 /// The standing delegation line carries lifetime children, their known cost,
 /// and pending waits with background shells. Expansion only appends their entries.
 fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
-    let wait_count =
-        waits::visible_waits(&agent.pending_waits).count() + agent.background_shells.len();
+    let wait_count = waits::visible_waits(&agent.pending_waits).count()
+        + agent.background_shells.len()
+        + usize::from(agent.idle_stop.is_some());
     if agent.sub_agent_count == 0 && wait_count == 0 {
         return None;
     }

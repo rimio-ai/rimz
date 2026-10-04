@@ -109,6 +109,40 @@ fn shell_lead(theme: &Theme, text: &str) -> String {
 }
 
 #[test]
+fn a_pending_idle_stop_is_one_wait_entry() {
+    let mut resting = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("finished work"),
+    );
+    resting.idle_stop = Some(crate::agents::IdleStop {
+        after_secs: 180,
+        requested_at: fixed_now(),
+        requested_by: None,
+    });
+    let snapshot = snapshot_with(vec![resting]);
+    let theme = Theme::fixed(false);
+    let collapsed = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
+    assert!(
+        collapsed.iter().any(|line| line.contains("⧖ waits (1)")),
+        "{collapsed:?}"
+    );
+    assert!(!collapsed.iter().any(|line| line.contains("after 3m idle")));
+    let expanded = line_texts(&group_lines(&snapshot, &theme, 0));
+    assert_eq!(
+        expanded
+            .iter()
+            .filter(|line| line.contains("stop · after 3m idle"))
+            .count(),
+        1,
+        "{expanded:?}"
+    );
+}
+
+#[test]
 fn pending_waits_line_counts_armed_waits() {
     let mut parent = agent(
         "claude-1",

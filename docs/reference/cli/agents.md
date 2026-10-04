@@ -507,6 +507,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `me` | `true` on at most one entry: the caller. RimZ matches `TMUX_PANE` or `ZELLIJ_PANE_ID` to the pane binding first, then the `RIMZ_AGENT_KIND`, `RIMZ_AGENT_NAME`, `RIMZ_AGENT_PROFILE`, and `RIMZ_AGENT_ROLE` launch identity. Outside an agent pane every entry is `false`. |
 | `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. |
 | `pending_waits` | Armed one-shot deliveries, each with its name, trigger, and optional arm timestamp. Trigger kinds include `check` with `command` and `file` with `path` and `grep`, alongside timers, PIDs, commands, and signals. Timers come first by due time, then watches and signals; names break ties. |
+| `idle_stop` | The pending [`stop --when-idle`](#stop) request: `after_secs`, `requested_at`, `requested_by` (the asking agent's handle, omitted from a user shell), and `due_at` while the agent is resting and its clock runs. Omitted when none is pending. |
 | `launch_warnings` | Warnings the launch wrapper printed for the current launch, in print order; empty after a clean launch. |
 | `background_shells` | Background shells the session is running, each with its `id`, optional `command` and `description`, and `started_at`, when RimZ first saw it. Only Claude reports them; other agents leave the list empty. |
 | `model` | `id`, `effort`, and the rendered `label`. |
@@ -723,7 +724,7 @@ The agent stops only when all of this holds at one check:
 - for a team seat, the team's board reads `Done`. A seat whose checkout has no board is held;
 - it has rested for the whole duration, measured from the later of its last turn end and the request. A new turn before then restarts the clock.
 
-Timing is best effort. The check runs on the room's refresh, so the stop comes after the duration, never at a wall-clock instant, and it needs a sidebar or `rimz` command keeping the room refreshed. While pending, the request shows in `rimz agents show` and on the agent's card. It ends with the session: a plain `stop`, a restart into a new session, or the agent exiting removes it, and a stop that fails leaves it armed for the next check. Each attempt is recorded as an `idle_stop` assist in [`rimz stats`](./stats.md#the-assist-timeline).
+Timing is best effort. The check runs on the room's refresh, which a running sidebar drives, so the stop comes after the duration, never at a wall-clock instant. While pending, the request shows as `idle_stop` in `rimz agents show`, in the `show` and `list` JSON, and as a `stop` entry under the card's `⧖ waits`. It ends with the session: a plain `stop`, a restart into a new session, or the agent exiting removes it, and a stop that fails leaves it armed for the next check. Each attempt is recorded as an `idle_stop` assist in [`rimz stats`](./stats.md#the-assist-timeline).
 
 A soft-stopped agent comes back like any stopped one: `rimz agents resume` reopens its place and resumes the provider session.
 

@@ -1609,6 +1609,14 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                 "@claude#project stops once idle for 3m with nothing owed\n".to_owned()
             )
         );
+        let shown = run_success(
+            env.rimz()
+                .env("RIMZ_TEST_PANE_LIST", &fixture)
+                .args(["agents", "show", "@claude", "--json"]),
+            "agents show",
+        );
+        let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+        assert_eq!(shown["agent"]["idle_stop"]["after_secs"], 180, "{shown}");
         assert_eq!(
             stop(&["@claude", "--when-idle", "0s"]),
             (

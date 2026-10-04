@@ -1774,7 +1774,15 @@ mod render {
         let mut active =
             agent_with_status("active", AgentStatus::Running, TurnPhase::Acting, 1_000);
         active.description = Some("ship\nwide\tfix".to_owned());
-        let idle = agent_with_status("idle", AgentStatus::Idle, TurnPhase::Idle, 1_000);
+        let mut idle = agent_with_status("idle", AgentStatus::Idle, TurnPhase::Idle, 1_000);
+        let stop = rimz::agents::IdleStop {
+            after_secs: 1_200,
+            requested_at: Timestamp::from_second(900).unwrap(),
+            requested_by: Some("@lead".to_owned()),
+        };
+        active.idle_stop = Some(stop.clone());
+        idle.turn_ended_at = Some(Timestamp::from_second(1_000).unwrap());
+        idle.idle_stop = Some(stop);
         let report = |agent: &AgentState| {
             let peers = [agent];
             super::report::build_entry(
@@ -1804,6 +1812,17 @@ mod render {
                 && active_text.contains("description:   ship wide fix"),
             "{active_text}"
         );
+        assert!(
+            active_text
+                .lines()
+                .any(|line| line.contains("idle_stop:") && line.ends_with("after 20m idle (@lead)")),
+            "a busy agent's clock is not running: {active_text}"
+        );
+        assert!(
+            serde_json::to_value(&active).unwrap()["idle_stop"]
+                .get("due_at")
+                .is_none()
+        );
 
         let mut idle_out = anstream::StripStream::new(Vec::new());
         super::show::render_activity_section(&mut idle_out, &idle, None, false, now)
@@ -1811,6 +1830,18 @@ mod render {
         let idle_text = String::from_utf8(idle_out.into_inner()).expect("utf8");
         assert!(idle_text.contains("status:"), "{idle_text}");
         assert!(!idle_text.contains("phase:"), "{idle_text}");
+        assert!(
+            idle_text.lines().any(|line| line.contains("idle_stop:")
+                && line.ends_with("after 20m idle, in 4m (@lead)")),
+            "{idle_text}"
+        );
+        assert_eq!(
+            serde_json::to_value(&idle).unwrap()["idle_stop"],
+            serde_json::json!({
+                "after_secs": 1_200, "requested_at": "1970-01-01T00:15:00Z",
+                "requested_by": "@lead", "due_at": "1970-01-01T00:36:40Z"
+            })
+        );
 
         let mut native_wait = agent_with_status(
             "droid-wait",

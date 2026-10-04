@@ -41,6 +41,8 @@ pub(super) struct AgentReportEntry {
     pub me: bool,
     pub status: AgentStatus,
     pub pending_waits: Vec<rimz::agents::state::PendingWait>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_stop: Option<IdleStopReport>,
     pub background_shells: Vec<rimz::agents::BackgroundShell>,
     pub phase: TurnPhase,
     pub turn_error: Option<TurnErrorReport>,
@@ -55,6 +57,15 @@ pub(super) struct AgentReportEntry {
     pub placement: PlacementReport,
     pub budget: BudgetReport,
     pub sub_agents: Vec<SubAgentReport>,
+}
+
+/// The pending soft stop, with when it falls due while the agent keeps resting.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct IdleStopReport {
+    #[serde(flatten)]
+    pub stop: rimz::agents::IdleStop,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -325,6 +336,10 @@ pub(super) fn build_entry(
         me: me == Some(&agent.agent_id),
         status,
         pending_waits: agent.pending_waits.clone(),
+        idle_stop: agent.idle_stop.clone().map(|stop| IdleStopReport {
+            due_at: rimz::harness::idle_stop::due_at(agent, &stop),
+            stop,
+        }),
         background_shells: agent.background_shells.clone(),
         phase,
         turn_error,
