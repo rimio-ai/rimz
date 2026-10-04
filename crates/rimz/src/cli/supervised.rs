@@ -142,7 +142,7 @@ fn preflight_program(
     Ok(())
 }
 
-/// Why a supervised stop did not end with the run terminal and its pane gone.
+/// Why a supervised stop did not end with the run terminal and no nameable pane left.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum StopRunErr {
     /// The cancel failed; nothing was closed.
@@ -155,7 +155,9 @@ pub(crate) enum StopRunErr {
 
 /// Cancel a live supervised run, then reclaim its pane after the existing
 /// backend grace. Terminal `--keep` records remain terminal and only lose the
-/// pane. `Ok` means the run is terminal and its pane is gone or never existed.
+/// pane. `Ok` means the run is terminal and no pane rimz can name for it
+/// remains: the pane is gone, its session is gone, or none was ever recorded or
+/// registered, so a pane nothing names can outlive an `Ok`.
 pub(crate) fn stop_supervised_run(
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,

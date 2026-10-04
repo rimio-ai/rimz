@@ -606,13 +606,20 @@ fn stop_backstop_uses_late_recorded_pane_id() {
     assert_eq!(resolved.session_name, "rimz-test");
 }
 
-/// The backstop's verdict is a listing or a close: `listed` answers each
-/// listing in turn (the last answer repeats), `None` standing for a listing
-/// that could not be read.
+/// The backstop's verdict is a listing or a close: each scripted listing
+/// answers in turn (the last answer repeats).
 #[test]
 fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
     use super::pane::settle_stopped_run_pane;
-    let settle = |listings: &[Option<bool>], close_ok: bool, recorded: bool| {
+    #[derive(Clone, Copy)]
+    enum Listing {
+        Present,
+        Absent,
+        Unreadable,
+        SessionGone,
+    }
+    use Listing::{Absent, Present, SessionGone, Unreadable};
+    let settle = |listings: &[Listing], close_ok: bool, recorded: bool| {
         let fixture = RunFixture::new(RunStatus::Canceled);
         if recorded {
             rimz::harness::run::record_pane(
@@ -630,17 +637,28 @@ fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
             "rimz-test",
             &fixture.record,
             Duration::ZERO,
-            |_| {
+            |pane| {
                 last = listings.next().or(last);
-                last.expect("a scripted listing")
+                match last.expect("a scripted listing") {
+                    Present => Ok(true),
+                    Absent => Ok(false),
+                    Unreadable => Err(rimz::mux::MuxErr::Output {
+                        program: "tmux".to_owned(),
+                        reason: "unreadable".to_owned(),
+                    }),
+                    SessionGone => Err(rimz::mux::MuxErr::SessionNotFound {
+                        session: pane.session_name.clone(),
+                    }),
+                }
             },
             |_| {
                 closes += 1;
                 if close_ok {
                     Ok(())
                 } else {
-                    Err(rimz::mux::MuxErr::SessionNotFound {
-                        session: "rimz-test".to_owned(),
+                    Err(rimz::mux::MuxErr::Output {
+                        program: "tmux".to_owned(),
+                        reason: "close refused".to_owned(),
                     })
                 }
             },
@@ -648,19 +666,29 @@ fn stop_backstop_reports_a_pane_it_could_not_confirm_closed() {
         (verdict.map_err(|open| open.to_string()), closes)
     };
     let open = Err(
-        "pane tmux:%8 is still open: session `rimz-test` is not active; rerun the stop to close it"
+        "pane tmux:%8 is still open: could not parse mux output from `tmux`: close refused; rerun the stop to close it"
             .to_owned(),
     );
 
-    assert_eq!(settle(&[Some(false)], false, true), (Ok(()), 0));
-    assert_eq!(settle(&[Some(true)], false, true), (open.clone(), 1));
-    assert_eq!(settle(&[Some(true), Some(false)], false, true), (Ok(()), 1));
-    assert_eq!(settle(&[None], true, true), (Ok(()), 1));
-    assert_eq!(settle(&[None], false, true), (open, 1));
+    assert_eq!(settle(&[Absent], false, true), (Ok(()), 0));
+    assert_eq!(settle(&[Present], false, true), (open.clone(), 1));
+    assert_eq!(settle(&[Present, Absent], false, true), (Ok(()), 1));
+    assert_eq!(settle(&[Unreadable], true, true), (Ok(()), 1));
+    assert_eq!(settle(&[Unreadable], false, true), (open, 1));
+    assert_eq!(
+        settle(&[SessionGone], false, true),
+        (Ok(()), 0),
+        "a session that is gone holds no pane"
+    );
+    assert_eq!(
+        settle(&[Present, SessionGone], false, true),
+        (Ok(()), 1),
+        "a session gone by the re-list took the pane with it"
+    );
     assert_eq!(
         settle(&[], false, false),
         (Ok(()), 0),
-        "a run with no pane has nothing to close"
+        "a run with no pane rimz can name has nothing to close"
     );
 
     let unresolved = super::pane::PaneOpen {

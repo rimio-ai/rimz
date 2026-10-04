@@ -568,48 +568,50 @@ pub(super) fn close_stopped_run_pane_after_grace(
         session_name,
         record,
         grace,
-        |pane| match backend.list_panes(PaneListOptions {
-            session_name: Some(pane.session_name.clone()),
-            command_timeout: Some(STOP_BACKSTOP_POLL),
-            // A cached topology may predate the pane: only mux truth proves it closed.
-            consistency: PaneReadConsistency::RequireAuthoritative,
-            ..Default::default()
-        }) {
-            Ok(listing) => Some(
-                listing
-                    .panes
-                    .iter()
-                    .any(|candidate| candidate.pane_id == pane.pane_id),
-            ),
-            Err(err) => {
-                tracing::debug!(
-                    run_id = %record.run_id,
-                    error = %err,
-                    "run stop backstop: pane list unavailable",
-                );
-                None
-            }
+        |pane| {
+            backend
+                .list_panes(PaneListOptions {
+                    session_name: Some(pane.session_name.clone()),
+                    command_timeout: Some(STOP_BACKSTOP_POLL),
+                    // A cached topology may predate the pane: only mux truth proves it closed.
+                    consistency: PaneReadConsistency::RequireAuthoritative,
+                    ..Default::default()
+                })
+                .map(|listing| {
+                    listing
+                        .panes
+                        .iter()
+                        .any(|candidate| candidate.pane_id == pane.pane_id)
+                })
+                .inspect_err(|err| {
+                    tracing::debug!(
+                        run_id = %record.run_id,
+                        error = %err,
+                        "run stop backstop: pane list unavailable",
+                    );
+                })
         },
         |latest| close_run_pane(backend, store, session_name, latest),
     )
 }
 
 /// The backstop's verdict. `listed` answers whether the pane is still in the
-/// multiplexer's listing, `None` when no listing could be read; a listing
-/// without the pane, or a close that went through, is the only proof it closed.
+/// multiplexer's listing. A listing without the pane, a session that is gone,
+/// or a close that went through proves it closed; any other listing error
+/// proves nothing. A run whose pane rimz cannot name has nothing to close.
 pub(super) fn settle_stopped_run_pane(
     store: &rimz::Store,
     session_name: &str,
     record: &RunRecord,
     grace: Duration,
-    mut listed: impl FnMut(&ResolvedRunPane) -> Option<bool>,
+    mut listed: impl FnMut(&ResolvedRunPane) -> rimz::mux::Result<bool>,
     close: impl FnOnce(&RunRecord) -> rimz::mux::Result<()>,
 ) -> Result<(), PaneOpen> {
     let deadline = Instant::now() + grace;
     loop {
         let resolved = latest_resolved_run_pane(store, session_name, record);
         if let Some((_, pane)) = &resolved
-            && listed(pane) == Some(false)
+            && pane_is_gone(&listed(pane))
         {
             return Ok(());
         }
@@ -620,7 +622,7 @@ pub(super) fn settle_stopped_run_pane(
             let Err(err) = close(&latest) else {
                 return Ok(());
             };
-            if listed(&pane) == Some(false) {
+            if pane_is_gone(&listed(&pane)) {
                 return Ok(());
             }
             return Err(PaneOpen {
@@ -630,6 +632,13 @@ pub(super) fn settle_stopped_run_pane(
         }
         std::thread::sleep(STOP_BACKSTOP_POLL);
     }
+}
+
+fn pane_is_gone(listed: &rimz::mux::Result<bool>) -> bool {
+    matches!(
+        listed,
+        Ok(false) | Err(rimz::mux::MuxErr::SessionNotFound { .. })
+    )
 }
 
 pub(super) fn latest_resolved_run_pane(
