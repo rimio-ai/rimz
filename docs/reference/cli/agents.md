@@ -715,18 +715,20 @@ Stopping a parent first stops its live children launched with `rimz subagents`, 
 | `--when-idle 10m`, `--when-idle=10m` | Stop after the given rest: a whole number with `s`, `m`, `h`, or `d`. `0s` stops at the first check that finds nothing owed. |
 | `--when-idle off` | Withdraw the pending request; with none pending it says so and still exits `0`. |
 
-The reference comes before the flag: in `rimz agents stop --when-idle @me` the flag takes `@me` as its duration and the command fails with that fix. `--when-idle` conflicts with `--all` and needs one live agent. A reference that resolves only to a run refuses and names the plain `stop`, and a provider's own subagent refuses because it ends with its parent. A second request for the same agent replaces the first, and its clock starts over.
+The reference comes before the flag: in `rimz agents stop --when-idle @me` the flag takes `@me` as its duration and the command fails with that fix. `--when-idle` conflicts with `--all` and needs one live agent; an ended one refuses with `rimz agents resume` as the fix. A reference that resolves only to a run refuses and names the plain `stop`, and a provider's own subagent refuses because it ends with its parent. A second request for the same agent replaces the first, and its clock starts over.
 
 The agent stops only when all of this holds at one check:
 
 - its turn has ended cleanly, and it is not waiting on your input, parked on a budget or provider limit, compacting, or running background work;
 - nothing is owed to it: no armed wait, no subagent or launched team still to report, no message queued or scheduled for it, and no open supervised run or peer turn, so a soft stop never cancels a run;
+- every live `rimz subagents` child the stop would close with it, at any depth, passes those same two checks. A child needs no rest of its own, but a message queued for a child you kept holds its parent until the message lands. A provider's own subagent is not checked: its row can read as working after it finished;
+- stopping it and those children would not cancel a run that is still open;
 - for a team seat, the team's board reads `Done`. A seat whose checkout has no board is held;
-- it has rested for the whole duration, never a fraction of a second less, measured from the later of its last turn end and the request. A new turn before then restarts the clock.
+- it has rested for the whole duration, never a fraction of a second less, measured from the latest of the request, its last turn end or interruption, and the session's last recorded event. A new turn before then restarts the clock, and so does a compaction that failed.
 
-Timing is best effort. The check runs on the room's refresh, which a running sidebar drives, so the stop comes after the duration, never at a wall-clock instant. While pending, the request shows as `idle_stop` in `rimz agents show`, in the `show` and `list` JSON, and as a `stop` entry under the card's `⧖ waits`. It ends with the session: a plain `stop`, a restart into a new session, or the agent exiting removes it, [`rimz reset`](./maintenance.md#reset-a-wedged-room) drops every pending request so a resumed agent never inherits one, and a stop that fails leaves it armed for the next check. Each attempt is recorded as an `idle_stop` assist in [`rimz stats`](./stats.md#the-assist-timeline).
+Timing is best effort. The check runs on the room's refresh, which a running sidebar drives, so the stop comes after the duration, never at a wall-clock instant. While pending, the request shows as `idle_stop` in `rimz agents show`, in the `show` and `list` JSON, and as a `stop` entry under the card's `⧖ waits`. It ends with the session: a plain `stop`, any `restart` (one that resumes the same session included), or the agent exiting removes it, [`rimz reset`](./maintenance.md#reset-a-wedged-room) drops every pending request so a resumed agent never inherits one, and a stop that fails leaves it armed for the next check. Each attempt is recorded as an `idle_stop` assist in [`rimz stats`](./stats.md#the-assist-timeline).
 
-A soft-stopped agent comes back like any stopped one: `rimz agents resume` reopens its place and resumes the provider session.
+A soft-stopped agent comes back like any stopped one: `rimz agents resume` reopens its place and resumes the provider session. Nothing else revives it: a message or a team stage flip addressed to a stopped solo agent or team seat does not reopen it. A stopped `rimz subagents` child is the exception, since [a message from its parent](./subagents.md#follow-up-messages) resumes its session where the provider supports it.
 
 #### `restart`
 
