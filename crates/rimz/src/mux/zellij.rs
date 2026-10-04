@@ -35,6 +35,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::command::RefusalRetry;
 use super::{CommandSpec, MuxBackend, MuxErr, Result};
 use crate::config::ZellijConfig;
 use crate::ids::PaneId;
@@ -94,6 +95,12 @@ const PRESENCE_RETIRE_PROOF_TIMEOUT: Duration = Duration::from_secs(5);
 /// `list-tabs` can hit an action-client startup race during busy session ticks.
 const LIST_TABS_ATTEMPTS: u32 = 5;
 const LIST_TABS_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+/// Reruns of a command Zellij's client refused before dispatch while the
+/// session's socket is still on disk (`socket::refused_live_session`). The
+/// busy window that causes the refusal passes in tens of milliseconds.
+const PREDISPATCH_REFUSAL_RERUNS: u32 = 5;
+const PREDISPATCH_REFUSAL_DELAY: Duration = Duration::from_millis(100);
 
 /// Zellij has no per-pane env flag or layout property. An empty map leaves the command unchanged.
 fn env_prefixed(env: &BTreeMap<String, String>, command: Vec<String>) -> Vec<String> {
@@ -450,7 +457,7 @@ impl ZellijBackend {
     }
 
     /// Base `CommandSpec` for every Zellij invocation — the single chokepoint,
-    /// with the user's `TMPDIR` restored.
+    /// with the user's `TMPDIR` restored and the pre-dispatch refusal rerun.
     pub(super) fn cmd(&self) -> CommandSpec {
         #[cfg(test)]
         let program = self
@@ -461,14 +468,20 @@ impl ZellijBackend {
             .unwrap_or_else(|| "zellij".to_owned());
         #[cfg(not(test))]
         let program = env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
-        let mut spec = CommandSpec::new(program).restore_user_tmpdir(
-            env::var(crate::child_process::USER_TMPDIR_ENV)
-                .ok()
-                .as_deref(),
-            env::var(crate::child_process::TEMP_ROOT_KEYS_ENV)
-                .ok()
-                .as_deref(),
-        );
+        let mut spec = CommandSpec::new(program)
+            .restore_user_tmpdir(
+                env::var(crate::child_process::USER_TMPDIR_ENV)
+                    .ok()
+                    .as_deref(),
+                env::var(crate::child_process::TEMP_ROOT_KEYS_ENV)
+                    .ok()
+                    .as_deref(),
+            )
+            .retry_refusal(RefusalRetry {
+                is_refusal: socket::refused_live_session,
+                reruns: PREDISPATCH_REFUSAL_RERUNS,
+                delay: PREDISPATCH_REFUSAL_DELAY,
+            });
         if let Some(dir) = &self.runtime_dir {
             let dir = dir.to_string_lossy().into_owned();
             spec = spec

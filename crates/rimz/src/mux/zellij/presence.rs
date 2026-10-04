@@ -306,18 +306,6 @@ impl ZellijBackend {
         self.ensure_presence_plugin_for(opts)?;
         match self.pipe_to_presence_plugin(opts, PRESENCE_TOPOLOGY_PIPE, "dump") {
             Ok(()) | Err(MuxErr::Timeout { .. }) => {}
-            // Zellij's CLI probes the server socket before every action and
-            // reports a live server too busy to answer as no session at all.
-            // The boot pipe above reached this session, so the launch stands
-            // and only the topology nudge is lost.
-            Err(MuxErr::Command { ref stderr, .. })
-                if super::parse::is_session_not_found(stderr.as_bytes()) =>
-            {
-                tracing::debug!(
-                    session = %opts.session_name,
-                    "presence topology dump found no session after a delivered launch",
-                );
-            }
             Err(err) => return Err(err),
         }
 

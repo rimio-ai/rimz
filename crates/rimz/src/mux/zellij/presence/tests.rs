@@ -3,9 +3,7 @@ use super::*;
 use super::super::pane_topology::TopologyWriter;
 use super::super::tests::support::presence_opts;
 #[cfg(unix)]
-use super::super::tests::support::{
-    failing_roster_shim, logging_shim, pane_roster_shim, shim_log, zellij_shim,
-};
+use super::super::tests::support::{failing_roster_shim, logging_shim, pane_roster_shim, shim_log};
 
 /// A writer record carrying this host's build and config identity — what the
 /// presence retire path accepts as proof that a replacement plugin is live.
@@ -283,35 +281,6 @@ fn presence_upgrade_without_current_writer_boots_and_dumps() {
             .expect("upgrade presence plugin"),
         PresenceUpgrade::Upgraded,
     );
-
-    let log = shim_log(&temp);
-    assert!(log.contains("--name rimz_presence_boot -- load"), "{log}");
-    assert!(log.contains("--name rimz:dump_topology -- dump"), "{log}");
-}
-
-/// Zellij's CLI answers for a live server too busy to take its probe as it
-/// does for an absent one. The boot pipe has already delivered the launch, so
-/// that answer to the topology nudge is not a failed convergence.
-#[cfg(unix)]
-#[test]
-fn presence_convergence_survives_a_refused_topology_dump() {
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
-case " $* " in
-  *" --name rimz:dump_topology "*) printf 'There is no active session!\n' >&2; exit 1 ;;
-esac
-exit 0
-"#,
-    );
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
-    let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
-
-    backend
-        .converge_presence_plugin_for_with(&opts, Duration::ZERO, Duration::ZERO)
-        .expect("a refused topology dump leaves the convergence standing");
 
     let log = shim_log(&temp);
     assert!(log.contains("--name rimz_presence_boot -- load"), "{log}");

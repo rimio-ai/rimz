@@ -35,6 +35,18 @@ pub struct CommandSpec {
     pub env_remove: BTreeSet<String>,
     pub cwd: Option<PathBuf>,
     stdin: Option<Vec<u8>>,
+    refusal_retry: Option<RefusalRetry>,
+}
+
+/// A backend's rule for rerunning a command its far side refused before
+/// acting on it. The rule belongs to the backend that knows the refusal; the
+/// bounded run applies it inside the command's own deadline.
+#[derive(Clone, Copy)]
+pub(in crate::mux) struct RefusalRetry {
+    /// Whether this exit left nothing done and can clear on its own.
+    pub(in crate::mux) is_refusal: fn(&CommandSpec, &Output) -> bool,
+    pub(in crate::mux) reruns: u32,
+    pub(in crate::mux) delay: Duration,
 }
 
 impl std::fmt::Debug for CommandSpec {
@@ -59,7 +71,13 @@ impl CommandSpec {
             env_remove: BTreeSet::new(),
             cwd: None,
             stdin: None,
+            refusal_retry: None,
         }
+    }
+
+    pub(in crate::mux) fn retry_refusal(mut self, retry: RefusalRetry) -> Self {
+        self.refusal_retry = Some(retry);
+        self
     }
 
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
@@ -166,10 +184,23 @@ impl CommandSpec {
     /// `wait()` and posts the exit status over a channel, so the common (fast)
     /// path wakes the instant the child exits — no poll step, no added latency.
     /// On the deadline the child is SIGKILLed by pid, the waiter's `wait()`
-    /// reaps it, and a [`MuxErr::Timeout`] is returned.
+    /// reaps it, and a [`MuxErr::Timeout`] is returned. A [`RefusalRetry`] rule
+    /// reruns a refused command inside the same `timeout`.
     pub(crate) fn output_raw_with_timeout(&self, timeout: Duration) -> Result<Output> {
         let started = Instant::now();
-        let result = self.run_bounded_inner(timeout);
+        let mut reruns = 0;
+        let result = loop {
+            let result = self.run_bounded_inner(timeout.saturating_sub(started.elapsed()));
+            let Some(retry) = self.refusal_retry else {
+                break result;
+            };
+            let refused = matches!(&result, Ok(output) if (retry.is_refusal)(self, output));
+            if !refused || reruns == retry.reruns || started.elapsed() + retry.delay >= timeout {
+                break result;
+            }
+            reruns += 1;
+            std::thread::sleep(retry.delay);
+        };
         crate::lane::add_mux_wait_ms(duration_ms(started.elapsed()));
         result
     }
