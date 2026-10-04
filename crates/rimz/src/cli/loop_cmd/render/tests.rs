@@ -785,6 +785,18 @@ fn detail_indices_include_prior_failure_when_latest_detail_shadows_it() {
 }
 
 #[test]
+fn detail_indices_pick_a_newer_launch_over_an_older_failure() {
+    let mut error = record(10, LoopRunResult::Errored);
+    error.error = Some("launch failed".to_owned());
+    let mut launched = record(20, LoopRunResult::Launched);
+    launched.checkout = Some(PathBuf::from("/repo/lane"));
+    launched.target = Some("@fixer".to_owned());
+    let records = vec![error, launched];
+
+    assert_eq!(detail_indices(&records), (Some(1), Some(0)));
+}
+
+#[test]
 fn render_record_detail_titles_status_age_and_mode() {
     let mut detail = record(20, LoopRunResult::Errored);
     detail.mode = Some(LoopRunMode::Manual);

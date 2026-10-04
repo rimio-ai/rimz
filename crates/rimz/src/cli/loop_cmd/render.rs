@@ -1387,7 +1387,9 @@ fn truncate_note(text: &str, max: usize) -> String {
 }
 
 fn record_has_detail(record: &LoopRunRecord) -> bool {
-    record.check.is_some()
+    // A resident launch's detail is its checkout and leader; it sets none of the fields below.
+    record.result == LoopRunResult::Launched
+        || record.check.is_some()
         || record.error.is_some()
         || record.last_message.is_some()
         || record.signal.is_some()
