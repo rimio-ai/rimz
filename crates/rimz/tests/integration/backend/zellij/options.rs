@@ -60,8 +60,10 @@ fn check_frames(baseline: bool, frames: Option<bool>, reapply: bool) {
         .expect("birth work shell")
         .pane_id
         .clone();
-    let client = AttachedClient::attach(&room, 120, 40);
-    client.wait_until_focused(&work, "birth work pane");
+    let mut client = AttachedClient::attach(&room, 120, 40);
+    // A client attaching to a detached birth can land on the sidebar; where it
+    // lands is not this test's subject, so steer it to the work pane.
+    client.press_alt_until('l', &work, "birth work pane");
     // Zellij draws no frame around a pane that is the only frame-eligible one in
     // its tab, and the birth work pane's siblings are the borderless sidebar and
     // compact bar. `pane_frames` stays invisible until a second work pane opens,
