@@ -204,7 +204,7 @@ signals:
   - ci.failed
 ```
 
-When the coder registers, RimZ arms a standing subscription pinned to that session and scoped to its worktree. A failing run then sends that member a `Type: SIGNAL` message with the branch, the pull request when known, and the event payload. A busy coder takes it at its next turn boundary rather than as an interrupt.
+When the coder registers, RimZ arms a standing subscription pinned to that session and scoped to its worktree. A failing run then sends that member a `Type: SIGNAL` message naming the branch, the pull request when known, and the commit. A busy coder takes it at its next turn boundary rather than as an interrupt.
 
 The subscription lives with the session, not with the definition. Resume, restart, and re-adding a role arm it again; stopping or losing the session removes it, and a signal that fires in between is never replayed. `rimz teams show forge#feat-rate-limits` separates what the definition declares from what is armed right now and whether it has fired, and `rimz loop remove <name>` takes one down by the task name shown there.
 

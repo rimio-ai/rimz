@@ -40,10 +40,10 @@ pub(super) fn compose_wait(
     if let Evidence::Signal(signal) = &evidence
         && signal.watch.is_none()
     {
-        body.push('\n');
-        let mut payload = signal.payload.clone();
-        payload.insert("signal".to_owned(), Value::String(signal.name.to_string()));
-        body.push_str(&Value::Object(payload).to_string());
+        for line in signal_details(signal) {
+            body.push('\n');
+            body.push_str(&line);
+        }
     }
     if checkin {
         body.push_str(&format!("\n\nStop it: rimz wait cancel {name}"));
@@ -52,12 +52,12 @@ pub(super) fn compose_wait(
         }
     }
     if let Evidence::Condition(condition) = &evidence {
-        body.push('\n');
-        // String keys and optional string readings are always JSON-serializable.
-        body.push_str(
-            &serde_json::to_string(&condition.readings)
-                .expect("condition readings are JSON strings"),
-        );
+        for (key, reading) in &condition.readings {
+            let reading = reading
+                .as_deref()
+                .map_or_else(|| "unknown".to_owned(), one_line);
+            body.push_str(&format!("\n{}: {reading}", one_line(key)));
+        }
     }
     if !note.is_empty() {
         body.push_str("\n\n");
@@ -142,27 +142,132 @@ fn verdict_line(
 }
 
 fn signal_headline(signal: &Signal) -> String {
+    let payload = &signal.payload;
+    let text = |key: &str| payload.get(key).and_then(Value::as_str);
     let mut headline = signal.name.to_string();
     match signal.name.family() {
-        "ci" | "pr" => {
-            if let Some(branch) = signal.payload.get("branch").and_then(Value::as_str) {
+        family @ ("ci" | "pr") => {
+            if let Some(branch) = text("branch") {
                 headline.push_str(&format!(" on {branch}"));
             }
-            if let Some(number) = signal.payload.get("number").and_then(Value::as_u64) {
-                headline.push_str(&format!(" (PR #{number})"));
+            if let Some(number) = payload.get("number").and_then(Value::as_u64) {
+                headline.push_str(&format!(" #{number}"));
+            }
+            if family == "ci"
+                && let Some(head) = text("head")
+            {
+                headline.push_str(&format!(" @{}", short_sha(head)));
             }
         }
-        "agent" => append_identity(&mut headline, &signal.payload, "handle"),
+        "agent" => {
+            let key = if text("handle").is_some() {
+                "handle"
+            } else {
+                "session"
+            };
+            append_identity(&mut headline, payload, key);
+        }
         "trunk" => {
-            if let Some(trunk) = signal.payload.get("trunk").and_then(Value::as_str) {
+            if let Some(trunk) = text("trunk") {
                 headline.push_str(&format!(" on {trunk}"));
             }
         }
-        "worktree" => append_identity(&mut headline, &signal.payload, "branch"),
-        "team" => append_identity(&mut headline, &signal.payload, "instance"),
+        "worktree" => append_identity(&mut headline, payload, "name"),
+        "team" => append_identity(&mut headline, payload, "instance"),
+        _ => {}
+    }
+    match signal.name.as_str() {
+        "pr.behind" => {
+            if let Some(behind) = payload.get("behind_by").and_then(Value::as_u64) {
+                headline.push_str(&format!(" · {behind} behind"));
+                append_identity(&mut headline, payload, "base");
+            }
+        }
+        "pr.conflicted" => {
+            if let Some(base) = text("base") {
+                headline.push_str(&format!(" · with {base}"));
+            }
+        }
+        "pr.dequeued" => {
+            if let Some(reason) = text("reason") {
+                headline.push_str(&format!(" · {reason}"));
+            }
+        }
+        "trunk.moved" => {
+            if let (Some(from), Some(to)) = (text("from"), text("to")) {
+                headline.push_str(&format!(" {}..{}", short_sha(from), short_sha(to)));
+            }
+        }
+        "worktree.created" => {
+            if let Some(base) = text("base") {
+                headline.push_str(&format!(" from {base}"));
+            }
+        }
+        "worktree.removed" => {
+            if payload.get("branch_deleted").and_then(Value::as_bool) == Some(true) {
+                headline.push_str(" · branch deleted");
+            }
+        }
+        "team.failed" => {
+            if let Some(member) = text("member") {
+                let handle = member.split('#').next().unwrap_or(member);
+                headline.push_str(&format!(" · {handle}"));
+            }
+        }
+        "team.stage" => {
+            if let Some(to) = text("to") {
+                match text("from") {
+                    Some(from) => headline.push_str(&format!(" · {from} -> {to}")),
+                    None => headline.push_str(&format!(" · {to}")),
+                }
+            }
+        }
         _ => {}
     }
     headline
+}
+
+/// The lines under the verdict: nothing for a built-in family, whose agent
+/// can ask the CLI, and every top-level field for a custom one.
+fn signal_details(signal: &Signal) -> Vec<String> {
+    if !signal.name.is_reserved() {
+        return signal
+            .payload
+            .iter()
+            .map(|(key, value)| format!("{}: {}", one_line(key), field_value(value)))
+            .collect();
+    }
+    if signal.name.as_str() != "pr.dequeued" {
+        return Vec::new();
+    }
+    // Nothing else names the queue commit, and `#N` cannot find the failed run.
+    signal
+        .payload
+        .get("queue_checks_url")
+        .and_then(Value::as_str)
+        .map(|url| format!("queue checks: {url}"))
+        .into_iter()
+        .collect()
+}
+
+fn field_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => one_line(text),
+        other => other.to_string(),
+    }
+}
+
+/// A key or string value bare, or JSON-quoted when it holds a line break, so
+/// one field stays one line.
+fn one_line(text: &str) -> String {
+    if text.contains(['\n', '\r']) {
+        return Value::from(text).to_string();
+    }
+    text.to_owned()
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }
 
 fn append_identity(headline: &mut String, payload: &Map<String, Value>, key: &str) {
