@@ -228,18 +228,24 @@ fn take_over_checkout(
     cwd: &Path,
 ) -> Result<ControlFlow<rimz::harness::schedule::runner::TaskFireEffect, Vec<String>>> {
     let snapshot = ctx.alive_snapshot()?;
+    // A provider hook records the physical cwd, the launch the path as given.
+    let path_forms = |path: PathBuf| {
+        let physical = std::fs::canonicalize(&path).ok();
+        std::iter::once(path).chain(physical)
+    };
     let owned: Vec<PathBuf> = match rimz::worktree::discover_owned(root) {
         Ok(owned) => owned
             .into_iter()
-            .map(|worktree| worktree.marker.worktree_path)
+            .flat_map(|worktree| path_forms(worktree.marker.worktree_path))
             .collect(),
         Err(rimz::worktree::WorktreeErr::NotRepo) => Vec::new(),
         Err(err) => return Err(err.into()),
     };
+    let checkouts: Vec<PathBuf> = path_forms(cwd.to_path_buf()).collect();
     let peers = rimz::address::addressable_agents(&snapshot);
     let handle =
         |agent: &rimz::agents::AgentState| rimz::address::agent_handle(agent, &peers, true);
-    let occupants = match takeover::plan(&snapshot.agents, cwd, &owned, Timestamp::now()) {
+    let occupants = match takeover::plan(&snapshot.agents, &checkouts, &owned, Timestamp::now()) {
         Takeover::Stop(occupants) => occupants,
         Takeover::Blocked(blockers) => {
             return Ok(ControlFlow::Break(

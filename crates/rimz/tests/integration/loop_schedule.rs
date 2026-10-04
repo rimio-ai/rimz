@@ -793,6 +793,7 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
 enum Takeover {
     IdleOccupants,
     WorkingOccupant,
+    SymlinkedCheckout,
     FailedStop,
     EmptyCheckout,
     TeamLayout,
@@ -806,6 +807,12 @@ fn resident_takeover_stops_idle_occupants_of_every_origin_and_no_other_checkout(
 #[test]
 fn resident_takeover_waits_for_a_working_occupant_then_stops_it_and_launches() {
     resident_takeover_case(Takeover::WorkingOccupant);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_takeover_of_a_symlinked_checkout_finds_the_occupant_at_its_physical_path() {
+    resident_takeover_case(Takeover::SymlinkedCheckout);
 }
 
 #[test]
@@ -828,9 +835,21 @@ fn resident_takeover_case(case: Takeover) {
     let Some(cwd) = team_signal_fixture(&env) else {
         return;
     };
+    // The launch checkout as the task names it, and as a provider hook reports
+    // the occupant's cwd: the same path unless a symlink leads to the checkout.
+    let symlinked = case == Takeover::SymlinkedCheckout;
+    let (launch_cwd, cwd) = if symlinked {
+        let launch_cwd = symlinked_owned_worktree(&env);
+        let physical = canonical(&launch_cwd);
+        assert_ne!(launch_cwd, physical);
+        (launch_cwd, physical)
+    } else {
+        (cwd.clone(), cwd)
+    };
+    let working = symlinked || case == Takeover::WorkingOccupant;
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
-    trust_codex_project(&env, &cwd);
+    trust_codex_project(&env, &launch_cwd);
     let sibling = env.home_root.join("sibling");
     assert!(git_ok(
         &env.project_root,
@@ -920,7 +939,7 @@ fn resident_takeover_case(case: Takeover) {
         seed_agent_launch(&env, checkout, session, launch);
         hook(session, checkout, pane, "SessionStart");
     }
-    if case == Takeover::WorkingOccupant {
+    if working {
         hook("old-coder", &cwd, Some("51"), "UserPromptSubmit");
     }
     let team_members = if case == Takeover::EmptyCheckout {
@@ -958,14 +977,19 @@ fn resident_takeover_case(case: Takeover) {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nagent = {:?}\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nstay = true\ntakeover = true\n",
+            "[tasks.resident]\nagent = {:?}\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\n{}\nstay = true\ntakeover = true\n",
             if case == Takeover::TeamLayout {
                 "forge"
             } else {
                 "codex"
             },
             env.project_root,
-            cwd
+            launch_cwd,
+            if symlinked {
+                "each-worktree = true\nwhen = [\"pr=open\"]"
+            } else {
+                "every = \"1h\""
+            },
         ),
     );
     let strikes = BTreeMap::from([(machine_task_key("resident"), 2_u32)]);
@@ -976,15 +1000,26 @@ fn resident_takeover_case(case: Takeover) {
     )
     .unwrap();
     let fire = || {
-        command()
-            .args(["loop", "run", "resident"])
-            .output()
-            .unwrap()
+        let mut fire = command();
+        fire.args(["loop", "run", "resident"]);
+        if symlinked {
+            fire.arg("--cwd")
+                .arg(&launch_cwd)
+                .arg("--condition-json")
+                .arg(
+                    json!({
+                        "when": "pr=open", "hold": null, "held_ms": 0,
+                        "readings": {"pr": "open"}
+                    })
+                    .to_string(),
+                );
+        }
+        fire.output().unwrap()
     };
     let trace_text = || std::fs::read_to_string(&trace).unwrap_or_default();
     let ledger = || rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
     let assists = || rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
-    let checkout = rimz::utils::path::normalize_path_lexical(&cwd);
+    let checkout = rimz::utils::path::normalize_path_lexical(&launch_cwd);
 
     let output = fire();
     if case == Takeover::FailedStop {
@@ -996,7 +1031,7 @@ fn resident_takeover_case(case: Takeover) {
         assert!(assists().is_empty());
         return;
     }
-    if case == Takeover::WorkingOccupant {
+    if working {
         assert!(
             output.status.success(),
             "{}",
@@ -1037,11 +1072,7 @@ fn resident_takeover_case(case: Takeover) {
 
         hook("old-coder", &cwd, Some("51"), "Stop");
     }
-    let output = if case == Takeover::WorkingOccupant {
-        fire()
-    } else {
-        output
-    };
+    let output = if working { fire() } else { output };
     assert!(
         output.status.success(),
         "{}",
@@ -1143,6 +1174,23 @@ fn resident_takeover_case(case: Takeover) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(read_loop_instances(&env).0.is_empty());
+}
+
+/// An owned worktree whose marker path runs through a symlinked worktree
+/// directory, so its lexical and physical forms differ.
+#[cfg(unix)]
+fn symlinked_owned_worktree(env: &Env) -> std::path::PathBuf {
+    let actual = env.home_root.join("actual-worktrees");
+    let alias = env.home_root.join("linked-worktrees");
+    std::fs::create_dir(&actual).unwrap();
+    std::os::unix::fs::symlink(&actual, &alias).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!("[agents.worktree]\ndir = {:?}\n", alias.to_str().unwrap()),
+    )
+    .unwrap();
+    loop_ok(env, &["worktree", "new", "lane"]);
+    alias.join("lane")
 }
 
 fn publish_claude_5h(env: &Env, used: u8) {

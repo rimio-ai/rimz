@@ -27,7 +27,7 @@ impl OpenTurn {
         match self {
             Self::Working => "is working",
             Self::WaitingOnUser => "is waiting on you",
-            Self::Paused => "is paused on a provider limit",
+            Self::Paused => "is paused on a limit",
             Self::Compacting => "is compacting",
         }
     }
@@ -44,25 +44,30 @@ pub enum Takeover<'a> {
     Blocked(Vec<(&'a AgentState, OpenTurn)>),
 }
 
-/// Decide the takeover of `checkout`. An occupant is a live pane-backed
+/// Decide the takeover of one checkout. An occupant is a live pane-backed
 /// launch recorded at or under the checkout, read through the one row that
 /// currently is that launch; `owned` worktrees nested inside it keep their own
-/// agents. The snapshot must carry rest certificates.
+/// agents. `checkouts` and `owned` carry every path form the caller resolved
+/// (as launched, and physical where a symlink leads there), since a row may
+/// record either. The snapshot must carry rest certificates.
 pub fn plan<'a>(
     agents: &'a [AgentState],
-    checkout: &Path,
+    checkouts: &[PathBuf],
     owned: &[PathBuf],
     now: Timestamp,
 ) -> Takeover<'a> {
-    let checkout = normalize_path_lexical(checkout);
+    let checkouts: Vec<PathBuf> = checkouts
+        .iter()
+        .map(|path| normalize_path_lexical(path))
+        .collect();
     let nested: Vec<PathBuf> = owned
         .iter()
         .map(|path| normalize_path_lexical(path))
-        .filter(|path| *path != checkout && path.starts_with(&checkout))
+        .filter(|path| !checkouts.contains(path) && is_under_any(path, &checkouts))
         .collect();
     let mut occupants: Vec<&AgentState> = crate::address::launch_occupants(agents)
         .into_iter()
-        .filter(|agent| occupies(agent, &checkout, &nested))
+        .filter(|agent| occupies(agent, &checkouts, &nested))
         .collect();
     occupants.sort_by_key(|agent| agent.is_launched_child());
     let mut blockers = Vec::new();
@@ -85,7 +90,11 @@ pub(super) fn blocked_reason(blockers: &[(String, OpenTurn)]) -> String {
         .join(", ")
 }
 
-fn occupies(agent: &AgentState, checkout: &Path, nested: &[PathBuf]) -> bool {
+fn is_under_any(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| path.starts_with(root))
+}
+
+fn occupies(agent: &AgentState, checkouts: &[PathBuf], nested: &[PathBuf]) -> bool {
     if agent.ended_at.is_some() || agent.pane.is_none() || agent.is_provider_subagent() {
         return false;
     }
@@ -93,7 +102,7 @@ fn occupies(agent: &AgentState, checkout: &Path, nested: &[PathBuf]) -> bool {
         return false;
     };
     let path = normalize_path_lexical(Path::new(path));
-    path.starts_with(checkout) && !nested.iter().any(|worktree| path.starts_with(worktree))
+    is_under_any(&path, checkouts) && !is_under_any(&path, nested)
 }
 
 fn collect_open_turns<'a>(
@@ -171,12 +180,20 @@ mod tests {
     }
 
     fn decide(agents: &[AgentState]) -> Result<Vec<String>, Vec<(String, OpenTurn)>> {
-        match plan(
+        decide_in(
             agents,
-            Path::new("/repo/wt"),
-            &[PathBuf::from("/repo/wt/.worktrees/lane")],
-            now(),
-        ) {
+            &["/repo/wt"],
+            &["/repo/wt/.worktrees/lane", "/repo/wt"],
+        )
+    }
+
+    fn decide_in(
+        agents: &[AgentState],
+        checkouts: &[&str],
+        owned: &[&str],
+    ) -> Result<Vec<String>, Vec<(String, OpenTurn)>> {
+        let paths = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+        match plan(agents, &paths(checkouts), &paths(owned), now()) {
             Takeover::Stop(occupants) => Ok(ids(&occupants)),
             Takeover::Blocked(blockers) => Err(blockers
                 .into_iter()
@@ -318,6 +335,46 @@ mod tests {
     }
 
     #[test]
+    fn a_symlinked_checkout_counts_both_path_forms_and_keeps_nested_worktrees_out() {
+        let decide = |agents: &[AgentState]| {
+            decide_in(
+                agents,
+                &["/alias/wt", "/real/wt"],
+                &[
+                    "/alias/wt",
+                    "/real/wt",
+                    "/alias/wt/.worktrees/lane",
+                    "/real/wt/.worktrees/lane",
+                ],
+            )
+        };
+        let lexical = agent("lexical", AgentStatus::Idle, "/alias/wt");
+        let physical = agent("physical", AgentStatus::Idle, "/real/wt/docs");
+        let nested_lexical = agent(
+            "nested-lexical",
+            AgentStatus::Running,
+            "/alias/wt/.worktrees/lane",
+        );
+        let nested_physical = agent(
+            "nested-physical",
+            AgentStatus::Running,
+            "/real/wt/.worktrees/lane/src",
+        );
+        let settled = [lexical, physical, nested_lexical, nested_physical];
+        assert_eq!(
+            decide(&settled),
+            Ok(vec!["lexical".to_owned(), "physical".to_owned()])
+        );
+
+        let [lexical, mut physical, ..] = settled;
+        physical.status = AgentStatus::Running;
+        assert_eq!(
+            decide(&[lexical, physical]),
+            Err(vec![("physical".to_owned(), OpenTurn::Working)])
+        );
+    }
+
+    #[test]
     fn blocked_reason_names_each_blocker_in_the_users_words() {
         assert_eq!(
             blocked_reason(&[
@@ -326,7 +383,7 @@ mod tests {
                 ("@owl".to_owned(), OpenTurn::Paused),
                 ("@elk".to_owned(), OpenTurn::Compacting),
             ]),
-            "@coder is working, @fox is waiting on you, @owl is paused on a provider limit, @elk is compacting"
+            "@coder is working, @fox is waiting on you, @owl is paused on a limit, @elk is compacting"
         );
     }
 }
