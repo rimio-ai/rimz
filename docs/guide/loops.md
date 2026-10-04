@@ -410,7 +410,7 @@ The [configuration rules](./configuration.md#idle-compaction) define the provide
 
 ### Stop when idle
 
-An agent that has finished still holds its pane, its process, and a place in the roster. `rimz agents stop @coder --when-idle` hands the cleanup to the room: the agent stops once it has rested three minutes with nothing owed to it, and an agent can ask for its own exit with `@me` as its last act. A pending wait, an unreported subagent, a queued message, an open run, or a team board short of `Done` all hold the stop, and a new turn restarts the clock. Pass a duration to change the rest, or `off` to withdraw. The [stop reference](../reference/cli/agents.md#stop) has the exact rule; each stop shows in `rimz stats --assists`.
+An agent that has finished still holds its pane, its process, and a place in the roster. `rimz agents stop @coder --when-idle` hands the cleanup to the room: the agent stops once it has rested three minutes with nothing owed to it, and an agent can ask for its own exit with `@me` as its last act. A pending wait, an unreported subagent, a queued message, an open run, or a team board short of `Done` all hold the stop, as does a launched child that is still working or owed something, and a new turn restarts the clock. Pass a duration to change the rest, or `off` to withdraw. The [stop reference](../reference/cli/agents.md#stop) has the exact rule; each stop shows in `rimz stats --assists`.
 
 ### Smart compaction
 
