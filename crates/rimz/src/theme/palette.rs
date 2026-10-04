@@ -4,7 +4,9 @@
 //! and the Theme facade read these slots; this is the one place depth
 //! quantization and slot overrides are applied.
 
-use crate::config::{AnimationColor, ColorDepth, PaletteRole, ThemeColor, ThemeConfig, xterm_rgb};
+use crate::config::{
+    AnimationColor, BudgetBarConfig, ColorDepth, PaletteRole, ThemeColor, ThemeConfig, xterm_rgb,
+};
 
 use super::raw::RawPalette;
 use super::{Identity, Tone, oklab};
@@ -151,6 +153,33 @@ impl Palette {
         }
     }
 
+    /// The tone of a budget with `remaining_pct` left: a full green→red drain
+    /// across the heat ramp, anchored green at `100%`, with the
+    /// `[theme.display.budget_bar]` zones as the warm stops the remaining
+    /// figure falls through — `100 → 0.0` green, `yellow → ⅓` warn, `amber → ⅔`
+    /// caution, `red`/below `→ 1.0` alarm — so the tone warms continuously as
+    /// the budget empties. Each zone names the exclusive upper bound of
+    /// remaining budget where its tier is reached ([`BudgetBarConfig`]);
+    /// checked worst-first, so a misordered user config degrades to the worse
+    /// tier. The sidebar's mana bar and the `rimz providers` percentages both
+    /// read it.
+    pub fn budget_tone(&self, remaining_pct: u8, zones: &BudgetBarConfig) -> Tone {
+        let remaining = u64::from(remaining_pct.min(100));
+        let yellow = u64::from(zones.yellow);
+        let amber = u64::from(zones.amber);
+        let red = u64::from(zones.red);
+        let amount = if remaining < red {
+            1.0
+        } else if remaining < amber {
+            interpolate_heat(remaining, red, amber, 1.0, 2.0 / 3.0)
+        } else if remaining < yellow {
+            interpolate_heat(remaining, amber, yellow, 2.0 / 3.0, 1.0 / 3.0)
+        } else {
+            interpolate_heat(remaining, yellow, 100, 1.0 / 3.0, 0.0)
+        };
+        rgb_color(ramp_tone(&self.heat_ramp, amount), self.depth)
+    }
+
     pub fn rgb_tone(&self, rgb: (u8, u8, u8)) -> Tone {
         Tone::from_rgb(rgb, self.depth)
     }
@@ -237,6 +266,16 @@ fn rgb_color(rgb: (u8, u8, u8), depth: ColorDepth) -> Tone {
     Tone::from_rgb(rgb, depth)
 }
 
+/// Where `value` sits between `start` and `end`, mapped onto `[low, high]`
+/// and clamped; an empty span reads `high`.
+pub(crate) fn interpolate_heat(value: u64, start: u64, end: u64, low: f32, high: f32) -> f32 {
+    if end <= start {
+        return high;
+    }
+    let position = (value - start) as f32 / (end - start) as f32;
+    low + (high - low) * position.clamp(0.0, 1.0)
+}
+
 /// Piecewise OKLab interpolation across an N-stop ramp: `amount` ∈ `[0, 1]` maps
 /// across the `N - 1` segments, blending within the active one. Endpoints clamp,
 /// so `0.0` is the first stop and `1.0` the last. One blend regardless of stop
@@ -250,6 +289,55 @@ pub(crate) fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
             let scaled = amount.clamp(0.0, 1.0) * segments;
             let lower = (scaled.floor() as usize).min(ramp.len() - 2);
             oklab::blend(ramp[lower], ramp[lower + 1], scaled - lower as f32)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budget_tone_lands_each_zone_on_its_ramp_stop_and_degrades_worst_first() {
+        for depth in [ColorDepth::Truecolor, ColorDepth::Indexed] {
+            let palette = Palette::resolve(&ThemeConfig::default(), depth);
+            let stop = |amount| rgb_color(ramp_tone(&palette.heat_ramp, amount), depth);
+            let tuned = BudgetBarConfig {
+                yellow: 80,
+                amber: 40,
+                red: 20,
+                ..BudgetBarConfig::default()
+            };
+            for (zones, remaining, amount) in [
+                (BudgetBarConfig::default(), 100, 0.0),
+                (BudgetBarConfig::default(), 50, 1.0 / 3.0),
+                (BudgetBarConfig::default(), 25, 2.0 / 3.0),
+                (BudgetBarConfig::default(), 10, 1.0),
+                (BudgetBarConfig::default(), 9, 1.0),
+                (BudgetBarConfig::default(), 0, 1.0),
+                (tuned, 80, 1.0 / 3.0),
+                (tuned, 40, 2.0 / 3.0),
+                (tuned, 19, 1.0),
+            ] {
+                assert_eq!(
+                    palette.budget_tone(remaining, &zones),
+                    stop(amount),
+                    "{remaining}% left under {zones:?} at {depth:?}"
+                );
+            }
+            // Between two stops the tone is blended, not snapped to either.
+            assert_eq!(
+                palette.budget_tone(75, &BudgetBarConfig::default()),
+                stop(1.0 / 6.0)
+            );
+            let misordered = BudgetBarConfig {
+                yellow: 25,
+                amber: 10,
+                red: 50,
+                ..BudgetBarConfig::default()
+            };
+            assert_eq!(palette.budget_tone(30, &misordered), stop(1.0));
+            assert_ne!(palette.budget_tone(50, &misordered), stop(1.0));
         }
     }
 }

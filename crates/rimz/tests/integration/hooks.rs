@@ -3662,8 +3662,8 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
         serde_json::from_slice(&std::fs::read(credits_path).expect("credits cache"))
             .expect("credits cache json");
     assert_eq!(
-        credits["logins"]["codex@default"]["extra_credits"]["known"]["remaining_usd"], 18.5,
-        "the app-server credits balance lands in the shared credits cache"
+        credits["logins"]["codex@default"]["extra_credits"]["known"]["remaining_usd"], 0.74,
+        "the app-server credits balance lands in the shared credits cache as dollars"
     );
     assert_eq!(
         credits["logins"]["codex@default"]["plan"], "team",

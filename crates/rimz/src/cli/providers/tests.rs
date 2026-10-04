@@ -328,8 +328,60 @@ fn window(minutes: u32, used: u8, resets_in: Option<i64>, now: Timestamp) -> Rat
     }
 }
 
+fn overview(
+    reports: &[ProviderReport],
+    now: Timestamp,
+    deciding: &BTreeMap<String, Deciding>,
+    in_room: bool,
+) -> String {
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_overview(&mut out, reports, now, deciding, in_room).unwrap();
+    String::from_utf8(out.into_inner()).unwrap()
+}
+
+/// One kind's logged-in accounts, `default` first, each with its panel.
+fn group(kind: &str, rows: Vec<(&str, SidebarProviderPanel)>) -> Vec<ProviderReport> {
+    let kind = AgentKind::new_unchecked(kind);
+    let (logins, panels): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .map(|(name, panel)| {
+            let name: LoginName = name.parse().unwrap();
+            let login = if name.is_default() {
+                ProviderLogin::default_for(kind.clone())
+            } else {
+                let home = format!("/accounts/{name}").into();
+                ProviderLogin::named(kind.clone(), name, home).unwrap()
+            };
+            (login, panel)
+        })
+        .unzip();
+    let accounts = AccountsCache {
+        logins: logins
+            .iter()
+            .map(|login| (login.key(), record(1_000, true, Some(account("pro", true)))))
+            .collect(),
+    };
+    let panels = logins.iter().map(ProviderLogin::key).zip(panels).collect();
+    assemble_reports(
+        &logins,
+        &accounts,
+        panels,
+        &ProviderSpendingCache::default(),
+        None,
+        false,
+    )
+}
+
+/// A table line's cells: columns are separated by two or more spaces.
+fn cells(line: &str) -> Vec<&str> {
+    line.split("  ")
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .collect()
+}
+
 #[test]
-fn overview_compares_a_kind_with_named_accounts_in_one_table() {
+fn overview_renders_every_kind_as_one_table() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let claude = AgentKind::new_unchecked("claude");
     let named = |name: &str| {
@@ -407,22 +459,21 @@ fn overview_compares_a_kind_with_named_accounts_in_one_table() {
         &mut reports,
         &AccountStanding::machine_only(&machine_using("claude", "work")),
     );
-    let mut out = anstream::StripStream::new(Vec::new());
-    write_overview(
-        &mut out,
-        &reports,
-        now,
-        &TimeZone::UTC,
-        &BTreeMap::new(),
-        false,
-    )
-    .unwrap();
-    let text = String::from_utf8(out.into_inner()).unwrap();
+    let text = overview(&reports, now, &BTreeMap::new(), false);
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines[0], "Claude · v2.1.274", "{text}");
     assert_eq!(
-        lines.iter().filter(|line| line.contains("ACCOUNT")).count(),
-        1,
+        cells(lines[1]),
+        [
+            "ACCOUNT",
+            "PLAN",
+            "5h LEFT",
+            "7d LEFT",
+            "Fable LEFT",
+            "EXTRA",
+            "RESETS",
+            "SPEND 7d"
+        ],
         "{text}"
     );
     assert!(lines[2].starts_with("   default"), "{text}");
@@ -431,15 +482,49 @@ fn overview_compares_a_kind_with_named_accounts_in_one_table() {
         "{text}"
     );
     assert!(lines[4].starts_with("●  work"), "{text}");
+    assert_eq!(
+        cells(lines[4])[5],
+        "69%",
+        "a sub-cap with no reset reads its own remainder: {text}"
+    );
     assert!(
         lines.iter().all(|line| line.trim_end() == *line),
         "{text:?}"
     );
-    assert!(
-        text.contains("\nPi — "),
-        "single-account kind keeps its block: {text}"
+    assert_eq!(
+        lines[6..],
+        [
+            "Pi · v1.2.3",
+            "   ACCOUNT  PLAN          SPEND 7d",
+            "●  default  Openai Oauth  -"
+        ],
+        "an all-default kind is a table too: {text}"
     );
     insta::assert_snapshot!("provider_overview", text);
+}
+
+fn hinted_window(
+    active: RateLimitWindow,
+    siblings: &[(&str, u8)],
+    deciding: Option<Deciding>,
+    in_room: bool,
+) -> String {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let with_window = |window| SidebarProviderPanel {
+        windows: vec![window],
+        ..panel("codex")
+    };
+    let mut rows = vec![("default", with_window(active))];
+    rows.extend(siblings.iter().map(|(name, used)| {
+        let week = window(7 * 24 * 60, *used, Some(86_400), now);
+        (*name, with_window(week))
+    }));
+    let mut reports = group("codex", rows);
+    reports[0].active = true;
+    let deciding = deciding
+        .map(|deciding| BTreeMap::from([("codex".to_owned(), deciding)]))
+        .unwrap_or_default();
+    overview(&reports, now, &deciding, in_room)
 }
 
 fn hinted(
@@ -449,51 +534,16 @@ fn hinted(
     in_room: bool,
 ) -> String {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
-    let codex = AgentKind::new_unchecked("codex");
-    let mut logins = vec![ProviderLogin::default_for(codex.clone())];
-    logins.extend(siblings.iter().map(|(name, _)| {
-        ProviderLogin::named(
-            codex.clone(),
-            name.parse().unwrap(),
-            format!("/accounts/{name}").into(),
-        )
-        .unwrap()
-    }));
-    let accounts = AccountsCache {
-        logins: logins
-            .iter()
-            .map(|login| (login.key(), record(1_000, true, Some(account("pro", true)))))
-            .collect(),
-    };
-    let week_window = |used| window(7 * 24 * 60, used, Some(86_400), now);
-    let mut panels = BTreeMap::new();
-    let mut default_panel = panel("codex");
-    default_panel.windows = vec![week_window(active_used)];
-    panels.insert(logins[0].key(), default_panel);
-    for (login, (_, used)) in logins[1..].iter().zip(siblings) {
-        let mut sibling = panel("codex");
-        sibling.windows = vec![week_window(*used)];
-        panels.insert(login.key(), sibling);
-    }
-    let mut reports = assemble_reports(
-        &logins,
-        &accounts,
-        panels,
-        &ProviderSpendingCache::default(),
-        None,
-        false,
-    );
-    reports[0].active = true;
-    let deciding = deciding
-        .map(|deciding| BTreeMap::from([("codex".to_owned(), deciding)]))
-        .unwrap_or_default();
-    let mut out = anstream::StripStream::new(Vec::new());
-    write_overview(&mut out, &reports, now, &TimeZone::UTC, &deciding, in_room).unwrap();
-    String::from_utf8(out.into_inner()).unwrap()
+    hinted_window(
+        window(7 * 24 * 60, active_used, Some(86_400), now),
+        siblings,
+        deciding,
+        in_room,
+    )
 }
 
 #[test]
-fn hint_names_the_roomiest_sibling_once_the_active_account_runs_hot() {
+fn hint_names_the_roomiest_sibling_once_the_active_account_runs_low() {
     let text = hinted(
         92,
         &[("team-2", 31), ("team-1", 5), ("team-0", 5)],
@@ -502,7 +552,7 @@ fn hint_names_the_roomiest_sibling_once_the_active_account_runs_hot() {
     );
     assert!(
         text.ends_with(
-            "\n  codex default is at 92% of its 7d window; team-0 has the most room:\n    rimz accounts use codex team-0\n"
+            "\n  codex default has 8% left of its 7d window; team-0 has the most room:\n    rimz accounts use codex team-0\n"
         ),
         "{text}"
     );
@@ -514,7 +564,24 @@ fn hint_names_the_roomiest_sibling_once_the_active_account_runs_hot() {
     for (text, why) in [
         (
             hinted(79, &[("team-1", 5)], Some(Deciding::Room), true),
-            "below 80%",
+            "21% left",
+        ),
+        (
+            hinted_window(
+                RateLimitWindow {
+                    resets_at: None,
+                    ..window(
+                        7 * 24 * 60,
+                        99,
+                        None,
+                        Timestamp::from_second(1_700_000_000).unwrap(),
+                    )
+                },
+                &[("team-1", 5)],
+                Some(Deciding::Room),
+                true,
+            ),
+            "a placeholder reading before the window starts",
         ),
         (
             hinted(
@@ -523,7 +590,7 @@ fn hint_names_the_roomiest_sibling_once_the_active_account_runs_hot() {
                 Some(Deciding::Room),
                 true,
             ),
-            "no lower sibling",
+            "no sibling with more left",
         ),
         (
             hinted(92, &[("team-1", 5)], Some(Deciding::Project), true),
@@ -538,6 +605,185 @@ fn hint_names_the_roomiest_sibling_once_the_active_account_runs_hot() {
         assert!(text.contains("team-1"), "{why}: table rendered: {text}");
         assert!(!text.contains("most room"), "{why}: {text}");
     }
+}
+
+#[test]
+fn table_window_cells_show_what_is_left() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let mut default_panel = panel("codex");
+    default_panel.windows = vec![
+        window(5 * 60, 45, Some(70 * 60), now),
+        window(7 * 24 * 60, 1, Some(7 * 86_400), now),
+        window(30 * 24 * 60, 99, None, now),
+    ];
+    let mut team_panel = panel("codex");
+    team_panel.windows = vec![
+        RateLimitWindow {
+            used_percentage: None,
+            ..window(5 * 60, 0, None, now)
+        },
+        RateLimitWindow {
+            lifted: true,
+            ..window(7 * 24 * 60, 0, None, now)
+        },
+        RateLimitWindow {
+            duration_mins: None,
+            scope: Some(rimz::agents::RateLimitWindowScope {
+                id: "spark".to_owned(),
+                label: "Spark".to_owned(),
+            }),
+            ..window(0, 70, None, now)
+        },
+    ];
+    let mut reports = group(
+        "codex",
+        vec![("default", default_panel), ("team", team_panel)],
+    );
+    reports[0].active = true;
+
+    let text = overview(&reports, now, &BTreeMap::new(), false);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        cells(lines[2]),
+        [
+            "●",
+            "default",
+            "Claude Max",
+            "55% · 1h10m",
+            "100% · ready",
+            "100%",
+            "–",
+            "-"
+        ],
+        "{text}"
+    );
+    assert_eq!(
+        cells(lines[3]),
+        ["team", "Claude Max", "–", "∞", "–", "30%", "-"],
+        "{text}"
+    );
+
+    let mut raw = Vec::new();
+    write_overview(&mut raw, &reports, now, &BTreeMap::new(), false).unwrap();
+    let raw = String::from_utf8(raw).unwrap();
+    let painted = |style: anstyle::Style, text: &str| {
+        format!("{}{text}{}", style.render(), style.render_reset())
+    };
+    assert!(
+        raw.contains(&format!(
+            "{} {}",
+            painted(render::palette::budget(55), "55%"),
+            painted(render::palette::body(), "· 1h10m")
+        )),
+        "only the percent takes the budget tone: {raw:?}"
+    );
+    assert_ne!(
+        render::palette::budget(55),
+        render::palette::budget(5),
+        "the tone follows what is left"
+    );
+}
+
+#[test]
+fn new_rooms_default_is_marked_unless_the_row_is_the_active_one() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let mut reports = group(
+        "codex",
+        vec![("default", panel("codex")), ("team", panel("codex"))],
+    );
+    let marks = |reports: &[ProviderReport]| -> Vec<String> {
+        overview(reports, now, &BTreeMap::new(), false)
+            .lines()
+            .skip(2)
+            .map(|line| line.chars().take(1).collect())
+            .collect()
+    };
+
+    mark_standing(
+        &mut reports,
+        &AccountStanding::unread(&machine_using("codex", "team")),
+    );
+    assert_eq!(marks(&reports), [" ", "○"], "unread layers mark no launch");
+    reports[0].active = true;
+    assert_eq!(marks(&reports), ["●", "○"]);
+    mark_standing(
+        &mut reports,
+        &AccountStanding::machine_only(&machine_using("codex", "team")),
+    );
+    assert_eq!(marks(&reports), [" ", "●"], "one row never takes both");
+}
+
+#[test]
+fn reset_cell_marks_its_countdown_as_an_expiry() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let banked = |count, soonest_expiry: Option<Timestamp>| SidebarProviderPanel {
+        reset_credits: Some(ResetCredits {
+            count,
+            soonest_expiry,
+            expiries: Vec::new(),
+            effect: rimz::agents::RedeemEffect::KeepsSchedule,
+        }),
+        ..panel("codex")
+    };
+    let reports = group(
+        "codex",
+        vec![
+            (
+                "default",
+                banked(2, Some(now + SignedDuration::from_secs(3 * 86_400))),
+            ),
+            ("due", banked(4, Some(now))),
+            ("bare", banked(1, None)),
+            ("none", banked(0, None)),
+            ("unknown", panel("codex")),
+        ],
+    );
+    let text = overview(&reports, now, &BTreeMap::new(), false);
+    assert_eq!(
+        text.lines()
+            .skip(1)
+            .map(|line| cells(line)[2])
+            .collect::<Vec<_>>(),
+        ["RESETS", "2 · exp 3d00h", "4 · due", "1", "-", "–"],
+        "{text}"
+    );
+}
+
+#[test]
+fn hint_and_block_read_a_reset_less_sub_cap_at_its_own_remainder() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let sub_cap = |used| RateLimitWindow {
+        scope: Some(rimz::agents::RateLimitWindowScope {
+            id: "fable".to_owned(),
+            label: "Fable".to_owned(),
+        }),
+        ..window(7 * 24 * 60, used, None, now)
+    };
+    assert_eq!(
+        block_window(&sub_cap(31), now).as_deref(),
+        Some("69% left · resets –")
+    );
+
+    let with_window = |window| SidebarProviderPanel {
+        windows: vec![window],
+        ..panel("claude")
+    };
+    let mut reports = group(
+        "claude",
+        vec![
+            ("default", with_window(sub_cap(85))),
+            ("work", with_window(sub_cap(40))),
+        ],
+    );
+    reports[0].active = true;
+    let deciding = BTreeMap::from([("claude".to_owned(), Deciding::Machine)]);
+    let text = overview(&reports, now, &deciding, false);
+    assert!(
+        text.ends_with(
+            "\n  claude default has 15% left of its Fable window; work has the most room:\n    rimz accounts use --global claude work\n"
+        ),
+        "{text}"
+    );
 }
 
 #[test]
@@ -748,7 +994,7 @@ fn reset_rendering_respects_count_falls_back_to_summary_and_marks_due() {
 }
 
 #[test]
-fn provider_money_style_covers_only_dollar_tokens() {
+fn provider_block_colours_only_dollar_and_percent_tokens() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let (accounts, panel, spending) = protocol_fixture(now);
     let reports = assemble_reports(
@@ -762,33 +1008,67 @@ fn provider_money_style_covers_only_dollar_tokens() {
     let mut raw = Vec::new();
     write_pretty(&mut raw, &reports, now, &TimeZone::UTC).unwrap();
     let raw = String::from_utf8(raw).unwrap();
-    let style = render::palette::money();
-    let painted = |value: &str| format!("{}{value}{}", style.render(), style.render_reset());
+    let painted = |style: anstyle::Style, value: &str| {
+        format!("{}{value}{}", style.render(), style.render_reset())
+    };
+    let money = |value: &str| painted(render::palette::money(), value);
 
     assert!(
         raw.contains(&format!(
             "{} used · {} limit",
-            painted("$12.40"),
-            painted("$50.00")
+            money("$12.40"),
+            money("$50.00")
         )),
         "{raw:?}"
     );
     assert!(
         raw.contains(&format!(
             "7d {} · 30d {}",
-            painted("$31.20"),
-            painted("$118.75")
+            money("$31.20"),
+            money("$118.75")
         )),
         "{raw:?}"
     );
     assert!(
-        raw.contains(&format!(
-            "{} of {}/day",
-            painted("$8.10"),
-            painted("$25.00")
-        )),
+        raw.contains(&format!("{} of {}/day", money("$8.10"), money("$25.00"))),
         "{raw:?}"
     );
+    let rows: Vec<&str> = raw.lines().skip(1).collect();
+    assert_eq!(
+        rows[2],
+        format!(
+            "  {}       {} left · resets in 1h23m",
+            painted(render::palette::muted(), "5h:"),
+            painted(render::palette::budget(38), "38%")
+        ),
+        "{raw:?}"
+    );
+    let coloured = [
+        "$12.40", "$50.00", "$31.20", "$118.75", "$8.10", "$25.00", "38%", "86%",
+    ];
+    let labels: usize = rows
+        .iter()
+        .map(|row| {
+            row.matches(&render::palette::muted().render().to_string())
+                .count()
+        })
+        .sum();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.matches("\u{1b}[").count())
+            .sum::<usize>(),
+        (labels + coloured.len()) * 2,
+        "nothing else in the body is coloured: {raw:?}"
+    );
+}
+
+fn block_window(window: &RateLimitWindow, now: Timestamp) -> Option<String> {
+    let mut rows = KeyVals::new();
+    rows.push_spans("w", window_spans(window, now)?);
+    let mut out = anstream::StripStream::new(Vec::new());
+    rows.render(&mut out).unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    Some(text.trim_end().strip_prefix("w: ").unwrap().to_owned())
 }
 
 #[test]
@@ -801,11 +1081,26 @@ fn window_rendering_marks_ready_lifted_and_unknown_states() {
         ..Default::default()
     };
     assert_eq!(
-        window_value(&ready, now).as_deref(),
-        Some("1% used · ready")
+        block_window(&ready, now).as_deref(),
+        Some("100% left · ready")
     );
     assert_eq!(
-        window_value(
+        block_window(&window(5 * 60, 45, Some(70 * 60), now), now).as_deref(),
+        Some("55% left · resets in 1h10m")
+    );
+    assert_eq!(
+        block_window(
+            &RateLimitWindow {
+                used_percentage: Some(30),
+                ..Default::default()
+            },
+            now
+        )
+        .as_deref(),
+        Some("70% left · resets –")
+    );
+    assert_eq!(
+        block_window(
             &RateLimitWindow {
                 lifted: true,
                 ..Default::default()
@@ -815,5 +1110,5 @@ fn window_rendering_marks_ready_lifted_and_unknown_states() {
         .as_deref(),
         Some("∞")
     );
-    assert_eq!(window_value(&RateLimitWindow::default(), now), None);
+    assert_eq!(block_window(&RateLimitWindow::default(), now), None);
 }

@@ -26,7 +26,7 @@ pub use glyphs::{
 pub use identity::Identity;
 pub(crate) use palette::HEAT_RAMP_WARM_START;
 pub use palette::Palette;
-pub(crate) use palette::ramp_tone;
+pub(crate) use palette::{interpolate_heat, ramp_tone};
 pub(crate) use provider::provider_title_case;
 pub use provider::{
     BrandColor, ResolvedProviderIdentity, resolve_provider_brand, resolve_provider_identity,

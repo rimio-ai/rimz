@@ -302,7 +302,7 @@ Normalization clamps and rounds percentages and orders windows short to long. Wh
 | --- | --- |
 | `overageLimitReached` | known, 0 remaining |
 | `unlimited` | usable, balance unknown |
-| `balance`, a number or numeric string | known, clamped at 0 |
+| `balance`, a number or numeric string | known, clamped at 0. The wire value is in credits; `normalize_credits` divides by 25 credits per US dollar, so `remaining_usd` holds dollars. The rate comes from observed account data (62,500 credits against a $2,500 balance), not from upstream source |
 | `hasCredits: false` | disabled |
 
 Reset credits, from the direct endpoint and from the app-server's `rateLimitResetCredits`, normalize through `ResetCredits::normalized` with the effect `RestartsWindow`: redeeming a Codex credit refills the window and restarts its natural reset a full window from the redemption. Auto-redeem reads that effect ([providers.md](./providers.md#auto-redeem)).

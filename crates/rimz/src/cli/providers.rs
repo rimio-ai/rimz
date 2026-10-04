@@ -20,7 +20,7 @@ use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCre
 use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet, ambient_env};
 use rimz::config::MachineConfig;
 use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
-use rimz::room::{AccountStanding, Deciding, Scopes};
+use rimz::room::{AccountStanding, Deciding, Scope, Scopes};
 use rimz::sidebar::enrich::provider_panels_from_caches;
 use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
 use rimz::store::snapshot::{DailyBudgetView, SidebarProviderPanel};
@@ -32,7 +32,7 @@ pub struct ProvidersArgs {
     /// Show only one provider kind.
     #[arg(value_name = "KIND")]
     kind: Option<String>,
-    /// Emit the report as JSON instead of human-readable blocks.
+    /// Emit the report as JSON instead of human-readable text.
     #[arg(long)]
     json: bool,
     /// Bypass account and usage refresh TTLs.
@@ -55,7 +55,7 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
         Err(error) => {
             writeln!(
                 std::io::stderr().lock(),
-                "rimz: warning: cannot read the account selection here, so no account is marked: {error:#}"
+                "rimz: warning: cannot read the account selection here, so no account is marked active: {error:#}"
             )?;
             (AccountStanding::unread(&config), false)
         }
@@ -186,9 +186,7 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
             Some((report.kind.clone(), deciding))
         })
         .collect();
-    render::finish(write_overview(
-        &mut out, &reports, now, &time_zone, &deciding, in_room,
-    ))
+    render::finish(write_overview(&mut out, &reports, now, &deciding, in_room))
 }
 
 /// The standing at the caller's position, and whether the caller runs inside
@@ -364,13 +362,11 @@ fn mark_standing(reports: &mut [ProviderReport], standing: &AccountStanding) {
     }
 }
 
-/// Every kind in turn: one comparison table for a kind with named accounts,
-/// today's block for the rest.
+/// Every kind in turn, each as one table with a row per account.
 fn write_overview(
     out: &mut impl Write,
     reports: &[ProviderReport],
     now: Timestamp,
-    time_zone: &TimeZone,
     deciding: &BTreeMap<String, Deciding>,
     in_room: bool,
 ) -> std::io::Result<()> {
@@ -378,16 +374,12 @@ fn write_overview(
         if index > 0 {
             writeln!(out)?;
         }
-        if group.iter().all(|report| report.account.is_default()) {
-            write_pretty(out, group, now, time_zone)?;
-        } else {
-            // A room's selection moves only from inside that room.
-            let deciding = deciding
-                .get(&group[0].kind)
-                .copied()
-                .filter(|deciding| in_room || *deciding != Deciding::Room);
-            write_comparison(out, group, now, deciding)?;
-        }
+        // A room's selection moves only from inside that room.
+        let deciding = deciding
+            .get(&group[0].kind)
+            .copied()
+            .filter(|deciding| in_room || *deciding != Deciding::Room);
+        write_comparison(out, group, now, deciding)?;
     }
     Ok(())
 }
@@ -426,7 +418,10 @@ fn write_comparison(
     for window in reports.iter().flat_map(|report| &report.windows) {
         let key = window_key(window);
         if !windows.iter().any(|(seen, _)| *seen == key) {
-            windows.push((key, rimz::theme::fmt::window_label(window)));
+            windows.push((
+                key,
+                format!("{} LEFT", rimz::theme::fmt::window_label(window)),
+            ));
         }
     }
     let extra = reports.iter().any(|report| report.extra_credits.is_some());
@@ -434,13 +429,15 @@ fn write_comparison(
     let mut headers = vec!["".to_owned(), "ACCOUNT".to_owned(), "PLAN".to_owned()];
     headers.extend(windows.iter().map(|(_, label)| label.clone()));
     headers.extend(extra.then(|| "EXTRA".to_owned()));
-    headers.extend(credits.then(|| "CREDITS".to_owned()));
-    headers.extend(["SPEND 7d".to_owned(), "DEFAULT FOR".to_owned()]);
+    headers.extend(credits.then(|| "RESETS".to_owned()));
+    headers.push("SPEND 7d".to_owned());
     let mut table = render::Table::new(headers);
     for report in reports {
         let mut cells = vec![
             if report.active {
                 cell("●").fg(render::palette::accent())
+            } else if report.default_for.contains(Scope::NewRooms) {
+                cell("○").fg(render::palette::muted())
             } else {
                 cell("")
             },
@@ -460,13 +457,11 @@ fn write_comparison(
             if report.metered == Some(false) {
                 return cell("∞");
             }
-            value_cell(
-                report
-                    .windows
-                    .iter()
-                    .find(|window| window_key(window) == *key)
-                    .and_then(|window| window_cell_value(window, now)),
-            )
+            report
+                .windows
+                .iter()
+                .find(|window| window_key(window) == *key)
+                .map_or_else(unknown_cell, |window| window_cell(window, now))
         }));
         if extra {
             cells.push(extra_cell(report.extra_credits.as_ref()));
@@ -478,11 +473,10 @@ fn write_comparison(
             || cell("-").dash(),
             |spending| money_cell(spending.week.usd),
         ));
-        cells.push(cell(report.default_for.label()).dash());
         table.row(cells);
     }
     table.render(out)?;
-    if let Some((reason, command)) = switch_hint(reports, deciding) {
+    if let Some((reason, command)) = switch_hint(reports, now, deciding) {
         writeln!(out)?;
         writeln!(out, "  {reason}")?;
         writeln!(out, "    {command}")?;
@@ -490,21 +484,29 @@ fn write_comparison(
     Ok(())
 }
 
-fn window_cell_value(window: &RateLimitWindow, now: Timestamp) -> Option<String> {
+/// What is left of a window, in the tone the sidebar's budget bar has there.
+fn percent_left_cell(left: u8) -> render::Cell {
+    cell(format!("{left}%")).fg(render::palette::budget(left))
+}
+
+fn window_cell(window: &RateLimitWindow, now: Timestamp) -> render::Cell {
     if window.lifted {
-        return Some("∞".to_owned());
+        return cell("∞");
     }
-    let used = window.used_percentage?;
+    let Some(left) = window.remaining_percentage(now) else {
+        return unknown_cell();
+    };
+    let percent = percent_left_cell(left);
     if window.not_started(now) {
-        return Some(format!("{used}% · ready"));
+        return percent.suffix("· ready", render::palette::body());
     }
-    Some(match window.resets_at {
-        Some(deadline) => format!(
-            "{used}% · {}",
-            rimz::theme::fmt::reset_countdown(deadline, now)
+    match window.resets_at {
+        Some(deadline) => percent.suffix(
+            format!("· {}", rimz::theme::fmt::reset_countdown(deadline, now)),
+            render::palette::body(),
         ),
-        None => format!("{used}%"),
-    })
+        None => percent,
+    }
 }
 
 fn extra_cell(extra: Option<&ExtraCredits>) -> render::Cell {
@@ -538,7 +540,7 @@ fn credits_cell(reset: Option<&ResetCredits>, now: Timestamp) -> render::Cell {
     match soonest {
         Some(deadline) if deadline <= now => cell(format!("{} · due", reset.count)),
         Some(deadline) => cell(format!(
-            "{} · {}",
+            "{} · exp {}",
             reset.count,
             rimz::theme::fmt::reset_countdown(deadline, now)
         )),
@@ -547,25 +549,29 @@ fn credits_cell(reset: Option<&ResetCredits>, now: Timestamp) -> render::Cell {
 }
 
 /// The sentence and command that move the marker to the logged-in sibling
-/// with the most room, once the active account reads 80% or more on a window
-/// that sibling reads strictly lower. A project-decided kind gets none: no
-/// `accounts use` form moves it.
-fn switch_hint(reports: &[ProviderReport], deciding: Option<Deciding>) -> Option<(String, String)> {
+/// with the most room, once the active account has 20% or less left of a
+/// window that sibling has strictly more of. A project-decided kind gets
+/// none: no `accounts use` form moves it.
+fn switch_hint(
+    reports: &[ProviderReport],
+    now: Timestamp,
+    deciding: Option<Deciding>,
+) -> Option<(String, String)> {
     let flag = match deciding? {
         Deciding::Room => "",
         Deciding::Machine => "--global ",
         Deciding::Project => return None,
     };
     let active = reports.iter().find(|report| report.active)?;
-    let mut hot: Vec<(&RateLimitWindow, u8)> = active
+    let mut low: Vec<(&RateLimitWindow, u8)> = active
         .windows
         .iter()
         .filter(|window| !window.lifted)
-        .filter_map(|window| Some((window, window.used_percentage?)))
-        .filter(|(_, used)| *used >= 80)
+        .filter_map(|window| Some((window, window.remaining_percentage(now)?)))
+        .filter(|(_, left)| *left <= 20)
         .collect();
-    hot.sort_by_key(|(_, used)| std::cmp::Reverse(*used));
-    hot.into_iter().find_map(|(window, used)| {
+    low.sort_by_key(|(_, left)| *left);
+    low.into_iter().find_map(|(window, left)| {
         let key = window_key(window);
         let (roomiest, _) = reports
             .iter()
@@ -575,13 +581,13 @@ fn switch_hint(reports: &[ProviderReport], deciding: Option<Deciding>) -> Option
                     .windows
                     .iter()
                     .find(|sibling| !sibling.lifted && window_key(sibling) == key)?
-                    .used_percentage?;
-                (reading < used).then_some((report, reading))
+                    .remaining_percentage(now)?;
+                (reading > left).then_some((report, reading))
             })
-            .min_by(|(a, a_used), (b, b_used)| (a_used, &a.account).cmp(&(b_used, &b.account)))?;
+            .max_by(|(a, a_left), (b, b_left)| (a_left, &b.account).cmp(&(b_left, &a.account)))?;
         Some((
             format!(
-                "{} {} is at {used}% of its {} window; {} has the most room:",
+                "{} {} has {left}% left of its {} window; {} has the most room:",
                 active.kind,
                 active.account,
                 rimz::theme::fmt::window_label(window),
@@ -668,10 +674,11 @@ fn write_pretty(
             rows.push("scope", cell(scope_label(scope)));
         }
         for window in &report.windows {
-            rows.push(
-                rimz::theme::fmt::window_label(window),
-                value_cell(window_value(window, now)),
-            );
+            let label = rimz::theme::fmt::window_label(window);
+            match window_spans(window, now) {
+                Some(spans) => rows.push_spans(label, spans),
+                None => rows.push(label, unknown_cell()),
+            }
         }
         if report.metered == Some(true) && report.windows.is_empty() {
             rows.push("usage", unknown_cell());
@@ -754,24 +761,28 @@ fn scope_label(scope: &ProviderAccountScope) -> String {
     }
 }
 
-fn window_value(window: &RateLimitWindow, now: Timestamp) -> Option<String> {
+fn window_spans(window: &RateLimitWindow, now: Timestamp) -> Option<Vec<render::Cell>> {
     if window.lifted {
-        return Some("∞".to_owned());
+        return Some(vec![cell("∞")]);
     }
-    let used = window.used_percentage?;
-    if window.not_started(now) {
-        return Some(format!("{used}% used · ready"));
-    }
-    let reset = window
-        .resets_at
-        .map(|deadline| {
-            format!(
-                "resets in {}",
-                rimz::theme::fmt::reset_countdown(deadline, now)
-            )
-        })
-        .unwrap_or_else(|| "resets –".to_owned());
-    Some(format!("{used}% used · {reset}"))
+    let left = window.remaining_percentage(now)?;
+    let tail = if window.not_started(now) {
+        "ready".to_owned()
+    } else {
+        window.resets_at.map_or_else(
+            || "resets –".to_owned(),
+            |deadline| {
+                format!(
+                    "resets in {}",
+                    rimz::theme::fmt::reset_countdown(deadline, now)
+                )
+            },
+        )
+    };
+    Some(vec![
+        percent_left_cell(left),
+        cell(format!(" left · {tail}")),
+    ])
 }
 
 fn money_cell(value: f64) -> render::Cell {

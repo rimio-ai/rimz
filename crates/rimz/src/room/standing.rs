@@ -39,6 +39,11 @@ impl Scope {
 pub struct Scopes(BTreeSet<Scope>);
 
 impl Scopes {
+    /// Whether the account is `scope`'s default.
+    pub fn contains(&self, scope: Scope) -> bool {
+        self.0.contains(&scope)
+    }
+
     /// The words joined in the order `this room`, `this project`, `new
     /// rooms`; `-` when the account is no layer's default.
     pub fn label(&self) -> String {

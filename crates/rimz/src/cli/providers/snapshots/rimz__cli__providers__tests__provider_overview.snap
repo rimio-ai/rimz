@@ -3,12 +3,11 @@ source: crates/rimz/src/cli/providers/tests.rs
 expression: text
 ---
 Claude · v2.1.274
-   ACCOUNT  PLAN        5h           7d           Fable  EXTRA        CREDITS    SPEND 7d   DEFAULT FOR
-   default  Claude Max  62% · 1h23m  14% · 4d02h  –      $37.60 left  2 · 3d00h  $2,742.90  -
-   spare    logged out  –            –            –      –            –          -          -
-●  work     Claude Max  –            30% · 1d00h  31%    off          –          $12.00     new rooms
+   ACCOUNT  PLAN        5h LEFT      7d LEFT      Fable LEFT  EXTRA        RESETS         SPEND 7d
+   default  Claude Max  38% · 1h23m  86% · 4d02h  –           $37.60 left  2 · exp 3d00h  $2,742.90
+   spare    logged out  –            –            –           –            –              -
+●  work     Claude Max  –            70% · 1d00h  69%         off          –              $12.00
 
-Pi — Openai Oauth · logged in
-  version: v1.2.3
-  usage:   ∞
-  spend:   –
+Pi · v1.2.3
+   ACCOUNT  PLAN          SPEND 7d
+●  default  Openai Oauth  -

@@ -251,7 +251,7 @@ fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
                 "rateLimits": {},
                 "credits": { "balance": 12.5 }
             }),
-            ExtraCredits::known(None, Some(12.5), None),
+            ExtraCredits::known(None, Some(0.5), None),
         ),
         (
             "nested credits",
@@ -260,7 +260,15 @@ fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
                     "credits": { "balance": "7.25" }
                 }
             }),
-            ExtraCredits::known(None, Some(7.25), None),
+            ExtraCredits::known(None, Some(0.29), None),
+        ),
+        (
+            "credits convert to dollars",
+            json!({
+                "rateLimits": {},
+                "credits": { "balance": 62_500 }
+            }),
+            ExtraCredits::known(None, Some(2_500.0), None),
         ),
     ] {
         let transport = CannedTransport::new().with("account/rateLimits/read", result);

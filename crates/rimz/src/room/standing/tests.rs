@@ -91,7 +91,13 @@ fn scopes_join_coinciding_layers_in_order_and_default_fills_unnamed_ones() {
     let default = LoginName::default_login();
     let unnamed = standing(None, ProjectLogins::Unconfigured, RoomLogins::new());
     assert_eq!(unnamed.scopes(&claude, &default).label(), "new rooms");
+    assert!(unnamed.scopes(&claude, &default).contains(Scope::NewRooms));
     assert_eq!(unnamed.scopes(&claude, &name("work")).label(), "-");
+    assert!(
+        !unnamed
+            .scopes(&claude, &name("work"))
+            .contains(Scope::NewRooms)
+    );
 
     let everywhere = standing(
         Some(logins(&[("claude", "work")])),

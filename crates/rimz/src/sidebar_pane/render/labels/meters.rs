@@ -2,6 +2,7 @@ use super::*;
 use crate::config::ContextMeterConfig;
 use crate::config::GlyphRole;
 use crate::sidebar_pane::render::theme::Component;
+use crate::theme::interpolate_heat;
 use jiff::SignedDuration;
 
 /// Token-composition glyphs for the `◇ ↘ ↗ ◌` fleet breakdown: a diamond for
@@ -354,14 +355,6 @@ fn axis_heat_amount(value: u64, green: u64, yellow: u64, amber: u64, red: u64) -
     }
 }
 
-fn interpolate_heat(value: u64, start: u64, end: u64, low: f32, high: f32) -> f32 {
-    if end <= start {
-        return high;
-    }
-    let position = (value - start) as f32 / (end - start) as f32;
-    low + (high - low) * position.clamp(0.0, 1.0)
-}
-
 /// Position along the warm tail (`warn → caution → alarm`) for a value crossing
 /// three escalating thresholds `yellow < amber < red`. `None` at or below
 /// `yellow` so the caller keeps its resting tone; then `0.0` just past `yellow`,
@@ -666,42 +659,16 @@ pub(in crate::sidebar_pane::render) fn unknown_mana_bar_spans(
     )]
 }
 
-/// The mana bar's tone at `remaining_pct` budget left: the full health ramp the
-/// context meter rides ([`Theme::heat_tone`]), anchored green at a brimming
-/// window and warming smoothly to red as it drains. Shared by the bar fill and
-/// the `5h`/`7d` label beside it so the label mirrors its bar's tone.
+/// The mana bar's tone at `remaining_pct` budget left: the shared budget tone
+/// ([`Theme::budget_tone`]), anchored green at a brimming window and warming
+/// smoothly to red as it drains. Shared by the bar fill and the `5h`/`7d` label
+/// beside it so the label mirrors its bar's tone.
 pub(in crate::sidebar_pane::render) fn mana_style(
     theme: &Theme,
     remaining_pct: u8,
     zones: &BudgetBarConfig,
 ) -> Style {
-    theme.style(
-        theme.heat_tone(mana_heat_amount(remaining_pct, zones)),
-        Modifier::empty(),
-    )
-}
-
-/// The mana bar's heat amount: a full green→red drain anchored green at `100%`,
-/// with the `[theme.display.budget_bar]` zones as the warm stops the remaining figure
-/// falls through — `100 → 0.0` green, `yellow → ⅓` warn, `amber → ⅔` caution,
-/// `red`/below `→ 1.0` alarm — so the bar warms continuously as it empties. Each
-/// zone names the exclusive upper bound of remaining budget where its tier is
-/// reached ([`BudgetBarConfig`]); checked worst-first, so a misordered user
-/// config degrades to the worse tier.
-fn mana_heat_amount(remaining_pct: u8, zones: &BudgetBarConfig) -> f32 {
-    let remaining = u64::from(remaining_pct.min(100));
-    let yellow = u64::from(zones.yellow);
-    let amber = u64::from(zones.amber);
-    let red = u64::from(zones.red);
-    if remaining < red {
-        1.0
-    } else if remaining < amber {
-        interpolate_heat(remaining, red, amber, 1.0, 2.0 / 3.0)
-    } else if remaining < yellow {
-        interpolate_heat(remaining, amber, yellow, 2.0 / 3.0, 1.0 / 3.0)
-    } else {
-        interpolate_heat(remaining, yellow, 100, 1.0 / 3.0, 0.0)
-    }
+    theme.style(theme.budget_tone(remaining_pct, zones), Modifier::empty())
 }
 
 /// Treat the first five percent of a budget window as already elapsed for pace

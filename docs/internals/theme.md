@@ -95,7 +95,7 @@ Beside the flat slots, `Palette` carries two ramps and one derived tone:
 
 | derived | stops | read by |
 | --- | --- | --- |
-| heat ramp | `good → warn → caution → alarm` | `Theme::heat_tone`: the context meter, the remote link badge, the provider budget bar and its window label, the Codex reset-credit expiry while auto-redeem is off; `Theme::warm_heat_tone`: the card age clock and the over-pace budget tail |
+| heat ramp | `good → warn → caution → alarm` | `Palette::budget_tone`, the one mapping from a remaining percent and the `[theme.display.budget_bar]` zones to a tone: the sidebar's provider budget bar and its window label, and the window percentages of `rimz providers`; `Theme::heat_tone`: the context meter, the remote link badge, the Codex reset-credit expiry while auto-redeem is off; `Theme::warm_heat_tone`: the card age clock and the over-pace budget tail |
 | calm ramp | `body → good` | `Theme::calm_tone`: the under-pace budget tail, the Codex reset-credit expiry while auto-redeem is armed or holding |
 | `expense` | `alarm` with chroma scaled by `INPUT_EXPENSE_CHROMA` (1.30), then lightness lowered by `INPUT_EXPENSE_DEEPEN` (0.09) | `Component::Input`, the `↘` fresh-input marker and the reddest tone on screen |
 

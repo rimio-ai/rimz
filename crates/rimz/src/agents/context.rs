@@ -1127,6 +1127,26 @@ impl RateLimitWindow {
         let full = SignedDuration::from_secs(i64::from(mins) * 60);
         reset.duration_since(now) >= full - NOT_STARTED_GRACE
     }
+
+    /// The budget left in this window as every surface displays it, in
+    /// percent; `None` when usage is unknown. A window whose clock has not
+    /// begun reads full: one that is [`not_started`](Self::not_started), and
+    /// Codex's placeholder before the first token, an unscoped window that
+    /// reports ≈99% used with a known duration and no reset. A scoped window
+    /// of that shape is a sub-cap and reads its own remainder. `lifted` is
+    /// the caller's to check first.
+    pub fn remaining_percentage(&self, now: Timestamp) -> Option<u8> {
+        let raw = 100u8.saturating_sub(self.used_percentage?);
+        let placeholder = self.scope.is_none()
+            && self.resets_at.is_none()
+            && self.duration_mins.is_some()
+            && raw > 0;
+        Some(if self.not_started(now) || placeholder {
+            100
+        } else {
+            raw
+        })
+    }
 }
 
 /// What kind of provider API error ended a turn.

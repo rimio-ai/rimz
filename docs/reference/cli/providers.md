@@ -1,6 +1,6 @@
 # Providers CLI
 
-`rimz providers` prints every provider account, where the sidebar's provider dashboard shows only the account each provider launches under in that room: one comparison table for a provider with named accounts and one block for each other provider: login status, plan and CLI version, rate-limit windows, paid usage and reset credits, spend, and the daily dollar cap. It runs anywhere, in or out of a room. To answer, it probes each provider login and runs any due usage reads, publishing the results to RimZ's shared account caches; it touches no agent and no room. What the dashboard's figures mean is the [Token Insight guide](../../guide/insight.md#per-account-the-provider-dashboard); how accounts are probed and cached is [providers internals](../../internals/agents/providers.md).
+`rimz providers` prints every provider account, where the sidebar's provider dashboard shows only the account each provider launches under in that room: one table per provider, a row per account: plan and CLI version, what is left of each rate-limit window, paid usage and reset credits, and 7-day spend, with the status in place of the plan for an account that is not logged in. `rimz providers <KIND>` prints one provider's accounts as blocks, which add the login status, account id, 30-day spend, and the daily dollar cap. It runs anywhere, in or out of a room. To answer, it probes each provider login and runs any due usage reads, publishing the results to RimZ's shared account caches; it touches no agent and no room. What the dashboard's figures mean is the [Token Insight guide](../../guide/insight.md#per-account-the-provider-dashboard); how accounts are probed and cached is [providers internals](../../internals/agents/providers.md).
 
 ```sh
 rimz providers                    # accounts with a login, known account facts, or spend
@@ -15,9 +15,9 @@ rimz providers --json             # the report as a JSON array
 | `KIND` | Show only this provider kind's accounts, and run usage reads for that kind only. An unknown kind exits 1 with `unknown provider kind` and the list of known kinds. |
 | `--all` | Show every registered provider's default account, including logged-out ones and ones with no spend. |
 | `--refresh` | Ignore the cache lifetimes for this run: probe every login and re-read usage now ([How fresh the figures are](#how-fresh-the-figures-are)). |
-| `--json` | Print the [JSON report](#json-output) instead of text blocks. |
+| `--json` | Print the [JSON report](#json-output) instead of text. |
 
-Of the [global flags](../cli.md#global-flags), `--color` applies, and `--root` selects the position whose active account gets the `●` marker and the `DEFAULT FOR` words, as in [`rimz accounts list`](./accounts.md); without it the position is the room you are in, else the project at the current directory. When the position's selection cannot be read (a project `.rimz/config.toml` with a TOML error, say), a warning on stderr carries the error and no account is marked; the command still prints and exits 0. The backend flags are accepted and change nothing. A probe that fails does not fail the command: the account prints with status `unavailable`.
+Of the [global flags](../cli.md#global-flags), `--color` applies, and `--root` selects the position whose active account gets the `●` marker, as in [`rimz accounts list`](./accounts.md); without it the position is the room you are in, else the project at the current directory. When the position's selection cannot be read (a project `.rimz/config.toml` with a TOML error, say), a warning on stderr carries the error and no account takes `●`; the command still prints and exits 0. The backend flags are accepted and change nothing. A probe that fails does not fail the command: the account prints with status `unavailable`.
 
 ## Which accounts appear
 
@@ -30,45 +30,43 @@ Every provider has a `default` account, its own login, and Claude and Codex can 
 
 `KIND` then drops every account of another kind.
 
-Blocks print in the dashboard's usage ranking: providers ordered by sessions in the trailing 7 days, then 30 days, then 365 days. Providers whose `default` account has no account facts follow in registry order. Within a provider, `default` comes first and named accounts follow by name.
+Providers print in the dashboard's usage ranking: providers ordered by sessions in the trailing 7 days, then 30 days, then 365 days. Providers whose `default` account has no account facts follow in registry order. Within a provider, `default` comes first and named accounts follow by name.
 
 ## Text output
 
-Providers print in turn, separated by a blank line. A provider with a named account prints one comparison table, one row per account; every other provider prints its one block.
+`rimz providers` prints one table per provider, separated by a blank line, with one row per account. `rimz providers <KIND>` prints that provider's [account blocks](#account-blocks) instead.
 
-### Comparison table
+### Provider tables
 
 ```console
 $ rimz providers
 Claude · v2.1.274
-   ACCOUNT  PLAN        5h           7d           Fable  EXTRA        CREDITS    SPEND 7d   DEFAULT FOR
-   default  Claude Max  62% · 1h23m  14% · 4d02h  –      $37.60 left  2 · 3d00h  $2,742.90  -
-   spare    logged out  –            –            –      –            –          -          -
-●  work     Claude Max  –            30% · 1d00h  31%    off          –          $12.00     new rooms
+   ACCOUNT  PLAN        5h LEFT      7d LEFT      Fable LEFT  EXTRA        RESETS         SPEND 7d
+   default  Claude Max  38% · 1h23m  86% · 4d02h  –           $37.60 left  2 · exp 3d00h  $2,742.90
+   spare    logged out  –            –            –           –            –              -
+●  work     Claude Max  –            70% · 1d00h  69%         off          –              $12.00
 
-Pi — Openai Oauth · logged in
-  version: v1.2.3
-  usage:   ∞
-  spend:   –
+Pi · v1.2.3
+   ACCOUNT  PLAN          SPEND 7d
+●  default  Openai Oauth  -
 ```
 
 The heading is the provider and the CLI version of the first account that reports one. `default` is the first row, then named accounts by name.
 
 | Column | Shows |
 | --- | --- |
-| (marker) | `●` on the account a launch at the position uses, at most one per provider. |
+| (marker) | `●` on the account a launch at the position uses, at most one per provider. `○` on the machine's default for new rooms (`[accounts.use]`, else `default`) when that row is not the `●` one. |
 | `ACCOUNT` | `default` (muted) or the named account. |
 | `PLAN` | The plan label, `–` when unknown, or the status (`logged out`, `unavailable`) when the account is not logged in. |
-| One column per window | Every window any account of the provider reports, labelled as in the block. The cell is `N% · 1h23m` (used, then time to reset), `N% · ready` before the window's clock starts, `N%` with no known reset, `∞` for a lifted limit or an account without subscription windows, or `–` when unknown. |
+| One column per window | Every window any account of the provider reports, labelled as in the block and suffixed `LEFT`. The cell is `N% · 1h23m` (what is left of the window, then time to reset), `100% · ready` before the window's clock starts, `N%` with no known reset, `∞` for a lifted limit or an account without subscription windows, or `–` when unknown. |
 | `EXTRA` | Only when some account reports paid usage: `off` when disabled, `$ left` when the remaining balance is known, else `$ used`, else `–`. |
-| `CREDITS` | Only when some account reports reset credits: the count and the time to the soonest expiry (`due` once passed), `-` with none banked, `–` when unknown. |
+| `RESETS` | Only when some account reports reset credits: the count, then `exp` and the time to the soonest expiry (`2 · exp 3d00h`, or `2 · due` once it has passed), the bare count with no known expiry, `-` with none banked, `–` when unknown. |
 | `SPEND 7d` | The account's own spend over the trailing 7 days, `-` when it has none recorded. |
-| `DEFAULT FOR` | `this room`, `this project`, `new rooms`, joined when they coincide, or `-`: the same words as [`rimz accounts list`](./accounts.md). |
 
-When the `●` account has used 80% or more of a window and another logged-in account of the provider reads strictly lower on the same window, a hint follows the table, naming the account with the most room (ties by name) and the command that moves the marker:
+When the `●` account has 20% or less left of a window and another logged-in account of the provider has strictly more left of the same window, a hint follows the table, naming the account with the most left (ties by name) and the command that moves the marker:
 
 ```text
-  codex default is at 92% of its 7d window; team-0 has the most room:
+  codex default has 8% left of its 7d window; team-0 has the most room:
     rimz accounts use codex team-0
 ```
 
@@ -76,15 +74,15 @@ The command is `rimz accounts use` when a room's selection decides the position 
 
 ### Account blocks
 
-`rimz providers <KIND>`, and every provider without named accounts, prints one block per account, separated by a blank line:
+`rimz providers <KIND>` prints one block per account, separated by a blank line:
 
 ```console
 $ rimz providers claude
 Claude — Claude Max · logged in
   version:  v1.2.3
   account:  acct_123
-  5h:       62% used · resets in 1h23m
-  7d:       14% used · resets in 4d02h
+  5h:       38% left · resets in 1h23m
+  7d:       86% left · resets in 4d02h
   extra:    $12.40 used · $50.00 limit
   resets:   2 credits
             - 2023-11-17 17:13:20 -05:00 · in 3d00h
@@ -103,7 +101,7 @@ The rows print in this order, and a row with nothing to report is left out:
 | `account` | The provider's non-secret account id. |
 | `provider` | The backing provider, for agents that run on another provider's account. |
 | `scope` | `<provider>/<variant>`, when the account reading is scoped to one backing provider. |
-| One row per window | Labelled by its length (`5h`, `7d`) or by the provider's quota name. The value is `N% used · resets in 1h23m`, `N% used · ready` for a window whose clock has not started, or `∞` for a limit the provider has lifted. |
+| One row per window | Labelled by its length (`5h`, `7d`) or by the provider's quota name. The value is `N% left · resets in 1h23m`, `100% left · ready` for a window whose clock has not started, `N% left · resets –` with no known reset, or `∞` for a limit the provider has lifted. |
 | `usage` | `∞` for an account without subscription windows, or `–` for a metered account with no window reading yet. |
 | `extra` | Paid usage beyond the windows: `disabled`, or whichever of `$ used`, `$ remaining`, and `$ limit` are known, or `–`. Without a provider-reported limit, `limit` is the display ceiling from [`[accounts.usage_limit_usd]`](../../guide/configuration.md#accounts). |
 | `resets` | Codex reset credits or Claude limit resets, only when at least one is banked: the count, then the soonest known expiries, up to three. |
@@ -114,7 +112,7 @@ Each reset-credit expiry prints as `YYYY-MM-DD HH:MM:SS ±HH:MM` in the machine 
 
 Windows, paid usage, and reset credits belong to the account, so each account reports its own. Spend and the daily cap belong to the history pool: `default` and the shared accounts of a provider report one figure, and a standalone account its own.
 
-With colour on, only the dollar figures in `extra`, `spend`, and `budget` take the money colour.
+With colour on, the dollar figures take the money colour, and each window's percentage takes the tone the sidebar's budget bar has at that remainder: green at a full window, warming to red as it drains, through the stops in `[theme.display.budget_bar]`. The same two rules colour the provider tables.
 
 ## How fresh the figures are
 
@@ -136,7 +134,7 @@ This command never computes spend itself. On a machine where nothing has publish
 
 ## JSON output
 
-`--json` prints an array with one object per account, in the same order as the text blocks. Every key below is always present, with `null` where there is no value. Credentials and the account fingerprint never appear in either format.
+`--json` prints an array with one object per account, in the same order as the text rows. Every key below is always present, with `null` where there is no value. Credentials and the account fingerprint never appear in either format.
 
 | Field | Meaning |
 | --- | --- |

@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use rimz::config::{MachineConfig, ThemeConfig, ThemeProviderStyle};
+use rimz::config::{BudgetBarConfig, MachineConfig, ThemeConfig, ThemeProviderStyle};
 use rimz::theme::{Palette, Tone, resolve_provider_brand, resolve_provider_identity};
 
 struct CliTheme {
     palette: Palette,
     providers: BTreeMap<String, ThemeProviderStyle>,
+    budget_bar: BudgetBarConfig,
 }
 
 impl CliTheme {
@@ -17,6 +18,7 @@ impl CliTheme {
         Self {
             palette: Palette::resolve(theme, depth),
             providers: theme.providers.clone(),
+            budget_bar: theme.display.budget_bar,
         }
     }
 
@@ -27,6 +29,10 @@ impl CliTheme {
 
     fn style(&self, tone: Tone) -> anstyle::Style {
         anstyle::Style::new().fg_color(Some(tone_color(tone)))
+    }
+
+    fn budget(&self, remaining_pct: u8) -> anstyle::Style {
+        self.style(self.palette.budget_tone(remaining_pct, &self.budget_bar))
     }
 
     fn identity(&self, kind: &str) -> anstyle::Style {
@@ -99,6 +105,11 @@ pub(crate) fn money() -> anstyle::Style {
     THEME.style(THEME.palette.identity(rimz::theme::Identity::Money))
 }
 
+/// The sidebar budget bar's tone for a window with `remaining_pct` left.
+pub(crate) fn budget(remaining_pct: u8) -> anstyle::Style {
+    THEME.budget(remaining_pct)
+}
+
 pub(crate) fn human_chip() -> anstyle::Style {
     anstyle::Style::new()
         .bg_color(Some(tone_color(THEME.palette.cool())))
@@ -147,6 +158,20 @@ mod tests {
             overridden.style(overridden.palette.good()).get_fg_color(),
             Some(anstyle::Color::Rgb(anstyle::RgbColor(1, 2, 3)))
         );
+    }
+
+    #[test]
+    fn budget_style_walks_the_heat_ramp_and_follows_configured_zones() {
+        let default = CliTheme::resolve(&ThemeConfig::default(), true);
+        assert_eq!(default.budget(100), default.style(default.palette.good()));
+        assert_eq!(default.budget(50), default.style(default.palette.warn()));
+        assert_eq!(default.budget(0), default.style(default.palette.alarm()));
+
+        let mut theme = ThemeConfig::default();
+        theme.display.budget_bar.yellow = 80;
+        let tuned = CliTheme::resolve(&theme, true);
+        assert_eq!(tuned.budget(80), tuned.style(tuned.palette.warn()));
+        assert_ne!(tuned.budget(80), default.budget(80));
     }
 
     #[test]
