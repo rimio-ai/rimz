@@ -7,7 +7,9 @@
 //! first.
 
 use std::path::{Path, PathBuf};
+use std::process::Output;
 
+use crate::mux::command::CommandSpec;
 use crate::mux::{MuxErr, Result};
 
 const ZELLIJ_SOCKET_PATH_LIMIT: usize = crate::sock::AF_UNIX_PATH_LIMIT;
@@ -47,6 +49,34 @@ pub(super) fn stderr_reports_socket_overflow(stderr: &str) -> bool {
     lower.contains("session name must be less than")
         || (lower.contains("socket") && lower.contains("too long"))
         || lower.contains("zellij_socket_dir")
+}
+
+/// Whether `output` is Zellij's client refusing a session whose socket is
+/// still on disk. The client probes every socket before it dispatches
+/// anything and counts a server too busy to answer as absent (`assert_socket`
+/// in `zellij-utils`, observed on 0.45.1), so the refusal proves nothing ran.
+/// A session that is really gone has no socket, and its refusal stands.
+pub(super) fn refused_live_session(spec: &CommandSpec, output: &Output) -> bool {
+    if output.status.success() || !super::parse::is_session_not_found(&output.stderr) {
+        return false;
+    }
+    let session = spec
+        .args
+        .iter()
+        .position(|arg| arg == "--session")
+        .and_then(|flag| spec.args.get(flag + 1));
+    let xdg = spec.env.get("XDG_RUNTIME_DIR").map(Path::new);
+    let socket = socket_headroom_with_xdg_override(session.map_or("", String::as_str), xdg).path;
+    if session.is_some() {
+        return socket.symlink_metadata().is_ok();
+    }
+    // Zellij infers the session: any socket beside the `session_info`
+    // directory may be the one it refused.
+    std::fs::read_dir(socket).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
+    })
 }
 
 fn socket_headroom_from(

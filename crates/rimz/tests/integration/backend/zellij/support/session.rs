@@ -152,6 +152,27 @@ impl LiveZellijSession {
         self.namespace.command()
     }
 
+    /// Run one raw `action` against this live session. Zellij's client can
+    /// refuse a busy live server before it dispatches anything; the backend's
+    /// own commands rerun that answer, so a raw one reruns it the same way.
+    pub(in crate::backend::zellij) fn action(&self, args: &[&str]) -> std::process::Output {
+        let mut reruns = 0;
+        loop {
+            let output = self
+                .command()
+                .args(["--session", self.name(), "action"])
+                .args(args)
+                .bounded_output()
+                .unwrap_or_else(|err| panic!("action {args:?} for {}: {err}", self.name));
+            let refused = String::from_utf8_lossy(&output.stderr).contains("no active session");
+            if output.status.success() || !refused || reruns == 5 {
+                return output;
+            }
+            reruns += 1;
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     /// Birth a detached session with Zellij's default shell pane.
     pub(in crate::backend::zellij) fn create_background(&self) {
         let output = self

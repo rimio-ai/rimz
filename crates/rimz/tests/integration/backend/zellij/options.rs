@@ -2,8 +2,6 @@ use std::time::Duration;
 
 use rimz::mux::{MuxBackend, PresencePluginOptions, zellij};
 
-use crate::common::CommandTimeoutExt;
-
 use super::support::*;
 
 const FRAME_TITLE: &str = "RIMZ-OPTION-FRAME";
@@ -69,29 +67,14 @@ fn check_frames(baseline: bool, frames: Option<bool>, reapply: bool) {
     // compact bar. `pane_frames` stays invisible until a second work pane opens,
     // so split first and hand focus back to the pane this test renames.
     for action in [
-        vec!["action", "new-pane", "--direction", "right"],
-        vec!["action", "focus-previous-pane"],
+        &["new-pane", "--direction", "right"][..],
+        &["focus-previous-pane"],
     ] {
-        let output = room
-            .command()
-            .args(["--session", room.name()])
-            .args(&action)
-            .bounded_output()
-            .expect("drive work-area split");
+        let output = room.action(action);
         assert!(output.status.success(), "{action:?}: {output:?}");
     }
     client.wait_until_focused(&work, "birth work pane after split");
-    let renamed = room
-        .command()
-        .args([
-            "--session",
-            room.name(),
-            "action",
-            "rename-pane",
-            FRAME_TITLE,
-        ])
-        .bounded_output()
-        .expect("rename focused work pane");
+    let renamed = room.action(&["rename-pane", FRAME_TITLE]);
     assert!(renamed.status.success(), "{renamed:?}");
     room.backend()
         .send_keys(&work, None, &format!("printf '{CONTENT_MARKER}\\n'\n"))

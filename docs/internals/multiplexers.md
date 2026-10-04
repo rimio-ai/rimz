@@ -127,6 +127,8 @@ Every control command runs through [`CommandSpec`](../../crates/rimz/src/mux/com
 
 A healthy command answers in milliseconds, and most callers treat a mux failure as best-effort, so a bound degrades the caller instead of blocking it. The start path is the exception: when the selected backend also times out on the retry, `rimz start` refuses with the backend's recovery command and the other backend as a fallback. Rival-backend and notice probes skip their enrichment and continue.
 
+Every Zellij command also reruns one refusal inside its own deadline. Zellij's client probes each session socket before it dispatches anything and counts a server too busy to answer as absent (`assert_socket` in `zellij-utils`, observed on 0.45.1), so a live session can answer `There is no active session!` or the `Session '<name>' not found` banner for a few milliseconds. `socket::refused_live_session` recognises that nonzero exit only while the session's socket is still on disk, and `ZellijBackend::cmd` attaches it as the command's `RefusalRetry`: at most `PREDISPATCH_REFUSAL_RERUNS` (5) reruns, `PREDISPATCH_REFUSAL_DELAY` (100 ms) apart. Nothing was dispatched, so a rerun cannot repeat a side effect. A session with no socket is absent and its refusal returns at once, as does every other failure.
+
 ## Identity
 
 ### Pane and view IDs
@@ -534,7 +536,7 @@ RimZ loads the plugin itself, never through the user's `config.kdl`, because a l
 
 The load verb is the idempotent `zellij … action pipe --plugin --skip-plugin-cache`, the one verb in Zellij 0.44 that works on a clientless session and carries the cache-bypass bit. Only owner flows use it: room birth, and `rimz reload` upgrade and repair. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
 
-Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`ws/<workspace-dir>/rimz`), runtime mouse options, the focus and zoom chords, `launch_scope=background`, the embedded-wasm digest (computed once, lazily), and a hash of the configuration itself. Every desired identity is created only through this pipe, so an identity-matching writer is a background instance and receives global pane and tab updates. Changing an identity launches another background writer; the host accepts its proof and retires the old identity. The `rimz:dump_topology` pipe that asks for that proof is a nudge: Zellij's CLI reports a live server too busy to answer its socket probe as `There is no active session!` (observed on 0.45.1), and once the launch is delivered the host treats that answer as a lost nudge, not a failed convergence.
+Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`ws/<workspace-dir>/rimz`), runtime mouse options, the focus and zoom chords, `launch_scope=background`, the embedded-wasm digest (computed once, lazily), and a hash of the configuration itself. Every desired identity is created only through this pipe, so an identity-matching writer is a background instance and receives global pane and tab updates. Changing an identity launches another background writer; the host accepts its proof and retires the old identity.
 
 The canonical artifact path is the same across upgrades, but Zellij keys its compiled-module cache by that path, not the wasm bytes. Every plugin-addressed pipe therefore skips the cache: a live identity treats the flag as a no-op, and a missing identity compiles the bytes currently installed at the path.
 

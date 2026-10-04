@@ -2394,3 +2394,123 @@ fn zellij_client_options_never_enable_xor_booleans() {
         }
     }
 }
+
+/// A shim that counts its `action` runs in `runs` and answers each with
+/// `answer`, a shell fragment that may read the count as `$n`.
+#[cfg(unix)]
+fn counting_action_shim(answer: &str) -> (tempfile::TempDir, ZellijBackend) {
+    let (temp, shim) = zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+n=$(($(cat "$dir/runs" 2>/dev/null || echo 0) + 1))
+echo "$n" > "$dir/runs"
+{answer}
+"#
+    ));
+    // The shim is `zellij` in the temp dir, where the socket base would land.
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path().join("run"));
+    (temp, backend)
+}
+
+#[cfg(unix)]
+fn action_runs(temp: &tempfile::TempDir) -> u32 {
+    std::fs::read_to_string(temp.path().join("runs"))
+        .expect("shim run count")
+        .trim()
+        .parse()
+        .expect("numeric run count")
+}
+
+/// Put a socket-dir entry for `session` where the backend's commands look.
+#[cfg(unix)]
+fn leave_session_socket(temp: &tempfile::TempDir, session: &str) {
+    let socket =
+        socket::socket_headroom_with_xdg_override(session, Some(&temp.path().join("run"))).path;
+    std::fs::create_dir_all(socket.parent().expect("socket dir")).expect("socket dir");
+    std::fs::write(socket, "").expect("socket entry");
+}
+
+#[cfg(unix)]
+const REFUSE: &str = "printf 'There is no active session!\\n' >&2; exit 1";
+
+#[cfg(unix)]
+#[test]
+fn a_refusal_of_a_live_session_is_rerun_until_the_action_lands() {
+    for session in [Some("rimz-test"), None] {
+        let (temp, backend) = counting_action_shim(&format!(
+            "if [ \"$n\" -lt 3 ]; then {REFUSE}; fi; printf 'done\\n'"
+        ));
+        leave_session_socket(&temp, "rimz-test");
+
+        let output = backend
+            .session_action(session)
+            .arg("new-pane")
+            .run()
+            .expect("the refusal clears");
+
+        assert_eq!(output.stdout, b"done\n", "session {session:?}");
+        assert_eq!(action_runs(&temp), 3, "session {session:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_refusal_that_never_clears_stops_at_its_bound() {
+    let (temp, backend) = counting_action_shim(REFUSE);
+    leave_session_socket(&temp, "rimz-test");
+
+    let err = backend
+        .zellij_action("rimz-test")
+        .arg("new-pane")
+        .run()
+        .expect_err("the refusal stands");
+
+    assert!(matches!(err, MuxErr::Command { .. }), "{err:?}");
+    assert_eq!(action_runs(&temp), 1 + PREDISPATCH_REFUSAL_RERUNS);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_absent_session_and_an_unrelated_failure_are_answered_once() {
+    // No socket: the session is gone, and its refusal is the answer.
+    let (temp, backend) = counting_action_shim(REFUSE);
+    let err = backend
+        .zellij_action("rimz-test")
+        .arg("new-pane")
+        .run()
+        .expect_err("absent session");
+    assert!(
+        matches!(&err, MuxErr::Command { stderr, .. } if stderr.contains("no active session")),
+        "{err:?}"
+    );
+    assert_eq!(action_runs(&temp), 1);
+
+    // Another session's socket does not vouch for the named one.
+    leave_session_socket(&temp, "rimz-other");
+    backend
+        .zellij_action("rimz-test")
+        .arg("new-pane")
+        .run()
+        .expect_err("absent session beside a live one");
+    assert_eq!(action_runs(&temp), 2);
+
+    // A live session's own failure may follow a dispatched action.
+    let (temp, backend) = counting_action_shim("printf 'pane not found\\n' >&2; exit 1");
+    leave_session_socket(&temp, "rimz-test");
+    backend
+        .zellij_action("rimz-test")
+        .arg("close-pane")
+        .run()
+        .expect_err("unrelated failure");
+    assert_eq!(action_runs(&temp), 1);
+
+    // The banner on a successful exit is the caller's to classify.
+    let (temp, backend) = counting_action_shim("printf 'There is no active session!\\n' >&2");
+    leave_session_socket(&temp, "rimz-test");
+    backend
+        .zellij_action("rimz-test")
+        .arg("list-panes")
+        .run()
+        .expect("exit 0");
+    assert_eq!(action_runs(&temp), 1);
+}
