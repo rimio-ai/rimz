@@ -852,6 +852,7 @@ enum Takeover {
     WorkingOccupant,
     SymlinkedCheckout,
     FailedStop,
+    OpenRunPane,
     EmptyCheckout,
     TeamLayout,
 }
@@ -875,6 +876,13 @@ fn resident_takeover_of_a_symlinked_checkout_finds_the_occupant_at_its_physical_
 #[test]
 fn resident_takeover_failed_stop_commits_no_launch_or_ledger() {
     resident_takeover_case(Takeover::FailedStop);
+}
+
+/// A kept run's pane that is still listed after a failed close is an occupant
+/// still in the checkout.
+#[test]
+fn resident_takeover_of_a_run_whose_pane_stays_open_commits_no_launch_or_ledger() {
+    resident_takeover_case(Takeover::OpenRunPane);
 }
 
 #[test]
@@ -1005,6 +1013,23 @@ fn resident_takeover_case(case: Takeover) {
         2
     };
     assert_eq!(read_loop_instances(&env).0.len(), team_members);
+    let open_run_pane = case == Takeover::OpenRunPane;
+    if open_run_pane {
+        let mut run = rimz::store::run::RunRecord::new(
+            env.workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            rimz::agents::PermissionMode::Auto,
+            "task".to_owned(),
+            cwd.clone(),
+        );
+        run.agent_name = Some("old-coder".to_owned());
+        run.pane_id = Some(rimz::ids::PaneId::from_parts(
+            rimz::ids::MuxName::Zellij,
+            "terminal_51",
+        ));
+        run.status = rimz::store::run::RunStatus::Completed;
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+    }
     let runtime = env.runtime_paths();
     crate::common::room::seed_live_zellij_room(&runtime, &workspace.session_name, Vec::new());
     let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
@@ -1026,6 +1051,12 @@ fn resident_takeover_case(case: Takeover) {
                 "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                 format!("{} [Created 1s ago]\n", workspace.session_name),
             );
+        if open_run_pane {
+            command.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1").env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                r#"[{"id":51,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            );
+        }
         command
     };
     write_loop_config(
@@ -1076,9 +1107,15 @@ fn resident_takeover_case(case: Takeover) {
     let checkout = rimz::utils::path::normalize_path_lexical(&launch_cwd);
 
     let output = fire();
-    if case == Takeover::FailedStop {
+    if case == Takeover::FailedStop || open_run_pane {
         assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("no bound pane"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = if open_run_pane {
+            "terminal_51 is still open"
+        } else {
+            "no bound pane"
+        };
+        assert!(stderr.contains(reason), "{stderr}");
         assert!(!trace_text().contains("new-tab"), "{}", trace_text());
         assert!(ledger().is_empty());
         assert_eq!(last_loop_record(&env).result, LoopRunResult::Errored);
@@ -5943,6 +5980,19 @@ fn manual_fire_forwards_interrupt_to_the_check_group() {
 #[cfg(unix)]
 #[test]
 fn loop_stop_cancels_a_spawn_run_in_an_unroomed_project() {
+    loop_stop_of_a_spawn_run(false);
+}
+
+/// The run stops and its lock is released, then the command fails naming
+/// the pane it could not close.
+#[cfg(unix)]
+#[test]
+fn loop_stop_fails_after_stopping_a_run_whose_pane_stays_open() {
+    loop_stop_of_a_spawn_run(true);
+}
+
+#[cfg(unix)]
+fn loop_stop_of_a_spawn_run(pane_open: bool) {
     let env = Env::new();
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
@@ -6049,12 +6099,32 @@ fn loop_stop_cancels_a_spawn_run_in_an_unroomed_project() {
             .is_file()
     );
 
-    let stopped = command().args(["loop", "stop", "spawn"]).output().unwrap();
-    assert!(
-        stopped.status.success(),
-        "{}",
-        String::from_utf8_lossy(&stopped.stderr)
-    );
+    let mut stop = command();
+    if pane_open {
+        rimz::harness::run::record_pane(
+            &paths,
+            &run.run_id,
+            rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, "terminal_51"),
+        )
+        .unwrap();
+        stop.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1").env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            r#"[{"id":51,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+        );
+    }
+    let stopped = stop.args(["loop", "stop", "spawn"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&stopped.stderr);
+    assert_eq!(stopped.status.success(), !pane_open, "{stderr}");
+    if pane_open {
+        assert!(
+            String::from_utf8_lossy(&stopped.stdout).contains("loop `spawn`: stopped"),
+            "{stopped:?}"
+        );
+        assert!(
+            stderr.contains("is still open") && stderr.contains("rerun the stop"),
+            "{stderr}"
+        );
+    }
     assert_eq!(
         rimz::harness::run::load(&paths, &run.run_id)
             .unwrap()

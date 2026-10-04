@@ -1574,7 +1574,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
         let frame = rimz::sidebar::frame::assemble_frame(
             vec![pane],
             rimz::utils::time::unix_now_ms(),
-            session,
+            session.clone(),
         );
         rimz::disk::atomic::write_temp_then_rename_cache(
             &store.runtime_paths().pane_frame_path(),
@@ -1680,8 +1680,14 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             }
             None => {}
         }
-        run_success(
-            traced_rimz(&env, "idle-stop-trace.log")
+        let helper = || {
+            let mut helper = traced_rimz(&env, "idle-stop-trace.log");
+            // The stop picks its backend by the room's live session.
+            helper
+                .env(
+                    "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                    format!("{session} [Created 1s ago]\n"),
+                )
                 .env("RIMZ_TEST_PANE_LIST", &fixture)
                 .args(rimz::child_process::agent_helper_argv(
                     "idle-stop",
@@ -1692,22 +1698,50 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                         pane_id: pane_id.clone(),
                         label: "@claude".into(),
                     },
-                )),
-            "idle stop",
-        );
+                ));
+            helper
+        };
+        let idle_stop_assists = || {
+            let output = run_success(env.rimz().args(["stats", "--json"]), "assist stats");
+            let stats: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let assists = stats["assists"]["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|event| event["assist"] == "idle_stop")
+                .cloned()
+                .collect::<Vec<_>>();
+            (stats, assists)
+        };
+        if owed.is_none() {
+            // The pane is still listed and its close fails: nothing stopped,
+            // so the request stays armed for the producer's next ask.
+            let failed = helper()
+                .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
+                .env(
+                    "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                    r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+                )
+                .output()
+                .expect("idle stop with a failing close");
+            assert!(!failed.status.success());
+            assert_eq!(rimz::store::idle_stop::read(store.paths()), pending);
+            let (_, assists) = idle_stop_assists();
+            assert_eq!(assists.len(), 1, "{assists:?}");
+            assert_eq!(assists[0]["stopped"], false, "{assists:?}");
+            let error = assists[0]["error"].as_str().unwrap();
+            assert!(
+                error.contains(TRACE_PANE) && error.contains("rerun the stop"),
+                "{error}"
+            );
+        }
+        run_success(&mut helper(), "idle stop");
         assert_eq!(
             rimz::harness::run::load(store.paths(), &run.run_id).unwrap(),
             run,
             "a soft stop never rewrites a settled run"
         );
-        let output = run_success(env.rimz().args(["stats", "--json"]), "assist stats");
-        let stats: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let assists = stats["assists"]["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|event| event["assist"] == "idle_stop")
-            .collect::<Vec<_>>();
+        let (stats, assists) = idle_stop_assists();
         if let Some(owed) = owed {
             assert_eq!(
                 rimz::store::idle_stop::read(store.paths()),
@@ -1742,12 +1776,176 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             rimz::store::idle_stop::read(store.paths()).is_empty(),
             "the stop retires the session's request"
         );
-        assert_eq!(assists.len(), 1, "{assists:?}");
-        assert_eq!(assists[0]["stopped"], true, "{assists:?}");
-        assert_eq!(assists[0]["label"], "@claude");
-        assert_eq!(assists[0]["idle_after_secs"], 0);
+        assert_eq!(assists.len(), 2, "{assists:?}");
+        let stopped = assists
+            .iter()
+            .find(|assist| assist["stopped"] == true)
+            .unwrap_or_else(|| panic!("no stopped assist: {assists:?}"));
+        assert!(stopped.get("error").is_none(), "{stopped}");
+        assert_eq!(stopped["label"], "@claude");
+        assert_eq!(stopped["idle_after_secs"], 0);
         assert_eq!(stats["assists"]["rollup"]["idle_stops"], 1);
+        let trace = std::fs::read_to_string(env.project_root.join("idle-stop-trace.log")).unwrap();
+        assert_eq!(trace.matches("close-pane").count(), 2, "{trace}");
     }
+}
+
+/// A stop says which pane closed: a root whose close fails was not stopped and
+/// keeps its idle-stop request; a root that closed while its child failed was
+/// stopped and retired, and the command still fails naming the child.
+#[test]
+fn stop_reports_a_pane_left_open_and_a_child_that_failed() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let register = |id: &'static str, parent: Option<&'static str>| {
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            id,
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.agent_name = Some(id.to_owned());
+                let Some(parent) = parent else {
+                    observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+                    return;
+                };
+                observation.launch.parent_agent_id = Some(parent.into());
+                observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+                observation.launch.launch_depth = Some(1);
+            },
+        );
+    };
+    register("parent", None);
+    register("child", Some("parent"));
+    let stop = |args: &[&str], fail_close: bool| {
+        let mut command = traced_rimz(&env, "stop-trace.log");
+        if fail_close {
+            command.env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1").env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            );
+        }
+        let output = command
+            .args(["--mux", "zellij", "agents", "stop"])
+            .args(args)
+            .output()
+            .expect("agents stop");
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned()
+                + &String::from_utf8_lossy(&output.stderr),
+        )
+    };
+    let armed = || rimz::store::idle_stop::read(env.store().paths()).len();
+    assert!(stop(&["@parent", "--when-idle"], false).0);
+
+    let (ok, text) = stop(&["@parent"], true);
+    assert!(!ok, "{text}");
+    assert!(text.contains("@parent#project was not stopped: "), "{text}");
+    assert!(text.contains("close-pane"), "{text}");
+    assert_eq!(armed(), 1, "a root left open keeps its request");
+
+    let (ok, text) = stop(&["@parent", "--all"], true);
+    assert!(!ok, "{text}");
+    assert!(text.contains("error @parent#project: "), "{text}");
+    assert!(!text.contains("stopped @parent"), "{text}");
+    assert_eq!(armed(), 1);
+
+    let (ok, text) = stop(&["@parent"], false);
+    assert!(!ok, "{text}");
+    assert!(text.contains("@parent#project stopped, but: "), "{text}");
+    assert!(
+        text.contains("@child") && text.contains("has no bound pane"),
+        "{text}"
+    );
+    assert_eq!(armed(), 0, "a root that closed is retired");
+}
+
+/// An orphan whose run pane stays open is not stamped ended: the repair
+/// fails and the next sweep finds it again.
+#[test]
+fn orphan_repair_records_no_end_while_the_run_pane_stays_open() {
+    use rimz::store::run::{RunRecord, RunStatus};
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let kind = AgentKind::new_unchecked("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "child",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            observation.launch.parent_agent_id = Some("gone".into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+        },
+    );
+    let store = env.store();
+    let mut run = RunRecord::new(
+        env.workspace_id.clone(),
+        kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "task".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some("child".into());
+    run.status = RunStatus::Completed;
+    rimz::harness::run::create(store.paths(), &run).expect("create run");
+    let session = env.resolve_workspace(&env.project_root).session_name;
+
+    // The helper finds the store by workspace id, which needs the committed
+    // workspace record a store-writing command leaves.
+    run_success(
+        env.rimz().args(["events", "emit", "orphan.test"]),
+        "events emit",
+    );
+    let request = rimz::harness::orphan_sweep::OrphanSubagentRequest {
+        workspace_id: env.workspace_id.clone(),
+        child_kind: kind,
+        child_agent_id: "child".into(),
+        parent_agent_id: "gone".into(),
+    };
+    let output = traced_rimz(&env, "orphan-trace.log")
+        .env("RIMZ_TEST_SUBAGENT_ORPHAN_GRACE_MS", "0")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{session} [Created 1s ago]\n"),
+        )
+        .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            r#"[{"id":3,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+        )
+        .args(rimz::child_process::agent_helper_argv(
+            "orphan-subagent",
+            &request,
+        ))
+        .output()
+        .expect("orphan repair");
+
+    assert!(
+        !output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert_eq!(agents.len(), 1);
+    assert!(agents[0].ended_at.is_none(), "{:?}", agents[0].ended_at);
+    let failed = env
+        .diag_records(&session)
+        .into_iter()
+        .find_map(|record| match record.event {
+            rimz::diag::record::DiagEvent::SubagentOrphanRepairFailed { error, .. } => Some(error),
+            _ => None,
+        })
+        .expect("a repair-failed diagnostic");
+    assert!(failed.contains("is still open"), "{failed}");
 }
 
 #[test]

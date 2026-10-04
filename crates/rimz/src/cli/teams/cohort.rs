@@ -78,14 +78,8 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
     let mut out = render::out();
     for agent in cohort.members.iter().copied() {
         let label = rimz::address::agent_handle(agent, &peers, true);
-        match agents_cmd::stop_resolved(&ctx, globals, &snapshot, agent, &mut tracker) {
-            Ok(true) => writeln!(out, "stopped {label}")?,
-            Ok(false) => {}
-            Err(err) => {
-                failed = true;
-                writeln!(out, "error {label}: {err:#}")?;
-            }
-        }
+        failed |= agents_cmd::stop_resolved(&ctx, globals, &snapshot, agent, &mut tracker)?
+            .report(&mut out, &label)?;
     }
     if failed {
         std::process::exit(1);

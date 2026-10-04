@@ -176,19 +176,13 @@ pub(in crate::cli) fn restart_resolved(
     } else {
         rimz::harness::schedule::arm::RetireScope::UnrestorableOnly
     };
-    let dropped = match rimz::harness::schedule::arm::retire_session(
+    let retired = rimz::harness::schedule::arm::retire_session(
         &workspace.project_root,
         &agent.kind,
         &agent.agent_id,
         scope,
-    ) {
-        Ok(dropped) => dropped,
-        Err(err) => {
-            writeln!(crate::cli::render::err(), "rimz: {err}")?;
-            0
-        }
-    };
-    let note = dropped_note(dropped);
+    );
+    let note = dropped_note(retired_count(retired, &mut crate::cli::render::err())?);
 
     if let (Some(identity), Some(reason)) = (fresh_identity, fresh_reason) {
         Ok(format!(
@@ -375,6 +369,21 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
     })
 }
 
+/// The waits a retirement dropped, counted whether or not it then failed;
+/// the failure goes to `err`.
+fn retired_count(
+    retired: Result<usize, rimz::harness::schedule::arm::RetireFailure>,
+    err: &mut impl Write,
+) -> Result<usize> {
+    match retired {
+        Ok(dropped) => Ok(dropped),
+        Err(failure) => {
+            writeln!(err, "rimz: {failure}")?;
+            Ok(failure.dropped())
+        }
+    }
+}
+
 /// What the restart line says about waits the replaced session took with it.
 /// Team-declared bindings come back at the resumed registration, so only the
 /// rest are worth reporting.
@@ -460,6 +469,18 @@ fn settle_peer_before_restart(store: &rimz::Store, agent: &AgentState) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_retirement_still_counts_the_waits_it_dropped() {
+        let mut err = Vec::new();
+        let failure = rimz::harness::schedule::arm::RetireFailure::after_dropping(2);
+        assert_eq!(retired_count(Err(failure), &mut err).unwrap(), 2);
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "rimz: retiring session deliveries: withdrawal failed\n"
+        );
+        assert_eq!(retired_count(Ok(3), &mut Vec::new()).unwrap(), 3);
+    }
 
     #[test]
     fn restarting_peer_fails_only_its_open_turn() {

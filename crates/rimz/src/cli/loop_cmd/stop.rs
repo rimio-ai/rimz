@@ -1,6 +1,7 @@
 //! Stop an active loop runner through durable cancellation and a SIGTERM backstop.
 
 use super::*;
+use crate::cli::supervised::StopRunErr;
 use rimz::harness::schedule::runner::{StopOutcome, stop_task};
 
 pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
@@ -10,23 +11,43 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
             .map(|(root, _)| root)
             .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?,
     };
-    match stop_task(name, &root, |workspace, paths, record| {
+    let mut pane_open = None;
+    let outcome = stop_task(name, &root, |workspace, paths, record| {
         let runtime = RuntimePaths::for_state(&paths)?;
         let store = rimz::Store::open(paths, runtime)?;
         match (workspace, record) {
             (_, None) => Ok(()),
             (Some(workspace), Some(record)) => {
-                crate::cli::supervised::stop_supervised_run(workspace, &store, globals, record)
+                match crate::cli::supervised::stop_supervised_run(
+                    workspace, &store, globals, record,
+                ) {
+                    // The run did stop: the lock wait and the SIGTERM backstop
+                    // still apply, and the open pane fails the command after them.
+                    Err(StopRunErr::PaneOpen(open)) => {
+                        pane_open = Some(open);
+                        Ok(())
+                    }
+                    Err(StopRunErr::NotCanceled(err)) => Err(err),
+                    Ok(()) => Ok(()),
+                }
             }
             (None, Some(record)) => crate::cli::supervised::cancel_supervised_run(&store, record),
         }
-    })? {
+    });
+    let outcome = match (outcome, &pane_open) {
+        (Err(err), Some(open)) => return Err(err.context(format!("loop `{name}`: {open}"))),
+        (outcome, _) => outcome?,
+    };
+    match outcome {
         StopOutcome::NoActiveRun => writeln!(ui::out(), "loop `{name}`: no active run")?,
         StopOutcome::Stopped { run_id, signaled } => {
             let run_id = run_id.map(|id| format!(" · run {id}")).unwrap_or_default();
             let backstop = if signaled { " · SIGTERM" } else { "" };
             writeln!(ui::out(), "loop `{name}`: stopped{run_id}{backstop}")?;
         }
+    }
+    if let Some(open) = pane_open {
+        bail!("loop `{name}`: {open}");
     }
     Ok(())
 }

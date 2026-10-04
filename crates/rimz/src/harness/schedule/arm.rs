@@ -210,8 +210,35 @@ pub fn arm_delivery(
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("retiring session deliveries: {0}")]
-pub struct RetireFailure(String);
+#[error("retiring session deliveries: {message}")]
+pub struct RetireFailure {
+    message: String,
+    dropped: usize,
+}
+
+impl RetireFailure {
+    fn before_removal(err: impl std::fmt::Display) -> Self {
+        Self {
+            message: err.to_string(),
+            dropped: 0,
+        }
+    }
+
+    /// A failure after `dropped` rows went, for a consumer's test.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn after_dropping(dropped: usize) -> Self {
+        Self {
+            message: "withdrawal failed".to_owned(),
+            dropped,
+        }
+    }
+
+    /// How many rows nothing arms again were removed before the failure: the
+    /// count `Ok` would have carried.
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+}
 
 /// Which of a session's rows a retirement takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,7 +261,8 @@ pub enum RetireScope {
 /// Overlay cleanup is best-effort and warns instead of failing, so the count is
 /// reported whatever the overlays do; `Err` means the durable map could not be
 /// rewritten and nothing was removed, or the session's idle-stop request could
-/// not be withdrawn after its rows went.
+/// not be withdrawn after its rows went, and carries the count either way
+/// ([`RetireFailure::dropped`]).
 pub fn retire_session(
     project_root: &Path,
     kind: &crate::ids::AgentKind,
@@ -242,9 +270,9 @@ pub fn retire_session(
     scope: RetireScope,
 ) -> Result<usize, RetireFailure> {
     let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
-        .map_err(|err| RetireFailure(err.to_string()))?;
+        .map_err(RetireFailure::before_removal)?;
     let runtime = crate::disk::paths::RuntimePaths::for_project_root(project_root)
-        .map_err(|err| RetireFailure(err.to_string()))?;
+        .map_err(RetireFailure::before_removal)?;
     retire_session_in(&paths, &runtime, project_root, kind, session, scope)
 }
 
@@ -257,7 +285,7 @@ fn retire_session_in(
     scope: RetireScope,
 ) -> Result<usize, RetireFailure> {
     let retired = super::instances::retire_session(paths, kind, session, scope)
-        .map_err(|err| RetireFailure(err.to_string()))?;
+        .map_err(RetireFailure::before_removal)?;
     let mut dropped = 0;
     for (name, entry) in &retired {
         if entry.team.is_none() && entry.loop_task.is_none() {
@@ -280,8 +308,10 @@ fn retire_session_in(
     }
     // A pending idle stop belongs to the pane it would close, so it goes under
     // either scope: a resumed restart must not inherit it.
-    crate::store::idle_stop::withdraw(paths, kind, session)
-        .map_err(|err| RetireFailure(err.to_string()))?;
+    crate::store::idle_stop::withdraw(paths, kind, session).map_err(|err| RetireFailure {
+        message: err.to_string(),
+        dropped,
+    })?;
     Ok(dropped)
 }
 
@@ -300,9 +330,9 @@ pub fn retire_ended_sessions<'a>(
     agents: impl FnOnce() -> std::borrow::Cow<'a, [AgentState]>,
 ) -> Result<usize, RetireFailure> {
     let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
-        .map_err(|err| RetireFailure(err.to_string()))?;
+        .map_err(RetireFailure::before_removal)?;
     let runtime = crate::disk::paths::RuntimePaths::for_project_root(project_root)
-        .map_err(|err| RetireFailure(err.to_string()))?;
+        .map_err(RetireFailure::before_removal)?;
     retire_ended_sessions_in(&paths, &runtime, project_root, agents)
 }
 
@@ -333,11 +363,17 @@ fn retire_ended_sessions_in<'a>(
             RetireScope::Session,
         ) {
             Ok(count) => dropped += count,
-            Err(err) => failures.push(err.to_string()),
+            Err(err) => {
+                dropped += err.dropped;
+                failures.push(err.message);
+            }
         }
     }
     if !failures.is_empty() {
-        return Err(RetireFailure(failures.join("; ")));
+        return Err(RetireFailure {
+            message: failures.join("; "),
+            dropped,
+        });
     }
     Ok(dropped)
 }
@@ -683,6 +719,38 @@ mod tests {
             assert_eq!(dropped, 0, "a request is not a wait row");
             assert_eq!(idle_stop_sessions(&paths), ["resting"], "{scope:?}");
         }
+    }
+
+    /// The rows go before the idle-stop request, so a withdrawal that fails
+    /// still reports the waits already dropped.
+    #[test]
+    fn a_failed_withdrawal_carries_the_waits_already_dropped() {
+        let (dir, mut paths, runtime) = idle_stop_fixture();
+        let entry = TaskEntry {
+            wait: Some(TaskTarget {
+                kind: crate::ids::AgentKind::new_unchecked("claude"),
+                session: "stopping".into(),
+                handle: "@stopping".to_owned(),
+            }),
+            root: dir.path().to_path_buf(),
+            ..TaskEntry::default()
+        };
+        super::super::instances::insert_delivery(&paths, None, &entry, &Default::default())
+            .expect("wait row");
+        // A directory cannot be opened as the withdrawal's lock file.
+        paths.workspace_lock = dir.path().to_path_buf();
+        let now = Timestamp::UNIX_EPOCH;
+        let mut ended = crate::testkit::agent_state("claude", "stopping", now);
+        ended.ended_at = Some(now);
+
+        let failure = retire_ended_sessions_in(&paths, &runtime, dir.path(), || {
+            std::borrow::Cow::Owned(vec![ended])
+        })
+        .expect_err("the withdrawal fails");
+
+        assert_eq!(failure.dropped(), 1, "{failure}");
+        assert!(super::super::instances::pinned_sessions(&paths.root).is_empty());
+        assert_eq!(idle_stop_sessions(&paths), ["stopping", "resting"]);
     }
 
     /// A session holding only an idle-stop request, no instance row, is still

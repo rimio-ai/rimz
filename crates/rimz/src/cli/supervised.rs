@@ -142,25 +142,39 @@ fn preflight_program(
     Ok(())
 }
 
+/// Why a supervised stop did not end with the run terminal and its pane gone.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum StopRunErr {
+    /// The cancel failed; nothing was closed.
+    #[error(transparent)]
+    NotCanceled(anyhow::Error),
+    /// The run is terminal and its pane was not confirmed closed.
+    #[error(transparent)]
+    PaneOpen(#[from] pane::PaneOpen),
+}
+
 /// Cancel a live supervised run, then reclaim its pane after the existing
 /// backend grace. Terminal `--keep` records remain terminal and only lose the
-/// pane.
+/// pane. `Ok` means the run is terminal and its pane is gone or never existed.
 pub(crate) fn stop_supervised_run(
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,
     globals: &GlobalFlags,
     run: &RunRecord,
-) -> Result<()> {
-    cancel_supervised_run(store, run)?;
-    if let Ok(backend) = pane::backend_for_workspace_session(workspace, globals) {
-        pane::close_stopped_run_pane_after_grace(
-            backend.as_ref(),
-            store,
-            &workspace.session_name,
-            run,
-            pane::STOP_BACKSTOP_GRACE,
-        );
-    }
+) -> std::result::Result<(), StopRunErr> {
+    cancel_supervised_run(store, run).map_err(StopRunErr::NotCanceled)?;
+    let backend =
+        pane::backend_for_workspace_session(workspace, globals).map_err(|err| pane::PaneOpen {
+            pane: None,
+            reason: format!("{err:#}"),
+        })?;
+    pane::close_stopped_run_pane_after_grace(
+        backend.as_ref(),
+        store,
+        &workspace.session_name,
+        run,
+        pane::STOP_BACKSTOP_GRACE,
+    )?;
     Ok(())
 }
 

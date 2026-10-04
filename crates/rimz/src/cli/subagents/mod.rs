@@ -875,14 +875,8 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     }
     for child in children {
         let label = rimz::address::agent_handle(child, &peers, true);
-        match agents_cmd::stop_resolved(&ctx, globals, &snapshot, child, &mut tracker) {
-            Ok(true) => writeln!(out, "stopped {label}")?,
-            Ok(false) => {}
-            Err(err) => {
-                failed = true;
-                writeln!(out, "error {label}: {err:#}")?;
-            }
-        }
+        failed |= agents_cmd::stop_resolved(&ctx, globals, &snapshot, child, &mut tracker)?
+            .report(&mut out, &label)?;
     }
     if failed {
         std::process::exit(1);

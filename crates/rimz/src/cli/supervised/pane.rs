@@ -483,34 +483,33 @@ pub(super) fn backend_for_workspace_session(
     Ok(rimz::mux::backend_for(mux))
 }
 
+/// Close the recorded pane, then the agent row's; `Ok` when either close went
+/// through or the run has no pane.
 pub(super) fn close_run_pane(
     backend: &dyn rimz::mux::MuxBackend,
     store: &rimz::Store,
     session_name: &str,
     record: &RunRecord,
-) {
+) -> rimz::mux::Result<()> {
+    let mut recorded = Ok(());
     if let Some(pane_id) = record.pane_id.as_ref() {
         match backend.close_pane(session_name, pane_id) {
-            Ok(()) => return,
-            Err(err) => tracing::debug!(
-                run_id = %record.run_id,
-                pane = %pane_id,
-                error = %err,
-                "run cleanup could not close the recorded pane",
-            ),
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                tracing::debug!(
+                    run_id = %record.run_id,
+                    pane = %pane_id,
+                    error = %err,
+                    "run cleanup could not close the recorded pane",
+                );
+                recorded = Err(err);
+            }
         }
     }
     let Some(pane) = resolve_run_pane_from_snapshot(store, session_name, record) else {
-        return;
+        return recorded;
     };
-    if let Err(err) = backend.close_pane(&pane.session_name, &pane.pane_id) {
-        tracing::debug!(
-            run_id = %record.run_id,
-            pane = %pane.pane_id,
-            error = %err,
-            "run cleanup could not close the agent pane",
-        );
-    }
+    backend.close_pane(&pane.session_name, &pane.pane_id)
 }
 
 pub(crate) fn capture_failure_tail(
@@ -538,47 +537,96 @@ pub(crate) fn capture_failure_tail(
     }
 }
 
+/// A stopped run's pane that was not confirmed closed.
+#[derive(Debug)]
+pub(crate) struct PaneOpen {
+    pub(super) pane: Option<PaneId>,
+    pub(super) reason: String,
+}
+
+impl std::fmt::Display for PaneOpen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.pane {
+            Some(pane) => write!(f, "pane {pane} is still open")?,
+            None => f.write_str("the run's pane was not closed")?,
+        }
+        write!(f, ": {}; rerun the stop to close it", self.reason)
+    }
+}
+
+impl std::error::Error for PaneOpen {}
+
 pub(super) fn close_stopped_run_pane_after_grace(
     backend: &dyn rimz::mux::MuxBackend,
     store: &rimz::Store,
     session_name: &str,
     record: &RunRecord,
     grace: Duration,
-) {
-    let deadline = Instant::now() + grace;
-    loop {
-        let Some((latest, pane)) = latest_resolved_run_pane(store, session_name, record) else {
-            if Instant::now() >= deadline {
-                return;
-            }
-            std::thread::sleep(STOP_BACKSTOP_POLL);
-            continue;
-        };
-        match backend.list_panes(PaneListOptions {
+) -> Result<(), PaneOpen> {
+    settle_stopped_run_pane(
+        store,
+        session_name,
+        record,
+        grace,
+        |pane| match backend.list_panes(PaneListOptions {
             session_name: Some(pane.session_name.clone()),
             command_timeout: Some(STOP_BACKSTOP_POLL),
+            // A cached topology may predate the pane: only mux truth proves it closed.
+            consistency: PaneReadConsistency::RequireAuthoritative,
             ..Default::default()
         }) {
-            Ok(listing)
-                if listing
+            Ok(listing) => Some(
+                listing
                     .panes
                     .iter()
-                    .any(|candidate| candidate.pane_id == pane.pane_id) =>
-            {
-                if Instant::now() >= deadline {
-                    close_run_pane(backend, store, session_name, &latest);
-                    return;
-                }
-            }
-            Ok(_) => return,
+                    .any(|candidate| candidate.pane_id == pane.pane_id),
+            ),
             Err(err) => {
                 tracing::debug!(
                     run_id = %record.run_id,
                     error = %err,
-                    "run stop backstop skipped; pane list unavailable",
+                    "run stop backstop: pane list unavailable",
                 );
-                return;
+                None
             }
+        },
+        |latest| close_run_pane(backend, store, session_name, latest),
+    )
+}
+
+/// The backstop's verdict. `listed` answers whether the pane is still in the
+/// multiplexer's listing, `None` when no listing could be read; a listing
+/// without the pane, or a close that went through, is the only proof it closed.
+pub(super) fn settle_stopped_run_pane(
+    store: &rimz::Store,
+    session_name: &str,
+    record: &RunRecord,
+    grace: Duration,
+    mut listed: impl FnMut(&ResolvedRunPane) -> Option<bool>,
+    close: impl FnOnce(&RunRecord) -> rimz::mux::Result<()>,
+) -> Result<(), PaneOpen> {
+    let deadline = Instant::now() + grace;
+    loop {
+        let resolved = latest_resolved_run_pane(store, session_name, record);
+        if let Some((_, pane)) = &resolved
+            && listed(pane) == Some(false)
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let Some((latest, pane)) = resolved else {
+                return Ok(());
+            };
+            let Err(err) = close(&latest) else {
+                return Ok(());
+            };
+            if listed(&pane) == Some(false) {
+                return Ok(());
+            }
+            return Err(PaneOpen {
+                pane: Some(pane.pane_id),
+                reason: err.to_string(),
+            });
         }
         std::thread::sleep(STOP_BACKSTOP_POLL);
     }

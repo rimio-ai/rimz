@@ -33,3 +33,14 @@ Local contract for `crates/rimz/tests/integration/` — the crate's single integ
 - External seams are faked with the [`tests/fixtures/`](../fixtures/) shims (`zellij-trace`, `git-trace`, `ssh-trace`, `codex-appserver-stub`); mux-driving tests route `rimz` invocations at an isolated tmux server env and a private Zellij runtime so a developer's live sessions stay untouched.
 - The journey's hook-firing stub agent fires no lifecycle hook for pasted text, so a message it receives stays `Sent`, never `Delivered`. To prove receipt, fire the receiving turn with `env.run_installed_hook_in_pane` (`UserPromptSubmit` carrying the rendered message text, then `Stop`). Split panes shrink the target pane, so capture with scrollback when asserting on text that may have scrolled.
 - Time is deterministic: fixed-epoch fixtures, boundary-exact.
+
+## Multiplexer test doubles
+
+No in-process `MuxBackend` fake exists; a failing multiplexer call is a fake executable.
+
+| Double | Reach | Can make fail |
+| --- | --- | --- |
+| `zellij-trace` fixture binary, behind `RIMZ_ZELLIJ_BIN` (`common::shim::zellij_trace_shim`) | every suite; logs each argv | writes and Enter (`RIMZ_TEST_ZELLIJ_MODE=fail-write`, `fail-enter`), session birth (`birth-fails`, `socket-overflow-on-birth`), `new-tab` (`RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB`), `close-pane` (`RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE`). A cached pane listing comes from the topology cache `common::room::seed_live_zellij_room` writes; an authoritative one runs `list-panes`, scripted by `RIMZ_TEST_ZELLIJ_LIST_PANES` |
+| `fake_zellij_script` in `zellij_health.rs` | that file | `list-panes`: sleep past a timeout, or exit non-zero |
+| `fake_tmux` in `asks.rs`, `tmux_shim` in `web.rs`, `common::shim::write_path_shim` for a custom body | PATH shims | nothing as written; a custom body decides |
+| `counting_action_shim` in `src/mux/zellij/tests.rs` | library unit tests only | any `action`, by run count |
