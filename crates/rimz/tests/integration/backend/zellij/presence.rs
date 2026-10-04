@@ -131,17 +131,17 @@ fn live_work_boundary_resize_is_audited() {
     assert_eq!(moves, 1, "expected one boundary audit record: {records}");
 }
 
-/// The presence-plugin wasm `cargo xtask build-plugin` produces, honoring
-/// `CARGO_TARGET_DIR`. `None` self-skips the live plugin test — CI's
-/// build-plugin gate runs before the suite, so the artifact is present there.
-pub(in crate::backend::zellij) fn presence_wasm_artifact() -> Option<PathBuf> {
-    let target_root = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"));
-    let wasm = target_root.join("wasm32-wasip1/release/rimz-presence-zellij.wasm");
+/// The vendored presence-plugin wasm, the file `build.rs` embeds into the
+/// `rimz` binary under test. It is tracked, so the live plugin tests never
+/// self-skip for a missing artifact; a contributor iterating on the plugin
+/// runs `cargo xtask plugin-refresh` to move it.
+pub(in crate::backend::zellij) fn presence_wasm_artifact() -> PathBuf {
     // Canonical, because the permission grant the test seeds is keyed on the
-    // exact path string Zellij sees — a `../..` in it misses the grant.
-    wasm.canonicalize().ok().filter(|wasm| wasm.is_file())
+    // exact path string Zellij sees.
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("presence/rimz-presence-zellij.wasm")
+        .canonicalize()
+        .expect("vendored presence wasm is tracked")
 }
 
 pub(in crate::backend::zellij) fn seed_presence_permissions(xdg: &Path, wasm: &Path) {
@@ -394,10 +394,7 @@ fn wait_for_switch_settled(log: &Path, prior_lines: usize) -> Vec<String> {
 #[test]
 fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
     require_zellij!();
-    let Some(wasm) = presence_wasm_artifact() else {
-        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
-        return;
-    };
+    let wasm = presence_wasm_artifact();
     match zellij::capabilities() {
         Ok(caps)
             if caps
@@ -539,10 +536,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 #[test]
 fn presence_identity_transition_keeps_global_background_updates() {
     require_zellij!();
-    let Some(wasm) = presence_wasm_artifact() else {
-        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
-        return;
-    };
+    let wasm = presence_wasm_artifact();
     match zellij::capabilities() {
         Ok(caps)
             if caps
@@ -906,10 +900,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
 #[test]
 fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
     require_zellij!();
-    let Some(wasm) = presence_wasm_artifact() else {
-        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
-        return;
-    };
+    let wasm = presence_wasm_artifact();
     match zellij::capabilities() {
         Ok(caps)
             if caps
@@ -1000,10 +991,7 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
 #[test]
 fn room_key_presses_from_different_cwd_reach_the_plugin() {
     require_zellij!();
-    let Some(wasm) = presence_wasm_artifact() else {
-        crate::common::skip("presence wasm not built (run `cargo xtask build-plugin`)");
-        return;
-    };
+    let wasm = presence_wasm_artifact();
     match zellij::capabilities() {
         Ok(caps)
             if caps

@@ -106,6 +106,14 @@ impl HostSandbox {
         skip_report(&records)
     }
 
+    /// The `--deny-skips` refusal for this run: the self-skipped tests whose
+    /// reason `allowed` does not list, then the fix. `None` when every skip is
+    /// allowed.
+    pub(crate) fn denied_skips(&self, allowed: &AllowedSkips) -> Option<String> {
+        let records = std::fs::read_to_string(self.env.get(SKIP_LOG_ENV)?).ok()?;
+        denied_skips(&records, allowed)
+    }
+
     fn for_manual_command() -> Result<Self> {
         Self::new()
     }
@@ -193,31 +201,91 @@ const SKIP_LOG_ENV: &str = "RIMZ_TEST_SKIP_LOG";
 
 const SKIP_NAMES_SHOWN: usize = 5;
 
-/// Distinct tests grouped by reason; a test nextest retried appends its record
-/// again and still counts once.
-fn skip_report(records: &str) -> Option<String> {
-    let tests: BTreeMap<&str, &str> = records
+/// Each distinct test with its reason; a test nextest retried appends its
+/// record again and still counts once.
+fn skipped_tests(records: &str) -> BTreeMap<&str, &str> {
+    records
         .lines()
         .filter_map(|line| line.split_once('\t'))
-        .collect();
+        .collect()
+}
+
+fn skip_report(records: &str) -> Option<String> {
+    let tests = skipped_tests(records);
     if tests.is_empty() {
         return None;
     }
+    let plural = if tests.len() == 1 { "" } else { "s" };
+    Some(format!(
+        "self-skipped {} test{plural}:{}",
+        tests.len(),
+        reason_lines(&tests, SKIP_NAMES_SHOWN)
+    ))
+}
+
+/// One line per reason: its test count, then up to `names_shown` test names.
+fn reason_lines(tests: &BTreeMap<&str, &str>, names_shown: usize) -> String {
     let mut by_reason: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (name, reason) in &tests {
+    for (name, reason) in tests {
         by_reason.entry(reason).or_default().push(name);
     }
-    let plural = if tests.len() == 1 { "" } else { "s" };
-    let mut report = format!("self-skipped {} test{plural}:", tests.len());
+    let mut lines = String::new();
     for (reason, names) in by_reason {
-        let shown = names[..names.len().min(SKIP_NAMES_SHOWN)].join(", ");
-        let more = match names.len().saturating_sub(SKIP_NAMES_SHOWN) {
+        let shown = names[..names.len().min(names_shown)].join(", ");
+        let more = match names.len().saturating_sub(names_shown) {
             0 => String::new(),
             more => format!(", +{more} more"),
         };
-        report.push_str(&format!("\n  {reason} ({}): {shown}{more}", names.len()));
+        lines.push_str(&format!("\n  {reason} ({}): {shown}{more}", names.len()));
     }
-    Some(report)
+    lines
+}
+
+/// The allow-list a `cargo xtask test --deny-skips` run reads, relative to the
+/// workspace root.
+const ALLOWED_SKIPS_FILE: &str = ".config/allowed-test-skips.txt";
+
+/// The self-skip reasons a `--deny-skips` run tolerates: one entry per line of
+/// [`ALLOWED_SKIPS_FILE`], matching every recorded reason that starts with it.
+pub(crate) struct AllowedSkips(Vec<String>);
+
+impl AllowedSkips {
+    pub(crate) fn load(workspace_root: &Path) -> Result<Self> {
+        let path = workspace_root.join(ALLOWED_SKIPS_FILE);
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading the --deny-skips allow-list {}", path.display()))?;
+        Ok(Self::parse(&text))
+    }
+
+    fn parse(text: &str) -> Self {
+        Self(
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(str::to_owned)
+                .collect(),
+        )
+    }
+
+    fn allows(&self, reason: &str) -> bool {
+        self.0.iter().any(|entry| reason.starts_with(entry))
+    }
+}
+
+/// Every offending test is named: the refusal is what CI acts on.
+fn denied_skips(records: &str, allowed: &AllowedSkips) -> Option<String> {
+    let mut tests = skipped_tests(records);
+    tests.retain(|_, reason| !allowed.allows(reason));
+    if tests.is_empty() {
+        return None;
+    }
+    let plural = if tests.len() == 1 { "" } else { "s" };
+    Some(format!(
+        "--deny-skips: {} test{plural} self-skipped for a reason {ALLOWED_SKIPS_FILE} does not list:{}\n\
+         install the missing capability in ci/Dockerfile, or add the reason to {ALLOWED_SKIPS_FILE}",
+        tests.len(),
+        reason_lines(&tests, usize::MAX),
+    ))
 }
 
 fn sandbox_env(root: &Path) -> BTreeMap<&'static str, PathBuf> {
@@ -737,6 +805,64 @@ journey::sandbox::b\tAF_UNIX bind is forbidden in this sandbox
             sandbox.skip_report().as_deref(),
             Some("self-skipped 1 test:\n  git not on PATH (1): one")
         );
+    }
+
+    #[test]
+    fn denied_skips_name_the_unlisted_tests_and_end_with_the_fix() {
+        let allowed = AllowedSkips::parse(
+            "# root in the job container\n\nmode 000 files remain readable\nbubblewrap unusable:\n",
+        );
+        let listed = "\
+sandbox::a\tbubblewrap unusable: bwrap not on PATH
+sandbox::b\tbubblewrap unusable: probe failed
+sandbox::c\tmode 000 files remain readable
+";
+        assert_eq!(denied_skips(listed, &allowed), None);
+        assert_eq!(denied_skips("", &allowed), None);
+
+        let unlisted = (0..6)
+            .map(|index| format!("tmux::t{index}\ttmux not on PATH\n"))
+            .chain(["web::one\t# root in the job container\n".to_owned()])
+            .collect::<String>();
+        assert_eq!(
+            denied_skips(&format!("{listed}{unlisted}{unlisted}"), &allowed).as_deref(),
+            Some(
+                "--deny-skips: 7 tests self-skipped for a reason .config/allowed-test-skips.txt does not list:\n  \
+                 # root in the job container (1): web::one\n  \
+                 tmux not on PATH (6): tmux::t0, tmux::t1, tmux::t2, tmux::t3, tmux::t4, tmux::t5\n\
+                 install the missing capability in ci/Dockerfile, or add the reason to .config/allowed-test-skips.txt"
+            )
+        );
+    }
+
+    #[test]
+    fn allowed_skips_load_from_the_workspace_and_a_missing_file_names_its_path() {
+        let workspace = TempDir::new().unwrap();
+        let missing = AllowedSkips::load(workspace.path())
+            .err()
+            .expect("a missing allow-list is an error");
+        assert!(
+            format!("{missing:#}").contains(".config/allowed-test-skips.txt"),
+            "{missing:#}"
+        );
+
+        std::fs::create_dir(workspace.path().join(".config")).unwrap();
+        std::fs::write(
+            workspace.path().join(ALLOWED_SKIPS_FILE),
+            "git not on PATH\n",
+        )
+        .unwrap();
+        let allowed = AllowedSkips::load(workspace.path()).unwrap();
+        let sandbox = HostSandbox::for_tests(workspace.path()).unwrap();
+        assert_eq!(sandbox.denied_skips(&allowed), None);
+        std::fs::write(
+            &sandbox.env[SKIP_LOG_ENV],
+            "one\tgit not on PATH\ntwo\ttmux not on PATH\n",
+        )
+        .unwrap();
+        let denied = sandbox.denied_skips(&allowed).expect("tmux is unlisted");
+        assert!(denied.contains("tmux not on PATH (1): two"), "{denied}");
+        assert!(!denied.contains("one"), "{denied}");
     }
 
     #[test]

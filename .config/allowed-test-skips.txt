@@ -1,0 +1,14 @@
+# Self-skip reasons `cargo xtask test --deny-skips` tolerates. One entry per
+# line; an entry matches every recorded reason that starts with it. Any other
+# self-skip fails the run. A capability CI can provide is installed in
+# ci/Dockerfile instead of being listed here; each entry says why it cannot.
+
+# GitHub container jobs run as root, which bypasses the permission bits and
+# the signal protection these three tests rely on.
+mode 000 files remain readable
+pid 1 is not signal-protected from this user
+this user bypasses directory write permissions
+
+# The CI image carries no bubblewrap, so `rimz::sandbox::preflight` fails for
+# the sandbox suite.
+bubblewrap unusable:
