@@ -1,4 +1,7 @@
-FROM node:26-trixie
+# The slim variant carries Node for Actions on a bare Debian. The full tag adds
+# the buildpack-deps SCM tools and -dev libraries, which no gate reads, so every
+# OS package a consumer needs is named in the apt layer below.
+FROM node:26-trixie-slim
 
 ARG ZELLIJ_VERSION=0.45.0
 ARG TTYD_VERSION=1.7.7
@@ -32,10 +35,14 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 # tmux 3.5a and Python 3.13, both below the versions CI targets. libevent,
 # ncurses, and bison are the tmux build deps (build-essential/pkg-config cover
 # the rest). bubblewrap is what the sandbox-isolation tests launch agents in.
+# procps supplies the `kill` and `ps` binaries xtask, the suite, and rimz spawn
+# by name. zlib1g-dev lets cargo-vet's libz-sys link the system zlib instead of
+# compiling its bundled copy.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git gh curl ca-certificates xz-utils \
       build-essential pkg-config libssl-dev \
       libevent-dev libncurses-dev bison chromium bubblewrap \
+      procps zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
@@ -48,10 +55,12 @@ RUN curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
 # file from the working directory upward, so the copy at `/` selects the pin,
 # with its components and targets, for every cargo command in this build and in
 # a job outside its checkout; a checkout's own file is nearer and wins. No
-# default toolchain is set, so nothing here repeats the channel.
+# default toolchain is set, so nothing here repeats the channel. The minimal
+# profile leaves out only `rust-docs`: the pin file's components and targets
+# install on top of it.
 COPY rust-toolchain.toml /rust-toolchain.toml
 RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://sh.rustup.rs | \
-      sh -s -- -y --no-modify-path --default-toolchain none \
+      sh -s -- -y --no-modify-path --profile minimal --default-toolchain none \
  && rustup toolchain install \
  && rustc -V && cargo -V
 
@@ -171,6 +180,7 @@ RUN rustup show active-toolchain | grep -F "(overridden by '/rust-toolchain.toml
  && ttyd --version \
  && chromium --version \
  && bwrap --version \
+ && ps --version \
  && mold --version \
  && zig version \
  && rcodesign --version \
