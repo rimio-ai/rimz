@@ -91,7 +91,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(WorktreeCiPassing, "✓", Some("\u{f058}")),
     glyph!(WorktreeCiFailing, "✕", Some("\u{f057}")),
     glyph!(WorktreeCiPending, "◌", Some("\u{f192}")),
-    glyph!(WorktreeReconciling, "⟳", Some("\u{f4db}")),
+    glyph!(WorktreeReconciling, "⟳", Some("\u{f46a}")),
     glyph!(WorktreeExpand, "▸", None),
     glyph!(WorktreeDotted, "┄", None),
     glyph!(ChannelHash, "#", Some("\u{f292}")),
