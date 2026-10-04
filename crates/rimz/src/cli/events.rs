@@ -239,6 +239,8 @@ mod tests {
             "pr.closed",
             "pr.behind",
             "pr.conflicted",
+            "pr.queued",
+            "pr.dequeued",
         ] {
             let name = raw.parse().unwrap();
             assert!(validate_emit_source(&name, "cli").is_err(), "{raw}");
@@ -247,6 +249,7 @@ mod tests {
                 SignalSource::Forge
             );
         }
+        assert_eq!(rimz::forge::ForgeSignal::ALL.len(), 9);
         let refusal = validate_emit_source(&"pr.unknown".parse().unwrap(), "forge")
             .unwrap_err()
             .to_string();
@@ -258,6 +261,8 @@ mod tests {
             "pr.closed",
             "pr.behind",
             "pr.conflicted",
+            "pr.queued",
+            "pr.dequeued",
         ] {
             assert!(refusal.contains(raw), "{refusal}");
         }

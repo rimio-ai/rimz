@@ -3760,6 +3760,83 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(read_loop_run_records(&env).len(), 1);
     assert_eq!(env.store().list_pending_messages().unwrap().len(), 1);
+
+    // A merge-queue rejection reaches its waiter with the reason and the
+    // queue's own checks link; the sibling `pr.queued` is recorded skipped.
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "queue-wait",
+            "--wait",
+            "@claude",
+            "--signal",
+            "pr.dequeued",
+            "--match",
+            "branch=feature-signal",
+            "--prompt",
+            "Fix the queue failure",
+        ],
+    );
+    let queue_checks_url = "https://github.com/org/repo/commit/queue-a/checks";
+    for (name, payload) in [
+        (
+            "pr.queued",
+            json!({"branch": "feature-signal", "queued_at": "2026-10-03T12:28:46Z"}),
+        ),
+        (
+            "pr.dequeued",
+            json!({
+                "branch": "feature-signal", "dequeued_at": "2026-10-03T12:46:03Z",
+                "reason": "failed_checks", "queue_checks_url": queue_checks_url,
+            }),
+        ),
+    ] {
+        loop_ok(
+            &env,
+            &[
+                "events",
+                "emit",
+                name,
+                "--source",
+                "forge",
+                "--json",
+                &payload.to_string(),
+            ],
+        );
+    }
+    wait_for_loop_run_records(&env, "queue-wait SignalSkipped then Delivered", |records| {
+        records.len() == 3
+    });
+    let records = read_loop_run_records(&env);
+    let queue_results: Vec<_> = records
+        .iter()
+        .filter(|record| record.task == "queue-wait")
+        .map(|record| {
+            let signal = record.signal.as_ref().expect("signal forensics");
+            (signal.name.as_str(), record.result)
+        })
+        .collect();
+    assert_eq!(
+        queue_results,
+        vec![
+            ("pr.queued", LoopRunResult::SignalSkipped),
+            ("pr.dequeued", LoopRunResult::Delivered),
+        ],
+        "{records:?}"
+    );
+    let messages = env.store().list_pending_messages().unwrap();
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    // Substrings only: the body's layout around these two values is not this test's contract.
+    let queue_message = messages
+        .iter()
+        .find(|message| message.text.contains("Fix the queue failure"))
+        .unwrap_or_else(|| panic!("{messages:?}"));
+    assert_eq!(queue_message.agent_id.as_str(), "sess-signal-live");
+    for value in ["failed_checks", queue_checks_url] {
+        assert!(queue_message.text.contains(value), "{}", queue_message.text);
+    }
 }
 
 #[test]

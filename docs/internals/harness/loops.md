@@ -381,12 +381,12 @@ Both key a task by scope: project and instance tasks as `<workspace_id>::<name>`
 
 A signal is a name, a JSON object payload, a source, and, for watched commands, an outcome. The first three persist, and [`store/event.rs`](../../../crates/rimz/src/store/event.rs) owns them as `SignalName`, `SignalSource`, and `SignalEventPayload`. The outcome does not persist, so the runtime `Signal` and its `WatchOutcome` stay in the harness and convert down through `From<&Signal> for SignalEventPayload`.
 
-`SignalName` is lowercase dot-separated segments, each starting with a lowercase letter or digit and otherwise `[a-z0-9_-]`, at most 64 bytes. The family is the first segment. `rimz events emit --source cli` refuses the `RESERVED_FAMILIES` (`agent`, `wait`, `team`, `ci`, `pr`, `trunk`, `worktree`). The hidden `--source forge` accepts exactly the seven forge names, and `--source git` accepts only `trunk.moved`; neither authenticates the caller.
+`SignalName` is lowercase dot-separated segments, each starting with a lowercase letter or digit and otherwise `[a-z0-9_-]`, at most 64 bytes. The family is the first segment. `rimz events emit --source cli` refuses the `RESERVED_FAMILIES` (`agent`, `wait`, `team`, `ci`, `pr`, `trunk`, `worktree`). The hidden `--source forge` accepts exactly the nine forge names, and `--source git` accepts only `trunk.moved`; neither authenticates the caller.
 
 | Source | Producer | Names |
 | --- | --- | --- |
 | `Cli` | `rimz events emit <name> --json '{…}'` | anything the grammar accepts outside the reserved families |
-| `Forge` | the sidebar's PR-state refresh, which spawns `rimz events emit --source forge` on a transition ([state.md § Push channels](../sidebar/state.md#push-channels)) | `ci.passed`, `ci.failed`, `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted` |
+| `Forge` | the sidebar's PR-state refresh, which spawns `rimz events emit --source forge` on a transition ([state.md § Push channels](../sidebar/state.md#push-channels)) | `ci.passed`, `ci.failed`, `pr.opened`, `pr.merged`, `pr.closed`, `pr.behind`, `pr.conflicted`, `pr.queued`, `pr.dequeued` |
 | `Git` | the sidebar's project-root trunk lane | `trunk.moved` |
 | `Worktree` | successful managed worktree operations, appended and fired in-process | `worktree.created`, `worktree.removed` |
 | `Lifecycle` | the lifecycle hook, from the events its own store append produced | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended`; `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
@@ -394,6 +394,8 @@ A signal is a name, a JSON object payload, a source, and, for watched commands, 
 | `Watch` | `rimz wait watch <name>` at a check-in or terminal command, PID, check, or file outcome, and the elder's watch-lost rule | `wait.<task-name>` |
 
 GitHub-only `pr.behind` and `pr.conflicted` fire for open PRs on entry (including first sight), or for a changed head while the state persists, without repeating for unchanged heads. Conflict keys use the head where mergeability settled. Their payload is the `pr.merged` context with `state: "open"`, plus `pr_head`, `base` when known, and `behind_by` for `pr.behind` only; `head` stays local. The [PR producer](../sidebar/state.md#push-channels) owns detection and carry-forward. Both names inherit PR-family scoping and `branch`/`path` matching; a matching `pr.merged` subscriber records `SignalSkipped` for either sibling, while a failed match records nothing.
+
+GitHub-only `pr.queued` and `pr.dequeued` follow the same rule with a different key: the queue entry's `enqueuedAt`, or the `createdAt` of the latest removal whose reason is not `merged`. They fire on first sight and on a changed timestamp, never for a changed head, and a queued PR that merges emits `pr.merged` alone. Their payload is the `pr.merged` context with `state: "open"`, `pr_head` (always the PR head), and `base` when known; `pr.queued` adds `queued_at`, and `pr.dequeued` adds `dequeued_at`, `reason`, and `queue_checks_url` when the removal names the queue's commit. `ForgeSignal::ALL` alone admits a `--source forge` name, so a variant missing from it is emitted by the poll and refused by the child.
 
 ### Trunk and worktree signals
 

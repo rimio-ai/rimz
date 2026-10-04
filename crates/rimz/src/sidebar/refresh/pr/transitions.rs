@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use super::{RepoGroup, Target};
-use crate::forge::pr_state::{PrLink, PrStateCache, SettledMergeability, TargetStamp};
+use crate::forge::pr_state::{PrLink, PrQueueFact, PrStateCache, SettledMergeability, TargetStamp};
 use crate::forge::{ForgeSignal, RemoteRepo};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
@@ -46,7 +46,12 @@ pub(super) fn transitions(
                 ),
             ));
         }
-        for signal in [ForgeSignal::PrBehind, ForgeSignal::PrConflicted] {
+        for signal in [
+            ForgeSignal::PrBehind,
+            ForgeSignal::PrConflicted,
+            ForgeSignal::PrQueued,
+            ForgeSignal::PrDequeued,
+        ] {
             if let Some(key) = open_key(Some(next_link), signal)
                 && Some(key) != open_key(prior_link, signal)
             {
@@ -124,22 +129,26 @@ pub(super) fn transitions(
     signals
 }
 
+/// What an open-PR signal re-emits on: the head it was read at for an adverse
+/// state, the forge's own timestamp for a merge-queue entry or removal.
 fn open_key(link: Option<&PrLink>, signal: ForgeSignal) -> Option<&str> {
     let facts = link
         .filter(|link| link.state == WorktreePrState::Open)?
         .open
         .as_ref()?;
-    match signal {
-        ForgeSignal::PrBehind if facts.behind_by.is_some_and(|behind| behind > 0) => {
+    match (signal, &facts.queue) {
+        (ForgeSignal::PrBehind, _) if facts.behind_by.is_some_and(|behind| behind > 0) => {
             Some(facts.head.as_str())
         }
-        ForgeSignal::PrConflicted => match &facts.mergeability {
+        (ForgeSignal::PrConflicted, _) => match &facts.mergeability {
             Some(SettledMergeability::Conflicting(head)) => Some(head.as_str()),
             _ => None,
         },
+        (ForgeSignal::PrQueued, Some(PrQueueFact::Queued { at }))
+        | (ForgeSignal::PrDequeued, Some(PrQueueFact::Dequeued { at, .. })) => Some(at.as_str()),
         _ => None,
     }
-    .filter(|head| !head.is_empty())
+    .filter(|key| !key.is_empty())
 }
 
 fn target_for_path<'a>(
@@ -211,21 +220,48 @@ fn payload(
     let state = match signal {
         Some(ForgeSignal::PrMerged) => Some("merged"),
         Some(ForgeSignal::PrClosed) => Some("closed"),
-        Some(ForgeSignal::PrOpened | ForgeSignal::PrBehind | ForgeSignal::PrConflicted) => {
-            Some("open")
-        }
-        _ => None,
+        Some(
+            ForgeSignal::PrOpened
+            | ForgeSignal::PrBehind
+            | ForgeSignal::PrConflicted
+            | ForgeSignal::PrQueued
+            | ForgeSignal::PrDequeued,
+        ) => Some("open"),
+        Some(ForgeSignal::CiPassed | ForgeSignal::CiFailed) | None => None,
     };
     if let Some(state) = state {
         payload.insert("state".to_owned(), Value::String(state.to_owned()));
     }
     if let Some(signal) = signal
-        && let Some(head) = open_key(link, signal)
+        && let Some(key) = open_key(link, signal)
         && let Some(facts) = link.and_then(|link| link.open.as_ref())
     {
-        payload.insert("pr_head".to_owned(), Value::String(head.to_owned()));
+        let mut insert = |name: &str, value: &str| {
+            payload.insert(name.to_owned(), Value::String(value.to_owned()));
+        };
+        match (signal, &facts.queue) {
+            (ForgeSignal::PrQueued, _) => {
+                insert("pr_head", &facts.head);
+                insert("queued_at", key);
+            }
+            (ForgeSignal::PrDequeued, Some(PrQueueFact::Dequeued { reason, commit, .. })) => {
+                insert("pr_head", &facts.head);
+                insert("dequeued_at", key);
+                if let Some(reason) = reason {
+                    insert("reason", reason);
+                }
+                if let Some(url) = commit
+                    .as_deref()
+                    .and_then(|commit| remote?.checks_web_url(commit))
+                {
+                    insert("queue_checks_url", &url);
+                }
+            }
+            // An adverse state's key is the head it was read at.
+            _ => insert("pr_head", key),
+        }
         if let Some(base) = &facts.base {
-            payload.insert("base".to_owned(), Value::String(base.clone()));
+            insert("base", base);
         }
         if signal == ForgeSignal::PrBehind
             && let Some(behind) = facts.behind_by
