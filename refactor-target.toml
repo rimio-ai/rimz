@@ -436,7 +436,8 @@ path = "crates/rimz/src/harness"
 # The resident takeover selector and its open-turn verdict cross the scheduler/CLI seam (+4).
 # The idle-stop decision and helper request cross the library/CLI seam; the producer hook crosses to sidebar refresh.
 # 679: `idle_stop::project_requests`, the enrich-time projection of pending idle stops onto their agents.
-surface-budget = 679
+# 680: `idle_stop::closing_with`, the cascade the idle-stop helper guards run by run before it stops.
+surface-budget = 680
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

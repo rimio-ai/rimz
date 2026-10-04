@@ -1,5 +1,8 @@
 use super::*;
-use crate::agents::{PendingWait, PendingWaitTrigger, PermissionMode};
+use crate::agents::context::{AgentContext, TurnSettle, TurnSettleOutcome};
+use crate::agents::{
+    AgentLifecycleObservation, LifecycleSignal, PendingWait, PendingWaitTrigger, PermissionMode,
+};
 use crate::ids::MuxName;
 use crate::store::idle_stop::IdleStopRequest;
 use crate::store::message::{DeliveryGate, MessageRecord, MessageStatus};
@@ -38,8 +41,12 @@ fn rested() -> (AgentState, IdleStop) {
 
 const DUE: i64 = 1_180;
 
+fn decide_alone(store: &Store, agent: &AgentState, stop: &IdleStop, now: Timestamp) -> Verdict {
+    decide(store, std::slice::from_ref(agent), agent, stop, now).expect("decide")
+}
+
 fn verdict(store: &Store, agent: &AgentState, stop: &IdleStop, now: i64) -> Verdict {
-    decide(store, agent, stop, ts(now)).expect("decide")
+    decide(store, std::slice::from_ref(agent), agent, stop, ts(now)).expect("decide")
 }
 
 #[test]
@@ -156,11 +163,11 @@ fn the_clock_runs_from_the_later_of_turn_end_and_request() {
     fractional.turn_ended_at = Some(ms(1_000_900));
     assert_eq!(due_at(&fractional, &three_minutes), Some(ms(1_180_900)));
     assert_eq!(
-        decide(&store, &fractional, &three_minutes, ms(1_180_899)).expect("decide"),
+        decide_alone(&store, &fractional, &three_minutes, ms(1_180_899)),
         Verdict::Hold(Hold::Clock)
     );
     assert_eq!(
-        decide(&store, &fractional, &three_minutes, ms(1_180_900)).expect("decide"),
+        decide_alone(&store, &fractional, &three_minutes, ms(1_180_900)),
         Verdict::Stop { idle_secs: 180 }
     );
 
@@ -173,6 +180,223 @@ fn the_clock_runs_from_the_later_of_turn_end_and_request() {
     assert_eq!(
         verdict(&store, &agent, &stop, 5_000),
         Verdict::Stop { idle_secs: 0 }
+    );
+}
+
+/// A row the lifecycle left `status` whose provider marker proves it settled at 2000.
+fn settled_by_marker(status: AgentStatus, outcome: TurnSettleOutcome) -> AgentState {
+    let (mut agent, _) = rested();
+    agent.status = status;
+    agent.last_activity = ts(1_900);
+    agent.context = Some(AgentContext {
+        settle: Some(TurnSettle::new(ts(2_000), outcome)),
+        ..AgentContext::default()
+    });
+    agent
+}
+
+#[test]
+fn a_turn_settled_only_by_a_provider_marker_rests_from_the_marker() {
+    let (_dir, store) = fixture();
+    let (_, stop) = rested();
+    for (status, outcome) in [
+        (AgentStatus::Running, TurnSettleOutcome::Interrupted),
+        (AgentStatus::Waiting, TurnSettleOutcome::Interrupted),
+        (AgentStatus::Running, TurnSettleOutcome::Complete),
+    ] {
+        // The previous turn ended at 1000 and the request is older still, so
+        // only the marker restarts the clock.
+        let agent = settled_by_marker(status, outcome);
+        let case = format!("{status:?} {outcome:?}");
+        assert_eq!(due_at(&agent, &stop), Some(ts(2_180)), "{case}");
+        assert_eq!(
+            verdict(&store, &agent, &stop, 2_179),
+            Verdict::Hold(Hold::Clock),
+            "{case}"
+        );
+        assert_eq!(
+            verdict(&store, &agent, &stop, 2_180),
+            Verdict::Stop { idle_secs: 180 },
+            "{case}"
+        );
+
+        let request = IdleStopRequest {
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            stop: stop.clone(),
+        };
+        crate::store::idle_stop::arm(store.paths(), request).expect("arm");
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            store.paths().workspace_id.clone(),
+            vec![agent],
+            ts(2_179),
+        );
+        let mut spawned = 0;
+        stop_idle_agents_with(&snapshot, store.paths(), store.runtime_paths(), |_| {
+            spawned += 1;
+            true
+        });
+        assert_eq!(
+            spawned, 0,
+            "the producer waits out the marker's rest: {case}"
+        );
+        project_requests(&mut snapshot, store.paths());
+        assert_eq!(
+            snapshot.agents[0]
+                .idle_stop
+                .as_ref()
+                .and_then(|stop| stop.due_at),
+            Some(ts(2_180)),
+            "{case}"
+        );
+    }
+
+    // A marker the session's later events passed proves nothing.
+    let mut stale = settled_by_marker(AgentStatus::Running, TurnSettleOutcome::Interrupted);
+    stale.last_activity = ts(2_000);
+    assert_eq!(
+        verdict(&store, &stale, &stop, 9_000),
+        Verdict::Hold(Hold::Busy)
+    );
+    let mut resting = settled_by_marker(AgentStatus::Idle, TurnSettleOutcome::Complete);
+    resting.last_activity = ts(1_000);
+    assert_eq!(
+        due_at(&resting, &stop),
+        Some(ts(DUE)),
+        "a hook-ended turn ignores the marker"
+    );
+}
+
+#[test]
+fn a_failed_compaction_restarts_the_clock() {
+    let (_dir, store) = fixture();
+    for signal in [
+        LifecycleSignal::Registered,
+        LifecycleSignal::TurnStarted { turn_id: None },
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    ] {
+        observe(&store, "session-1", None, signal);
+    }
+    std::thread::sleep(Duration::from_millis(5));
+    for signal in [
+        LifecycleSignal::Compacting,
+        LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: true,
+        },
+    ] {
+        observe(&store, "session-1", None, signal);
+    }
+    let agent = store.snapshot_cached().expect("snapshot").agents.remove(0);
+    let ended = agent.turn_ended_at.expect("turn end");
+    assert!(
+        resting(&agent).is_ok(),
+        "the failed compaction leaves it resting"
+    );
+    assert!(
+        agent.last_activity > ended,
+        "the compaction came after the turn end"
+    );
+    let stop = IdleStop {
+        after_secs: 180,
+        requested_at: Timestamp::UNIX_EPOCH,
+        requested_by: None,
+    };
+    let after = jiff::SignedDuration::from_secs(180);
+    assert_eq!(
+        decide_alone(&store, &agent, &stop, ended + after),
+        Verdict::Hold(Hold::Clock),
+        "rest is counted from the compaction, not the turn before it"
+    );
+    assert_eq!(
+        decide_alone(&store, &agent, &stop, agent.last_activity + after),
+        Verdict::Stop { idle_secs: 180 }
+    );
+}
+
+/// A live `rimz subagents` child of `parent`, resting with nothing owed.
+fn kept_child(parent: &AgentState, id: &str) -> AgentState {
+    let (mut child, _) = rested();
+    child.agent_id = id.into();
+    child.name = Some(id.to_owned());
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child
+}
+
+#[test]
+fn the_stop_waits_for_every_agent_it_would_close() {
+    let (_dir, store) = fixture();
+    let (parent, stop) = rested();
+    let child = kept_child(&parent, "child");
+    let tree =
+        |agents: &[AgentState]| decide(&store, agents, &parent, &stop, ts(DUE)).expect("decide");
+    assert_eq!(
+        tree(&[parent.clone(), child.clone()]),
+        Verdict::Stop { idle_secs: 180 },
+        "a kept child at rest with nothing owed closes with its parent"
+    );
+    // The child needs no rest of its own: the grace is the root's.
+    let mut fresh = child.clone();
+    fresh.turn_ended_at = Some(ts(DUE));
+    assert_eq!(
+        tree(&[parent.clone(), fresh]),
+        Verdict::Stop { idle_secs: 180 }
+    );
+
+    let mut working = child.clone();
+    working.status = AgentStatus::Running;
+    assert_eq!(
+        tree(&[parent.clone(), working.clone()]),
+        Verdict::Hold(Hold::Tree)
+    );
+    let mut ended = working.clone();
+    ended.ended_at = Some(ts(1_100));
+    assert_eq!(
+        tree(&[parent.clone(), ended]),
+        Verdict::Stop { idle_secs: 180 },
+        "an ended child is not closed, so it holds nothing"
+    );
+    let mut grandchild = kept_child(&child, "grandchild");
+    grandchild.status = AgentStatus::Running;
+    assert_eq!(
+        tree(&[parent.clone(), child.clone(), grandchild]),
+        Verdict::Hold(Hold::Tree)
+    );
+    let mut unrelated = working;
+    unrelated.parent_agent_id = Some("someone-else".into());
+    assert_eq!(
+        tree(&[parent.clone(), unrelated]),
+        Verdict::Stop { idle_secs: 180 }
+    );
+
+    // Work queued for a kept, joined child holds the parent until it lands.
+    let message = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &child,
+        "one more thing".to_owned(),
+        DeliveryGate::Done,
+    );
+    store
+        .queue_message(&message, "idle-stop-test")
+        .expect("queue");
+    assert_eq!(
+        tree(&[parent.clone(), child.clone()]),
+        Verdict::Hold(Hold::Tree)
+    );
+    assert!(
+        store
+            .cancel_message(&message.message_id, "idle-stop-test", "test")
+            .expect("cancel")
+    );
+    assert_eq!(
+        tree(&[parent.clone(), child]),
+        Verdict::Stop { idle_secs: 180 }
     );
 }
 
@@ -217,9 +441,11 @@ fn an_undelivered_message_holds_until_it_is_terminal() {
 
 /// Register `id` in the store's log, as the owed-wake reads find it.
 fn register(store: &Store, id: &str, parent: Option<&AgentState>) {
-    use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
-    let mut observation =
-        AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+    observe(store, id, parent, LifecycleSignal::Registered);
+}
+
+fn observe(store: &Store, id: &str, parent: Option<&AgentState>, signal: LifecycleSignal) {
+    let mut observation = AgentLifecycleObservation::new(Some(id.into()), signal);
     observation.agent_name = Some(id.to_owned());
     if let Some(parent) = parent {
         observation.launch.parent_agent_id = Some(parent.agent_id.clone());

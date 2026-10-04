@@ -138,7 +138,9 @@ fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags
         return Ok(());
     };
     if agent.ended_at.is_some() {
-        bail!("{label} has ended, and --when-idle needs one live agent");
+        bail!(
+            "{label} has ended, and --when-idle needs one live agent; reopen it with `rimz agents resume` first"
+        );
     }
     if agent.is_provider_subagent() {
         bail!(
@@ -199,11 +201,16 @@ fn stop_live_agent(
     globals: &GlobalFlags,
     agent: &AgentState,
 ) -> Result<()> {
-    if let Some(run) = newest_run_for_agent(store, agent)?.filter(|run| run.peer.is_none()) {
+    if let Some(run) = stop_run(store, agent)? {
         supervised::stop_supervised_run(workspace, store, globals, &run)
     } else {
         close_agent_pane(workspace, agent)
     }
+}
+
+/// The supervised run a stop of `agent` settles, when it has one.
+pub(super) fn stop_run(store: &rimz::Store, agent: &AgentState) -> Result<Option<RunRecord>> {
+    Ok(newest_run_for_agent(store, agent)?.filter(|run| run.peer.is_none()))
 }
 
 pub(in crate::cli) fn stop_resolved(

@@ -1525,7 +1525,7 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
 fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run() {
     use rimz::harness::idle_stop::IdleStopHelperRequest;
     use rimz::store::run::{RunRecord, RunStatus};
-    for owed in [Some("message"), Some("wait"), None] {
+    for owed in [Some("message"), Some("wait"), Some("collision"), None] {
         let env = Env::new();
         env.install_agent_hooks("claude");
         let pane_id = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
@@ -1638,6 +1638,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].stop.after_secs, 0);
 
+        let mut collision = None;
         let as_agent = |args: &[&str]| {
             run_success(
                 env.rimz()
@@ -1659,7 +1660,24 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                 );
                 store.queue_message(&message, "idle-stop-test").unwrap();
             }
-            Some(_) => as_agent(&["wait", "--in", "30m"]),
+            Some("wait") => as_agent(&["wait", "--in", "30m"]),
+            // Another kind's newer run under this agent's name is the run a
+            // stop of this agent would select and cancel.
+            Some(_) => {
+                let agent = store.snapshot_cached().unwrap().agents.remove(0);
+                let mut other = RunRecord::new(
+                    env.workspace_id.clone(),
+                    AgentKind::new_unchecked("codex"),
+                    rimz::agents::PermissionMode::Auto,
+                    "task".to_owned(),
+                    env.project_root.clone(),
+                );
+                other.agent_name = agent.name;
+                other.started_at = run.started_at + std::time::Duration::from_secs(60);
+                other.status = RunStatus::Running;
+                rimz::harness::run::create(store.paths(), &other).expect("create run");
+                collision = Some(other);
+            }
             None => {}
         }
         run_success(
@@ -1702,6 +1720,13 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             );
             if owed == "wait" {
                 as_agent(&["wait", "cancel", "--all"]);
+            }
+            if let Some(other) = &collision {
+                assert_eq!(
+                    &rimz::harness::run::load(store.paths(), &other.run_id).unwrap(),
+                    other,
+                    "the conflicting run is not canceled"
+                );
             }
             assert_eq!(
                 stop(&["@claude", "--when-idle", "off"]),

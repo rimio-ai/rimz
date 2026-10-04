@@ -13,11 +13,13 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::owed::OwedWake;
-use crate::agents::state::{IdleStop, PendingIdleStop};
+use crate::agents::state::{IdleStop, PendingIdleStop, settled_outcome};
 use crate::agents::{AgentState, AgentStatus, TurnPhase};
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::StoreErr;
+use crate::store::message::MessageRecord;
+use crate::store::run::RunRecord;
 use crate::store::snapshot::{SidebarSnapshot, find_agent};
 use crate::{RuntimePaths, StatePaths, Store};
 
@@ -59,6 +61,8 @@ pub enum Hold {
     OpenRun,
     /// A team seat whose board does not read `Done` is owed a stage.
     Board,
+    /// An agent the stop would close with this one is working or owed something.
+    Tree,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,12 +99,60 @@ fn resting(agent: &AgentState) -> Result<(), Hold> {
     Ok(())
 }
 
-/// A turn that ends after the request restarts the clock; a request against
-/// an agent already resting waits its whole duration.
+/// Rest runs from the latest of the request, the turn end, the provider
+/// marker that settled a turn no hook closed, and the session's last event:
+/// a failed compaction returns to rest without a new turn end.
 fn rested_since(agent: &AgentState, stop: &IdleStop) -> Timestamp {
-    agent
-        .turn_ended_at
-        .map_or(stop.requested_at, |ended| ended.max(stop.requested_at))
+    let context = agent.context.as_ref();
+    let marker = settled_outcome(agent.status, context, agent.last_activity)
+        .and_then(|_| context?.settle)
+        .map(|settle| settle.at);
+    [agent.turn_ended_at, marker, Some(agent.last_activity)]
+        .into_iter()
+        .flatten()
+        .fold(stop.requested_at, Timestamp::max)
+}
+
+/// The live `rimz subagents` descendants a stop of `agent` closes with it.
+pub fn closing_with<'a>(agents: &'a [AgentState], agent: &AgentState) -> Vec<&'a AgentState> {
+    let mut closing: Vec<&AgentState> = Vec::new();
+    let mut pending = crate::address::launched_children(agents, agent);
+    while let Some(child) = pending.pop() {
+        if child.ended_at.is_some()
+            || (child.kind == agent.kind && child.agent_id == agent.agent_id)
+            || closing.iter().any(|seen| std::ptr::eq(*seen, child))
+        {
+            continue;
+        }
+        closing.push(child);
+        pending.extend(crate::address::launched_children(agents, child));
+    }
+    closing
+}
+
+/// What `agent` is still owed, beyond what its own rollup row shows.
+fn debt(
+    store: &Store,
+    messages: &[MessageRecord],
+    runs: &[RunRecord],
+    agent: &AgentState,
+) -> Result<Option<Hold>, StoreErr> {
+    if let Some(owed) = super::owed::owed_wake(store, &agent.kind, &agent.agent_id)? {
+        return Ok(Some(Hold::Owed(owed)));
+    }
+    if messages
+        .iter()
+        .any(|message| message.same_agent_card(agent) && !message.status.is_terminal())
+    {
+        return Ok(Some(Hold::Message));
+    }
+    if runs
+        .iter()
+        .any(|run| run.matches_agent(agent) && !run.status.is_terminal())
+    {
+        return Ok(Some(Hold::OpenRun));
+    }
+    Ok(None)
 }
 
 /// When the stop falls due while the agent keeps resting, or `None` while a
@@ -114,9 +166,12 @@ pub fn due_at(agent: &AgentState, stop: &IdleStop) -> Option<Timestamp> {
 }
 
 /// The whole decision, read fresh: the helper calls it immediately before it
-/// stops the agent. `agent` comes from an enriched snapshot.
+/// stops the agent. `agent` and `agents` come from one enriched snapshot. The
+/// clock is `agent`'s alone; every agent closing with it must be at rest with
+/// nothing owed.
 pub fn decide(
     store: &Store,
+    agents: &[AgentState],
     agent: &AgentState,
     stop: &IdleStop,
     now: Timestamp,
@@ -127,21 +182,15 @@ pub fn decide(
     if due_at(agent, stop).is_none_or(|due| now < due) {
         return Ok(Verdict::Hold(Hold::Clock));
     }
-    if let Some(owed) = super::owed::owed_wake(store, &agent.kind, &agent.agent_id)? {
-        return Ok(Verdict::Hold(Hold::Owed(owed)));
+    let messages = store.list_messages()?;
+    let runs = super::run::list(store.paths())?;
+    if let Some(hold) = debt(store, &messages, &runs, agent)? {
+        return Ok(Verdict::Hold(hold));
     }
-    if store
-        .list_messages()?
-        .iter()
-        .any(|message| message.same_agent_card(agent) && !message.status.is_terminal())
-    {
-        return Ok(Verdict::Hold(Hold::Message));
-    }
-    if super::run::list(store.paths())?
-        .iter()
-        .any(|run| run.matches_agent(agent) && !run.status.is_terminal())
-    {
-        return Ok(Verdict::Hold(Hold::OpenRun));
+    for child in closing_with(agents, agent) {
+        if resting(child).is_err() || debt(store, &messages, &runs, child)?.is_some() {
+            return Ok(Verdict::Hold(Hold::Tree));
+        }
     }
     if agent.is_team_seat() && !board_done(agent) {
         return Ok(Verdict::Hold(Hold::Board));
