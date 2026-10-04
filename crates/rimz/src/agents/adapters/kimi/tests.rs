@@ -1155,8 +1155,37 @@ fn stop_failure_label_prefers_error_message_and_caps_it() {
         label(json!({"error_type": " rate_limit "})),
         Some("rate_limit".to_owned())
     );
+    for blank in ["", "   "] {
+        assert_eq!(
+            label(json!({"error_message": blank, "error_type": " rate_limit "})),
+            Some("rate_limit".to_owned())
+        );
+        assert_eq!(
+            label(json!({"error_message": blank, "error_type": blank})),
+            None
+        );
+    }
+}
+
+#[test]
+fn stop_failure_with_blank_message_classifies_from_error_type() {
+    let adapter = KimiAdapter;
+    let class = |error_type: &str| {
+        hook_output(
+            &adapter,
+            "StopFailure",
+            &json!({"error_message": "", "error_type": error_type}),
+        )
+        .turn_error()
+        .unwrap()
+        .class
+    };
     assert_eq!(
-        label(json!({"error_message": "   ", "error_type": "rate_limit"})),
-        None
+        class("APIProviderQuotaExhaustedError"),
+        TurnErrorClass::PausedRateLimit
+    );
+    assert_eq!(
+        class("APIProviderOverloadedError"),
+        TurnErrorClass::PausedOverloaded
     );
 }
