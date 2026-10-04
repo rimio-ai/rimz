@@ -1962,6 +1962,283 @@ fn tmux_settled_subagent_reports_to_parent() {
 }
 
 #[test]
+fn tmux_subagent_startup_death_relaunches_once_and_reports_completed() {
+    let Some(child) = startup_death_child("1", "0") else {
+        return;
+    };
+    assert_eq!(child.launches, 2, "one death, one relaunch");
+    assert_eq!(child.run.status, rimz::store::run::RunStatus::Completed);
+    let row = format!("@{}: completed", child.name);
+    assert!(child.digest.contains(&row), "{}", child.digest);
+    let response_path = rimz::harness::run::response_path(child.env.store().paths(), &child.run)
+        .expect("response path");
+    assert!(
+        child
+            .digest
+            .contains(&format!("response: {}", response_path.display())),
+        "{}",
+        child.digest
+    );
+    assert!(child.parent_frame.contains(&row), "{}", child.parent_frame);
+    match child.retries.as_slice() {
+        [
+            rimz::harness::assist_log::Assist::LaunchRetry {
+                label,
+                run_id,
+                exit_code,
+                relaunched,
+                error,
+                ..
+            },
+        ] => {
+            assert_eq!(label, &format!("@{}", child.name));
+            assert_eq!(run_id, &child.run.run_id);
+            assert_eq!(*exit_code, Some(7));
+            assert!(*relaunched && error.is_none());
+        }
+        other => panic!("expected one launch_retry assist: {other:?}"),
+    }
+}
+
+#[test]
+fn tmux_subagent_reports_failed_when_the_relaunch_also_dies_at_startup() {
+    let Some(child) = startup_death_child("9", "0") else {
+        return;
+    };
+    assert_eq!(child.launches, 2, "a wrapper spawns its provider twice");
+    assert_eq!(child.run.status, rimz::store::run::RunStatus::Failed);
+    let row = format!("@{}: failed", child.name);
+    assert!(child.digest.contains(&row), "{}", child.digest);
+    assert_eq!(
+        child
+            .digest
+            .split_once("; ")
+            .and_then(|(_, rest)| rest.split_once(", task:"))
+            .map(|(reason, _)| reason),
+        Some("2"),
+        "the reason is the second attempt's output: {}",
+        child.digest
+    );
+    assert!(child.parent_frame.contains(&row), "{}", child.parent_frame);
+    assert_eq!(child.retries.len(), 1, "{:?}", child.retries);
+}
+
+#[test]
+fn tmux_subagent_that_opened_a_session_is_not_relaunched() {
+    let Some(child) = startup_death_child("0", "7") else {
+        return;
+    };
+    assert_eq!(child.launches, 1, "an observed child fails as before");
+    assert_eq!(child.run.status, rimz::store::run::RunStatus::Failed);
+    assert!(
+        child.digest.contains(&format!("@{}: failed", child.name)),
+        "{}",
+        child.digest
+    );
+    assert!(child.retries.is_empty(), "{:?}", child.retries);
+}
+
+struct StartupDeathChild {
+    env: Env,
+    name: String,
+    run: rimz::store::run::RunRecord,
+    /// The fleet digest queued for the parent.
+    digest: String,
+    /// The parent pane once that digest landed in it.
+    parent_frame: String,
+    /// How many times the provider stub was launched for the child.
+    launches: usize,
+    retries: Vec<rimz::harness::assist_log::Assist>,
+}
+
+/// Launch one `rimz subagents` child from a live parent, with the provider
+/// stub dying before any hook on its first `startup_deaths` launches and
+/// exiting `exit` after its hooks otherwise, and collect what the parent gets:
+/// one run for the child, one fleet report, one row in it.
+fn startup_death_child(startup_deaths: &str, exit: &str) -> Option<StartupDeathChild> {
+    if which::which("tmux").is_err() {
+        crate::common::skip("tmux not on PATH");
+        return None;
+    }
+    let _rimz = rimz_bin()?;
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return None;
+    }
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let stub_dir = write_hook_firing_agent(&env, "codex");
+    let agent_path = path_with_front(&stub_dir);
+    trust_agent_path(&env, "codex", &agent_path);
+    let socket = managed_socket(&env.runtime_root);
+    let _server = TmuxServerGuard::new(socket.clone());
+    let session = workspace_session(&env);
+    let started = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("start room");
+    assert!(started.status.success(), "room start failed: {started:?}");
+    let launch_pane = tmux_capture(
+        &socket,
+        &[
+            "list-panes",
+            "-t",
+            &session,
+            "-F",
+            "#{pane_id}:#{pane_title}",
+        ],
+    )
+    .lines()
+    .find_map(|line| {
+        let (pane, title) = line.split_once(':')?;
+        (title != rimz::pane::SIDEBAR_CHROME_TITLE).then(|| pane.to_owned())
+    })
+    .expect("room shell pane");
+    let parent_env = [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-retry-parent"),
+        ("RIMZ_TEST_AGENT_WAIT_STDIN", "1"),
+    ];
+    for (key, value) in parent_env {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+    let parent = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &launch_pane)
+        .envs(parent_env)
+        .args([
+            "--mux",
+            "tmux",
+            "agents",
+            "codex",
+            "coordinate the retry",
+            "--name",
+            "retry-parent",
+            "--bg",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch parent");
+    assert!(parent.status.success(), "parent launch failed: {parent:?}");
+    let parent_agent = wait_for_named_agent(&env, "retry-parent", true, CAPTURE_BUDGET);
+    let parent_launch_id = parent_agent.launch_id.clone().expect("parent launch id");
+    let parent_pane = parent_agent
+        .pane
+        .as_ref()
+        .expect("parent provider pane")
+        .pane_id
+        .raw()
+        .to_owned();
+
+    let launch_log = env.home_root.join("child-launches.log");
+    let launch_log_arg = launch_log.display().to_string();
+    let child_env = [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-retry-child"),
+        ("RIMZ_TEST_AGENT_WAIT_STDIN", "0"),
+        ("RIMZ_TEST_AGENT_LAUNCH_LOG", launch_log_arg.as_str()),
+        ("RIMZ_TEST_AGENT_STARTUP_DEATHS", startup_deaths),
+        ("RIMZ_TEST_AGENT_EXIT", exit),
+    ];
+    for (key, value) in child_env {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+    let launched = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane)
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
+        .envs(child_env)
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "survive startup",
+            "--timeout",
+            "2m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch child");
+    assert!(
+        launched.status.success(),
+        "child launch failed: {launched:?}"
+    );
+    let name = launched_subagent_name(&launched);
+    let child_runs = || {
+        rimz::harness::run::list(env.store().paths())
+            .expect("read runs")
+            .into_iter()
+            .filter(|run| run.agent_name.as_deref() == Some(name.as_str()))
+            .collect::<Vec<_>>()
+    };
+    let run = wait_for_named_terminal_run(&env, &name, CAPTURE_BUDGET);
+    let reports = || {
+        env.store()
+            .list_messages()
+            .expect("list fleet digest")
+            .into_iter()
+            .filter(|message| {
+                matches!(
+                    message.sender,
+                    rimz::store::message::MessageSender::Harness {
+                        notice: rimz::store::message::HarnessNotice::SubagentReport
+                    }
+                )
+            })
+            .map(|message| message.text)
+            .collect::<Vec<_>>()
+    };
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    while reports().is_empty() {
+        assert!(Instant::now() < deadline, "fleet digest was not queued");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let row = format!("@{name}: ");
+    let parent_frame = capture_joined_until(
+        &socket,
+        &parent_pane,
+        |frame| frame.contains("Type: SUBAGENT_REPORT") && frame.contains(&row),
+        CAPTURE_BUDGET,
+    );
+    let runs = child_runs();
+    assert_eq!(runs.len(), 1, "both attempts share one run: {runs:?}");
+    let mut reports = reports();
+    assert_eq!(reports.len(), 1, "the parent gets one report: {reports:?}");
+    let digest = reports.remove(0);
+    assert_eq!(digest.matches(&row).count(), 1, "one row: {digest}");
+    let launches = std::fs::read_to_string(&launch_log)
+        .expect("child launch log")
+        .lines()
+        .count();
+    let retries = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
+        .into_iter()
+        .map(|record| record.assist)
+        .filter(|assist| {
+            matches!(
+                assist,
+                rimz::harness::assist_log::Assist::LaunchRetry { .. }
+            )
+        })
+        .collect();
+    Some(StartupDeathChild {
+        run: rimz::harness::run::load(env.store().paths(), &run.run_id).expect("reload run"),
+        env,
+        name,
+        digest,
+        parent_frame,
+        launches,
+        retries,
+    })
+}
+
+#[test]
 fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
     if which::which("tmux").is_err() {
         crate::common::skip("tmux not on PATH");

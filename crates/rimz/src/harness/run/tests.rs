@@ -1716,3 +1716,72 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
         "cohorts settle independently"
     );
 }
+
+#[test]
+fn startup_relaunch_is_due_only_for_an_unobserved_first_nonzero_exit() {
+    let (_dir, _paths, pending) = setup();
+    let died = ProviderExit {
+        fresh_subagent: true,
+        success: false,
+        abrupt: false,
+        signaled: false,
+        relaunched: false,
+    };
+    assert!(startup_relaunch_due(&pending, died));
+
+    for (why, exit) in [
+        (
+            "not a fresh subagent launch",
+            ProviderExit {
+                fresh_subagent: false,
+                ..died
+            },
+        ),
+        (
+            "exit status 0",
+            ProviderExit {
+                success: true,
+                ..died
+            },
+        ),
+        (
+            "the wrapper ended the provider",
+            ProviderExit {
+                abrupt: true,
+                ..died
+            },
+        ),
+        (
+            "a stop or interrupt signal",
+            ProviderExit {
+                signaled: true,
+                ..died
+            },
+        ),
+        (
+            "already relaunched",
+            ProviderExit {
+                relaunched: true,
+                ..died
+            },
+        ),
+    ] {
+        assert!(!startup_relaunch_due(&pending, exit), "{why}");
+    }
+
+    for status in [
+        RunStatus::Running,
+        RunStatus::Completed,
+        RunStatus::Failed,
+        RunStatus::VerifyFailed,
+        RunStatus::Canceled,
+        RunStatus::TimedOut,
+        RunStatus::BudgetExceeded,
+    ] {
+        let observed = RunRecord {
+            status,
+            ..pending.clone()
+        };
+        assert!(!startup_relaunch_due(&observed, died), "{status:?}");
+    }
+}

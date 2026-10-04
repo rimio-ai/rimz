@@ -265,7 +265,8 @@ fn launch_and_supervise(
         .transpose()
         .context("reading resumed run before spawning provider")?
         .and_then(|record| resumed_run_follow_ups(request, &record));
-    let child = command
+    let spawned_at = Instant::now();
+    let mut child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;
     if let Some(target) = attach_target.as_ref() {
@@ -313,21 +314,101 @@ fn launch_and_supervise(
                 .ok()
         })
         .is_some_and(|record| record.keep);
-    let parent_watchdog =
+    let mut parent_watchdog =
         subagent_parent_watchdog(request, run_context, launch_identity.as_ref(), keep);
-    let outcome = supervise_child(
-        child,
-        run_context,
-        request.exit_on_run_completion,
-        if request.subagent {
-            StopPolicy::ParentReceived
-        } else {
-            StopPolicy::RunTerminal
-        },
-        awaiting_reopen,
-        parent_watchdog,
-    )
-    .context("supervising agent process")?;
+    let fresh_subagent = request.subagent
+        && attach_target.is_none()
+        && matches!(
+            request.action,
+            rimz::harness::launch::ExecAction::Launch { .. }
+        );
+    let mut relaunched = false;
+    let (outcome, terminal_grace) = loop {
+        let mut outcome = supervise_child(
+            child,
+            run_context,
+            request.exit_on_run_completion,
+            if request.subagent {
+                StopPolicy::ParentReceived
+            } else {
+                StopPolicy::RunTerminal
+            },
+            awaiting_reopen,
+            parent_watchdog.take(),
+        )
+        .context("supervising agent process")?;
+        let startup = spawned_at.elapsed();
+        let Some(context) = run_context else {
+            break (outcome, RUN_EXIT_TERMINAL_GRACE);
+        };
+        // The grace a late first hook gets here is the one a late terminal hook gets at settle.
+        let grace_ends = Instant::now() + RUN_EXIT_TERMINAL_GRACE;
+        let record = wait_for_first_observation(context, grace_ends);
+        let terminal_grace = grace_ends.saturating_duration_since(Instant::now());
+        let exit = rimz::harness::run::ProviderExit {
+            fresh_subagent,
+            success: outcome.status.success(),
+            abrupt: outcome.abrupt,
+            signaled: cleanup_signal_received() || interrupt_signal_flag().load(Ordering::SeqCst),
+            relaunched,
+        };
+        let Some(record) =
+            record.filter(|record| rimz::harness::run::startup_relaunch_due(record, exit))
+        else {
+            break (outcome, terminal_grace);
+        };
+        relaunched = true;
+        let exit_code = outcome.status.code();
+        let _ = writeln!(
+            crate::cli::render::err(),
+            "rimz: {} exited {} before its session opened; launching it once more",
+            request.kind,
+            exit_code.map_or_else(
+                || "on a signal".to_owned(),
+                |code| format!("with code {code}")
+            ),
+        );
+        let spawned = command.spawn();
+        if let Err(error) =
+            rimz::harness::assist_log::try_append(&rimz::harness::assist_log::AssistRecord {
+                at: jiff::Timestamp::now(),
+                assist: rimz::harness::assist_log::Assist::LaunchRetry {
+                    kind: request.kind.clone(),
+                    label: record
+                        .agent_name
+                        .as_deref()
+                        .map_or_else(|| record.run_id.to_string(), |name| format!("@{name}")),
+                    run_id: record.run_id,
+                    exit_code,
+                    startup_ms: u64::try_from(startup.as_millis()).unwrap_or(u64::MAX),
+                    relaunched: spawned.is_ok(),
+                    error: spawned
+                        .as_ref()
+                        .err()
+                        .map(|error| format!("running {program}: {error}")),
+                },
+            })
+        {
+            let _ = writeln!(
+                crate::cli::render::err(),
+                "rimz: could not record launch retry: {error}"
+            );
+        }
+        match spawned {
+            Ok(next) => {
+                record_provider_process(context, next.id());
+                child = next;
+                parent_watchdog = outcome.parent_watchdog.take();
+            }
+            Err(error) => {
+                let _ = writeln!(
+                    crate::cli::render::err(),
+                    "rimz: running {program}: {error}"
+                );
+                break (outcome, terminal_grace);
+            }
+        }
+    };
     settle_after_exit(
         request,
         globals,
@@ -336,6 +417,7 @@ fn launch_and_supervise(
             run: run_context,
             keep,
             checkout: &invocation.cwd,
+            terminal_grace,
         },
         launch_identity.as_ref(),
         entered_worktree.as_deref(),
@@ -347,6 +429,8 @@ struct RunExitContext<'a> {
     run: Option<&'a RunExecContext>,
     keep: bool,
     checkout: &'a Path,
+    /// What is left of `RUN_EXIT_TERMINAL_GRACE` for a late terminal hook.
+    terminal_grace: Duration,
 }
 
 fn settle_after_exit(
@@ -362,6 +446,7 @@ fn settle_after_exit(
         run,
         keep,
         checkout,
+        terminal_grace,
     } = run_exit;
     if let Err(error) = rimz::lsp::registry::release_lease(
         checkout,
@@ -377,7 +462,7 @@ fn settle_after_exit(
         parent_watchdog,
     } = outcome;
     if let Some(context) = run {
-        fail_run_if_child_exited_first(context, globals, RUN_EXIT_TERMINAL_GRACE);
+        fail_run_if_child_exited_first(context, globals, terminal_grace);
     }
     if let Some(context) = run
         && !parent_ended
@@ -1446,6 +1531,24 @@ fn record_own_run_failure_tail(context: &RunExecContext, globals: &GlobalFlags) 
             error = %err,
             "could not record supervised run failure pane tail",
         );
+    }
+}
+
+/// The run record once it left `Pending`, or as it stands when `deadline`
+/// passes; `None` when it cannot be read.
+fn wait_for_first_observation(
+    context: &RunExecContext,
+    deadline: Instant,
+) -> Option<rimz::store::run::RunRecord> {
+    loop {
+        let record = context.load_record();
+        let pending = record
+            .as_ref()
+            .is_some_and(|record| record.status == rimz::store::run::RunStatus::Pending);
+        if !pending || Instant::now() >= deadline {
+            return record;
+        }
+        std::thread::sleep(CHILD_WAIT_POLL);
     }
 }
 
