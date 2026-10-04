@@ -17,11 +17,11 @@ use rimz::RuntimePaths;
 use rimz::agents::account::{AccountsCache, ProviderRecord, ProviderStatus};
 use rimz::agents::spending::{ProviderSpendingCache, read_provider_spending_cache};
 use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally};
-use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet, ambient_env};
+use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet};
 use rimz::config::MachineConfig;
-use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
+use rimz::ids::{AgentKind, LoginKey, LoginName};
 use rimz::room::{AccountStanding, Deciding, Scope, Scopes};
-use rimz::sidebar::enrich::provider_panels_from_caches;
+use rimz::sidebar::enrich::{provider_panel_for_login, provider_panels_from_caches};
 use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
 use rimz::store::snapshot::{DailyBudgetView, SidebarProviderPanel};
 
@@ -140,25 +140,18 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
         })
         .collect();
     for login in logins.iter().filter(|login| !login.name().is_default()) {
-        let selection = RoomLogins::from([(login.kind().clone(), login.name().clone())]);
-        let account_facts = accounts
+        let account = accounts
             .logins
             .get(&login.key())
-            .and_then(|record| record.account.clone())
-            .map(|account| (login.key(), account))
-            .into_iter()
-            .collect();
-        let login_panels = provider_panels_from_caches(
+            .and_then(|record| record.account.clone());
+        if let Some(panel) = provider_panel_for_login(
             &runtime,
-            &RoomLoginSet::new(Some(selection), catalog.clone(), ambient_env()),
+            login,
+            catalog.as_ref(),
             &config,
-            account_facts,
+            account,
             &provider_spending,
-        );
-        if let Some(panel) = login_panels
-            .into_iter()
-            .find(|panel| panel.kind == login.kind().as_str())
-        {
+        ) {
             panels.insert(login.key(), panel);
         }
     }
