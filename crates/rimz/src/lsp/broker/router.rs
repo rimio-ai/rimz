@@ -404,6 +404,7 @@ mod tests {
             changed: Condvar::new(),
             started: std::time::Instant::now(),
             in_flight: std::sync::atomic::AtomicUsize::new(0),
+            requests: Default::default(),
         });
         let running = std::thread::spawn({
             let shared = shared.clone();

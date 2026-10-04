@@ -89,6 +89,7 @@ struct Shared {
     changed: Condvar,
     started: Instant,
     in_flight: std::sync::atomic::AtomicUsize,
+    requests: socket::Requests,
 }
 
 struct Model {
@@ -233,6 +234,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         changed: Condvar::new(),
         started: Instant::now(),
         in_flight: std::sync::atomic::AtomicUsize::new(0),
+        requests: socket::Requests::default(),
     });
     let routing = shared.clone();
     let router = std::thread::spawn(move || router::run(routing, router_rx));
@@ -310,6 +312,11 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     };
     let _ = shared.router.send(router::RouterEvent::Close(reason));
     let _ = router.join();
+    // Before the registry lock: the main thread holds no lock while it waits on a socket.
+    let abandoned = shared.requests.drain(Duration::from_secs(5));
+    if abandoned > 0 {
+        tracing::warn!(abandoned, "broker exits with requests unanswered");
+    }
     let _lock = registry::lock()?;
     drop(_socket);
     std::fs::remove_dir_all(directory)?;
