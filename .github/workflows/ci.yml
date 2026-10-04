@@ -2,6 +2,14 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      # `container.image` reads `inputs` but not `env`, so a dispatch is the
+      # one way a branch runs in an image other than `latest`. Every other
+      # event leaves the input empty.
+      image_tag:
+        description: rimz-ci image tag to run in (defaults to latest)
+        required: false
+        type: string
   pull_request:
   # The main ruleset's merge queue waits for the required checks on its own
   # merge-group commit; without this trigger every queued PR times out.
@@ -46,7 +54,7 @@ jobs:
     # stable for cargo cache keys, concurrent jobs stay isolated, and every run
     # skips per-job toolchain bootstrap.
     container:
-      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:${{ inputs.image_tag || 'latest' }}
       options: --init
       credentials:
         username: ${{ github.actor }}
@@ -102,7 +110,7 @@ jobs:
     # Cargo.lock. `vet` fetches the crates.io index directly, bypasses the
     # mirror, and retries transient egress. Both gates block the job.
     container:
-      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:${{ inputs.image_tag || 'latest' }}
       options: --init
       credentials:
         username: ${{ github.actor }}
@@ -193,7 +201,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     container:
-      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:latest
+      image: ghcr.io/${{ github.repository_owner }}/rimz-ci:${{ inputs.image_tag || 'latest' }}
       options: --init
       credentials:
         username: ${{ github.actor }}
