@@ -166,7 +166,8 @@ upward-dependencies = ["address"]
 # TurnErrorClass::words names a labelless turn error for `subagents list` and the parent's park notice (+1).
 # `newest_version` is the one version-order rule the provider panel fold and the accounts merge share (+1).
 # `runtime_control::installed_broker_bin`, the one answer to "is the broker's provider installed" for the room and daemon-view pane gates (+1).
-surface-budget = 976
+# The switch-hint pick and its result serve providers and accounts list (+2).
+surface-budget = 978
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -257,7 +258,8 @@ path = "crates/rimz/src/cli"
 # `accounts use` and the `providers` hint share the verified-pin room check.
 # Launch cwd and prompt-file resolution share the caller tmp reversal (+1).
 # `main` maps the scenes' shared usage error to exit 2 (+1).
-surface-budget = 30
+# The `accounts use` line is built once for both commands' switch hints (+1).
+surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/config"

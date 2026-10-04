@@ -526,48 +526,25 @@ fn switch_hint(
     now: Timestamp,
     deciding: Option<Deciding>,
 ) -> Option<(String, String)> {
-    let flag = match deciding? {
-        Deciding::Room => "",
-        Deciding::Machine => "--global ",
-        Deciding::Project => return None,
-    };
     let active = reports.iter().find(|report| report.active)?;
-    let mut low: Vec<(&RateLimitWindow, u8)> = active
-        .windows
+    let siblings: Vec<_> = reports
         .iter()
-        .filter(|window| !window.lifted)
-        .filter_map(|window| Some((window, window.remaining_percentage(now)?)))
-        .filter(|(_, left)| *left <= 20)
+        .filter(|report| !report.active && report.status == ProviderStatus::LoggedIn)
+        .map(|report| (&report.account, report.windows.as_slice()))
         .collect();
-    low.sort_by_key(|(_, left)| *left);
-    low.into_iter().find_map(|(window, left)| {
-        let key = window_key(window);
-        let (roomiest, _) = reports
-            .iter()
-            .filter(|report| !report.active && report.status == ProviderStatus::LoggedIn)
-            .filter_map(|report| {
-                let reading = report
-                    .windows
-                    .iter()
-                    .find(|sibling| !sibling.lifted && window_key(sibling) == key)?
-                    .remaining_percentage(now)?;
-                (reading > left).then_some((report, reading))
-            })
-            .max_by(|(a, a_left), (b, b_left)| (a_left, &b.account).cmp(&(b_left, &a.account)))?;
-        Some((
-            format!(
-                "{} {} has {left}% left of its {} window; {} has the most room:",
-                active.kind,
-                active.account,
-                rimz::theme::fmt::window_label(window),
-                roomiest.account
-            ),
-            format!(
-                "rimz accounts use {flag}{} {}",
-                active.kind, roomiest.account
-            ),
-        ))
-    })
+    let hint = rimz::agents::account::switch_hint(&active.windows, &siblings, now)?;
+    let command = super::accounts_use_command(deciding, &active.kind, hint.sibling)?;
+    Some((
+        format!(
+            "{} {} has {}% left of its {} window; {} has the most room:",
+            active.kind,
+            active.account,
+            hint.left,
+            rimz::theme::fmt::window_label(hint.window),
+            hint.sibling
+        ),
+        command,
+    ))
 }
 
 fn timestamp_from_millis(millis: u64) -> Option<Timestamp> {

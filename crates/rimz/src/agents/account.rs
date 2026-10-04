@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use super::{AgentAccount, RoomLoginSet};
 use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
 use crate::RuntimePaths;
-use crate::ids::LoginKey;
+use crate::ids::{LoginKey, LoginName};
 
 /// Informational account and CLI-version probes are best-effort enrichment.
 /// Bound every subprocess so one installed but wedged CLI cannot hold the
@@ -472,6 +472,53 @@ fn window_duration_label(mins: u32) -> String {
     } else {
         format!("{mins}m")
     }
+}
+
+/// What is left of a window at or below which an account counts as running low.
+const SWITCH_HINT_LEFT_CEILING: u8 = 20;
+
+/// A low window on the active account and the sibling with the most room on it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwitchHint<'a> {
+    pub window: &'a RateLimitWindow,
+    /// What the active account has left of `window`.
+    pub left: u8,
+    pub sibling: &'a LoginName,
+}
+
+/// Pick the switch a low account earns: its lowest unlifted window with 20%
+/// or less left that some sibling has strictly more of, with the sibling that
+/// has the most left, ties by name. The caller passes logged-in siblings only.
+pub fn switch_hint<'a>(
+    active: impl IntoIterator<Item = &'a RateLimitWindow>,
+    siblings: &[(&'a LoginName, &'a [RateLimitWindow])],
+    now: Timestamp,
+) -> Option<SwitchHint<'a>> {
+    let mut low: Vec<(&RateLimitWindow, u8)> = active
+        .into_iter()
+        .filter(|window| !window.lifted)
+        .filter_map(|window| Some((window, window.remaining_percentage(now)?)))
+        .filter(|(_, left)| *left <= SWITCH_HINT_LEFT_CEILING)
+        .collect();
+    low.sort_by_key(|(_, left)| *left);
+    low.into_iter().find_map(|(window, left)| {
+        let key = window.key();
+        let (_, sibling) = siblings
+            .iter()
+            .filter_map(|(name, windows)| {
+                let reading = windows
+                    .iter()
+                    .find(|sibling| !sibling.lifted && sibling.key() == key)?
+                    .remaining_percentage(now)?;
+                (reading > left).then_some((reading, *name))
+            })
+            .max_by(|(a_left, a), (b_left, b)| (a_left, b).cmp(&(b_left, a)))?;
+        Some(SwitchHint {
+            window,
+            left,
+            sibling,
+        })
+    })
 }
 
 /// A subscription window length that loop triggers name: `5h` or `7d`.
