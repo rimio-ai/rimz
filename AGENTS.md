@@ -93,6 +93,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - A scan command never passes `-r` to `rg`: it is `--replace`, so `rg -rn PATTERN` parses as `-r n` and rewrites every match to `n`. Single-quote any argument that starts with `=` or carries a glob character (`echo '==='`, `rg -g '*.rs'`), since the shell otherwise aborts the whole command before it runs. Both failures return plausible-looking output, so they cost a call each time.
 - Search a snake_case field or function name with `rg -w`; a bare substring also matches every longer identifier that starts with it.
 - A scan command always names its path (`rg PATTERN .`): in an agent shell stdin is not a terminal, so a pathless `rg` searches stdin and hangs until the tool timeout.
+- A tree-wide `rg` skips dot-directories: name `.github` as a path (or pass `--hidden`) when the question includes workflows.
 - Stop a process you started by its PID (`$!`, `pgrep -x`), never with `pkill -f PATTERN`: the pattern matches the shell running `pkill` and kills it.
 - Brace a shell variable that a colon follows (`git show "${rev}:path"`): zsh reads `$rev:c` as a modifier on the variable and passes git a mangled revision.
 
