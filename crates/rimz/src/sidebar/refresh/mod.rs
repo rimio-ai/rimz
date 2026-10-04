@@ -275,6 +275,7 @@ pub(super) fn refresh_heavy_lanes(
         TeamsConfig::default()
     };
     crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &teams);
+    crate::harness::idle_stop::stop_idle_agents(base, state_paths, runtime);
     crate::harness::cache_keepalive::keepalive_agents(base, runtime, &config.harness);
     crate::harness::auto_redeem::redeem_credits(
         &panels.providers,

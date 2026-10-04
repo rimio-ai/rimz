@@ -11,6 +11,7 @@ pub mod cache_keepalive;
 pub mod deadline;
 pub mod fleet;
 pub mod idle_compact;
+pub mod idle_stop;
 pub mod launch;
 mod launch_context;
 pub mod launch_plan;

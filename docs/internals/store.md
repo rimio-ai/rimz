@@ -173,6 +173,7 @@ live/active-time/                     active-time accumulators
 live/prompt/{task,sys}.<digest>.md     launch artifacts
 live/agent-telemetry/copilot-otel.jsonl metadata-only Copilot export
 live/idle-compact/<digest>.json       idle-compaction fire records
+live/idle-stop/<digest>.json          idle-stop helper pacing records
 live/{presence,client-presence-probe}.stamp probe freshness
 lanes/{snapshot,agent-projection,workspace-projection}.json projections
 lanes/{sidebar-width,sidebar-filter,unread}.json renderer state
