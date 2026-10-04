@@ -528,6 +528,9 @@ pub(super) fn write_record_forensics(
         && let Some(signal) = &record.signal
     {
         write_detail_link(out, "signal", signal.name.as_str())?;
+        if !signal.payload.is_empty() {
+            writeln!(out, "  {}", serde_json::to_string(&signal.payload)?)?;
+        }
     }
     if let Some(condition) = &record.condition {
         let held = condition
