@@ -710,10 +710,51 @@ fn signal_timing_renders_trigger_matches_and_listening_state() {
     assert!(list.contains("listening"), "{list}");
 
     let mut out = Vec::new();
-    write_show_headline(&mut out, "task", &timing, now).unwrap();
+    write_show_headline(&mut out, "task", &timing, None, now).unwrap();
     let show = String::from_utf8(out).unwrap();
     assert!(
         show.contains("on ci.failed [branch=feature] · listening"),
+        "{show}"
+    );
+}
+
+#[test]
+fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
+    let now = Timestamp::from_second(100_000).unwrap();
+    let holder = |age: i64| RunLockInfo {
+        pid: 4_162_080,
+        started_at: now - jiff::SignedDuration::from_secs(age),
+    };
+    for (age, text) in [
+        (45, "▸ running 45s"),
+        (190 * 60, "▸ running 3h"),
+        (-5, "▸ running 0s"),
+    ] {
+        assert_eq!(running_text(Some(holder(age)), now), text);
+    }
+    assert_eq!(running_text(None, now), "▸ running");
+    let holderless = InFlightRun {
+        holder: None,
+        run: None,
+    };
+    assert_eq!(running_text_full(&holderless, now), "▸ running");
+
+    let pause = Arming {
+        enabled: true,
+        at: None,
+        pause_until: Some(now + jiff::SignedDuration::from_secs(300)),
+        strikes: None,
+    };
+    let timing = interval_timing(None, None, Some(&pause), now);
+    let in_flight = InFlightRun {
+        holder: Some(holder(180)),
+        run: None,
+    };
+    let mut out = Vec::new();
+    write_show_headline(&mut out, "task", &timing, Some(&in_flight), now).unwrap();
+    let show = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(
+        show.ends_with(" · ▸ running 3m · pid 4162080\n") && !show.contains("paused"),
         "{show}"
     );
 }
@@ -730,7 +771,7 @@ fn show_headline_keeps_blocked_before_pause() {
     let timing = interval_timing(Some(TrustState::Untrusted), None, Some(&pause), now);
     let mut out = Vec::new();
 
-    write_show_headline(&mut out, "task", &timing, now).unwrap();
+    write_show_headline(&mut out, "task", &timing, None, now).unwrap();
 
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(out.contains("next blocked · trust"), "{out}");

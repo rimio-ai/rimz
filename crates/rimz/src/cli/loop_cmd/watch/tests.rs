@@ -18,7 +18,7 @@ fn dashboard_row(name: &str, state: RowState, failed: bool) -> WatchRow {
             _ => None,
         },
         next_text: match state {
-            RowState::Running => "running now".to_owned(),
+            RowState::Running => "▸ running 3m".to_owned(),
             RowState::Due => "due".to_owned(),
             RowState::Held => "paused".to_owned(),
             RowState::Blocked => "blocked · trust".to_owned(),
@@ -379,7 +379,7 @@ fn task_timing_maps_to_watch_labels() {
             render::held_text(&timing.state(), now).as_deref(),
             (state == RowState::Held).then_some(label)
         );
-        assert_eq!(next_text(state, &timing, now), label);
+        assert_eq!(next_text(state, &timing, None, now), label);
     }
 }
 
@@ -413,7 +413,7 @@ fn signal_and_watch_timing_map_to_live_watch_labels() {
         );
         assert_eq!(row_state_for_timing(&timing), state);
         assert_eq!(render::held_text(&timing.state(), now), None);
-        assert_eq!(next_text(state, &timing, now), label);
+        assert_eq!(next_text(state, &timing, None, now), label);
     }
 }
 
@@ -434,6 +434,18 @@ fn running_watch_row_retains_next_fire_through_pause_overlay() {
     );
     assert_eq!(timing.next_timestamp(), None);
     assert_eq!(watch_next_timestamp(&timing, false), None);
+    let holder = RunLockInfo {
+        pid: 7,
+        started_at: Timestamp::from_second(9_820).unwrap(),
+    };
+    assert_eq!(
+        next_text(RowState::Running, &timing, Some(holder), now),
+        "▸ running 3m"
+    );
+    assert_eq!(
+        next_text(RowState::Running, &timing, None, now),
+        "▸ running"
+    );
     assert_eq!(
         watch_next_timestamp(&timing, true),
         Timestamp::from_second(10_300).ok()

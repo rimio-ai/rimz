@@ -13,6 +13,17 @@ pub(super) struct ObservedTask<'a> {
     pub(super) name: &'a str,
     pub(super) task: &'a LoadedTask,
     pub(super) timing: schedule::TaskTiming,
+    pub(super) run_lock: Result<RunLockState>,
+}
+
+impl ObservedTask<'_> {
+    /// The held run lock's holder, when the task is running.
+    pub(super) fn running(&self) -> Option<Option<RunLockInfo>> {
+        match &self.run_lock {
+            Ok(RunLockState::Held(holder)) => Some(*holder),
+            Ok(RunLockState::Available) | Err(_) => None,
+        }
+    }
 }
 
 pub(super) struct ObservedTaskGroup<'a> {
@@ -54,6 +65,7 @@ pub(super) fn grouped_tasks<'a>(
                         arming_entries.get(&task.key(name)),
                         now_zoned,
                     ),
+                    run_lock: probe_run_lock(name, task.entry()),
                 })
                 .collect();
             ObservedTaskGroup {
@@ -93,12 +105,15 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
         }
         write_root_heading(&mut out, &group.root, group.room_is_open, timer_is_active)?;
         let mut table = ui::Table::new([
-            "NAME", "TASK", "SOURCE", "SCHEDULE", "LAST", "STATUS", "COST", "NEXT",
+            "NAME", "STATE", "LAST", "RESULT", "TASK", "SOURCE", "SCHEDULE", "COST",
         ])
-        .right(&[6])
+        .right(&[7])
         .indent(2);
         let context = ListRowContext { stats: &stats, now };
         for task in group.tasks {
+            if let Err(error) = &task.run_lock {
+                warn_run_lock(task.name, error);
+            }
             blocked_count += usize::from(task.task.source().blocked_state().is_some());
             not_enabled_count += usize::from(matches!(
                 task.timing.arm_state(),
@@ -127,8 +142,11 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
         Ok(schedule) => schedule.describe(),
         Err(err) => format!("invalid: {err}"),
     };
-    let next = next_cell(&task.timing, context.now);
-    let (last, status) = context
+    let state = match task.running() {
+        Some(holder) => ui::cell(running_text(holder, context.now)).fg(ui::palette::cool()),
+        None => next_cell(&task.timing, context.now),
+    };
+    let (last, result) = context
         .stats
         .get(task.name)
         .map(|stats| last_run_cells(stats, context.now))
@@ -144,13 +162,13 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
     .unwrap_or_else(|| ui::cell("-").dash());
     vec![
         ui::cell(task.name).fg(ui::palette::body()),
+        state,
+        last,
+        result,
         ui::cell(task_subject(task.task)),
         source_cell(task.task),
         ui::cell(when),
-        last,
-        status,
         cost,
-        next,
     ]
 }
 
@@ -544,21 +562,28 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         BTreeMap::new()
     };
+    let in_flight = displayed_in_flight(&args.name, in_flight_run(&args.name, &root));
     if args.json {
+        let running = in_flight.as_ref().map(|in_flight| {
+            serde_json::json!({
+                "pid": in_flight.holder.map(|info| info.pid),
+                "started_at": in_flight.holder.map(|info| info.started_at),
+                "run_id": in_flight.run.as_ref().map(|run| &run.run_id),
+            })
+        });
         writeln!(
             ui::out(),
             "{}",
             serde_json::to_string_pretty(
-                &serde_json::json!({ "task": args.name, "entry": entry, "launches": launches, "runs": records })
+                &serde_json::json!({ "task": args.name, "entry": entry, "launches": launches, "runs": records, "running": running })
             )?
         )?;
         return Ok(());
     }
     let show_agent_runs = has_agent_runs_section(&task);
-    let in_flight = displayed_in_flight(in_flight_run(&args.name, &root));
 
     let mut out = ui::out();
-    write_show_headline(&mut out, &args.name, &timing, now)?;
+    write_show_headline(&mut out, &args.name, &timing, in_flight.as_ref(), now)?;
     if !launches.is_empty() {
         writeln!(out, "\nLAUNCHES")?;
         for (checkout, launch) in &launches {
@@ -580,7 +605,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         condition::write_show(&mut out, task.entry(), &timing)?;
     }
-    write_verdict(&mut out, &args.name, &records, in_flight.as_ref(), now)?;
+    write_verdict(&mut out, &args.name, &records, in_flight.is_some(), now)?;
     if records.is_empty() {
         writeln!(out)?;
         writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
@@ -613,29 +638,23 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-/// The answer under the headline: the verdict, any fires nothing has answered, and the run in flight.
+/// The answer under the headline: the verdict, any fires nothing has answered, and how to stop a running task.
 fn write_verdict(
     out: &mut impl Write,
     name: &str,
     records: &[LoopRunRecord],
-    in_flight: Option<&InFlightRun>,
+    is_running: bool,
     now: Timestamp,
 ) -> std::io::Result<()> {
     let verdict = verdict_line(records, now).map(|(verdict, style)| ui::paint(style, &verdict));
-    let stale = stale_clause(records, in_flight.is_some())
-        .map(|clause| ui::paint(ui::palette::warn(), &clause));
+    let stale =
+        stale_clause(records, is_running).map(|clause| ui::paint(ui::palette::warn(), &clause));
     match (verdict, stale) {
         (Some(verdict), Some(stale)) => writeln!(out, "  {verdict} · {stale}")?,
         (Some(line), None) | (None, Some(line)) => writeln!(out, "  {line}")?,
         (None, None) => {}
     }
-    if let Some(in_flight) = in_flight {
-        writeln!(
-            out,
-            "  {} {}",
-            ui::paint(ui::palette::muted(), "active:"),
-            active_run_text(in_flight)
-        )?;
+    if is_running {
         writeln!(out, "  stop with `rimz loop stop {name}`")?;
     }
     Ok(())
@@ -745,19 +764,22 @@ fn show_in_flight(args: &ShowArgs, root: &Path, in_flight: &InFlightRun) -> Resu
     let mut out = ui::out();
     writeln!(
         out,
-        "{} — one-shot fired · row consumed by its run",
-        ui::paint(ui::palette::header(), &args.name)
+        "{} — one-shot fired · {}",
+        ui::paint(ui::palette::header(), &args.name),
+        ui::paint(
+            ui::palette::cool(),
+            &running_text_full(in_flight, Timestamp::now())
+        )
     )?;
-    let mut kv = ui::KeyVals::new().indent(2);
-    kv.push("active", ui::cell(active_run_text(in_flight)));
     if let Some(run) = &in_flight.run {
         let agent = match &run.agent_name {
             Some(name) => format!("{} {name}", run.kind.as_str()),
             None => run.kind.as_str().to_owned(),
         };
+        let mut kv = ui::KeyVals::new().indent(2);
         kv.push("agent", ui::cell(agent));
+        kv.render(&mut out)?;
     }
-    kv.render(&mut out)?;
     writeln!(out, "  stop with `rimz loop stop {}`", args.name)?;
     let records = run_log::task_records(&rimz::disk::paths::logs_dir(), &args.name, Some(root));
     let visible = records.iter().rev().take(args.runs).collect::<Vec<_>>();
@@ -776,11 +798,12 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         &args.name,
         project_root_for_globals(globals).as_deref(),
     );
-    let in_flight = match entry {
-        Some(_) => None,
-        None => displayed_in_flight(in_flight_without_row(&args.name, globals))
-            .map(|(_, in_flight)| in_flight),
+    let lookup = match entry {
+        Some(entry) => in_flight_run(&args.name, &entry.resolved_root()),
+        None => in_flight_without_row(&args.name, globals)
+            .map(|found| found.map(|(_, in_flight)| in_flight)),
     };
+    let in_flight = displayed_in_flight(&args.name, lookup);
     if entry.is_none() && records.is_empty() && in_flight.is_none() {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
     }
@@ -805,7 +828,14 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
         if !visible.is_empty() {
             writeln!(out)?;
         }
-        writeln!(out, "{}", active_run_text(in_flight))?;
+        writeln!(
+            out,
+            "{}",
+            ui::paint(
+                ui::palette::cool(),
+                &running_text_full(in_flight, Timestamp::now())
+            )
+        )?;
     }
     Ok(())
 }
@@ -844,42 +874,53 @@ fn write_log_records(
 }
 
 /// The in-flight lookup as `show` and `logs` use it: the active run is
-/// enrichment there, so a failed lookup warns and costs only that line.
-fn displayed_in_flight<T>(lookup: Result<Option<T>>) -> Option<T> {
+/// enrichment there, so a failed lookup warns and costs only the running state.
+fn displayed_in_flight<T>(name: &str, lookup: Result<Option<T>>) -> Option<T> {
     lookup.unwrap_or_else(|error| {
-        let _ = writeln!(
-            ui::err(),
-            "{} cannot read the loop run lock, so no active run is shown: {error:#}",
-            ui::paint(ui::palette::warn().bold(), "warning:")
-        );
+        warn_run_lock(name, &error);
         None
     })
 }
 
-/// The one rendering of a run in flight, shared by `show` and `logs`.
-fn active_run_text(in_flight: &InFlightRun) -> String {
+fn warn_run_lock(name: &str, error: &anyhow::Error) {
+    let _ = writeln!(
+        ui::err(),
+        "{} cannot read the loop run lock of `{name}`, so no active run is shown: {error:#}",
+        ui::paint(ui::palette::warn().bold(), "warning:")
+    );
+}
+
+/// The one wording of a held run lock, as `list` and `watch` print it. The
+/// elapsed time needs the holder, which a held lock may lack.
+pub(super) fn running_text(holder: Option<RunLockInfo>, now: Timestamp) -> String {
+    match holder {
+        Some(info) => {
+            let elapsed = now.duration_since(info.started_at).as_secs().max(0) as u64;
+            format!("▸ running {}", ui::age_label(elapsed))
+        }
+        None => "▸ running".to_owned(),
+    }
+}
+
+/// The running state with the holder's pid and the run's id, for `show` and `logs`.
+fn running_text_full(in_flight: &InFlightRun, now: Timestamp) -> String {
+    let pid = in_flight
+        .holder
+        .map(|info| format!(" · pid {}", info.pid))
+        .unwrap_or_default();
     let run = in_flight
         .run
         .as_ref()
         .map(|run| format!(" · run {}", run.run_id))
         .unwrap_or_default();
-    let holder = in_flight
-        .holder
-        .map(|info| {
-            format!(
-                " · pid {} · started {}",
-                info.pid,
-                ui::rel_age(info.started_at, Timestamp::now())
-            )
-        })
-        .unwrap_or_default();
-    format!("run in progress{run}{holder}")
+    format!("{}{pid}{run}", running_text(in_flight.holder, now))
 }
 
 fn write_show_headline(
     out: &mut impl Write,
     name: &str,
     timing: &schedule::TaskTiming,
+    in_flight: Option<&InFlightRun>,
     now: Timestamp,
 ) -> std::io::Result<()> {
     let schedule_text = match timing.parsed() {
@@ -892,6 +933,13 @@ fn write_show_headline(
         ui::paint(ui::palette::header(), name),
         ui::paint(schedule_style(timing.parsed()), &schedule_text)
     )?;
+    if let Some(in_flight) = in_flight {
+        return writeln!(
+            out,
+            " · {}",
+            ui::paint(ui::palette::cool(), &running_text_full(in_flight, now))
+        );
+    }
     match timing.state() {
         schedule::TaskTimingState::Blocked(state) => write!(
             out,

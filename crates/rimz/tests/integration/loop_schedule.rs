@@ -5635,19 +5635,11 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
         &env,
         &["loop", "add", "busy", "--check", "true", "--at", "07:00"],
     );
-    let lock_path = loop_run_lock_path(&env, "busy");
-    std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir runtime");
     let holder = RunLockInfo {
         pid: 42_424,
         started_at: Timestamp::now() - SignedDuration::from_secs(25 * 60),
     };
-    std::fs::write(&lock_path, serde_json::to_vec(&holder).unwrap()).expect("write lock holder");
-    let lock_file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .expect("open lock");
-    lock_file.try_lock().expect("hold loop run lock");
+    let lock_file = hold_loop_run_lock(&loop_run_lock_path(&env, "busy"), &holder);
 
     let run = loop_ok(&env, &["loop", "run", "busy"]);
     assert!(
@@ -5665,8 +5657,12 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     );
     let show = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
-        show.contains("  1 fire skipped while the active run holds the lock\n")
-            && show.contains("  active: run in progress · pid 42424 · started 25m ago\n")
+        show.starts_with("busy — once at 07:00 · ▸ running 25m · pid 42424\n")
+            && show.contains("  1 fire skipped while the active run holds the lock\n")
+            && show.contains("  stop with `rimz loop stop busy`\n")
+            && !show
+                .lines()
+                .any(|line| line.trim_start().starts_with("active:"))
             && show.contains("○ overlapped")
             && !show.contains("LAST RUN"),
         "{show}"
@@ -5674,12 +5670,109 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     let logs = loop_ok(&env, &["loop", "logs", "busy"]);
     assert!(
         logs.contains("○ overlapped")
-            && logs.contains("previous run still active (pid 42424, started 25m ago) — skipped"),
+            && logs.contains("previous run still active (pid 42424, started 25m ago) — skipped")
+            && logs.ends_with("\n\n▸ running 25m · pid 42424\n"),
         "{logs}"
     );
+    let failed = loop_ok(&env, &["loop", "logs", "busy", "--failed"]);
+    assert!(!failed.contains("▸ running"), "{failed}");
     let json = loop_ok(&env, &["loop", "show", "busy", "--json"]);
     assert!(json.contains("\"result\": \"overlapped\""), "{json}");
+    let json: serde_json::Value = serde_json::from_str(&json).expect("show json");
+    assert_eq!(
+        json["running"],
+        json!({ "pid": 42_424, "started_at": holder.started_at, "run_id": null })
+    );
     lock_file.unlock().expect("unlock loop run lock");
+    let json = loop_ok(&env, &["loop", "show", "busy", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&json).expect("show json");
+    assert!(json["running"].is_null(), "{json}");
+    assert!(
+        json.as_object()
+            .is_some_and(|keys| keys.contains_key("running")),
+        "{json}"
+    );
+}
+
+#[test]
+fn loop_list_shows_a_running_task_beside_its_last_result() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "busy", "--check", "true", "--every", "1h"],
+    );
+    loop_ok(&env, &["loop", "fire", "busy"]);
+    let row = |list: &str, head: &str| -> Vec<String> {
+        list.lines()
+            .find(|line| line.trim_start().starts_with(head))
+            .unwrap_or_else(|| panic!("no `{head}` line: {list}"))
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect()
+    };
+
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert_eq!(
+        row(&list, "NAME"),
+        [
+            "NAME", "STATE", "LAST", "RESULT", "TASK", "SOURCE", "SCHEDULE", "COST"
+        ]
+    );
+    let idle = row(&list, "busy");
+    assert_eq!(idle[1], "-", "{list}");
+    assert_eq!(idle[4..6], ["✓", "completed"], "{list}");
+    assert!(!list.contains("▸ running"), "{list}");
+
+    let holder = RunLockInfo {
+        pid: 42_424,
+        started_at: Timestamp::now() - SignedDuration::from_secs(3 * 60),
+    };
+    let lock_file = hold_loop_run_lock(&loop_run_lock_path(&env, "busy"), &holder);
+    let list = loop_ok(&env, &["loop", "list"]);
+    let running = row(&list, "busy");
+    assert_eq!(running[1..4], ["▸", "running", "3m"], "{list}");
+    assert_eq!(running[6..], idle[4..], "{list}");
+    lock_file.unlock().expect("unlock loop run lock");
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_stop_reaches_a_run_holding_only_a_per_checkout_lock() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "fan", "--check", "true", "--every", "1h"],
+    );
+    let mut runner = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn holder");
+    let holder = RunLockInfo {
+        pid: runner.id(),
+        started_at: Timestamp::now(),
+    };
+    let lock_file = hold_loop_run_lock(
+        &loop_run_lock_path(&env, "fan-ws_0123456789abcdef01234567"),
+        &holder,
+    );
+
+    let stop = env
+        .rimz()
+        .args(["loop", "stop", "fan"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn loop stop");
+    // `loop stop` signals the holder only for a lock it found held.
+    runner.wait().expect("holder stopped by loop stop");
+    lock_file.unlock().expect("unlock loop run lock");
+    let stop = stop.wait_with_output().expect("loop stop");
+    let stdout = String::from_utf8_lossy(&stop.stdout);
+    assert!(
+        stop.status.success() && stdout.contains("loop `fan`: stopped · SIGTERM"),
+        "{stdout}{}",
+        String::from_utf8_lossy(&stop.stderr)
+    );
 }
 
 #[test]
@@ -6181,7 +6274,7 @@ fn loop_show_and_logs_find_a_consumed_one_shot_while_its_run_is_in_flight() {
 
     let show = loop_ok(&env, &["loop", "show", "later"]);
     assert!(
-        show.contains("run in progress")
+        show.contains("▸ running")
             && show.contains(&run_id)
             && show.contains("stop with `rimz loop stop later`")
             && !show.contains("no loop task")
@@ -6190,14 +6283,12 @@ fn loop_show_and_logs_find_a_consumed_one_shot_while_its_run_is_in_flight() {
     );
     let logs = loop_ok(&env, &["loop", "logs", "later"]);
     assert!(
-        logs.contains("run in progress")
-            && logs.contains(&run_id)
-            && !logs.contains("no loop task"),
+        logs.contains("▸ running") && logs.contains(&run_id) && !logs.contains("no loop task"),
         "{logs}"
     );
     let failed = loop_ok(&env, &["loop", "logs", "later", "--failed"]);
     assert!(
-        failed.contains("no failed runs recorded") && !failed.contains("run in progress"),
+        failed.contains("no failed runs recorded") && !failed.contains("▸ running"),
         "{failed}"
     );
     runner.kill().unwrap();
@@ -6250,7 +6341,7 @@ fn loop_stop_reaches_a_consumed_one_shot_run() {
     assert!(!read_loop_instances(&env).0.contains_key("later"));
     let show = loop_ok(&env, &["loop", "show", "later"]);
     assert!(
-        show.contains("canceled") && !show.contains("run in progress"),
+        show.contains("canceled") && !show.contains("▸ running"),
         "{show}"
     );
 }
@@ -6286,14 +6377,14 @@ fn loop_commands_follow_the_lock_before_a_consumed_one_shot_has_a_run_record() {
 
     let show = loop_ok(&env, &["loop", "show", "stuck"]);
     assert!(
-        show.contains("run in progress")
+        show.contains("▸ running")
             && !show.contains("run run_")
             && show.contains("stop with `rimz loop stop stuck`"),
         "{show}"
     );
     let logs = loop_ok(&env, &["loop", "logs", "stuck"]);
     assert!(
-        logs.contains("run in progress") && !logs.contains("run run_"),
+        logs.contains("▸ running") && !logs.contains("run run_"),
         "{logs}"
     );
     let stopped = loop_ok(&env, &["loop", "stop", "stuck"]);
@@ -6308,7 +6399,7 @@ fn loop_commands_follow_the_lock_before_a_consumed_one_shot_has_a_run_record() {
     assert_eq!(record.error.as_deref(), Some("stopped by rimz loop stop"));
     let show = loop_ok(&env, &["loop", "show", "stuck"]);
     assert!(
-        show.contains("stopped by rimz loop stop") && !show.contains("run in progress"),
+        show.contains("stopped by rimz loop stop") && !show.contains("▸ running"),
         "{show}"
     );
 }
@@ -6366,9 +6457,24 @@ fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
             1,
             "loop {command}: {stderr}"
         );
-        assert!(!stdout.contains("run in progress"), "{stdout}");
+        assert!(!stdout.contains("▸ running"), "{stdout}");
         stdout
     };
+    let list = env.rimz().args(["loop", "list"]).output().unwrap();
+    let stderr = String::from_utf8(list.stderr).unwrap();
+    let stdout = String::from_utf8(list.stdout).unwrap();
+    assert!(list.status.success(), "loop list: {stderr}");
+    assert_eq!(
+        stderr
+            .matches("cannot read the loop run lock of `probe`")
+            .count(),
+        1,
+        "loop list: {stderr}"
+    );
+    assert!(
+        stdout.contains("probe") && !stdout.contains("▸ running"),
+        "{stdout}"
+    );
 
     let show = display("show");
     assert!(
@@ -7453,6 +7559,19 @@ fn wait_for_path(path: &Path) {
 fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {
     env.runtime_paths()
         .lock_path(format!("loop-run-{name}.lock"))
+}
+
+/// Hold a run lock as a runner would, with `holder` as its payload.
+fn hold_loop_run_lock(path: &Path, holder: &RunLockInfo) -> std::fs::File {
+    std::fs::create_dir_all(path.parent().expect("lock parent")).expect("mkdir runtime");
+    std::fs::write(path, serde_json::to_vec(holder).unwrap()).expect("write lock holder");
+    let lock_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("open lock");
+    lock_file.try_lock().expect("hold loop run lock");
+    lock_file
 }
 
 #[cfg(unix)]

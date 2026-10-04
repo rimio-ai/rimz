@@ -24,13 +24,13 @@ rimz loop fire watchdog
 | `rimz loop pause <NAME> --for <DUR>` | Hold a task for a bounded time. |
 | `rimz loop fire <NAME>` | Run a task now in the foreground. |
 | `rimz loop stop <NAME>` | Stop a task's active run and release its overlap lock, including a fired one-shot's run. |
-| `rimz loop list` | List tasks grouped by project, with last run and next fire. |
-| `rimz loop watch` | Hold a live dashboard open with countdowns. |
+| `rimz loop list` | List tasks grouped by project, with state and last run. |
+| `rimz loop watch` | Hold a live dashboard open with countdowns and running tasks. |
 | `rimz loop show <NAME>` | One task's trigger, health, spend, and recent runs. |
 | `rimz loop logs <NAME>` | Full forensics for a task's recent runs. |
 | `rimz loop timer install\|status\|remove` | Manage the machine-wide timer. |
 
-Every command takes the [global flags](../cli.md#global-flags). `loop show --json` prints structured task, launch, and run records. It fails if the task no longer exists; without `--json`, `show` can still display its retained history.
+Every command takes the [global flags](../cli.md#global-flags). `loop show --json` prints structured task, launch, and run records and the running state. It fails if the task no longer exists; without `--json`, `show` can still display its retained history.
 
 ## Add a task
 
@@ -396,10 +396,11 @@ Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and 
 
 ### `loop list`
 
-`loop list` groups tasks by project root. Each group's heading shows `room open`, `no room`, or `no room · timer`. The columns are NAME, TASK, SOURCE, SCHEDULE, LAST (age of the last run), STATUS (its result), COST, and NEXT:
+`loop list` groups tasks by project root. Each group's heading shows `room open`, `no room`, or `no room · timer`. The columns are NAME, STATE, LAST (age of the last finished run), RESULT (its result), TASK, SOURCE, SCHEDULE, and COST. A running task still shows its last finished run in LAST and RESULT.
 
-| NEXT | Meaning |
+| STATE | Meaning |
 | --- | --- |
+| `▸ running 3m` | A run holds the task's run lock, for that long. It replaces every state below, held ones included, until the run ends; a `--wait` delivery or a `--stay` launch holds the lock for a second or two. |
 | `in 12m` | The next clock fire. |
 | `listening` | A signal subscription. |
 | `watching` | A `rimz wait` command, PID, check, or file watch. |
@@ -412,17 +413,17 @@ Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and 
 | `blocked · trust` | A project task whose project is not trusted. |
 | `-` | No clock has armed the task yet, or no occurrence remains. |
 
-Footers count tasks blocked by trust and project tasks not yet enabled, with the command that fixes each.
+Footers count tasks blocked by trust and project tasks not yet enabled, with the command that fixes each. A run lock that cannot be read warns on stderr with the task's name, and that task's row shows its other state.
 
 ### `loop watch`
 
-`loop watch` holds the list open as a live dashboard, repainting countdowns and `running now` every second. It is the loop pane in the room's `rimzd` tab.
+`loop watch` holds the list open as a live dashboard, repainting countdowns and each running task's `▸ running 3m` every second. It is the loop pane in the room's `rimzd` tab.
 
 ### `loop show`
 
-A condition adds a `condition: <NEXT text>` block immediately below the trigger. Each leaf term appears in expression order, followed by `✓` or `✗` for that term's truth and its current reading (`unknown` if absent). Negation applies to the expression, not the leaf's glyph.
+A condition adds a `condition: <STATE text>` block immediately below the trigger. Each leaf term appears in expression order, followed by `✓` or `✗` for that term's truth and its current reading (`unknown` if absent). Negation applies to the expression, not the leaf's glyph.
 
-`loop show <name>` answers whether the task is working, then shows its evidence. It opens with the task's schedule and next fire or hold, then a health verdict from the latest conclusive run: its age, its status and duration, and the streak (how many consecutive conclusive runs ended the same way, and the age of the failure or good run that bounds the streak). An active run adds an `active` line with its run id, holder PID and start, and the `loop stop` command. For a fired one-shot whose run is still active, the task row is already gone: `show` says the one-shot fired, prints the active run (`run in progress`, its run id, holder PID and start), the agent, and the `loop stop` command, then any recorded runs as `loop logs` prints them.
+`loop show <name>` answers whether the task is working, then shows its evidence. It opens with the task's schedule and next fire or hold, or, while a run holds the task's run lock, `▸ running 3m · pid <PID> · run <run id>` in their place (the PID and elapsed time when the lock names its holder, the run id once the run has a record), then a health verdict from the latest conclusive run: its age, its status and duration, and the streak (how many consecutive conclusive runs ended the same way, and the age of the failure or good run that bounds the streak). A running task adds the `loop stop` command under the verdict. For a fired one-shot whose run is still active, the task row is already gone: `show` opens with `<name> — one-shot fired` and the same running text, then the agent, the `loop stop` command, and any recorded runs as `loop logs` prints them.
 
 A fire refused because the previous run was still active is spent: nothing queues or replays it. The run that refused it started before that fire, so the verdict says, in the warning tone, when such fires have had no run since: fires skipped while the active run holds the lock, fires skipped after the last run, or, when no run is active, fires skipped during the last run. A fire refused at another gate (`budget skipped`, `account skipped`, `surplus skipped`, `signal skipped`) ran nothing, so it does not clear the warning.
 
@@ -434,13 +435,13 @@ The sections below follow in this order, and the task's facts close the screen: 
 | `AGENT RUNS` | Check-gated `--agent` and `--wait` tasks only: how many fires escalated to the action, the total and average cost across every escalated run the log still holds that recorded one, and the five latest attempts, newest first. |
 | `RECENT RUNS` | The latest runs, newest first, identical consecutive runs collapsed into one row. An `overlapped` fire takes no row once a later run is recorded: it joins that run's `NOTE` as a count (`2 fires skipped, run already active`), and the runs on either side of it collapse. Overlapped fires with no later run keep one row at the top. The heading gives the runs these rows stand for out of the runs recorded. `-n, --runs <N>` sets how many rows, default `10`. `MODE` appears when the rows differ in mode, `COST` and `TOKENS` when a row has one. |
 
-`loop logs` and `loop show --json` keep one entry per fire, overlapped fires included.
+`loop logs` and `loop show --json` keep one entry per fire, overlapped fires included. The JSON document's keys are `task`, `entry`, `launches`, `runs`, and `running`: `null` while no run holds the lock, otherwise an object with `pid`, `started_at`, and `run_id`, each `null` when the lock names no holder or the run has no record yet. A run lock that cannot be read warns on stderr and prints `null`.
 
 A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind).
 
 ### `loop logs`
 
-`loop logs <name>` prints the full record of the latest runs, oldest first, so the newest ends the output. Each block holds the status, age, mode (`scheduled` or `manual`), exit information, check output, error chains, run ids, pane output tails, cost and tokens, and transcript links when recorded. Agent messages render as [agent prose](../cli.md#agent-prose); check output and errors stay literal. For a fired one-shot whose run is still active, a final `run in progress` line names that run; `--failed` leaves it out.
+`loop logs <name>` prints the full record of the latest runs, oldest first, so the newest ends the output. Each block holds the status, age, mode (`scheduled` or `manual`), exit information, check output, error chains, run ids, pane output tails, cost and tokens, and transcript links when recorded. Agent messages render as [agent prose](../cli.md#agent-prose); check output and errors stay literal. While the task is running, the last line is the running text `loop show` opens with; `--failed` leaves it out.
 
 | Flag | Effect |
 | --- | --- |

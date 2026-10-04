@@ -48,7 +48,7 @@ live while a room for /home/you/code/app is open
 no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one
 ```
 
-The receipt reads back the action, the schedule in plain words, and, for a clock, the concrete next fire. Two facts in it matter before your first task. A task is bound to the project you ran the command in (`--root <path>` picks another), and it fires only while a room for that project is open, or while the [loop timer](#who-keeps-time) keeps time for it. Until then `rimz loop list` shows the task with `-` in its NEXT column, because no clock has picked it up yet.
+The receipt reads back the action, the schedule in plain words, and, for a clock, the concrete next fire. Two facts in it matter before your first task. A task is bound to the project you ran the command in (`--root <path>` picks another), and it fires only while a room for that project is open, or while the [loop timer](#who-keeps-time) keeps time for it. Until then `rimz loop list` shows the task with `-` in its STATE column, because no clock has picked it up yet.
 
 That one command replaces a cron entry, the guard script around it, and the terminal you would have left open to watch it. It runs Claude in an isolated [worktree](./worktrees.md) every Monday at 09:00, and if a bump breaks the build the agent stops and asks instead of forcing it through: the question reaches you like any other waiting card.
 
@@ -342,7 +342,7 @@ One pair is worth a second look. `--every 1d` is an interval: it fires a day aft
 Inspect, test, and manage tasks with the rest of the surface:
 
 ```sh
-rimz loop list                 # every task, grouped by project, with next-fire and last-run
+rimz loop list                 # every task, grouped by project, with state and last run
 rimz loop watch                # live dashboard with countdowns and running tasks
 rimz loop show pr-watch        # health, next fire, agent-run rollup, and recent runs
 rimz loop logs pr-watch        # full forensics for recent runs
@@ -356,7 +356,7 @@ rimz loop rename pr-watch ci-watch
 rimz loop remove pr-watch
 ```
 
-`rimz loop fire` runs every gate a scheduled fire would (budget, surplus, overlap, check), streams the agent's messages as they land, then links the completed run and its transcript. When a fire reports `previous run still active`, `rimz loop show <name>` names the active run and `rimz loop stop <name>` cancels it; stop asks the run to cancel first and sends SIGTERM only as a backstop, and if the run still holds its lock it prints the PID and lock path instead of escalating to SIGKILL.
+`rimz loop fire` runs every gate a scheduled fire would (budget, surplus, overlap, check), streams the agent's messages as they land, then links the completed run and its transcript. When a fire reports `previous run still active`, `rimz loop show <name>` and `rimz loop list` show the task as `▸ running` with how long it has run, and `rimz loop stop <name>` cancels it; stop asks the run to cancel first and sends SIGTERM only as a backstop, and if the run still holds its lock it prints the PID and lock path instead of escalating to SIGKILL.
 
 Enablement and pauses belong to one machine and never edit the task definition. `disable` holds a task indefinitely, `pause --for <duration>` is a bounded hold that lifts itself, and `enable` clears either hold and any strike counter. `--all` applies enable or disable to every task in `rimz loop list`. A lifted hold starts the schedule fresh from that moment, so fires missed while held never replay.
 

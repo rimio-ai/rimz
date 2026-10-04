@@ -196,12 +196,9 @@ impl<'a> WatchSummary<'a> {
 }
 
 fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> WatchRow {
-    let running = matches!(
-        probe_run_lock(task.name, task.task.entry()),
-        Ok(RunLockState::Held(_))
-    );
-    let next_ts = watch_next_timestamp(&task.timing, running);
-    let state = if running {
+    let running = task.running();
+    let next_ts = watch_next_timestamp(&task.timing, running.is_some());
+    let state = if running.is_some() {
         RowState::Running
     } else {
         row_state_for_timing(&task.timing)
@@ -233,15 +230,20 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
         state,
         failed,
         next_ts,
-        next_text: next_text(state, &task.timing, context.now),
+        next_text: next_text(state, &task.timing, running.flatten(), context.now),
         last_text,
         status_text,
     }
 }
 
-fn next_text(state: RowState, timing: &schedule::TaskTiming, now: Timestamp) -> String {
+fn next_text(
+    state: RowState,
+    timing: &schedule::TaskTiming,
+    holder: Option<RunLockInfo>,
+    now: Timestamp,
+) -> String {
     match state {
-        RowState::Running => "running now".to_owned(),
+        RowState::Running => render::running_text(holder, now),
         RowState::Held => {
             // row_state_for_timing maps only disabled and paused states to Held.
             render::held_text(&timing.state(), now)
