@@ -487,7 +487,14 @@ fn usage_response_maps_windows_and_tolerates_bad_credit_balance() {
     );
     assert_eq!(
         usage.extra_credits,
-        Some(ExtraCredits::known(None, Some(18.5), None))
+        Some(ExtraCredits::known(None, Some(0.74), None))
+    );
+    assert_eq!(
+        parse_usage_response(r#"{ "credits": { "balance": "62500" } }"#)
+            .unwrap()
+            .extra_credits,
+        Some(ExtraCredits::known(None, Some(2_500.0), None)),
+        "a credit balance converts to dollars"
     );
 
     let usage = parse_usage_response(

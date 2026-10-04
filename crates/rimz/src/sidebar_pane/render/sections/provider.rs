@@ -1321,8 +1321,8 @@ fn longer_window_spent(panel: &SidebarProviderPanel, window: &RateLimitWindow) -
 /// then the provider keeps `resets_at` slid a full window-length ahead. Detect that
 /// by the reset distance ([`RateLimitWindow::not_started`]), not a 0% reading — a fresh 5h
 /// window still reports ~1% used, never 0. Codex reports a placeholder usedPercent
-/// (~99) with no `resets_at` before the first token; that variant is caught by the
-/// absent-reset + known-duration check in the `remaining` computation below.
+/// (~99) with no `resets_at` before the first token; that variant reads full
+/// through [`RateLimitWindow::remaining_percentage`].
 fn metered_bar_row(
     theme: &Theme,
     window: &RateLimitWindow,
@@ -1350,16 +1350,7 @@ fn metered_bar_row(
     let remaining = if force_exhausted {
         0
     } else {
-        let raw = 100u8.saturating_sub(window.used_percentage.unwrap_or(100));
-        // Codex reports a placeholder usedPercent (≈99) with no resetsAt before the
-        // first token and a known duration — normalise to full so the bar matches
-        // the empty countdown.
-        if not_started || (window.resets_at.is_none() && window.duration_mins.is_some() && raw > 0)
-        {
-            100
-        } else {
-            raw
-        }
+        window.remaining_percentage(now).unwrap_or(0)
     };
     let reset = if force_exhausted || not_started {
         None

@@ -92,6 +92,11 @@ pub(crate) fn normalize_usage(
     }
 }
 
+/// Codex reports `credits.balance` in credits, not dollars. The rate is read
+/// off user-reported account data (62,500 credits against a $2,500 balance),
+/// not an upstream protocol guarantee.
+const CREDITS_PER_USD: f64 = 25.0;
+
 pub(crate) fn normalize_credits(credits: UsageCredits) -> Option<ExtraCredits> {
     if credits.overage_limit_reached == Some(true) {
         return Some(ExtraCredits::known(None, Some(0.0), None));
@@ -100,7 +105,11 @@ pub(crate) fn normalize_credits(credits: UsageCredits) -> Option<ExtraCredits> {
         return Some(ExtraCredits::known(None, None, None));
     }
     if let Some(balance) = credits.balance {
-        return Some(ExtraCredits::known(None, Some(balance), None));
+        return Some(ExtraCredits::known(
+            None,
+            Some(balance / CREDITS_PER_USD),
+            None,
+        ));
     }
     (credits.has_credits == Some(false)).then_some(ExtraCredits::Disabled)
 }
@@ -439,7 +448,7 @@ mod tests {
         assert_eq!(windows[1].used_percentage, Some(100));
         assert_eq!(
             usage.extra_credits,
-            Some(ExtraCredits::known(None, Some(12.5), None))
+            Some(ExtraCredits::known(None, Some(0.5), None))
         );
     }
 

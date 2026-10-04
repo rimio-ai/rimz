@@ -613,7 +613,7 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
     let credits = read_json(runtime.shared_credits_path());
     assert_eq!(
         credits["logins"]["codex@default"]["extra_credits"]["known"]["remaining_usd"],
-        18.5
+        0.74
     );
     assert_eq!(credits["logins"]["codex@default"]["account_key"], "acc_123");
     let limits = read_json(runtime.shared_rate_limits_path());

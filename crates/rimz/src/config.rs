@@ -76,11 +76,11 @@ pub use color::{ColorDepth, ThemeColor, ThemeMode};
 pub(crate) use color::{PaletteRole, Semantic, nearest_xterm_index, parse_hex, xterm_rgb};
 pub(crate) use daemon::{DaemonConfig, DaemonPane};
 pub use diagnosis::ConfigFileDiagnosis;
+pub use display::{BudgetBarConfig, ContextMeterConfig, PixelMode, ProviderTabsMode};
 pub(crate) use display::{
-    BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, DisplayConfig,
-    HighlightStepsConfig, ScrollbarMode,
+    BudgetBurnRateConfig, CardDensityMode, ContextBand, DisplayConfig, HighlightStepsConfig,
+    ScrollbarMode,
 };
-pub use display::{ContextMeterConfig, PixelMode, ProviderTabsMode};
 pub use edit::{ConfigEditErr, ConfigEditor, MergeAction, MergeReport};
 pub(crate) use gc::GcConfig;
 pub use gc::parse_older_than;

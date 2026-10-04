@@ -15,7 +15,8 @@
 use std::collections::BTreeMap;
 
 use crate::config::{
-    ColorDepth, GlyphRole, HighlightStepsConfig, ThemeConfig, ThemeProviderStyle, xterm_rgb,
+    BudgetBarConfig, ColorDepth, GlyphRole, HighlightStepsConfig, ThemeConfig, ThemeProviderStyle,
+    xterm_rgb,
 };
 pub(crate) use crate::theme::Palette;
 use crate::theme::{
@@ -428,6 +429,12 @@ impl Theme {
     /// between. Drives the context meter's health tone and severity glyph.
     pub(super) fn heat_tone(&self, amount: f32) -> Color {
         rgb_color(ramp_tone(&self.palette.heat_ramp, amount), self.depth)
+    }
+
+    /// The tone of a budget with `remaining_pct` left under `zones`
+    /// ([`Palette::budget_tone`]), the mana bar's colour.
+    pub(super) fn budget_tone(&self, remaining_pct: u8, zones: &BudgetBarConfig) -> Color {
+        tone_color(self.palette.budget_tone(remaining_pct, zones))
     }
 
     /// The warm tail of the ramp (`warn` → `caution` → `alarm`) for `amount` ∈

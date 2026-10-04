@@ -190,6 +190,47 @@ fn window_not_started_keys_on_reset_distance_above_the_floor() {
 }
 
 #[test]
+fn window_remaining_reads_full_before_the_clock_starts() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let reading = |used, resets_in: Option<i64>| RateLimitWindow {
+        used_percentage: used,
+        resets_at: resets_in.map(|secs| now + SignedDuration::from_secs(secs)),
+        duration_mins: Some(300),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        reading(Some(45), Some(3_600)).remaining_percentage(now),
+        Some(55)
+    );
+    // Not started: the reset still sits a full window out at the usage floor.
+    assert_eq!(
+        reading(Some(1), Some(300 * 60)).remaining_percentage(now),
+        Some(100)
+    );
+    // Codex's placeholder before the first token: no reset, a known duration.
+    assert_eq!(reading(Some(99), None).remaining_percentage(now), Some(100));
+    // A scoped window of that shape is a sub-cap with a real reading.
+    let sub_cap = RateLimitWindow {
+        scope: Some(RateLimitWindowScope {
+            id: "fable".to_owned(),
+            label: "Fable".to_owned(),
+        }),
+        ..reading(Some(31), None)
+    };
+    assert_eq!(sub_cap.remaining_percentage(now), Some(69));
+    // A spent window stays spent, placeholder shape or not.
+    assert_eq!(reading(Some(100), None).remaining_percentage(now), Some(0));
+    assert_eq!(reading(None, Some(3_600)).remaining_percentage(now), None);
+    // Without a duration the absent reset says nothing about the clock.
+    let undated = RateLimitWindow {
+        used_percentage: Some(99),
+        ..Default::default()
+    };
+    assert_eq!(undated.remaining_percentage(now), Some(1));
+}
+
+#[test]
 fn scoped_window_identity_projection_and_wire_round_trip() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let scope = RateLimitWindowScope {
