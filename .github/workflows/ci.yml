@@ -256,6 +256,8 @@ jobs:
           mold -run cargo xtask test --deny-skips --profile journey
 
       # A green run still carries each flaky test's failed first attempt here.
+      # When compile or gate fails, no report exists, so this step fails too with
+      # "No files were found": the earlier failed step is the cause.
       - name: Upload nextest JUnit reports
         if: always()
         uses: actions/upload-artifact@v7
