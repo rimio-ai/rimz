@@ -580,9 +580,25 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         condition::write_show(&mut out, task.entry(), &timing)?;
     }
-    if let Some((verdict, style)) = verdict_line(&records, now) {
-        writeln!(out, "  {}", ui::paint(style, &verdict))?;
+    write_verdict(&mut out, &args.name, &records, in_flight.as_ref(), now)?;
+    if records.is_empty() {
+        writeln!(out)?;
+        writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
+    } else {
+        write_last_run(
+            &mut out,
+            &args.name,
+            entry,
+            &records,
+            now,
+            ui::prose::Prose::for_stdout(),
+        )?;
+        if show_agent_runs {
+            write_agent_runs(&mut out, &records, now)?;
+        }
+        write_runs_table(&mut out, &records, args.runs, now)?;
     }
+    writeln!(out)?;
     write_show_facts(
         &mut out,
         &args.name,
@@ -591,36 +607,130 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         ShowFactsContext {
             now_zoned: &now_zoned,
             is_held: timing.arm_state() != ArmState::Live,
-            in_flight: in_flight.as_ref(),
             full_spend: !show_agent_runs,
         },
     )?;
+    Ok(())
+}
 
-    if show_agent_runs {
-        write_agent_runs(&mut out, &records, now)?;
+/// The answer under the headline: the verdict, any fires nothing has answered, and the run in flight.
+fn write_verdict(
+    out: &mut impl Write,
+    name: &str,
+    records: &[LoopRunRecord],
+    in_flight: Option<&InFlightRun>,
+    now: Timestamp,
+) -> std::io::Result<()> {
+    let verdict = verdict_line(records, now).map(|(verdict, style)| ui::paint(style, &verdict));
+    let stale = stale_clause(records, in_flight.is_some())
+        .map(|clause| ui::paint(ui::palette::warn(), &clause));
+    match (verdict, stale) {
+        (Some(verdict), Some(stale)) => writeln!(out, "  {verdict} · {stale}")?,
+        (Some(line), None) | (None, Some(line)) => writeln!(out, "  {line}")?,
+        (None, None) => {}
     }
-
-    if records.is_empty() {
-        writeln!(out)?;
-        writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
-        return Ok(());
+    if let Some(in_flight) = in_flight {
+        writeln!(
+            out,
+            "  {} {}",
+            ui::paint(ui::palette::muted(), "active:"),
+            active_run_text(in_flight)
+        )?;
+        writeln!(out, "  stop with `rimz loop stop {name}`")?;
     }
+    Ok(())
+}
 
-    write_runs_table(&mut out, &records, args.runs, now)?;
-    let (detail_idx, failure_idx) = detail_indices(&records);
-    if let Some(detail) = detail_idx.and_then(|idx| records.get(idx)) {
+fn is_overlap(record: &LoopRunRecord) -> bool {
+    record.result == LoopRunResult::Overlapped
+}
+
+fn fires(count: usize) -> String {
+    if count == 1 {
+        "1 fire".to_owned()
+    } else {
+        format!("{count} fires")
+    }
+}
+
+/// A fire a gate refused before anything ran: no run answers it, and it is no run itself.
+fn is_refused_fire(record: &LoopRunRecord) -> bool {
+    matches!(
+        record.result,
+        LoopRunResult::Overlapped
+            | LoopRunResult::BudgetSkipped
+            | LoopRunResult::AccountSkipped
+            | LoopRunResult::SurplusSkipped
+            | LoopRunResult::SignalSkipped
+    )
+}
+
+/// A fire refused at the run lock is spent, and the run that refused it started
+/// before it. So fires refused during or after the newest run, with no run
+/// since, are fires nothing has answered. A run in flight with no refusal
+/// after the newest run started after every one of them, and answers them.
+/// Fires refused at the other gates ran nothing, so they neither bound the
+/// newest run nor end a count of overlaps.
+fn stale_clause(records: &[LoopRunRecord], has_active_run: bool) -> Option<String> {
+    let newest_run = records.iter().rposition(|record| !is_refused_fire(record));
+    let after = records[newest_run.map_or(0, |idx| idx + 1)..]
+        .iter()
+        .filter(|record| is_overlap(record))
+        .count();
+    if after > 0 && has_active_run {
+        return Some(format!(
+            "{} skipped while the active run holds the lock",
+            fires(after)
+        ));
+    }
+    if after > 0 {
+        let last = if after == 1 {
+            "last fire".to_owned()
+        } else {
+            format!("last {after} fires")
+        };
+        return Some(format!("{last} skipped, nothing has run since"));
+    }
+    if has_active_run {
+        return None;
+    }
+    let during = records[..newest_run?]
+        .iter()
+        .rev()
+        .take_while(|record| is_refused_fire(record))
+        .filter(|record| is_overlap(record))
+        .count();
+    (during > 0).then(|| {
+        format!(
+            "{} skipped during the last run, nothing has run since",
+            fires(during)
+        )
+    })
+}
+
+fn write_last_run(
+    out: &mut impl Write,
+    name: &str,
+    entry: &TaskEntry,
+    records: &[LoopRunRecord],
+    now: Timestamp,
+    prose: ui::prose::Prose,
+) -> std::io::Result<()> {
+    let (detail_idx, failure_idx) = detail_indices(records);
+    if let Some(idx) = detail_idx {
         writeln!(out)?;
         run_report::render_record_detail(
-            &mut out,
+            out,
             entry,
-            detail,
+            &records[idx],
             "LAST RUN",
+            &format!("rimz loop logs {name} -n {}", records.len() - idx),
             now,
-            ui::prose::Prose::for_stdout(),
+            prose,
         )?;
     }
     if let Some(failure) = failure_idx.and_then(|idx| records.get(idx)) {
-        run_report::write_failure_pointer(&mut out, &args.name, failure, now)?;
+        run_report::write_failure_pointer(out, name, failure, now)?;
     }
     Ok(())
 }
@@ -723,7 +833,7 @@ fn write_log_records(
             write!(out, " · {exit}")?;
         }
         writeln!(out)?;
-        run_report::write_record_forensics(out, entry, record, prose)?;
+        run_report::write_record_forensics(out, entry, record, prose, run_report::Forensics::Full)?;
     }
     Ok(())
 }
@@ -820,7 +930,6 @@ fn write_show_headline(
 struct ShowFactsContext<'a> {
     now_zoned: &'a jiff::Zoned,
     is_held: bool,
-    in_flight: Option<&'a InFlightRun>,
     full_spend: bool,
 }
 
@@ -837,8 +946,6 @@ fn write_show_facts(
     let room_is_open = room_open(&root);
     let blocked_state = source.blocked_state();
     let strike_count = strikes::load().get(&task.key(name)).copied().unwrap_or(0);
-    let active = context.in_flight.map(active_run_text);
-    let has_active_run = active.is_some();
     let timeout = entry.timeout.clone().or_else(|| {
         entry.agent.as_ref().map(|_| {
             format!(
@@ -852,9 +959,19 @@ fn write_show_facts(
         })
     });
     let mut kv = ui::KeyVals::new().indent(2);
-    kv.push("task", ui::cell(task_subject(task)));
-    if let Some(check) = check_summary(entry, task.action().ok()) {
-        kv.push("check", ui::cell(check));
+    match (task.action(), check_summary(entry, task.action().ok())) {
+        (Ok(TaskAction::CheckOnly), Some(check)) => {
+            kv.push(
+                "task",
+                ui::cell(format!("{} · {check}", task_subject(task))),
+            );
+        }
+        (_, check) => {
+            kv.push("task", ui::cell(task_subject(task)));
+            if let Some(check) = check {
+                kv.push("check", ui::cell(check));
+            }
+        }
     }
     if let Some(verify) = entry.verify.as_deref() {
         kv.push(
@@ -870,8 +987,8 @@ fn write_show_facts(
         kv.push("dir", ui::cell(display_path(dir)));
     }
     kv.push("source", ui::cell(source_detail(source, entry)));
-    if let Some(active) = active {
-        kv.push("active", ui::cell(active));
+    if let Some(timeout) = timeout {
+        kv.push("timeout", ui::cell(timeout));
     }
     if let Some(state) = blocked_state {
         kv.push(
@@ -897,14 +1014,7 @@ fn write_show_facts(
             ui::cell(format!("{strike_count}/{max}")).fg(ui::palette::muted()),
         );
     }
-    kv.render(out)?;
-    if let Some(timeout) = timeout {
-        writeln!(out, "  timeout: {timeout}")?;
-    }
-    if has_active_run {
-        writeln!(out, "  stop with `rimz loop stop {name}`")?;
-    }
-    Ok(())
+    kv.render(out)
 }
 
 fn write_agent_runs(
@@ -941,8 +1051,7 @@ fn write_agent_runs(
         return Ok(());
     }
 
-    let start = agent_runs.len().saturating_sub(5);
-    let visible = &agent_runs[start..];
+    let visible = agent_runs.iter().rev().take(5).collect::<Vec<_>>();
     let show_note = visible.iter().any(|record| record_note(record).is_some());
     let mut headers = vec!["WHEN", "STATUS", "TOOK", "COST"];
     if show_note {
@@ -979,36 +1088,58 @@ fn write_runs_table(
     limit: usize,
     now: Timestamp,
 ) -> std::io::Result<()> {
+    let rows = collapsed_run_rows(records);
+    let visible_rows = rows.iter().rev().take(limit).collect::<Vec<_>>();
+    let shown = visible_rows
+        .iter()
+        .map(|row| row.count + row.skipped)
+        .sum::<usize>();
     writeln!(out)?;
     writeln!(
         out,
         "{}",
         ui::paint(
             ui::palette::header(),
-            &format!("RECENT RUNS ({} recorded)", records.len())
+            &format!("RECENT RUNS (newest first · {shown} of {})", records.len())
         )
     )?;
-    let rows = collapsed_run_rows(records);
-    let start = rows.len().saturating_sub(limit);
-    let visible_rows = &rows[start..];
-    let show_note = visible_rows.iter().any(|row| row.key.note.is_some());
+    let show_mode = visible_rows
+        .iter()
+        .any(|row| row.key.mode != visible_rows[0].key.mode);
+    let show_cost = visible_rows
+        .iter()
+        .any(|row| valid_cost(row.latest).is_some());
     let show_tokens = visible_rows
         .iter()
         .any(|row| row.latest.input_tokens.is_some() || row.latest.output_tokens.is_some());
-    let mut headers = vec!["WHEN", "MODE", "STATUS", "TOOK", "COST"];
+    let show_note = visible_rows.iter().any(|row| row.note().is_some());
+    let mut headers = vec!["WHEN"];
+    if show_mode {
+        headers.push("MODE");
+    }
+    headers.extend(["STATUS", "TOOK"]);
+    let cost_column = headers.len();
+    if show_cost {
+        headers.push("COST");
+    }
     if show_tokens {
         headers.push("TOKENS");
     }
     if show_note {
         headers.push("NOTE");
     }
-    let mut table = ui::Table::new(headers).right(&[4]).indent(2);
+    let mut table = ui::Table::new(headers).indent(2);
+    if show_cost {
+        table = table.right(&[cost_column]);
+    }
     for row in visible_rows {
         let record = row.latest;
-        let mut cells = vec![
-            ui::cell(ui::rel_age(record.at, now)),
-            ui::cell(row.key.mode.map_or("-", LoopRunMode::label)).dash(),
-            run_status_cell(record, row.count),
+        let mut cells = vec![ui::cell(ui::rel_age(record.at, now))];
+        if show_mode {
+            cells.push(ui::cell(row.key.mode.map_or("-", LoopRunMode::label)).dash());
+        }
+        cells.push(run_status_cell(record, row.count));
+        cells.push(
             ui::cell(
                 record
                     .watch
@@ -1019,8 +1150,10 @@ fn write_runs_table(
                     .unwrap_or_else(|| "-".to_owned()),
             )
             .dash(),
-            cost_cell(record),
-        ];
+        );
+        if show_cost {
+            cells.push(cost_cell(record));
+        }
         if show_tokens {
             cells.push(
                 ui::cell(
@@ -1031,7 +1164,7 @@ fn write_runs_table(
             );
         }
         if show_note {
-            cells.push(ui::cell(row.key.note.as_deref().unwrap_or("-")).dash());
+            cells.push(ui::cell(row.note().as_deref().unwrap_or("-")).dash());
         }
         table.row(cells);
     }
@@ -1069,14 +1202,38 @@ struct CollapsedRunRow<'a> {
     key: RunRowKey,
     latest: &'a LoopRunRecord,
     count: usize,
+    /// Overlapped fires folded into this row: refused while its runs held the lock.
+    skipped: usize,
 }
 
+impl CollapsedRunRow<'_> {
+    fn note(&self) -> Option<String> {
+        let skipped = (self.skipped > 0)
+            .then(|| format!("{} skipped, run already active", fires(self.skipped)));
+        match (&self.key.note, skipped) {
+            (Some(note), Some(skipped)) => Some(format!("{note} · {skipped}")),
+            (note, skipped) => note.clone().or(skipped),
+        }
+    }
+}
+
+/// Table rows in record order. An overlap takes no row once a later record
+/// exists: its row precedes the row of the run that refused it, so it folds
+/// into the next record as a count, and neighbours it used to split collapse.
+/// Overlaps with no later record are a run still in flight, or one that
+/// crashed, and keep one row.
 fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
     let mut rows = Vec::<CollapsedRunRow<'_>>::new();
+    let mut overlaps = 0;
     for record in records {
+        if is_overlap(record) {
+            overlaps += 1;
+            continue;
+        }
         let key = RunRowKey::new(record);
         if let Some(row) = rows.last_mut().filter(|row| row.key == key) {
             row.count += 1;
+            row.skipped += overlaps;
             if record.at >= row.latest.at {
                 row.latest = record;
             }
@@ -1085,8 +1242,18 @@ fn collapsed_run_rows(records: &[LoopRunRecord]) -> Vec<CollapsedRunRow<'_>> {
                 key,
                 latest: record,
                 count: 1,
+                skipped: overlaps,
             });
         }
+        overlaps = 0;
+    }
+    if let Some(latest) = records.last().filter(|_| overlaps > 0) {
+        rows.push(CollapsedRunRow {
+            key: RunRowKey::new(latest),
+            latest,
+            count: overlaps,
+            skipped: 0,
+        });
     }
     rows
 }
@@ -1178,7 +1345,7 @@ fn record_is_good(record: &LoopRunRecord) -> bool {
 }
 
 fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, anstyle::Style)> {
-    let (decisive_idx, healthy) = records.iter().enumerate().rev().find_map(|(idx, record)| {
+    let (newest_idx, healthy) = records.iter().enumerate().rev().find_map(|(idx, record)| {
         if record_is_failure(record) {
             Some((idx, false))
         } else if record_is_good(record) {
@@ -1187,35 +1354,45 @@ fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, an
             None
         }
     })?;
-    let boundary = records[..decisive_idx]
-        .iter()
-        .rposition(|record| {
-            if healthy {
-                record_is_failure(record)
-            } else {
-                record_is_good(record)
-            }
-        })
-        .map_or(0, |idx| idx + 1);
-    let matching = |record: &&LoopRunRecord| {
+    let bound = records[..newest_idx].iter().rposition(|record| {
         if healthy {
-            record_is_good(record)
-        } else {
             record_is_failure(record)
+        } else {
+            record_is_good(record)
         }
-    };
-    let mut streak = records[boundary..=decisive_idx].iter().filter(matching);
-    let oldest = streak.next()?;
-    let count = 1 + streak.count();
-    let status = run_status(&records[decisive_idx]);
-    let state = if healthy { "healthy" } else { "failing" };
-    Some((
+    });
+    let count = records[bound.map_or(0, |idx| idx + 1)..=newest_idx]
+        .iter()
+        .filter(|record| record_is_failure(record) || record_is_good(record))
+        .count();
+    let newest = &records[newest_idx];
+    let status = run_status(newest);
+    let mut line = format!(
+        "{} {} · last run {}, {}",
+        status.glyph,
+        if healthy { "healthy" } else { "failing" },
+        ui::rel_age(newest.at, now),
+        status.label
+    );
+    if let Some(took) = run_duration_label(newest) {
+        line.push_str(&format!(" in {took}"));
+    }
+    let since = bound.map(|idx| {
         format!(
-            "{} {state} · {} ×{count} since {}",
-            status.glyph,
-            status.label,
-            ui::rel_age(oldest.at, now)
-        ),
+            " since a {} {}",
+            if healthy { "failure" } else { "good run" },
+            ui::rel_age(records[idx].at, now)
+        )
+    });
+    match (count, since) {
+        (1, None) => {}
+        (1, Some(since)) => line.push_str(&format!(" · first{since}")),
+        (count, since) => {
+            line.push_str(&format!(" · {count} in a row{}", since.unwrap_or_default()))
+        }
+    }
+    Some((
+        line,
         if healthy {
             ui::palette::good()
         } else {
@@ -1305,6 +1482,15 @@ pub(super) fn format_duration_ms(ms: u64) -> String {
     } else {
         format!("{}m", ms / 60_000)
     }
+}
+
+/// A run's own duration. A watched command's verdict label already states its
+/// elapsed time, so such a record has none to add.
+pub(super) fn run_duration_label(record: &LoopRunRecord) -> Option<String> {
+    record
+        .duration_ms
+        .filter(|_| record.watch.is_none())
+        .map(format_duration_ms)
 }
 
 fn valid_cost(record: &LoopRunRecord) -> Option<f64> {
@@ -1404,7 +1590,7 @@ fn record_has_detail(record: &LoopRunRecord) -> bool {
         || record.output_tokens.is_some()
 }
 
-fn record_is_failure(record: &LoopRunRecord) -> bool {
+pub(super) fn record_is_failure(record: &LoopRunRecord) -> bool {
     matches!(
         record.result,
         LoopRunResult::Errored
@@ -1424,16 +1610,17 @@ fn is_agent_run(record: &LoopRunRecord) -> bool {
         )
 }
 
+/// The record LAST RUN details, and the failure to point at when the loop is
+/// failing and LAST RUN is some other record. An overlap is never the detail:
+/// it is a refused fire, and the run before it is the last thing that ran.
 fn detail_indices(records: &[LoopRunRecord]) -> (Option<usize>, Option<usize>) {
-    let detail_idx = records.iter().rposition(record_has_detail);
+    let detail_idx = records
+        .iter()
+        .rposition(|record| !is_overlap(record) && record_has_detail(record));
     let failure_idx = records
         .iter()
-        .enumerate()
-        .rev()
-        .find(|(idx, record)| {
-            Some(*idx) != detail_idx && record_is_failure(record) && record_has_detail(record)
-        })
-        .map(|(idx, _record)| idx);
+        .rposition(|record| record_is_failure(record) || record_is_good(record))
+        .filter(|&idx| record_is_failure(&records[idx]) && Some(idx) != detail_idx);
     (detail_idx, failure_idx)
 }
 

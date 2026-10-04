@@ -299,21 +299,25 @@ $ rimz loop fire suite
 suite — check
   check: cargo test
   │ error: could not find `Cargo.toml` in `/home/you/code/app` or any parent directory
-✗ check failed (exit 101) in 24ms
+✗ check failed (exit 101) in 206ms
 $ rimz loop show suite
 suite — every 1h
-  ✗ failing · failed (exit 101) ×1 since 0s ago
-  task:    check
-  check:   cargo test
-  root:    /home/you/code/app · no room
+  ✗ failing · last run 0s ago, failed (exit 101) in 206ms
+
+LAST RUN — ✗ failed (exit 101) · 0s ago · 206ms · manual
+  │ error: could not find `Cargo.toml` in `/home/you/code/app` or any parent directory
+
+RECENT RUNS (newest first · 1 of 1)
+  WHEN    STATUS               TOOK   NOTE
+  0s ago  ✗ failed (exit 101)  206ms  error: could not find `Cargo.toml` in `/home/you/code/app...
+
+  task:    check · cargo test
+  root:    ~/code/app · no room
   source:  machine — ~/.rimz/loop.toml
   strikes: 1/3
-…
-LAST RUN — ✗ failed (exit 101) · 0s ago · manual
-  │ error: could not find `Cargo.toml` in `/home/you/code/app` or any parent directory
 ```
 
-The verdict line reads the latest conclusive run, `strikes` counts consecutive failures against the threshold, and `manual` marks a run you fired by hand; a clock's fire reads `scheduled`.
+The screen answers first and shows its evidence after. The verdict line reads the latest conclusive run: how long ago it ran, how it ended, and, once there is a streak, how many runs in a row ended that way and when the streak began. `LAST RUN` is that run's output (a passing check prints its last five lines and the `rimz loop logs` command for the rest), `RECENT RUNS` reads newest first, and the task's facts close the screen, where `strikes` counts consecutive failures against the threshold. `manual` marks a run you fired by hand; a clock's fire carries no mark.
 
 Teardown is one command. `rimz loop remove <name>` deletes the entry from whichever file owns it; the run history stays. `rimz loop timer remove` takes the timer out, and `rimz uninstall` removes it too.
 

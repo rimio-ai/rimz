@@ -331,7 +331,7 @@ struct ShowArgs {
         crate::cli::complete::loop_tasks
     ))]
     name: String,
-    /// Number of recent run rows to show; consecutive identical runs collapse into one.
+    /// Number of recent run rows to show, newest first; consecutive identical runs collapse into one row and an overlapped fire folds into the run that follows it.
     #[arg(short = 'n', long = "runs", default_value_t = 10)]
     runs: usize,
 }
