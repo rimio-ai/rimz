@@ -1,6 +1,7 @@
 //! Link a named account's home into the provider's own home: everything but
-//! credentials for an account that shares the default's history, settings
-//! alone for a standalone one.
+//! private and transient names for an account that shares the default's
+//! history, settings alone for a standalone one. A link into the provider's
+//! own home at a private or transient name is removed in either mode.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -90,15 +91,26 @@ pub struct ShareReport {
     /// Links a standalone account no longer shares.
     unlinked: Vec<String>,
     set_aside: Vec<(PathBuf, PathBuf)>,
+    /// Links removed from names no account shares.
+    repaired: Vec<PathBuf>,
     /// Entries that could not move to the provider's own home.
     left_local: Vec<PathBuf>,
     notes: Vec<String>,
 }
 
 impl ShareReport {
-    /// What the account's owner must hear about: every entry set aside and
-    /// every entry left in the account home.
+    /// What the account's owner must hear about: every link removed from a
+    /// name no account shares, every entry set aside, and every entry left in
+    /// the account home.
     pub fn warnings(&self) -> Vec<String> {
+        let repaired = self.repaired.iter().map(|slot| {
+            format!(
+                "{} account: removed the link {} into {}; that name is per-account and no longer shared",
+                self.account,
+                slot.display(),
+                self.default_home.display()
+            )
+        });
         let set_aside = self.set_aside.iter().map(|(slot, aside)| {
             format!(
                 "{} account: moved {} aside to {}; the account now reads the copy in {}",
@@ -116,7 +128,7 @@ impl ShareReport {
                 self.default_home.display()
             )
         });
-        set_aside.chain(left_local).collect()
+        repaired.chain(set_aside).chain(left_local).collect()
     }
 }
 
@@ -226,6 +238,22 @@ fn is_private(adapter: &AgentDefinition, name: &str) -> bool {
         })
 }
 
+/// A provider's lock or temp file: `.lock` or `.tmp` as a dotted component
+/// past the start of the name, so `.tmp` and `thread-writer-locks` are not.
+fn is_transient(name: &str) -> bool {
+    [".lock", ".tmp"].iter().any(|suffix| {
+        name.match_indices(suffix).any(|(at, _)| {
+            let rest = &name[at + suffix.len()..];
+            at > 0 && (rest.is_empty() || rest.starts_with('.'))
+        })
+    })
+}
+
+/// Whether a top-level name stays out of the link set of every account.
+fn is_unshared(adapter: &AgentDefinition, name: &str) -> bool {
+    is_private(adapter, name) || is_transient(name)
+}
+
 pub fn check_distinct_homes(named_home: &Path, default_home: &Path) -> Result<(), ShareErr> {
     let named_canonical = match named_home.canonicalize() {
         Ok(home) => home,
@@ -319,7 +347,7 @@ fn reconcile_homes(
                     .iter()
                     .map(|&name| name.to_owned()),
             )
-            .filter(|name| !is_private(adapter, name) && !names.contains(name))
+            .filter(|name| !is_unshared(adapter, name) && !names.contains(name))
             .collect();
         names.extend(rest);
     }
@@ -339,7 +367,6 @@ fn reconcile_homes(
     for name in in_account {
         let slot = named_home.join(&name);
         if !names.contains(&name)
-            && !is_private(adapter, &name)
             && metadata(&slot)?.is_some_and(|entry| entry.is_symlink())
             && link_target(&slot)?.starts_with(&default_home)
         {
@@ -347,14 +374,16 @@ fn reconcile_homes(
         }
     }
     // A provider appends by path, so a directory, or a link to one, leaves
-    // its slot only when no other agent on the account can be writing.
+    // its slot only when no other agent on the account can be writing. A
+    // link at an unshared name is exempt: the provider must own that name in
+    // each home, so the link is the defect.
     let set_aside = plan
         .iter()
         .find(|planned| matches!(planned.action, Action::SetAside(_)) && planned.slot.is_dir())
         .map(|planned| (planned.name.clone(), false));
     let unlinked = stale
         .iter()
-        .find(|(_, slot)| slot.is_dir())
+        .find(|(name, slot)| !is_unshared(adapter, name) && slot.is_dir())
         .map(|(name, _)| (name.clone(), true));
     if let Some((entry, unlink)) = set_aside.or(unlinked) {
         let agents = other_live_agents();
@@ -388,6 +417,7 @@ fn reconcile_homes(
         moved: Vec::new(),
         unlinked: Vec::new(),
         set_aside: Vec::new(),
+        repaired: Vec::new(),
         left_local: Vec::new(),
         notes: Vec::new(),
     };
@@ -485,7 +515,11 @@ fn apply(
     }
     for (name, slot) in stale {
         fs::remove_file(&slot).map_err(|error| io_err(&slot, error))?;
-        report.unlinked.push(name);
+        if is_unshared(adapter, &name) {
+            report.repaired.push(slot);
+        } else {
+            report.unlinked.push(name);
+        }
     }
     Ok(())
 }

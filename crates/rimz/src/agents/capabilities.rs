@@ -288,6 +288,8 @@ pub trait LaunchCapability: CoreCapability {
     /// Top-level home names a shared account keeps to itself: its credentials,
     /// and state that belongs to one running daemon or one install. A name is
     /// private when it equals one of these or starts with one followed by `.`.
+    /// Lock and temp names (a dotted `.lock` or `.tmp` component) stay out of
+    /// the link set for every provider and are not restated here.
     fn private_home_entries(&self) -> &'static [&'static str] {
         &[]
     }

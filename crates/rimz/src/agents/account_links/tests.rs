@@ -226,7 +226,13 @@ fn private_names_and_their_dotted_siblings_stay_real() {
         ),
         (
             "claude",
-            &[".credentials.json", ".claude.json", ".claude.json.backup"][..],
+            &[
+                ".credentials.json",
+                ".claude.json",
+                ".claude.json.backup",
+                ".oauth_refresh.lock",
+                ".last-update-result.json",
+            ][..],
         ),
     ] {
         let home = Fixture::new(kind);
@@ -657,4 +663,190 @@ fn two_accounts_moving_one_name_into_the_default_home_overwrite_nothing() {
     let mut both = [kept.as_str(), aside.as_str()];
     both.sort_unstable();
     assert_eq!(both, ["team", "work"]);
+}
+
+/// A reconcile that fails the test if it asks about live agents.
+fn run_unguarded(home: &Fixture, shared: bool) -> ShareReport {
+    reconcile_homes(
+        &Homes {
+            adapter: super::super::definition_by_kind(home.account.kind.as_str()).unwrap(),
+            account: &home.account,
+            named: &home.named,
+            default: &home.native,
+            shared,
+            lock: &home.lock,
+        },
+        &|| -> Option<usize> { panic!("an unshared name never waits on live agents") },
+    )
+    .unwrap()
+}
+
+#[test]
+fn only_dotted_lock_and_tmp_components_are_unshared() {
+    let codex = super::super::definition_by_kind("codex").unwrap();
+    let claude = super::super::definition_by_kind("claude").unwrap();
+    for name in [
+        ".oauth_refresh.lock",
+        ".oauth_refresh.lock.owner",
+        ".sqlite-maintenance.lock",
+        "session_index.jsonl.tmp",
+        "settings.json.tmp.123.ab",
+    ] {
+        assert!(is_unshared(codex, name), "{name}");
+        assert!(is_unshared(claude, name), "{name}");
+    }
+    assert!(is_unshared(claude, ".last-update-result.json"));
+    assert!(!is_unshared(codex, ".last-update-result.json"));
+    for name in [
+        ".tmp",
+        "tmp",
+        "thread-writer-locks",
+        "mcp-oauth-locks",
+        ".lockfile",
+        "notes.locked",
+        ".lock",
+    ] {
+        assert!(!is_unshared(codex, name), "{name}");
+        assert!(!is_unshared(claude, name), "{name}");
+    }
+}
+
+#[test]
+fn a_lock_or_temp_file_in_either_home_is_never_linked() {
+    let launch = Fixture::new("codex");
+    fs::create_dir_all(launch.native.join(".oauth_refresh.lock")).unwrap();
+    fs::create_dir_all(launch.native.join("thread-writer-locks")).unwrap();
+    fs::create_dir_all(launch.native.join(".tmp")).unwrap();
+    for file in [".sqlite-maintenance.lock", "session_index.jsonl.tmp"] {
+        fs::write(launch.native.join(file), file).unwrap();
+    }
+    let report = launch.run_with(true, Some(2)).unwrap();
+    assert!(report.warnings().is_empty(), "{report}");
+    for name in [
+        ".oauth_refresh.lock",
+        ".sqlite-maintenance.lock",
+        "session_index.jsonl.tmp",
+    ] {
+        assert!(
+            fs::symlink_metadata(launch.named.join(name)).is_err(),
+            "{name}"
+        );
+    }
+    for name in ["thread-writer-locks", ".tmp"] {
+        assert_eq!(
+            fs::read_link(launch.named.join(name)).unwrap(),
+            launch.native.join(name)
+        );
+    }
+
+    let add = Fixture::new("claude");
+    fs::create_dir(add.named.join(".oauth_refresh.lock")).unwrap();
+    let report = run_unguarded(&add, true);
+    assert!(report.moved.is_empty() && report.warnings().is_empty());
+    assert!(
+        fs::symlink_metadata(add.named.join(".oauth_refresh.lock"))
+            .unwrap()
+            .is_dir()
+    );
+    assert!(!add.native.join(".oauth_refresh.lock").exists());
+}
+
+#[test]
+fn a_real_lock_in_both_homes_is_no_conflict_in_either_mode() {
+    for shared in [true, false] {
+        let home = Fixture::new("claude");
+        for dir in [&home.native, &home.named] {
+            fs::create_dir_all(dir.join(".oauth_refresh.lock")).unwrap();
+        }
+        let report = run_unguarded(&home, shared);
+        assert!(report.set_aside.is_empty(), "{shared}");
+        assert!(report.warnings().is_empty(), "{shared}");
+        assert!(!home.named.join(ASIDE_DIR).exists(), "{shared}");
+        for dir in [&home.native, &home.named] {
+            assert!(
+                fs::symlink_metadata(dir.join(".oauth_refresh.lock"))
+                    .unwrap()
+                    .is_dir(),
+                "{shared}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_link_at_an_unshared_name_is_removed_under_any_live_count() {
+    for (shared, agents) in [
+        (true, Some(2)),
+        (true, None),
+        (false, Some(2)),
+        (false, None),
+    ] {
+        let home = Fixture::new("claude");
+        fs::create_dir_all(home.native.join(".oauth_refresh.lock")).unwrap();
+        fs::write(home.native.join(".last-update-result.json"), "update").unwrap();
+        let links = [
+            (".oauth_refresh.lock", true),
+            (".last-update-result.json", false),
+            (".oauth_refresh.lock.owner", true),
+            ("settings.json.tmp.123.ab", false),
+        ];
+        for (name, absolute) in links {
+            let target = if absolute {
+                home.native.join(name)
+            } else {
+                Path::new("../native").join(name)
+            };
+            symlink(target, home.named.join(name)).unwrap();
+        }
+
+        let report = home.run_with(shared, agents).unwrap();
+        let warnings = report.warnings();
+        assert_eq!(warnings.len(), links.len(), "{warnings:?}");
+        for (name, _) in links {
+            assert!(
+                fs::symlink_metadata(home.named.join(name)).is_err(),
+                "{name}"
+            );
+            let slot = home.named.join(name).display().to_string();
+            let warning = warnings
+                .iter()
+                .find(|warning| warning.contains(&format!("{slot} ")))
+                .unwrap_or_else(|| panic!("no warning names {slot}: {warnings:?}"));
+            assert!(warning.contains("claude@work"), "{warning}");
+            assert!(
+                warning.contains(&home.native.display().to_string()),
+                "{warning}"
+            );
+            assert!(report.to_string().contains(warning), "{report}");
+        }
+        assert!(report.unlinked.is_empty(), "{:?}", report.unlinked);
+        assert!(home.native.join(".oauth_refresh.lock").is_dir());
+        assert_eq!(
+            fs::read_to_string(home.native.join(".last-update-result.json")).unwrap(),
+            "update"
+        );
+
+        let before = names(&home.named);
+        let again = home.run_with(shared, agents).unwrap();
+        assert!(again.warnings().is_empty(), "{again}");
+        assert!(again.linked.is_empty() && again.unlinked.is_empty());
+        assert_eq!(names(&home.named), before);
+    }
+}
+
+#[test]
+fn a_link_at_an_unshared_name_that_points_elsewhere_survives() {
+    for shared in [true, false] {
+        let home = Fixture::new("claude");
+        let elsewhere = home.named.parent().unwrap().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::create_dir_all(home.native.join(".oauth_refresh.lock")).unwrap();
+        symlink(&elsewhere, home.named.join(".oauth_refresh.lock")).unwrap();
+        let report = run_unguarded(&home, shared);
+        assert!(report.warnings().is_empty(), "{report}");
+        assert_eq!(
+            fs::read_link(home.named.join(".oauth_refresh.lock")).unwrap(),
+            elsewhere
+        );
+    }
 }
