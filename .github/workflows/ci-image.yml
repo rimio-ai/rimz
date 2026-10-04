@@ -17,10 +17,12 @@ on:
     branches: [main]
     paths:
       - ci/Dockerfile
+      - rust-toolchain.toml
       - .github/workflows/ci-image.yml
   pull_request:
     paths:
       - ci/Dockerfile
+      - rust-toolchain.toml
       - .github/workflows/ci-image.yml
 
 permissions:

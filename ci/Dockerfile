@@ -44,10 +44,15 @@ RUN curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
  && install -m 0755 /tmp/ttyd /usr/local/bin/ttyd \
  && rm -f /tmp/ttyd
 
+# The repository pin is the image's only toolchain. rustup resolves a toolchain
+# file from the working directory upward, so the copy at `/` selects the pin,
+# with its components and targets, for every cargo command in this build and in
+# a job outside its checkout; a checkout's own file is nearer and wins. No
+# default toolchain is set, so nothing here repeats the channel.
+COPY rust-toolchain.toml /rust-toolchain.toml
 RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-errors https://sh.rustup.rs | \
-      sh -s -- -y --no-modify-path --default-toolchain stable \
- && rustup component add rustfmt clippy llvm-tools-preview rust-analyzer \
- && rustup target add wasm32-wasip1 aarch64-apple-darwin x86_64-apple-darwin \
+      sh -s -- -y --no-modify-path --default-toolchain none \
+ && rustup toolchain install \
  && rustc -V && cargo -V
 
 # Gate plugins arrive as prebuilt binaries. binstall resolves them through the
@@ -147,7 +152,11 @@ RUN ( cd /tmp/registry-warm && cargo fetch --locked ) \
  && rm -rf /tmp/registry-warm \
  && test -d /usr/local/cargo/registry/index/index.crates.io-1949cf8c6b5b557f
 
-RUN rustc -V \
+# The first three lines hold the pin: it is what `/` resolves to, it is the only
+# toolchain installed, and it runs with rustup's auto-install switched off.
+RUN rustup show active-toolchain | grep -F "(overridden by '/rust-toolchain.toml')" \
+ && test "$(rustup toolchain list | wc -l)" -eq 1 \
+ && RUSTUP_AUTO_INSTALL=0 rustc -V \
  && cargo nextest --version \
  && cargo deny --version \
  && cargo machete --version \
