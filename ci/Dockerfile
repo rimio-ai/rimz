@@ -1,6 +1,5 @@
-# The slim variant carries Node for Actions on a bare Debian. The full tag adds
-# the buildpack-deps SCM tools and -dev libraries, which no gate reads, so every
-# OS package a consumer needs is named in the apt layer below.
+# The slim variant carries Node for Actions without the broad buildpack-deps
+# toolset. The apt layer below explicitly adds the packages consumers need.
 FROM node:26-trixie-slim
 
 ARG ZELLIJ_VERSION=0.45.0
