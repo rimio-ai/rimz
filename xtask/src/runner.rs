@@ -223,10 +223,30 @@ fn build_command<S: AsRef<OsStr>>(
     if crate::sccache::should_wrap(program, args) {
         command.env("RUSTC_WRAPPER", "sccache");
     }
+    if program == "cargo" {
+        for key in env::vars_os()
+            .map(|(key, _)| key)
+            .filter(|key| is_cargo_run_package_key(key))
+        {
+            command.env_remove(key);
+        }
+    }
     for key in removed_envs {
         command.env_remove(key);
     }
     command
+}
+
+/// True for the keys `cargo run` exports to describe the package it launched:
+/// here always xtask's own. A nested `cargo` must not inherit them. Cargo
+/// compares a build script's `rerun-if-env-changed` keys against its own
+/// environment, and `ring` tracks `CARGO_MANIFEST_DIR` and `CARGO_PKG_*`, so a
+/// build unit shared by `cargo xtask` itself and the nested build would re-run
+/// that script, and rebuild everything above it, on every alternation.
+fn is_cargo_run_package_key(key: &OsStr) -> bool {
+    key.to_str().is_some_and(|key| {
+        key == "CARGO_MANIFEST_DIR" || key == "CARGO_MANIFEST_PATH" || key.starts_with("CARGO_PKG_")
+    })
 }
 
 pub(crate) fn ensure_success<S: AsRef<OsStr>>(
@@ -291,6 +311,42 @@ mod tests {
             "child outlived its budget by {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn nested_cargo_drops_the_package_keys_cargo_run_exported() {
+        for key in [
+            "CARGO_MANIFEST_DIR",
+            "CARGO_MANIFEST_PATH",
+            "CARGO_PKG_NAME",
+            "CARGO_PKG_VERSION_PRE",
+        ] {
+            assert!(is_cargo_run_package_key(OsStr::new(key)), "{key}");
+        }
+        // Build inputs and the toolchain pin survive.
+        for key in [
+            "CARGO",
+            "CARGO_HOME",
+            "CARGO_TARGET_DIR",
+            "CARGO_PROFILE_DEV_DEBUG",
+            "CARGO_INCREMENTAL",
+        ] {
+            assert!(!is_cargo_run_package_key(OsStr::new(key)), "{key}");
+        }
+
+        // nextest exports the same keys to each test, as `cargo run` does to xtask.
+        assert!(env::var_os("CARGO_MANIFEST_DIR").is_some());
+        let cargo = build_command(Path::new("."), "cargo", &["--version"], &[], &[]);
+        let removed: Vec<_> = cargo
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_owned())
+            .collect();
+        assert!(removed.iter().any(|key| key == "CARGO_MANIFEST_DIR"));
+        assert!(removed.iter().any(|key| key == "CARGO_PKG_NAME"));
+
+        let other = build_command(Path::new("."), "git", &["status"], &[], &[]);
+        assert_eq!(other.get_envs().count(), 0);
     }
 
     #[test]
