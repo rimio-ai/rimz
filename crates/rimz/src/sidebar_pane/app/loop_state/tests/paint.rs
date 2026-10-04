@@ -346,24 +346,40 @@ fn stale_tmux_caps_reprobe_is_bounded_and_adopts_changes() {
 
 #[test]
 fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
+    // Every instant handed to the refresh is taken from the deadline the resize
+    // armed, never from the clock: the settle window is already running while
+    // `on_resize` paints. The clock read before each resize only bounds that
+    // deadline from below, which is what holds the window's length.
+    assert_ne!(RESIZE_CAPS_SETTLE, Duration::ZERO);
     let mut rig = Rig::new();
+    let armed = |rig: &Rig| {
+        rig.state
+            .caps_refresh_deadline
+            .expect("a resize arms the caps deadline")
+    };
     for _ in 0..3 {
+        let before = Instant::now();
         rig.state
             .on_resize(&mut rig.fetch, &mut rig.terminal, Some(40))
             .unwrap();
-        rig.state.refresh_pet_render_caps_if_stale_with(
+        let deadline = armed(&rig);
+        assert!(
+            deadline >= before + RESIZE_CAPS_SETTLE,
+            "a resize arms a full settle window"
+        );
+        assert!(!rig.state.refresh_pet_render_caps_if_stale_with(
             crate::MuxName::Tmux,
             "rimz-test",
-            Instant::now(),
+            deadline - Duration::from_nanos(1),
             |_, _, _| panic!("resize burst must not probe yet"),
-        );
+        ));
     }
     rig.state.dirty = false;
     let enabled = PixelRenderCaps {
         pixel_transport: true,
         kitty_clients: true,
     };
-    let settled = Instant::now() + Duration::from_millis(510);
+    let settled = armed(&rig);
     assert!(rig.state.refresh_pet_render_caps_if_stale_with(
         crate::MuxName::Tmux,
         "rimz-test",
