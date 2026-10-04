@@ -132,4 +132,4 @@ jobs:
                 gsub(/\|/, "\\|", cmd)
                 printf "| %.1f | `%s` |\n", $1 / 1e6, cmd
               }'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
