@@ -348,7 +348,8 @@ path = "crates/rimz/src/forge"
 # Forge signal vocabulary is shared with CLI admission.
 # Open PR facts and settled-at mergeability cross the parser/projection seam.
 # The merge-queue fact crosses the same seam to the poll cadence and its readers (+1).
-surface-budget = 47
+# `PrLink::queue` is the one open-only reading of that fact for cadence, conditions, and the snapshot (+1).
+surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -438,7 +439,9 @@ path = "crates/rimz/src/harness"
 # The idle-stop decision and helper request cross the library/CLI seam; the producer hook crosses to sidebar refresh.
 # 679: `idle_stop::project_requests`, the enrich-time projection of pending idle stops onto their agents.
 # 680: `idle_stop::closing_with`, the cascade the idle-stop helper guards run by run before it stops.
-surface-budget = 680
+# `WhenExpr::reads_forge` replaces the CLI's hand copy of the forge condition keys (+1).
+# 681: `WhenExpr::reads_forge`.
+surface-budget = 681
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

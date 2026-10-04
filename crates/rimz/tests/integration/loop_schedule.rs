@@ -131,12 +131,69 @@ fn condition_tick_observes_board_and_records_evidence() {
 }
 
 #[test]
+fn queue_condition_selects_a_dequeued_open_pr_from_the_room_cache() {
+    let env = Env::new();
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "queue",
+    );
+    let write_queue = |queue: serde_json::Value| {
+        std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
+        std::fs::write(
+            runtime.lane_path("pr-state.json"),
+            json!({"states": {env.project_root.to_string_lossy().to_string(): {
+                "state": "open", "number": 91,
+                "open": {"head": "head-a", "base": "main", "queue": queue},
+            }}})
+            .to_string(),
+        )
+        .unwrap();
+    };
+    write_queue(json!({
+        "state": "dequeued", "at": "2026-10-03T12:46:03Z",
+        "reason": "failed_checks", "commit": "queue-a",
+    }));
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "requeue",
+            "--when",
+            "pr=open && pr.queue=dequeued",
+            "--check",
+            "true",
+        ],
+    );
+    let show = loop_ok(&env, &["loop", "show", "requeue"]);
+    for term in ["pr=open", "pr.queue=dequeued"] {
+        let line = show
+            .lines()
+            .find(|line| line.trim_start().starts_with(term))
+            .unwrap_or_else(|| panic!("{show}"));
+        assert!(line.contains('✓'), "{show}");
+    }
+    assert!(show.contains("dequeued"), "{show}");
+
+    write_queue(json!({"state": "queued", "at": "2026-10-03T13:00:00Z"}));
+    let show = loop_ok(&env, &["loop", "show", "requeue"]);
+    let line = show
+        .lines()
+        .find(|line| line.trim_start().starts_with("pr.queue=dequeued"))
+        .unwrap_or_else(|| panic!("{show}"));
+    assert!(line.ends_with("queued") && !line.contains('✓'), "{show}");
+}
+
+#[test]
 fn condition_add_refuses_invalid_predicates_and_options() {
     let env = Env::new();
     for (flags, expected) in [
         (
             vec!["--when", "wat=yes"],
-            "team.stage, ci, pr, window.5h.left, window.7d.left",
+            "team.stage, ci, pr, pr.queue, window.5h.left, window.7d.left",
         ),
         (
             vec!["--when", "window.5h.left>=40"],

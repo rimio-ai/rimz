@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::account::read_rate_limits_cache;
 use crate::agents::{ProviderCapacity, RateLimitWindow, RoomLoginSet, WindowSpan};
-use crate::forge::pr_state::PrStateCache;
+use crate::forge::pr_state::{PrQueueFact, PrStateCache};
 use crate::ids::{AgentKind, LoginKey, LoginName};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
@@ -52,10 +52,7 @@ pub(crate) fn probe_scopes(
             else {
                 return None;
             };
-            let needs_probe = expr
-                .terms()
-                .any(|term| matches!(term.key.as_str(), "ci" | "pr"));
-            needs_probe.then_some((name, task))
+            expr.reads_forge().then_some((name, task))
         })
         .collect();
     let ledger = if tasks.iter().any(|(_, task)| task.entry().each_worktree) {
@@ -95,6 +92,62 @@ pub(crate) fn probe_scopes(
 
 /// A room's last-known CI and PR readings. Absence of this source means unknown.
 pub struct CiSource(PrStateCache);
+
+/// The condition keys read from the room's forge cache. This is the one place
+/// that names them: the parser, the probe scopes, and the no-room hint ask it.
+#[derive(Clone, Copy)]
+enum ForgeKey {
+    Ci,
+    Pr,
+    PrQueue,
+}
+
+impl ForgeKey {
+    fn parse(key: &str) -> Option<Self> {
+        match key {
+            "ci" => Some(Self::Ci),
+            "pr" => Some(Self::Pr),
+            "pr.queue" => Some(Self::PrQueue),
+            _ => None,
+        }
+    }
+
+    fn values(self) -> &'static [&'static str] {
+        match self {
+            Self::Ci => &["passed", "failed", "pending"],
+            Self::Pr => &["open", "merged", "closed"],
+            Self::PrQueue => &["queued", "dequeued", "none"],
+        }
+    }
+
+    fn read(self, cache: &PrStateCache, scope: &Path) -> Option<&'static str> {
+        let scope = scope.to_string_lossy();
+        let link = cache.states.get(scope.as_ref());
+        match self {
+            Self::Ci => link
+                .filter(|link| {
+                    matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged)
+                })
+                .and_then(|link| link.ci)
+                .or_else(|| cache.branch_ci.get(scope.as_ref()).copied())
+                .map(|ci| match ci {
+                    WorktreeCi::Passing => "passed",
+                    WorktreeCi::Failing => "failed",
+                    WorktreeCi::Pending => "pending",
+                }),
+            Self::Pr => link.map(|link| match link.state {
+                WorktreePrState::Open => "open",
+                WorktreePrState::Merged => "merged",
+                WorktreePrState::Closed => "closed",
+            }),
+            Self::PrQueue => link.map(|link| match link.queue() {
+                Some(PrQueueFact::Queued { .. }) => "queued",
+                Some(PrQueueFact::Dequeued { .. }) => "dequeued",
+                None => "none",
+            }),
+        }
+    }
+}
 
 impl CiSource {
     pub fn read(runtime: &crate::RuntimePaths) -> Self {
@@ -202,51 +255,20 @@ pub fn evaluate(
 ) -> Verdict {
     let mut readings = BTreeMap::new();
     for term in expr.terms() {
-        readings
-            .entry(term.key.clone())
-            .or_insert_with(|| match term.key.as_str() {
-                "team.stage" => crate::harness::scratch::board_stage(scope).map(|stage| stage.name),
-                "pr" => ci_source.and_then(|source| {
-                    source
-                        .0
-                        .states
-                        .get(scope.to_string_lossy().as_ref())
-                        .map(|link| {
-                            match link.state {
-                                WorktreePrState::Open => "open",
-                                WorktreePrState::Merged => "merged",
-                                WorktreePrState::Closed => "closed",
-                            }
-                            .to_owned()
-                        })
-                }),
-                "ci" => ci_source.and_then(|source| {
-                    let key = scope.to_string_lossy();
-                    source
-                        .0
-                        .states
-                        .get(key.as_ref())
-                        .filter(|link| {
-                            matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged)
-                        })
-                        .and_then(|link| link.ci)
-                        .or_else(|| source.0.branch_ci.get(key.as_ref()).copied())
-                        .map(|ci| {
-                            match ci {
-                                WorktreeCi::Passing => "passed",
-                                WorktreeCi::Failing => "failed",
-                                WorktreeCi::Pending => "pending",
-                            }
-                            .to_owned()
-                        })
-                }),
-                key => {
-                    // WhenExpr can only be constructed through the key-validating parser.
-                    let span = window_span(key)
-                        .expect("the parser admits only team.stage, ci, pr, and window keys");
-                    provider.and_then(|kind| windows.left(kind, account, span))
-                }
-            });
+        readings.entry(term.key.clone()).or_insert_with(|| {
+            if term.key == "team.stage" {
+                return crate::harness::scratch::board_stage(scope).map(|stage| stage.name);
+            }
+            if let Some(key) = ForgeKey::parse(&term.key) {
+                return ci_source
+                    .and_then(|source| key.read(&source.0, scope))
+                    .map(str::to_owned);
+            }
+            // WhenExpr can only be constructed through the key-validating parser.
+            let span = window_span(&term.key)
+                .expect("the parser admits only team.stage, forge, and window keys");
+            provider.and_then(|kind| windows.left(kind, account, span))
+        });
     }
     Verdict {
         ok: expr.0.matches(&readings),
@@ -400,6 +422,12 @@ impl WhenExpr {
         let mut terms = Vec::new();
         self.0.terms(&mut terms);
         terms.into_iter()
+    }
+
+    /// Whether any term reads the room's forge cache.
+    pub fn reads_forge(&self) -> bool {
+        self.terms()
+            .any(|term| ForgeKey::parse(&term.key).is_some())
     }
 
     /// The spans the expression's `window.*` terms read, in expression order.
@@ -593,9 +621,10 @@ impl Parser<'_> {
                     self.rest().trim()
                 )));
             }
-            if !matches!(key.as_str(), "team.stage" | "ci" | "pr") {
+            let forge_key = ForgeKey::parse(&key);
+            if key != "team.stage" && forge_key.is_none() {
                 return Err(self.error(
-                    "unknown key; keys: team.stage, ci, pr, window.5h.left, window.7d.left",
+                    "unknown key; keys: team.stage, ci, pr, pr.queue, window.5h.left, window.7d.left",
                 ));
             }
             if Op::COMPARISONS.iter().any(|op| self.take(op.token())) {
@@ -623,19 +652,15 @@ impl Parser<'_> {
                     }
                 }
             }
-            if key == "ci"
+            if let Some(allowed) = forge_key.map(ForgeKey::values)
                 && values
                     .iter()
-                    .any(|value| !matches!(value.as_str(), "passed" | "failed" | "pending"))
+                    .any(|value| !allowed.contains(&value.as_str()))
             {
-                return Err(self.error("unknown ci value; values: passed, failed, pending"));
-            }
-            if key == "pr"
-                && values
-                    .iter()
-                    .any(|value| !matches!(value.as_str(), "open" | "merged" | "closed"))
-            {
-                return Err(self.error("unknown pr value; values: open, merged, closed"));
+                return Err(self.error(format!(
+                    "unknown {key} value; values: {}",
+                    allowed.join(", ")
+                )));
             }
             Node::Term(WhenTerm {
                 key,
@@ -767,7 +792,68 @@ mod tests {
         let error = WhenExpr::parse(&["pr=pending".to_owned()]).unwrap_err();
         assert!(error.to_string().contains("values: open, merged, closed"));
         let error = WhenExpr::parse(&["unknown=value".to_owned()]).unwrap_err();
-        assert!(error.to_string().contains("team.stage, ci, pr,"));
+        assert!(error.to_string().contains("team.stage, ci, pr, pr.queue,"));
+    }
+
+    #[test]
+    fn pr_queue_reads_the_open_link_fact_and_leaves_pr_open() {
+        use serde_json::json;
+        let scope = Path::new("/checkout");
+        let queued = json!({"state": "queued", "at": "2026-10-03T12:28:46Z"});
+        let dequeued =
+            json!({"state": "dequeued", "at": "2026-10-03T12:46:03Z", "reason": "manual"});
+        for (link, pr, queue) in [
+            (
+                json!({"state": "open", "open": {"head": "a", "queue": queued}}),
+                "open",
+                "queued",
+            ),
+            (
+                json!({"state": "open", "open": {"head": "a", "queue": dequeued}}),
+                "open",
+                "dequeued",
+            ),
+            (
+                json!({"state": "open", "open": {"head": "a"}}),
+                "open",
+                "none",
+            ),
+            (json!({"state": "open"}), "open", "none"),
+            // A fact left on a link that is no longer open is not a reading.
+            (
+                json!({"state": "merged", "open": {"head": "a", "queue": queued}}),
+                "merged",
+                "none",
+            ),
+            (json!({"state": "closed"}), "closed", "none"),
+        ] {
+            let source = CiSource(PrStateCache {
+                states: BTreeMap::from([(
+                    "/checkout".to_owned(),
+                    serde_json::from_value(link).unwrap(),
+                )]),
+                ..PrStateCache::default()
+            });
+            let expr = WhenExpr::parse(&[format!("pr={pr} && pr.queue={queue}")]).unwrap();
+            let verdict = evaluate(&expr, scope, Some(&source), None, None, &no_windows());
+            assert!(verdict.ok, "{:?}", verdict.readings);
+            assert_eq!(verdict.readings["pr.queue"].as_deref(), Some(queue));
+            for (scope, source) in [(scope, None), (Path::new("/missing"), Some(&source))] {
+                let verdict = evaluate(&expr, scope, source, None, None, &no_windows());
+                assert_eq!((verdict.ok, &verdict.readings["pr.queue"]), (false, &None));
+            }
+        }
+        let reads_forge = |when: &str| WhenExpr::parse(&[when.to_owned()]).unwrap().reads_forge();
+        assert!(
+            reads_forge("pr.queue=queued,dequeued") && reads_forge("ci=passed || team.stage=Done")
+        );
+        assert!(!reads_forge("team.stage=Done && window.5h.left>=40"));
+        let error = WhenExpr::parse(&["pr.queue=failed".to_owned()]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unknown pr.queue value; values: queued, dequeued, none")
+        );
     }
 
     #[test]
@@ -957,11 +1043,11 @@ mod tests {
         for (input, hint) in [
             (
                 "agent=idle",
-                "team.stage, ci, pr, window.5h.left, window.7d.left",
+                "team.stage, ci, pr, pr.queue, window.5h.left, window.7d.left",
             ),
             (
                 "window.1h.left>=40",
-                "team.stage, ci, pr, window.5h.left, window.7d.left",
+                "team.stage, ci, pr, pr.queue, window.5h.left, window.7d.left",
             ),
             ("ci=green", "passed, failed, pending"),
             ("ci!=failed", "!ci=failed"),
