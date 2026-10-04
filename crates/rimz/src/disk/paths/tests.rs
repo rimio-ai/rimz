@@ -190,6 +190,97 @@ fn runtime_cleanup_accepts_an_absent_directory() {
 }
 
 #[test]
+fn state_cleanup_detaches_before_inspecting_and_removing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = dir.path().join("cache");
+    fs::create_dir(&cache).expect("state directory");
+    fs::write(cache.join("old"), b"old").expect("old entry");
+
+    let inspected = remove_state_dir_with(&cache, |detached| {
+        assert_eq!(detached, dir.path().join("cache.reset"));
+        // Force the late writer into the window between detach and removal.
+        fs::create_dir_all(&cache).expect("late writer recreates the directory");
+        fs::write(cache.join("late"), b"late").expect("late entry");
+        assert!(detached.join("old").exists());
+        Ok::<_, PathErr>(7)
+    })
+    .expect("state cleanup succeeds despite late writer");
+
+    assert_eq!(inspected, Some(7));
+    assert!(!cache.join("old").exists());
+    assert!(!dir.path().join("cache.reset").exists());
+    assert_eq!(fs::read(cache.join("late")).unwrap(), b"late");
+}
+
+#[test]
+fn state_cleanup_removes_an_interrupted_resets_leftover_uninspected() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = dir.path().join("cache");
+    let leftover = dir.path().join("cache.reset");
+    fs::create_dir_all(leftover.join("nested")).expect("leftover tree");
+
+    // Leftover alone: nothing to detach, and the leftover still goes.
+    let absent = remove_state_dir_with(&cache, |_| -> Result<()> {
+        panic!("an absent directory must not be inspected")
+    })
+    .expect("absent directory is already clean");
+    assert_eq!(absent, None);
+    assert!(!leftover.exists());
+
+    // Leftover beside a live directory: only the live tree is inspected.
+    fs::create_dir_all(leftover.join("nested")).expect("leftover tree");
+    fs::create_dir(&cache).expect("state directory");
+    fs::write(cache.join("old"), b"old").expect("old entry");
+    remove_state_dir_with(&cache, |detached| {
+        assert!(detached.join("old").exists());
+        assert!(!detached.join("nested").exists());
+        Ok::<_, PathErr>(())
+    })
+    .expect("state cleanup replaces the leftover");
+    assert!(!leftover.exists() && !cache.exists());
+
+    // Handed the leftover itself, as a parent listing does: removed, uninspected.
+    fs::create_dir_all(leftover.join("nested")).expect("leftover tree");
+    let listed = remove_state_dir_with(&leftover, |_| -> Result<()> {
+        panic!("a leftover must not be inspected")
+    })
+    .expect("leftover is removed");
+    assert_eq!(listed, None);
+    assert!(!leftover.exists());
+    assert!(!dir.path().join("cache.reset.reset").exists());
+}
+
+#[test]
+fn state_cleanup_appends_to_a_dotted_name_and_reports_failures() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dotted = dir.path().join("unit.v2");
+    let stem_sibling = dir.path().join("unit.reset");
+    fs::create_dir(&dotted).expect("dotted directory");
+    fs::create_dir(&stem_sibling).expect("unrelated sibling");
+    fs::write(stem_sibling.join("keep"), b"keep").expect("sibling entry");
+
+    remove_state_dir_with(&dotted, |detached| {
+        assert_eq!(detached, dir.path().join("unit.v2.reset"));
+        Ok::<_, PathErr>(())
+    })
+    .expect("dotted directory is removed");
+    assert!(!dotted.exists());
+    assert!(stem_sibling.join("keep").exists());
+
+    fs::create_dir(&dotted).expect("dotted directory");
+    let err = remove_state_dir_with(&dotted, |detached| {
+        Err::<(), _>(PathErr::io(detached)(io::Error::other("inspect failed")))
+    })
+    .expect_err("an inspection failure is returned");
+    assert!(err.to_string().contains("inspect failed"));
+
+    let file = dir.path().join("file");
+    fs::write(&file, b"not a directory").expect("file");
+    remove_state_dir_with(&file.join("child"), |_| Ok::<_, PathErr>(()))
+        .expect_err("an error other than an absent source is returned");
+}
+
+#[test]
 fn runtime_paths_follow_lifetime_classes() {
     let dir = tempfile::tempdir().unwrap();
     let id = WorkspaceId::from_project_root(dir.path());

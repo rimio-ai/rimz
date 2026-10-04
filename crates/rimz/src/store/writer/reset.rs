@@ -4,21 +4,11 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
+use crate::disk::paths::remove_state_dir_with;
 use crate::store::run::{self as run, RunRecord, RunStatus};
 
 use super::super::{Result, Store, StoreErr, event_log, snapshot};
 use super::{ResetRecordsOutcome, RollupInvalidation, remove_file_if_exists};
-
-fn remove_dir_if_exists(path: &Path) -> Result<bool> {
-    match fs::remove_dir_all(path) {
-        Ok(()) => Ok(true),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(source) => Err(StoreErr::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
 
 fn count_dir_entries_recursive(path: &Path) -> Result<usize> {
     let entries = match fs::read_dir(path) {
@@ -50,13 +40,10 @@ fn count_dir_entries_recursive(path: &Path) -> Result<usize> {
     Ok(count)
 }
 
-fn remove_dir_counting_entries(path: &Path) -> Result<usize> {
-    let count = count_dir_entries_recursive(path)?;
-    remove_dir_if_exists(path)?;
-    Ok(count)
-}
-
-fn remove_owned_except_runs(paths: &super::super::StatePaths) -> Result<usize> {
+fn remove_owned_except_runs(
+    paths: &super::super::StatePaths,
+    count: &impl Fn(&Path) -> Result<usize>,
+) -> Result<usize> {
     let owned = crate::disk::paths::Class::Owned.path_under(&paths.root);
     let entries = match fs::read_dir(&owned) {
         Ok(entries) => entries,
@@ -68,7 +55,9 @@ fn remove_owned_except_runs(paths: &super::super::StatePaths) -> Result<usize> {
             });
         }
     };
-    let mut removed = 0;
+    // Listed whole before the first removal: detaching a child reuses the
+    // name an interrupted reset's leftover may hold in this same directory.
+    let mut children = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|source| StoreErr::Io {
             path: owned.clone(),
@@ -82,8 +71,12 @@ fn remove_owned_except_runs(paths: &super::super::StatePaths) -> Result<usize> {
             path: path.clone(),
             source,
         })?;
+        children.push((path, kind));
+    }
+    let mut removed = 0;
+    for (path, kind) in children {
         if kind.is_dir() {
-            removed += remove_dir_counting_entries(&path)?;
+            removed += remove_state_dir_with(&path, count)?.unwrap_or(0);
         } else {
             remove_file_if_exists(&path)?;
             removed += 1;
@@ -130,6 +123,22 @@ impl Store {
     where
         F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
     {
+        self.reset_records_counting_with(hard, unfreeze_logins, rotate, count_dir_entries_recursive)
+    }
+
+    /// `count` walks each removed directory after it is detached from its
+    /// canonical path, so it never reads a tree another process can write.
+    fn reset_records_counting_with<F, C>(
+        &self,
+        hard: bool,
+        unfreeze_logins: bool,
+        rotate: F,
+        count: C,
+    ) -> Result<ResetRecordsOutcome>
+    where
+        F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
+        C: Fn(&Path) -> Result<usize>,
+    {
         let (mut outcome, canceled_runs) = self.commit_boundary(|paths| {
             let canceled_runs = cancel_active_runs_for_reset_locked(paths)?;
             let runs_canceled = canceled_runs.len();
@@ -157,7 +166,8 @@ impl Store {
                 crate::workspace::record::write(paths, &record)?;
             }
 
-            let mut state_entries_removed = remove_dir_counting_entries(&paths.cache_dir)?;
+            let mut state_entries_removed =
+                remove_state_dir_with(&paths.cache_dir, &count)?.unwrap_or(0);
 
             let rotation = rotate(&paths.events_log, &paths.events_archive_dir, 0)?;
             if hard {
@@ -171,9 +181,9 @@ impl Store {
                     crate::disk::paths::Class::Shared,
                 ] {
                     state_entries_removed +=
-                        remove_dir_counting_entries(&class.path_under(&paths.root))?;
+                        remove_state_dir_with(&class.path_under(&paths.root), &count)?.unwrap_or(0);
                 }
-                state_entries_removed += remove_owned_except_runs(paths)?;
+                state_entries_removed += remove_owned_except_runs(paths, &count)?;
             }
             let rollup = if hard {
                 RollupInvalidation::Forget
@@ -209,7 +219,8 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
+    use std::path::PathBuf;
 
     use serde_json::json;
 
@@ -351,5 +362,122 @@ mod tests {
             .expect("reset records");
 
         assert!(rotate_called.get(), "test rotate hook should run");
+    }
+
+    fn open_store(dir: &Path) -> (Store, StatePaths) {
+        let id = WorkspaceId::from_project_root(dir);
+        let paths = StatePaths::under(id.clone(), dir).unwrap();
+        let runtime = RuntimePaths::under(id, dir).unwrap();
+        (Store::open(paths.clone(), runtime).unwrap(), paths)
+    }
+
+    fn seed(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"seeded").unwrap();
+    }
+
+    fn reset_sibling(dir: &Path) -> PathBuf {
+        let mut name = dir.file_name().unwrap().to_os_string();
+        name.push(".reset");
+        dir.with_file_name(name)
+    }
+
+    #[test]
+    fn reset_survives_writers_inside_each_removal_window() {
+        for hard in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (store, paths) = open_store(dir.path());
+            let owned = crate::disk::paths::Class::Owned.path_under(&paths.root);
+            let audit = crate::disk::paths::Class::Audit.path_under(&paths.root);
+            let mut removed_dirs = vec![paths.cache_dir.clone()];
+            let mut seeded = vec![paths.cache_dir.join("obsolete.json")];
+            if hard {
+                removed_dirs.extend([
+                    audit.clone(),
+                    paths.tmp_dir.clone(),
+                    paths.out_dir.clone(),
+                    paths.room_shared_dir.clone(),
+                    paths.agents_dir.clone(),
+                    owned.join("unit.v2"),
+                ]);
+                seeded.extend([
+                    audit.join("test/log.jsonl"),
+                    paths.temp_unit_dir(Some("retired")).join("note"),
+                    paths.out_reader_dir(Some("retired")).join("child.output"),
+                    paths.room_shared_dir.join("task/note"),
+                    paths.agents_dir.join("retired/scratch/note"),
+                    owned.join("unit.v2/note"),
+                ]);
+            }
+            seeded.iter().for_each(|path| seed(path));
+            let seeded_entries: usize = removed_dirs
+                .iter()
+                .map(|dir| count_dir_entries_recursive(dir).unwrap())
+                .sum();
+
+            let late = RefCell::new(Vec::new());
+            let outcome = store
+                .reset_records_counting_with(hard, true, event_log::rotate, |tree| {
+                    // Force a writer into the window: it addresses the directory
+                    // by its canonical path while the reset is removing it.
+                    let canonical = removed_dirs
+                        .iter()
+                        .find(|dir| *dir == tree || reset_sibling(dir) == tree)
+                        .unwrap_or_else(|| panic!("unexpected removal of {}", tree.display()));
+                    fs::create_dir_all(canonical).unwrap();
+                    let file = canonical.join("late");
+                    fs::write(&file, b"late").unwrap();
+                    late.borrow_mut().push(file);
+                    count_dir_entries_recursive(tree)
+                })
+                .unwrap_or_else(|err| panic!("hard={hard}: reset failed on a late writer: {err}"));
+
+            let late = late.into_inner();
+            assert_eq!(late.len(), removed_dirs.len(), "hard={hard}");
+            for file in &late {
+                assert!(file.exists(), "hard={hard}: {} was removed", file.display());
+            }
+            for path in &seeded {
+                assert!(!path.exists(), "hard={hard}: {} survived", path.display());
+            }
+            for dir in &removed_dirs {
+                assert!(!reset_sibling(dir).exists(), "hard={hard}");
+            }
+            assert_eq!(outcome.state_entries_removed, seeded_entries, "hard={hard}");
+            assert!(paths.runs_dir.exists(), "hard={hard}");
+            assert!(!reset_sibling(&paths.runs_dir).exists(), "hard={hard}");
+            assert!(paths.workspace_lock.exists(), "hard={hard}");
+        }
+    }
+
+    #[test]
+    fn reset_removes_an_interrupted_resets_leftovers_uncounted() {
+        for hard in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (store, paths) = open_store(dir.path());
+            let owned = crate::disk::paths::Class::Owned.path_under(&paths.root);
+            let audit = crate::disk::paths::Class::Audit.path_under(&paths.root);
+            // `audit/` and `owned/agents/` are absent: only their leftovers exist.
+            assert!(!audit.exists() && !paths.agents_dir.exists());
+            let mut leftovers = vec![reset_sibling(&paths.cache_dir)];
+            if hard {
+                leftovers.extend([reset_sibling(&audit), reset_sibling(&paths.agents_dir)]);
+            }
+            for leftover in &leftovers {
+                seed(&leftover.join("nested/old"));
+            }
+            seed(&owned.join("unit/note"));
+            let live_entries =
+                count_dir_entries_recursive(&paths.cache_dir).unwrap() + if hard { 1 } else { 0 };
+
+            let outcome = store.reset_records(hard).unwrap();
+
+            for leftover in &leftovers {
+                assert!(!leftover.exists(), "hard={hard}: {}", leftover.display());
+            }
+            assert!(!reset_sibling(&reset_sibling(&paths.agents_dir)).exists());
+            assert_eq!(outcome.state_entries_removed, live_entries, "hard={hard}");
+            assert_eq!(owned.join("unit/note").exists(), !hard);
+        }
     }
 }

@@ -1061,6 +1061,44 @@ fn remove_runtime_dir_with(
     }
 }
 
+const RESET_DETACHED_SUFFIX: &str = ".reset";
+
+/// Remove a state directory for a reset: rename it to its `<dir>.reset`
+/// sibling, run `inspect` on the detached tree, then remove that tree. A
+/// writer addressing the canonical path lands in a fresh directory and cannot
+/// refill the one being removed. `None` when there was nothing to detach.
+///
+/// The caller holds the workspace lock, so one reset at a time owns the fixed
+/// name. A tree an interrupted reset left under it is removed uninspected,
+/// both as `path`'s sibling and when a parent listing hands it in as `path`.
+pub(crate) fn remove_state_dir_with<T, E: From<PathErr>>(
+    path: &Path,
+    inspect: impl FnOnce(&Path) -> std::result::Result<T, E>,
+) -> std::result::Result<Option<T>, E> {
+    let Some(name) = path.file_name() else {
+        return Ok(None);
+    };
+    if name
+        .as_encoded_bytes()
+        .ends_with(RESET_DETACHED_SUFFIX.as_bytes())
+    {
+        remove_tree(path)?;
+        return Ok(None);
+    }
+    let mut detached_name = name.to_os_string();
+    detached_name.push(RESET_DETACHED_SUFFIX);
+    let detached = path.with_file_name(detached_name);
+    remove_tree(&detached)?;
+    match fs::rename(path, &detached) {
+        Ok(()) => {}
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(PathErr::io(path)(source).into()),
+    }
+    let inspected = inspect(&detached)?;
+    remove_tree(&detached)?;
+    Ok(Some(inspected))
+}
+
 fn mkdir_p(path: &Path) -> Result<()> {
     fs::create_dir_all(path).map_err(PathErr::io(path))
 }
