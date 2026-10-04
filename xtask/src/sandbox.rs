@@ -1,6 +1,6 @@
 //! Disposable host-state and multiplexer roots for tests and manual smoke runs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -219,14 +219,18 @@ fn skip_report(records: &str) -> Option<String> {
     Some(format!(
         "self-skipped {} test{plural}:{}",
         tests.len(),
-        reason_lines(&tests, SKIP_NAMES_SHOWN)
+        reason_lines(tests, SKIP_NAMES_SHOWN)
     ))
 }
 
 /// One line per reason: its test count, then up to `names_shown` test names.
-fn reason_lines(tests: &BTreeMap<&str, &str>, names_shown: usize) -> String {
+/// `skips` yields `(test, reason)` pairs in test order.
+fn reason_lines<'a>(
+    skips: impl IntoIterator<Item = (&'a str, &'a str)>,
+    names_shown: usize,
+) -> String {
     let mut by_reason: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (name, reason) in tests {
+    for (name, reason) in skips {
         by_reason.entry(reason).or_default().push(name);
     }
     let mut lines = String::new();
@@ -272,10 +276,17 @@ impl AllowedSkips {
     }
 }
 
-/// Every offending test is named: the refusal is what CI acts on.
+/// Every offending test is named: the refusal is what CI acts on. Each
+/// recorded reason is judged on its own, since a test can record several (a
+/// partial skip, a retry that skips differently) and an allowed one must not
+/// stand in for an unlisted one.
 fn denied_skips(records: &str, allowed: &AllowedSkips) -> Option<String> {
-    let mut tests = skipped_tests(records);
-    tests.retain(|_, reason| !allowed.allows(reason));
+    let denied: BTreeSet<(&str, &str)> = records
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter(|(_, reason)| !allowed.allows(reason))
+        .collect();
+    let tests = denied.iter().map(|(name, _)| name).collect::<BTreeSet<_>>();
     if tests.is_empty() {
         return None;
     }
@@ -284,7 +295,7 @@ fn denied_skips(records: &str, allowed: &AllowedSkips) -> Option<String> {
         "--deny-skips: {} test{plural} self-skipped for a reason {ALLOWED_SKIPS_FILE} does not list:{}\n\
          install the missing capability in ci/Dockerfile, or add the reason to {ALLOWED_SKIPS_FILE}",
         tests.len(),
-        reason_lines(&tests, usize::MAX),
+        reason_lines(denied.iter().copied(), usize::MAX),
     ))
 }
 
@@ -832,6 +843,36 @@ sandbox::c\tmode 000 files remain readable
                  tmux not on PATH (6): tmux::t0, tmux::t1, tmux::t2, tmux::t3, tmux::t4, tmux::t5\n\
                  install the missing capability in ci/Dockerfile, or add the reason to .config/allowed-test-skips.txt"
             )
+        );
+    }
+
+    #[test]
+    fn every_recorded_unlisted_reason_is_denied_whatever_the_test_recorded_after_it() {
+        let allowed = AllowedSkips::parse("mode 000 files remain readable\n");
+        let records = "\
+partial::a\ttmux not on PATH
+partial::a\tmode 000 files remain readable
+retried::b\ttmux not on PATH
+retried::b\tgit not on PATH
+retried::b\ttmux not on PATH
+";
+        assert_eq!(
+            denied_skips(records, &allowed).as_deref(),
+            Some(
+                "--deny-skips: 2 tests self-skipped for a reason .config/allowed-test-skips.txt does not list:\n  \
+                 git not on PATH (1): retried::b\n  \
+                 tmux not on PATH (2): partial::a, retried::b\n\
+                 install the missing capability in ci/Dockerfile, or add the reason to .config/allowed-test-skips.txt"
+            )
+        );
+        assert_eq!(
+            skip_report(records).as_deref(),
+            Some(
+                "self-skipped 2 tests:\n  \
+                 mode 000 files remain readable (1): partial::a\n  \
+                 tmux not on PATH (1): retried::b"
+            ),
+            "the report keeps one reason per test"
         );
     }
 
