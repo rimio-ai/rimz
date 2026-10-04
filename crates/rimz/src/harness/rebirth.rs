@@ -270,56 +270,6 @@ impl RebirthPlan {
         }
     }
 
-    /// Settle a live session's parked agents, opening each resumed tab through
-    /// `open`. A tab that does not open stops the run and returns every
-    /// resumed agent to the pending record, where the ones now live are
-    /// ignored and the rest wait for the next attended start.
-    pub(crate) fn settle_live<E: std::fmt::Display>(
-        self,
-        disposition: RebirthDisposition,
-        session_name: &str,
-        mut open: impl FnMut(ResumeTab) -> std::result::Result<(), E>,
-    ) -> ResumePlan {
-        let paths = self.paths.clone();
-        let runtime = self.runtime.clone();
-        let death = self.death.clone();
-        let (mut resume, resumed) = self.settle(disposition, session_name);
-        let failed = resume
-            .tabs
-            .iter()
-            .enumerate()
-            .find_map(|(index, tab)| Some((index, open(tab.clone()).err()?)));
-        let Some((index, error)) = failed else {
-            if let Err(err) = pending_recovery::settle(&paths, &resumed) {
-                resume
-                    .warnings
-                    .push(format!("resumed agents stay pending: {err}"));
-            }
-            record_recovery(&paths, death, session_name, &resume.tabs);
-            return resume;
-        };
-        if let Err(err) = pending_recovery::park(&paths, &resumed) {
-            tracing::warn!(workspace = %paths.workspace_id, error = %err, "rebirth: could not park agents whose tab did not open");
-        }
-        if let Ok(store) = Store::open(paths.clone(), runtime) {
-            for launch in resume
-                .team_launches
-                .iter()
-                .filter(|launch| launch.tab >= index)
-            {
-                let _ = store.fail_agent_launch_batch(&launch.batch);
-            }
-        }
-        resume.warnings.push(format!(
-            "could not open resumed tab {}: {error}; its agents stay pending",
-            resume.tabs[index].label
-        ));
-        resume.team_launches.retain(|launch| launch.tab < index);
-        resume.tabs.truncate(index);
-        record_recovery(&paths, death, session_name, &resume.tabs);
-        resume
-    }
-
     /// Distinct checkouts that recovery will launch into, before materialization.
     pub fn checkout_roots(&self) -> std::collections::BTreeSet<&Path> {
         self.planned.checkout_roots()
@@ -327,30 +277,14 @@ impl RebirthPlan {
 
     /// Commit the boundary, when this birth ends an incarnation, and settle
     /// the candidates as `disposition` says, after the multiplexer session exists.
-    /// The caller must park the roster before creating that session.
-    pub(crate) fn materialize(
+    /// The caller must park the roster before creating that session. The
+    /// resumed agents stay in the pending record until
+    /// [`SeededRecovery::confirm`] learns whether their tab is open.
+    pub(crate) fn settle(
         self,
         disposition: RebirthDisposition,
         session_name: &str,
-    ) -> ResumePlan {
-        let paths = self.paths.clone();
-        let death = self.death.clone();
-        let (mut resume, resumed) = self.settle(disposition, session_name);
-        if let Err(err) = pending_recovery::settle(&paths, &resumed) {
-            resume
-                .warnings
-                .push(format!("resumed agents stay pending: {err}"));
-        }
-        record_recovery(&paths, death, session_name, &resume.tabs);
-        resume
-    }
-
-    /// [`Self::materialize`], also returning every agent it resumed.
-    fn settle(
-        self,
-        disposition: RebirthDisposition,
-        session_name: &str,
-    ) -> (ResumePlan, BTreeSet<(AgentKind, AgentSessionId)>) {
+    ) -> SeededRecovery {
         if let Some(boot) = self.boot_token.as_deref() {
             write_boot_marker(&self.paths.boot_marker, boot);
         }
@@ -402,7 +336,7 @@ impl RebirthPlan {
                 cancel_child_runs(store, &self.paths, &self.crash_roster, &lost);
             }
         }
-        let (resume, resumed) = match disposition {
+        let (resume, tab_agents) = match disposition {
             RebirthDisposition::RecoverKeep | RebirthDisposition::RecoverDrop => {
                 materialize_recovery(
                     store.as_ref(),
@@ -415,16 +349,21 @@ impl RebirthPlan {
             // Declining at the prompt starts bare; recovery switched off
             // decides the agents alone, and the channel tabs still restore.
             RebirthDisposition::Decline if !self.recovery_off => {
-                (ResumePlan::default(), BTreeSet::new())
+                (ResumePlan::default(), Vec::new())
             }
             RebirthDisposition::Defer | RebirthDisposition::Decline => (
                 ResumePlan {
                     channel_tabs: self.empty_tabs,
                     ..ResumePlan::default()
                 },
-                BTreeSet::new(),
+                Vec::new(),
             ),
         };
+        let resumed = tab_agents
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let worktree_gone = resume
             .agents_to_end
             .iter()
@@ -470,7 +409,101 @@ impl RebirthPlan {
         if self.boundary {
             close_boundary(store.as_ref(), &self.paths, session_name);
         }
-        (resume, resumed)
+        SeededRecovery {
+            paths: self.paths,
+            runtime: self.runtime,
+            death: self.death,
+            session_name: session_name.to_owned(),
+            resume,
+            tab_agents,
+        }
+    }
+}
+
+/// A settlement whose resume tabs are planned but not yet known to be open.
+/// Its resumed agents wait in the pending record for [`Self::confirm`].
+pub(crate) struct SeededRecovery {
+    paths: StatePaths,
+    runtime: RuntimePaths,
+    death: Option<LastDeathMarker>,
+    session_name: String,
+    resume: ResumePlan,
+    /// The agents each of `resume.tabs` resumes, by position.
+    tab_agents: Vec<BTreeSet<(AgentKind, AgentSessionId)>>,
+}
+
+impl SeededRecovery {
+    /// The tabs whose agents this settlement resumes.
+    pub(crate) fn tabs(&self) -> &[ResumeTab] {
+        &self.resume.tabs
+    }
+
+    /// The empty named channels restored beside them.
+    pub(crate) fn channel_tabs(&self) -> &[ResumeTab] {
+        &self.resume.channel_tabs
+    }
+
+    /// Finish the settlement tab by tab. `outcome` says whether the tab at a
+    /// position is open: a confirmed tab's agents leave the pending record
+    /// and count as recovered, while an unconfirmed tab fails its launch
+    /// batch, leaves the returned plan with a warning, and keeps its agents
+    /// pending for the next attended start.
+    pub(crate) fn confirm<E: std::fmt::Display>(
+        self,
+        mut outcome: impl FnMut(usize, &ResumeTab) -> std::result::Result<(), E>,
+    ) -> ResumePlan {
+        let Self {
+            paths,
+            runtime,
+            death,
+            session_name,
+            mut resume,
+            tab_agents,
+        } = self;
+        let planned = std::mem::take(&mut resume.tabs);
+        let mut confirmed = BTreeSet::new();
+        // Where each planned tab sits in the returned plan, if it is there.
+        let mut returned = Vec::with_capacity(planned.len());
+        for (index, (tab, agents)) in planned.into_iter().zip(tab_agents).enumerate() {
+            match outcome(index, &tab) {
+                Ok(()) => {
+                    returned.push(Some(resume.tabs.len()));
+                    confirmed.extend(agents);
+                    resume.tabs.push(tab);
+                }
+                Err(error) => {
+                    returned.push(None);
+                    resume.warnings.push(format!(
+                        "could not open resumed tab {}: {error}; its agents stay pending for the next attended start",
+                        tab.label
+                    ));
+                }
+            }
+        }
+        let (kept, failed): (Vec<_>, Vec<_>) = std::mem::take(&mut resume.team_launches)
+            .into_iter()
+            .partition(|launch| returned.get(launch.tab).is_some_and(Option::is_some));
+        resume.team_launches = kept
+            .into_iter()
+            .filter_map(|mut launch| {
+                launch.tab = (*returned.get(launch.tab)?)?;
+                Some(launch)
+            })
+            .collect();
+        if !failed.is_empty()
+            && let Ok(store) = Store::open(paths.clone(), runtime)
+        {
+            for launch in &failed {
+                let _ = store.fail_agent_launch_batch(&launch.batch);
+            }
+        }
+        if let Err(err) = pending_recovery::settle(&paths, &confirmed) {
+            resume
+                .warnings
+                .push(format!("resumed agents stay pending: {err}"));
+        }
+        record_recovery(&paths, death, &session_name, &resume.tabs);
+        resume
     }
 }
 
@@ -819,10 +852,10 @@ fn materialize_recovery(
     session_name: &str,
     planned: RecoveryPlan,
     empty_tabs: Vec<ResumeTab>,
-) -> (ResumePlan, BTreeSet<(AgentKind, AgentSessionId)>) {
+) -> (ResumePlan, Vec<BTreeSet<(AgentKind, AgentSessionId)>>) {
     let MaterializedRecovery {
         resume: mut final_plan,
-        resumed,
+        tab_agents,
     } = match planned.materialize(
         session_name,
         RecoveryMaterializer::BestEffort {
@@ -835,7 +868,7 @@ fn materialize_recovery(
             tracing::warn!(workspace = %paths.workspace_id, error = %err, "rebirth recovery materialization skipped");
             MaterializedRecovery {
                 resume: ResumePlan::default(),
-                resumed: BTreeSet::new(),
+                tab_agents: Vec::new(),
             }
         }
     };
@@ -848,7 +881,7 @@ fn materialize_recovery(
                 .any(|existing| existing.label == tab.label)
         })
         .collect();
-    (final_plan, resumed)
+    (final_plan, tab_agents)
 }
 
 fn empty_named_channel_tabs(paths: &StatePaths) -> Vec<ResumeTab> {

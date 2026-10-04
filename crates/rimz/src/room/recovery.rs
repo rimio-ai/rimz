@@ -97,10 +97,8 @@ impl RoomContext {
             &self.workspace.project_root,
             &self.machine_config,
         )?;
-        Ok(
-            plan.settle_live(consent.disposition, self.session_name(), |tab| {
-                self.open_resume_tab(tab, false)
-            }),
-        )
+        Ok(plan
+            .settle(consent.disposition, self.session_name())
+            .confirm(|_, tab| self.open_resume_tab(tab.clone(), false)))
     }
 }

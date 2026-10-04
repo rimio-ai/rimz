@@ -524,6 +524,57 @@ impl ResumeTab {
     }
 }
 
+/// Why a planned resume tab was not seen open in its session.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ResumeTabUnconfirmed {
+    #[error("no tab of that name is open")]
+    Absent,
+    #[error("its tab holds {found} of {planned} panes")]
+    ShortOfPanes { found: usize, planned: usize },
+    #[error("the session's tabs could not be listed: {0}")]
+    Unlisted(String),
+}
+
+/// A planned or live tab reduced to what resume confirmation compares: its
+/// normalised name and its panes besides sidebar chrome.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResumeTabShape {
+    name: String,
+    panes: usize,
+}
+
+/// Match each planned resume tab, in order, to a distinct live tab of its name
+/// that holds at least its panes.
+fn confirm_resume_tab_shapes(
+    planned: &[ResumeTabShape],
+    live: &[ResumeTabShape],
+) -> Vec<std::result::Result<(), ResumeTabUnconfirmed>> {
+    let mut claimed = vec![false; live.len()];
+    planned
+        .iter()
+        .map(|tab| {
+            let mut found = None;
+            for (index, view) in live.iter().enumerate() {
+                if claimed[index] || view.name != tab.name {
+                    continue;
+                }
+                if view.panes >= tab.panes {
+                    claimed[index] = true;
+                    return Ok(());
+                }
+                found = found.max(Some(view.panes));
+            }
+            Err(match found {
+                Some(found) => ResumeTabUnconfirmed::ShortOfPanes {
+                    found,
+                    planned: tab.panes,
+                },
+                None => ResumeTabUnconfirmed::Absent,
+            })
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SplitPaneOptions {
     pub target: SplitTarget,
@@ -1060,6 +1111,20 @@ pub trait MuxBackend: Send + Sync {
     /// layout. Contributor gallery tabs can opt out through
     /// [`TabOptions::dock_sidebar`].
     fn open_tab(&self, opts: &TabOptions) -> Result<()>;
+
+    /// Whether each tab a birth seeded is open in `session`, one result per
+    /// tab in order. A tab is open when a live tab of its name holds at least
+    /// its panes besides sidebar chrome; each planned tab claims its own live
+    /// tab. Waits a bounded time for a layout still materializing, and reads
+    /// tab structure only, never pane content.
+    /// Expiring that wait after a successful listing preserves its last
+    /// observed outcomes; any other listing failure, including an initial
+    /// timeout, leaves every tab unconfirmed.
+    fn confirm_resume_tabs(
+        &self,
+        session: &str,
+        tabs: &[ResumeTab],
+    ) -> Vec<std::result::Result<(), ResumeTabUnconfirmed>>;
 
     /// Whether a live session can materialize another tab now.
     fn can_open_tab(&self, _session: &str) -> bool {

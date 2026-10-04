@@ -40,7 +40,30 @@ fn materialize(
     if plan.boundary {
         park_roster(&plan.paths).expect("park before birth");
     }
-    plan.materialize(disposition, session_name)
+    plan.settle(disposition, session_name)
+        .confirm(|_, _| Ok::<(), &str>(()))
+}
+
+fn auto_resume_assists(fixture: &Fixture) -> Vec<(usize, Vec<String>)> {
+    crate::harness::assist_log::recent(&crate::disk::paths::logs_dir(), None)
+        .into_iter()
+        .filter_map(|record| match record.assist {
+            crate::harness::assist_log::Assist::AutoResume {
+                workspace_id,
+                recovered,
+                labels,
+                ..
+            } if workspace_id == fixture.paths.workspace_id => Some((recovered, labels)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn recovered_count(fixture: &Fixture) -> Option<usize> {
+    let marker: LastDeathMarker =
+        serde_json::from_slice(&std::fs::read(&fixture.paths.last_death_marker).expect("marker"))
+            .expect("marker");
+    marker.recovered
 }
 
 impl Fixture {
@@ -783,79 +806,168 @@ fn settlement_drops_parked_agents_ended_by_other_means() {
 }
 
 #[test]
-fn live_settlement_keeps_resumed_agents_parked_when_a_tab_does_not_open() {
-    for opened in 0..=2 {
-        let dir = tempfile::tempdir().expect("worktrees");
-        let lost = dir.path().join("lost");
-        let other = dir.path().join("other");
-        let fixture = Fixture::new(&[("lost", &lost, true), ("other", &other, true)]);
-        materialize(
-            fixture.inspect(true),
-            RebirthDisposition::Defer,
-            "rimz-test",
-        );
-        let plan = inspect_live_at(
-            fixture.paths.clone(),
-            fixture.runtime.clone(),
-            &fixture.project,
-            &MachineConfig::default(),
-            false,
-        );
+fn settlement_confirms_each_resume_tab_on_its_own() {
+    for live in [false, true] {
+        for (first_opens, second_opens) in
+            [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let dir = tempfile::tempdir().expect("worktrees");
+            let first = dir.path().join("first");
+            let second = dir.path().join("second");
+            let fixture = Fixture::new(&[("first", &first, true), ("second", &second, true)]);
+            let plan = if live {
+                materialize(
+                    fixture.inspect(true),
+                    RebirthDisposition::Defer,
+                    "rimz-test",
+                );
+                inspect_live_at(
+                    fixture.paths.clone(),
+                    fixture.runtime.clone(),
+                    &fixture.project,
+                    &MachineConfig::default(),
+                    false,
+                )
+            } else {
+                park_roster(&fixture.paths).expect("park before birth");
+                fixture.inspect(false)
+            };
+            let case = format!("live={live} first={first_opens} second={second_opens}");
 
-        let mut attempts = 0;
-        let outcome = plan.settle_live(RebirthDisposition::RecoverKeep, "rimz-test", |_| {
+            let seeded = plan.settle(RebirthDisposition::RecoverKeep, "rimz-test");
+            assert_eq!(seeded.tabs().len(), 2, "{case}");
+            let outcome = seeded.confirm(|_, tab| {
+                assert_eq!(
+                    pending(&fixture),
+                    [key("first"), key("second")].into(),
+                    "a dying opener must leave its candidates parked"
+                );
+                let opens = if tab.cwd == first {
+                    first_opens
+                } else {
+                    second_opens
+                };
+                if opens { Ok(()) } else { Err("no tab") }
+            });
+
+            let opened = [
+                (first_opens, &first, "first"),
+                (second_opens, &second, "second"),
+            ];
+            assert_eq!(
+                outcome
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.cwd.as_path())
+                    .collect::<BTreeSet<_>>(),
+                opened
+                    .iter()
+                    .filter(|(opens, _, _)| *opens)
+                    .map(|(_, cwd, _)| cwd.as_path())
+                    .collect(),
+                "{case}"
+            );
             assert_eq!(
                 pending(&fixture),
-                [key("lost"), key("other")].into(),
-                "a dying opener must leave its candidates parked"
+                opened
+                    .iter()
+                    .filter(|(opens, _, _)| !*opens)
+                    .map(|(_, _, id)| key(id))
+                    .collect(),
+                "{case}"
             );
-            attempts += 1;
-            if attempts <= opened {
+            let lost = opened.iter().filter(|(opens, _, _)| !*opens).count();
+            assert_eq!(
+                outcome.warnings.len(),
+                lost,
+                "{case}: {:?}",
+                outcome.warnings
+            );
+            for warning in &outcome.warnings {
+                assert!(
+                    warning.starts_with("could not open resumed tab #")
+                        && warning.ends_with(
+                            ": no tab; its agents stay pending for the next attended start"
+                        ),
+                    "{case}: {warning}"
+                );
+            }
+            assert_eq!(ended_events(&fixture), [], "{case}");
+            assert_eq!(recovered_count(&fixture), Some(2 - lost), "{case}");
+            assert_eq!(
+                auto_resume_assists(&fixture),
+                if lost == 2 {
+                    vec![]
+                } else {
+                    vec![(
+                        2 - lost,
+                        outcome.tabs.iter().map(|tab| tab.label.clone()).collect(),
+                    )]
+                },
+                "{case}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unconfirmed_team_tab_fails_its_launch_batch_and_reindexes_the_rest() {
+    for team_opens in [false, true] {
+        let dir = tempfile::tempdir().expect("worktrees");
+        let team_worktree = dir.path().join("forge");
+        let flat_worktree = dir.path().join("flat");
+        let fixture = Fixture::new(&[
+            ("planner", &team_worktree, true),
+            ("flat", &flat_worktree, true),
+        ]);
+        fixture.stamp_team("planner", &team_worktree, "forge", "planner", "claude-plan");
+        fixture.touch_agent("flat", &flat_worktree);
+        let plan = fixture.inspect_with(&team_machine(), false);
+        park_roster(&fixture.paths).expect("park before birth");
+
+        let seeded = plan.settle(RebirthDisposition::RecoverKeep, "rimz-test");
+        assert_eq!(
+            seeded
+                .tabs()
+                .iter()
+                .map(|tab| tab.cwd.as_path())
+                .collect::<Vec<_>>(),
+            [flat_worktree.as_path(), team_worktree.as_path()]
+        );
+        // The flat tab opens exactly when the team tab does not.
+        let outcome = seeded.confirm(|index, _| {
+            if (index == 1) == team_opens {
                 Ok(())
             } else {
                 Err("no tab")
             }
         });
 
-        assert_eq!(outcome.tabs.len(), opened);
-        assert_eq!(outcome.warnings.len(), usize::from(opened < 2));
-        assert_eq!(
-            pending(&fixture),
-            if opened == 2 {
-                BTreeSet::new()
-            } else {
-                [key("lost"), key("other")].into()
-            }
-        );
+        let failed_launches = event_log(&fixture).matches("\"failed\"").count();
+        if team_opens {
+            assert_eq!(outcome.tabs.len(), 1);
+            assert_eq!(outcome.tabs[0].cwd, team_worktree);
+            assert_eq!(outcome.team_launches.len(), 1);
+            assert_eq!(outcome.team_launches[0].tab, 0);
+            assert_eq!(failed_launches, 0, "{}", event_log(&fixture));
+            assert_eq!(pending(&fixture), [key("flat")].into());
+        } else {
+            assert_eq!(outcome.tabs.len(), 1);
+            assert_eq!(outcome.tabs[0].cwd, flat_worktree);
+            assert!(outcome.team_launches.is_empty());
+            assert!(failed_launches > 0, "{}", event_log(&fixture));
+            assert_eq!(pending(&fixture), [key("planner")].into());
+            // The failed seats do not stand in for the agent they were to resume.
+            let again = inspect_live_at(
+                fixture.paths.clone(),
+                fixture.runtime.clone(),
+                &fixture.project,
+                &team_machine(),
+                false,
+            );
+            assert_eq!(again.planned.resumed_keys(), [key("planner")].into());
+        }
         assert_eq!(ended_events(&fixture), []);
-        let marker: LastDeathMarker = serde_json::from_slice(
-            &std::fs::read(&fixture.paths.last_death_marker).expect("last death"),
-        )
-        .expect("marker");
-        assert_eq!(marker.recovered, Some(opened));
-        let assists = crate::harness::assist_log::recent(&crate::disk::paths::logs_dir(), None)
-            .into_iter()
-            .filter_map(|record| match record.assist {
-                crate::harness::assist_log::Assist::AutoResume {
-                    workspace_id,
-                    recovered,
-                    labels,
-                    ..
-                } if workspace_id == fixture.paths.workspace_id => Some((recovered, labels)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            assists,
-            if opened == 0 {
-                vec![]
-            } else {
-                vec![(
-                    opened,
-                    outcome.tabs.iter().map(|tab| tab.label.clone()).collect(),
-                )]
-            }
-        );
     }
 }
 

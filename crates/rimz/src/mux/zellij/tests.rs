@@ -2657,3 +2657,174 @@ fn an_absent_session_and_an_unrelated_failure_are_answered_once() {
         .expect("exit 0");
     assert_eq!(action_runs(&temp), 1);
 }
+
+#[cfg(unix)]
+fn planned_resume_tab(label: &str, panes: usize) -> crate::mux::ResumeTab {
+    crate::mux::ResumeTab {
+        label: label.to_owned(),
+        cwd: std::path::PathBuf::from("/tmp"),
+        env: Default::default(),
+        layout: LayoutPanes {
+            columns: vec![LayoutColumn {
+                panes: vec![
+                    PaneCmd {
+                        argv: vec!["sh".to_owned()],
+                        name: None,
+                    };
+                    panes
+                ],
+                stacked: false,
+            }],
+            focused_pane: 0,
+        },
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn resume_confirmation_counts_work_panes_per_live_tab() {
+    use crate::mux::{ResumeTabShape, ResumeTabUnconfirmed, confirm_resume_tab_shapes};
+
+    // `#seeded` holds two agents beside its sidebar, a plugin, a float, and an
+    // exited pane; `#thin` holds one agent and wears a status glyph.
+    let theme = crate::config::ThemeConfig::default();
+    let glyph = format!(
+        " {}",
+        crate::theme::unicode_glyph(crate::config::GlyphRole::StatusWorking)
+    );
+    let panes: Vec<backend::RawListedPane> = serde_json::from_str(&format!(
+        r##"[
+  {{"id":1,"tab_id":10,"tab_name":"#seeded","title":"rimz-sidebar"}},
+  {{"id":2,"tab_id":10,"tab_name":"#seeded","title":"claude"}},
+  {{"id":3,"tab_id":10,"tab_name":"#seeded","title":"codex"}},
+  {{"id":4,"tab_id":10,"tab_name":"#seeded","title":"gone","exited":true}},
+  {{"id":5,"tab_id":10,"tab_name":"#seeded","title":"float","is_floating":true}},
+  {{"id":0,"tab_id":10,"tab_name":"#seeded","is_plugin":true}},
+  {{"id":6,"tab_id":11,"tab_name":"#thin{glyph}","title":"rimz-sidebar"}},
+  {{"id":7,"tab_id":11,"tab_name":"#thin{glyph}","title":"claude"}}
+]"##
+    ))
+    .expect("listing");
+    let live = backend::live_tab_shapes(&panes, &theme);
+    assert_eq!(
+        live,
+        [
+            ResumeTabShape {
+                name: "#seeded".to_owned(),
+                panes: 2
+            },
+            ResumeTabShape {
+                name: "#thin".to_owned(),
+                panes: 1
+            },
+        ]
+    );
+    let planned =
+        [("#seeded", 2), ("#absent", 1), ("#seeded", 2), ("#thin", 2)].map(|(name, panes)| {
+            ResumeTabShape {
+                name: name.to_owned(),
+                panes,
+            }
+        });
+    assert_eq!(
+        confirm_resume_tab_shapes(&planned, &live),
+        [
+            Ok(()),
+            Err(ResumeTabUnconfirmed::Absent),
+            // One live tab answers for one planned tab.
+            Err(ResumeTabUnconfirmed::Absent),
+            Err(ResumeTabUnconfirmed::ShortOfPanes {
+                found: 1,
+                planned: 2
+            }),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resume_confirmation_waits_for_panes_and_fails_every_tab_on_a_dead_listing() {
+    use crate::mux::ResumeTabUnconfirmed;
+
+    // The tab lists with one pane first, then with both.
+    let (temp, shim) = zellij_shim(
+        r##"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-panes --all --json "*)
+    if [ -e "$dir/listed" ]; then
+      printf '[{"id":1,"tab_id":10,"tab_name":"#seeded","title":"claude"},{"id":2,"tab_id":10,"tab_name":"#seeded","title":"codex"}]\n'
+    else
+      : > "$dir/listed"
+      printf '[{"id":1,"tab_id":10,"tab_name":"#seeded","title":"claude"}]\n'
+    fi
+    exit 0 ;;
+esac
+exit 1
+"##,
+    );
+    assert_eq!(
+        ZellijBackend::with_program_for_test(&shim)
+            .confirm_resume_tabs("rimz-test", &[planned_resume_tab("#seeded", 2)]),
+        [Ok(())]
+    );
+    assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 2);
+
+    let (_temp, shim) = zellij_shim("#!/bin/sh\necho 'no server' >&2; exit 1\n");
+    let outcomes = ZellijBackend::with_program_for_test(&shim).confirm_resume_tabs(
+        "rimz-test",
+        &[
+            planned_resume_tab("#seeded", 2),
+            planned_resume_tab("#thin", 1),
+        ],
+    );
+    assert!(
+        matches!(
+            outcomes[..],
+            [
+                Err(ResumeTabUnconfirmed::Unlisted(_)),
+                Err(ResumeTabUnconfirmed::Unlisted(_))
+            ]
+        ),
+        "{outcomes:?}"
+    );
+
+    let (_temp, shim) = zellij_shim("#!/bin/sh\nexec sleep 60\n");
+    let started = std::time::Instant::now();
+    let outcomes = ZellijBackend::with_program_for_test(&shim)
+        .confirm_resume_tabs("rimz-test", &[planned_resume_tab("#seeded", 2)]);
+    assert!(matches!(
+        outcomes[..],
+        [Err(ResumeTabUnconfirmed::Unlisted(_))]
+    ));
+    assert!(
+        started.elapsed() < NEW_TAB_MATERIALIZE_WINDOW + std::time::Duration::from_secs(5),
+        "a stalled listing must share the confirmation deadline: {:?}",
+        started.elapsed()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resume_confirmation_keeps_last_observation_when_its_deadline_expires() {
+    use crate::mux::ResumeTabUnconfirmed;
+
+    let (_temp, shim) = zellij_shim(
+        r##"#!/bin/sh
+dir=$(dirname "$0")
+if [ -e "$dir/listed" ]; then exec sleep 60; fi
+: > "$dir/listed"
+printf '[{"id":1,"tab_id":10,"tab_name":"#seeded","title":"claude"}]\n'
+"##,
+    );
+    assert_eq!(
+        ZellijBackend::with_program_for_test(&shim).confirm_resume_tabs(
+            "rimz-test",
+            &[
+                planned_resume_tab("#seeded", 1),
+                planned_resume_tab("#absent", 1),
+            ],
+        ),
+        [Ok(()), Err(ResumeTabUnconfirmed::Absent)]
+    );
+}

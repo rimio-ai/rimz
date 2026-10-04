@@ -443,7 +443,8 @@ path = "crates/rimz/src/harness"
 # 680: `idle_stop::closing_with`, the cascade the idle-stop helper guards run by run before it stops.
 # `WhenExpr::reads_forge` replaces the CLI's hand copy of the forge condition keys (+1).
 # The exec wrapper's startup-relaunch decision and its `ProviderExit` input (+2).
-surface-budget = 683
+# `RebirthPlan::settle` returns a `SeededRecovery` whose tabs a birth seeds and whose `confirm` settles each tab on its outcome, replacing `materialize` and `settle_live` (+3).
+surface-budget = 686
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -493,7 +494,8 @@ path = "crates/rimz/src/mux"
 # `MuxBackend::require_pane_in_session` is the room-membership check `pane send` and `pane capture` run before any pane I/O (+1).
 # Room entry asks the backend whether it can open a tab before attach (+1).
 # `SweepScope` names the process sweep's two scopes in place of a bool (+1).
-surface-budget = 254
+# `MuxBackend::confirm_resume_tabs` and its `ResumeTabUnconfirmed` error let a birth settle each resume tab on what the session holds (+2).
+surface-budget = 256
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"

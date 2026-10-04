@@ -962,11 +962,10 @@ impl TmuxBackend {
 
     /// Re-seed the reborn session's prior agents, one `#channel` window per
     /// worktree, born `sidebar | agents…` via the `after-new-window` hook.
-    /// Idempotent on the window name so a re-run (a heal that re-adds the
-    /// sidebar) never doubles a channel window; the freshest channel (the first
-    /// in the plan) is selected so attach lands on it, mirroring the Zellij
-    /// layout's focus. Best-effort: a failed window is logged and skipped — the
-    /// room is still usable.
+    /// Idempotent on the window name so a re-run never doubles a channel
+    /// window; the freshest channel (the first in the plan) is selected so
+    /// attach lands on it, mirroring the Zellij layout's focus. Best-effort: a
+    /// failed window is logged and skipped, and `confirm_resume_tabs` reports it.
     pub(super) fn seed_resume_windows(&self, opts: &SidebarPaneOptions) {
         if opts.resume_tabs.is_empty() {
             return;
