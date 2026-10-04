@@ -24,10 +24,6 @@ env:
   RUST_BACKTRACE: 1
   RUSTC_WRAPPER: sccache
   CARGO_INCREMENTAL: "0"
-  # Overrides `[profile.dev] debug` from Cargo.toml for CI only; the `test`
-  # profile inherits it. Backtrace frames lose file and line, panic messages
-  # keep their location.
-  CARGO_PROFILE_DEV_DEBUG: "false"
 
 jobs:
   checks:
