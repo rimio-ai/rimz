@@ -392,6 +392,31 @@ pub(crate) fn age_short(ts: Timestamp, now: Timestamp) -> String {
     age_label(age.as_secs().max(0) as u64)
 }
 
+/// What is left of a window, in the tone the sidebar's budget bar has there.
+pub(crate) fn percent_left_cell(left: u8) -> Cell {
+    cell(format!("{left}%")).fg(palette::budget(left))
+}
+
+/// A rate-limit window's table cell in what is left: `∞` when lifted,
+/// `N% · ready` before its clock starts, else the percentage with its reset
+/// countdown when known. `None` without a reading.
+pub(crate) fn window_cell(window: &rimz::agents::RateLimitWindow, now: Timestamp) -> Option<Cell> {
+    if window.lifted {
+        return Some(cell("∞"));
+    }
+    let percent = percent_left_cell(window.remaining_percentage(now)?);
+    if window.not_started(now) {
+        return Some(percent.suffix("· ready", palette::body()));
+    }
+    Some(match window.resets_at {
+        Some(deadline) => percent.suffix(
+            format!("· {}", rimz::theme::fmt::reset_countdown(deadline, now)),
+            palette::body(),
+        ),
+        None => percent,
+    })
+}
+
 pub(crate) fn terminal_columns(fallback: usize) -> usize {
     terminal_size::terminal_size()
         .map(|(terminal_size::Width(width), _)| usize::from(width))
