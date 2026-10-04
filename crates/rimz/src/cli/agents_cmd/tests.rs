@@ -1780,9 +1780,14 @@ mod render {
             requested_at: Timestamp::from_second(900).unwrap(),
             requested_by: Some("@lead".to_owned()),
         };
-        active.idle_stop = Some(stop.clone());
-        idle.turn_ended_at = Some(Timestamp::from_second(1_000).unwrap());
-        idle.idle_stop = Some(stop);
+        active.idle_stop = Some(rimz::agents::PendingIdleStop {
+            stop: stop.clone(),
+            due_at: None,
+        });
+        idle.idle_stop = Some(rimz::agents::PendingIdleStop {
+            stop,
+            due_at: Some(Timestamp::from_second(2_200).unwrap()),
+        });
         let report = |agent: &AgentState| {
             let peers = [agent];
             super::report::build_entry(

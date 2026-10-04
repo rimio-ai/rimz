@@ -1525,7 +1525,7 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
 fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run() {
     use rimz::harness::idle_stop::IdleStopHelperRequest;
     use rimz::store::run::{RunRecord, RunStatus};
-    for owed in [true, false] {
+    for owed in [Some("message"), Some("wait"), None] {
         let env = Env::new();
         env.install_agent_hooks("claude");
         let pane_id = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
@@ -1617,6 +1617,10 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
         );
         let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
         assert_eq!(shown["agent"]["idle_stop"]["after_secs"], 180, "{shown}");
+        assert!(
+            shown["agent"]["idle_stop"]["due_at"].is_string(),
+            "a resting agent's clock runs: {shown}"
+        );
         assert_eq!(
             stop(&["@claude", "--when-idle", "0s"]),
             (
@@ -1634,15 +1638,29 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].stop.after_secs, 0);
 
-        if owed {
-            let agent = store.snapshot_cached().unwrap().agents.remove(0);
-            let message = MessageRecord::new(
-                env.workspace_id.clone(),
-                &agent,
-                "rebase first".to_owned(),
-                DeliveryGate::Done,
+        let as_agent = |args: &[&str]| {
+            run_success(
+                env.rimz()
+                    .env("RIMZ_TEST_PANE_LIST", &fixture)
+                    .env("RIMZ_AGENT_KIND", "claude")
+                    .env("RIMZ_AGENT_ID", "provider-session")
+                    .args(args),
+                "wait",
             );
-            store.queue_message(&message, "idle-stop-test").unwrap();
+        };
+        match owed {
+            Some("message") => {
+                let agent = store.snapshot_cached().unwrap().agents.remove(0);
+                let message = MessageRecord::new(
+                    env.workspace_id.clone(),
+                    &agent,
+                    "rebase first".to_owned(),
+                    DeliveryGate::Done,
+                );
+                store.queue_message(&message, "idle-stop-test").unwrap();
+            }
+            Some(_) => as_agent(&["wait", "--in", "30m"]),
+            None => {}
         }
         run_success(
             traced_rimz(&env, "idle-stop-trace.log")
@@ -1672,12 +1690,19 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             .iter()
             .filter(|event| event["assist"] == "idle_stop")
             .collect::<Vec<_>>();
-        if owed {
-            assert_eq!(rimz::store::idle_stop::read(store.paths()), pending);
+        if let Some(owed) = owed {
+            assert_eq!(
+                rimz::store::idle_stop::read(store.paths()),
+                pending,
+                "{owed}"
+            );
             assert!(
                 assists.is_empty(),
-                "a declined stop is no assist: {assists:?}"
+                "a declined stop is no assist ({owed}): {assists:?}"
             );
+            if owed == "wait" {
+                as_agent(&["wait", "cancel", "--all"]);
+            }
             assert_eq!(
                 stop(&["@claude", "--when-idle", "off"]),
                 (

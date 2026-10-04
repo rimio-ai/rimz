@@ -143,13 +143,22 @@ pub struct IdleStop {
     pub requested_by: Option<String>,
 }
 
-impl IdleStop {
+/// A session's pending idle stop as enrichment projects it: the request, and when it falls due while the agent rests and its clock runs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingIdleStop {
+    #[serde(flatten)]
+    pub stop: IdleStop,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<Timestamp>,
+}
+
+impl PendingIdleStop {
     /// `after 3m idle`, then `, due` or `, in 2m` while the rest clock runs.
-    pub fn label(&self, due: Option<Timestamp>, now: Timestamp) -> String {
+    pub fn label(&self, now: Timestamp) -> String {
         let after = crate::utils::time::format_duration_compact(std::time::Duration::from_secs(
-            self.after_secs,
+            self.stop.after_secs,
         ));
-        let clock = match due {
+        let clock = match self.due_at {
             None => String::new(),
             Some(due) if due <= now => ", due".to_owned(),
             Some(due) => {
@@ -849,7 +858,7 @@ pub struct AgentState {
     /// The pending `stop --when-idle` request, attached at enrichment from its
     /// durable record and never reduced from events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idle_stop: Option<IdleStop>,
+    pub idle_stop: Option<PendingIdleStop>,
     /// Background shells this session is running, folded from adapter hook
     /// reports and carried forward; cleared when the session ends or
     /// re-registers. Independent of the `Parked` phase.

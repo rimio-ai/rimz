@@ -118,11 +118,32 @@ fn a_pending_idle_stop_is_one_wait_entry() {
         Some("main"),
         Some("finished work"),
     );
-    resting.idle_stop = Some(crate::agents::IdleStop {
-        after_secs: 180,
-        requested_at: fixed_now(),
-        requested_by: None,
-    });
+    let pending = |due_at| crate::agents::PendingIdleStop {
+        stop: crate::agents::IdleStop {
+            after_secs: 180,
+            requested_at: fixed_now(),
+            requested_by: None,
+        },
+        due_at,
+    };
+    for (due_at, entry) in [
+        (None, "stop · after 3m idle "),
+        (
+            Some(fixed_now() + jiff::SignedDuration::from_secs(120)),
+            "stop · after 3m idle, in 2m",
+        ),
+        (Some(fixed_now()), "stop · after 3m idle, due"),
+    ] {
+        let mut clocked = resting.clone();
+        clocked.idle_stop = Some(pending(due_at));
+        let lines = line_texts(&group_lines(
+            &snapshot_with(vec![clocked]),
+            &Theme::fixed(false),
+            0,
+        ));
+        assert!(lines.iter().any(|line| line.contains(entry)), "{lines:?}");
+    }
+    resting.idle_stop = Some(pending(None));
     let snapshot = snapshot_with(vec![resting]);
     let theme = Theme::fixed(false);
     let collapsed = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
