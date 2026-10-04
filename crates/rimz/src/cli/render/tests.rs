@@ -181,6 +181,29 @@ fn report_prints_a_bare_error_on_one_line() {
 }
 
 #[test]
+fn error_line_joins_distinct_causes_and_keeps_a_bare_error_verbatim() {
+    #[derive(Debug, thiserror::Error)]
+    #[error("opening config: {source}")]
+    struct EmbeddedSource {
+        #[source]
+        source: std::io::Error,
+    }
+    let embedded = anyhow::Error::new(EmbeddedSource {
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied"),
+    })
+    .context("starting");
+
+    assert_eq!(
+        error_line(&embedded),
+        "starting: opening config: permission denied"
+    );
+    assert_eq!(
+        error_line(&anyhow::anyhow!("first detail\nsecond detail")),
+        "first detail\nsecond detail"
+    );
+}
+
+#[test]
 fn pane_frame_aligns_plain_text() {
     let rendered = strip(|w| pane_frame(w, "tmux:%3", "short\na longer line"));
     let widths: Vec<usize> = rendered.lines().map(UnicodeWidthStr::width).collect();

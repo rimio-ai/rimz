@@ -10,11 +10,6 @@ const AGENT_ENDED_EVENT: &str = "rimz.agent-ended";
 const AGENT_RESUMED_EVENT: &str = "rimz.agent-resumed";
 
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
-    let mut launch_warnings = Vec::new();
-    let mut warn = |warning: String| {
-        let _ = writeln!(crate::cli::render::err(), "rimz: {warning}");
-        launch_warnings.push(warning);
-    };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
     let envelope = rimz::harness::launch::decode_exec_envelope(
@@ -31,7 +26,41 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().context("reading the agent pane cwd"))?;
     let mut invocation = ExecInvocationContext::new(&workspace, cwd);
     let run_context = run_exec_context(envelope.request(), &invocation)?;
-    let provisional_identity = exec_launch_identity(envelope.request())?;
+    let mut provisional_identity = None;
+    let launched = exec_launch_identity(envelope.request()).and_then(|identity| {
+        provisional_identity = identity;
+        launch_and_supervise(
+            envelope,
+            globals,
+            &mut invocation,
+            run_context.as_ref(),
+            provisional_identity.as_ref(),
+        )
+    });
+    // The one place a wrapper error settles its launch and its run: every exit
+    // below the run context returns here, so none can forget either.
+    if let Err(err) = &launched {
+        mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
+        if let Some(context) = run_context.as_ref() {
+            fail_run_if_nonterminal(context, &crate::cli::render::error_line(err));
+        }
+    }
+    launched
+}
+
+fn launch_and_supervise(
+    envelope: rimz::harness::launch::ExecEnvelope,
+    globals: &GlobalFlags,
+    invocation: &mut ExecInvocationContext<'_>,
+    run_context: Option<&RunExecContext>,
+    provisional_identity: Option<&LaunchIdentity>,
+) -> Result<()> {
+    let workspace = invocation.workspace;
+    let mut launch_warnings = Vec::new();
+    let mut warn = |warning: String| {
+        let _ = writeln!(crate::cli::render::err(), "rimz: {warning}");
+        launch_warnings.push(warning);
+    };
     let machine_config = crate::cli::machine_config();
     let effective = rimz::config::effective::load_with_roots(
         &machine_config,
@@ -104,36 +133,11 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             warn(format!("could not record model alias move: {error}"));
         }
     }
-    let (plan, isolation) = match prepared.outcome {
-        Ok(prepared) => prepared,
-        Err(err) => {
-            mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
-            if let rimz::harness::launch_plan::LaunchPlanErr::DefinitionFailed(detail) = &err
-                && let Some(context) = run_context.as_ref()
-                && let Err(err) = rimz::harness::run::record_failure_tail(
-                    context.store.paths(),
-                    &context.run_id,
-                    detail,
-                )
-            {
-                tracing::debug!(
-                    run_id = %context.run_id,
-                    error = %err,
-                    "could not record supervised run definition failure",
-                );
-            }
-            fail_run_on_exec_precondition(run_context.as_ref());
-            return Err(err.into());
-        }
-    };
+    let (plan, isolation) = prepared.outcome?;
     invocation.effective_isolation = Some(isolation);
-    let fail = || {
-        mark_launch_failed_if_provisional(&invocation, provisional_identity.as_ref());
-        fail_run_on_exec_precondition(run_context.as_ref());
-    };
     let request = &plan.request;
     let attach_target = exec_attach_target(request);
-    let mut launch_identity = provisional_identity.clone();
+    let mut launch_identity = provisional_identity.cloned();
     if let Some(identity) = &mut launch_identity {
         identity
             .launch
@@ -153,7 +157,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             warn(skipped.to_string());
         }
     }
-    let skill_links = rimz::harness::launch_plan::apply(&plan).inspect_err(|_| fail())?;
+    let skill_links = rimz::harness::launch_plan::apply(&plan)?;
     if let Some((links, outcome)) = plan.skill_links.as_ref().zip(skill_links)
         && let Some(report) = links.shadowed_report(&outcome.shadowed)
     {
@@ -163,15 +167,13 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .worktree_path
         .as_deref()
         .map(enter_worktree)
-        .transpose()
-        .inspect_err(|_| fail())?;
+        .transpose()?;
     let process = plan.process();
     if let Some(adapter) = rimz::agents::find_definition(request.kind.as_str())
         && adapter.min_version().is_some()
         && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
     {
-        rimz::agents::version::check_launch_version_floor(adapter, &path)
-            .inspect_err(|_| fail())?;
+        rimz::agents::version::check_launch_version_floor(adapter, &path)?;
     }
     if let Err(error) = rimz::lsp::registry::register_lease(
         &invocation.cwd,
@@ -184,21 +186,21 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         let (program, rest) = argv
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("finalized Qwen launch produced an empty command"))?;
-        exec_agent_command(program, rest, &process.env, &process.unset).inspect_err(|_| fail())?;
+        exec_agent_command(program, rest, &process.env, &process.unset)?;
         return Ok(());
     }
-    if let Some(context) = run_context.as_ref() {
+    if let Some(context) = run_context {
         record_own_run_pane(context);
     }
     if let Some(identity) = launch_identity.as_ref() {
-        record_own_launch_pane(&invocation, identity);
+        record_own_launch_pane(invocation, identity);
         if attach_target.is_none() {
-            attach_own_launch_pane(&invocation, identity);
+            attach_own_launch_pane(invocation, identity);
         }
     }
     if let Some(target) = attach_target.as_ref() {
         record_own_resume_pane(
-            &invocation,
+            invocation,
             target,
             request
                 .identity
@@ -242,13 +244,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
     })?;
     if should_exec_agent_directly(request) {
-        match exec_agent_command(program, rest, &process.env, &process.unset) {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-                return Err(err);
-            }
-        }
+        return exec_agent_command(program, rest, &process.env, &process.unset);
     }
     reset_cleanup_signal_flag();
     install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
@@ -274,7 +270,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .with_context(|| format!("running {program}"))?;
     if let Some(target) = attach_target.as_ref() {
         record_own_resume_pane(
-            &invocation,
+            invocation,
             target,
             request
                 .identity
@@ -292,7 +288,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     // A root resume may fork to a new session id; only a subagent's parent addresses the resumed id.
     if let Some(target) = attach_target.as_ref().filter(|_| request.subagent) {
         append_agent_lifecycle_trace(
-            &invocation,
+            invocation,
             target.0.clone(),
             target.1.clone(),
             rimz::agents::LifecycleSignal::Registered,
@@ -300,7 +296,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             "agent resume start stamp",
         );
     }
-    if let Some(context) = run_context.as_ref() {
+    if let Some(context) = run_context {
         record_provider_process(context, child.id());
     }
     let keep = run_context
@@ -317,15 +313,11 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 .ok()
         })
         .is_some_and(|record| record.keep);
-    let parent_watchdog = subagent_parent_watchdog(
-        request,
-        run_context.as_ref(),
-        launch_identity.as_ref(),
-        keep,
-    );
+    let parent_watchdog =
+        subagent_parent_watchdog(request, run_context, launch_identity.as_ref(), keep);
     let outcome = supervise_child(
         child,
-        run_context.as_ref(),
+        run_context,
         request.exit_on_run_completion,
         if request.subagent {
             StopPolicy::ParentReceived
@@ -339,9 +331,9 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     settle_after_exit(
         request,
         globals,
-        &invocation,
+        invocation,
         RunExitContext {
-            run: run_context.as_ref(),
+            run: run_context,
             keep,
             checkout: &invocation.cwd,
         },
@@ -1415,27 +1407,18 @@ fn fail_run_if_child_exited_first(
         return;
     }
     record_own_run_failure_tail(context, globals);
-    fail_run_if_nonterminal(
-        context,
-        "agent process exited before supervised run reached a terminal state",
-    );
+    // No reason: the evidence is the pane tail, which the waiter still
+    // captures when the read above found none.
+    fail_run_if_nonterminal(context, "");
 }
 
-fn fail_run_on_exec_precondition(context: Option<&RunExecContext>) {
-    let Some(context) = context else {
-        return;
-    };
-    fail_run_if_nonterminal(context, "agent exec precondition failed");
-}
-
-fn fail_run_if_nonterminal(context: &RunExecContext, reason: &'static str) {
-    match rimz::harness::run::fail_if_nonterminal(context.store.paths(), &context.run_id) {
+fn fail_run_if_nonterminal(context: &RunExecContext, reason: &str) {
+    match rimz::harness::run::fail_if_nonterminal(context.store.paths(), &context.run_id, reason) {
         Ok(Some(record)) => rimz::store::run::wake_run(context.store.runtime_paths(), &record),
         Ok(None) => {}
         Err(err) => tracing::debug!(
             run_id = %context.run_id,
             error = %err,
-            reason,
             "could not mark supervised run failed",
         ),
     }

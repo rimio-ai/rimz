@@ -777,7 +777,9 @@ fn two_peer_turns_survive_a_running_sibling_and_share_one_digest() {
         std::fs::read_to_string(&second_path).unwrap(),
         "second answer\n"
     );
-    let child = run::fail(store.paths(), &child.run_id).unwrap();
+    let child = run::fail_if_nonterminal(store.paths(), &child.run_id, "")
+        .unwrap()
+        .unwrap();
     assert!(matches!(
         report_settled_child(&workspace, &store, &child).unwrap(),
         ReportOutcome::Queued { .. }
@@ -835,7 +837,9 @@ fn settled_background_peer_reports_to_its_launcher_only() {
         .set_modified(std::time::SystemTime::UNIX_EPOCH)
         .unwrap();
     let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
-    let child = run::fail(store.paths(), &child.run_id).unwrap();
+    let child = run::fail_if_nonterminal(store.paths(), &child.run_id, "")
+        .unwrap()
+        .unwrap();
     assert!(matches!(
         report_settled_child(&workspace, &store, &child).unwrap(),
         ReportOutcome::Queued { .. }

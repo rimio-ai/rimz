@@ -28,7 +28,7 @@ Every entry point that can start a sandboxed agent probes bubblewrap first and r
 | `rimz agents launch`, `restart`, `fork`, supervised runs | For the launch's effective isolation. |
 | Cohort resume (`launch_resume_layout` in `cli/agents_cmd/launch.rs`) | For each resumed agent's effective isolation. |
 | Parent-message child resume (`cli/subagents/resume.rs`) | For the child's effective isolation after re-reading its profile. |
-| The exec wrapper (`cli/agents_cmd/exec.rs`) | For the launch's effective isolation; a failure marks the launch failed and fails its run. |
+| The exec wrapper (`cli/agents_cmd/exec.rs`) | For the launch's effective isolation; a failure marks the launch failed and fails its run with the refusal as its reason. |
 | `rimz agents explain` | For the explained launch's isolation. |
 | `rimz doctor` | Always; reports mode, binary path, version, probe verdict, and fix. In host mode the check is informational. |
 

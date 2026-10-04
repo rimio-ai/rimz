@@ -3326,10 +3326,85 @@ async fn exec_prompt_failures_fail_provisional_launch_and_release_run_waiter() {
             RunStatus::Failed,
             "failure must not leave the parent waiting until timeout"
         );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = terminal.failure_tail.expect("launch error on the record");
+        assert!(reason.contains(expected), "{reason}");
+        assert!(
+            reason.split(": ").all(|message| stderr.contains(message)),
+            "{reason}\n{stderr}"
+        );
         assert!(store.read_events().expect("launch events").iter().any(|event| matches!(
             event.kind(), EventKind::AgentLaunch(ref payload) if payload.state == AgentLaunchState::Failed && payload.agent_id == launch_id
         )));
+        if !missing_artifact {
+            continue;
+        }
+        let wait = |json: bool| {
+            let mut command = env.rimz();
+            command.args(["agents", "wait", record.run_id.as_str()]);
+            if json {
+                command.arg("--json");
+            }
+            command.bounded_output().expect("wait on a settled run")
+        };
+        let printed: serde_json::Value =
+            serde_json::from_slice(&wait(true).stdout).expect("run record json");
+        assert_eq!(printed["failure_tail"], reason.as_str());
+        let human = wait(false);
+        let human = String::from_utf8_lossy(&human.stderr);
+        let (_, after_status) = human
+            .split_once("(exit 1)")
+            .unwrap_or_else(|| panic!("no failed-run line:\n{human}"));
+        assert!(human.contains("rimz: run "), "{human}");
+        assert!(after_status.contains(&reason), "{human}");
     }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn exec_spawn_failure_fails_the_run_with_its_reason_and_releases_run_waiter() {
+    use rimz::harness::run::RunCancellation;
+    use rimz::harness::run_wake::{ExpectedRunFrame, RunWaiter};
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    let env = Env::new();
+    let store = env.store();
+    let record = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        rimz::agents::PermissionMode::Auto,
+        "prompt".to_owned(),
+        env.project_root.clone(),
+    );
+    rimz::harness::run::create(store.paths(), &record).expect("pending run");
+    let waiter = RunWaiter::bind(
+        store.runtime_paths(),
+        ExpectedRunFrame {
+            workspace_id: env.workspace_id.clone(),
+            run_id: record.run_id.clone(),
+        },
+        RunCancellation::new(),
+    )
+    .expect("run waiter");
+    let mut request = fresh_exec("codex", Some("prompt"));
+    request.run_id = Some(record.run_id.clone());
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", "/definitely/not/a/shell")
+        .env("PATH", "/nonexistent")
+        .bounded_output()
+        .expect("wrapper exits");
+    assert!(!output.status.success());
+    let terminal = waiter
+        .wait_terminal(&store, Some(std::time::Duration::from_secs(1)), None)
+        .await
+        .expect("parent unblocks");
+    assert_eq!(terminal.status, RunStatus::Failed);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let reason = terminal.failure_tail.expect("spawn error on the record");
+    assert!(reason.starts_with("running "), "{reason}\n{stderr}");
+    assert!(reason.contains("No such file or directory"), "{reason}");
 }
 
 #[cfg(unix)]
