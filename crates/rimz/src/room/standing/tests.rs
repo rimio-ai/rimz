@@ -288,7 +288,7 @@ fn the_agents_column_is_the_refusal_count_with_nothing_launching() {
             .iter()
             .map(|agents| count_others_on(agents, &account, &[]))
             .sum();
-        assert_eq!(column, refusal, "{account}");
+        assert_eq!(column, refusal);
     }
 }
 
