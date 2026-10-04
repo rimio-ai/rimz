@@ -133,6 +133,16 @@ impl BudgetPark {
     }
 }
 
+/// A pending `stop --when-idle` request for this session, read from the idle-stop record. Never folded from the log.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdleStop {
+    pub after_secs: u64,
+    pub requested_at: Timestamp,
+    /// The requesting agent's handle; absent for a user shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<String>,
+}
+
 /// One pending wake aimed at this session, projected from the loop catalog or launched runs during enrichment. Never folded from the log.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingWait {

@@ -233,7 +233,8 @@ pub enum RetireScope {
 /// member's next registration, stay out of that count.
 /// Overlay cleanup is best-effort and warns instead of failing, so the count is
 /// reported whatever the overlays do; `Err` means the durable map could not be
-/// rewritten and nothing was removed.
+/// rewritten and nothing was removed, or the session's idle-stop request could
+/// not be withdrawn after its rows went.
 pub fn retire_session(
     project_root: &Path,
     kind: &crate::ids::AgentKind,
@@ -244,7 +245,18 @@ pub fn retire_session(
         .map_err(|err| RetireFailure(err.to_string()))?;
     let runtime = crate::disk::paths::RuntimePaths::for_project_root(project_root)
         .map_err(|err| RetireFailure(err.to_string()))?;
-    let retired = super::instances::retire_session(&paths, kind, session, scope)
+    retire_session_in(&paths, &runtime, project_root, kind, session, scope)
+}
+
+fn retire_session_in(
+    paths: &crate::disk::paths::StatePaths,
+    runtime: &crate::disk::paths::RuntimePaths,
+    project_root: &Path,
+    kind: &crate::ids::AgentKind,
+    session: &crate::ids::AgentSessionId,
+    scope: RetireScope,
+) -> Result<usize, RetireFailure> {
+    let retired = super::instances::retire_session(paths, kind, session, scope)
         .map_err(|err| RetireFailure(err.to_string()))?;
     let mut dropped = 0;
     for (name, entry) in &retired {
@@ -256,7 +268,7 @@ pub fn retire_session(
             super::catalog::TaskSource::Instance,
             project_root,
         );
-        if let Err(err) = super::signal::stop_watcher(&runtime, name) {
+        if let Err(err) = super::signal::stop_watcher(runtime, name) {
             tracing::warn!(task = name, error = %err, "retire: stopping the watcher");
         }
         if let Err(err) = super::arming::remove(&key) {
@@ -266,6 +278,10 @@ pub fn retire_session(
             tracing::warn!(task = name, error = %err, "retire: clearing the strike overlay");
         }
     }
+    // A pending idle stop belongs to the pane it would close, so it goes under
+    // either scope: a resumed restart must not inherit it.
+    crate::store::idle_stop::withdraw(paths, kind, session)
+        .map_err(|err| RetireFailure(err.to_string()))?;
     Ok(dropped)
 }
 
@@ -277,22 +293,45 @@ pub fn retire_session(
 /// an `ended_at`. A session whose latest lifecycle event revived it has no
 /// `ended_at` and stays; a target with no agent row at all is gc's business.
 ///
-/// `agents` is read only once this workspace is known to hold a pinned row, so a
-/// caller with no subscriptions pays a single file read.
+/// `agents` is read only once this workspace is known to hold a pinned row or
+/// an idle-stop request, so a caller with neither pays two file reads.
 pub fn retire_ended_sessions<'a>(
     project_root: &Path,
     agents: impl FnOnce() -> std::borrow::Cow<'a, [AgentState]>,
 ) -> Result<usize, RetireFailure> {
     let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
         .map_err(|err| RetireFailure(err.to_string()))?;
-    let pinned = super::instances::pinned_sessions(&paths.root);
+    let runtime = crate::disk::paths::RuntimePaths::for_project_root(project_root)
+        .map_err(|err| RetireFailure(err.to_string()))?;
+    retire_ended_sessions_in(&paths, &runtime, project_root, agents)
+}
+
+fn retire_ended_sessions_in<'a>(
+    paths: &crate::disk::paths::StatePaths,
+    runtime: &crate::disk::paths::RuntimePaths,
+    project_root: &Path,
+    agents: impl FnOnce() -> std::borrow::Cow<'a, [AgentState]>,
+) -> Result<usize, RetireFailure> {
+    let mut pinned = super::instances::pinned_sessions(&paths.root);
+    pinned.extend(
+        crate::store::idle_stop::read(paths)
+            .into_iter()
+            .map(|request| (request.kind, request.agent_id)),
+    );
     if pinned.is_empty() {
         return Ok(0);
     }
     let mut dropped = 0;
     let mut failures = Vec::new();
     for (kind, session) in ended_pinned_sessions(&agents(), &pinned) {
-        match retire_session(project_root, kind, session, RetireScope::Session) {
+        match retire_session_in(
+            paths,
+            runtime,
+            project_root,
+            kind,
+            session,
+            RetireScope::Session,
+        ) {
             Ok(count) => dropped += count,
             Err(err) => failures.push(err.to_string()),
         }
@@ -588,6 +627,78 @@ mod tests {
                 Err(DeliveryScopeFailure::SelfSignal)
             ));
         }
+    }
+
+    fn idle_stop_fixture() -> (
+        tempfile::TempDir,
+        crate::disk::paths::StatePaths,
+        crate::disk::paths::RuntimePaths,
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let id = crate::ids::WorkspaceId::from_project_root(dir.path());
+        let paths = crate::disk::paths::StatePaths::under(id.clone(), &dir.path().join("state"))
+            .expect("state paths");
+        let runtime = crate::disk::paths::RuntimePaths::under(id, &dir.path().join("runtime"))
+            .expect("runtime paths");
+        for session in ["stopping", "resting"] {
+            crate::store::idle_stop::arm(
+                &paths,
+                crate::store::idle_stop::IdleStopRequest {
+                    kind: crate::ids::AgentKind::new_unchecked("claude"),
+                    agent_id: session.into(),
+                    stop: crate::agents::state::IdleStop {
+                        after_secs: 180,
+                        requested_at: Timestamp::UNIX_EPOCH,
+                        requested_by: None,
+                    },
+                },
+            )
+            .expect("arm idle stop");
+        }
+        (dir, paths, runtime)
+    }
+
+    fn idle_stop_sessions(paths: &crate::disk::paths::StatePaths) -> Vec<String> {
+        crate::store::idle_stop::read(paths)
+            .into_iter()
+            .map(|request| request.agent_id.to_string())
+            .collect()
+    }
+
+    /// Hard stop, a fresh restart, and a durable end retire under `Session`; a
+    /// resumed restart under `UnrestorableOnly`. Each takes the idle-stop request.
+    #[test]
+    fn retiring_a_session_removes_its_idle_stop_request_under_either_scope() {
+        for scope in [RetireScope::Session, RetireScope::UnrestorableOnly] {
+            let (dir, paths, runtime) = idle_stop_fixture();
+            let dropped = retire_session_in(
+                &paths,
+                &runtime,
+                dir.path(),
+                &crate::ids::AgentKind::new_unchecked("claude"),
+                &"stopping".into(),
+                scope,
+            )
+            .expect("retire");
+            assert_eq!(dropped, 0, "a request is not a wait row");
+            assert_eq!(idle_stop_sessions(&paths), ["resting"], "{scope:?}");
+        }
+    }
+
+    /// A session holding only an idle-stop request, no instance row, is still
+    /// reconciled once it durably ends.
+    #[test]
+    fn ended_session_reconcile_covers_a_request_only_session() {
+        let (dir, paths, runtime) = idle_stop_fixture();
+        let now = Timestamp::UNIX_EPOCH;
+        let mut ended = crate::testkit::agent_state("claude", "stopping", now);
+        ended.ended_at = Some(now);
+        let agents = vec![ended, crate::testkit::agent_state("claude", "resting", now)];
+        retire_ended_sessions_in(&paths, &runtime, dir.path(), || {
+            std::borrow::Cow::Borrowed(&agents)
+        })
+        .expect("reconcile");
+        assert_eq!(idle_stop_sessions(&paths), ["resting"]);
     }
 
     /// The retirement predicate: a pinned session is retired on positive

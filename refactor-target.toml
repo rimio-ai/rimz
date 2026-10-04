@@ -158,7 +158,8 @@ upward-dependencies = ["address"]
 # Pass 32a: HookContextReply declares the hook-context reply on the spec; AgentDefinition::attach_hook_context is its one writer, replacing the trait method (+1).
 # RoomLoginSet::declared and ProviderCapacity::known_unused give auto-redeem its idle accounts and their unused-window evidence (+2).
 # ProviderLogin::local_sessions discovers a provider home and stamps each observation with its account (+1).
-surface-budget = 965
+# The idle-stop request body is shared by the store record and the agent rollup (+2).
+surface-budget = 967
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -607,7 +608,8 @@ path = "crates/rimz/src/store"
 # Per-login provider panels expose their cache and renderer identity.
 # `RunStatus::label` is the one human run-status label the CLI tables and pending waits share (pass 31d).
 # The pending-recovery record parks lost agents for the rebirth boundary and settlement (+5).
-surface-budget = 353
+# The idle-stop request record: its codec module, entry, error, read, arm and withdraw (+6).
+surface-budget = 359
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -858,7 +860,8 @@ allowed-dependencies = [
     "workspace::record",
 ]
 # The pending-recovery record module (+1).
-surface-budget = 31
+# The idle-stop record module (+1).
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
