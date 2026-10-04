@@ -954,6 +954,22 @@ pub(crate) fn pinned_room_root() -> Option<PathBuf> {
         .and_then(|(id, root)| rimz::workspace::verify_pin(&id, &PathBuf::from(root)))
 }
 
+/// The `rimz accounts use` line that moves `kind`'s marker to `name` from the
+/// layer deciding it; `None` when project config decides it or nothing does,
+/// since no form moves the marker then.
+pub(crate) fn accounts_use_command(
+    deciding: Option<rimz::room::Deciding>,
+    kind: &str,
+    name: &rimz::ids::LoginName,
+) -> Option<String> {
+    let flag = match deciding? {
+        rimz::room::Deciding::Room => "",
+        rimz::room::Deciding::Machine => "--global ",
+        rimz::room::Deciding::Project => return None,
+    };
+    Some(format!("rimz accounts use {flag}{kind} {name}"))
+}
+
 fn check_launch_room(globals: &GlobalFlags) -> Result<()> {
     let Some(root) = globals.root.as_ref() else {
         return Ok(());
