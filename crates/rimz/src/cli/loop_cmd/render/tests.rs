@@ -1132,13 +1132,25 @@ fn trailing_overlaps_keep_a_row_and_mark_the_verdict() {
             clause(&[completed(10), overlap(20), refused(30)], true),
             "1 fire skipped while the active run holds the lock"
         );
+        // An overlap with another refused fire after it is no longer the last fire.
         assert_eq!(
             clause(&[completed(10), overlap(20), refused(30)], false),
-            "last fire skipped, nothing has run since"
+            "1 fire skipped, nothing has run since"
         );
         assert_eq!(
             clause(&[overlap(10), refused(20)], false),
+            "1 fire skipped, nothing has run since"
+        );
+        assert_eq!(
+            clause(&[completed(10), refused(20), overlap(30)], false),
             "last fire skipped, nothing has run since"
+        );
+        assert_eq!(
+            clause(
+                &[completed(10), refused(20), overlap(30), overlap(40)],
+                false
+            ),
+            "last 2 fires skipped, nothing has run since"
         );
         assert_eq!(
             clause(
@@ -1164,7 +1176,7 @@ fn trailing_overlaps_keep_a_row_and_mark_the_verdict() {
                 ],
                 false
             ),
-            "last 2 fires skipped, nothing has run since"
+            "2 fires skipped, nothing has run since"
         );
         assert_eq!(clause(&[completed(10), refused(20)], false), "");
         assert_eq!(clause(&[refused(10)], false), "");
