@@ -1,6 +1,7 @@
 use super::*;
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent};
 use crate::cli::render;
@@ -11,7 +12,34 @@ pub(in crate::cli) struct StopTracker {
     stopped: HashSet<(AgentKind, AgentSessionId)>,
 }
 
-pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) -> Result<()> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WhenIdle {
+    After(Duration),
+    Off,
+}
+
+pub(super) fn parse_when_idle(raw: &str) -> std::result::Result<WhenIdle, String> {
+    if raw == "off" {
+        return Ok(WhenIdle::Off);
+    }
+    supervised::parse_timeout(raw)
+        .map(WhenIdle::After)
+        .map_err(|err| {
+            format!(
+                "{err}; --when-idle takes a duration (`90s`, `5m`) or `off`, so put the reference before the flag (`rimz agents stop @me --when-idle`)"
+            )
+        })
+}
+
+pub(super) fn stop_agent(
+    reference: String,
+    all: bool,
+    when_idle: Option<WhenIdle>,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    if let Some(when_idle) = when_idle {
+        return request_idle_stop(&reference, when_idle, globals);
+    }
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let snapshot = ctx.cached_snapshot()?;
@@ -70,6 +98,86 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
     }
     let live_agent = live_agent_result.map_err(|err| stop_resolve_error(err, &reference))?;
     close_agent_pane(workspace, live_agent)
+}
+
+/// Arm, replace, or withdraw the agent's soft stop; the elected producer and
+/// its helper act on it later.
+fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags) -> Result<()> {
+    let ctx = Ctx::open(globals)?;
+    let snapshot = ctx.cached_snapshot()?;
+    let agent = match crate::cli::resolve_agent_one(
+        &ctx.store,
+        &snapshot,
+        reference,
+        None,
+        ctx.channel(),
+    ) {
+        Ok(agent) => agent,
+        Err(err) => {
+            if newest_run_by_ref(&ctx.store, reference, None)?.is_some() {
+                bail!(
+                    "`{reference}` names a run, and --when-idle needs one live agent; stop the run with `rimz agents stop {reference}`"
+                );
+            }
+            return Err(err);
+        }
+    };
+    let peers = rimz::address::addressable_agents(&snapshot);
+    let label = rimz::address::agent_handle(agent, &peers, true);
+    let paths = ctx.store.paths();
+    let pending = rimz::store::idle_stop::read(paths)
+        .into_iter()
+        .find(|request| request.kind == agent.kind && request.agent_id == agent.agent_id);
+    let mut out = render::out();
+    let WhenIdle::After(after) = when_idle else {
+        if rimz::store::idle_stop::withdraw(paths, &agent.kind, &agent.agent_id)? {
+            writeln!(out, "withdrew the pending idle stop for {label}")?;
+        } else {
+            writeln!(out, "{label} has no pending idle stop")?;
+        }
+        return Ok(());
+    };
+    if agent.ended_at.is_some() {
+        bail!("{label} has ended, and --when-idle needs one live agent");
+    }
+    if agent.is_provider_subagent() {
+        bail!(
+            "{label} is a provider subagent and ends with its parent; request the stop on the parent"
+        );
+    }
+    let requested_by = crate::cli::send::resolve_caller(&ctx.store)?
+        .and_then(|caller| {
+            rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, &caller).ok()
+        })
+        .map(|caller| rimz::address::agent_handle(caller, &peers, true));
+    rimz::store::idle_stop::arm(
+        paths,
+        rimz::store::idle_stop::IdleStopRequest {
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            stop: rimz::agents::IdleStop {
+                after_secs: after.as_secs(),
+                requested_at: jiff::Timestamp::now(),
+                requested_by,
+            },
+        },
+    )?;
+    let duration = rimz::harness::schedule::arm::duration_label(after);
+    let replaced = pending
+        .map(|request| {
+            format!(
+                " (replaces the pending {} request)",
+                rimz::harness::schedule::arm::duration_label(Duration::from_secs(
+                    request.stop.after_secs
+                ))
+            )
+        })
+        .unwrap_or_default();
+    writeln!(
+        out,
+        "{label} stops once idle for {duration} with nothing owed{replaced}"
+    )?;
+    Ok(())
 }
 
 fn stop_resolve_error(err: anyhow::Error, reference: &str) -> anyhow::Error {

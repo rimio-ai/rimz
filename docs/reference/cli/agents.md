@@ -432,6 +432,7 @@ rimz agents focus @claude-2#cli-docs     # jump to the pane
 rimz agents fork @coder --name twin      # branch a conversation into a new agent
 rimz agents wait otter fox --any         # race two agents; print the first finisher
 rimz agents stop @claude --all           # stop every matching Claude in scope
+rimz agents stop @coder --when-idle      # stop it once it has rested 3m with nothing owed
 rimz agents restart @claude-2#cli-docs   # replace the pane and resume the session
 rimz agents compact @coder               # compact context at the next turn boundary
 ```
@@ -704,6 +705,27 @@ The exit code is `0` when every target completes; otherwise it is the status cod
 An interactive peer still takes the pane-close path when it has a launcher-opened run, whether that run is open or already terminal. An open turn reports failure to its launcher when session-end or the backstop observes the stop; an idle peer with no open turn reports nothing.
 
 Stopping a parent first stops its live children launched with `rimz subagents`, including when [`rimz teams stop`](./teams.md#drive-a-live-team) reaches the parent. Without `--all`, the reference must match one agent. With `--all`, `stop` acts on every match, prints one result line per agent, and exits `1` if any stop failed.
+
+`rimz agents stop <REF> --when-idle [DURATION|off]` asks for the same stop later, once the agent is finished rather than now. It records the request, prints one line, and returns at once with exit `0`; the room stops the agent after it has rested for the duration with nothing owed to it. An agent can pass `@me` to end its own session when its work is done.
+
+| Form | Does |
+| --- | --- |
+| `--when-idle` | Stop after `3m` of rest. |
+| `--when-idle 10m`, `--when-idle=10m` | Stop after the given rest: a whole number with `s`, `m`, `h`, or `d`. `0s` stops at the first check that finds nothing owed. |
+| `--when-idle off` | Withdraw the pending request; with none pending it says so and still exits `0`. |
+
+The reference comes before the flag: in `rimz agents stop --when-idle @me` the flag takes `@me` as its duration and the command fails with that fix. `--when-idle` conflicts with `--all` and needs one live agent. A reference that resolves only to a run refuses and names the plain `stop`, and a provider's own subagent refuses because it ends with its parent. A second request for the same agent replaces the first, and its clock starts over.
+
+The agent stops only when all of this holds at one check:
+
+- its turn has ended cleanly, and it is not waiting on your input, parked on a budget or provider limit, compacting, or running background work;
+- nothing is owed to it: no armed wait, no subagent or launched team still to report, no message queued or scheduled for it, and no open supervised run or peer turn, so a soft stop never cancels a run;
+- for a team seat, the team's board reads `Done`. A seat whose checkout has no board is held;
+- it has rested for the whole duration, measured from the later of its last turn end and the request. A new turn before then restarts the clock.
+
+Timing is best effort. The check runs on the room's refresh, so the stop comes after the duration, never at a wall-clock instant, and it needs a sidebar or `rimz` command keeping the room refreshed. While pending, the request shows in `rimz agents show` and on the agent's card. It ends with the session: a plain `stop`, a restart into a new session, or the agent exiting removes it, and a stop that fails leaves it armed for the next check. Each attempt is recorded as an `idle_stop` assist in [`rimz stats`](./stats.md#the-assist-timeline).
+
+A soft-stopped agent comes back like any stopped one: `rimz agents resume` reopens its place and resumes the provider session.
 
 #### `restart`
 
