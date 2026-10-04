@@ -229,7 +229,7 @@ fn resident_add_accepts_layout_and_persists_launch_options() {
             "--each-worktree",
             "--when",
             "pr=open",
-            "--stop-team",
+            "--takeover",
             "--subscribe",
             "ci.failed",
             "--subscribe",
@@ -253,7 +253,7 @@ fn resident_add_accepts_layout_and_persists_launch_options() {
     let entry = serde_json::to_value(&config.tasks.0["resident"]).unwrap();
     assert_eq!(entry["stay"], true);
     assert_eq!(entry["each-worktree"], true);
-    assert_eq!(entry["stop-team"], true);
+    assert_eq!(entry["takeover"], true);
     assert_eq!(entry["subscribe"][0]["signal"], "ci.failed");
     assert_eq!(entry["subscribe"][1]["signal"], "pr.conflicted");
     assert_eq!(entry["mode"], "ask");
@@ -789,17 +789,41 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     );
 }
 
-#[test]
-fn resident_stops_only_checkout_team_and_explicit_team_stop_retires_the_rest() {
-    resident_team_stop_case(true);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Takeover {
+    IdleOccupants,
+    WorkingOccupant,
+    FailedStop,
+    EmptyCheckout,
+    TeamLayout,
 }
 
 #[test]
-fn resident_failed_team_stop_commits_no_launch_or_ledger() {
-    resident_team_stop_case(false);
+fn resident_takeover_stops_idle_occupants_of_every_origin_and_no_other_checkout() {
+    resident_takeover_case(Takeover::IdleOccupants);
 }
 
-fn resident_team_stop_case(bind_pane: bool) {
+#[test]
+fn resident_takeover_waits_for_a_working_occupant_then_stops_it_and_launches() {
+    resident_takeover_case(Takeover::WorkingOccupant);
+}
+
+#[test]
+fn resident_takeover_failed_stop_commits_no_launch_or_ledger() {
+    resident_takeover_case(Takeover::FailedStop);
+}
+
+#[test]
+fn resident_takeover_of_an_empty_checkout_launches_and_stops_nothing() {
+    resident_takeover_case(Takeover::EmptyCheckout);
+}
+
+#[test]
+fn resident_takeover_into_a_team_layout_relaunches_the_team_holding_the_checkout() {
+    resident_takeover_case(Takeover::TeamLayout);
+}
+
+fn resident_takeover_case(case: Takeover) {
     let env = Env::new();
     let Some(cwd) = team_signal_fixture(&env) else {
         return;
@@ -819,16 +843,34 @@ fn resident_team_stop_case(bind_pane: bool) {
             sibling.to_str().unwrap()
         ]
     ));
+    let docs = cwd.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
     let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
-    for (session, checkout, pane) in [("old-coder", &cwd, "51"), ("sibling-coder", &sibling, "52")]
-    {
-        seed_team_signal_member_in_channel(&env, checkout, session, None, session);
+    let team = |channel: &str| rimz::agents::LaunchParams {
+        team: Some("forge".to_owned()),
+        role: Some("coder".to_owned()),
+        channel: Some(channel.to_owned()),
+        ..Default::default()
+    };
+    // The fire runs under the test process, so a launched child owned by it
+    // would make the fire itself a subagent.
+    let child_owner = dummy_agent_process();
+    let child_pid = child_owner.id();
+    reap_later(child_owner);
+    let owner_pid = |session: &str| {
+        if session.ends_with("-child") {
+            child_pid
+        } else {
+            std::process::id()
+        }
+    };
+    let hook = |session: &str, checkout: &Path, pane: Option<&str>, event: &str| {
         let mut hook = env.hook_command("claude");
         hook.current_dir(checkout)
             .env(rimz::harness::launch::ENV_AGENT_NAME, session)
-            .env("RIMZ_AGENT_PID", std::process::id().to_string());
-        if bind_pane || checkout == &sibling {
+            .env("RIMZ_AGENT_PID", owner_pid(session).to_string());
+        if let Some(pane) = pane {
             hook.env("ZELLIJ", "1")
                 .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
                 .env("ZELLIJ_PANE_ID", pane);
@@ -836,7 +878,7 @@ fn resident_team_stop_case(bind_pane: bool) {
         let output = env
             .spawn_payload(
                 hook,
-                &json!({"hook_event_name":"SessionStart", "session_id":session, "cwd":checkout})
+                &json!({"hook_event_name":event, "session_id":session, "cwd":checkout, "prompt":"work"})
                     .to_string(),
             )
             .wait_with_output()
@@ -846,18 +888,47 @@ fn resident_team_stop_case(bind_pane: bool) {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    };
+    let child_of_old_coder = || rimz::agents::LaunchParams {
+        parent_agent_id: Some(AgentSessionId::from("launch_old-coder")),
+        parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+        launch_depth: Some(1),
+        ..Default::default()
+    };
+    let mut occupants = vec![("sibling-coder", &sibling, Some("52"), team("sibling-coder"))];
+    if case != Takeover::EmptyCheckout {
+        occupants.push(("old-coder", &cwd, Some("51"), team("old-coder")));
     }
-    assert_eq!(read_loop_instances(&env).0.len(), 2);
-    assert!(
-        rimz::harness::resume::inspect_team_hold(
-            &store
-                .runtime_projection(rimz::RuntimeScope::Audit)
-                .unwrap()
-                .agents,
-            &cwd
-        )
-        .is_some()
-    );
+    if case == Takeover::IdleOccupants {
+        occupants.push((
+            "sweeper",
+            &cwd,
+            Some("53"),
+            rimz::agents::LaunchParams {
+                loop_task: Some("sweep".to_owned()),
+                ..Default::default()
+            },
+        ));
+        occupants.push(("solo", &docs, Some("54"), Default::default()));
+        occupants.push(("old-child", &cwd, Some("55"), child_of_old_coder()));
+    }
+    if case == Takeover::FailedStop {
+        occupants.push(("paneless-child", &cwd, None, child_of_old_coder()));
+    }
+    let seeded = occupants.len();
+    for (session, checkout, pane, launch) in occupants {
+        seed_agent_launch(&env, checkout, session, launch);
+        hook(session, checkout, pane, "SessionStart");
+    }
+    if case == Takeover::WorkingOccupant {
+        hook("old-coder", &cwd, Some("51"), "UserPromptSubmit");
+    }
+    let team_members = if case == Takeover::EmptyCheckout {
+        1
+    } else {
+        2
+    };
+    assert_eq!(read_loop_instances(&env).0.len(), team_members);
     crate::common::room::seed_live_zellij_room(
         &env.runtime_paths(),
         &workspace.session_name,
@@ -865,7 +936,7 @@ fn resident_team_stop_case(bind_pane: bool) {
     );
     let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let trace = env.home_root.join("stop-team.log");
+    let trace = env.home_root.join("takeover.log");
     let command = || {
         let mut command = env.rimz();
         command
@@ -887,45 +958,160 @@ fn resident_team_stop_case(bind_pane: bool) {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.resident]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nstay = true\nstop-team = true\n",
-            env.project_root, cwd
+            "[tasks.resident]\nagent = {:?}\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nstay = true\ntakeover = true\n",
+            if case == Takeover::TeamLayout {
+                "forge"
+            } else {
+                "codex"
+            },
+            env.project_root,
+            cwd
         ),
     );
-    let output = command()
-        .args(["loop", "run", "resident"])
-        .output()
-        .unwrap();
-    let agents = store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .unwrap()
-        .agents;
-    if !bind_pane {
+    let strikes = BTreeMap::from([(machine_task_key("resident"), 2_u32)]);
+    std::fs::create_dir_all(loop_strikes_path(&env).parent().unwrap()).unwrap();
+    std::fs::write(
+        loop_strikes_path(&env),
+        serde_json::to_vec(&strikes).unwrap(),
+    )
+    .unwrap();
+    let fire = || {
+        command()
+            .args(["loop", "run", "resident"])
+            .output()
+            .unwrap()
+    };
+    let trace_text = || std::fs::read_to_string(&trace).unwrap_or_default();
+    let ledger = || rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
+    let assists = || rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    let checkout = rimz::utils::path::normalize_path_lexical(&cwd);
+
+    let output = fire();
+    if case == Takeover::FailedStop {
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("no bound pane"));
-        assert_eq!(agents.len(), 2);
-        assert!(
-            rimz::harness::schedule::launch_ledger::load(store.paths())
-                .unwrap()
-                .is_empty()
-        );
+        assert!(!trace_text().contains("new-tab"), "{}", trace_text());
+        assert!(ledger().is_empty());
         assert_eq!(last_loop_record(&env).result, LoopRunResult::Errored);
-        assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
-        assert_eq!(read_loop_instances(&env).0.len(), 2);
+        assert!(assists().is_empty());
         return;
     }
+    if case == Takeover::WorkingOccupant {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let trace_text = trace_text();
+        assert!(!trace_text.contains("close-pane"), "{trace_text}");
+        assert!(!trace_text.contains("new-tab"), "{trace_text}");
+        assert!(ledger().is_empty());
+        assert!(assists().is_empty());
+        let record = last_loop_record(&env);
+        assert_eq!(record.result, LoopRunResult::TakeoverBlocked);
+        assert_eq!(record.checkout.as_deref(), Some(checkout.as_path()));
+        let reason = record.error.as_deref().unwrap();
+        assert!(reason.contains("old-coder"), "{reason}");
+        assert!(reason.ends_with("is working"), "{reason}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&format!("{reason}; skipping")),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            serde_json::from_slice::<BTreeMap<String, u32>>(
+                &std::fs::read(loop_strikes_path(&env)).unwrap()
+            )
+            .unwrap(),
+            strikes
+        );
+        assert_eq!(read_loop_instances(&env).0.len(), 2);
+        assert_eq!(
+            store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .unwrap()
+                .agents
+                .len(),
+            seeded
+        );
+
+        hook("old-coder", &cwd, Some("51"), "Stop");
+    }
+    let output = if case == Takeover::WorkingOccupant {
+        fire()
+    } else {
+        output
+    };
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(last_loop_record(&env).result, LoopRunResult::Launched);
+    assert!(ledger()["resident"].contains_key(&checkout));
+    let assists = assists();
+    assert_eq!(assists.len(), 1);
+    let assist = serde_json::to_value(&assists[0]).unwrap();
+    let trace_text = trace_text();
+    let stops = trace_text.matches("close-pane").count();
+    if case == Takeover::EmptyCheckout {
+        assert_eq!(stops, 0, "{trace_text}");
+        assert!(assist.get("stopped").is_none(), "{assist}");
+        assert_eq!(read_loop_instances(&env).0.len(), 1);
+        return;
+    }
+    let stopped: Vec<&str> = assist["stopped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|handle| handle.as_str().unwrap())
+        .collect();
+    let expected: &[&str] = if case == Takeover::IdleOccupants {
+        &["old-coder", "sweeper", "solo", "old-child"]
+    } else {
+        &["old-coder"]
+    };
+    assert_eq!(stopped.len(), expected.len(), "{stopped:?}");
+    for name in expected {
+        assert!(
+            stopped.iter().any(|handle| handle.contains(name)),
+            "{name} missing from {stopped:?}"
+        );
+    }
+    assert_eq!(stops, expected.len(), "{trace_text}");
+    assert!(
+        trace_text.rfind("close-pane").unwrap() < trace_text.find("new-tab").unwrap(),
+        "{trace_text}"
+    );
+    if case == Takeover::TeamLayout {
+        // The hold admits a relaunch of the team that holds the checkout.
+        let agents = store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents;
+        let mut launched: Vec<(Option<&str>, Option<&str>)> = agents
+            .iter()
+            .filter(|agent| {
+                !agent
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.ends_with("-coder"))
+            })
+            .map(|agent| {
+                assert_eq!(agent.team.as_deref(), Some("forge"));
+                assert_eq!(agent.worktree_path.as_deref(), checkout.to_str());
+                (agent.role.as_deref(), agent.loop_task.as_deref())
+            })
+            .collect();
+        launched.sort();
+        assert_eq!(
+            launched,
+            [(Some("coder"), Some("resident")), (Some("reviewer"), None)]
+        );
+        return;
+    }
     let subscriptions = read_loop_instances(&env);
     assert_eq!(subscriptions.0.len(), 1);
-    let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
-    assert_eq!(assists.len(), 1);
-    assert_eq!(
-        serde_json::to_value(&assists[0]).unwrap()["stopped_team"],
-        "forge"
-    );
     assert_eq!(
         subscriptions
             .0
@@ -939,12 +1125,11 @@ fn resident_team_stop_case(bind_pane: bool) {
             .as_str(),
         "sibling-coder"
     );
-    let trace_text = std::fs::read_to_string(&trace).unwrap();
-    let close = trace_text.find("close-pane").unwrap();
-    assert!(close < trace_text.find("new-tab").unwrap(), "{trace_text}");
-    assert_eq!(trace_text.matches("close-pane").count(), 1, "{trace_text}");
     assert_eq!(
-        agents
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
             .iter()
             .filter(|agent| agent.loop_task.as_deref() == Some("resident"))
             .count(),
@@ -1838,16 +2023,23 @@ fn team_signal_fixture(env: &Env) -> Option<std::path::PathBuf> {
 }
 
 fn seed_team_signal_member(env: &Env, cwd: &Path, session: &str, parent: Option<&str>) {
-    seed_team_signal_member_in_channel(env, cwd, session, parent, "feature-team");
+    seed_agent_launch(
+        env,
+        cwd,
+        session,
+        rimz::agents::LaunchParams {
+            team: Some("forge".to_owned()),
+            role: Some("coder".to_owned()),
+            channel: Some("feature-team".to_owned()),
+            parent_agent_id: parent.map(AgentSessionId::from),
+            parent_agent_kind: parent.map(|_| AgentKind::new_unchecked("claude")),
+            launch_depth: parent.map(|_| 1),
+            ..Default::default()
+        },
+    );
 }
 
-fn seed_team_signal_member_in_channel(
-    env: &Env,
-    cwd: &Path,
-    session: &str,
-    parent: Option<&str>,
-    channel: &str,
-) {
+fn seed_agent_launch(env: &Env, cwd: &Path, session: &str, launch: rimz::agents::LaunchParams) {
     let workspace = env.resolve_workspace(&env.project_root);
     env.store()
         .append_event(&rimz::store::event::EventEnvelope::agent_launched(
@@ -1859,15 +2051,7 @@ fn seed_team_signal_member_in_channel(
                 launch_id: Some(AgentSessionId::from(format!("launch_{session}"))),
                 agent_name: session.to_owned(),
                 agent_name_explicit: true,
-                launch: rimz::agents::LaunchParams {
-                    team: Some("forge".to_owned()),
-                    role: Some("coder".to_owned()),
-                    channel: Some(channel.to_owned()),
-                    parent_agent_id: parent.map(AgentSessionId::from),
-                    parent_agent_kind: parent.map(|_| AgentKind::new_unchecked("claude")),
-                    launch_depth: parent.map(|_| 1),
-                    ..Default::default()
-                },
+                launch,
                 state: rimz::store::event::AgentLaunchState::Bound,
                 run_id: None,
                 pane_id: None,

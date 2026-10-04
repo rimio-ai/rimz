@@ -35,6 +35,7 @@ pub mod run_log;
 pub mod runner;
 pub mod signal;
 pub mod strikes;
+pub mod takeover;
 pub mod team;
 pub mod when;
 

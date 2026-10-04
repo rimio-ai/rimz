@@ -747,7 +747,7 @@ fn reject_project_task_state_fields(
             "for",
             "stay",
             "each-worktree",
-            "stop-team",
+            "takeover",
             "subscribe",
             "loop-task",
         ] {
@@ -768,7 +768,7 @@ fn reject_project_task_state_fields(
                         "when" | "for" => {
                             "project tasks cannot use conditions yet; add it with `rimz loop add` without `--project`"
                         }
-                        "stay" | "each-worktree" | "stop-team" | "subscribe" => {
+                        "stay" | "each-worktree" | "takeover" | "subscribe" => {
                             "resident launches are machine state; add them with `rimz loop add` without `--project`"
                         }
                         "loop-task" => {

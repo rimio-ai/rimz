@@ -1258,6 +1258,7 @@ fn failure_note_visible(result: LoopRunResult) -> bool {
             | LoopRunResult::BudgetSkipped
             | LoopRunResult::SurplusSkipped
             | LoopRunResult::AccountSkipped
+            | LoopRunResult::TakeoverBlocked
             | LoopRunResult::Errored
             | LoopRunResult::StartFailed
     )
@@ -1284,6 +1285,7 @@ pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
         | LoopRunResult::Canceled
         | LoopRunResult::TargetGone
         | LoopRunResult::Overlapped
+        | LoopRunResult::TakeoverBlocked
         | LoopRunResult::BudgetSkipped
         | LoopRunResult::AccountSkipped => ("○", ui::palette::warn()),
         LoopRunResult::CheckSkipped

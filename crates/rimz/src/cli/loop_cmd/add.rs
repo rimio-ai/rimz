@@ -312,7 +312,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     }
     for (used, flag) in [
         (args.each_worktree, "--each-worktree"),
-        (args.stop_team, "--stop-team"),
+        (args.takeover, "--takeover"),
         (!args.subscribe.is_empty(), "--subscribe"),
     ] {
         if used && !args.stay {
@@ -698,7 +698,7 @@ fn build_task_entry(
     let mut entry = TaskEntry {
         stay: args.stay,
         each_worktree: args.each_worktree,
-        stop_team: args.stop_team,
+        takeover: args.takeover,
         subscribe: args
             .subscribe
             .iter()
@@ -1055,8 +1055,11 @@ fn write_add_feedback(
                     entry.run_dir().display()
                 )?;
             }
-            if entry.stop_team {
-                writeln!(out, "before launch: stops the team holding the checkout")?;
+            if entry.takeover {
+                writeln!(
+                    out,
+                    "before launch: takes over the checkout (stops its idle agents, waits while any is busy)"
+                )?;
             }
             for binding in &entry.subscribe {
                 writeln!(
@@ -1229,11 +1232,22 @@ mod tests {
                 vec!["--agent", "claude", "--subscribe", "ci.failed"],
                 "--stay",
             ),
-            (vec!["--agent", "claude", "--stop-team"], "--stay"),
+            (vec!["--agent", "claude", "--takeover"], "--stay"),
         ] {
             let error = validate_add_args(&args(&argv)).expect_err("invalid resident flags");
             assert!(error.to_string().contains(flag), "{error}");
         }
+        let removed = AddArgs::augment_args(clap::Command::new("add"))
+            .try_get_matches_from([
+                "add",
+                "resident",
+                "--agent",
+                "claude",
+                "--stay",
+                "--stop-team",
+            ])
+            .expect_err("--stop-team is gone");
+        assert_eq!(removed.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]

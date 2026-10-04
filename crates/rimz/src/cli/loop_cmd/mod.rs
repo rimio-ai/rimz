@@ -143,9 +143,9 @@ struct AddArgs {
     /// Arm a standing signal subscription for the layout's prompt leader.
     #[arg(long, value_name = "SIGNAL")]
     subscribe: Vec<String>,
-    /// Stop the team holding the checkout before launching the layout.
+    /// Take over the checkout: stop its idle agents first, wait while any is busy.
     #[arg(long)]
-    stop_team: bool,
+    takeover: bool,
     /// Live agent to wake through the message path; resolved and pinned now.
     #[arg(
         long,

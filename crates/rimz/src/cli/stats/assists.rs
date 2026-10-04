@@ -40,8 +40,8 @@ pub(super) enum AssistEvent {
         checkout: std::path::PathBuf,
         #[serde(skip_serializing_if = "Option::is_none")]
         condition: Option<rimz::harness::schedule::when::ConditionEvidence>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        stopped_team: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        stopped: Vec<String>,
         handles: Vec<String>,
     },
     ModelAlias {
@@ -259,14 +259,14 @@ impl AssistEvent {
                 task,
                 checkout,
                 condition,
-                stopped_team,
+                stopped,
                 handles,
             } => Self::ResidentLaunch {
                 at: record.at,
                 task,
                 checkout,
                 condition,
-                stopped_team,
+                stopped,
                 handles,
             },
             Assist::ModelAlias {
@@ -842,7 +842,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         AssistEvent::ResidentLaunch {
             checkout,
             condition,
-            stopped_team,
+            stopped,
             ..
         } => format!(
             "{at} {benefit} · checkout {}{}{}",
@@ -850,9 +850,11 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             condition
                 .as_ref()
                 .map_or_else(String::new, |evidence| format!(" · when {}", evidence.when)),
-            stopped_team
-                .as_ref()
-                .map_or_else(String::new, |team| format!(" · stopped team {team}")),
+            if stopped.is_empty() {
+                String::new()
+            } else {
+                format!(" · took over from {}", stopped.join(", "))
+            },
         ),
         AssistEvent::ModelAlias { login, .. } => format!("{at} {benefit} · login {login}"),
         AssistEvent::TierFallback { agent_id, .. } => format!("{at} {benefit} · agent {agent_id}"),
@@ -1042,7 +1044,7 @@ mod tests {
     fn resident_launch_assists_roll_up_and_render() {
         let record = serde_json::from_value::<AssistRecord>(serde_json::json!({
             "at": "2026-01-01T00:00:00Z", "assist": "resident_launch",
-            "task": "fixer", "checkout": "/repo-worktrees/auth", "stopped_team": "forge",
+            "task": "fixer", "checkout": "/repo-worktrees/auth", "stopped": ["@coder", "@sweep"],
             "condition": {"when":"ci=passed", "hold":null, "held_ms":0, "readings":{"ci":"passed"}},
             "handles": ["@otter", "@fox"]
         }))
@@ -1051,6 +1053,10 @@ mod tests {
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["rollup"]["resident_launches"], 1);
         assert_eq!(json["events"][0]["condition"]["readings"]["ci"], "passed");
+        assert_eq!(
+            json["events"][0]["stopped"],
+            serde_json::json!(["@coder", "@sweep"])
+        );
         assert!(
             category_rows(&stats.rollup)
                 .join(" ")
@@ -1062,11 +1068,26 @@ mod tests {
             "@otter",
             "@fox",
             "/repo-worktrees/auth",
-            "forge",
+            "took over from @coder, @sweep",
             "ci=passed",
         ] {
             assert!(line.contains(fact), "{line}");
         }
+    }
+
+    #[test]
+    fn resident_launch_assist_written_before_takeover_still_loads() {
+        let record = serde_json::from_value::<AssistRecord>(serde_json::json!({
+            "at": "2026-01-01T00:00:00Z", "assist": "resident_launch",
+            "task": "fixer", "checkout": "/repo-worktrees/auth", "stopped_team": "forge",
+            "handles": ["@otter"]
+        }))
+        .expect("resident launch assist written with the old field");
+        let stats = AssistStats::from_records("all", vec![record]);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert!(json["events"][0].get("stopped").is_none(), "{json}");
+        let line = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+        assert!(!line.contains("took over"), "{line}");
     }
 
     #[test]
