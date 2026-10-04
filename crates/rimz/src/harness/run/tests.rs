@@ -1069,8 +1069,14 @@ fn terminal_transitions_are_once_only_and_map_exit_codes() {
     assert!(timed_out.completed_at.is_some());
     assert_eq!(timed_out.status.exit_code(), 124);
 
-    let still_timed_out = fail(&paths, &record.run_id).unwrap();
+    assert!(
+        fail_if_nonterminal(&paths, &record.run_id, "late")
+            .unwrap()
+            .is_none()
+    );
+    let still_timed_out = load(&paths, &record.run_id).unwrap();
     assert_eq!(still_timed_out.status, RunStatus::TimedOut);
+    assert_eq!(still_timed_out.failure_tail, None);
 
     let (_dir, paths, record) = setup();
     let (canceled, wrote) = cancel(&paths, &record.run_id).unwrap();
@@ -1492,6 +1498,35 @@ fn record_provider_process_persists_pid_reuse_guard() {
     let loaded = load(&paths, &record.run_id).unwrap();
     assert_eq!(loaded.provider_pid, Some(42));
     assert_eq!(loaded.provider_process_start.as_deref(), Some("start-42"));
+}
+
+#[test]
+fn fail_if_nonterminal_writes_the_reason_with_the_failed_status() {
+    let (_dir, paths, record) = setup();
+    let reason = format!("{}{}\n", "a".repeat(FAILURE_TAIL_CAP), "b".repeat(20));
+    let failed = fail_if_nonterminal(&paths, &record.run_id, &reason)
+        .unwrap()
+        .expect("newly failed");
+    assert_eq!(failed.status, RunStatus::Failed);
+    let stored = load(&paths, &record.run_id).unwrap();
+    assert_eq!(stored.status, RunStatus::Failed);
+    let tail = stored.failure_tail.expect("reason");
+    assert_eq!(tail.len(), FAILURE_TAIL_CAP);
+    assert!(tail.ends_with('b'));
+
+    let (_dir, paths, record) = setup();
+    record_failure_tail(&paths, &record.run_id, "pane tail").unwrap();
+    let failed = fail_if_nonterminal(&paths, &record.run_id, "launch error")
+        .unwrap()
+        .expect("newly failed");
+    assert_eq!(failed.failure_tail.as_deref(), Some("pane tail"));
+
+    let (_dir, paths, record) = setup();
+    let failed = fail_if_nonterminal(&paths, &record.run_id, " \n")
+        .unwrap()
+        .expect("a blank reason still fails the run");
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert_eq!(failed.failure_tail, None);
 }
 
 #[test]

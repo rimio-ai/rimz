@@ -432,19 +432,27 @@ pub fn record_provider_process(
 }
 
 pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Result<RunRecord> {
-    let tail = tail.trim_end();
     update_record(paths, run_id, |record, _| {
-        if record.failure_tail.is_some() || tail.trim().is_empty() {
+        if record.failure_tail.is_some() {
             return Ok(RecordMutation::Keep(()));
         }
-        record.failure_tail = Some(
-            crate::proc::tail_output(tail.as_bytes(), FAILURE_TAIL_CAP)
-                .trim_end()
-                .to_owned(),
-        );
+        let Some(tail) = capped_failure_tail(tail) else {
+            return Ok(RecordMutation::Keep(()));
+        };
+        record.failure_tail = Some(tail);
         Ok(RecordMutation::Write(()))
     })
     .map(|(record, ())| record)
+}
+
+/// The last `FAILURE_TAIL_CAP` bytes of a failure reason, or nothing for a blank one.
+fn capped_failure_tail(tail: &str) -> Option<String> {
+    let tail = tail.trim_end();
+    (!tail.trim().is_empty()).then(|| {
+        crate::proc::tail_output(tail.as_bytes(), FAILURE_TAIL_CAP)
+            .trim_end()
+            .to_owned()
+    })
 }
 
 pub(super) fn timeout(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
@@ -544,12 +552,27 @@ pub fn cancel(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {
     mark_terminal(paths, run_id, RunStatus::Canceled)
 }
 
-pub fn fail(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
-    mark_terminal(paths, run_id, RunStatus::Failed).map(|(record, _wrote)| record)
-}
-
-pub fn fail_if_nonterminal(paths: &StatePaths, run_id: &RunId) -> Result<Option<RunRecord>> {
-    let (record, wrote) = mark_terminal(paths, run_id, RunStatus::Failed)?;
+/// Fail a non-terminal run and record why in the same locked write, so a
+/// waiter released by the terminal record reads the reason with it.
+///
+/// The reason follows `record_failure_tail`: an existing tail wins and a blank
+/// one records nothing. A terminal run is left untouched, reason included.
+/// Returns the record only when this call wrote it, for the caller to wake the
+/// waiter once the lock has dropped.
+pub fn fail_if_nonterminal(
+    paths: &StatePaths,
+    run_id: &RunId,
+    reason: &str,
+) -> Result<Option<RunRecord>> {
+    let (record, wrote) = update_record(paths, run_id, |record, now| {
+        if !record.mark_terminal(RunStatus::Failed, now) {
+            return Ok(RecordMutation::Keep(false));
+        }
+        if record.failure_tail.is_none() {
+            record.failure_tail = capped_failure_tail(reason);
+        }
+        Ok(RecordMutation::Write(true))
+    })?;
     Ok(wrote.then_some(record))
 }
 

@@ -350,9 +350,14 @@ fn open_attempt_pane(
         RunPlacement::Tab => tab(format!("run {}", prepared.adapter.spec().kind)),
     };
     if let Err(err) = open_result {
-        let _ = rimz::harness::run::fail(prepared.store.paths(), run_id);
+        let err = err.context("opening run pane");
+        let _ = rimz::harness::run::fail_if_nonterminal(
+            prepared.store.paths(),
+            run_id,
+            &render::error_line(&err),
+        );
         let _ = prepared.store.fail_agent_launch_batch(launch_batch);
-        return Err(err).context("opening run pane");
+        return Err(err);
     }
     if request.subagent {
         supervised::pane::wait_for_subagent_pane_bind(
@@ -814,9 +819,11 @@ fn verify_phase(
             &record,
             reprompt,
         ) {
-            if let Some(failed) =
-                rimz::harness::run::fail_if_nonterminal(prepared.store.paths(), &record.run_id)?
-            {
+            if let Some(failed) = rimz::harness::run::fail_if_nonterminal(
+                prepared.store.paths(),
+                &record.run_id,
+                &render::error_line(&err),
+            )? {
                 record = failed;
             }
             verify_error = Some(err);

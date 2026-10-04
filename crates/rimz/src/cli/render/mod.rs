@@ -122,12 +122,10 @@ pub(crate) fn report(error: &anyhow::Error) {
 }
 
 fn write_report(w: &mut impl Write, error: &anyhow::Error) -> std::io::Result<()> {
-    let mut chain = error.chain();
-    let Some(error) = chain.next() else {
+    let mut messages = distinct_messages(error).into_iter();
+    let Some(message) = messages.next() else {
         return Ok(());
     };
-    let message = error.to_string();
-    let message = message.trim();
     let mut lines = message.lines();
     match lines.next() {
         Some(line) => writeln!(w, "{} {line}", paint(palette::alarm().bold(), "error:"))?,
@@ -137,19 +135,33 @@ fn write_report(w: &mut impl Write, error: &anyhow::Error) -> std::io::Result<()
         writeln!(w, "  {line}")?;
     }
 
-    let mut last_printed = message.to_owned();
-    for source in chain {
-        let message = source.to_string();
-        let message = message.trim();
-        if last_printed.contains(message) {
-            continue;
-        }
+    for message in messages {
         for line in message.lines() {
             writeln!(w, "  {line}")?;
         }
-        last_printed = message.to_owned();
     }
     Ok(())
+}
+
+/// An error's messages outermost first, each trimmed, without any source the
+/// message kept before it already contains.
+fn distinct_messages(error: &anyhow::Error) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for cause in error.chain() {
+        let message = cause.to_string();
+        let message = message.trim();
+        if kept.last().is_some_and(|last| last.contains(message)) {
+            continue;
+        }
+        kept.push(message.to_owned());
+    }
+    kept
+}
+
+/// The error chain as plain text for a durable record: what `report` prints,
+/// joined by `: ` in place of its prefix, indentation, and color.
+pub(crate) fn error_line(error: &anyhow::Error) -> String {
+    distinct_messages(error).join(": ")
 }
 
 /// Finish a stdout emission, treating a consumer that stopped reading as a
