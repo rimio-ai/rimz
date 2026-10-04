@@ -9,6 +9,8 @@ mode 000 files remain readable
 pid 1 is not signal-protected from this user
 this user bypasses directory write permissions
 
-# The CI image carries no bubblewrap, so `rimz::sandbox::preflight` fails for
-# the sandbox suite.
+# The CI image carries bubblewrap, but the unprivileged job container denies
+# the namespace it needs (`Creating new namespace failed: Operation not
+# permitted`), so `rimz::sandbox::preflight` fails for the sandbox suite.
+# Loosening the container's confinement is not the fix.
 bubblewrap unusable:
