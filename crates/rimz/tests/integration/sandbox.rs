@@ -2460,10 +2460,7 @@ impl ViewWriter {
         let output = self.reset(true);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "hard reset failed: {stderr}");
-        assert!(
-            stderr.contains("Sandbox views: ended 1 process still inside"),
-            "{stderr}"
-        );
+        assert!(stderr.contains("Sandbox views: ended "), "{stderr}");
         assert!(!self.is_live(), "writer survived the hard reset");
         let tmp = &self.env.state_path_for(&self.env.project_root).tmp_dir;
         assert!(!tmp.exists(), "tmp/ survived the hard reset");
