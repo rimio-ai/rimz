@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -75,7 +76,9 @@ pub struct AgentsConfig {
     #[serde(rename = "startup-relaunches")]
     pub startup_relaunches: u8,
     /// The wait before each startup relaunch, in the CLI duration syntax
-    /// (`3s`); validated at use, when a fresh launch may need it.
+    /// (`3s`), at most `24h`. [`Self::startup_relaunch_wait`] validates it at
+    /// every fresh-launch entry point: a lenient load would turn a
+    /// deserialize-time refusal into a silent fallback to the defaults.
     #[serde(rename = "startup-relaunch-wait")]
     pub startup_relaunch_wait: String,
     /// Carry the launch cwd and shell in the launch reminder.
@@ -125,6 +128,46 @@ impl Default for AgentsConfig {
             teams: default_machine_teams(),
         }
     }
+}
+
+impl AgentsConfig {
+    /// The wait before each startup relaunch; zero when relaunches are off.
+    pub fn startup_relaunch_wait(&self) -> Result<Duration, StartupRelaunchWaitErr> {
+        use crate::utils::time::{DurationUnit, parse_duration_units};
+
+        const CEILING: Duration = Duration::from_secs(24 * 60 * 60);
+        if self.startup_relaunches == 0 {
+            return Ok(Duration::ZERO);
+        }
+        let refuse = |reason: String| StartupRelaunchWaitErr {
+            value: self.startup_relaunch_wait.clone(),
+            reason,
+        };
+        let wait = parse_duration_units(
+            &self.startup_relaunch_wait,
+            &[
+                DurationUnit::Second,
+                DurationUnit::Minute,
+                DurationUnit::Hour,
+                DurationUnit::Day,
+            ],
+        )
+        .map_err(|err| refuse(err.to_string()))?;
+        if wait > CEILING {
+            return Err(refuse("longer than 24h".to_owned()));
+        }
+        Ok(wait)
+    }
+}
+
+/// `agents.startup-relaunch-wait` holds no wait a launch can use.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "invalid agents.startup-relaunch-wait `{value}`: {reason}; use a whole number with s, m, h or d from 0s through 24h, e.g. `rimz config set agents.startup-relaunch-wait 3s`"
+)]
+pub struct StartupRelaunchWaitErr {
+    value: String,
+    reason: String,
 }
 
 const fn default_max_chain_length() -> u8 {

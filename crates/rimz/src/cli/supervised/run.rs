@@ -396,6 +396,7 @@ fn prepare_supervised(
     crate::cli::check_launch_room(globals)?;
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
+    machine_config.agents.startup_relaunch_wait()?;
     let worktree_launch = request.worktree.is_some() || request.from_pr.is_some();
     if worktree_launch {
         crate::cli::require_worktree_config(&machine_config)?;

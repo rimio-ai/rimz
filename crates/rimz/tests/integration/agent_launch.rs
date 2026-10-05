@@ -4323,6 +4323,69 @@ fn an_unparseable_startup_relaunch_wait_refuses_the_launch() {
     assert!(stderr.contains("s/m/h/d"), "{stderr}");
 }
 
+/// The wrapper would refuse the same value inside the pane; the entry point
+/// refuses it first, so no pane opens and no receipt or launch row appears.
+#[cfg(unix)]
+#[test]
+fn an_unusable_startup_relaunch_wait_refuses_every_launch_doorway_before_side_effects() {
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let caller = AgentSessionId::from("launch_root_caller");
+    env.store()
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("codex"),
+            AgentLaunchPayload {
+                agent_id: AgentSessionId::from("provider-root-caller"),
+                launch_id: Some(caller.clone()),
+                agent_name: "caller".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: Some("main".to_owned()),
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed the subagents caller");
+    let events = || env.store().read_events().expect("read events").len();
+    let seeded = events();
+    for wait in ["", "18446744073709551615s"] {
+        write_startup_relaunch_config(&env, &format!("startup-relaunch-wait = \"{wait}\""));
+        for args in [
+            vec!["agents", "codex"],
+            vec!["agents", "codex", "-p", "hello"],
+            vec!["subagents", "codex", "hello"],
+        ] {
+            let mut command = env.rimz();
+            if args[0] == "subagents" {
+                command
+                    .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+                    .env(rimz::harness::launch::ENV_AGENT_ID, caller.as_str());
+            }
+            let output = command.args(&args).output().expect("run launch");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{args:?} {wait:?}: {stderr}");
+            assert!(
+                stderr.contains("agents.startup-relaunch-wait")
+                    && stderr.contains("0s through 24h")
+                    && stderr.contains("rimz config set agents.startup-relaunch-wait 3s"),
+                "{args:?} {wait:?}: {stderr}"
+            );
+            assert!(
+                output.stdout.is_empty(),
+                "{args:?} {wait:?} printed a receipt"
+            );
+            assert_eq!(events(), seeded, "{args:?} {wait:?} appended launch events");
+        }
+    }
+}
+
 #[cfg(unix)]
 fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
     seed_launch(
