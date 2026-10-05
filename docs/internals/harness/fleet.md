@@ -444,7 +444,7 @@ The wrapper attaches the resumed session before the provider starts. Once the pr
 
 ## Reclaiming a pane
 
-When an agent exits, the resident [exec wrapper](#the-exec-wrapper) either leaves the pane usable or reclaims what automation owns. The decision turns on whether the exit was *deliberate* (`close_is_deliberate`).
+When an agent exits, the resident [exec wrapper](#the-exec-wrapper) either leaves the pane usable or reclaims what automation owns. The decision turns on whether the exit was *deliberate* (`close_is_deliberate`). A supervising wrapper traps hangup and termination from before its first pane binding, so a pane closed at any point after the store names it owner still reaches this decision; a wrapper that execs its provider in place keeps the default dispositions and leaves the end to the provider.
 
 ```text
 agent process exits
