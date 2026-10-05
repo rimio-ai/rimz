@@ -1324,6 +1324,250 @@ fn user_shell_subagents_list_inspects_the_channel() {
 
 #[cfg(unix)]
 #[test]
+fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
+    use rimz::store::message::{HarnessNotice, MessageSender};
+
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("planner-session");
+    let child_kind = AgentKind::new_unchecked("codex");
+    let child_id = AgentSessionId::from("gatekeeper-session");
+    let mut run = rimz::store::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        child_kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "gate the release".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = Some(child_id.clone());
+    run.agent_name = Some("still-silver".to_owned());
+    run.subagent = true;
+    run.status = rimz::store::run::RunStatus::Running;
+    rimz::harness::run::create(store.paths(), &run).expect("create open subagent run");
+    for (kind, id, name, launch) in [
+        (&parent_kind, &parent_id, "planner", LaunchParams::default()),
+        (
+            &child_kind,
+            &child_id,
+            "still-silver",
+            LaunchParams {
+                parent_agent_id: Some(parent_id.clone()),
+                parent_agent_kind: Some(parent_kind.clone()),
+                launch_depth: Some(1),
+                ..Default::default()
+            },
+        ),
+    ] {
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                kind,
+                AgentLaunchPayload {
+                    agent_id: id.clone(),
+                    launch_id: None,
+                    agent_name: name.to_owned(),
+                    agent_name_explicit: true,
+                    launch,
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .expect("seed agent row");
+    }
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            child_kind.as_str(),
+            "UserPromptSubmit",
+            &AgentLifecycleObservation::new(
+                Some(child_id.clone()),
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+        ))
+        .expect("start the child's turn");
+    // A progress hook after the turn start: the heartbeat runs ahead of the lifecycle clock.
+    let heartbeat = || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        rimz::agent_activity::touch(
+            &env.runtime_paths(),
+            child_kind.as_str(),
+            child_id.as_str(),
+            rimz::agent_activity::ToolRun::Reset,
+            true,
+        )
+        .expect("touch the child's heartbeat");
+        rimz::agent_activity::read_for_keys(
+            &env.runtime_paths(),
+            [(child_kind.as_str(), child_id.as_str())],
+        )[0]
+        .at
+    };
+    let child_activity = || {
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("read audit projection")
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id == child_id)
+            .expect("child row")
+            .last_activity
+    };
+    let list = || {
+        let output = env
+            .rimz()
+            .args(["subagents", "list", "--json"])
+            .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
+            .env(rimz::harness::launch::ENV_AGENT_ID, parent_id.as_str())
+            .output()
+            .expect("list as the parent");
+        assert!(
+            output.status.success(),
+            "list failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let rows: serde_json::Value = serde_json::from_slice(&output.stdout).expect("list json");
+        assert_eq!(rows.as_array().expect("list array").len(), 1, "{rows}");
+        rows[0].clone()
+    };
+    let notify = || {
+        let request = rimz::harness::park_notice::ParkNoticeRequest {
+            workspace_id: workspace.workspace_id.clone(),
+            run_id: run.run_id.clone(),
+        };
+        env.rimz()
+            .args(rimz::child_process::agent_helper_argv(
+                "park-notice",
+                &request,
+            ))
+            .assert()
+            .success();
+    };
+    // The agents the producer tick hands the detector: context and heartbeat folded.
+    let producer_owes_notice = || {
+        let runtime = env.runtime_paths();
+        let agents = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            workspace.workspace_id.clone(),
+            store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .expect("read audit projection")
+                .agents,
+            jiff::Timestamp::now(),
+        )
+        .with_agent_context(rimz::store::agent_context::read_all(&runtime))
+        .with_agent_activity(&rimz::agent_activity::read_all(&runtime))
+        .agents;
+        let run = rimz::harness::run::load(store.paths(), &run.run_id).expect("load run");
+        rimz::harness::park_notice::unnoticed_park(&run, &agents).is_some()
+    };
+    let seed_marker = |at: jiff::Timestamp| {
+        let mut context = rimz::agents::AgentContext::new(child_kind.as_str(), at);
+        context.turn_error = Some(rimz::agents::AgentTurnError {
+            class: rimz::agents::TurnErrorClass::Failed,
+            at,
+            label: Some("Usage limit reached".to_owned()),
+        });
+        rimz::store::agent_context::write_record(
+            &env.runtime_paths(),
+            &rimz::agents::context::record::AgentContextRecord::new(
+                child_kind.as_str(),
+                child_id.as_str(),
+                context,
+            ),
+        )
+        .expect("seed the limit marker");
+    };
+    let notices = || {
+        store
+            .list_messages()
+            .expect("list queued messages")
+            .into_iter()
+            .filter(|message| {
+                message.sender
+                    == MessageSender::Harness {
+                        notice: HarnessNotice::SubagentPaused,
+                    }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let row = list();
+    assert_eq!(row["status"], "running");
+    assert!(row.get("turn_error").is_none(), "{row}");
+    notify();
+    assert!(notices().is_empty(), "a working child sends no notice");
+
+    // Lifecycle D < heartbeat H < marker M. The legacy `failed` class reads as
+    // a limit only through the label mapping.
+    let parked_at = heartbeat();
+    assert!(
+        parked_at > child_activity(),
+        "the heartbeat leads the lifecycle"
+    );
+    seed_marker(parked_at + std::time::Duration::from_secs(1));
+    assert!(producer_owes_notice(), "the producer sees the park");
+
+    let row = list();
+    assert_eq!(row["name"], "still-silver");
+    assert_eq!(row["status"], "paused");
+    assert_eq!(row["run_status"], "running");
+    assert_eq!(row["turn_error"]["class"], "paused_rate_limit");
+    assert_eq!(row["turn_error"]["label"], "Usage limit reached");
+
+    notify();
+    notify();
+    let queued = notices();
+    assert_eq!(queued.len(), 1, "one notice per park: {queued:?}");
+    assert_eq!(queued[0].agent_id, parent_id);
+    assert!(
+        queued[0].text.contains("@still-silver") && queued[0].text.contains("Usage limit reached"),
+        "{}",
+        queued[0].text
+    );
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .expect("load run")
+            .park_noticed_activity,
+        Some(parked_at),
+        "the stamp names the park by the heartbeat the producer compares"
+    );
+    assert!(
+        !producer_owes_notice(),
+        "the producer stops spawning helpers once the park is claimed"
+    );
+    assert_eq!(
+        list()["run_status"],
+        "running",
+        "the notice leaves the run open"
+    );
+
+    // The child resumes, works, and parks again: a new park, a second notice.
+    let resumed_at = heartbeat();
+    seed_marker(resumed_at + std::time::Duration::from_secs(1));
+    assert!(producer_owes_notice(), "a later park is owed again");
+    notify();
+    notify();
+    assert_eq!(notices().len(), 2, "one notice per park");
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .expect("load run")
+            .park_noticed_activity,
+        Some(resumed_at)
+    );
+    assert!(!producer_owes_notice());
+}
+
+#[cfg(unix)]
+#[test]
 fn user_shell_subagent_entrypoints_do_not_create_room_state() {
     let env = Env::new();
     let state = env.state_path_for(&env.project_root);
