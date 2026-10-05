@@ -1061,6 +1061,66 @@ fn boundary_inspection_offers_an_agent_whose_owner_exits_within_the_bound() {
 }
 
 #[test]
+fn boundary_inspection_classes_an_owner_that_records_its_end_during_the_wait_as_ended() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let exiting = dir.path().join("exiting");
+    let fixture = Fixture::new(&[("exiting", &exiting, true)]);
+    let mut owner = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("owner process");
+    fixture.own("exiting", owner.id());
+
+    let inspection = std::thread::spawn({
+        let fixture_paths = (fixture.paths.clone(), fixture.runtime.clone());
+        let project = fixture.project.clone();
+        move || {
+            inspect_at(
+                fixture_paths.0,
+                fixture_paths.1,
+                Some("boot-a".to_owned()),
+                Vec::new(),
+                &project,
+                &MachineConfig::default(),
+                false,
+                Duration::from_secs(60),
+            )
+            .expect("inspect")
+        }
+    });
+    let held_from = Instant::now();
+    while held_from.elapsed() < Duration::from_millis(300) && !inspection.is_finished() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !inspection.is_finished(),
+        "the inspection returned while the owner was still live"
+    );
+    // The dying provider's own session-end hook lands while the inspection waits.
+    let mut end = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("exiting")),
+        LifecycleSignal::Ended,
+    );
+    end.agent_pid = Some(owner.id());
+    Store::open(fixture.paths.clone(), fixture.runtime.clone())
+        .expect("store")
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.paths.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionEnd",
+            &end,
+        ))
+        .expect("ended event");
+    drop(owner.stdin.take());
+    owner.wait().expect("owner exit");
+    let plan = inspection.join().expect("inspection");
+
+    assert_eq!(plan.preview().candidate_count(), 0);
+    assert_eq!(plan.ended, [key("exiting")].into());
+}
+
+#[test]
 fn boundary_inspection_stops_waiting_for_a_live_owner_at_the_bound() {
     let dir = tempfile::tempdir().expect("worktrees");
     let running = dir.path().join("running");
