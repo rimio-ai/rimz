@@ -140,6 +140,7 @@ pub(super) fn stamp_hosted_agent_processes(
     for pane in frame.pane_states_mut() {
         pane.current.hosted_agent_kind = None;
         pane.current.hosted_agent_process_start = None;
+        pane.current.hosted_agent_lineage.clear();
         pane.hosted_carry_since_ms = None;
         let Some(pid) = pane.current.pid else {
             continue;
@@ -149,6 +150,7 @@ pub(super) fn stamp_hosted_agent_processes(
         };
         pane.current.hosted_agent_kind = Some(process.kind);
         pane.current.hosted_agent_process_start = Some(process.started_at);
+        pane.current.hosted_agent_lineage = process.lineage;
         if pane.current.cwd.as_deref().is_none_or(|cwd| cwd.is_empty())
             && let Some(cwd) = displayable_cwd(process.cwd.as_ref())
         {
@@ -239,6 +241,10 @@ pub(super) fn carry_hosted_agent_stamps(
 
         fresh.current.hosted_agent_kind = Some(prior_kind.clone());
         fresh.current.hosted_agent_process_start = Some(prior_start);
+        fresh
+            .current
+            .hosted_agent_lineage
+            .clone_from(&prior.current.hosted_agent_lineage);
         fresh.hosted_carry_since_ms = Some(carried_since_ms);
     }
     drops
@@ -305,6 +311,7 @@ pub(super) fn drop_reused_pid_bindings(
             pane.current.started_at = None;
             pane.current.hosted_agent_kind = None;
             pane.current.hosted_agent_process_start = None;
+            pane.current.hosted_agent_lineage.clear();
             pane.hosted_carry_since_ms = None;
             pane.previous = None;
             pane.children.clear();

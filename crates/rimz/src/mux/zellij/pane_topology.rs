@@ -69,6 +69,7 @@ impl PaneTopologyCache {
                         pane_process_start: None,
                         hosted_agent_kind: None,
                         hosted_agent_process_start: None,
+                        hosted_agent_lineage: Vec::new(),
                         command,
                         foreground_cmdline: None,
                         spawn_command: pane.spawn_command().map(str::to_owned),

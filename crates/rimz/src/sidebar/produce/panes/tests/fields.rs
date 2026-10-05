@@ -263,6 +263,7 @@ fn stamp_hosted_qwen_process_ignores_foreground_command_and_probes_once() {
             pid: 777,
             started_at: start,
             cwd: None,
+            lineage: Vec::new(),
         })
     });
 
@@ -296,6 +297,7 @@ fn hosted_agent_process_fills_empty_cwd_for_wrapped_shell_pane() {
             pid: 3153567,
             started_at: start,
             cwd: Some(cwd.path().to_path_buf()),
+            lineage: vec![3153600, 3153601],
         })
     });
 
@@ -309,6 +311,10 @@ fn hosted_agent_process_fills_empty_cwd_for_wrapped_shell_pane() {
     );
     assert_eq!(pane.current.hosted_agent_process_start, Some(start));
     assert_eq!(pane.current.cwd.as_deref(), Some(expected.as_str()));
+    assert_eq!(pane.current.hosted_agent_lineage, [3153600, 3153601]);
+
+    stamp_hosted_agent_processes(&mut frame, &|_| None);
+    assert!(first(&frame).current.hosted_agent_lineage.is_empty());
 }
 
 #[test]
@@ -500,6 +506,7 @@ fn carried_hosted_stamp_survives_tmux_scan_miss_until_ttl() {
     first_mut(&mut prior).current.hosted_agent_kind =
         Some(crate::ids::AgentKind::new_unchecked("codex"));
     first_mut(&mut prior).current.hosted_agent_process_start = Some(agent_start);
+    first_mut(&mut prior).current.hosted_agent_lineage = vec![101, 102];
     let mut fresh = frame(vec![tmux_pane("git")]);
     first_mut(&mut fresh).current.pid = Some(100);
     fresh.rotate_against_prior(&prior);
@@ -532,6 +539,7 @@ fn carried_hosted_stamp_survives_tmux_scan_miss_until_ttl() {
         Some("codex")
     );
     assert_eq!(pane.current.hosted_agent_process_start, Some(agent_start));
+    assert_eq!(pane.current.hosted_agent_lineage, [101, 102]);
     assert_eq!(pane.hosted_carry_since_ms, Some(10));
 }
 
@@ -545,6 +553,7 @@ fn carried_hosted_stamp_drops_on_positive_child_start_mismatch() {
     first_mut(&mut frame).current.hosted_agent_kind =
         Some(crate::ids::AgentKind::new_unchecked("codex"));
     first_mut(&mut frame).current.hosted_agent_process_start = Some(expected);
+    first_mut(&mut frame).current.hosted_agent_lineage = vec![101, 102];
     first_mut(&mut frame).hosted_carry_since_ms = Some(10);
 
     drop_reused_pid_bindings(
@@ -563,6 +572,7 @@ fn carried_hosted_stamp_drops_on_positive_child_start_mismatch() {
     assert_eq!(pane.current.pid, None);
     assert!(pane.current.hosted_agent_kind.is_none());
     assert!(pane.current.hosted_agent_process_start.is_none());
+    assert!(pane.current.hosted_agent_lineage.is_empty());
     assert_eq!(pane.hosted_carry_since_ms, None);
 }
 

@@ -184,6 +184,7 @@ mod tests {
                             started_at: None,
                             hosted_agent_kind: None,
                             hosted_agent_process_start: None,
+                            hosted_agent_lineage: Vec::new(),
                             resumed_session_id: None,
                             elevated_agent: None,
                         },

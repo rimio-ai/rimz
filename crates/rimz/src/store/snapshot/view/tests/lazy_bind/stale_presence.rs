@@ -58,6 +58,7 @@ fn resumed_codex_pane_binds_the_matching_session_and_heals_stale_stamp() {
         pane_process_start: Some(epoch()),
         hosted_agent_kind: None,
         hosted_agent_process_start: None,
+        hosted_agent_lineage: Vec::new(),
         resumed_session_id: Some("sess-old".into()),
         ..pane("term1", "codex", "/repo/main")
     };
@@ -79,6 +80,7 @@ fn resumed_codex_pane_binds_the_matching_session_and_heals_stale_stamp() {
         pane_process_start: Some(ago(1)),
         hosted_agent_kind: None,
         hosted_agent_process_start: None,
+        hosted_agent_lineage: Vec::new(),
         resumed_session_id: Some("sess-old".into()),
         ..pane("term1", "codex", "/repo/main")
     };

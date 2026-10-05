@@ -507,6 +507,7 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
         pane_process_start: Some("2024-12-31T23:59:58Z".parse().unwrap()),
         hosted_agent_kind: None,
         hosted_agent_process_start: None,
+        hosted_agent_lineage: Vec::new(),
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,
