@@ -1,12 +1,14 @@
 //! A launched child parked on a provider limit, and the one notice its parent gets per park.
 //!
-//! This module only reads agent rows and run records. The detached helper
-//! claims the park on the run record and queues the notice.
+//! This module only reads agent rows and run records and spawns a hidden CLI
+//! helper. The helper claims the park on the run record and queues the notice,
+//! so the sidebar producer remains read-only on the store.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::auto_continue::limit_marker_active;
+use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::RunRecord;
@@ -45,6 +47,40 @@ pub fn unnoticed_park<'a>(run: &RunRecord, agents: &'a [AgentState]) -> Option<U
     let parent = crate::address::launched_parent(agents, child)
         .filter(|parent| parent.ended_at.is_none())?;
     Some(UnnoticedPark { child, parent })
+}
+
+fn notify_parents_with(
+    runs: &[RunRecord],
+    agents: &[AgentState],
+    workspace_id: &WorkspaceId,
+    mut spawn: impl FnMut(&ParkNoticeRequest),
+) {
+    for run in runs {
+        if unnoticed_park(run, agents).is_some() {
+            spawn(&ParkNoticeRequest {
+                workspace_id: workspace_id.clone(),
+                run_id: run.run_id.clone(),
+            });
+        }
+    }
+}
+
+/// Ask one short-lived helper per unnoticed park to tell the child's parent.
+/// The helper's locked claim settles a race between ticks.
+pub(crate) fn notify_parents(runs: &[RunRecord], agents: &[AgentState], runtime: &RuntimePaths) {
+    notify_parents_with(runs, agents, &runtime.workspace_id, |request| {
+        let args = crate::child_process::agent_helper_argv("park-notice", request);
+        if let Err(err) =
+            crate::child_process::spawn_detached_rimz(runtime, args, "subagent-park-notice")
+        {
+            tracing::debug!(
+                workspace = %runtime.workspace_id,
+                run_id = %request.run_id,
+                error = &err as &dyn std::error::Error,
+                "sidebar: failed to spawn subagent park notice helper",
+            );
+        }
+    });
 }
 
 /// The notice text: who parked, on what, how long the run stays open, and the parent's three moves.
@@ -193,6 +229,34 @@ mod tests {
         let (mut agents, run) = fresh();
         agents.remove(0);
         assert!(!eligible(&run, &agents), "missing parent");
+    }
+
+    #[test]
+    fn the_detector_asks_for_one_helper_per_unnoticed_park() {
+        let (agents, parked_run) =
+            parked(TurnErrorClass::PausedRateLimit, Some("Usage limit reached"));
+        let mut told = parked_run.clone();
+        told.run_id = RunId::new();
+        told.park_noticed_activity = Some(agents[1].last_activity);
+        let mut settled = parked_run.clone();
+        settled.run_id = RunId::new();
+        settled.status = RunStatus::Completed;
+        let workspace_id = parked_run.workspace_id.clone();
+
+        let mut asked = Vec::new();
+        notify_parents_with(
+            &[told, parked_run.clone(), settled],
+            &agents,
+            &workspace_id,
+            |request| asked.push(request.clone()),
+        );
+        assert_eq!(
+            asked,
+            [ParkNoticeRequest {
+                workspace_id,
+                run_id: parked_run.run_id,
+            }]
+        );
     }
 
     #[test]
