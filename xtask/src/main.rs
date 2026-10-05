@@ -121,7 +121,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "stress",
         summary: "Loop one test's own binary under CPU load and count the failing copies.",
-        runs: "cargo xtask stress <test> [--copies N] [--jobs N] [--hogs N] [--env KEY=VALUE]... [--out DIR]: build and locate the binary of the one test <test> names (as `test --name` takes it), then run --copies (400) of `<binary> --exact <test> --test-threads=1`, --jobs (2 x CPUs) at a time, in the test sandbox while --hogs (one per CPU) busy processes hold the CPUs; print the load average before and after and `failed: K/N`, keep each failing copy's output and summary.txt under --out (a fresh temp directory), and exit non-zero when a copy failed",
+        runs: "cargo xtask stress <test> [--copies N] [--jobs N] [--hogs N] [--env KEY=VALUE]... [--out DIR]: build and locate the binary of the one test <test> names (as `test --name` takes it), then run --copies (400) of `<binary> --exact <test> --test-threads=1`, --jobs (2 x CPUs) at a time, in the test sandbox while --hogs (one per CPU) busy processes hold the CPUs; print the load average before and after and `failed: K/N`, keep each failing copy's output and summary.txt under --out (a fresh temp directory; one that already holds run-*.out is refused), and exit non-zero when a copy failed or the batch stopped early, whose summary counts only the copies that completed",
     },
     TaskInfo {
         name: "test-archive",

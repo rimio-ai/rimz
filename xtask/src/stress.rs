@@ -12,7 +12,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -39,6 +39,7 @@ struct Report {
     text: String,
     failed: usize,
     summary: PathBuf,
+    stopped: Option<anyhow::Error>,
 }
 
 #[expect(
@@ -52,6 +53,8 @@ struct Report {
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     let cpus = thread::available_parallelism().map_or(1, usize::from);
     let options = parse(args, cpus)?;
+    let out = output_dir(options.out.as_deref())?;
+    eprintln!("output: {}", out.display());
     let sandbox = HostSandbox::for_tests(root)?;
     let test = gates::locate_test(root, &options.test, &sandbox)?;
     let executable = sandbox::self_executable()?;
@@ -60,9 +63,12 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
         command.arg(HOG_ARG);
         command
     };
-    let report = stress(root, &options, &test, &sandbox, cpus, &hog)?;
+    let report = stress(root, &options, &test, &sandbox, cpus, &out, &hog)?;
     print!("{}", report.text);
     eprintln!("summary: {}", report.summary.display());
+    if let Some(stopped) = report.stopped {
+        return Err(stopped);
+    }
     if report.failed > 0 {
         bail!("{} of {} copies failed", report.failed, options.copies);
     }
@@ -137,28 +143,47 @@ fn count(flag: &str, value: &str, least: usize) -> Result<usize> {
     }
 }
 
+/// The batch's output directory: the caller's or a fresh one, never removed.
+/// A directory an earlier batch kept copies in is refused untouched.
+fn output_dir(out: Option<&Path>) -> Result<PathBuf> {
+    match out {
+        Some(out) => {
+            fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+            let entries =
+                fs::read_dir(out).with_context(|| format!("reading {}", out.display()))?;
+            for entry in entries {
+                let name = entry
+                    .with_context(|| format!("reading {}", out.display()))?
+                    .file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("run-") && name.ends_with(".out") {
+                    bail!(
+                        "`--out` {} already holds run-*.out from an earlier batch, which this batch would mix with or overwrite\nNEXT: name an empty directory with `--out`, or omit it for a fresh one",
+                        out.display()
+                    );
+                }
+            }
+            Ok(out.to_path_buf())
+        }
+        None => Ok(tempfile::Builder::new()
+            .prefix("rimz-stress-")
+            .tempdir()
+            .context("creating the stress output directory")?
+            .keep()),
+    }
+}
+
 /// Run the batch, keep each failing copy's output, and write the summary
-/// beside them. The output directory is the caller's or a fresh one, and is
-/// never removed.
+/// beside them in `out`.
 fn stress(
     root: &Path,
     options: &Options,
     test: &LocatedTest,
     sandbox: &HostSandbox,
     cpus: usize,
+    out: &Path,
     hog: &dyn Fn() -> Command,
 ) -> Result<Report> {
-    let out = match &options.out {
-        Some(out) => {
-            fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-            out.clone()
-        }
-        None => tempfile::Builder::new()
-            .prefix("rimz-stress-")
-            .tempdir()
-            .context("creating the stress output directory")?
-            .keep(),
-    };
     let mut text = format!(
         "test: {}\nbinary: {}\ncommit: {}\ncopies: {}\njobs: {}\nhogs: {}\ncpus: {cpus}\n",
         test.name,
@@ -171,40 +196,82 @@ fn stress(
 
     text.push_str(&format!("load before: {}\n", load_average()));
     let hogs = Hogs::start(options.hogs, hog)?;
-    let kept = run_copies(options, test, sandbox, &out)?;
+    let batch = run_copies(options, test, sandbox, out);
     text.push_str(&format!("load after: {}\n", load_average()));
     drop(hogs);
 
-    text.push_str(&format!("failed: {}/{}\n", kept.len(), options.copies));
-    for path in &kept {
+    let failed = batch.failed.len();
+    let completed = batch.completed;
+    match &batch.error {
+        None => text.push_str(&format!("failed: {failed}/{}\n", options.copies)),
+        Some(_) => text.push_str(&format!(
+            "failed: {failed}/{completed} (batch stopped: {completed} of {} copies completed)\n",
+            options.copies
+        )),
+    }
+    for path in &batch.failed {
         text.push_str(&format!("{}\n", path.display()));
     }
+    for path in &batch.aborted {
+        text.push_str(&format!("aborted: {}\n", path.display()));
+    }
+    if let Some(error) = &batch.error {
+        let first = error.to_string();
+        text.push_str(&format!(
+            "error: {}\n",
+            first.lines().next().unwrap_or_default()
+        ));
+    }
     let summary = out.join("summary.txt");
-    fs::write(&summary, &text).with_context(|| format!("writing {}", summary.display()))?;
+    fs::write(&summary, &text).with_context(|| {
+        format!(
+            "writing {} after {completed} of {} copies completed, {failed} failed; their output stays under {}",
+            summary.display(),
+            options.copies,
+            out.display()
+        )
+    })?;
+    let stopped = batch.error.map(|error| {
+        error.context(format!(
+            "stress batch stopped after {completed} of {} copies completed, {failed} failed; output under {}",
+            options.copies,
+            out.display()
+        ))
+    });
     Ok(Report {
         text,
-        failed: kept.len(),
+        failed,
         summary,
+        stopped,
     })
 }
 
-/// The kept output of every failing copy, in copy order.
-fn run_copies(
-    options: &Options,
-    test: &LocatedTest,
-    sandbox: &HostSandbox,
-    out: &Path,
-) -> Result<Vec<PathBuf>> {
+/// What a batch left behind: the count of copies that ran to their end, the
+/// kept output of those that failed, and the output of copies a fatal error
+/// stopped part-way, each in copy order. An unrun copy is in none of them.
+#[derive(Default)]
+struct Batch {
+    completed: usize,
+    failed: Vec<PathBuf>,
+    aborted: Vec<PathBuf>,
+    error: Option<anyhow::Error>,
+}
+
+/// Run the copies until all have run or one hits a fatal error (the xtask
+/// budget, or I/O). After that no worker claims another copy, and the copies
+/// already running end on their own or by the same budget.
+fn run_copies(options: &Options, test: &LocatedTest, sandbox: &HostSandbox, out: &Path) -> Batch {
     let env = sandbox.command_env();
     let removed = sandbox.removed_test_env();
     let width = options.copies.to_string().len().max(3);
     let next = AtomicUsize::new(1);
-    let worker = || -> Result<Vec<PathBuf>> {
-        let mut kept = Vec::new();
-        loop {
+    let stop = AtomicBool::new(false);
+    let worker = || -> Batch {
+        let mut batch = Batch::default();
+        while !stop.load(Ordering::Relaxed) {
             let copy = next.fetch_add(1, Ordering::Relaxed);
             if copy > options.copies {
-                return Ok(kept);
+                break;
             }
             let mut command = Command::new(&test.binary);
             command
@@ -218,26 +285,44 @@ fn run_copies(
                 .env("RUST_BACKTRACE", "1")
                 .envs(options.env.iter().map(|(key, value)| (key, value)));
             let output = out.join(format!("run-{copy:0width$}.out"));
-            if !run_copy(&mut command, &output)? {
-                kept.push(output);
+            match run_copy(&mut command, &output) {
+                Ok(passed) => {
+                    batch.completed += 1;
+                    if !passed {
+                        batch.failed.push(output);
+                    }
+                }
+                Err(error) => {
+                    stop.store(true, Ordering::Relaxed);
+                    if output.exists() {
+                        batch.aborted.push(output);
+                    }
+                    batch.error = Some(error);
+                }
             }
         }
+        batch
     };
-    let mut kept = thread::scope(|scope| {
+    let mut batch = thread::scope(|scope| {
         let workers: Vec<_> = (0..options.jobs.min(options.copies))
             .map(|_| scope.spawn(worker))
             .collect();
-        let mut kept = Vec::new();
+        let mut batch = Batch::default();
         for worker in workers {
-            let result = worker
-                .join()
-                .map_err(|_| anyhow::anyhow!("stress worker panicked"))?;
-            kept.extend(result?);
+            let part = worker.join().unwrap_or_else(|_| Batch {
+                error: Some(anyhow::anyhow!("stress worker panicked")),
+                ..Batch::default()
+            });
+            batch.completed += part.completed;
+            batch.failed.extend(part.failed);
+            batch.aborted.extend(part.aborted);
+            batch.error = batch.error.or(part.error);
         }
-        anyhow::Ok(kept)
-    })?;
-    kept.sort();
-    Ok(kept)
+        batch
+    });
+    batch.failed.sort();
+    batch.aborted.sort();
+    batch
 }
 
 /// Run one copy with stdout and stderr together in `output`, which survives
@@ -245,12 +330,20 @@ fn run_copies(
 /// would block a pipe reader past the copy's exit; a file does not.
 fn run_copy(command: &mut Command, output: &Path) -> Result<bool> {
     let file = File::create(output).with_context(|| format!("creating {}", output.display()))?;
-    let mut child = command
+    let spawned = command
         .stdin(Stdio::null())
         .stdout(file.try_clone().context("sharing the copy's output file")?)
         .stderr(file)
-        .spawn()
-        .with_context(|| format!("running {}", command.get_program().display()))?;
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(error) => {
+            // A copy that never started has no output to keep.
+            let _ = fs::remove_file(output);
+            return Err(error)
+                .with_context(|| format!("running {}", command.get_program().display()));
+        }
+    };
     let status = loop {
         if let Some(status) = child.try_wait().context("waiting for a stress copy")? {
             break status;
@@ -258,6 +351,7 @@ fn run_copy(command: &mut Command, output: &Path) -> Result<bool> {
         if let Some(overrun) = deadline::overrun() {
             let _ = child.kill();
             let _ = child.wait();
+            append(output, &format!("stress: copy stopped: {overrun}"))?;
             bail!(
                 "{overrun}: stopped the stress batch\n{}",
                 overrun.next_step()
@@ -270,13 +364,16 @@ fn run_copy(command: &mut Command, output: &Path) -> Result<bool> {
         return Ok(true);
     }
     // A copy killed by a signal prints nothing about its own end.
+    append(output, &format!("stress: copy ended with {status}"))?;
+    Ok(false)
+}
+
+fn append(output: &Path, trailer: &str) -> Result<()> {
     let mut file = OpenOptions::new()
         .append(true)
         .open(output)
         .with_context(|| format!("reopening {}", output.display()))?;
-    writeln!(file, "\nstress: copy ended with {status}")
-        .with_context(|| format!("writing {}", output.display()))?;
-    Ok(false)
+    writeln!(file, "\n{trailer}").with_context(|| format!("writing {}", output.display()))
 }
 
 fn commit(root: &Path) -> String {
@@ -537,43 +634,87 @@ mkdir "$STUB_STATE/signal" 2>/dev/null && kill -KILL $$
 exit 0
 "#;
 
+    /// A batch of `copies` copies of `script`, `jobs` at a time, with its
+    /// output under `<dir>/out`; `STUB_STATE` names `dir`.
+    struct StubBatch {
+        _home: TempDir,
+        dir: PathBuf,
+        out: PathBuf,
+        binary: PathBuf,
+        options: Options,
+        test: LocatedTest,
+        sandbox: HostSandbox,
+    }
+
+    impl StubBatch {
+        fn new(script: &str, copies: usize, jobs: usize) -> Self {
+            let home = TempDir::new().unwrap();
+            let dir = home.path().canonicalize().unwrap();
+            let binary = dir.join("stub");
+            std::fs::write(&binary, script).unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let out = dir.join("out");
+            let options = Options {
+                test: "stub::test".to_owned(),
+                copies,
+                jobs,
+                hogs: 0,
+                env: vec![
+                    ("STUB_STATE".to_owned(), dir.display().to_string()),
+                    ("RIMZ_HOME".to_owned(), "/stub-home".to_owned()),
+                ],
+                out: Some(out.clone()),
+            };
+            let test = LocatedTest {
+                name: "stub::test".to_owned(),
+                binary: binary.clone(),
+                cwd: dir.clone(),
+            };
+            let sandbox = HostSandbox::for_tests(&dir).unwrap();
+            Self {
+                _home: home,
+                dir,
+                out,
+                binary,
+                options,
+                test,
+                sandbox,
+            }
+        }
+
+        fn run(&self) -> Result<Report> {
+            let out = output_dir(self.options.out.as_deref()).unwrap();
+            stress(
+                Path::new("."),
+                &self.options,
+                &self.test,
+                &self.sandbox,
+                4,
+                &out,
+                &|| Command::new("false"),
+            )
+        }
+
+        fn listing(&self) -> Vec<PathBuf> {
+            let mut listing: Vec<PathBuf> = std::fs::read_dir(&self.out)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect();
+            listing.sort();
+            listing
+        }
+    }
+
     #[test]
     fn a_batch_counts_exits_and_signal_deaths_and_keeps_only_their_output() {
-        let dir = TempDir::new().unwrap();
-        let dir = dir.path().canonicalize().unwrap();
-        let binary = dir.join("stub");
-        std::fs::write(&binary, STUB).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = dir.join("out");
-        let options = Options {
-            test: "stub::test".to_owned(),
-            copies: 6,
-            jobs: 3,
-            hogs: 0,
-            env: vec![
-                ("STUB_STATE".to_owned(), dir.display().to_string()),
-                ("RIMZ_HOME".to_owned(), "/stub-home".to_owned()),
-            ],
-            out: Some(out.clone()),
-        };
-        let test = LocatedTest {
-            name: "stub::test".to_owned(),
-            binary: binary.clone(),
-            cwd: dir.clone(),
-        };
-        let sandbox = HostSandbox::for_tests(&dir).unwrap();
+        let batch = StubBatch::new(STUB, 6, 3);
+        let (dir, out, binary) = (&batch.dir, &batch.out, &batch.binary);
 
-        let report = stress(Path::new("."), &options, &test, &sandbox, 4, &|| {
-            Command::new("false")
-        })
-        .unwrap();
+        let report = batch.run().unwrap();
 
         assert_eq!(report.failed, 2);
-        let mut kept: Vec<PathBuf> = std::fs::read_dir(&out)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect();
-        kept.sort();
+        assert!(report.stopped.is_none());
+        let mut kept = batch.listing();
         let summary = kept.pop().unwrap();
         assert_eq!(summary, out.join("summary.txt"));
         assert_eq!(std::fs::read_to_string(summary).unwrap(), report.text);
@@ -622,6 +763,155 @@ exit 0
             outputs.iter().any(|output| output.contains("signal: 9")),
             "{outputs:?}"
         );
+    }
+
+    /// Run serially: copy 1 exits 3, copy 2 passes, and copy 3 marks itself
+    /// started, which proves the first two completed, then hangs until killed.
+    const HANGING_STUB: &str = r#"#!/bin/sh
+mkdir "$STUB_STATE/exit" 2>/dev/null && exit 3
+mkdir "$STUB_STATE/pass" 2>/dev/null && exit 0
+echo "hanging copy started"
+mkdir "$STUB_STATE/hanging"
+exec sleep 120
+"#;
+
+    /// Bounds each wait in a test that drives a batch from outside; reaching
+    /// it means the batch is wedged, not slow.
+    const BATCH_LIVENESS: Duration = Duration::from_secs(60);
+
+    /// Wait for `done`, failing the test with `what` past the liveness bound.
+    fn wait_for(what: &str, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + BATCH_LIVENESS;
+        while !done() {
+            assert!(
+                Instant::now() < deadline,
+                "{what} within {BATCH_LIVENESS:?}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    // The budget arms once per process; nextest runs each test in its own, so
+    // this test owns the armed budget for the whole process. It stays unarmed
+    // until the hanging copy starts, then arms already spent.
+    #[test]
+    fn a_spent_budget_stops_the_batch_and_keeps_its_partial_count() {
+        let batch = StubBatch::new(HANGING_STUB, 6, 1);
+        let hanging = batch.dir.join("hanging");
+        let running = thread::spawn(move || {
+            let report = batch.run();
+            (batch, report)
+        });
+        wait_for("the third copy starts", || hanging.exists());
+
+        deadline::arm_with("stress", Some(Duration::from_millis(1)));
+
+        wait_for("the batch stops", || running.is_finished());
+        let (batch, report) = running.join().unwrap();
+        assert!(
+            report.is_ok(),
+            "a stopped batch reports what it ran: {:#}",
+            report.err().unwrap()
+        );
+        let report = report.unwrap();
+        let stopped = format!("{:#}", report.stopped.expect("the batch was stopped"));
+        assert!(
+            stopped.contains("stopped after 2 of 6 copies completed, 1 failed"),
+            "{stopped}"
+        );
+        assert!(stopped.contains("exceeded its 1ms budget"), "{stopped}");
+        assert!(stopped.contains("RIMZ_XTASK_TIMEOUT="), "{stopped}");
+        assert_eq!(report.failed, 1);
+
+        let mut listing = batch.listing();
+        let summary = listing.pop().unwrap();
+        assert_eq!(summary, batch.out.join("summary.txt"));
+        assert_eq!(std::fs::read_to_string(&summary).unwrap(), report.text);
+        assert_eq!(
+            listing,
+            [batch.out.join("run-001.out"), batch.out.join("run-003.out")],
+            "a passed copy and the unrun ones leave nothing"
+        );
+
+        let lines: Vec<&str> = report.text.lines().collect();
+        assert!(lines[8].starts_with("load after: "), "{}", report.text);
+        assert_eq!(
+            &lines[9..12],
+            [
+                "failed: 1/2 (batch stopped: 2 of 6 copies completed)".to_owned(),
+                listing[0].display().to_string(),
+                format!("aborted: {}", listing[1].display()),
+            ]
+        );
+        assert!(
+            lines[12].starts_with("error: xtask `stress` exceeded its 1ms budget after "),
+            "{}",
+            report.text
+        );
+        assert_eq!(lines.len(), 13, "{}", report.text);
+        let failed = std::fs::read_to_string(&listing[0]).unwrap();
+        assert!(failed.contains("exit status: 3"), "{failed}");
+        let aborted = std::fs::read_to_string(&listing[1]).unwrap();
+        assert!(aborted.contains("hanging copy started"), "{aborted}");
+        assert!(aborted.contains("stress: copy stopped"), "{aborted}");
+    }
+
+    /// Run serially: copy 1 exits 3, copy 2 passes and deletes the binary, so
+    /// copy 3 cannot start.
+    const VANISHING_STUB: &str = r#"#!/bin/sh
+mkdir "$STUB_STATE/exit" 2>/dev/null && exit 3
+rm "$0"
+exit 0
+"#;
+
+    #[test]
+    fn a_copy_that_cannot_start_stops_the_batch_and_keeps_its_partial_count() {
+        let batch = StubBatch::new(VANISHING_STUB, 6, 1);
+
+        let report = batch.run().unwrap();
+
+        let stopped = format!("{:#}", report.stopped.expect("the batch was stopped"));
+        assert!(
+            stopped.contains("stopped after 2 of 6 copies completed, 1 failed"),
+            "{stopped}"
+        );
+        assert!(
+            stopped.contains(&format!("running {}", batch.binary.display())),
+            "{stopped}"
+        );
+        assert_eq!(
+            batch.listing(),
+            [batch.out.join("run-001.out"), batch.out.join("summary.txt")],
+            "a copy that never started leaves nothing"
+        );
+        let lines: Vec<&str> = report.text.lines().collect();
+        assert_eq!(
+            &lines[9..],
+            [
+                "failed: 1/2 (batch stopped: 2 of 6 copies completed)".to_owned(),
+                batch.out.join("run-001.out").display().to_string(),
+                format!("error: running {}", batch.binary.display()),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_output_directory_holding_kept_copies_is_refused_untouched() {
+        let dir = TempDir::new().unwrap();
+        let kept = dir.path().join("run-007.out");
+        std::fs::write(&kept, "an earlier batch").unwrap();
+
+        let result = output_dir(Some(dir.path()));
+
+        assert!(result.is_err(), "a used directory is taken: {result:?}");
+        let err = result.unwrap_err().to_string();
+
+        assert!(err.contains("already holds run-*.out"), "{err}");
+        assert!(err.contains("NEXT: name an empty directory"), "{err}");
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "an earlier batch");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        let fresh = dir.path().join("fresh");
+        assert_eq!(output_dir(Some(&fresh)).unwrap(), fresh);
     }
 
     #[test]
