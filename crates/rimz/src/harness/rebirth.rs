@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
@@ -21,6 +22,12 @@ use crate::store::runtime::{AgentLiveness, agent_liveness};
 use crate::store::snapshot::find_agent;
 use crate::store::{live_roster, pending_recovery};
 use crate::{Store, channel};
+
+/// How long a boundary inspection waits for the dead room's agent processes:
+/// an exec wrapper holds its provider through two signal graces after the
+/// pane's hangup, and the margin covers a loaded host.
+const OWNER_EXIT_BOUND: Duration = Duration::from_secs(3);
+const OWNER_EXIT_POLL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RebirthErr {
@@ -203,6 +210,7 @@ impl RebirthPlan {
             project_root,
             machine,
             disabled,
+            OWNER_EXIT_BOUND,
         )
         .map_err(RebirthErr::Inspect)
     }
@@ -566,6 +574,10 @@ fn cancel_child_runs(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the boundary inspection's inputs, with the owner-exit bound a test shortens"
+)]
 fn inspect_at(
     paths: StatePaths,
     runtime: RuntimePaths,
@@ -574,7 +586,9 @@ fn inspect_at(
     project_root: &Path,
     machine: &MachineConfig,
     disabled: bool,
+    owner_exit_bound: Duration,
 ) -> Result<RebirthPlan> {
+    let owners_exited_by = Instant::now() + owner_exit_bound;
     let previous_boot = read_boot_marker(&paths.boot_marker);
     let reboot = boot_changed(previous_boot.as_deref(), current_boot.as_deref());
     let audit = Store::open_existing(paths.clone(), runtime.clone()).and_then(|store| {
@@ -624,6 +638,9 @@ fn inspect_at(
     tracing::debug!(workspace = %paths.workspace_id, roster = roster.len(), pending = scope.len(), reboot, "rebirth: recovery scope");
     scope.extend(roster.iter().cloned());
     let recovery_off = disabled || !machine.resume.on_rebirth;
+    if let Some((_, projection)) = &audit {
+        await_owner_exits(&projection.agents, &scope, owners_exited_by);
+    }
     let (candidates, ended, planned) = plan_settlement(
         audit.as_ref().map(|(_, projection)| projection),
         &paths,
@@ -650,6 +667,24 @@ fn inspect_at(
         requires_sandbox,
         empty_tabs,
     })
+}
+
+/// Blocks until no agent a settlement could offer (in `scope`, not ended) has a
+/// live owner, or `deadline` passes. The room these owners ran in is gone, so
+/// a live one is on its wrapper's exit ladder; the wrapper owns the kill.
+fn await_owner_exits(
+    agents: &[AgentState],
+    scope: &BTreeSet<(AgentKind, AgentSessionId)>,
+    deadline: Instant,
+) {
+    let exiting = |agent: &AgentState| {
+        agent.ended_at.is_none()
+            && scope.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+            && matches!(agent_liveness(agent), AgentLiveness::Live { .. })
+    };
+    while agents.iter().any(exiting) && Instant::now() < deadline {
+        std::thread::sleep(OWNER_EXIT_POLL);
+    }
 }
 
 fn inspect_live_at(
