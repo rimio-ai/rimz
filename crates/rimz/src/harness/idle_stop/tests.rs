@@ -6,7 +6,7 @@ use crate::agents::{
 use crate::ids::MuxName;
 use crate::store::idle_stop::IdleStopRequest;
 use crate::store::message::{DeliveryGate, MessageRecord, MessageStatus};
-use crate::store::run::{PeerRun, RunRecord, RunStatus};
+use crate::store::run::{PeerRun, ReportTo, RunRecord, RunStatus};
 use crate::store::snapshot::PaneAgent;
 
 fn ts(seconds: i64) -> Timestamp {
@@ -497,6 +497,45 @@ fn a_launched_child_holds_until_its_answer_is_collected() {
             verdict(&store, &agent, &stop, DUE),
             expected,
             "{status:?} joined={joined}"
+        );
+    }
+}
+
+#[test]
+fn a_detached_child_holds_the_tree_while_it_works_and_owes_nothing_after() {
+    for (run_status, child_status, expected) in [
+        (
+            RunStatus::Running,
+            AgentStatus::Running,
+            Verdict::Hold(Hold::Tree),
+        ),
+        (
+            RunStatus::Completed,
+            AgentStatus::Idle,
+            Verdict::Stop { idle_secs: 180 },
+        ),
+    ] {
+        let (dir, store) = fixture();
+        let (agent, stop) = rested();
+        register(&store, "session-1", None);
+        register(&store, "child", Some(&agent));
+        let mut run = RunRecord::new(
+            store.paths().workspace_id.clone(),
+            agent.kind.clone(),
+            PermissionMode::Auto,
+            "work".to_owned(),
+            dir.path().to_owned(),
+        );
+        run.agent_id = Some("child".into());
+        run.report_to = ReportTo::Nobody;
+        run.status = run_status;
+        super::super::run::create(store.paths(), &run).expect("run");
+        let mut child = kept_child(&agent, "child");
+        child.status = child_status;
+        assert_eq!(
+            decide(&store, &[agent.clone(), child], &agent, &stop, ts(DUE)).expect("decide"),
+            expected,
+            "{run_status:?}: a detached answer is owed to nobody, a working child is still closed"
         );
     }
 }

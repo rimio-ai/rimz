@@ -1785,3 +1785,92 @@ fn startup_relaunch_is_due_only_for_an_unobserved_first_nonzero_exit() {
         assert!(!startup_relaunch_due(&observed, died), "{status:?}");
     }
 }
+
+#[test]
+fn a_detached_background_run_publishes_its_response_at_the_terminal_write() {
+    let (_dir, paths, mut record) = setup();
+    record.report_to = ReportTo::Nobody;
+    record.agent_name = Some("worker".into());
+    record.agent_id = Some("worker".into());
+    record.reader = Some("launcher".into());
+    create(&paths, &record).unwrap();
+    record_lifecycle(
+        &paths,
+        &record.run_id,
+        "claude",
+        &turn_end("worker"),
+        Some("detached answer".into()),
+        || None,
+    )
+    .unwrap();
+    assert!(load(&paths, &record.run_id).unwrap().status.is_terminal());
+    let path = paths.out_reader_dir(Some("launcher")).join("worker.output");
+    assert_eq!(
+        std::fs::read_to_string(&path).ok().as_deref(),
+        Some("detached answer\n"),
+        "no fleet reporter publishes a detached run, so its terminal write must"
+    );
+}
+
+#[test]
+fn a_detached_answer_is_dropped_when_its_subagent_reopens_attached() {
+    let (_dir, paths, mut record) = setup();
+    record.subagent = true;
+    record.report_to = ReportTo::Nobody;
+    record.agent_id = Some("child".into());
+    record.status = RunStatus::Completed;
+    record.completed_at = Some(record.started_at);
+    record.last_message = Some("detached answer".into());
+    create(&paths, &record).unwrap();
+    let observation = AgentLifecycleObservation::new(
+        Some("child".into()),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+        None
+    })
+    .unwrap();
+    let reopened = load(&paths, &record.run_id).unwrap();
+    assert_eq!(reopened.status, RunStatus::Running);
+    assert_eq!(reopened.follow_ups, 1);
+    assert_eq!(
+        reopened.report_to,
+        ReportTo::Launcher,
+        "the follow-up is its launcher's again"
+    );
+    assert!(
+        reopened.earlier_answers.is_empty(),
+        "the detached answer joins no later digest"
+    );
+    let settled = record_lifecycle(
+        &paths,
+        &record.run_id,
+        "claude",
+        &turn_end("child"),
+        Some("follow-up answer".into()),
+        || None,
+    )
+    .unwrap()
+    .expect("the follow-up turn settles the run");
+    let owed = settled
+        .answer_claims()
+        .filter(|claim| claim.owed)
+        .map(|claim| claim.ordinal)
+        .collect::<Vec<_>>();
+    assert_eq!(owed, [2], "only the follow-up answer is reported");
+}
+
+#[test]
+fn a_detached_team_run_reopens_detached() {
+    let (_dir, paths, _) = setup();
+    let mut first = team_record(&paths, "forge#x");
+    first.report_to = ReportTo::Nobody;
+    create(&paths, &first).unwrap();
+    settle_team_run(&paths, &first.run_id, None, None)
+        .unwrap()
+        .expect("Done settles the detached run");
+    let reopened = reopen_team_run(&paths, "forge#x")
+        .unwrap()
+        .expect("leaving Done opens the next stretch");
+    assert_eq!(reopened.report_to, ReportTo::Nobody);
+}

@@ -173,7 +173,7 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
                     },
                 })
                 .collect();
-            for run in fleet::open_team_runs(&snapshot.agents, &runs, agent) {
+            for run in fleet::owed_team_runs(&snapshot.agents, &runs, agent) {
                 let Some(team) = &run.team else { continue };
                 let stage = crate::harness::scratch::board_stage(&run.worktree_path)
                     .map(|stage| stage.name);
@@ -391,6 +391,21 @@ mod tests {
                 .all(|wait| !matches!(wait.trigger, PendingWaitTrigger::Team { .. })),
             "a board at Done projects no team wait"
         );
+        std::fs::remove_file(dir.path().join("blackboard.md")).unwrap();
+        for run in &mut runs {
+            run.report_to = run::ReportTo::Nobody;
+            run::write(&paths.runs_dir, run).unwrap();
+        }
+        snapshot.agents[0].pending_waits.clear();
+        project_run_waits(&mut snapshot, &paths);
+        assert_eq!(
+            snapshot.agents[0].pending_waits,
+            Vec::new(),
+            "detached launches leave their launcher waiting on nothing"
+        );
+        for run in &mut runs {
+            run.report_to = run::ReportTo::Launcher;
+        }
         for (index, run) in runs.iter_mut().enumerate() {
             run.status = RunStatus::Completed;
             if index == 0 {

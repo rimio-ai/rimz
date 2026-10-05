@@ -417,6 +417,7 @@ fn reject_launch_flags_without_name(
         || launch.budget.is_some()
         || launch.bg
         || launch.new_tab
+        || launch.detach
     {
         bail!("team launch options require a team name");
     }
@@ -820,7 +821,11 @@ mod tests {
 
     #[test]
     fn launch_flags_without_a_team_name_are_rejected() {
-        for argv in [vec!["rimz", "-w", "feat-x"], vec!["rimz", "--fresh"]] {
+        for argv in [
+            vec!["rimz", "-w", "feat-x"],
+            vec!["rimz", "--fresh"],
+            vec!["rimz", "--detach"],
+        ] {
             let args = parse_teams(&argv);
             let error = reject_launch_flags_without_name(&args.prompt, &args.launch)
                 .expect_err("missing team");

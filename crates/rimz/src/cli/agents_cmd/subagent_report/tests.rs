@@ -966,3 +966,60 @@ fn dismissing_every_row_of_a_queued_digest_cancels_it() {
     assert_eq!(history[0].message_id, message_id);
     assert_eq!(history[0].status, MessageStatus::Canceled);
 }
+
+#[test]
+fn a_running_detached_sibling_neither_holds_nor_joins_the_digest() {
+    let (_dir, workspace, store) = fixture();
+    append_agent(&store, "parent", None);
+    for name in ["a", "b"] {
+        append_agent(&store, name, Some("parent"));
+    }
+    let mut attached = child_run(&workspace.workspace_id, "a", RunStatus::Completed);
+    attached.last_message = Some("attached answer".into());
+    let mut detached = child_run(&workspace.workspace_id, "b", RunStatus::Running);
+    detached.report_to = rimz::store::run::ReportTo::Nobody;
+    for record in [&attached, &detached] {
+        run::create(store.paths(), record).unwrap();
+    }
+    assert!(matches!(
+        report_settled_child(&workspace, &store, &attached).unwrap(),
+        ReportOutcome::Queued { .. }
+    ));
+    let messages = store.list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    let digest = &messages[0].text;
+    assert!(digest.starts_with("Your subagent settled:"), "{digest}");
+    assert!(digest.contains("- @a:"), "{digest}");
+    assert!(!digest.contains("@b"), "{digest}");
+
+    let observation = AgentLifecycleObservation::new(
+        Some("b".into()),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    let detached = run::record_lifecycle(
+        store.paths(),
+        &detached.run_id,
+        "codex",
+        &observation,
+        Some("detached answer".into()),
+        || None,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        report_settled_child(&workspace, &store, &detached).unwrap(),
+        ReportOutcome::NothingToReport
+    );
+    assert_eq!(store.list_messages().unwrap().len(), 1);
+    let detached = run::load(store.paths(), &detached.run_id).unwrap();
+    assert!(detached.report_message_id.is_none());
+    assert_eq!(
+        std::fs::read_to_string(response_path(store.paths(), &detached).unwrap()).unwrap(),
+        "detached answer\n",
+        "the response file is published without a report"
+    );
+}

@@ -566,10 +566,15 @@ pub(in crate::cli) fn launch_resolved(
             description: args.launch.cohort.description.clone(),
         },
     )?;
-    let peer_prompt = prepare_peer_prompt(store, launch_batch.identities(), &launch.cwd)
-        .inspect_err(|_| {
-            let _ = store.fail_agent_launch_batch(&launch_batch);
-        })?;
+    let peer_prompt = prepare_peer_prompt(
+        store,
+        launch_batch.identities(),
+        &launch.cwd,
+        super::report_to(args.launch.cohort.detach),
+    )
+    .inspect_err(|_| {
+        let _ = store.fail_agent_launch_batch(&launch_batch);
+    })?;
     let fail_peer_prompt = || {
         if let Some((peer, _)) = &peer_prompt {
             match rimz::harness::run::fail_peer_run(store, peer, "peer launch failed") {
@@ -686,6 +691,7 @@ fn prepare_peer_prompt(
     store: &rimz::Store,
     identities: &[AgentLaunchIdentity],
     cwd: &Path,
+    report_to: rimz::store::run::ReportTo,
 ) -> Result<Option<(AgentState, rimz::store::run::RunRecord)>> {
     let Some(identity) = identities.iter().find(|identity| {
         identity.launch.launched_by.is_some()
@@ -723,6 +729,7 @@ fn prepare_peer_prompt(
         adapter,
         identity.prompt.as_deref().unwrap_or_default(),
         cwd,
+        report_to,
     )?;
     Ok(run.map(|run| (peer.clone(), run)))
 }
@@ -737,7 +744,27 @@ fn write_peer_receipt(
         && let Some(name) = run.agent_name.as_deref()
         && let Some(response) = rimz::harness::run::response_path(paths, run)
     {
-        if let Some(team) = run.team.as_ref() {
+        let detached = run.report_to == rimz::store::run::ReportTo::Nobody;
+        if let Some(team) = run.team.as_ref()
+            && detached
+        {
+            writeln!(
+                w,
+                "@{name} leads {instance}, detached: no TEAM_REPORT reaches you and nothing holds your turn. When its board at {} reaches Done, the leader's final response lands at {}. The team keeps its panes. To block until Done: rimz teams wait {instance}",
+                run.worktree_path
+                    .join(rimz::harness::board::BOARD_FILE)
+                    .display(),
+                response.display(),
+                instance = team.instance,
+            )?;
+        } else if detached {
+            writeln!(
+                w,
+                "@{name} runs detached: no AGENT_REPORT reaches you for this launch and nothing holds your turn; a message to it after this launch turn settles reports as usual, while one that lands before then joins this unreported answer. Its response lands at {} when this turn settles. The peer keeps its pane. To read it: rimz agents wait {}",
+                response.display(),
+                run.run_id
+            )?;
+        } else if let Some(team) = run.team.as_ref() {
             writeln!(
                 w,
                 "@{name} leads {instance}. When its board reaches Done, a TEAM_REPORT from @rimz arrives at your next turn boundary with the leader's final response at {} and the team's board path; the seats do not report their turns. The team keeps its panes. To block instead: rimz teams wait {instance}",
@@ -1466,6 +1493,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.launch.cohort.bg
         || args.launch.new_pane
         || args.launch.cohort.new_tab
+        || args.launch.cohort.detach
         || args.launch.cohort.resume
         || args.launch.cohort.fresh
         || args.launch.overrides.ask

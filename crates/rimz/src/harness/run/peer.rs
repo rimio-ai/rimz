@@ -8,7 +8,7 @@ use crate::disk::paths::StatePaths;
 use crate::ids::AgentSessionId;
 use crate::store::Store;
 use crate::store::message::{MessageRecord, MessageSender};
-use crate::store::run::{PeerRun, RunStatus, RunStoreErr};
+use crate::store::run::{PeerRun, ReportTo, RunStatus, RunStoreErr};
 use crate::store::writer::DeliveryAckMatch;
 
 use super::{RecordMutation, Result, RunRecord};
@@ -19,6 +19,7 @@ pub fn peer_can_report(adapter: &AgentDefinition) -> bool {
 }
 
 /// `reader` is the launcher's handle, whose `out/` directory receives the response.
+/// `report_to` is stamped on a record this call creates; an open run it reuses keeps its own.
 pub fn create_peer_prompt(
     paths: &StatePaths,
     peer: &AgentState,
@@ -26,9 +27,10 @@ pub fn create_peer_prompt(
     adapter: &AgentDefinition,
     prompt: &str,
     cwd: &Path,
+    report_to: ReportTo,
 ) -> Result<Option<RunRecord>> {
     if peer.is_team_seat() {
-        return super::team::create_team_run(paths, peer, reader, adapter, prompt, cwd);
+        return super::team::create_team_run(paths, peer, reader, adapter, prompt, cwd, report_to);
     }
     let Some(launch_id) = peer_launch_id(peer) else {
         return Ok(None);
@@ -40,7 +42,8 @@ pub fn create_peer_prompt(
     if let Some(record) = open_peer_run(paths, peer)? {
         return Ok(Some(record));
     }
-    let record = new_peer_record(paths, peer, reader, launch_id, prompt.to_owned(), cwd);
+    let mut record = new_peer_record(paths, peer, reader, launch_id, prompt.to_owned(), cwd);
+    record.report_to = report_to;
     crate::store::run::write(&paths.runs_dir, &record)?;
     Ok(Some(record))
 }

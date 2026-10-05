@@ -25,7 +25,7 @@ use crate::disk::paths::StatePaths;
 use crate::harness::owed::OwedWake;
 use crate::ids::{AgentSessionId, PaneId, RunId};
 use crate::store::run::{
-    EarlierAnswer, FollowUpTurn, RunRecord, RunStatus, RunStoreErr, RunVerify,
+    EarlierAnswer, FollowUpTurn, ReportTo, RunRecord, RunStatus, RunStoreErr, RunVerify,
 };
 use crate::store::{
     Store,
@@ -173,6 +173,7 @@ pub struct SupervisedRunRequest {
     pub warn: Vec<std::time::Duration>,
     pub grace: Option<std::time::Duration>,
     pub keep: bool,
+    pub report_to: ReportTo,
     pub retries: u32,
     pub verify: Option<String>,
     pub max_attempts: Option<u32>,
@@ -221,6 +222,7 @@ impl SupervisedRunRequest {
             warn: Vec::new(),
             grace: None,
             keep: false,
+            report_to: ReportTo::Launcher,
             retries: 0,
             verify: None,
             max_attempts: None,
@@ -388,9 +390,13 @@ fn update_record<T>(
         RecordMutation::Write(outcome) => {
             record.updated_at = now;
             // Waiters read the record unlocked, so a terminal record must imply its file.
+            // A detached plain run is outside the fleet, so this is its only publisher.
             if !was_terminal
                 && record.status.is_terminal()
-                && (record.subagent || record.peer.is_some() || record.team.is_some())
+                && (record.subagent
+                    || record.peer.is_some()
+                    || record.team.is_some()
+                    || record.report_to == ReportTo::Nobody)
                 && let Err(err) = publish_response(paths, &record)
             {
                 tracing::warn!(run_id = %record.run_id, error = %err, "publishing subagent response failed");
@@ -842,7 +848,8 @@ fn fold_lifecycle(
         record
             .earlier_answers
             .retain(|answer| answer.joined_at.is_none());
-        if record.joined_at.is_none() {
+        // A detached answer was owed to nobody; the follow-up is the launcher's.
+        if record.joined_at.is_none() && record.report_to == ReportTo::Launcher {
             record.earlier_answers.push(EarlierAnswer {
                 ordinal: record.follow_ups + 1,
                 status: record.status,
@@ -863,6 +870,7 @@ fn fold_lifecycle(
                 .deadline_at
                 .map(|deadline| now + (deadline - started_at))
         });
+        record.report_to = ReportTo::Launcher;
         record.follow_ups += 1;
         record.follow_up = Some(FollowUpTurn {
             started_at: now,

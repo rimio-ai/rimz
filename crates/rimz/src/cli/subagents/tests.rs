@@ -63,6 +63,32 @@ fn parse(argv: &[&str]) -> SubagentsArgs {
 }
 
 #[test]
+fn detach_parses_on_launch_and_fanout_and_refuses_wait() {
+    let launch = parse(&["subagents", "claude", "Task", "--detach", "--keep"]);
+    assert!(launch.launch.detach && launch.launch.keep);
+    let Some(SubagentsSubcmd::Fanout(fanout)) =
+        parse(&["subagents", "fanout", "--detach", "--wait"]).command
+    else {
+        panic!("fanout parses")
+    };
+    assert!(fanout.detach);
+    assert_eq!(
+        reject_detach_with_wait(fanout.detach, fanout.wait.is_some())
+            .expect_err("refuse a detached wait")
+            .to_string(),
+        "--detach cannot be combined with --wait: a detached launch holds nobody; drop --detach to block on the result, or drop --wait and run `rimz subagents wait <name>` later"
+    );
+    reject_detach_with_wait(true, false).expect("detached");
+    reject_detach_with_wait(false, true).expect("waited");
+    assert_eq!(
+        reject_launch_flags_without_spec(&parse(&["subagents", "--detach"]).launch)
+            .expect_err("no profile")
+            .to_string(),
+        "subagent launch options require a profile"
+    );
+}
+
+#[test]
 fn launch_accepts_hyphen_prompt_and_flags() {
     for verb in [false, true] {
         for prompt in ["--dry-run first", "-x", "-"] {

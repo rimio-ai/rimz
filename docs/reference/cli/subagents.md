@@ -47,6 +47,7 @@ rimz subagents wait "$first" "$second"
 | `--warn <OFFSETS>` | `[agents.subagents] warn`, `6m,3m` | Comma-separated warning offsets before the deadline; `none` disables warnings. |
 | `--grace <DURATION>` | `[agents.subagents] grace`, `3m` | Time to finish reporting after the deadline; `0s` kills at the deadline. |
 | `--keep` | off | Disable automatic completion cleanup and cleanup on parent exit; hold the pane after provider exit. Explicit stop and the run timeout still apply. |
+| `--detach` | off | Launch without a report: the child stays out of the [fleet report](#the-fleet-report), never holds the parent's turn or run open, and outlives the parent's exit. Its pane closes when it finishes; `subagents wait <name>` still reads the answer. Refused with `--wait`. |
 | `--isolation host\|sandbox` | the parent's recorded override, else the child's profile default, else `agents.isolation` | A sandboxed parent refuses a host override; host defaults clamp to sandbox with a note. |
 | `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
 | `--model`, `--tier`, `--agent`, `--effort`, `--max-turns`, `-- <ARGS>` | from the profile | Override the concrete model or tier (mutually exclusive), prefer another family or re-base onto another profile or kind, set reasoning effort, cap agentic turns, or append provider argv. |
@@ -105,7 +106,7 @@ JSON
 | `effort` | no | Reasoning effort |
 | `max_turns` | no | Maximum agentic turns |
 
-For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout flag, which wins over `[agents.subagents]`. `--keep` applies to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's recorded override, otherwise follows its own definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
+For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout flag, which wins over `[agents.subagents]`. `--keep` and `--detach` apply to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's recorded override, otherwise follows its own definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
 
 | Mode | stdout |
 | --- | --- |
@@ -121,6 +122,8 @@ A launch that fails partway stops the remaining launches. The error names the ch
 ## The fleet report
 
 Launcher-opened turns of persistent interactive peers also join this fleet. Every unreported turn retains its own response at `out/<launcher>/<name>.<run_id>.output`, with that turn's prompt as its task and its own elapsed time. Two rows can name the same peer. An open peer run delays the whole fleet report; a user-typed turn without an open peer run does not. These rows use the `background agent` heading and never close the peer's pane.
+
+A child launched with `--detach` is outside the fleet. It adds no row and does not delay the report for the children beside it, the parent is not held open or shown as waiting for it, and its launch receipt says no report will arrive. Its response file is written when it settles, and `subagents wait <name>` joins it on purpose. A follow-up message to a detached child opens an ordinary reported turn; the detached answer itself appears in no report. A detached child survives its parent's exit, but `subagents stop` and a stop of the parent still stop it, and `agents stop --when-idle` on the parent waits while it works.
 
 A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet; a fleet containing any solo agent run gets `AGENT_REPORT` instead. The message is parked and delivered at the parent's next turn boundary:
 

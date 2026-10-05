@@ -296,6 +296,22 @@ mod tests {
                 .joined_at,
             joined.joined_at
         );
+        let mut detached = record.clone();
+        detached.run_id = RunId::new();
+        detached.report_to = crate::store::run::ReportTo::Nobody;
+        super::super::create(&paths, &detached).unwrap();
+        assert!(
+            mark_joined_record(&paths, &detached.run_id, Some(1))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            super::super::load(&paths, &detached.run_id)
+                .unwrap()
+                .joined_at
+                .is_some(),
+            "an explicit join still claims a detached answer"
+        );
         let mut sibling = record.clone();
         sibling.run_id = RunId::new();
         super::super::create(&paths, &sibling).unwrap();

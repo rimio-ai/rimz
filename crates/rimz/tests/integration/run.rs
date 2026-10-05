@@ -1838,6 +1838,66 @@ mod parked {
         );
     }
 
+    /// The consumer's decision: the launcher's turn-end fold reads the live
+    /// child's run and either parks on its report or finishes without it.
+    #[test]
+    fn detached_live_child_lets_its_launcher_finish_while_the_attached_twin_parks() {
+        use rimz::store::run::ReportTo;
+        for report_to in [ReportTo::Nobody, ReportTo::Launcher] {
+            let env = Env::new();
+            if env.skip_if_sandboxed() {
+                return;
+            }
+            let fixture = Fixture::new(env);
+            let mut child = RunRecord::new(
+                fixture.env.workspace_id.clone(),
+                AgentKind::new_unchecked("codex"),
+                PermissionMode::Auto,
+                "child task".to_owned(),
+                fixture.env.project_root.clone(),
+            );
+            child.agent_id = Some("child-session".into());
+            child.agent_name = Some("helper".to_owned());
+            child.subagent = true;
+            child.status = RunStatus::Running;
+            child.report_to = report_to;
+            rimz::harness::run::create(fixture.store.paths(), &child).expect("create live child");
+            let mut observation =
+                AgentLifecycleObservation::new(child.agent_id.clone(), LifecycleSignal::Registered);
+            observation.agent_name = child.agent_name.clone();
+            observation.pane_id = Some(PaneId::parse("tmux:%2").expect("child pane"));
+            observation.launch = LaunchParams {
+                parent_agent_id: Some("launch-session".into()),
+                parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                launch_depth: Some(1),
+                ..LaunchParams::default()
+            };
+            fixture
+                .store
+                .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: child.kind.clone(),
+                    event_name: "test",
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .expect("register launched child");
+            fixture.hook("Stop", "");
+            if report_to == ReportTo::Launcher {
+                fixture.assert_parked();
+                continue;
+            }
+            fixture.assert_terminal(RunStatus::Completed);
+            assert_eq!(
+                rimz::harness::run::load(fixture.store.paths(), &child.run_id)
+                    .expect("load child")
+                    .status,
+                RunStatus::Running,
+                "the detached child is still working when its launcher completes"
+            );
+        }
+    }
+
     #[test]
     fn live_child_keeps_parent_open_until_report_turn_finishes() {
         let env = Env::new();

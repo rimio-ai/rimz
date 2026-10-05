@@ -959,6 +959,47 @@ mod parse {
     }
 
     #[test]
+    fn detach_is_refused_where_no_launch_report_exists_to_drop() {
+        for (argv, error) in [
+            (
+                &["rimz", "claude", "hi", "-p", "--detach"][..],
+                "--detach on `-p` requires --bg: a foreground run prints its answer inline; add --bg, or drop --detach",
+            ),
+            (
+                &["rimz", "claude", "--resume", "--detach"],
+                "--detach cannot be combined with --resume: a resumed cohort has no launch task to detach; drop --detach",
+            ),
+            (
+                &["rimz", "claude", "--detach"],
+                "--detach requires a prompt: without a launch task no report is owed; add a prompt, or drop --detach",
+            ),
+            (
+                &["rimz", "claude", " \t", "--detach"],
+                "--detach requires a prompt: without a launch task no report is owed; add a prompt, or drop --detach",
+            ),
+        ] {
+            let args = parse_agents(argv);
+            let err = validate_detach(&args.launch, args.launch.print).expect_err("refuse detach");
+            assert_eq!(err.to_string(), error, "{argv:?}");
+        }
+        for argv in [
+            &["rimz", "claude", "hi", "--detach"][..],
+            &["rimz", "claude", "hi", "-p", "--bg", "--detach"],
+            &["rimz", "claude", "--resume"],
+            &["rimz", "claude", "-p"],
+        ] {
+            let args = parse_agents(argv);
+            validate_detach(&args.launch, args.launch.print)
+                .unwrap_or_else(|err| panic!("{argv:?}: {err:#}"));
+        }
+        let loop_check = parse_agents(&["rimz", "claude", "hi", "--detach"]);
+        assert!(
+            validate_detach(&loop_check.launch, true).is_err(),
+            "a loop check is a foreground print run whatever its flags say"
+        );
+    }
+
+    #[test]
     fn launch_preconditions_reject_missing_or_ambiguous_specs() {
         for (argv, fragment) in [
             (&["rimz", "--worktree=docs"][..], "--worktree requires"),
@@ -969,6 +1010,7 @@ mod parse {
             (&["rimz", "--fresh"], "require an agent spec"),
             (&["rimz", "--isolation", "sandbox"], "require an agent spec"),
             (&["rimz", "-p", "--max-turns", "3"], "require an agent spec"),
+            (&["rimz", "--detach"], "require an agent spec"),
         ] {
             let args = parse_agents(argv);
             let err = reject_launch_flags_without_spec(&args).expect_err("reject flag");

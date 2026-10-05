@@ -1,4 +1,5 @@
 use super::*;
+use rimz::store::run::ReportTo;
 
 #[test]
 fn resume_prompt_is_queued_to_the_leader_before_registration() {
@@ -94,9 +95,10 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
             },
         )
         .unwrap();
-    let (peer, run) = prepare_peer_prompt(&store, batch.identities(), dir.path())
-        .unwrap()
-        .expect("prompt leader owes a report before opening the pane");
+    let (peer, run) =
+        prepare_peer_prompt(&store, batch.identities(), dir.path(), ReportTo::Launcher)
+            .unwrap()
+            .expect("prompt leader owes a report before opening the pane");
     assert_eq!(run.status, rimz::store::run::RunStatus::Pending);
     assert_eq!(run.agent_name.as_deref(), Some("leader"));
     assert_eq!(run.peer.as_ref().unwrap().launch_id, identities[1].agent_id);
@@ -125,23 +127,63 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
         ),
         "{receipt}"
     );
+    let (_, reused) = prepare_peer_prompt(&store, batch.identities(), dir.path(), ReportTo::Nobody)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (&reused.run_id, reused.report_to),
+        (&run.run_id, ReportTo::Launcher),
+        "a reused open run keeps its recorded policy"
+    );
     rimz::harness::run::fail_peer_run(&store, &peer, "launch failed").unwrap();
     for identity in &mut identities {
         identity.prompt = None;
     }
     assert!(
-        prepare_peer_prompt(&store, &identities, dir.path())
+        prepare_peer_prompt(&store, &identities, dir.path(), ReportTo::Launcher)
             .unwrap()
             .is_none()
     );
     identities[1].prompt = Some("human task".into());
     identities[1].launch.launched_by = None;
     assert!(
-        prepare_peer_prompt(&store, &identities, dir.path())
+        prepare_peer_prompt(&store, &identities, dir.path(), ReportTo::Launcher)
             .unwrap()
             .is_none()
     );
     assert_eq!(rimz::harness::run::list(store.paths()).unwrap().len(), 1);
+
+    let (_, detached) =
+        prepare_peer_prompt(&store, batch.identities(), dir.path(), ReportTo::Nobody)
+            .unwrap()
+            .unwrap();
+    assert_eq!(detached.report_to, ReportTo::Nobody);
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &detached.run_id)
+            .unwrap()
+            .report_to,
+        ReportTo::Nobody
+    );
+    let mut receipt = Vec::new();
+    write_peer_receipt(
+        &mut receipt,
+        batch.identities(),
+        Some(&detached),
+        store.paths(),
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(receipt).unwrap(),
+        format!(
+            "@leader runs detached: no AGENT_REPORT reaches you for this launch and nothing holds your turn; a message to it after this launch turn settles reports as usual, while one that lands before then joins this unreported answer. Its response lands at {} when this turn settles. The peer keeps its pane. To read it: rimz agents wait {}\n",
+            store
+                .paths()
+                .out_reader_dir(Some("leader"))
+                .join(format!("leader.{}.output", detached.run_id))
+                .display(),
+            detached.run_id
+        )
+    );
 }
 
 #[test]
@@ -201,6 +243,18 @@ fn peer_receipt_names_the_host_out_path_under_its_reader() {
     );
     assert!(!receipt.contains("AGENT_REPORT"), "{receipt}");
     assert!(receipt.contains("the team's board path"), "{receipt}");
+
+    run.report_to = ReportTo::Nobody;
+    let mut receipt = Vec::new();
+    write_peer_receipt(&mut receipt, &[], Some(&run), &paths).unwrap();
+    assert_eq!(
+        String::from_utf8(receipt).unwrap(),
+        format!(
+            "@peer leads forge#feat-x, detached: no TEAM_REPORT reaches you and nothing holds your turn. When its board at {} reaches Done, the leader's final response lands at {}. The team keeps its panes. To block until Done: rimz teams wait forge#feat-x\n",
+            dir.path().join("blackboard.md").display(),
+            expected.display()
+        )
+    );
 }
 
 #[test]

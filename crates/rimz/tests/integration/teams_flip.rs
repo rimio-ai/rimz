@@ -1547,6 +1547,7 @@ fn agent_launched_team_death_reports_once_and_respects_a_racing_done() {
             rimz::agents::registry::definition_by_kind("claude").unwrap(),
             "Ship the feature.",
             &fixture.env.project_root,
+            rimz::store::run::ReportTo::Launcher,
         )
         .unwrap()
         .unwrap();
@@ -1660,6 +1661,7 @@ fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
         adapter,
         "Ship the feature.",
         &fixture.env.project_root,
+        rimz::store::run::ReportTo::Launcher,
     )
     .unwrap()
     .expect("the prompted leader of an agent-launched team holds a team run");
@@ -1763,4 +1765,84 @@ fn agent_launched_team_reports_its_leader_to_the_launcher_at_each_done() {
             .iter()
             .any(|report| report.text != reports[0].text && report.agent_id.as_str() == "boss")
     );
+}
+
+#[test]
+fn detached_team_follows_its_board_and_reports_to_nobody() {
+    let fixture = Fixture::new();
+    fixture.seed_launched("boss", None, None);
+    fixture.seed_launched("coder", Some("coder"), Some("boss"));
+    fixture.seed_launched("reviewer", Some("reviewer"), Some("boss"));
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let store = fixture.env.store();
+    let leader = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|agent| agent.name.as_deref() == Some("coder"))
+        .unwrap();
+    let adapter = rimz::agents::registry::definition_by_kind("claude").unwrap();
+    let run = rimz::harness::run::create_peer_prompt(
+        store.paths(),
+        &leader,
+        None,
+        adapter,
+        "Ship the feature.",
+        &fixture.env.project_root,
+        rimz::store::run::ReportTo::Nobody,
+    )
+    .unwrap()
+    .expect("a detached team still holds its team run");
+    assert_eq!(run.report_to, rimz::store::run::ReportTo::Nobody);
+    rimz::harness::run::record_assistant_message(
+        store.paths(),
+        &run.run_id,
+        "claude",
+        &leader.agent_id,
+        "Shipped: PR #1.".to_owned(),
+    )
+    .unwrap();
+
+    // Flips still message the seats; only the launcher's report is dropped.
+    let team_reports = || {
+        store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                message.agent_id.as_str() == "boss"
+                    || message.sender
+                        == MessageSender::Harness {
+                            notice: HarnessNotice::TeamReport,
+                        }
+            })
+            .collect::<Vec<_>>()
+    };
+    let detached = "report   none: the team was launched detached; rimz teams wait forge#feature-team blocks on Done";
+    let done = success(fixture.flip("Done", None, Some("Finished.")));
+    assert!(done.contains(detached), "{done}");
+    assert!(!done.contains("TEAM_REPORT"), "{done}");
+    let settled = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(settled.status, rimz::store::run::RunStatus::Completed);
+    assert_eq!(settled.report_message_id, None);
+    assert_eq!(
+        std::fs::read_to_string(rimz::harness::run::response_path(store.paths(), &run).unwrap())
+            .unwrap(),
+        "Shipped: PR #1.\n"
+    );
+    assert!(team_reports().is_empty(), "{:?}", team_reports());
+
+    let reopened = success(fixture.flip("Review", None, Some("One more pass.")));
+    assert!(reopened.contains(detached), "{reopened}");
+    assert!(!reopened.contains("TEAM_REPORT"), "{reopened}");
+    assert_eq!(
+        rimz::harness::run::open_team_run_for(store.paths(), "forge#feature-team")
+            .unwrap()
+            .expect("the reopened stretch has its run")
+            .report_to,
+        rimz::store::run::ReportTo::Nobody
+    );
+    success(fixture.flip("Done", None, Some("Finished again.")));
+    assert!(team_reports().is_empty(), "{:?}", team_reports());
 }

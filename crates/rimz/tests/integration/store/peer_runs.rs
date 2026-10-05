@@ -316,6 +316,7 @@ fn peer_launch_prompt_is_pending_and_failure_is_terminal() {
         adapter,
         "launch task",
         Path::new("/repo"),
+        rimz::store::run::ReportTo::Launcher,
     )
     .unwrap()
     .unwrap();
@@ -333,7 +334,8 @@ fn peer_launch_prompt_is_pending_and_failure_is_terminal() {
             None,
             adapter,
             "duplicate",
-            Path::new("/repo")
+            Path::new("/repo"),
+            rimz::store::run::ReportTo::Launcher,
         )
         .unwrap()
         .unwrap()
@@ -363,7 +365,8 @@ fn peer_launch_prompt_is_pending_and_failure_is_terminal() {
             None,
             adapter,
             "human",
-            Path::new("/repo")
+            Path::new("/repo"),
+            rimz::store::run::ReportTo::Launcher,
         )
         .unwrap()
         .is_none()
@@ -385,6 +388,7 @@ fn team_seat_launch_prompt_opens_a_team_run_and_no_peer_turns() {
         adapter,
         "build the feature",
         Path::new("/repo"),
+        rimz::store::run::ReportTo::Launcher,
     )
     .unwrap()
     .unwrap();

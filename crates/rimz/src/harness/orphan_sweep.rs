@@ -125,7 +125,7 @@ fn orphaned_child(
         return None;
     }
     let run = newest_run(child, runs);
-    if run.is_some_and(|run| run.keep) {
+    if run.is_some_and(RunRecord::survives_parent) {
         return None;
     }
     let parent = crate::address::launched_parent(agents, child);
@@ -320,6 +320,19 @@ mod tests {
         );
 
         child_run.keep = false;
+        child_run.report_to = crate::store::run::ReportTo::Nobody;
+        assert!(
+            orphaned_child(
+                &child,
+                &[parent.clone(), child.clone()],
+                &[child_run.clone()],
+                now
+            )
+            .is_none(),
+            "a detached child outlives the parent that launched it"
+        );
+
+        child_run.report_to = crate::store::run::ReportTo::Launcher;
         parent.ended_at = None;
         assert!(
             orphaned_child(&child, &[parent, child.clone()], &[child_run.clone()], now).is_none()

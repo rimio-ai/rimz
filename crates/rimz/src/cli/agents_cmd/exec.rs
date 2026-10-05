@@ -300,7 +300,7 @@ fn launch_and_supervise(
     if let Some(context) = run_context {
         record_provider_process(context, child.id());
     }
-    let keep = run_context
+    let (keep, survives_parent) = run_context
         .as_ref()
         .and_then(|context| {
             rimz::harness::run::load(context.store.paths(), &context.run_id)
@@ -313,9 +313,14 @@ fn launch_and_supervise(
                 })
                 .ok()
         })
-        .is_some_and(|record| record.keep);
-    let mut parent_watchdog =
-        subagent_parent_watchdog(request, run_context, launch_identity.as_ref(), keep);
+        .map(|record| (record.keep, record.survives_parent()))
+        .unwrap_or_default();
+    let mut parent_watchdog = subagent_parent_watchdog(
+        request,
+        run_context,
+        launch_identity.as_ref(),
+        survives_parent,
+    );
     let fresh_subagent = request.subagent
         && attach_target.is_none()
         && matches!(
@@ -1030,7 +1035,14 @@ impl RunMonitor {
             }
             self.awaiting_reopen = None;
         }
-        if !record.status.is_terminal() || now < self.next_receipt_check {
+        if !record.status.is_terminal() {
+            return false;
+        }
+        if record.report_to == rimz::store::run::ReportTo::Nobody {
+            // Nobody receives a detached answer, so there is no parent turn to wait for.
+            return context.ready_for_self_cleanup(&record);
+        }
+        if now < self.next_receipt_check {
             return false;
         }
         self.next_receipt_check = now + PARENT_RECEIPT_POLL;
@@ -1698,7 +1710,7 @@ fn subagent_parent_watchdog(
     request: &rimz::harness::launch::ExecRequest,
     run_context: Option<&RunExecContext>,
     launch_identity: Option<&LaunchIdentity>,
-    keep: bool,
+    survives_parent: bool,
 ) -> Option<rimz::harness::parent_watch::ParentWatch> {
     if !request.subagent {
         return None;
@@ -1707,7 +1719,7 @@ fn subagent_parent_watchdog(
         tracing::debug!("subagent parent watchdog has no supervised run context");
         return None;
     };
-    if keep {
+    if survives_parent {
         return None;
     }
     let Some(identity) = launch_identity else {

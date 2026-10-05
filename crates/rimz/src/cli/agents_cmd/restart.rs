@@ -501,6 +501,7 @@ mod tests {
             adapter,
             "task",
             dir.path(),
+            rimz::store::run::ReportTo::Launcher,
         )
         .unwrap()
         .unwrap();

@@ -13,7 +13,7 @@ use rimz::ids::{AgentSessionId, MessageId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
 use rimz::message::synthetic::SyntheticMessage;
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
-use rimz::store::run::{RunRecord, RunStatus};
+use rimz::store::run::{ReportTo, RunRecord, RunStatus};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{RuntimeScope, Store};
 
@@ -26,6 +26,8 @@ pub(in crate::cli) enum TeamReportOutcome {
     Queued { launcher: String, delivered: bool },
     /// The board left `Done`; the leader's next stretch of work reports at the next `Done`.
     Reopened,
+    /// A detached team settled or reopened: its run follows the board and tells nobody.
+    Detached,
     /// No agent launched this cohort, or the flip does not touch `Done`.
     NotOwed,
 }
@@ -43,8 +45,14 @@ pub(in crate::cli) fn on_flip(
     if to == DONE_STAGE && !was_done {
         return Ok(report_done(workspace, store, instance, board)?);
     }
-    if was_done && to != DONE_STAGE && run::reopen_team_run(store.paths(), instance)?.is_some() {
-        return Ok(TeamReportOutcome::Reopened);
+    if was_done
+        && to != DONE_STAGE
+        && let Some(reopened) = run::reopen_team_run(store.paths(), instance)?
+    {
+        return Ok(match reopened.report_to {
+            ReportTo::Launcher => TeamReportOutcome::Reopened,
+            ReportTo::Nobody => TeamReportOutcome::Detached,
+        });
     }
     Ok(TeamReportOutcome::NotOwed)
 }
@@ -113,6 +121,12 @@ fn report_team(
     let Some(team) = record.team.as_ref() else {
         return Ok(TeamReportOutcome::NotOwed);
     };
+    if record.report_to == ReportTo::Nobody {
+        // Detached: the run follows the board and leaves the answer on disk for a join.
+        run::publish_response(store.paths(), record)?;
+        run::settle_team_run(store.paths(), &record.run_id, None, failure)?;
+        return Ok(TeamReportOutcome::Detached);
+    }
     let instance = &team.instance;
     let projection = store.runtime_projection(RuntimeScope::Audit)?;
     let agents = &projection.agents;
@@ -203,64 +217,118 @@ fn report_team(
 mod tests {
     use super::*;
 
+    /// A cohort `forge#x` led by `lead`, launched by the live agent `boss`, with its open team run.
+    fn launched_team(
+        report_to: ReportTo,
+    ) -> (tempfile::TempDir, ResolvedWorkspace, Store, RunRecord) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = ResolvedWorkspace {
+            workspace_id: rimz::WorkspaceId::from_project_root(dir.path()),
+            project_root: dir.path().into(),
+            cwd_project_root: None,
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: dir.path().into(),
+            worktree_branch: None,
+            session_name: "room".into(),
+            mux_hint: None,
+        };
+        let store = Store::open(
+            rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap(),
+            rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("rt"))
+                .unwrap(),
+        )
+        .unwrap();
+        let kind = rimz::ids::AgentKind::new_unchecked("codex");
+        for name in ["boss", "lead"] {
+            let mut observation = rimz::agents::AgentLifecycleObservation::new(
+                Some(name.into()),
+                rimz::agents::LifecycleSignal::Registered,
+            );
+            observation.agent_name = Some(name.into());
+            if name == "lead" {
+                observation.launch.team = Some("forge".into());
+                observation.launch.channel = Some("x".into());
+                observation.launch.launched_by = Some(Box::new(rimz::agents::LaunchedBy {
+                    kind: kind.clone(),
+                    agent_id: "boss".into(),
+                }));
+            }
+            store
+                .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                    session_name: "room",
+                    agent_kind: kind.clone(),
+                    event_name: "test",
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        }
+        let mut record = RunRecord::new(
+            workspace.workspace_id.clone(),
+            kind,
+            rimz::agents::PermissionMode::Auto,
+            "work".into(),
+            dir.path().into(),
+        );
+        record.team = Some(rimz::store::run::TeamRun {
+            launch_id: "lead".into(),
+            instance: "forge#x".into(),
+        });
+        record.agent_name = Some("lead".into());
+        record.last_message = Some("shipped".into());
+        record.report_to = report_to;
+        run::create(store.paths(), &record).unwrap();
+        (dir, workspace, store, record)
+    }
+
+    #[test]
+    fn a_detached_team_settles_and_reopens_without_telling_its_launcher() {
+        for stage in [Some(DONE_STAGE), None] {
+            let (dir, workspace, store, record) = launched_team(ReportTo::Nobody);
+            let board = dir.path().join("blackboard.md");
+            assert_eq!(
+                report_team(&workspace, &store, &record, &board, stage).unwrap(),
+                TeamReportOutcome::Detached
+            );
+            let settled = run::load(store.paths(), &record.run_id).unwrap();
+            assert_eq!(
+                settled.status,
+                if stage.is_some() {
+                    RunStatus::Completed
+                } else {
+                    RunStatus::Failed
+                }
+            );
+            assert_eq!(settled.report_message_id, None);
+            assert!(store.list_messages().unwrap().is_empty());
+            assert!(store.list_message_history().unwrap().is_empty());
+            let response = run::response_path(store.paths(), &settled).unwrap();
+            assert_eq!(std::fs::read_to_string(response).unwrap(), "shipped\n");
+
+            assert_eq!(
+                on_flip(
+                    &workspace,
+                    &store,
+                    "forge#x",
+                    &board,
+                    Some(DONE_STAGE),
+                    "Build"
+                )
+                .unwrap(),
+                TeamReportOutcome::Detached
+            );
+            let reopened = run::open_team_run_for(store.paths(), "forge#x")
+                .unwrap()
+                .unwrap();
+            assert_eq!(reopened.report_to, ReportTo::Nobody);
+            assert!(store.list_messages().unwrap().is_empty());
+        }
+    }
+
     #[test]
     fn competing_done_and_death_reports_cancel_the_loser_in_either_order() {
         for first_stage in [Some(DONE_STAGE), None] {
-            let dir = tempfile::tempdir().unwrap();
-            let workspace = ResolvedWorkspace {
-                workspace_id: rimz::WorkspaceId::from_project_root(dir.path()),
-                project_root: dir.path().into(),
-                cwd_project_root: None,
-                root_class: rimz::workspace::RootClass::Directory,
-                worktree_root: dir.path().into(),
-                worktree_branch: None,
-                session_name: "room".into(),
-                mux_hint: None,
-            };
-            let store = Store::open(
-                rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap(),
-                rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("rt"))
-                    .unwrap(),
-            )
-            .unwrap();
-            let kind = rimz::ids::AgentKind::new_unchecked("codex");
-            for name in ["boss", "lead"] {
-                let mut observation = rimz::agents::AgentLifecycleObservation::new(
-                    Some(name.into()),
-                    rimz::agents::LifecycleSignal::Registered,
-                );
-                observation.agent_name = Some(name.into());
-                if name == "lead" {
-                    observation.launch.team = Some("forge".into());
-                    observation.launch.channel = Some("x".into());
-                    observation.launch.launched_by = Some(Box::new(rimz::agents::LaunchedBy {
-                        kind: kind.clone(),
-                        agent_id: "boss".into(),
-                    }));
-                }
-                store
-                    .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
-                        session_name: "room",
-                        agent_kind: kind.clone(),
-                        event_name: "test",
-                        observation: &observation,
-                        spawned_subagents: &[],
-                    })
-                    .unwrap();
-            }
-            let mut record = RunRecord::new(
-                workspace.workspace_id.clone(),
-                kind,
-                rimz::agents::PermissionMode::Auto,
-                "work".into(),
-                dir.path().into(),
-            );
-            record.team = Some(rimz::store::run::TeamRun {
-                launch_id: "lead".into(),
-                instance: "forge#x".into(),
-            });
-            record.agent_name = Some("lead".into());
-            run::create(store.paths(), &record).unwrap();
+            let (dir, workspace, store, record) = launched_team(ReportTo::Launcher);
             let board = dir.path().join("blackboard.md");
             assert!(matches!(
                 report_team(&workspace, &store, &record, &board, first_stage).unwrap(),

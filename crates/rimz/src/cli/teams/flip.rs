@@ -189,6 +189,12 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         Ok(TeamReportOutcome::Reopened) => {
             writeln!(out, "  report   TEAM_REPORT again at the next Done")?;
         }
+        Ok(TeamReportOutcome::Detached) => {
+            writeln!(
+                out,
+                "  report   none: the team was launched detached; rimz teams wait {instance} blocks on Done"
+            )?;
+        }
         Ok(TeamReportOutcome::NotOwed) => {}
         Err(error) => {
             tracing::warn!(%error, %instance, "team report failed");

@@ -528,6 +528,146 @@ fn terminal_child_waits_for_its_receiving_parent_turn() {
 }
 
 #[test]
+fn a_terminal_detached_child_cleans_up_with_no_report_and_no_parent_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = test_workspace(dir.path());
+    let paths = rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let runtime =
+        rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = rimz::Store::open(paths, runtime).unwrap();
+    let kind = AgentKind::new_unchecked("codex");
+    use rimz::agents::LifecycleSignal;
+    for (name, signal) in [
+        ("parent", LifecycleSignal::Registered),
+        ("child", LifecycleSignal::Registered),
+        (
+            "child",
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        ),
+    ] {
+        let mut observation =
+            rimz::agents::AgentLifecycleObservation::new(Some(name.into()), signal);
+        observation.agent_name = Some(name.into());
+        if name == "child" {
+            observation.launch.parent_agent_id = Some("parent".into());
+            observation.launch.parent_agent_kind = Some(kind.clone());
+            observation.launch.launch_depth = Some(1);
+        }
+        store
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: "room",
+                agent_kind: kind.clone(),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    let mut record = rimz::store::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        kind,
+        PermissionMode::Auto,
+        "work".into(),
+        dir.path().into(),
+    );
+    record.agent_id = Some("child".into());
+    record.agent_name = Some("child".into());
+    record.subagent = true;
+    record.report_to = rimz::store::run::ReportTo::Nobody;
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let context = RunExecContext {
+        run_id: record.run_id.clone(),
+        store: store.clone(),
+        session_name: "room".into(),
+        workspace,
+    };
+    let now = Instant::now();
+    let mut monitor = RunMonitor {
+        self_cleanup: true,
+        stop_policy: StopPolicy::ParentReceived,
+        awaiting_reopen: None,
+        next_receipt_check: now,
+        reported_revision: None,
+        next_park_check: now,
+        previous: None,
+    };
+    assert!(!monitor.poll(&context, now), "a running child is kept");
+    record.status = rimz::store::run::RunStatus::Completed;
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    monitor.awaiting_reopen = Some(record.follow_ups);
+    assert!(
+        !monitor.poll(&context, now),
+        "a resumed wrapper waits for its reopen before reading the old terminal record"
+    );
+    monitor.awaiting_reopen = None;
+    assert!(
+        monitor.poll(&context, now),
+        "nobody receives a detached answer, so the terminal run is ready"
+    );
+    assert_eq!(context.load_record().unwrap().report_message_id, None);
+    assert!(store.list_messages().unwrap().is_empty());
+}
+
+#[test]
+fn parent_watchdog_is_admitted_only_for_a_child_that_dies_with_its_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = test_workspace(dir.path());
+    let paths = rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let runtime =
+        rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = rimz::Store::open(paths, runtime).unwrap();
+    let mut record = rimz::store::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "work".into(),
+        dir.path().into(),
+    );
+    let mut request = minimal_exec_request(
+        "codex",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    request.subagent = true;
+    let context = RunExecContext {
+        run_id: record.run_id.clone(),
+        store,
+        session_name: "room".into(),
+        workspace,
+    };
+    let identity = LaunchIdentity {
+        kind: request.kind.clone(),
+        agent_id: "child-launch".into(),
+        name: "child".into(),
+        name_explicit: false,
+        launch: rimz::agents::LaunchParams::default(),
+        run_id: None,
+        prompt: None,
+    };
+    let admitted = |record: &rimz::store::run::RunRecord| {
+        subagent_parent_watchdog(
+            &request,
+            Some(&context),
+            Some(&identity),
+            record.survives_parent(),
+        )
+        .is_some()
+    };
+    assert!(admitted(&record), "an attached child watches its parent");
+    record.report_to = rimz::store::run::ReportTo::Nobody;
+    assert!(!admitted(&record), "a detached child outlives its parent");
+    record.report_to = rimz::store::run::ReportTo::Launcher;
+    record.keep = true;
+    assert!(!admitted(&record), "a kept child outlives its parent");
+}
+
+#[test]
 fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
     let state = tempfile::tempdir().unwrap();
     let runtime_root = tempfile::tempdir_in("/tmp").unwrap();

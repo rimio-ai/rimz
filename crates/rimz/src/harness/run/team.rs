@@ -10,7 +10,7 @@ use crate::agents::{AgentDefinition, AgentState, PermissionMode};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::StatePaths;
 use crate::ids::MessageId;
-use crate::store::run::{RunStatus, TeamRun};
+use crate::store::run::{ReportTo, RunStatus, TeamRun};
 
 use super::{RecordMutation, Result, RunRecord};
 
@@ -29,6 +29,7 @@ pub(super) fn create_team_run(
     adapter: &AgentDefinition,
     prompt: &str,
     cwd: &Path,
+    report_to: ReportTo,
 ) -> Result<Option<RunRecord>> {
     if leader.launched_by.is_none() || prompt.trim().is_empty() || !super::peer_can_report(adapter)
     {
@@ -54,6 +55,7 @@ pub(super) fn create_team_run(
     );
     record.agent_name = leader.name.clone();
     record.reader = reader.map(str::to_owned);
+    record.report_to = report_to;
     record.team = Some(TeamRun {
         launch_id: launch_id.clone(),
         instance,
@@ -108,8 +110,8 @@ pub fn settle_team_run(
     Ok(settled.then_some(record))
 }
 
-/// Open a fresh team run for a board that left `Done`, carrying the task and
-/// leader of the cohort's newest run. `None` when the cohort never had one
+/// Open a fresh team run for a board that left `Done`, carrying the task,
+/// leader, and report policy of the cohort's newest run. `None` when the cohort never had one
 /// (a user-launched team) or already has one open.
 pub fn reopen_team_run(paths: &StatePaths, instance: &str) -> Result<Option<RunRecord>> {
     let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
@@ -132,6 +134,7 @@ pub fn reopen_team_run(paths: &StatePaths, instance: &str) -> Result<Option<RunR
     record.reader.clone_from(&newest.reader);
     record.transcript_path.clone_from(&newest.transcript_path);
     record.team.clone_from(&newest.team);
+    record.report_to = newest.report_to;
     record.status = RunStatus::Running;
     crate::store::run::write(&paths.runs_dir, &record)?;
     Ok(Some(record))
