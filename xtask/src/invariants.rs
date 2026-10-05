@@ -51,6 +51,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_sidebar_enrich_projection_only(root, &files)?;
     ensure_sidebar_fold_caller_state(root, &files)?;
     ensure_no_zellij_runtime_list_panes(root, &files)?;
+    ensure_zellij_actions_name_the_session(root, &files)?;
     ensure_sidebar_event_log_reads_through_rollup(root, &files)?;
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
     ensure_snapshot_projection_stays_quiet(root, &files)?;
@@ -607,6 +608,39 @@ fn ensure_no_zellij_runtime_list_panes(root: &Path, files: &[PathBuf]) -> Result
     }
     bail!(
         "Zellij runtime must use presence-plugin topology; only the stale-topology confirmation path may query server panes\n{}",
+        violations.join("\n")
+    )
+}
+
+/// A Zellij action without `--session` exits 0 and does nothing among several
+/// live sessions, so the `action` argv word is written only beside the
+/// session flag: in `ZellijBackend::zellij_action`, the one builder.
+fn ensure_zellij_actions_name_the_session(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let needle = concat!("\"act", "ion\"");
+    let session_flag = concat!("\"--sess", "ion\"");
+    let mut violations = Vec::new();
+    for path in files {
+        if path.extension().and_then(OsStr::to_str) != Some("rs")
+            || is_test_source_path(root, path)
+            || !(path == &root.join("crates/rimz/src/mux/zellij.rs")
+                || path.starts_with(root.join("crates/rimz/src/mux/zellij")))
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in text.lines().enumerate() {
+            if line.contains(needle) && !line.contains(session_flag) {
+                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+            }
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "every Zellij action names its session: build it with ZellijBackend::zellij_action\n{}",
         violations.join("\n")
     )
 }
