@@ -1491,6 +1491,7 @@ rimz loop add
     --surplus-after <DUR>  [action=set takes=1..=1]
     --system-prompt-file <PATH>  [action=set takes=1..=1]
     --takeover  [action=set-true takes=0..=0]
+    --throttle <on|off>  [action=set takes=1..=1 values=on|off]
     --timeout <TIMEOUT>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --until <DUR>  [action=set takes=1..=1]

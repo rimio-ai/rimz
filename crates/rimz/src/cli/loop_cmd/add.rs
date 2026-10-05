@@ -732,12 +732,14 @@ fn build_task_entry(
     let mut resolved_for_preflight = None;
     match action {
         AddTaskAction::Stay { .. } => {
+            entry.throttle = throttle_switch(args);
             entry.agent = args.agent.clone();
             entry.mode = args.mode.as_deref().map(parse_mode).transpose()?;
             entry.effort = args.effort.clone();
         }
         AddTaskAction::Spawn { resolved, mode, .. } => {
             resolved_for_preflight = Some(resolved);
+            entry.throttle = throttle_switch(args);
             entry.agent = args.agent.clone();
             entry.verify = args.verify.clone();
             entry.max_attempts = args.max_attempts;
@@ -756,6 +758,14 @@ fn build_task_entry(
         }
     }
     Ok((entry, resolved_for_preflight))
+}
+
+fn throttle_switch(args: &AddArgs) -> Option<rimz::config::ThrottleSwitch> {
+    // clap admits only `on` and `off`.
+    args.throttle.as_deref().map(|value| match value {
+        "off" => rimz::config::ThrottleSwitch::Off,
+        _ => rimz::config::ThrottleSwitch::On,
+    })
 }
 
 pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
@@ -1248,6 +1258,28 @@ mod tests {
             ])
             .expect_err("--stop-team is gone");
         assert_eq!(removed.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn throttle_flag_takes_on_or_off_and_needs_an_agent() {
+        let parse = |flags: &[&str]| {
+            AddArgs::augment_args(clap::Command::new("add")).try_get_matches_from(
+                ["add", "nightly", "--every", "1h"]
+                    .into_iter()
+                    .chain(flags.iter().copied()),
+            )
+        };
+        assert_eq!(
+            throttle_switch(&args(&["--agent", "claude", "--throttle", "off"])),
+            Some(rimz::config::ThrottleSwitch::Off)
+        );
+        assert_eq!(
+            throttle_switch(&args(&["--agent", "claude", "--throttle", "on"])),
+            Some(rimz::config::ThrottleSwitch::On)
+        );
+        assert_eq!(throttle_switch(&args(&["--agent", "claude"])), None);
+        parse(&["--agent", "claude", "--throttle", "maybe"]).expect_err("only on and off");
+        parse(&["--check", "true", "--throttle", "off"]).expect_err("needs an agent task");
     }
 
     #[test]

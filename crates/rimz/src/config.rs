@@ -90,7 +90,10 @@ pub(crate) use harness::PROMPT_CACHE_MARGIN;
 pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompactMode};
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
-pub use loop_::{CheckOn, FileMark, LoopConfig, TaskEntry, TaskTarget, Tasks, WatchSpec};
+pub use loop_::{
+    CheckOn, FileMark, LoopConfig, TaskEntry, TaskTarget, Tasks, ThrottleConfig, ThrottleSwitch,
+    WatchSpec,
+};
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::MultiplexerConfig;
 use mux::MuxConfig;

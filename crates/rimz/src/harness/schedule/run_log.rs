@@ -103,6 +103,9 @@ pub struct LoopRunRecord {
     pub mode: Option<LoopRunMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// How long the start throttle held the run before admitting it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub throttle_wait_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -146,6 +149,7 @@ impl LoopRunRecord {
             result,
             mode: Some(mode),
             duration_ms: Some(duration_ms),
+            throttle_wait_ms: None,
             error: None,
             check: None,
             watch: None,
@@ -206,6 +210,7 @@ pub enum LoopRunResult {
     BudgetSkipped,
     SurplusSkipped,
     AccountSkipped,
+    ThrottleSkipped,
     Canceled,
     Delivered,
     TargetGone,
@@ -242,6 +247,7 @@ impl LoopRunResult {
             Self::BudgetSkipped => "budget skipped",
             Self::SurplusSkipped => "surplus skipped",
             Self::AccountSkipped => "account skipped",
+            Self::ThrottleSkipped => "throttle skipped",
             Self::Canceled => "canceled",
             Self::Delivered => "delivered",
             Self::TargetGone => "target gone",
@@ -515,6 +521,7 @@ mod tests {
             result,
             mode: None,
             duration_ms: None,
+            throttle_wait_ms: None,
             error: None,
             check: None,
             watch: None,
@@ -877,6 +884,27 @@ mod tests {
     }
 
     #[test]
+    fn throttle_vocabulary_is_durable_snake_case() {
+        let mut held = record("wait", 0, LoopRunResult::ThrottleSkipped);
+        held.throttle_wait_ms = Some(1_800_000);
+        let encoded = serde_json::to_string(&held).unwrap();
+        assert!(
+            encoded.contains(r#""result":"throttle_skipped""#),
+            "{encoded}"
+        );
+        assert!(
+            encoded.contains(r#""throttle_wait_ms":1800000"#),
+            "{encoded}"
+        );
+        assert_eq!(
+            serde_json::from_str::<LoopRunRecord>(&encoded).unwrap(),
+            held
+        );
+        assert_eq!(LoopRunResult::ThrottleSkipped.label(), "throttle skipped");
+        assert_eq!(LoopRunResult::ThrottleSkipped.spawn_exit_code(), None);
+    }
+
+    #[test]
     fn old_minimal_records_still_parse() {
         let line = r#"{"task":"wait","at":"1970-01-01T00:00:10Z","result":"completed"}"#;
         let record: LoopRunRecord = serde_json::from_str(line).expect("legacy record");
@@ -886,6 +914,8 @@ mod tests {
         assert_eq!(record.check, None);
         assert_eq!(record.transcript_path, None);
         assert_eq!(record.watch, None);
+        assert_eq!(record.throttle_wait_ms, None);
+        assert!(!serde_json::to_string(&record).unwrap().contains("throttle"));
         let line = r#"{"task":"wait","at":"1970-01-01T00:00:10Z","result":"completed","check":{"code":0,"timed_out":false,"output":"ok"}}"#;
         let record: LoopRunRecord = serde_json::from_str(line).expect("legacy check record");
         assert_eq!(record.watch, None);

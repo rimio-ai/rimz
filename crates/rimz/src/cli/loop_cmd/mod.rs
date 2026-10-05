@@ -240,6 +240,9 @@ struct AddArgs {
     /// Named account of the agent's provider that every fire runs on; unset follows the room.
     #[arg(long, value_name = "NAME")]
     account: Option<rimz::ids::LoginName>,
+    /// Whether the task's agent starts take their turn in the loop throttle; unset is on.
+    #[arg(long, value_name = "on|off", value_parser = ["on", "off"], requires = "agent")]
+    throttle: Option<String>,
     /// Dollar cap for each spawned agent run.
     #[arg(long, value_name = "AMOUNT[/day]")]
     budget: Option<String>,

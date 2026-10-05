@@ -284,6 +284,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             fire_at: Some(jiff::Timestamp::UNIX_EPOCH),
             provider: Some(crate::ids::AgentKind::new_unchecked("claude")),
             account: Some("work".parse().expect("login name")),
+            throttle: Some(crate::config::ThrottleSwitch::Off),
         };
 
         let machine = task_entry_table(&entry, true).expect("serialize machine");
@@ -306,6 +307,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
         assert!(machine_text.contains("for = \"30m\""));
         assert!(machine_text.contains("provider = \"claude\""));
         assert!(machine_text.contains("account = \"work\""));
+        assert!(machine_text.contains("throttle = \"off\""));
         assert_eq!(
             toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(machine))
                 .expect("machine round trip"),
