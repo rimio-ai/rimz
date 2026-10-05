@@ -21,6 +21,7 @@ The rule that resolves this: **the durable run record is the run; the pane, the 
 | [`harness/run/report.rs`](../../../crates/rimz/src/harness/run/report.rs) | The `joined_at` and `report_message_id` stamps that joins and subagent digests share. |
 | [`harness/run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | The receiving half of the blocking wait: the per-run datagram socket, frame validation, the poll loop, and the timeout and cancellation transitions it drives. |
 | [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) | Producer-side deadline detection and spawning the detached timeout helper. |
+| [`harness/park_notice.rs`](../../../crates/rimz/src/harness/park_notice.rs) | Producer-side detection of a subagent run parked on a provider limit, the notice text, and spawning the detached notice helper. |
 | [`harness/deadline.rs`](../../../crates/rimz/src/harness/deadline.rs) | Pure warning, stop-channel, and grace-bound kill policy. |
 | [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) | `plan_supervised_launch`: lane qualification, isolation inheritance, route, resolve, finalize, the single-cell refusals, and the child isolation cap, returning finalize warnings as values. |
 | [`harness/prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | `retry_prompt` and `verify_reprompt`, beside the system-prompt composition [fleet.md](./fleet.md#system-prompt-composition) owns. |
@@ -32,6 +33,7 @@ The rule that resolves this: **the durable run record is the run; the pane, the 
 | [`cli/supervised/pane.rs`](../../../crates/rimz/src/cli/supervised/pane.rs) | Loop-zone and subagent-zone placement, finding the run's pane, capturing its failure tail, and closing it. |
 | [`cli/agents_cmd/exec.rs`](../../../crates/rimz/src/cli/agents_cmd/exec.rs) | The in-pane wrapper's side: recording its pane and provider process, the process-death backstop, and self-cleanup. |
 | [`cli/agents_cmd/run_timeout.rs`](../../../crates/rimz/src/cli/agents_cmd/run_timeout.rs) | The hidden `agents run-timeout` helper that settles an overdue run. |
+| [`cli/agents_cmd/park_notice.rs`](../../../crates/rimz/src/cli/agents_cmd/park_notice.rs) | The hidden `agents park-notice` helper that claims a park and tells the child's parent. |
 | [`cli/agents_cmd/wait.rs`](../../../crates/rimz/src/cli/agents_cmd/wait.rs), [`stop.rs`](../../../crates/rimz/src/cli/agents_cmd/stop.rs) | Joining on runs started elsewhere, and cancelling them. |
 
 ## The record
