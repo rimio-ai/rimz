@@ -54,6 +54,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         result,
         mode: None,
         duration_ms: None,
+        throttle_wait_ms: None,
         error: None,
         check: None,
         watch: None,
@@ -121,6 +122,25 @@ fn last_run(records: &[LoopRunRecord]) -> String {
     )
     .unwrap();
     anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
+#[test]
+fn throttle_skip_is_a_refused_fire_with_a_visible_reason_and_a_waited_row_says_held() {
+    let mut skipped = record(0, LoopRunResult::ThrottleSkipped);
+    skipped.error = Some("cpu pressure 41% >= 25%; held 30m".into());
+    assert!(is_refused_fire(&skipped));
+    assert!(failure_note_visible(skipped.result));
+
+    let mut waited = record(0, LoopRunResult::Launched);
+    waited.throttle_wait_ms = Some(192_000);
+    assert_eq!(record_note(&waited).as_deref(), Some("held 3m"));
+    waited.target = Some("@fixer".into());
+    assert_eq!(record_note(&waited).as_deref(), Some("held 3m · @fixer"));
+    waited.checkout = Some(PathBuf::from("/repo/lane"));
+    assert_eq!(
+        record_note(&waited).as_deref(),
+        Some("/repo/lane held 3m · @fixer")
+    );
 }
 
 #[test]
@@ -529,6 +549,12 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
             "○",
             ui::palette::warn(),
             "account skipped",
+        ),
+        (
+            LoopRunResult::ThrottleSkipped,
+            "○",
+            ui::palette::warn(),
+            "throttle skipped",
         ),
         (
             LoopRunResult::TakeoverBlocked,

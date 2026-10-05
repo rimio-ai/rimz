@@ -91,6 +91,8 @@ fn template_comparison_defaults(mut config: MachineConfig) -> MachineConfig {
     // missing value can still participate correctly in layered config.
     config.r#loop.default_timeout =
         Some(crate::harness::schedule::runner::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned());
+    config.r#loop.throttle.pace = Some(ThrottleConfig::DEFAULT_PACE.to_owned());
+    config.r#loop.throttle.max_wait = Some(ThrottleConfig::DEFAULT_MAX_WAIT.to_owned());
     config
 }
 

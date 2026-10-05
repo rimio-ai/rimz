@@ -286,7 +286,7 @@ upward-dependencies = [
 # MachineConfig::require_readable_core shares birth/worktree refusal; ConfigEditor::use_account preserves machine selection edits (+2).
 # MachineConfig::model_alias exposes machine pins to the launch wrapper (+1).
 # AccountHistory carries a named account's history mode to the login catalog and `rimz accounts` (+1).
-surface-budget = 184
+surface-budget = 186
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

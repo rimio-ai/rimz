@@ -747,6 +747,7 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
         LoopRunResult::Overlapped
             | LoopRunResult::BudgetSkipped
             | LoopRunResult::AccountSkipped
+            | LoopRunResult::ThrottleSkipped
             | LoopRunResult::SurplusSkipped
             | LoopRunResult::SignalSkipped
     )
@@ -1123,6 +1124,15 @@ fn write_show_facts(
         kv.push(
             "will not fire",
             ui::cell(blocked_notice(state)).fg(ui::status::trust(state)),
+        );
+    }
+    if let Some(throttle) = entry.throttle {
+        kv.push(
+            "throttle",
+            ui::cell(match throttle {
+                rimz::config::ThrottleSwitch::On => "on",
+                rimz::config::ThrottleSwitch::Off => "off (starts without taking a turn)",
+            }),
         );
     }
     if let Some(budget) = budget_label(entry) {
@@ -1564,6 +1574,7 @@ fn failure_note_visible(result: LoopRunResult) -> bool {
             | LoopRunResult::BudgetSkipped
             | LoopRunResult::SurplusSkipped
             | LoopRunResult::AccountSkipped
+            | LoopRunResult::ThrottleSkipped
             | LoopRunResult::TakeoverBlocked
             | LoopRunResult::Errored
             | LoopRunResult::StartFailed
@@ -1593,7 +1604,8 @@ pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
         | LoopRunResult::Overlapped
         | LoopRunResult::TakeoverBlocked
         | LoopRunResult::BudgetSkipped
-        | LoopRunResult::AccountSkipped => ("○", ui::palette::warn()),
+        | LoopRunResult::AccountSkipped
+        | LoopRunResult::ThrottleSkipped => ("○", ui::palette::warn()),
         LoopRunResult::CheckSkipped
         | LoopRunResult::SignalSkipped
         | LoopRunResult::SurplusSkipped => ("○", ui::palette::muted()),
@@ -1667,7 +1679,15 @@ fn record_note(record: &LoopRunRecord) -> Option<String> {
         .or_else(|| check_failure_line(record))
         .or_else(|| record.last_message.as_deref().map(first_line))
         .or_else(|| record.target.as_deref().map(first_line))
-        .map(|note| truncate_note(note, NOTE_MAX));
+        .map(|note| truncate_note(note, NOTE_MAX))
+        .filter(|note| !note.is_empty());
+    let held = record
+        .throttle_wait_ms
+        .map(|waited| format!("held {}", format_duration_ms(waited)));
+    let note = match (held, note) {
+        (Some(held), Some(note)) => Some(format!("{held} · {note}")),
+        (held, note) => held.or(note),
+    };
     match (&record.checkout, note) {
         (Some(checkout), Some(note)) if !note.is_empty() => {
             Some(format!("{} {note}", checkout.display()))

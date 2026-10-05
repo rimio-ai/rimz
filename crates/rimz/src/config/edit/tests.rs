@@ -320,6 +320,8 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.startup-relaunch-wait",
         "loop.tasks.watch.agent",
         "loop.default-timeout",
+        "loop.throttle.pace",
+        "loop.throttle.max-active",
         "loop.tasks.watch.prompt",
         "loop.tasks.watch.check",
         "loop.tasks.watch.on",

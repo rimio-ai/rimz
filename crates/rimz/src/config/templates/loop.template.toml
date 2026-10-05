@@ -7,6 +7,21 @@
 # Supervised scheduled turns without a task-specific timeout use two hours.
 # default-timeout = "2h"
 
+# Loop runs that start an agent take turns across every room on this machine.
+# A start holds the turn until the provider reports the new agent, or for
+# `pace` at most ("0s" turns pacing off); a run still waiting after `max-wait`
+# is skipped. Per task, `throttle = "off"` starts without taking a turn.
+# [throttle]
+# pace = "10s"
+# max-wait = "30m"
+## max-active = 6                      # hold while this many agents are working, in every room
+## max-active-per-task = 2             # hold while this many of the task's own agents are working
+## cpu-pressure = 60                   # hold while Linux PSI `some` avg10 or avg60 is at or over this percent
+## io-pressure = 40
+## memory-pressure = 20
+## min-memory = "8GB"                  # hold while less memory is available
+## min-disk = "20GB"                   # hold while the launch checkout's filesystem has less free
+
 # Scheduled loop tasks. Each entry drives one `rimz loop run <name>` wake-up,
 # fired by the sidebar elder while a room for the task's project is open, or by
 # the OS timer installed with `rimz loop timer install` otherwise. Use either

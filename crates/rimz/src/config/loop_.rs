@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use crate::ids::{AgentKind, AgentSessionId};
+use crate::utils::size::parse_byte_size;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 
 const DEFAULT_TIMEOUT_UNITS: &[DurationUnit] = &[
@@ -12,6 +14,12 @@ const DEFAULT_TIMEOUT_UNITS: &[DurationUnit] = &[
     DurationUnit::Minute,
     DurationUnit::Hour,
     DurationUnit::Day,
+];
+
+const THROTTLE_UNITS: &[DurationUnit] = &[
+    DurationUnit::Second,
+    DurationUnit::Minute,
+    DurationUnit::Hour,
 ];
 
 /// `loop.toml`: scheduled and automated agent-loop helpers.
@@ -25,12 +33,14 @@ pub struct LoopConfig {
         deserialize_with = "deserialize_default_timeout"
     )]
     pub default_timeout: Option<String>,
+    #[serde(skip_serializing_if = "ThrottleConfig::is_empty")]
+    pub throttle: ThrottleConfig,
     pub tasks: Tasks,
 }
 
 impl LoopConfig {
     pub fn is_empty(&self) -> bool {
-        self.default_timeout.is_none() && self.tasks.0.is_empty()
+        self.default_timeout.is_none() && self.throttle.is_empty() && self.tasks.0.is_empty()
     }
 
     pub fn validate_budgets(&self) -> Result<(), TaskBudgetError> {
@@ -54,6 +64,160 @@ where
         }
     }
     Ok(raw)
+}
+
+/// `[throttle]`: how loop runs that spawn an agent take turns starting. Every
+/// value is validated at deserialize; the accessors return the parsed form.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ThrottleConfig {
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_pace"
+    )]
+    pub pace: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_max_wait"
+    )]
+    pub max_wait: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_cap"
+    )]
+    pub max_active: Option<u32>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_cap"
+    )]
+    pub max_active_per_task: Option<u32>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_pressure"
+    )]
+    pub cpu_pressure: Option<u8>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_pressure"
+    )]
+    pub io_pressure: Option<u8>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_pressure"
+    )]
+    pub memory_pressure: Option<u8>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_size"
+    )]
+    pub min_memory: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_throttle_size"
+    )]
+    pub min_disk: Option<String>,
+}
+
+impl ThrottleConfig {
+    pub const DEFAULT_PACE: &'static str = "10s";
+    pub const DEFAULT_MAX_WAIT: &'static str = "30m";
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The longest one start holds the turn; zero turns pacing off.
+    pub fn pace(&self) -> Duration {
+        throttle_duration(self.pace.as_deref().unwrap_or(Self::DEFAULT_PACE))
+            .unwrap_or(Duration::from_secs(10))
+    }
+
+    /// How long a run waits for its turn before it is skipped.
+    pub fn max_wait(&self) -> Duration {
+        throttle_duration(self.max_wait.as_deref().unwrap_or(Self::DEFAULT_MAX_WAIT))
+            .unwrap_or(Duration::from_secs(30 * 60))
+    }
+
+    pub fn min_memory_bytes(&self) -> Option<u64> {
+        parse_byte_size(self.min_memory.as_deref()?).ok()
+    }
+
+    pub fn min_disk_bytes(&self) -> Option<u64> {
+        parse_byte_size(self.min_disk.as_deref()?).ok()
+    }
+}
+
+fn throttle_duration(raw: &str) -> crate::utils::time::Result<Duration> {
+    parse_duration_units(raw, THROTTLE_UNITS)
+}
+
+fn deserialize_throttle_pace<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    if let Some(value) = raw.as_deref() {
+        throttle_duration(value).map_err(D::Error::custom)?;
+    }
+    Ok(raw)
+}
+
+fn deserialize_throttle_max_wait<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    if let Some(value) = raw.as_deref()
+        && throttle_duration(value)
+            .map_err(D::Error::custom)?
+            .is_zero()
+    {
+        return Err(D::Error::custom("must be greater than zero"));
+    }
+    Ok(raw)
+}
+
+fn deserialize_throttle_cap<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let cap = Option::<u32>::deserialize(deserializer)?;
+    if cap == Some(0) {
+        return Err(D::Error::custom("must be greater than zero"));
+    }
+    Ok(cap)
+}
+
+fn deserialize_throttle_pressure<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let percent = Option::<u8>::deserialize(deserializer)?;
+    if percent.is_some_and(|percent| !(1..=100).contains(&percent)) {
+        return Err(D::Error::custom("must be a percentage between 1 and 100"));
+    }
+    Ok(percent)
+}
+
+fn deserialize_throttle_size<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    if let Some(value) = raw.as_deref()
+        && parse_byte_size(value).map_err(D::Error::custom)? == 0
+    {
+        return Err(D::Error::custom("must be greater than zero"));
+    }
+    Ok(raw)
+}
+
+/// A task's own `throttle` key; absent means on.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ThrottleSwitch {
+    On,
+    Off,
 }
 
 /// Named loop tasks, ordered by name. A map keeps `rimz loop add/remove/run`
@@ -150,6 +314,9 @@ pub struct TaskEntry {
     /// The provider account every fire of an `agent` task runs on; unset follows the room.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<crate::ids::LoginName>,
+    /// `off` exempts every fire of the task from the start throttle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub throttle: Option<ThrottleSwitch>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -784,6 +951,75 @@ mod tests {
                 "{err}"
             );
         }
+    }
+
+    #[test]
+    fn throttle_table_parses_with_defaults_and_typed_values() {
+        let defaults = LoopConfig::default().throttle;
+        assert!(defaults.is_empty());
+        assert_eq!(defaults.pace(), Duration::from_secs(10));
+        assert_eq!(defaults.max_wait(), Duration::from_secs(30 * 60));
+        assert_eq!(defaults.min_memory_bytes(), None);
+
+        let config: LoopConfig = toml::from_str(
+            "[throttle]\npace = \"0s\"\nmax-wait = \"2h\"\nmax-active = 12\n\
+             max-active-per-task = 4\ncpu-pressure = 60\nio-pressure = 40\n\
+             memory-pressure = 100\nmin-memory = \"8GB\"\nmin-disk = \"20GB\"\n",
+        )
+        .expect("valid throttle table");
+        let throttle = &config.throttle;
+        assert!(!config.is_empty(), "a throttle table alone is content");
+        assert_eq!(throttle.pace(), Duration::ZERO);
+        assert_eq!(throttle.max_wait(), Duration::from_secs(2 * 60 * 60));
+        assert_eq!(throttle.max_active, Some(12));
+        assert_eq!(throttle.max_active_per_task, Some(4));
+        assert_eq!(
+            (
+                throttle.cpu_pressure,
+                throttle.io_pressure,
+                throttle.memory_pressure
+            ),
+            (Some(60), Some(40), Some(100))
+        );
+        assert_eq!(throttle.min_memory_bytes(), Some(8_000_000_000));
+        assert_eq!(throttle.min_disk_bytes(), Some(20_000_000_000));
+        let round_trip: LoopConfig =
+            toml::from_str(&toml::to_string(&config).expect("serialize")).expect("reparse");
+        assert_eq!(round_trip, config);
+    }
+
+    #[test]
+    fn throttle_table_rejects_values_that_could_never_admit() {
+        for (text, expected) in [
+            ("max-wait = \"0s\"", "must be greater than zero"),
+            ("max-wait = \"1d\"", "unit"),
+            ("pace = \"soon\"", "duration"),
+            ("max-active = 0", "must be greater than zero"),
+            ("max-active-per-task = 0", "must be greater than zero"),
+            ("cpu-pressure = 0", "between 1 and 100"),
+            ("io-pressure = 101", "between 1 and 100"),
+            ("min-memory = \"lots\"", "size"),
+            ("min-disk = \"0\"", "must be greater than zero"),
+        ] {
+            let err =
+                toml::from_str::<LoopConfig>(&format!("[throttle]\n{text}\n")).expect_err(text);
+            assert!(err.to_string().contains(expected), "{text}: {err}");
+        }
+    }
+
+    #[test]
+    fn task_throttle_switch_round_trips_and_is_absent_by_default() {
+        let tasks = toml::from_str::<Tasks>(
+            "[exempt]\nroot = \"/repo\"\nthrottle = \"off\"\n[plain]\nroot = \"/repo\"\n",
+        )
+        .expect("parse");
+        assert_eq!(tasks.0["exempt"].throttle, Some(ThrottleSwitch::Off));
+        assert_eq!(tasks.0["plain"].throttle, None);
+        let text = toml::to_string(&tasks).expect("serialize");
+        assert!(text.contains("throttle = \"off\""), "{text}");
+        assert_eq!(text.matches("throttle").count(), 1, "{text}");
+        toml::from_str::<Tasks>("[bad]\nroot = \"/repo\"\nthrottle = \"maybe\"\n")
+            .expect_err("only on and off");
     }
 
     #[test]
