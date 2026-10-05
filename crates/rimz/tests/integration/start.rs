@@ -1392,6 +1392,8 @@ fn closing_an_agent_resumed_while_pending_ends_it() {
         return;
     };
     let env = Env::new();
+    // The hand resume runs the launch account check, which needs the hooks.
+    env.install_agent_hooks("claude");
     let (lost, agent_path) = seed_lost_tmux_agent(&env);
     let store = env.store();
     let pending = || -> serde_json::Value {
