@@ -939,3 +939,76 @@ fn confirm_resume_tabs_reports_each_planned_window() {
         })]
     );
 }
+
+/// Under the default fixture environment a room behaves as on a host with no
+/// codex installed, even with a `codex` first on `PATH`: the account pass
+/// starts no codex process and the daemon view opens no broker pane. The
+/// `claude` witness is the positive control that the pass ran in a pane that
+/// sees this `PATH`, and the accounts cache is published only after every
+/// provider probe has returned.
+#[test]
+fn fixture_room_starts_no_codex_process_and_no_broker_pane() {
+    require_tmux!();
+
+    let env = Env::new();
+    let witness_log = env.home_root.join("witness.log");
+    let witness_bin = env.home_root.join("witness-bin");
+    for program in ["codex", "claude"] {
+        crate::common::write_path_shim(
+            &witness_bin,
+            program,
+            &format!(
+                "printf '%s %s\\n' {program} \"$*\" >> \"{}\"\nexit 1",
+                witness_log.display()
+            ),
+        );
+    }
+    let path = crate::common::path_with_front(&witness_bin);
+    let rimz = |args: &[&str]| {
+        env.rimz()
+            .env("PATH", &path)
+            .args(args)
+            .assert_success_within_timeout("rimz loop");
+    };
+    let board = env.project_root.join("blackboard.md");
+    std::fs::write(&board, "Stage: Review\n").expect("write board");
+    rimz(&[
+        "loop",
+        "add",
+        "ready",
+        "--when",
+        "team.stage=Done",
+        "--check",
+        "true",
+        "--once",
+    ]);
+    rimz(&["loop", "tick"]);
+    std::fs::write(&board, "Stage: Done\n").expect("flip board");
+    rimz(&["loop", "tick"]);
+
+    let accounts = env.runtime_paths().shared_accounts_path();
+    let witnessed = || std::fs::read_to_string(&witness_log).unwrap_or_default();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !(accounts.exists() && witnessed().contains("claude auth status")) {
+        assert!(
+            Instant::now() < deadline,
+            "the room never finished an account pass; witness log: {:?}",
+            witnessed()
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    let witnessed = witnessed();
+    assert!(
+        !witnessed.lines().any(|line| line.starts_with("codex ")),
+        "the room executed codex: {witnessed:?}"
+    );
+    let panes = TmuxServer::in_runtime_root(&env.runtime_root).stdout(&[
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_start_command}",
+    ]);
+    assert!(panes.contains("loop watch"), "no daemon view: {panes}");
+    assert!(!panes.contains("app-server"), "broker pane opened: {panes}");
+}

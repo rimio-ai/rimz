@@ -311,11 +311,6 @@ impl Env {
             // Room start probes browser access best-effort. Keep the suite off
             // the developer's real ttyd; web tests replace this with the trace fixture.
             .env("RIMZ_TTYD_BIN", self.home_root.join("missing-ttyd"))
-            // A snapshot of a live codex root spawns a detached context refresh
-            // that would cold-start the host's `codex app-server` and rewrite
-            // the session sidecar mid-test. Tests that want the app-server set
-            // the `codex-appserver-stub` afterwards.
-            .env("RIMZ_CODEX_BIN", self.home_root.join("missing-codex"))
             .env_remove("ENV")
             .env_remove("BASH_ENV")
             .env_remove("ZDOTDIR")
@@ -833,10 +828,13 @@ fn rimz_command_pins_persistent_roots_and_both_mux_namespaces() {
     assert_eq!(configured("ZELLIJ_CONFIG_DIR"), env.zellij_config_dir());
     assert_eq!(configured("TMUX_TMPDIR"), env.tmux_tmpdir());
     assert!(env.tmux_tmpdir().starts_with(&env.runtime_root));
+    let codex_bin = configured("RIMZ_CODEX_BIN");
+    assert!(!codex_bin.exists(), "the default codex binary is missing");
 
     let mut pty = portable_pty::CommandBuilder::new("rimz");
     pty.env("CODEX_HOME", "/ambient/codex");
     env.pin_pty_command(&mut pty);
+    assert_eq!(pty.get_env("RIMZ_CODEX_BIN"), Some(codex_bin.as_os_str()));
     let scrubbed: Vec<_> = provider_home_keys().collect();
     assert!(scrubbed.contains(&"CODEX_HOME") && scrubbed.contains(&"CLAUDE_CONFIG_DIR"));
     for key in scrubbed {
