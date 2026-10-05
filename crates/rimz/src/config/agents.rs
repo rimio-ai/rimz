@@ -70,6 +70,14 @@ pub struct AgentsConfig {
     /// Maximum successive agent-to-agent launches from a human-started root.
     #[serde(default = "default_max_chain_length", rename = "max-chain-length")]
     pub max_chain_length: u8,
+    /// How many times a fresh launch whose provider dies before its session
+    /// opens is relaunched; `0` disables the relaunch.
+    #[serde(rename = "startup-relaunches")]
+    pub startup_relaunches: u8,
+    /// The wait before each startup relaunch, in the CLI duration syntax
+    /// (`3s`); validated at use, when a fresh launch may need it.
+    #[serde(rename = "startup-relaunch-wait")]
+    pub startup_relaunch_wait: String,
     /// Carry the launch cwd and shell in the launch reminder.
     #[serde(rename = "env-reminder")]
     pub env_reminder: bool,
@@ -103,6 +111,8 @@ impl Default for AgentsConfig {
             placement: LaunchPlacement::default(),
             isolation: Isolation::default(),
             max_chain_length: default_max_chain_length(),
+            startup_relaunches: 3,
+            startup_relaunch_wait: "3s".to_owned(),
             env_reminder: true,
             runtime_env: true,
             allow_routine_rimz: true,

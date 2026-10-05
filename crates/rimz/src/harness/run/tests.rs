@@ -1,5 +1,6 @@
 use super::*;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::agents::AgentState;
 use crate::agents::LifecycleSignal;
@@ -1718,56 +1719,101 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
 }
 
 #[test]
-fn startup_relaunch_is_due_only_for_an_unobserved_first_nonzero_exit() {
-    let (_dir, _paths, pending) = setup();
+fn startup_relaunch_is_due_only_for_an_unopened_nonzero_exit_below_the_cap() {
+    use StartupRelaunch::{Due, No, Spent};
     let died = ProviderExit {
-        fresh_subagent: true,
+        fresh_launch: true,
         success: false,
         abrupt: false,
         signaled: false,
-        relaunched: false,
+        relaunches: 0,
+        startup: Duration::from_secs(5),
     };
-    assert!(startup_relaunch_due(&pending, died));
-
-    for (why, exit) in [
-        (
-            "not a fresh subagent launch",
-            ProviderExit {
-                fresh_subagent: false,
-                ..died
-            },
-        ),
-        (
-            "exit status 0",
-            ProviderExit {
-                success: true,
-                ..died
-            },
-        ),
-        (
-            "the wrapper ended the provider",
-            ProviderExit {
-                abrupt: true,
-                ..died
-            },
-        ),
-        (
-            "a stop or interrupt signal",
-            ProviderExit {
-                signaled: true,
-                ..died
-            },
-        ),
-        (
-            "already relaunched",
-            ProviderExit {
-                relaunched: true,
-                ..died
-            },
-        ),
-    ] {
-        assert!(!startup_relaunch_due(&pending, exit), "{why}");
+    let pending = StartupEvidence::Run(RunStatus::Pending);
+    let provisional = StartupEvidence::Card { provisional: true };
+    let slow = ProviderExit {
+        startup: Duration::from_secs(3600),
+        ..died
+    };
+    for relaunches in 0..3 {
+        let exit = ProviderExit { relaunches, ..slow };
+        assert_eq!(startup_relaunch(exit, pending, 3), Due, "{relaunches}");
     }
+    assert_eq!(startup_relaunch(died, provisional, 3), Due);
+    let at_window = ProviderExit {
+        startup: Duration::from_secs(60),
+        ..died
+    };
+    assert_eq!(startup_relaunch(at_window, provisional, 3), Due);
+    let past_window = ProviderExit {
+        startup: Duration::from_secs(61),
+        ..died
+    };
+    assert_eq!(
+        startup_relaunch(past_window, provisional, 3),
+        No,
+        "a provisional card is normal for a session nobody prompted"
+    );
+    assert_eq!(
+        startup_relaunch(died, StartupEvidence::Card { provisional: false }, 3),
+        No,
+        "the card was adopted"
+    );
+
+    for evidence in [pending, provisional] {
+        for (why, exit, cap) in [
+            (
+                "a resume or fork",
+                ProviderExit {
+                    fresh_launch: false,
+                    ..died
+                },
+                3,
+            ),
+            (
+                "exit status 0",
+                ProviderExit {
+                    success: true,
+                    ..died
+                },
+                3,
+            ),
+            (
+                "the wrapper ended the provider",
+                ProviderExit {
+                    abrupt: true,
+                    ..died
+                },
+                3,
+            ),
+            (
+                "a stop or interrupt signal",
+                ProviderExit {
+                    signaled: true,
+                    ..died
+                },
+                3,
+            ),
+            ("the relaunch is disabled", died, 0),
+        ] {
+            assert_eq!(startup_relaunch(exit, evidence, cap), No, "{why}");
+        }
+        let spent = ProviderExit {
+            relaunches: 3,
+            ..died
+        };
+        assert_eq!(startup_relaunch(spent, evidence, 3), Spent);
+    }
+    let opened = ProviderExit {
+        relaunches: 3,
+        success: true,
+        ..died
+    };
+    assert_eq!(
+        startup_relaunch(opened, pending, 3),
+        No,
+        "the cap is spent only by a startup death"
+    );
 
     for status in [
         RunStatus::Running,
@@ -1778,11 +1824,11 @@ fn startup_relaunch_is_due_only_for_an_unobserved_first_nonzero_exit() {
         RunStatus::TimedOut,
         RunStatus::BudgetExceeded,
     ] {
-        let observed = RunRecord {
-            status,
-            ..pending.clone()
-        };
-        assert!(!startup_relaunch_due(&observed, died), "{status:?}");
+        assert_eq!(
+            startup_relaunch(died, StartupEvidence::Run(status), 3),
+            No,
+            "{status:?}"
+        );
     }
 }
 

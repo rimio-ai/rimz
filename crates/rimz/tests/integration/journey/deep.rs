@@ -1962,11 +1962,11 @@ fn tmux_settled_subagent_reports_to_parent() {
 }
 
 #[test]
-fn tmux_subagent_startup_death_relaunches_once_and_reports_completed() {
-    let Some(child) = startup_death_child("1", "0") else {
+fn tmux_subagent_startup_deaths_below_the_cap_relaunch_and_report_completed() {
+    let Some(child) = startup_death_child("2", "0") else {
         return;
     };
-    assert_eq!(child.launches, 2, "one death, one relaunch");
+    assert_eq!(child.launches, 3, "two deaths, two relaunches");
     assert_eq!(child.run.status, rimz::store::run::RunStatus::Completed);
     let row = format!("@{}: completed", child.name);
     assert!(child.digest.contains(&row), "{}", child.digest);
@@ -1980,32 +1980,35 @@ fn tmux_subagent_startup_death_relaunches_once_and_reports_completed() {
         child.digest
     );
     assert!(child.parent_frame.contains(&row), "{}", child.parent_frame);
-    match child.retries.as_slice() {
-        [
+    assert_eq!(child.retries.len(), 2, "{:?}", child.retries);
+    for (retry, expected) in child.retries.iter().zip(1u8..) {
+        match retry {
             rimz::harness::assist_log::Assist::LaunchRetry {
                 label,
                 run_id,
+                attempt,
                 exit_code,
                 relaunched,
                 error,
                 ..
-            },
-        ] => {
-            assert_eq!(label, &format!("@{}", child.name));
-            assert_eq!(run_id, &child.run.run_id);
-            assert_eq!(*exit_code, Some(7));
-            assert!(*relaunched && error.is_none());
+            } => {
+                assert_eq!(label, &format!("@{}", child.name));
+                assert_eq!(run_id.as_ref(), Some(&child.run.run_id));
+                assert_eq!(*attempt, expected);
+                assert_eq!(*exit_code, Some(7));
+                assert!(*relaunched && error.is_none());
+            }
+            other => panic!("expected a launch_retry assist: {other:?}"),
         }
-        other => panic!("expected one launch_retry assist: {other:?}"),
     }
 }
 
 #[test]
-fn tmux_subagent_reports_failed_when_the_relaunch_also_dies_at_startup() {
+fn tmux_subagent_reports_failed_when_every_relaunch_also_dies_at_startup() {
     let Some(child) = startup_death_child("9", "0") else {
         return;
     };
-    assert_eq!(child.launches, 2, "a wrapper spawns its provider twice");
+    assert_eq!(child.launches, 4, "the first launch and three relaunches");
     assert_eq!(child.run.status, rimz::store::run::RunStatus::Failed);
     let row = format!("@{}: failed", child.name);
     assert!(child.digest.contains(&row), "{}", child.digest);
@@ -2015,12 +2018,12 @@ fn tmux_subagent_reports_failed_when_the_relaunch_also_dies_at_startup() {
             .split_once("; ")
             .and_then(|(_, rest)| rest.split_once(", task:"))
             .map(|(reason, _)| reason),
-        Some("2"),
-        "the reason is the second attempt's output: {}",
+        Some("4"),
+        "the reason is the last attempt's output: {}",
         child.digest
     );
     assert!(child.parent_frame.contains(&row), "{}", child.parent_frame);
-    assert_eq!(child.retries.len(), 1, "{:?}", child.retries);
+    assert_eq!(child.retries.len(), 3, "{:?}", child.retries);
 }
 
 #[test]
@@ -2208,7 +2211,7 @@ fn startup_death_child(startup_deaths: &str, exit: &str) -> Option<StartupDeathC
         CAPTURE_BUDGET,
     );
     let runs = child_runs();
-    assert_eq!(runs.len(), 1, "both attempts share one run: {runs:?}");
+    assert_eq!(runs.len(), 1, "every attempt shares one run: {runs:?}");
     let mut reports = reports();
     assert_eq!(reports.len(), 1, "the parent gets one report: {reports:?}");
     let digest = reports.remove(0);

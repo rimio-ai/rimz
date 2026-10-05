@@ -437,31 +437,70 @@ pub fn record_provider_process(
     .map(|(record, ())| record)
 }
 
-/// What the exec wrapper saw when its provider process exited.
+/// What the exec wrapper saw when one provider process exited.
 #[derive(Clone, Copy, Debug)]
 pub struct ProviderExit {
-    /// A `rimz subagents` launch, not a resume of one.
-    pub fresh_subagent: bool,
+    /// A fresh launch, not a resume or a fork.
+    pub fresh_launch: bool,
     pub success: bool,
-    /// The wrapper ended the provider itself.
+    /// The wrapper ended the provider itself, or the launching parent ended.
     pub abrupt: bool,
     /// A stop or interrupt signal reached the wrapper.
     pub signaled: bool,
-    /// This wrapper already spawned its provider a second time.
-    pub relaunched: bool,
+    /// How many times this wrapper already relaunched its provider.
+    pub relaunches: u8,
+    /// Spawn to exit of this process.
+    pub startup: std::time::Duration,
 }
 
-/// Whether a provider exit is a startup death the wrapper answers by spawning
-/// the same command once more. `Pending` means RimZ accepted no lifecycle
-/// observation for the run. It does not prove the provider did nothing: one
-/// that acts before its first hook and then exits nonzero may repeat that work.
-pub fn startup_relaunch_due(record: &RunRecord, exit: ProviderExit) -> bool {
-    record.status == RunStatus::Pending
-        && exit.fresh_subagent
-        && !exit.success
-        && !exit.abrupt
-        && !exit.signaled
-        && !exit.relaunched
+/// What durably says whether a launch's session opened.
+#[derive(Clone, Copy, Debug)]
+pub enum StartupEvidence {
+    /// The launch's run record; `Pending` means RimZ accepted no lifecycle
+    /// observation for it.
+    Run(RunStatus),
+    /// A launch without a run: whether its launch card is still provisional.
+    Card { provisional: bool },
+}
+
+/// How soon after its spawn a provider must exit for a provisional card to
+/// count as a startup death. A lazily registering provider keeps that card
+/// until its first prompt, so past this window the card says nothing.
+const CARD_EVIDENCE_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The wrapper's answer to one provider exit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartupRelaunch {
+    /// Not a startup death, or the relaunch is disabled: the exit settles.
+    No,
+    /// A startup death below the cap: spawn the same command again.
+    Due,
+    /// A startup death with every allowed relaunch already made.
+    Spent,
+}
+
+/// Whether a provider exit is a startup death, and whether the wrapper still
+/// answers it by spawning the same command again: at most `cap` times per
+/// launch, and never at `cap` 0. A `Pending` run is evidence at any startup
+/// time: a prompt was handed over and never observed. Neither source proves
+/// the provider did nothing: one that acts before its first hook and then
+/// exits nonzero may repeat that work.
+pub fn startup_relaunch(exit: ProviderExit, evidence: StartupEvidence, cap: u8) -> StartupRelaunch {
+    let unopened = match evidence {
+        StartupEvidence::Run(status) => status == RunStatus::Pending,
+        StartupEvidence::Card { provisional } => {
+            provisional && exit.startup <= CARD_EVIDENCE_WINDOW
+        }
+    };
+    let died_at_startup =
+        unopened && exit.fresh_launch && !exit.success && !exit.abrupt && !exit.signaled;
+    if cap == 0 || !died_at_startup {
+        StartupRelaunch::No
+    } else if exit.relaunches < cap {
+        StartupRelaunch::Due
+    } else {
+        StartupRelaunch::Spent
+    }
 }
 
 pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Result<RunRecord> {

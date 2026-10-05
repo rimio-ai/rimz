@@ -436,6 +436,24 @@ fn removed_agents_tables_fail_fast_with_the_rename() {
 }
 
 #[test]
+fn startup_relaunch_defaults_to_three_after_three_seconds_and_parses_overrides() {
+    let dir = tempdir().expect("tempdir");
+    let defaulted = load_no_fragments(&write_named(&dir, "config.toml", ""))
+        .expect("load default agents config");
+    assert_eq!(defaulted.agents.startup_relaunches, 3);
+    assert_eq!(defaulted.agents.startup_relaunch_wait, "3s");
+
+    let tuned = load_no_fragments(&write_named(
+        &dir,
+        "config.toml",
+        "[agents]\nstartup-relaunches = 0\nstartup-relaunch-wait = \"0s\"\n",
+    ))
+    .expect("load startup relaunch overrides");
+    assert_eq!(tuned.agents.startup_relaunches, 0);
+    assert_eq!(tuned.agents.startup_relaunch_wait, "0s");
+}
+
+#[test]
 fn agent_chain_length_defaults_parses_override_and_rejects_retired_key() {
     let dir = tempdir().expect("tempdir");
     let defaulted = load_no_fragments(&write_named(&dir, "config.toml", ""))

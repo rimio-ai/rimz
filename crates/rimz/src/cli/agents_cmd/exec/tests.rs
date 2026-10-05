@@ -1057,6 +1057,40 @@ mod pane_exec {
         }
     }
 
+    /// The respawn decision is the consumer's: whatever ended the relaunch
+    /// during the wait (a late first hook, a terminal or timed-out run, an
+    /// ended parent, a stop) is read by the last ask before the spawn.
+    #[test]
+    fn a_relaunch_is_asked_again_until_its_wait_ends() {
+        use rimz::harness::run::StartupRelaunch::{Due, No, Spent};
+
+        assert_eq!(startup_relaunch_at(Instant::now(), || Due), Due);
+        assert_eq!(startup_relaunch_at(Instant::now(), || Spent), Spent);
+        assert_eq!(
+            startup_relaunch_at(Instant::now(), || No),
+            No,
+            "a zero wait still asks once"
+        );
+
+        let asked = std::cell::Cell::new(0);
+        let started = Instant::now();
+        let answer = startup_relaunch_at(started + Duration::from_secs(60), || {
+            asked.set(asked.get() + 1);
+            if asked.get() < 3 { Due } else { No }
+        });
+        assert_eq!(answer, No, "the answer changed during the wait");
+        assert_eq!(asked.get(), 3, "the wait ends at the first refusal");
+        assert!(started.elapsed() < Duration::from_secs(10));
+
+        let asked = std::cell::Cell::new(0);
+        let answer = startup_relaunch_at(Instant::now() + CHILD_WAIT_POLL * 3, || {
+            asked.set(asked.get() + 1);
+            Due
+        });
+        assert_eq!(answer, Due);
+        assert!(asked.get() >= 2, "asked after the wait, not only before it");
+    }
+
     #[test]
     fn exit_hints_use_best_relaunch_identity() {
         let mut team = bare_exec_args();

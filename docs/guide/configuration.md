@@ -656,6 +656,16 @@ max-chain-length = 3
 
 An agent that runs `rimz agents` or `rimz teams` launches independent top-level peers, not children. `max-chain-length` caps how many of those launches can chain from one human-started root, and defaults to three. A launch past the limit fails before it creates a pane, a worktree, or a provisional agent, and tells the calling agent not to retry.
 
+#### Startup relaunches
+
+```toml
+[agents]
+startup-relaunches = 3
+startup-relaunch-wait = "3s"
+```
+
+An agent CLI sometimes dies while it starts, on a provider error that is gone a few seconds later. When a freshly launched agent's CLI exits with an error before its session opens, RimZ says so in the pane, waits `startup-relaunch-wait`, and launches it again in the same pane under the same name, up to `startup-relaunches` times. Ctrl-C during the wait cancels the relaunch. RimZ never reads the error text, so a CLI that fails the same way every time is launched four times before the failure is reported. A resumed or forked session is never relaunched. `startup-relaunches = 0` turns the relaunch off; the wait takes `s`, `m`, `h`, or `d`, and `"0s"` relaunches at once. Each relaunch is a `Launch retry` in [`rimz stats`](./insight.md).
+
 #### Environment at launch
 
 Agents receive their launch cwd and the kind of shell their commands run under (`zsh`, `bash`) by default, so they can start with their environment in view. Git state is left out of the launch text: it can change between launch and the agent's first turn. To omit these optional environment bullets for your machine, set this in `~/.rimz/config.toml`:
