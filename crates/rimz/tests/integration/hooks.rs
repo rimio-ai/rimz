@@ -2302,10 +2302,8 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
     let env = Env::new();
     let run = |payload: Value| {
         let payload = serde_json::to_string(&payload).expect("payload");
-        let mut cmd = env.hook_command("codex");
-        cmd.env("RIMZ_CODEX_BIN", "/nonexistent/codex-binary-xyz");
         let output = env
-            .spawn_payload(cmd, &payload)
+            .spawn_payload(env.hook_command("codex"), &payload)
             .wait_with_output()
             .expect("wait codex hook");
         assert_hook_succeeded_neutral("codex", output);
@@ -2357,11 +2355,9 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
         "transcript_path": child_rollout.to_string_lossy(),
     }))
     .expect("payload");
-    let mut cmd = env.hook_command("codex");
-    cmd.env("RIMZ_CODEX_BIN", "/nonexistent/codex-binary-xyz");
     assert_hook_succeeded_neutral(
         "codex",
-        env.spawn_payload(cmd, &start_payload)
+        env.spawn_payload(env.hook_command("codex"), &start_payload)
             .wait_with_output()
             .expect("wait start"),
     );
