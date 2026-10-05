@@ -638,11 +638,19 @@ fn inspect_at(
     tracing::debug!(workspace = %paths.workspace_id, roster = roster.len(), pending = scope.len(), reboot, "rebirth: recovery scope");
     scope.extend(roster.iter().cloned());
     let recovery_off = disabled || !machine.resume.on_rebirth;
-    if let Some((_, projection)) = &audit {
-        await_owner_exits(&projection.agents, &scope, owners_exited_by);
-    }
+    // A provider that dies inside the wait may record its own end meanwhile,
+    // so a wait that slept plans from a fresh read of the log.
+    let waited = audit.as_ref().is_some_and(|(_, projection)| {
+        await_owner_exits(&projection.agents, &scope, owners_exited_by)
+    });
+    let refreshed = audit
+        .as_ref()
+        .filter(|_| waited)
+        .and_then(|(store, _)| store.runtime_projection(crate::RuntimeScope::Audit).ok());
     let (candidates, ended, planned) = plan_settlement(
-        audit.as_ref().map(|(_, projection)| projection),
+        refreshed
+            .as_ref()
+            .or(audit.as_ref().map(|(_, projection)| projection)),
         &paths,
         &runtime,
         &scope,
@@ -670,21 +678,25 @@ fn inspect_at(
 }
 
 /// Blocks until no agent a settlement could offer (in `scope`, not ended) has a
-/// live owner, or `deadline` passes. The room these owners ran in is gone, so
-/// a live one is on its wrapper's exit ladder; the wrapper owns the kill.
+/// live owner, or `deadline` passes, and reports whether it slept. The room
+/// these owners ran in is gone, so a live one is on its wrapper's exit ladder;
+/// the wrapper owns the kill.
 fn await_owner_exits(
     agents: &[AgentState],
     scope: &BTreeSet<(AgentKind, AgentSessionId)>,
     deadline: Instant,
-) {
+) -> bool {
     let exiting = |agent: &AgentState| {
         agent.ended_at.is_none()
             && scope.contains(&(agent.kind.clone(), agent.agent_id.clone()))
             && matches!(agent_liveness(agent), AgentLiveness::Live { .. })
     };
+    let mut slept = false;
     while agents.iter().any(exiting) && Instant::now() < deadline {
         std::thread::sleep(OWNER_EXIT_POLL);
+        slept = true;
     }
+    slept
 }
 
 fn inspect_live_at(
