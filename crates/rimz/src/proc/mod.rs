@@ -638,6 +638,28 @@ pub fn cwd(pid: u32) -> Option<std::path::PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
+/// The `(dev, ino)` of what `pid` sees at the absolute `path` in its own root,
+/// read through `/proc/<pid>/root`. A bind mount keeps its source directory's
+/// identity, so this names the directory a mount view put there whatever host
+/// path it has since been renamed to. `None` off Linux, or when the root or
+/// the path cannot be read.
+#[cfg(target_os = "linux")]
+pub(crate) fn root_path_identity(pid: u32, path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    let seen = Path::new("/proc")
+        .join(pid.to_string())
+        .join("root")
+        .join(path.strip_prefix("/").ok()?);
+    let metadata = std::fs::metadata(seen).ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn root_path_identity(_pid: u32, _path: &Path) -> Option<(u64, u64)> {
+    None
+}
+
 /// The executable backing `pid` from `/proc/<pid>/exe`. Linux appends
 /// ` (deleted)` when the inode has been unlinked; return the stripped path plus
 /// that flag so callers can name a stale running binary without treating the
@@ -1509,6 +1531,22 @@ Uid:\t1000\t1000\t1000\t1000
                 tree_totals_with(1, &stat, &children, &io).map(|totals| totals.io_bytes),
                 Some(None)
             );
+        }
+
+        #[test]
+        fn root_path_identity_reads_a_path_through_the_process_root() {
+            use std::os::unix::fs::MetadataExt;
+
+            let dir = tempfile::tempdir().unwrap();
+            let metadata = std::fs::metadata(dir.path()).unwrap();
+            let me = std::process::id();
+            assert_eq!(
+                root_path_identity(me, dir.path()),
+                Some((metadata.dev(), metadata.ino()))
+            );
+            assert_eq!(root_path_identity(me, &dir.path().join("absent")), None);
+            assert_eq!(root_path_identity(me, Path::new("relative")), None);
+            assert_eq!(root_path_identity(u32::MAX, dir.path()), None);
         }
 
         #[test]

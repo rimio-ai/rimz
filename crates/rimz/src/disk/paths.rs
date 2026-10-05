@@ -335,6 +335,18 @@ impl StatePaths {
         self.tmp_dir.join(owner.unwrap_or(UNNAMED_DIR))
     }
 
+    /// Every temp unit directory the room has on disk, including the units an
+    /// interrupted reset left under the detached sibling of `tmp/`.
+    pub(crate) fn temp_unit_dirs(&self) -> Vec<PathBuf> {
+        [self.tmp_dir.clone(), reset_detached(&self.tmp_dir)]
+            .iter()
+            .filter_map(|parent| fs::read_dir(parent).ok())
+            .flat_map(|entries| entries.flatten())
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| entry.path())
+            .collect()
+    }
+
     /// Where RimZ writes the results it reports to `reader`: `out/<reader>/`,
     /// or `out/_unnamed/` for a reader without a handle.
     pub fn out_reader_dir(&self, reader: Option<&str>) -> PathBuf {
@@ -1063,6 +1075,13 @@ fn remove_runtime_dir_with(
 
 const RESET_DETACHED_SUFFIX: &str = ".reset";
 
+/// The `<dir>.reset` sibling a reset detaches `path` to.
+fn reset_detached(path: &Path) -> PathBuf {
+    let mut detached = path.as_os_str().to_os_string();
+    detached.push(RESET_DETACHED_SUFFIX);
+    PathBuf::from(detached)
+}
+
 /// Remove a state directory for a reset: rename it to its `<dir>.reset`
 /// sibling, run `inspect` on the detached tree, then remove that tree. A
 /// writer addressing the canonical path lands in a fresh directory and cannot
@@ -1085,9 +1104,7 @@ pub(crate) fn remove_state_dir_with<T, E: From<PathErr>>(
         remove_tree(path)?;
         return Ok(None);
     }
-    let mut detached_name = name.to_os_string();
-    detached_name.push(RESET_DETACHED_SUFFIX);
-    let detached = path.with_file_name(detached_name);
+    let detached = reset_detached(path);
     remove_tree(&detached)?;
     match fs::rename(path, &detached) {
         Ok(()) => {}

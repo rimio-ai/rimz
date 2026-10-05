@@ -3,6 +3,11 @@
 //! inherited workspace pin, an explicit exclusion of this process and its ancestors, and the
 //! inherited environment domain — and it runs where the process backend can
 //! enumerate the current user's process table.
+//!
+//! A hard reset also ends the processes still inside the room's sandbox views
+//! (`temp_unit_holders`). That match is exact, the temp unit directory's own
+//! identity at the process's `/tmp`, so it carries the uid and ancestor scopes
+//! and no session-name or environment-domain guard.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -176,6 +181,55 @@ pub(crate) fn sweep_orphan_processes(
     _scope: SweepScope,
 ) -> KillOutcome {
     KillOutcome::default()
+}
+
+/// Pick this user's processes whose `/tmp` is one of `units` by `(dev, ino)`,
+/// minus this process and its ancestors. A process whose root cannot be read
+/// has no `/tmp` identity and is spared.
+fn select_temp_unit_holders(
+    procs: Vec<ProcInfo>,
+    my_uid: u32,
+    protected: &HashSet<u32>,
+    units: &HashSet<(u64, u64)>,
+    tmp_identity: impl Fn(u32) -> Option<(u64, u64)>,
+) -> Vec<ProcInfo> {
+    procs
+        .into_iter()
+        .filter(|proc| proc.real_uid == my_uid)
+        .filter(|proc| !protected.contains(&proc.pid))
+        .filter(|proc| tmp_identity(proc.pid).is_some_and(|tmp| units.contains(&tmp)))
+        .collect()
+}
+
+/// This user's processes still inside one of the room's sandbox views: those
+/// whose `/tmp` is one of the temp unit directories `units`, excluding the
+/// caller and its ancestors. The match is the unit directory's own identity,
+/// which a bind mount keeps across the reset's rename, so it needs no
+/// environment-domain guard. A process whose root cannot be read is logged and
+/// spared. Empty off Linux, where no sandbox view exists.
+pub(crate) fn temp_unit_holders(units: &[std::path::PathBuf]) -> Vec<ProcInfo> {
+    let me = std::process::id();
+    let tmp = std::path::Path::new("/tmp");
+    // A host path read through the caller's own root is the directory itself.
+    let units: HashSet<(u64, u64)> = units
+        .iter()
+        .filter_map(|unit| crate::proc::root_path_identity(me, unit))
+        .collect();
+    if units.is_empty() {
+        return Vec::new();
+    }
+    let procs = crate::proc::list_processes();
+    let protected = protected_pids(&procs, me);
+    select_temp_unit_holders(procs, current_uid(), &protected, &units, |pid| {
+        let identity = crate::proc::root_path_identity(pid, tmp);
+        if identity.is_none() {
+            tracing::debug!(
+                pid,
+                "cannot read the process root; not a sandbox view holder"
+            );
+        }
+        identity
+    })
 }
 
 /// SIGUSR1 every `rimz stats --refresh` dashboard this user owns in this state
@@ -509,6 +563,47 @@ mod tests {
             |_| None,
         );
         assert_eq!(got, vec![(10, RequiredDomainCheck::Mux(MuxName::Zellij))]);
+    }
+
+    #[test]
+    fn temp_unit_holders_match_only_by_unit_identity() {
+        let me = 1000;
+        let canonical_unit = (64, 7);
+        // A unit an earlier failed reset left under the detached `tmp/` sibling.
+        let detached_unit = (64, 8);
+        let units = HashSet::from([canonical_unit, detached_unit]);
+        let procs = vec![
+            proc(1, 0, me, "init"),
+            proc(100, 1, me, "zsh"),
+            proc(101, 100, me, "rimz reset --hard"),
+            proc(10, 1, me, "sh -c writer"),
+            proc(11, 1, me, "node dev-server"),
+            // Another user's process in the same view.
+            proc(20, 1, me + 1, "sh -c writer"),
+            // A host process: its `/tmp` is not a unit.
+            proc(21, 1, me, "cargo build"),
+            // A process whose root cannot be read.
+            proc(22, 1, me, "sh -c hidden"),
+        ];
+        // The caller runs inside a view itself, so it and its ancestor shell
+        // hold a unit too.
+        let tmp_identity = |pid| match pid {
+            10 | 20 | 100 | 101 => Some(canonical_unit),
+            11 => Some(detached_unit),
+            21 => Some((64, 2)),
+            _ => None,
+        };
+        let holders = select_temp_unit_holders(
+            procs.clone(),
+            me,
+            &protected_pids(&procs, 101),
+            &units,
+            tmp_identity,
+        );
+        assert_eq!(
+            holders.iter().map(|proc| proc.pid).collect::<Vec<_>>(),
+            [10, 11]
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::harness::resume::ResumePlan;
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, DaemonView, SessionHealth, SidebarPaneOptions,
 };
+use crate::proc::ProcInfo;
 use crate::remote_control::ReadinessSnapshot;
 use crate::{StatePaths, Store};
 
@@ -76,6 +77,9 @@ pub enum RoomBirth {
 #[derive(Debug)]
 pub struct RoomResetReport {
     pub teardown: crate::room::teardown::TeardownReport,
+    /// Processes a hard reset ended because they still ran inside one of the
+    /// room's sandbox views.
+    pub view_processes_ended: Vec<u32>,
     pub records: crate::store::writer::ResetRecordsOutcome,
 }
 
@@ -353,7 +357,7 @@ impl RoomContext {
         }
         // A recovery reset rebuilds the room this birth already froze accounts
         // for; unlike `rimz reset`, it must not unfreeze them.
-        let reset = self.reset_with(Store::reset_records_keeping_logins)?;
+        let reset = self.reset_with(false, Store::reset_records_keeping_logins)?;
         match self.clean_session(sidebar, daemon) {
             Ok(SessionHealth::Healthy | SessionHealth::Reborn) => Ok(Some(reset)),
             Ok(SessionHealth::Stuck | SessionHealth::Unresponsive) => Err(ResetRecoveryError {
@@ -388,13 +392,16 @@ impl RoomContext {
         }
     }
 
-    /// Tear down mux runtime and reset durable room records.
+    /// Tear down mux runtime and reset durable room records. A hard reset
+    /// first ends the processes still inside the room's sandbox views, and
+    /// refuses before any store write when one survives.
     pub fn reset(&self, hard: bool) -> Result<RoomResetReport> {
-        self.reset_with(|store| store.reset_records(hard))
+        self.reset_with(hard, |store| store.reset_records(hard))
     }
 
     fn reset_with(
         &self,
+        end_view_processes: bool,
         reset_records: impl FnOnce(
             &Store,
         )
@@ -408,18 +415,125 @@ impl RoomContext {
             &self.workspace.session_name,
             &self.runtime,
         );
-        let store = Store::open(paths, self.runtime.clone()).context("opening store for reset")?;
-        store
-            .record_workspace(&self.workspace)
-            .context("recording workspace metadata for reset")?;
-        let records = reset_records(&store).context("resetting workspace records")?;
-        Ok(RoomResetReport { teardown, records })
+        let units = paths.temp_unit_dirs();
+        let reset_store = || {
+            let store =
+                Store::open(paths, self.runtime.clone()).context("opening store for reset")?;
+            store
+                .record_workspace(&self.workspace)
+                .context("recording workspace metadata for reset")?;
+            reset_records(&store).context("resetting workspace records")
+        };
+        let (view_processes_ended, records) = if end_view_processes {
+            end_view_holders_then(
+                || crate::mux::recovery::temp_unit_holders(&units),
+                |pids| {
+                    crate::mux::recovery::kill_pids(pids, crate::mux::recovery::SWEEP_GRACE);
+                },
+                reset_store,
+            )?
+        } else {
+            (Vec::new(), reset_store()?)
+        };
+        Ok(RoomResetReport {
+            teardown,
+            view_processes_ended,
+            records,
+        })
     }
+}
+
+/// End the processes `holders` reports inside the room's sandbox views, then
+/// run `reset_records`. `kill` only warns about survivors, so a second look
+/// decides: a process that is still a holder refuses the reset before
+/// `reset_records` runs, leaving the store untouched for a rerun.
+fn end_view_holders_then<T>(
+    holders: impl Fn() -> Vec<ProcInfo>,
+    kill: impl FnOnce(&[u32]),
+    reset_records: impl FnOnce() -> Result<T>,
+) -> Result<(Vec<u32>, T)> {
+    let ended: Vec<u32> = holders().iter().map(|proc| proc.pid).collect();
+    if !ended.is_empty() {
+        kill(&ended);
+        let survivors = holders();
+        if !survivors.is_empty() {
+            let listed: String = survivors
+                .iter()
+                .map(|proc| format!("\n  pid {}: {}", proc.pid, proc.cmdline))
+                .collect();
+            let one = survivors.len() == 1;
+            bail!(
+                "The session is gone, but {} process{} still run{} inside the room's sandbox view \
+                 and keep{} its /tmp in use:{listed}\n\
+                 Stop {}, then run `rimz reset --hard` again.",
+                survivors.len(),
+                if one { "" } else { "es" },
+                if one { "s" } else { "" },
+                if one { "s" } else { "" },
+                if one { "it" } else { "them" },
+            );
+        }
+    }
+    Ok((ended, reset_records()?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn holder(pid: u32) -> ProcInfo {
+        ProcInfo {
+            pid,
+            ppid: 1,
+            real_uid: 1000,
+            cmdline: format!("writer-{pid}"),
+        }
+    }
+
+    #[test]
+    fn hard_reset_ends_view_holders_before_the_record_reset() {
+        let live = std::cell::RefCell::new(vec![holder(41), holder(42)]);
+        let (ended, ()) = end_view_holders_then(
+            || live.borrow().clone(),
+            |pids| live.borrow_mut().retain(|proc| !pids.contains(&proc.pid)),
+            || {
+                assert!(live.borrow().is_empty(), "records reset under a holder");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(ended, [41, 42]);
+
+        let killed = std::cell::Cell::new(false);
+        let (ended, ()) = end_view_holders_then(Vec::new, |_| killed.set(true), || Ok(())).unwrap();
+        assert!(ended.is_empty());
+        assert!(!killed.get(), "no holder, nothing to signal");
+    }
+
+    #[test]
+    fn hard_reset_refuses_before_the_record_reset_when_a_holder_survives() {
+        let live = std::cell::RefCell::new(vec![holder(41), holder(42)]);
+        let records_reset = std::cell::Cell::new(false);
+        let err = end_view_holders_then(
+            || live.borrow().clone(),
+            |pids| {
+                assert_eq!(pids, [41, 42]);
+                live.borrow_mut().retain(|proc| proc.pid != 41);
+            },
+            || {
+                records_reset.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(!records_reset.get(), "refusal must precede the store");
+        assert_eq!(
+            err.to_string(),
+            "The session is gone, but 1 process still runs inside the room's sandbox view and \
+             keeps its /tmp in use:\n  pid 42: writer-42\n\
+             Stop it, then run `rimz reset --hard` again."
+        );
+    }
 
     #[test]
     fn birth_keeps_live_recorded_name_and_migrates_dead_name() {
