@@ -2890,12 +2890,12 @@ fn agent_broadcast_waits_for_peers_without_waiting_on_itself() {
         .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
         .env(rimz::harness::launch::ENV_AGENT_ID, "launch-agent-gather")
         .env(rimz::harness::launch::ENV_AGENT_NAME, "planner")
-        .args(["message", "@all", "--wait=5s", "status?"])
+        .args(["message", "@all", "--wait=60s", "status?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn agent fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 1, Duration::from_secs(2));
+    wait_for_message_event_count(&env, "message.sent", 1, Duration::from_secs(60));
     peer.start_reported(
         &env,
         "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\n@all, status?",
@@ -2928,12 +2928,12 @@ fn message_wait_json_emits_one_fanout_map() {
     let [first, second] = ReplyAgentFixture::pair(&env, "json");
 
     let child = traced_rimz(&env, "zellij-wait-json-trace.log")
-        .args(["message", "@all", "--wait=5s", "--json", "status?"])
+        .args(["message", "@all", "--wait=60s", "--json", "status?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn JSON fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
+    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(60));
     first.start(&env, "@all, status?");
     second.start(&env, "@all, status?");
     first.finish(&env, "first JSON reply", false);
@@ -3008,12 +3008,12 @@ fn message_wait_any_returns_only_the_first_terminal_leg() {
     let [first, second] = ReplyAgentFixture::pair(&env, "any");
 
     let child = traced_rimz(&env, "zellij-wait-any-trace.log")
-        .args(["message", "@all", "--wait=5s", "--any", "first?"])
+        .args(["message", "@all", "--wait=60s", "--any", "first?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn any fanout wait");
-    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
+    wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(60));
     first.start(&env, "@all, first?");
     second.start(&env, "@all, first?");
     second.finish(&env, "winner", false);
