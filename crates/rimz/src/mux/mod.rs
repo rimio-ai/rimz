@@ -1048,7 +1048,9 @@ pub trait MuxBackend: Send + Sync {
     /// Whether an abrupt agent-wrapper exit should be treated as a deliberate
     /// pane/tab close inside a session that `list-sessions` still reports live.
     /// If the session is absent from the backend's live list, the wrapper
-    /// preserves the agent for recovery.
+    /// preserves the agent for recovery. The sidebar producer asks the same
+    /// question before it drops an agent from the recovery roster, so a failed
+    /// listing reading as "not listed" is load-bearing for both callers.
     fn session_accepts_agent_close(&self, name: &str) -> bool {
         self.list_sessions()
             .map(|sessions| sessions.iter().any(|session| session == name))
