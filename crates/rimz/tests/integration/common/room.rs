@@ -28,6 +28,12 @@ pub fn seed_live_zellij_room(
     seed_sidebar_heartbeat(runtime, MuxName::Zellij, session_name, "seeded");
 }
 
+const SEEDED_HEARTBEAT_LIFE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// A live renderer rewrites its heartbeat every beat and the product treats
+/// one as dead `SIDEBAR_HEARTBEAT_TTL` after its modification time. This seed
+/// has no writer behind it, so it is dated ahead of the clock to stay a live
+/// claim for the whole test, however slow the host.
 pub fn seed_sidebar_heartbeat(
     runtime: &rimz::RuntimePaths,
     mux: MuxName,
@@ -45,6 +51,11 @@ pub fn seed_sidebar_heartbeat(
     );
     let path = runtime.heartbeat_dir.join(format!("sidebar.{label}.json"));
     rimz::disk::atomic::write_temp_then_rename_cache(&path, &heartbeat).expect("write heartbeat");
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|file| file.set_modified(std::time::SystemTime::now() + SEEDED_HEARTBEAT_LIFE))
+        .expect("date heartbeat ahead");
     path
 }
 

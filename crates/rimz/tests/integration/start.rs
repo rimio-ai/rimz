@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-use crate::common::room::ShimRoom;
+use crate::common::room::{ShimRoom, seed_sidebar_heartbeat};
 use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env, path_with_front, zellij_trace_shim};
 
 const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
@@ -53,26 +53,6 @@ fn configure_actionable_hooks(
             "RIMZ_ANTIGRAVITY_SETTINGS",
             env.home_root.join("agent-config/settings.json"),
         );
-}
-
-fn seed_sidebar_heartbeat(env: &Env, session_name: &str, label: &str) -> PathBuf {
-    let runtime = env.runtime_paths();
-    let path = crate::common::room::seed_sidebar_heartbeat(
-        &runtime,
-        rimz::MuxName::Zellij,
-        session_name,
-        label,
-    );
-    // A live renderer rewrites its heartbeat every beat; this one-shot seed has
-    // no writer, so the runtime-claim sweep would rightly reap it once the run
-    // outlasts `SIDEBAR_HEARTBEAT_TTL`. Dating it past the run's bound keeps it
-    // a live claim for the whole `rimz start`, however slow the host.
-    std::fs::File::options()
-        .write(true)
-        .open(&path)
-        .and_then(|file| file.set_modified(std::time::SystemTime::now() + COMMAND_TIMEOUT))
-        .expect("date heartbeat past the run");
-    path
 }
 
 fn assert_health_before_presence(trace: &str) {
@@ -475,7 +455,12 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let config = birth.home_root.join("codex.toml");
     std::fs::write(&config, "").unwrap();
     let birth_workspace = birth.resolve_workspace(&birth.project_root);
-    let birth_heartbeat = seed_sidebar_heartbeat(&birth, &birth_workspace.session_name, "birth");
+    let birth_heartbeat = seed_sidebar_heartbeat(
+        &birth.runtime_paths(),
+        rimz::MuxName::Zellij,
+        &birth_workspace.session_name,
+        "birth",
+    );
     let birth_trace = birth.project_root.join("zellij-birth.log");
     let _birth_room = ShimRoom::watch(&birth, &birth_trace, MATERIALIZED_ROOM_PANES);
     let mut birth_command = birth.rimz();
@@ -528,7 +513,12 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let live = Env::new();
     let live_bin = seed_actionable_agent(&live);
     let workspace = live.resolve_workspace(&live.project_root);
-    let live_heartbeat = seed_sidebar_heartbeat(&live, &workspace.session_name, "live");
+    let live_heartbeat = seed_sidebar_heartbeat(
+        &live.runtime_paths(),
+        rimz::MuxName::Zellij,
+        &workspace.session_name,
+        "live",
+    );
     let sessions = format!("{} [Created 1m ago]\n", workspace.session_name);
     let live_trace = live.project_root.join("zellij-live.log");
     let _live_room = ShimRoom::watch(&live, &live_trace, MATERIALIZED_ROOM_PANES);
