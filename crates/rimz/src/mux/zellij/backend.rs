@@ -1100,7 +1100,15 @@ impl MuxBackend for ZellijBackend {
             spec = spec.env("ZELLIJ_PANE_ID", pane_id.to_string());
         }
         let anchored_stack = opts.placement == SplitPlacement::Stacked && target_pane.is_some();
-        let no_focus = !opts.focus && self.supports_no_focus();
+        let directional_session_pane = matches!(
+            (&target, opts.placement),
+            (
+                SplitTarget::SessionPane { .. },
+                SplitPlacement::Directional(_)
+            )
+        );
+        let no_focus = (!opts.focus || directional_session_pane) && self.supports_no_focus();
+        let focus_spawned = opts.focus && no_focus;
         let restore = (!opts.focus && !no_focus)
             .then(|| self.focus_restore_target(&session, focus_workspace.as_ref()))
             .flatten();
@@ -1115,12 +1123,15 @@ impl MuxBackend for ZellijBackend {
                 spec = spec.args(["--direction", split_direction(direction)]);
             }
         }
-        // Zellij gives `--tab-id` precedence over the CLI pane context. On
-        // 0.45+, `--no-focus` lets both tab-targeted and pane-targeted spawns
-        // preserve every attached client's view and the exact split anchor. On 0.44 an anchored stack
-        // uses `--near-current-pane` and lets `ZELLIJ_PANE_ID` imply the tab;
-        // directional spawns silently no-op with that flag and keep resolving
-        // a stable tab id.
+        // The CLI pane context anchors a spawn only under `--no-focus`: a
+        // focus-taking directional spawn splits the last-active client's
+        // focused pane, whatever `ZELLIJ_PANE_ID` and `--tab-id` name. On
+        // 0.45+ a directional session-pane split is therefore always spawned
+        // unfocused, and a focus-taking one jumps to the pane it made. On 0.44
+        // an anchored stack uses `--near-current-pane` and lets
+        // `ZELLIJ_PANE_ID` imply the tab; directional spawns silently no-op
+        // with that flag and keep resolving a stable tab id, which places a
+        // focus-taking one beside the client's focused pane in that tab.
         if let (
             SplitTarget::SessionPane {
                 session_name,
@@ -1162,7 +1173,21 @@ impl MuxBackend for ZellijBackend {
                     .args(args.iter().cloned());
             }
         }
-        spec.run()?;
+        let spawned = spec.run()?;
+        if focus_spawned {
+            // The pane is running, so a lost jump never fails the split. The
+            // jump is bare: a focus intent naming a pane no renderer has
+            // observed yet is invalidated, and a renderer that clears it
+            // before dispatch cancels the jump.
+            match super::raw_pane::parse_new_pane_id(&String::from_utf8_lossy(&spawned.stdout)) {
+                Some(created) => {
+                    if let Err(err) = self.focus_pane(&PaneId::from(created), Some(&session)) {
+                        tracing::debug!(error = %err, "split opened; focusing it failed");
+                    }
+                }
+                None => tracing::debug!("split opened; zellij printed no pane id to focus"),
+            }
+        }
         if !no_focus {
             self.restore_background_split_focus(
                 opts.placement,
