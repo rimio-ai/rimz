@@ -5871,33 +5871,7 @@ fn loop_watch_shows_a_run_whose_task_row_is_gone() {
     };
     let _lock = hold_loop_run_lock(&loop_run_lock_path(&env, "later"), &holder);
 
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 100,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("open loop watch pty");
-    let mut cmd = CommandBuilder::new(env.rimz_bin());
-    env.pin_pty_command(&mut cmd);
-    cmd.args(["loop", "watch", "--hold"]);
-    cmd.cwd(env.project_root.as_os_str());
-    cmd.env("TERM", "xterm-256color");
-    let mut child = pair.slave.spawn_command(cmd).expect("spawn loop watch");
-    drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
-    let reader_thread = std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
-        output
-    });
-    std::thread::sleep(Duration::from_millis(1_200));
-    child.kill().expect("terminate loop watch");
-    let _ = child.wait().expect("reap loop watch");
-    drop(pair.master);
-    let output =
-        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    let output = loop_watch_frames(&env);
 
     assert!(
         output.contains("loop · 1 tasks")
@@ -5906,6 +5880,60 @@ fn loop_watch_shows_a_run_whose_task_row_is_gone() {
             && output.contains("▸ running 3m")
             && !output.contains("next:")
             && !output.contains("no loop tasks"),
+        "{output}"
+    );
+}
+
+#[test]
+fn loop_watch_stays_silent_when_a_task_run_lock_cannot_be_read() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "probe", "--check", "true", "--every", "1h"],
+    );
+    // A directory where the run lock file belongs makes opening the lock fail.
+    std::fs::create_dir_all(loop_run_lock_path(&env, "probe")).unwrap();
+
+    let output = loop_watch_frames(&env);
+
+    assert!(
+        output.contains("loop · 1 tasks")
+            && output.contains("probe")
+            && !output.contains("▸ running")
+            && !output.contains("warning")
+            && !output.contains("cannot read"),
+        "{output}"
+    );
+}
+
+#[test]
+fn loop_watch_stays_silent_and_drops_a_group_holding_only_a_listing_error() {
+    let env = Env::new();
+    let elsewhere = env.home_root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.remote-task]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            elsewhere.display()
+        ),
+    );
+    // A file where the project's locks directory belongs makes listing it fail.
+    let locks = loop_run_lock_path(&env, "any");
+    let locks = locks.parent().expect("locks directory");
+    let _ = std::fs::remove_dir_all(locks);
+    std::fs::create_dir_all(locks.parent().expect("runtime root")).unwrap();
+    std::fs::write(locks, "").unwrap();
+
+    let output = loop_watch_frames(&env);
+
+    assert!(
+        output.contains("loop · 1 tasks")
+            && output.contains("~/elsewhere")
+            && output.contains("remote-task")
+            && !output.contains("~/project")
+            && !output.contains("warning")
+            && !output.contains("listing loop run locks"),
         "{output}"
     );
 }
@@ -7790,6 +7818,37 @@ fn wait_for_path(path: &Path) {
         std::thread::sleep(Duration::from_millis(25));
     }
     assert!(path.exists(), "timed out waiting for {}", path.display());
+}
+
+/// Run `loop watch --hold` in a pty from the project root for about one
+/// repaint, and return everything it wrote, stderr included.
+fn loop_watch_frames(env: &Env) -> String {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open loop watch pty");
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut cmd);
+    cmd.args(["loop", "watch", "--hold"]);
+    cmd.cwd(env.project_root.as_os_str());
+    cmd.env("TERM", "xterm-256color");
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn loop watch");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+    std::thread::sleep(Duration::from_millis(1_200));
+    child.kill().expect("terminate loop watch");
+    let _ = child.wait().expect("reap loop watch");
+    drop(pair.master);
+    String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned()
 }
 
 fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {
