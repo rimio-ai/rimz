@@ -128,6 +128,15 @@ impl Fixture {
     }
 
     fn inspect_with(&self, machine: &MachineConfig, disabled: bool) -> RebirthPlan {
+        self.inspect_within(machine, disabled, OWNER_EXIT_BOUND)
+    }
+
+    fn inspect_within(
+        &self,
+        machine: &MachineConfig,
+        disabled: bool,
+        owner_exit_bound: Duration,
+    ) -> RebirthPlan {
         inspect_at(
             self.paths.clone(),
             self.runtime.clone(),
@@ -136,8 +145,27 @@ impl Fixture {
             &self.project,
             machine,
             disabled,
+            owner_exit_bound,
         )
         .expect("inspect")
+    }
+
+    fn own(&self, id: &str, pid: u32) {
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(id)),
+            LifecycleSignal::Registered,
+        );
+        observation.agent_pid = Some(pid);
+        Store::open(self.paths.clone(), self.runtime.clone())
+            .expect("store")
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                self.paths.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .expect("owner event");
     }
 
     fn stamp_team(&self, id: &str, worktree: &Path, team: &str, role: &str, profile: &str) {
@@ -199,6 +227,16 @@ impl Fixture {
 
 fn key(id: &str) -> (AgentKind, AgentSessionId) {
     (AgentKind::new_unchecked("claude"), AgentSessionId::from(id))
+}
+
+fn owner_liveness(fixture: &Fixture, id: &str) -> AgentLiveness {
+    let projection = Store::open_existing(fixture.paths.clone(), fixture.runtime.clone())
+        .expect("store")
+        .runtime_projection(crate::RuntimeScope::Audit)
+        .expect("projection");
+    agent_liveness(
+        find_agent(&projection.agents, "claude", &AgentSessionId::from(id)).expect("agent"),
+    )
 }
 
 fn pending(fixture: &Fixture) -> BTreeSet<(AgentKind, AgentSessionId)> {
@@ -972,6 +1010,125 @@ fn unconfirmed_team_tab_fails_its_launch_batch_and_reindexes_the_rest() {
 }
 
 #[test]
+fn boundary_inspection_offers_an_agent_whose_owner_exits_within_the_bound() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let exiting = dir.path().join("exiting");
+    let fixture = Fixture::new(&[("exiting", &exiting, true)]);
+    // `cat` lives until its stdin closes, so the owner exits only on release.
+    let mut owner = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("owner process");
+    fixture.own("exiting", owner.id());
+    assert!(
+        matches!(
+            owner_liveness(&fixture, "exiting"),
+            AgentLiveness::Live { .. }
+        ),
+        "the inspection's own liveness read sees the owner live"
+    );
+
+    let inspection = std::thread::spawn({
+        let fixture_paths = (fixture.paths.clone(), fixture.runtime.clone());
+        let project = fixture.project.clone();
+        move || {
+            inspect_at(
+                fixture_paths.0,
+                fixture_paths.1,
+                Some("boot-a".to_owned()),
+                Vec::new(),
+                &project,
+                &MachineConfig::default(),
+                false,
+                Duration::from_secs(60),
+            )
+            .expect("inspect")
+        }
+    });
+    let held_from = Instant::now();
+    while held_from.elapsed() < Duration::from_millis(300) && !inspection.is_finished() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !inspection.is_finished(),
+        "the inspection returned while the owner was still live"
+    );
+    drop(owner.stdin.take());
+    owner.wait().expect("owner exit");
+    let plan = inspection.join().expect("inspection");
+
+    assert_eq!(plan.preview().candidate_count(), 1);
+}
+
+#[test]
+fn boundary_inspection_stops_waiting_for_a_live_owner_at_the_bound() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let running = dir.path().join("running");
+    let fixture = Fixture::new(&[("running", &running, true)]);
+    fixture.own("running", std::process::id());
+    let bound = Duration::from_millis(150);
+
+    let inspection = Instant::now();
+    let plan = fixture.inspect_within(&MachineConfig::default(), false, bound);
+
+    assert!(inspection.elapsed() >= bound, "{:?}", inspection.elapsed());
+    assert!(
+        matches!(
+            owner_liveness(&fixture, "running"),
+            AgentLiveness::Live { .. }
+        ),
+        "the bound, not an exit, ended the wait"
+    );
+    assert_eq!(plan.preview().candidate_count(), 0);
+    assert_eq!(
+        pending(&fixture),
+        BTreeSet::new(),
+        "inspection writes nothing"
+    );
+}
+
+#[test]
+fn boundary_inspection_waits_for_no_owner_it_would_not_offer() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let lost = dir.path().join("lost");
+    let ended = dir.path().join("ended");
+    let bystander = dir.path().join("bystander");
+    let fixture = Fixture::new(&[
+        ("lost", &lost, true),
+        ("ended", &ended, true),
+        ("bystander", &bystander, true),
+    ]);
+    // Live owners outside the offer: an ended agent, and one out of scope.
+    fixture.own("ended", std::process::id());
+    fixture.own("bystander", std::process::id());
+    let mut end =
+        AgentLifecycleObservation::new(Some(AgentSessionId::from("ended")), LifecycleSignal::Ended);
+    end.agent_pid = Some(std::process::id());
+    Store::open(fixture.paths.clone(), fixture.runtime.clone())
+        .expect("store")
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.paths.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionEnd",
+            &end,
+        ))
+        .expect("ended event");
+    live_roster::publish(
+        &fixture.paths.live_roster,
+        [key("lost"), key("ended")].into(),
+    )
+    .expect("roster");
+    let bound = Duration::from_secs(60);
+
+    let inspection = Instant::now();
+    let plan = fixture.inspect_within(&MachineConfig::default(), false, bound);
+
+    assert!(inspection.elapsed() < bound, "{:?}", inspection.elapsed());
+    assert_eq!(plan.preview().candidate_count(), 1);
+}
+
+#[test]
 fn live_settlement_writes_no_boundary_and_leaves_live_agents_alone() {
     for disposition in [RebirthDisposition::Decline, RebirthDisposition::RecoverKeep] {
         let dir = tempfile::tempdir().expect("worktrees");
@@ -1518,6 +1675,7 @@ fn crash_archive_uses_cache_bytes_captured_before_room_birth() {
         &fixture.project,
         &MachineConfig::default(),
         false,
+        OWNER_EXIT_BOUND,
     )
     .expect("inspect");
 
