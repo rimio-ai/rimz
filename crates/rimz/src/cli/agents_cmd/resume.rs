@@ -144,7 +144,10 @@ pub(super) fn resume_lane(
                 .unwrap_or_default();
             for pane in commands {
                 backend.split_pane(SplitPaneOptions {
-                    target: SplitTarget::Pane(target_pane_id.clone()),
+                    target: SplitTarget::SessionPane {
+                        session_name: workspace.session_name.clone(),
+                        pane_id: target_pane_id.clone(),
+                    },
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(pane.argv),
                     env: rimz::room::pane_identity_env(&workspace, &cwd, channel.as_deref(), false),

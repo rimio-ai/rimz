@@ -911,6 +911,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
         .env("RIMZ_PRESENCE_PLUGIN", presence)
         .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
@@ -981,6 +982,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
         .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{} [Created 1s ago]\n", workspace.session_name),
@@ -2783,6 +2785,7 @@ fn spawn_retrying_print(
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
         .env("RIMZ_TEST_ZELLIJ_TOPOLOGY_PANES", "[]")
         .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{} [Created 1s ago]\n", workspace.session_name),
@@ -2832,6 +2835,7 @@ fn spawn_verifying_print(
         .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
         .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{} [Created 1s ago]\n", workspace.session_name),
