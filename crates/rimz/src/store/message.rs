@@ -68,6 +68,8 @@ pub enum HarnessNotice {
     Stage,
     /// The leader of an agent-launched team, reported when its board reaches Done.
     TeamReport,
+    /// A launched child stopped on a provider limit; told to its parent once per park.
+    SubagentPaused,
     /// Preserve newer notices verbatim through older queue rewrites and history pruning.
     #[serde(untagged)]
     Other(String),
@@ -84,6 +86,7 @@ impl HarnessNotice {
             Self::SubagentReport => "SUBAGENT_REPORT".to_owned(),
             Self::AgentReport => "AGENT_REPORT".to_owned(),
             Self::TeamReport => "TEAM_REPORT".to_owned(),
+            Self::SubagentPaused => "SUBAGENT_PAUSED".to_owned(),
             Self::Deadline => "DEADLINE".to_owned(),
             Self::Wait => "WAIT".to_owned(),
             Self::Signal => "SIGNAL".to_owned(),
@@ -113,6 +116,7 @@ impl MessageSender {
                     | HarnessNotice::Wait
                     | HarnessNotice::Signal
                     | HarnessNotice::Stage
+                    | HarnessNotice::SubagentPaused
                     | HarnessNotice::Other(_),
             } => SectionOrigin::Notice(self.render()),
             Self::System => SectionOrigin::Harness,

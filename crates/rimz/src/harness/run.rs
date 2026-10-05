@@ -541,6 +541,36 @@ pub fn claim_rung(
     .map(|(_, rung)| rung)
 }
 
+/// Claim one provider-limit park of a child run for its parent's notice. The
+/// park is named by the child's `last_activity`; a settled run and a park
+/// already claimed write nothing. Returns whether this caller owns the notice.
+pub fn claim_park_notice(paths: &StatePaths, run_id: &RunId, activity: Timestamp) -> Result<bool> {
+    update_record(paths, run_id, |record, _| {
+        if record.status.is_terminal()
+            || record
+                .park_noticed_activity
+                .is_some_and(|noticed| noticed >= activity)
+        {
+            return Ok(RecordMutation::Keep(false));
+        }
+        record.park_noticed_activity = Some(activity);
+        Ok(RecordMutation::Write(true))
+    })
+    .map(|(_, claimed)| claimed)
+}
+
+/// Give a claimed park back when its notice could not be queued.
+pub fn release_park_notice(paths: &StatePaths, run_id: &RunId, activity: Timestamp) -> Result<()> {
+    update_record(paths, run_id, |record, _| {
+        if record.park_noticed_activity != Some(activity) {
+            return Ok(RecordMutation::Keep(()));
+        }
+        record.park_noticed_activity = None;
+        Ok(RecordMutation::Write(()))
+    })
+    .map(|_| ())
+}
+
 pub fn budget_exceeded(
     paths: &StatePaths,
     run_id: &RunId,

@@ -44,6 +44,7 @@ fn submitted_sections_cover_every_sender_and_body() {
         HarnessNotice::Signal,
         HarnessNotice::Stage,
         HarnessNotice::CacheKeepalive,
+        HarnessNotice::SubagentPaused,
         HarnessNotice::Other("future".to_owned()),
     ] {
         let origin = if matches!(

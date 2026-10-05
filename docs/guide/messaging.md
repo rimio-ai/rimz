@@ -271,7 +271,10 @@ Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come fro
 
 - `SUBAGENT_REPORT`, the digest sent once an agent's launched subagents have all settled; `AGENT_REPORT` when the fleet includes solo agents.
 - `TEAM_REPORT`, the leader's final response and the team's board path when an agent-launched team reaches `Done` or ends before `Done`.
+- `SUBAGENT_PAUSED`, sent to a parent once each time one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stops on a provider usage limit.
+- `DEADLINE`, the warnings and the stop request a subagent receives as its work deadline nears.
 - `WAIT`, a [`rimz wait`](./loops.md) delivery coming due.
+- `CACHE_KEEPALIVE`, a facts-only ping that keeps a sleeping agent's prompt cache warm.
 - `SIGNAL`, a signal-triggered loop firing.
 - `STAGE`, a [team](./teams.md) stage opening.
 
