@@ -1075,6 +1075,8 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
         return;
     }
     let env = Env::new();
+    env.install_agent_hooks("codex");
+    crate::common::trust_codex_preflight_hooks(&env);
     std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
     init_repo(&env.project_root);
     let worktree = env.home_root.join("project-worktrees/resume");
@@ -1305,6 +1307,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         return;
     }
     let env = Env::new();
+    env.install_agent_hooks("claude");
     std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
     init_repo(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
@@ -1637,6 +1640,7 @@ fn existing_unmanaged_worktree_launch(doorway: &str, spec: &str) {
     use std::os::unix::fs::MetadataExt;
 
     let env = Env::new();
+    env.install_agent_hooks("claude");
     std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
     init_repo(&env.project_root);
     let worktree = env.home_root.join("project-worktrees/existing");

@@ -556,6 +556,12 @@ fn tier_lane_resume_records_assist_after_tab_opens() {
 
 #[cfg(unix)]
 #[test]
+fn lane_resume_refuses_a_login_without_hooks() {
+    assert_tier_launch("fallback", "lane-unhooked");
+}
+
+#[cfg(unix)]
+#[test]
 fn tier_lane_resume_failed_tab_closes_launch_without_assist() {
     assert_tier_launch("fallback", "lane-fails");
 }
@@ -563,7 +569,7 @@ fn tier_lane_resume_failed_tab_closes_launch_without_assist() {
 #[cfg(unix)]
 fn assert_tier_launch(routing: &str, surface: &str) {
     let interactive = surface != "subagent";
-    let lane = matches!(surface, "lane" | "lane-fails");
+    let lane = matches!(surface, "lane" | "lane-fails" | "lane-unhooked");
     let resume = surface == "resume" || lane;
     let env = Env::new();
     for kind in ["claude", "codex"] {
@@ -727,7 +733,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         .args(match surface {
             "same-pane" => vec!["--mux", "zellij", "agents", "preview"],
             "resume" => vec!["--mux", "zellij", "agents", "duo", "--resume"],
-            "lane" | "lane-fails" => vec!["--mux", "zellij", "agents", "resume", "#restore"],
+            _ if lane => vec!["--mux", "zellij", "agents", "resume", "#restore"],
             _ => vec!["--mux", "zellij", "subagents", "worker", "work"],
         })
         .envs(rimz::workspace::pin_env(
@@ -760,8 +766,11 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     if surface == "lane-fails" {
         command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
     }
+    if surface == "lane-unhooked" {
+        std::fs::remove_file(env.agent_config_path("claude")).unwrap();
+    }
     let launched = std::sync::atomic::AtomicBool::new(false);
-    std::thread::scope(|scope| {
+    let output = std::thread::scope(|scope| {
         if !interactive {
             scope.spawn(|| bind_child_panes(&store, &trace, &workspace.session_name, &launched));
         }
@@ -769,7 +778,8 @@ fn assert_tier_launch(routing: &str, surface: &str) {
         launched.store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(
             surface == "same-pane"
-                || output.as_ref().unwrap().status.success() == (surface != "lane-fails"),
+                || output.as_ref().unwrap().status.success()
+                    == !matches!(surface, "lane-fails" | "lane-unhooked"),
             "{}",
             String::from_utf8_lossy(&output.as_ref().unwrap().stderr)
         );
@@ -777,6 +787,27 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     })
     .unwrap();
     let events = env.read_events();
+    if surface == "lane-unhooked" {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("RimZ hooks are missing for claude account `default`"),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("; run `rimz hooks install claude`"),
+            "{stderr}"
+        );
+        assert!(!events.iter().any(|event| matches!(event.kind(),
+            rimz::store::event::EventKind::AgentLaunch(payload)
+                if payload.state == AgentLaunchState::Starting)));
+        assert!(
+            !std::fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("action\tnew-tab")
+        );
+        assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
+        return;
+    }
     let launches: Vec<_> = events
         .iter()
         .filter_map(|event| match event.kind() {

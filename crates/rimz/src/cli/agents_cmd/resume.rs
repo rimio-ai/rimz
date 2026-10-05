@@ -97,6 +97,9 @@ pub(super) fn resume_lane(
     };
     for kind in action.agent_kinds_needing_preflight() {
         rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), cwd)?;
+        catalog
+            .room_login(&logins, kind)?
+            .health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
     }
 
     match action {

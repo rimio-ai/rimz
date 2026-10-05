@@ -836,7 +836,6 @@ fn preflight_cell(
         &rimz::config::MachineConfig::load_lenient().accounts,
     )?;
     request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
-    login.preflight(&rimz::agents::ambient_env())?;
     request.skills.clone_from(&cell.skills);
     request.isolation_default = cell.isolation_default;
     request.action = rimz::harness::launch::ExecAction::Launch {
@@ -848,6 +847,10 @@ fn preflight_cell(
         &request,
         &workspace.worktree_root,
         (isolation == rimz::config::Isolation::Host).then_some(runtime),
+    )?;
+    login.health(
+        &rimz::agents::machine_login_catalog()
+            .native_ambient(&cell.kind, &rimz::agents::ambient_env()),
     )?;
     if adapter.min_version().is_some()
         && let Ok(Some(path)) = process.resolve_program_after_shell_rc()

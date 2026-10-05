@@ -47,10 +47,11 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let focus = LaunchFocus::resolve(args.bg, resolve_caller(&snapshot.agents).as_ref());
     let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
     let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let catalog = rimz::agents::machine_login_catalog();
     let mut seed = validate_fork_source(
         &source,
         &logins,
-        &rimz::agents::machine_login_catalog(),
+        &catalog,
         rimz::harness::resume::resume_session_present,
         Path::is_dir,
     )?;
@@ -125,6 +126,8 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         &seed.cwd,
         (isolation == rimz::config::Isolation::Host).then_some(store.runtime_paths()),
     )?;
+    rimz::agents::session_login(&seed.kind, seed.launch.login.as_ref(), &config.accounts)?
+        .health(&catalog.native_ambient(&seed.kind, &rimz::agents::ambient_env()))?;
     let placement = resolve_fork_placement(
         args.new_tab,
         args.new_pane,

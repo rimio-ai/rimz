@@ -117,6 +117,16 @@ fn agent_restart_keeps_focus_on_another_pane() {
 }
 
 #[test]
+fn agent_launch_refuses_a_login_without_hooks() {
+    assert_launch_focus(&["agents", "claude", "--new-pane"], true, "unhooked");
+}
+
+#[test]
+fn agent_restart_refuses_a_login_without_hooks() {
+    assert_launch_focus(&["agents", "restart", "@planner"], true, "unhooked");
+}
+
+#[test]
 fn agent_resume_live_lane_keeps_focus() {
     assert_launch_focus(&["agents", "resume", "#review"], true, "live");
 }
@@ -252,6 +262,7 @@ fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinke
     use crate::common::git::{configure_github_origin_rewrite, git_stdout, publish_pr_ref};
 
     let env = Env::new();
+    env.install_agent_hooks("claude");
     let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
     configure_github_origin_rewrite(&env);
     let mut config = "[agents]\nisolation = 'host'\n".to_owned();
@@ -415,6 +426,9 @@ fn assert_launch_focus(args: &[&str], agent: bool, action: &str) {
 
 fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version: &str) {
     let env = Env::new();
+    if action != "unhooked" {
+        env.install_agent_hooks("claude");
+    }
     crate::common::wait::register_calling_agent(&env);
     std::fs::write(
         env.rimz_home().join("config.toml"),
@@ -600,6 +614,24 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         command.env(rimz::workspace::ENV_CHANNEL, "review");
     }
     let output = command.bounded_output().unwrap();
+    if action == "unhooked" {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("is not a directory; run `rimz hooks install claude`"),
+            "{stderr}"
+        );
+        assert_eq!(
+            serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+            before
+        );
+        assert_eq!(
+            std::fs::read(env.state_path_for(&env.project_root).events_log).unwrap(),
+            events_before
+        );
+        assert!(!log.exists(), "a refused launch must not reach the mux");
+        return;
+    }
     if matches!(
         action,
         "hold-live"
@@ -815,6 +847,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
     use std::time::{Duration, Instant};
 
     let env = Env::new();
+    env.install_agent_hooks("claude");
     crate::common::wait::register_calling_agent(&env);
     let store = env.store();
     std::fs::write(
@@ -2121,6 +2154,71 @@ fn profile_default_exec_stamps_effective_isolation_not_an_override() {
 
 #[cfg(unix)]
 #[test]
+fn agent_fork_refuses_untrusted_hooks_before_any_launch() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    let shim = write_env_dump_shim(&env, "codex");
+    let workspace = env.resolve_workspace(&env.project_root);
+    let transcript = env.project_root.join("source.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    let mut observation =
+        AgentLifecycleObservation::new(Some("sess-source".into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("source".to_owned());
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    observation.transcript_path = Some(transcript.display().to_string());
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "codex",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
+    let log = env.home_root.join("mux.log");
+
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "agents", "fork", "@source"])
+        .env("PATH", path_with_front(&shim))
+        .env(
+            "RIMZ_ZELLIJ_BIN",
+            crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("RimZ hooks for codex account `default` at"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("run /hooks inside codex and trust the RimZ hooks"),
+        "{stderr}"
+    );
+    assert_eq!(
+        serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+        before
+    );
+    assert!(!log.exists(), "a refused fork must not reach the mux");
+}
+
+#[cfg(unix)]
+#[test]
 fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
     let kind = AgentKind::new_unchecked("codex");
     // (wrapped, subagent): a direct-exec resume, a wrapped root resume, a wrapped subagent resume.
@@ -2858,6 +2956,9 @@ fn missing_configured_agent_shell_refuses_the_launch() {
 #[test]
 fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
     let env = Env::new();
+    env.install_agent_hooks("claude");
+    env.install_agent_hooks("codex");
+    crate::common::trust_codex_preflight_hooks(&env);
 
     env.rimz()
         .args(["agents", "claude,codex", "--worktree=wt-a", "--new-pane"])
@@ -2887,6 +2988,8 @@ fn unreadable_machine_config_blocks_worktree_launch_before_store_events() {
         return;
     }
     env.install_agent_hooks("claude");
+    env.install_agent_hooks("codex");
+    crate::common::trust_codex_preflight_hooks(&env);
     std::fs::create_dir_all(env.rimz_home()).unwrap();
     let config = env.rimz_home().join("config.toml");
     std::fs::write(
@@ -3668,6 +3771,8 @@ fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
         (Some(Isolation::Sandbox), Some("host"), false),
     ] {
         let env = Env::new();
+        env.install_agent_hooks("codex");
+        crate::common::trust_codex_preflight_hooks(&env);
         std::fs::create_dir_all(env.rimz_home()).expect("config directory");
         std::fs::write(
             env.rimz_home().join("config.toml"),
