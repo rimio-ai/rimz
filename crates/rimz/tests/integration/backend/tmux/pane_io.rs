@@ -281,6 +281,7 @@ struct TwoRooms {
     env: Env,
     server: TmuxServer,
     here: String,
+    other: String,
     here_pane: PaneId,
     other_pane: PaneId,
 }
@@ -301,6 +302,7 @@ impl TwoRooms {
             env,
             server,
             here,
+            other,
             here_pane,
             other_pane,
         }
@@ -355,6 +357,36 @@ fn pane_send_and_capture_refuse_a_pane_from_another_room() {
     assert!(
         !text.contains("CROSS_ROOM_MARK"),
         "other room was written: {text}"
+    );
+}
+
+/// From a shell outside any pane, `pane split` opens its pane in the resolved
+/// room although the other session is the one tmux picks when no target is
+/// named.
+#[test]
+fn pane_split_outside_a_pane_opens_in_the_resolved_room() {
+    require_tmux!();
+    let rooms = TwoRooms::new();
+    assert_eq!(
+        rooms
+            .server
+            .stdout(&["display-message", "-p", "#{session_name}"]),
+        rooms.other,
+        "the other session must be tmux's default target",
+    );
+
+    let split = rooms.pane(&["split"]);
+    assert!(
+        split.status.success(),
+        "split: {}",
+        String::from_utf8_lossy(&split.stderr)
+    );
+
+    assert_eq!(rooms.server.wait_for_panes(&rooms.here, 2).len(), 2);
+    assert_eq!(
+        list_session_panes(&rooms.server, &rooms.other).len(),
+        1,
+        "the other session gained a pane"
     );
 }
 
