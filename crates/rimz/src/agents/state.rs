@@ -1454,6 +1454,32 @@ impl AgentState {
         Some((effective_turn_error_class(error), error))
     }
 
+    /// Displayed status and phase of an agent with no sidebar row of its own
+    /// (a launched child nests under its parent's card). A displayed pausing
+    /// marker reads `paused` and any other displayed marker `failed`, on a
+    /// raw-`failed` row too; without one this is [`Self::effective_status`].
+    pub fn rowless_status(&self) -> (AgentStatus, TurnPhase) {
+        match self.displayed_turn_error().map(|(class, _)| class) {
+            Some(
+                TurnErrorClass::PausedRateLimit
+                | TurnErrorClass::PausedSpendLimit
+                | TurnErrorClass::PausedOverloaded,
+            ) => (AgentStatus::Paused, TurnPhase::Idle),
+            Some(TurnErrorClass::Unknown | TurnErrorClass::Failed) => {
+                (AgentStatus::Failed, TurnPhase::Idle)
+            }
+            None => {
+                let status = self.effective_status();
+                let phase = if status == AgentStatus::Running {
+                    self.phase
+                } else {
+                    TurnPhase::Idle
+                };
+                (status, phase)
+            }
+        }
+    }
+
     /// Join a stored context sidecar onto this row; every sidecar attach goes
     /// through here. A sidecar whose occupancy is the reading the latest
     /// completed compaction retired was measured before the close, so the

@@ -162,7 +162,8 @@ upward-dependencies = ["address"]
 # 970: `PendingIdleStop`, the projected idle stop with its due time, and its `label`, the one wording shared by `agents show` and the card.
 # `RateLimitWindow::remaining_percentage` is the one displayed remainder the sidebar bar and `rimz providers` read (+1).
 # `DaemonSessions` is the three-state answer the account-link gate reads from `runtime_control_writes_history` (+1).
-surface-budget = 972
+# AgentState::rowless_status gives `agents` and `subagents list` one status for a child with no row (+1).
+surface-budget = 973
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

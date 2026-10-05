@@ -287,7 +287,7 @@ pub(super) fn build_entry(
     let card = row.and_then(SidebarRow::as_agent);
     let (status, phase) = card
         .map(|card| (card.status, card.phase))
-        .unwrap_or_else(|| fallback_status_projection(agent));
+        .unwrap_or_else(|| agent.rowless_status());
     let displayed_error = agent.displayed_turn_error();
     let turn_error = displayed_error.map(|(class, error)| TurnErrorReport {
         class,
@@ -454,28 +454,6 @@ pub(super) fn row_for_agent<'a>(
     snapshot
         .rows()
         .find(|row| row.is_agent() && row.id == agent.agent_id.as_str())
-}
-
-pub(super) fn fallback_status_projection(agent: &AgentState) -> (AgentStatus, TurnPhase) {
-    match agent.displayed_turn_error().map(|(class, _)| class) {
-        Some(
-            TurnErrorClass::PausedRateLimit
-            | TurnErrorClass::PausedSpendLimit
-            | TurnErrorClass::PausedOverloaded,
-        ) => (AgentStatus::Paused, TurnPhase::Idle),
-        Some(TurnErrorClass::Unknown | TurnErrorClass::Failed) => {
-            (AgentStatus::Failed, TurnPhase::Idle)
-        }
-        None => {
-            let status = agent.effective_status();
-            let phase = if status == AgentStatus::Running {
-                agent.phase
-            } else {
-                TurnPhase::Idle
-            };
-            (status, phase)
-        }
-    }
 }
 
 pub(super) fn status_style(entry: &AgentReportEntry) -> anstyle::Style {
