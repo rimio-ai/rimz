@@ -2492,12 +2492,12 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
 }
 
 #[test]
-fn standalone_account_room_launches_into_its_home_and_refuses_cross_account_resume() {
+fn tmux_standalone_account_room_launches_into_its_home_and_refuses_cross_account_resume() {
     account_room_journey("standalone");
 }
 
 #[test]
-fn shared_account_room_resumes_under_the_rooms_new_account() {
+fn tmux_shared_account_room_resumes_under_the_rooms_new_account() {
     account_room_journey("shared");
 }
 
@@ -2655,9 +2655,12 @@ fn account_room_journey(history: &str) {
         "reset failed: {}",
         String::from_utf8_lossy(&reset.stderr)
     );
+    // Nothing reads room state between the reset and this start: a probe here
+    // delays the rebirth past the race a failing run loses.
     let reborn = env
         .rimz()
         .env("PATH", &agent_path)
+        .env("RUST_LOG", REBIRTH_TRACE)
         .env_remove("CLAUDE_CONFIG_DIR")
         .args([
             "--mux",
@@ -2695,8 +2698,10 @@ fn account_room_journey(history: &str) {
             std::thread::sleep(Duration::from_millis(50));
         };
         assert_eq!(
-            homes, expected,
-            "the work session is reopened under the default account: {output}"
+            homes,
+            expected,
+            "the work session is reopened under the default account: {output}\n{}",
+            rebirth_evidence(&env, &socket, &agent)
         );
         assert_eq!(
             stamp,
@@ -2708,7 +2713,8 @@ fn account_room_journey(history: &str) {
     let mismatch = "@account-worker's session belongs to claude account `work`; this room now launches claude on `default`. Run `rimz accounts use claude work` to resume it, then switch back.";
     assert!(
         output.contains(mismatch) && output.contains("(different account)"),
-        "rebirth warns and skips: {output}"
+        "rebirth warns and skips: {output}\n{}",
+        rebirth_evidence(&env, &socket, &agent)
     );
     assert_eq!(
         std::fs::read_to_string(&launched_homes).expect("launched homes trace"),
@@ -3233,6 +3239,135 @@ fn tmux_screens(socket: &Path) -> String {
             )
         })
         .collect()
+}
+
+/// The `RUST_LOG` filter that makes a `rimz start` print why its rebirth left
+/// an agent out of recovery.
+const REBIRTH_TRACE: &str = "warn,rimz::harness::rebirth=debug,rimz::cli::room=debug";
+
+/// What the room holds after a rebirth that did not resume `agent`, for a
+/// failure message beside the start's own decision trace: the audit row and
+/// whether its owner still runs, the roster, the death marker (it lists the
+/// agent when the roster named it), the agent's events from each archived and
+/// the active log, and the tmux sessions.
+fn rebirth_evidence(env: &Env, socket: &Path, agent: &rimz::agents::AgentState) -> String {
+    let store = env.store();
+    let row = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .map(|projection| {
+            projection
+                .agents
+                .iter()
+                .find(|row| row.agent_id == agent.agent_id)
+                .map(|row| {
+                    format!(
+                        "ended_at={:?} owner={:?} liveness={:?}",
+                        row.ended_at,
+                        row.runtime_owner,
+                        rimz::store::runtime::agent_liveness(row)
+                    )
+                })
+        });
+    let file = |path: &Path| {
+        std::fs::read_to_string(path).unwrap_or_else(|err| format!("unreadable: {err}"))
+    };
+    // The reset rotated the log the agent's launch and teardown stamps were
+    // written to, so the archives are read with the active log.
+    let mut logs = std::fs::read_dir(&store.paths().events_archive_dir)
+        .map(|dir| dir.flatten().map(|entry| entry.path()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    logs.sort();
+    logs.push(store.paths().events_log.clone());
+    let events = logs
+        .iter()
+        .map(|log| {
+            let name = log.file_name().unwrap_or_default().to_string_lossy();
+            let label = if *log == store.paths().events_log {
+                format!("active/{name}")
+            } else {
+                format!("archive/{name}")
+            };
+            match rimz::store::event_log::read_all(log) {
+                Ok(events) => events
+                    .iter()
+                    .filter(|event| event.params.get().contains(agent.agent_id.as_str()))
+                    .map(|event| {
+                        format!(
+                            "\n  [{label}] {} {} {} {}",
+                            event.timestamp, event.source, event.method, event.params
+                        )
+                    })
+                    .collect(),
+                Err(err) => format!("\n  [{label}] unreadable: {err}"),
+            }
+        })
+        .collect::<String>();
+    let sessions = Command::new("tmux")
+        .scrub_session_env()
+        .arg("-S")
+        .arg(socket)
+        .arg("list-sessions")
+        .bounded_output()
+        .map(|out| {
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        })
+        .unwrap_or_else(|err| format!("tmux list-sessions: {err}"));
+    format!(
+        "after the rebirth:\naudit row: {row:?}\nlive roster: {}\nlast death: {}\nevents naming the agent:{events}\ntmux sessions: {sessions}",
+        file(&store.paths().live_roster),
+        file(&store.paths().last_death_marker),
+    )
+}
+
+/// A reset rotates the event log before the rebirth runs, so the stamps
+/// written up to and during the teardown are in the archive by the time a
+/// failing journey reads its evidence.
+#[test]
+fn tmux_rebirth_evidence_keeps_the_events_a_reset_rotated_out() {
+    let Some(_rimz) = rimz_bin() else {
+        return;
+    };
+    let env = Env::new();
+    let fed = env.run_hook(
+        "claude",
+        &session_start_at(
+            "sess-rotated",
+            "GPT-5.5",
+            "high",
+            env.project_root.display().to_string(),
+            Some("main"),
+        )
+        .to_string(),
+    );
+    assert!(
+        fed.status.success(),
+        "hook feed failed: {}",
+        String::from_utf8_lossy(&fed.stderr)
+    );
+    let store = env.store();
+    let agent = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read audit rollup")
+        .agents
+        .into_iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-rotated")
+        .expect("the hook registered the agent");
+    store.reset_records(false).expect("rotate the event log");
+
+    let evidence = rebirth_evidence(&env, &managed_socket(&env.runtime_root), &agent);
+    let stamp = evidence
+        .lines()
+        .find(|line| line.contains("agent.lifecycle") && line.contains("SessionStart"))
+        .unwrap_or_else(|| panic!("the pre-reset stamp is missing: {evidence}"));
+    assert!(stamp.contains("[archive/events."), "{stamp}");
+    assert!(
+        stamp.contains(" claude "),
+        "the event keeps its source: {stamp}"
+    );
 }
 
 /// Rebirth recovers the sessions the sidebar producer last published, which

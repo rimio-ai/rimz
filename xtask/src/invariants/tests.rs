@@ -766,3 +766,9 @@ fn zellij_actions_must_name_the_session() {
     std::fs::write(&tests, bare).unwrap();
     ensure_zellij_actions_name_the_session(&root, std::slice::from_ref(&tests)).unwrap();
 }
+
+#[test]
+fn deep_journeys_without_a_backend_prefix_are_flagged() {
+    let text = "#[test]\nfn tmux_room() {}\n\n#[test]\n#[ignore]\nfn account_room() {\n}\n\nfn helper() {}\n\n#[test]\nfn zellij_room() {}\n";
+    assert_eq!(unprefixed_deep_journeys(text), vec![(6, "account_room")]);
+}

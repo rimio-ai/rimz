@@ -587,6 +587,9 @@ fn inspect_at(
         .as_ref()
         .map(|(_, projection)| recovery_roster(&paths, &projection.agents))
         .unwrap_or_default();
+    if audit.is_none() {
+        tracing::debug!(workspace = %paths.workspace_id, "rebirth: no readable store, nothing to recover");
+    }
     let recover_agents = reboot || !roster.is_empty();
     let death = audit
         .as_ref()
@@ -618,6 +621,7 @@ fn inspect_at(
     };
 
     let mut scope = pending_recovery::read(&paths.pending_recovery);
+    tracing::debug!(workspace = %paths.workspace_id, roster = roster.len(), pending = scope.len(), reboot, "rebirth: recovery scope");
     scope.extend(roster.iter().cloned());
     let recovery_off = disabled || !machine.resume.on_rebirth;
     let (candidates, ended, planned) = plan_settlement(
@@ -730,16 +734,38 @@ fn plan_settlement(
         .agents
         .iter()
         .filter(|agent| scope.contains(&(agent.kind.clone(), agent.agent_id.clone())))
-        .filter(|agent| !matches!(agent_liveness(agent), AgentLiveness::Live { .. }))
+        .filter(|agent| match agent_liveness(agent) {
+            AgentLiveness::Live { pid } => {
+                tracing::debug!(kind = %agent.kind, session = %agent.agent_id, pid, ended = agent.ended_at.is_some(), "rebirth: not a candidate: owner live");
+                false
+            }
+            AgentLiveness::Dead | AgentLiveness::Unknown => true,
+        })
         .cloned()
         .collect::<Vec<_>>();
     let candidates = lost
         .iter()
-        .filter(|agent| agent.ended_at.is_none())
+        .filter(|agent| {
+            if agent.ended_at.is_some() {
+                tracing::debug!(kind = %agent.kind, session = %agent.agent_id, "rebirth: not a candidate: ended");
+            }
+            agent.ended_at.is_none()
+        })
         .cloned()
         .collect::<Vec<_>>();
+    for (kind, session) in scope {
+        if !projection
+            .agents
+            .iter()
+            .any(|agent| agent.kind == *kind && agent.agent_id == *session)
+        {
+            tracing::debug!(%kind, %session, "rebirth: not a candidate: no audit row");
+        }
+    }
     if recovery_off || candidates.is_empty() {
-        return (candidates, ended, RecoveryPlan::default());
+        let planned = RecoveryPlan::default();
+        trace_unplanned(&candidates, &planned, recovery_off);
+        return (candidates, ended, planned);
     }
     let availability =
         crate::harness::plan::LaunchAvailability::read(runtime, paths, machine, Timestamp::now());
@@ -753,7 +779,28 @@ fn plan_settlement(
         machine,
         &teams_and_profiles,
     );
+    trace_unplanned(&candidates, &planned, recovery_off);
     (candidates, ended, planned)
+}
+
+/// Debug evidence for each candidate the plan neither resumes nor reports as
+/// skipped, which a silent start would otherwise drop with nothing printed.
+fn trace_unplanned(candidates: &[AgentState], planned: &RecoveryPlan, recovery_off: bool) {
+    let resumable = planned.resumed_keys();
+    for agent in candidates {
+        let key = (agent.kind.clone(), agent.agent_id.clone());
+        if resumable.contains(&key) || planned.skip_for(&key).is_some() {
+            continue;
+        }
+        let reason = if recovery_off {
+            "recovery off"
+        } else if planned.worktree_gone().contains(&key) {
+            "worktree gone"
+        } else {
+            "no resume tab planned"
+        };
+        tracing::debug!(kind = %agent.kind, session = %agent.agent_id, name = ?agent.name, parent = ?agent.parent_agent_id, worktree = ?agent.worktree_path, reason, "rebirth: candidate not resumed");
+    }
 }
 
 fn effective_teams_and_profiles(
@@ -954,13 +1001,24 @@ fn recovery_roster(
     agents: &[AgentState],
 ) -> BTreeSet<(AgentKind, AgentSessionId)> {
     let Some(roster) = live_roster::read(&paths.live_roster) else {
+        tracing::debug!(path = %paths.live_roster.display(), "rebirth: live roster absent or unreadable");
         return BTreeSet::new();
     };
     let audited = agents
         .iter()
         .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
         .collect::<BTreeSet<_>>();
-    roster.agents.intersection(&audited).cloned().collect()
+    let recoverable = roster
+        .agents
+        .intersection(&audited)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    tracing::debug!(
+        entries = roster.agents.len(),
+        audited = recoverable.len(),
+        "rebirth: live roster read"
+    );
+    recoverable
 }
 
 fn lost_agent_summaries(

@@ -76,6 +76,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_rolling_release_is_single_writer(root)?;
     ensure_stable_release_dispatches_docs(root)?;
     ensure_inline_tests_stay_small(&files)?;
+    ensure_deep_journeys_name_their_backend(root)?;
     Ok(())
 }
 
@@ -1730,6 +1731,45 @@ fn ensure_inline_tests_stay_small(files: &[PathBuf]) -> Result<()> {
         "inline tests modules past {INLINE_TESTS_MAX_LINES} lines move to a sibling tests.rs — see docs/contributing/rust-conventions.md#tests\n{}",
         violations.join("\n")
     );
+}
+
+/// `.config/nextest.toml` puts a deep journey in its live-mux group, with the
+/// group's thread cap and retry budget, by the backend prefix of its name.
+fn ensure_deep_journeys_name_their_backend(root: &Path) -> Result<()> {
+    let path = root.join("crates/rimz/tests/integration/journey/deep.rs");
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let violations = unprefixed_deep_journeys(&text);
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "a deep journey test is named tmux_… or zellij_… so .config/nextest.toml schedules it in that backend's live group\n{}",
+        violations
+            .iter()
+            .map(|(line, name)| format!("{}:{line}: {name}", path.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+fn unprefixed_deep_journeys(text: &str) -> Vec<(usize, &str)> {
+    let mut lines = text.lines().enumerate();
+    let mut violations = Vec::new();
+    while let Some((_, line)) = lines.next() {
+        if line != "#[test]" {
+            continue;
+        }
+        let Some((idx, name)) = lines.by_ref().find_map(|(idx, line)| {
+            let name = line.strip_prefix("fn ")?.split('(').next()?;
+            Some((idx, name))
+        }) else {
+            break;
+        };
+        if !name.starts_with("tmux_") && !name.starts_with("zellij_") {
+            violations.push((idx + 1, name));
+        }
+    }
+    violations
 }
 
 #[cfg(test)]
