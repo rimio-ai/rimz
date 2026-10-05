@@ -664,7 +664,7 @@ startup-relaunches = 3
 startup-relaunch-wait = "3s"
 ```
 
-An agent CLI sometimes dies while it starts, on a provider error that is gone a few seconds later. When a freshly launched agent's CLI exits with an error before its session opens, RimZ says so in the pane, waits `startup-relaunch-wait`, and launches it again in the same pane under the same name, up to `startup-relaunches` times. Ctrl-C during the wait cancels the relaunch. RimZ never reads the error text, so a CLI that fails the same way every time is launched four times before the failure is reported. A resumed or forked session is never relaunched. `startup-relaunches = 0` turns the relaunch off; the wait takes `s`, `m`, `h`, or `d`, and `"0s"` relaunches at once. Each relaunch is a `Launch retry` in [`rimz stats`](./insight.md).
+An agent CLI sometimes dies while it starts, on a provider error that is gone a few seconds later. When a freshly launched agent's CLI exits with an error before its session opens, RimZ says so in the pane, waits `startup-relaunch-wait`, and launches it again in the same pane under the same name, up to `startup-relaunches` times. Ctrl-C during the wait cancels the relaunch. RimZ never reads the error text, so a CLI that fails the same way every time is launched four times before the failure is reported. A resumed or forked session is never relaunched. To be there for the relaunch, RimZ stays behind as the parent process of an agent launched in place, where it would otherwise replace itself with the agent's CLI. `startup-relaunches = 0` turns the relaunch off and restores that replacement; the wait takes `s`, `m`, `h`, or `d`, and `"0s"` relaunches at once. Each relaunch is a `Launch retry` in [`rimz stats`](./insight.md).
 
 #### Environment at launch
 

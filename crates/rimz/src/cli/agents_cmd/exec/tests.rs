@@ -1041,10 +1041,30 @@ mod pane_exec {
             ),
             ("close", close_owned, false, true, true),
         ] {
-            assert_eq!(should_exec_agent_directly(&args), direct, "{name}");
+            assert_eq!(should_exec_agent_directly(&args, 0), direct, "{name}");
+            assert!(!should_exec_agent_directly(&args, 3), "{name}");
             assert_eq!(should_record_end_trace(&args), record_end, "{name}");
             assert_eq!(should_drop_to_shell(&args, false), drop_to_shell, "{name}");
             assert!(!should_drop_to_shell(&args, true), "{name}");
+        }
+
+        // Only a fresh launch can be relaunched, so only it trades direct
+        // exec for a wrapper.
+        for action in [
+            ExecAction::Resume {
+                session_id: "sess-source".to_owned(),
+                extra_args: Vec::new(),
+            },
+            ExecAction::Fork {
+                session_id: "sess-source".to_owned(),
+                extra_args: Vec::new(),
+            },
+        ] {
+            let mut args = bare_exec_args();
+            args.action = action;
+            for cap in [0, 3] {
+                assert_eq!(should_exec_agent_directly(&args, cap), cfg!(unix));
+            }
         }
 
         for (abrupt, accepts_close, expected) in [
