@@ -842,7 +842,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             let outcome = if *relaunched {
                 format!("relaunched, attempt {attempt}")
             } else {
-                "relaunch failed".to_owned()
+                format!("relaunch failed, attempt {attempt}")
             };
             let error = error
                 .as_deref()
@@ -1282,7 +1282,7 @@ mod tests {
         assert_eq!(json["events"][2]["startup_ms"], 999);
         for startup in ["<1s", "1s"] {
             let failed = format!(
-                "after {startup} before its session opened — relaunch failed (codex: not found)"
+                "after {startup} before its session opened — relaunch failed, attempt 1 (codex: not found)"
             );
             assert!(lines.iter().any(|line| line.contains(&failed)), "{lines:?}");
         }
@@ -1311,6 +1311,19 @@ mod tests {
         let forensic = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
         assert!(forensic.ends_with("relaunched true"), "{forensic}");
         assert!(!forensic.contains("run "), "{forensic}");
+
+        let failed = serde_json::from_value::<AssistRecord>(serde_json::json!({
+            "at": "2026-01-03T00:00:00Z", "assist": "launch_retry", "kind": "codex",
+            "label": "@fox", "attempt": 3, "exit_code": 1, "startup_ms": 400,
+            "relaunched": false, "error": "codex: not found"
+        }))
+        .expect("a failed launch retry without a run");
+        let stats = AssistStats::from_records("all", vec![failed]);
+        let line = benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+        assert!(
+            line.ends_with("— relaunch failed, attempt 3 (codex: not found)"),
+            "{line}"
+        );
     }
 
     #[test]

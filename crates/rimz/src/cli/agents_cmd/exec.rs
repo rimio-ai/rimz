@@ -76,10 +76,8 @@ fn launch_and_supervise(
         rimz::harness::launch::ExecAction::Launch { .. }
     );
     let relaunch_cap = machine_config.agents.startup_relaunches;
-    let relaunch_wait = if fresh_launch && relaunch_cap > 0 {
-        supervised::parse_timeout(&machine_config.agents.startup_relaunch_wait)
-            .map_err(anyhow::Error::msg)
-            .context("parsing agents.startup-relaunch-wait")?
+    let relaunch_wait = if fresh_launch {
+        machine_config.agents.startup_relaunch_wait()?
     } else {
         Duration::ZERO
     };

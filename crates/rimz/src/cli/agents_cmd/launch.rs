@@ -153,6 +153,9 @@ pub(in crate::cli) fn launch_resolved(
     let store = &ctx.store;
     report_unknown_config_keys(&machine_config)?;
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
+    if !args.launch.cohort.resume {
+        machine_config.agents.startup_relaunch_wait()?;
+    }
     let lane = args
         .launch
         .cohort

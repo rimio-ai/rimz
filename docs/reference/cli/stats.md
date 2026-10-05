@@ -147,7 +147,7 @@ assists (all) — Auto-continue: 110 (+77.0h) · Auto-compact: 340 · Auto-redee
 | `▶` | Auto-continue: a parked agent resumed, or `resume held` when delivery did not happen. |
 | `◷` | Cache keepalive: idle duration and pending-wait count, followed by agent, message, and delivery verdict. |
 | `■` | Idle stop: an agent stopped by its `--when-idle` request, with how long it rested, the threshold, and who asked; `idle stop failed` carries the error. |
-| `↺` | Launch retry: an agent whose CLI exited before its session opened, with the exit code and how long it lived; `relaunch failed` carries the error. |
+| `↺` | Launch retry: an agent whose CLI exited before its session opened, with the exit code, how long it lived, and the attempt number; `relaunch failed` carries the error. |
 | `⌁` | Compaction: before a delivery (`auto-compact`), after an idle gap (`idle compacted`), or at a team stage flip (`flip compaction`). `held` means it was not delivered. |
 | `↻` | Credit redemption for a provider account, with its outcome. |
 | `⟲` | Room restore after a crash or reboot, with the channels it brought back. |

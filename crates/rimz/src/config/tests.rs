@@ -454,6 +454,66 @@ fn startup_relaunch_defaults_to_three_after_three_seconds_and_parses_overrides()
 }
 
 #[test]
+fn startup_relaunch_wait_accepts_zero_through_a_day_and_refuses_the_rest_with_the_fix() {
+    let with_wait = |wait: &str| AgentsConfig {
+        startup_relaunch_wait: wait.to_owned(),
+        ..AgentsConfig::default()
+    };
+    for (wait, secs) in [
+        ("0s", 0),
+        ("3s", 3),
+        ("2m", 120),
+        ("24h", 86_400),
+        ("1d", 86_400),
+    ] {
+        assert_eq!(
+            with_wait(wait).startup_relaunch_wait().expect(wait),
+            Duration::from_secs(secs),
+        );
+    }
+    assert_eq!(
+        AgentsConfig::default()
+            .startup_relaunch_wait()
+            .expect("default"),
+        Duration::from_secs(3),
+    );
+    for wait in [
+        "",
+        "s",
+        "soon",
+        "3",
+        "1.5s",
+        "86401s",
+        "25h",
+        "2d",
+        "18446744073709551615s",
+        "18446744073709551615d",
+        "99999999999999999999999s",
+    ] {
+        let message = with_wait(wait)
+            .startup_relaunch_wait()
+            .expect_err(wait)
+            .to_string();
+        for part in [
+            "agents.startup-relaunch-wait",
+            "s, m, h or d",
+            "0s through 24h",
+            "rimz config set agents.startup-relaunch-wait 3s",
+        ] {
+            assert!(message.contains(part), "{wait:?}: {message}");
+        }
+    }
+    let disabled = AgentsConfig {
+        startup_relaunches: 0,
+        ..with_wait("soon")
+    };
+    assert_eq!(
+        disabled.startup_relaunch_wait().expect("unused"),
+        Duration::ZERO
+    );
+}
+
+#[test]
 fn agent_chain_length_defaults_parses_override_and_rejects_retired_key() {
     let dir = tempdir().expect("tempdir");
     let defaulted = load_no_fragments(&write_named(&dir, "config.toml", ""))
