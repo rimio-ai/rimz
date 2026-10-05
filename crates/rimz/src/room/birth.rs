@@ -415,7 +415,7 @@ impl RoomContext {
             &self.workspace.session_name,
             &self.runtime,
         );
-        let units = paths.temp_unit_dirs();
+        let units = end_view_processes.then(|| paths.temp_unit_dirs());
         let reset_store = || {
             let store =
                 Store::open(paths, self.runtime.clone()).context("opening store for reset")?;
@@ -424,9 +424,9 @@ impl RoomContext {
                 .context("recording workspace metadata for reset")?;
             reset_records(&store).context("resetting workspace records")
         };
-        let (view_processes_ended, records) = if end_view_processes {
+        let (view_processes_ended, records) = if let Some(units) = &units {
             end_view_holders_then(
-                || crate::mux::recovery::temp_unit_holders(&units),
+                || crate::mux::recovery::temp_unit_holders(units),
                 |pids| {
                     crate::mux::recovery::kill_pids(pids, crate::mux::recovery::SWEEP_GRACE);
                 },
