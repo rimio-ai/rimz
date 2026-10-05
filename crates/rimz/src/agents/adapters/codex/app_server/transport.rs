@@ -5,6 +5,7 @@
 //! helpers used by the broker and read-only app-server client.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -17,7 +18,11 @@ use tungstenite::error::ProtocolError;
 use tungstenite::handshake::{HandshakeError, client::ClientHandshake};
 use tungstenite::{Message, WebSocket};
 
-/// Override for the `codex` binary path (tests/tooling point this at a stub).
+/// Names the `codex` binary for every codex process RimZ starts on its own
+/// behalf: the app-server (broker and cold spawn) and `login status`. Set and
+/// non-empty, codex counts as installed only when the value names an executable
+/// file, so tests point it at a stub or at a missing path. Unset or empty, the
+/// binary is the first `codex` on `PATH`. Agent launch does not read it.
 const CODEX_BIN_ENV: &str = "RIMZ_CODEX_BIN";
 
 #[derive(Debug, thiserror::Error)]
@@ -62,12 +67,30 @@ pub(in crate::agents::adapters::codex) fn initialize(
 
 /// Resolve the `codex` binary: explicit override, then `PATH`, then the bare
 /// name (which `Command` resolves against `PATH` at spawn). Shared with the
-/// broker ([`crate::agents::adapters::codex::broker`]) so both resolve the same binary.
+/// broker ([`crate::agents::adapters::codex::broker`]) and the `login status`
+/// probe so all three resolve the same binary.
 pub(crate) fn codex_bin() -> PathBuf {
-    if let Some(raw) = std::env::var_os(CODEX_BIN_ENV).filter(|v| !v.is_empty()) {
-        return PathBuf::from(raw);
+    codex_bin_from(std::env::var_os(CODEX_BIN_ENV))
+}
+
+fn codex_bin_from(configured: Option<OsString>) -> PathBuf {
+    match configured.filter(|raw| !raw.is_empty()) {
+        Some(raw) => PathBuf::from(raw),
+        None => which::which("codex").unwrap_or_else(|_| PathBuf::from("codex")),
     }
-    which::which("codex").unwrap_or_else(|_| PathBuf::from("codex"))
+}
+
+/// The binary [`codex_bin`] resolves, when it names an executable file. `None`
+/// is "codex is not installed": the room opens no broker pane.
+pub(crate) fn installed_codex_bin() -> Option<PathBuf> {
+    installed_codex_bin_from(std::env::var_os(CODEX_BIN_ENV))
+}
+
+fn installed_codex_bin_from(configured: Option<OsString>) -> Option<PathBuf> {
+    let named = configured
+        .filter(|raw| !raw.is_empty())
+        .unwrap_or_else(|| "codex".into());
+    which::which(named).ok()
 }
 
 /// Spawn a thread draining newline-framed lines from `reader` into a channel, so
@@ -371,6 +394,26 @@ mod tests {
     use std::thread;
 
     use super::*;
+
+    #[test]
+    fn the_override_decides_both_the_binary_and_whether_codex_is_installed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing-codex");
+        assert_eq!(codex_bin_from(Some(missing.clone().into())), missing);
+        assert_eq!(installed_codex_bin_from(Some(missing.into())), None);
+
+        let present = dir.path().join("codex-stub");
+        std::fs::write(&present, "#!/bin/sh\n").unwrap();
+        assert_eq!(installed_codex_bin_from(Some(present.clone().into())), None);
+        std::fs::set_permissions(&present, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(codex_bin_from(Some(present.clone().into())), present);
+        assert_eq!(
+            installed_codex_bin_from(Some(present.clone().into())),
+            Some(present)
+        );
+    }
 
     #[test]
     fn the_app_server_runs_under_the_account_and_its_database_home() {
