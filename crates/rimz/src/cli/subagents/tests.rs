@@ -908,6 +908,7 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
         kind: "codex".to_owned(),
         status: "running".to_owned(),
         description: None,
+        turn_error: None,
         run_id: None,
         run_status: None,
     };
@@ -916,6 +917,69 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
 
     assert_eq!(value["parent"], "@planner");
     assert!(value.get("channel").is_none());
+    assert!(value.get("turn_error").is_none());
+}
+
+#[test]
+fn child_reports_show_a_limit_parked_child_as_paused_beside_its_open_run() {
+    let planner =
+        rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);
+    let mut child =
+        rimz::agents::AgentState::stub("codex", "child", rimz::agents::AgentStatus::Running);
+    child.name = Some("still-silver".to_owned());
+    child.description = Some("gating the release".to_owned());
+    child.parent_agent_id = Some(planner.agent_id.clone());
+    child.parent_agent_kind = Some(planner.kind.clone());
+    child.launch_depth = Some(1);
+    let mut run = rimz::store::run::RunRecord::new(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-list")),
+        child.kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "gate".to_owned(),
+        PathBuf::from("/tmp/subagent-list"),
+    );
+    run.agent_id = Some(child.agent_id.clone());
+    run.status = rimz::store::run::RunStatus::Running;
+    let mut parked = child.clone();
+    let at = parked.last_activity + Duration::from_secs(1);
+    let mut context = rimz::agents::AgentContext::new("codex", at);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        class: rimz::agents::TurnErrorClass::PausedRateLimit,
+        at,
+        label: Some("Usage limit reached".to_owned()),
+    });
+    parked.context = Some(context);
+    let mut unlabelled = parked.clone();
+    if let Some(error) = unlabelled
+        .context
+        .as_mut()
+        .and_then(|context| context.turn_error.as_mut())
+    {
+        error.label = None;
+    }
+
+    let report = |child: rimz::agents::AgentState| {
+        let agents = [planner.clone(), child];
+        child_reports(&agents, &[&agents[1]], std::slice::from_ref(&run)).remove(0)
+    };
+    let live = report(child);
+    let parked = report(parked);
+    let unlabelled = report(unlabelled);
+
+    assert_eq!(live.status, "running");
+    assert!(live.turn_error.is_none());
+    assert_eq!(live.detail().as_deref(), Some("gating the release"));
+    assert_eq!(parked.status, "paused");
+    assert_eq!(parked.run_status.as_deref(), Some("running"));
+    assert_eq!(parked.description.as_deref(), Some("gating the release"));
+    assert_eq!(parked.detail().as_deref(), Some("Usage limit reached"));
+    let value = serde_json::to_value(&parked).expect("serialize child report");
+    assert_eq!(value["turn_error"]["class"], "paused_rate_limit");
+    assert_eq!(value["turn_error"]["label"], "Usage limit reached");
+    assert_eq!(unlabelled.status, "paused");
+    assert_eq!(unlabelled.detail().as_deref(), Some("rate limit"));
+    let value = serde_json::to_value(&unlabelled).expect("serialize child report");
+    assert!(value["turn_error"]["label"].is_null());
 }
 
 #[test]

@@ -86,7 +86,7 @@ rimz agents show @calm-fox       # one child's activity, context, and recent tra
 rimz transcript @calm-fox        # its conversation, after the pane has closed too
 ```
 
-`list` from a shell outside any channel shows every child in the room. Channel and `@all` transcript views leave children out, so read a child by its handle.
+`list` from a shell outside any channel shows every child in the room. A child parked on a provider usage limit reads `paused` there, with the provider's message under its row, while its `RUN` column still says `running`: nothing has ended, and the child can still resume before its deadline. A reset alone does not guarantee continuation; automatic continuation depends on the configured [resume policy](./loops.md). Channel and `@all` transcript views leave children out, so read a child by its handle.
 
 A child runs one prompt and is not built to read messages mid-run. To change what a child is doing, stop it and let the parent relaunch.
 

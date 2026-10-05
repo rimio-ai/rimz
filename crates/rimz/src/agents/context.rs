@@ -1196,6 +1196,17 @@ impl TurnErrorClass {
         )
     }
 
+    /// The class in words, for a surface whose marker carries no provider label.
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::PausedRateLimit => "rate limit",
+            Self::PausedSpendLimit => "spend limit",
+            Self::PausedOverloaded => "provider overloaded",
+            Self::Unknown => "unknown error",
+            Self::Failed => "provider error",
+        }
+    }
+
     /// Whether the pause follows a resumable rate or spend window.
     pub(crate) fn is_limit(self) -> bool {
         matches!(self, Self::PausedRateLimit | Self::PausedSpendLimit)
