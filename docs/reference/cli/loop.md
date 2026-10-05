@@ -388,7 +388,7 @@ For an untrusted or stale project task on a terminal, `fire` asks `grant trust a
 | `0` | A gate or check skipped the action, a `--wait` delivered, or a check-only task finished, whatever its check returned. |
 | `1` | An error, or a trust refusal. |
 
-A task whose previous run is still active records `overlapped` and does not start another. `loop stop <name>` ends the active run: it marks a linked supervised run canceled, waits 5 seconds for the overlap lock, sends SIGTERM to a remaining holder, and waits again. It prints ``loop `<name>`: stopped`` (with the run id, and `· SIGTERM` when it signaled) or `no active run`, and exits `0`. When the run stopped but its pane was not confirmed closed, it prints the `stopped` line and then exits `1` naming the pane and the command that closes it, `rimz agents stop <run-id>`; a second `loop stop` finds no active run and leaves the pane open. When the lock is still held it exits `1` with the holder's PID and the lock path; SIGKILL is left to you. A fired one-shot (`--at`, `--in`, `--after-reset`) gives up its task row when its run starts; while that run is active, `stop`, `show`, and `logs` still find it by name from inside its project.
+A task whose previous run is still active records `overlapped` and does not start another. `loop stop <name>` ends the active run: it marks a linked supervised run canceled, waits 5 seconds for the overlap lock, sends SIGTERM to a remaining holder, and waits again. It prints ``loop `<name>`: stopped`` (with the run id, and `· SIGTERM` when it signaled) or `no active run`, and exits `0`. When the run stopped but its pane was not confirmed closed, it prints the `stopped` line and then exits `1` naming the pane and the command that closes it, `rimz agents stop <run-id>`; a second `loop stop` finds no active run and leaves the pane open. When the lock is still held it exits `1` with the holder's PID and the lock path; SIGKILL is left to you. A fired one-shot (`--at`, `--in`, `--after-reset`) gives up its task row when its run starts; while that run is active, `stop`, `show`, and `logs` still find it by name from inside its project, and `list` and `watch` there keep a row for it.
 
 ## Read run history
 
@@ -397,6 +397,8 @@ Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and 
 ### `loop list`
 
 `loop list` groups tasks by project root. Each group's heading shows `room open`, `no room`, or `no room · timer`. The columns are NAME, STATE, LAST (age of the last finished run), RESULT (its result), TASK, SOURCE, SCHEDULE, and COST. A running task still shows its last finished run in LAST and RESULT.
+
+A run whose task row is gone keeps a row until it ends, so the name `loop stop` needs stays on screen: a fired one-shot most often, or a task removed or renamed mid-run. It sits under the project you are standing in, after that project's tasks, with `▸ running 3m` in STATE, `one-shot fired` in SCHEDULE, LAST and RESULT from the name's history, and `-` in TASK, SOURCE, and COST. Only your own project is searched, so every name listed this way can be stopped from where you stand. `no loop tasks` prints only when there is no task and no such run.
 
 | STATE | Meaning |
 | --- | --- |
@@ -413,11 +415,11 @@ Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and 
 | `blocked · trust` | A project task whose project is not trusted. |
 | `-` | No clock has armed the task yet, or no occurrence remains. |
 
-Footers count tasks blocked by trust and project tasks not yet enabled, with the command that fixes each. A run lock that cannot be read warns on stderr with the task's name, and that task's row shows its other state.
+Footers count tasks blocked by trust and project tasks not yet enabled, with the command that fixes each. A run lock that cannot be read warns on stderr with the task's name, and that task's row shows its other state. When a project's locks directory cannot be listed at all, one warning names the directory and every task in that project shows its other state.
 
 ### `loop watch`
 
-`loop watch` holds the list open as a live dashboard, repainting countdowns and each running task's `▸ running 3m` every second. It is the loop pane in the room's `rimzd` tab.
+`loop watch` holds the list open as a live dashboard, repainting countdowns and each running task's `▸ running 3m` every second. A run whose task row is gone is a running row there too, counted in the band's totals and never its `next:`; the dashboard prints no lock warnings. It is the loop pane in the room's `rimzd` tab.
 
 ### `loop show`
 

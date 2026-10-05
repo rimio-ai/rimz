@@ -5776,6 +5776,142 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
 
 #[cfg(unix)]
 #[test]
+fn loop_list_shows_a_consumed_one_shot_until_its_run_ends() {
+    let env = Env::new();
+    let (_fixture, mut runner, _run) = start_consumed_spawn(&env, "later");
+
+    let list = loop_ok(&env, &["loop", "list"]);
+    let lines = list.lines().collect::<Vec<_>>();
+    assert!(
+        lines.len() == 3
+            && lines[0].contains("room")
+            && lines[1].trim_start().starts_with("NAME")
+            && lines[2].trim_start().starts_with("later")
+            && lines[2].contains("▸ running")
+            && lines[2].contains("one-shot fired"),
+        "{list}"
+    );
+
+    runner.kill().unwrap();
+    runner.wait().unwrap();
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        list.contains("no loop tasks") && !list.contains("later"),
+        "{list}"
+    );
+}
+
+#[test]
+fn loop_list_adds_one_row_per_held_lock_no_task_claims() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "fan", "--check", "true", "--every", "1h"],
+    );
+    let holder = RunLockInfo {
+        pid: 42_424,
+        started_at: Timestamp::now() - SignedDuration::from_secs(3 * 60),
+    };
+    let _locks = ["fan", "fan-ws_0123456789abcdef01234567", "later"]
+        .map(|name| hold_loop_run_lock(&loop_run_lock_path(&env, name), &holder));
+
+    let list = loop_ok(&env, &["loop", "list"]);
+    let lines = list.lines().collect::<Vec<_>>();
+    assert!(
+        lines.len() == 4
+            && lines[0].contains("room")
+            && lines[2].trim_start().starts_with("fan ")
+            && lines[2].contains("▸ running 3m")
+            && lines[2].contains("every 1h")
+            && lines[3].trim_start().starts_with("later ")
+            && lines[3].contains("▸ running 3m")
+            && lines[3].contains("one-shot fired"),
+        "{list}"
+    );
+}
+
+#[test]
+fn loop_list_warns_once_when_the_run_locks_cannot_be_listed() {
+    let env = Env::new();
+    for name in ["first", "second"] {
+        loop_ok(
+            &env,
+            &["loop", "add", name, "--check", "true", "--every", "1h"],
+        );
+    }
+    // A file where the locks directory belongs makes listing it fail.
+    let locks = loop_run_lock_path(&env, "first");
+    let locks = locks.parent().expect("locks directory");
+    let _ = std::fs::remove_dir_all(locks);
+    std::fs::create_dir_all(locks.parent().expect("runtime root")).unwrap();
+    std::fs::write(locks, "").unwrap();
+
+    let list = env.rimz().args(["loop", "list"]).output().unwrap();
+    let stderr = String::from_utf8(list.stderr).unwrap();
+    let stdout = String::from_utf8(list.stdout).unwrap();
+    assert!(list.status.success(), "loop list: {stderr}");
+    assert!(
+        stderr.matches("warning:").count() == 1
+            && stderr.contains(locks.to_str().expect("utf-8 locks path"))
+            && stderr.contains("no active run is shown"),
+        "loop list: {stderr}"
+    );
+    assert!(
+        stdout.contains("first") && stdout.contains("second") && !stdout.contains("▸ running"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn loop_watch_shows_a_run_whose_task_row_is_gone() {
+    let env = Env::new();
+    let holder = RunLockInfo {
+        pid: 42_424,
+        started_at: Timestamp::now() - SignedDuration::from_secs(3 * 60),
+    };
+    let _lock = hold_loop_run_lock(&loop_run_lock_path(&env, "later"), &holder);
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open loop watch pty");
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut cmd);
+    cmd.args(["loop", "watch", "--hold"]);
+    cmd.cwd(env.project_root.as_os_str());
+    cmd.env("TERM", "xterm-256color");
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn loop watch");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+    std::thread::sleep(Duration::from_millis(1_200));
+    child.kill().expect("terminate loop watch");
+    let _ = child.wait().expect("reap loop watch");
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+
+    assert!(
+        output.contains("loop · 1 tasks")
+            && output.contains("▸ 1 running")
+            && output.contains("later")
+            && output.contains("▸ running 3m")
+            && !output.contains("next:")
+            && !output.contains("no loop tasks"),
+        "{output}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn loop_stop_reaches_a_run_holding_only_a_per_checkout_lock() {
     let env = Env::new();
     loop_ok(

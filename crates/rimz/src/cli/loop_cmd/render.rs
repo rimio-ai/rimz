@@ -30,14 +30,25 @@ pub(super) struct ObservedTaskGroup<'a> {
     pub(super) root: PathBuf,
     pub(super) room_is_open: bool,
     pub(super) tasks: Vec<ObservedTask<'a>>,
+    /// Runs in flight under the caller's project whose task row is gone, as
+    /// task name and lock holder.
+    pub(super) rowless: Vec<(String, Option<RunLockInfo>)>,
+    /// Why this root's run locks could not be listed; no task in it shows a run.
+    pub(super) locks_error: Option<anyhow::Error>,
 }
 
+/// The one row source of `list` and `watch`: the catalog's tasks by root, plus
+/// the runs under `project_root` that no task row accounts for.
 pub(super) fn grouped_tasks<'a>(
     tasks: &'a BTreeMap<String, LoadedTask>,
+    project_root: Option<&Path>,
     arming_entries: &BTreeMap<String, Arming>,
     now_zoned: &jiff::Zoned,
 ) -> Vec<ObservedTaskGroup<'a>> {
     let mut entries_by_root: BTreeMap<PathBuf, Vec<(&str, &LoadedTask)>> = BTreeMap::new();
+    if let Some(root) = project_root {
+        entries_by_root.entry(root.to_owned()).or_default();
+    }
     for (name, task) in tasks {
         entries_by_root
             .entry(task.entry().resolved_root())
@@ -46,14 +57,27 @@ pub(super) fn grouped_tasks<'a>(
     }
     entries_by_root
         .into_iter()
-        .map(|(root, entries)| {
+        .filter_map(|(root, entries)| {
+            let (locks, locks_error) = match RunLocks::list(&root) {
+                Ok(locks) => (Some(locks), None),
+                Err(error) => (None, Some(error)),
+            };
+            let rowless = match &locks {
+                Some(locks) if project_root == Some(root.as_path()) => {
+                    let rows = entries.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+                    locks.rowless(&rows)
+                }
+                _ => Vec::new(),
+            };
+            if entries.is_empty() && rowless.is_empty() && locks_error.is_none() {
+                return None;
+            }
             let runtime = runtime_for_root(&root);
             let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
             let stamps = runtime
                 .as_ref()
                 .map(schedule::last_stamps)
                 .unwrap_or_default();
-            let locks = RunLocks::list(&root);
             let tasks = entries
                 .into_iter()
                 .map(|(name, task)| ObservedTask {
@@ -66,17 +90,18 @@ pub(super) fn grouped_tasks<'a>(
                         arming_entries.get(&task.key(name)),
                         now_zoned,
                     ),
-                    run_lock: match &locks {
-                        Ok(locks) => locks.state(name),
-                        Err(error) => Err(anyhow::anyhow!("{error:#}")),
-                    },
+                    run_lock: locks
+                        .as_ref()
+                        .map_or(Ok(RunLockState::Available), |locks| locks.state(name)),
                 })
                 .collect();
-            ObservedTaskGroup {
+            Some(ObservedTaskGroup {
                 root,
                 room_is_open,
                 tasks,
-            }
+                rowless,
+                locks_error,
+            })
         })
         .collect()
 }
@@ -84,25 +109,36 @@ pub(super) fn grouped_tasks<'a>(
 // ---- list -------------------------------------------------------------------
 
 pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
-    let catalog = task_catalog(globals)?;
-    let tasks = catalog.visible();
+    let project_root = project_root_for_globals(globals);
+    let catalog = TaskCatalog::load(project_root.as_deref())?;
     let arming_entries = arming::load();
     let mut out = ui::out();
-    if tasks.is_empty() {
+    let now = Timestamp::now();
+    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    let mut groups = grouped_tasks(
+        catalog.visible(),
+        project_root.as_deref(),
+        &arming_entries,
+        &now_zoned,
+    );
+    for group in &groups {
+        if let Some(error) = &group.locks_error {
+            warn_run_locks(error);
+        }
+    }
+    groups.retain(|group| !group.tasks.is_empty() || !group.rowless.is_empty());
+    if groups.is_empty() {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
         return Ok(());
     }
-    let now = Timestamp::now();
-    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(
         &rimz::disk::paths::logs_dir(),
         &now_zoned,
-        project_root_for_globals(globals).as_deref(),
+        project_root.as_deref(),
     );
     let mut blocked_count = 0;
     let mut not_enabled_count = 0;
     let timer_is_active = timer::active();
-    let groups = grouped_tasks(tasks, &arming_entries, &now_zoned);
     for (idx, group) in groups.into_iter().enumerate() {
         if idx > 0 {
             writeln!(out)?;
@@ -124,6 +160,9 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
                 ArmState::Disabled(DisabledReason::NotEnabledHere)
             ));
             table.row(task_row(&task, &context));
+        }
+        for (name, holder) in &group.rowless {
+            table.row(rowless_row(name, *holder, &context));
         }
         table.render(&mut out)?;
     }
@@ -173,6 +212,31 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
         source_cell(task.task),
         ui::cell(when),
         cost,
+    ]
+}
+
+/// The row of a run whose task row is gone: the lock and the name's history
+/// are all that is left to read, so the cells a task row fed are dashes.
+fn rowless_row(
+    name: &str,
+    holder: Option<RunLockInfo>,
+    context: &ListRowContext<'_>,
+) -> Vec<ui::Cell> {
+    let dash = || ui::cell("-").dash();
+    let (last, result) = context
+        .stats
+        .get(name)
+        .map(|stats| last_run_cells(stats, context.now))
+        .unwrap_or_else(|| (dash(), dash()));
+    vec![
+        ui::cell(name).fg(ui::palette::body()),
+        ui::cell(running_text(holder, context.now)).fg(ui::palette::cool()),
+        last,
+        result,
+        dash(),
+        dash(),
+        ui::cell("one-shot fired"),
+        dash(),
     ]
 }
 
@@ -890,6 +954,14 @@ fn warn_run_lock(name: &str, error: &anyhow::Error) {
     let _ = writeln!(
         ui::err(),
         "{} cannot read the loop run lock of `{name}`, so no active run is shown: {error:#}",
+        ui::paint(ui::palette::warn().bold(), "warning:")
+    );
+}
+
+fn warn_run_locks(error: &anyhow::Error) {
+    let _ = writeln!(
+        ui::err(),
+        "{} cannot list the loop run locks, so no active run is shown: {error:#}",
         ui::paint(ui::palette::warn().bold(), "warning:")
     );
 }
