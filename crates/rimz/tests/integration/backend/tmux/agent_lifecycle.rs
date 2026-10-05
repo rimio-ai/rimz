@@ -128,9 +128,10 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
         assert_eq!(server.display(anchor.raw(), "#{window_name}"), title);
         assert_eq!(server.display(anchor.raw(), "#{@rimz_title}"), "opus");
         assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
-        if isolation == "sandbox" {
-            server.wait_for_pane_command(&workspace.session_name, "bwrap");
-        }
+        assert_eq!(
+            server.display(anchor.raw(), "#{pane_current_command}"),
+            "rimz"
+        );
         server
             .backend
             .rename_tab(
@@ -2042,6 +2043,13 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
 fn failing_close_pane_agent_drops_to_shell() {
     require_tmux!();
     let env = Env::new();
+    let config_dir = env.rimz_home();
+    std::fs::create_dir_all(&config_dir).expect("config directory");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[agents]\nstartup-relaunch-wait = \"0s\"\n",
+    )
+    .expect("relaunch without delay before checking the dropped shell");
     let workspace = env.resolve_workspace(&env.project_root);
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     server
