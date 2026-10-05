@@ -346,7 +346,8 @@ allowed-dependencies = [
 # Detached recovery owns a classed state log (+1).
 # Reset detaches each state directory it removes through one classed helper (+1).
 # `StatePaths::temp_unit_dirs` lists the room's temp units, canonical and reset-detached, for the hard reset's view-holder sweep (+1).
-surface-budget = 212
+# The loop start throttle's queue directory, lock, and ticket name are built here (+3).
+surface-budget = 215
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -452,7 +453,8 @@ path = "crates/rimz/src/harness"
 # A limit-parked child run: the park predicate, notice text and helper request cross the producer/CLI seam, with the locked claim and its release in `run`.
 # The producer tick calls the park detector (+1).
 # The public park_notice module itself also crosses the harness/CLI boundary (+1).
-surface-budget = 699
+# The loop start throttle crosses to the CLI as the `Turn` a launch reports through, the start preflight, and the held-run and readings lookups `loop show` renders, and the typed `ThrottleError` the preflight and admission return, plus the public `schedule::throttle` module itself (+10).
+surface-budget = 709
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1053,6 +1055,8 @@ allowed-dependencies = [
     # Locked rung claims and timeout settlement share the pure deadline policy.
     "harness::deadline",
     "harness::owed",
+    # A loop spawn request carries its start-throttle turn to the launch commit.
+    "harness::schedule::throttle",
     "ids",
     "proc",
     "store",
@@ -1138,7 +1142,8 @@ allowed-dependencies = [
 # Fan-out supplies its already-resolved marker checkout separately from task config.
 # Resident completion appends its assist after durable ledger publication.
 # `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+3).
-surface-budget = 50
+# The CLI hears hold reasons and reports a resident launch through the fire (+2).
+surface-budget = 52
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

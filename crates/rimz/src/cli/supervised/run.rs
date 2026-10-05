@@ -720,6 +720,9 @@ fn execute_attempt(
         )
     };
     rimz::harness::run::create(prepared.store.paths(), &record).context("recording run")?;
+    if let Some(turn) = &request.throttle_turn {
+        turn.report_launch(&prepared.workspace.workspace_id, &launch_identity.agent_id);
+    }
     open_attempt_pane(prepared, room, request, &run_id, &launch_batch, &pane)?;
     rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities());
     if request.background {

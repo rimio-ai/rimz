@@ -25,7 +25,7 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use super::super::assist_log::{self, Assist, AssistRecord};
-use super::{LOOP_TASK_ENV, fire::deadline_expired_at};
+use super::{LOOP_TASK_ENV, fire::deadline_expired_at, throttle};
 use crate::agents::PermissionMode;
 use crate::agents::account::{AccountsCache, ProviderStatus, read_accounts_cache};
 use crate::agents::login::LoginErr;
@@ -34,7 +34,7 @@ use crate::agents::{
     RateLimitWindow, RoomLoginErr, TurnLifecycleNeed, WindowSpan, WindowSurplus, ambient_env,
     find_definition, preflight_hooks,
 };
-use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, WatchSpec};
+use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget, ThrottleSwitch, WatchSpec};
 use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
@@ -324,6 +324,8 @@ impl FireContext {
     }
 }
 
+type HoldNotice<'a> = Box<dyn FnMut(&str) + 'a>;
+
 /// One loop fire from ordered gates through exactly one history transition.
 pub struct TaskFire<'a> {
     name: String,
@@ -345,6 +347,12 @@ pub struct TaskFire<'a> {
     started: Instant,
     run_lock: Option<RunLockGuard>,
     run_lock_path: fn(&str, &TaskEntry) -> Result<PathBuf>,
+    throttle_host: Arc<dyn throttle::Host>,
+    throttle_turn: Option<throttle::Turn>,
+    throttle_wait: Option<Duration>,
+    hold_notice: Option<HoldNotice<'a>>,
+    /// The check a spawn fired on, kept for whatever row ends the fire.
+    fired_check: Option<CheckRecord>,
     pending: Option<PendingEffect>,
     finished: bool,
 }
@@ -390,6 +398,11 @@ impl<'a> TaskFire<'a> {
             started,
             run_lock: None,
             run_lock_path,
+            throttle_host: Arc::new(throttle::SystemHost),
+            throttle_turn: None,
+            throttle_wait: None,
+            hold_notice: None,
+            fired_check: None,
             pending: None,
             finished: false,
         })
@@ -407,6 +420,71 @@ impl<'a> TaskFire<'a> {
     pub fn with_checkout(mut self, checkout: Option<PathBuf>) -> Self {
         self.checkout = checkout;
         self
+    }
+
+    /// Hear each new reason the start throttle holds this fire on.
+    pub fn with_hold_notice(mut self, notice: impl FnMut(&str) + 'a) -> Self {
+        self.hold_notice = Some(Box::new(notice));
+        self
+    }
+
+    /// Report the committed launch of a resident plan, so the throttle turn
+    /// this fire holds passes on once the provider reports the agent.
+    pub fn report_launch(&self, workspace: &WorkspaceId, agent: &crate::ids::AgentSessionId) {
+        if let Some(turn) = &self.throttle_turn {
+            turn.report_launch(workspace, agent);
+        }
+    }
+
+    /// The last gate of both ladders: take a turn in the start throttle. A
+    /// fire that will not spawn an agent never reaches it.
+    fn prepare_throttle(&mut self) -> Result<Option<TaskFireFinished>> {
+        if self.entry.throttle == Some(ThrottleSwitch::Off) {
+            return Ok(None);
+        }
+        let root = self.entry.resolved_root();
+        let run = throttle::Run {
+            task: self.name.clone(),
+            workspace: StatePaths::for_project_root(&root)?.workspace_id,
+            root,
+            checkout: self.launch_checkout(),
+            disk: throttle::disk_at(
+                &self.entry,
+                &self.config.agents.worktree,
+                self.launch_checkout(),
+            ),
+        };
+        let mut silent = |_: &str| {};
+        let admission = throttle::admit(
+            &self.throttle_host,
+            &self.config.r#loop.throttle,
+            &run,
+            match self.hold_notice.as_mut() {
+                Some(notice) => notice.as_mut(),
+                None => &mut silent,
+            },
+        )?;
+        match admission {
+            throttle::Admission::Open => Ok(None),
+            throttle::Admission::Turn { turn, waited } => {
+                self.throttle_turn = Some(turn);
+                self.throttle_wait = waited;
+                Ok(None)
+            }
+            throttle::Admission::Skipped { reason } => Ok(Some(
+                self.record_gate(LoopRunResult::ThrottleSkipped, reason),
+            )),
+            throttle::Admission::Interrupted => Ok(Some(self.record_terminal_with(
+                LoopRunResult::Canceled,
+                LoopRunPresentation {
+                    exit_code: Some(130),
+                    ..LoopRunPresentation::default()
+                },
+                TaskFireNotice::None,
+                None,
+                |record| record.error = Some("interrupted while held".to_owned()),
+            ))),
+        }
     }
 
     fn launch_checkout(&self) -> PathBuf {
@@ -437,6 +515,12 @@ impl<'a> TaskFire<'a> {
             ControlFlow::Break(done) => return Ok(TaskFirePlan::Done(done)),
             ControlFlow::Continue(check) => check,
         };
+        self.prepare_effect(fired_check)
+    }
+
+    /// The effect of a one-shot fire whose gates passed. Only a spawn takes a
+    /// turn in the start throttle, before its ephemeral row is consumed.
+    fn prepare_effect(&mut self, fired_check: Option<FiredCheck>) -> Result<TaskFirePlan> {
         match self
             .context
             .as_ref()
@@ -444,7 +528,13 @@ impl<'a> TaskFire<'a> {
             .action
             .clone()
         {
-            TaskAction::Spawn(spec) => self.prepare_spawn(spec, fired_check),
+            TaskAction::Spawn(spec) => {
+                self.fired_check = fired_check.as_ref().map(|check| check.record.clone());
+                if let Some(done) = self.prepare_throttle()? {
+                    return Ok(TaskFirePlan::Done(done));
+                }
+                self.prepare_spawn(spec, fired_check)
+            }
             TaskAction::Deliver(target) => self.prepare_delivery(target, fired_check),
             TaskAction::CheckOnly => {
                 unreachable!("check-only action is completed by prepare_check")
@@ -474,6 +564,9 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::Done(done));
         }
         if let Some(done) = self.prepare_deadline()? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        if let Some(done) = self.prepare_throttle()? {
             return Ok(TaskFirePlan::Done(done));
         }
         let TaskAction::Spawn(spec) = self
@@ -878,7 +971,8 @@ impl<'a> TaskFire<'a> {
             scope.managed_launch.clone()
         };
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
-        let request = self.compile_spawn_request(spec, prompt, managed_launch)?;
+        let mut request = self.compile_spawn_request(spec, prompt, managed_launch)?;
+        request.throttle_turn.clone_from(&self.throttle_turn);
         self.consume_ephemeral()?;
         let check = fired_check.as_ref().map(|check| check.record.clone());
         let stream = self.mode == LoopRunMode::Manual;
@@ -1067,6 +1161,10 @@ impl<'a> TaskFire<'a> {
             payload: signal.payload.clone(),
         });
         record.condition = self.condition.clone();
+        record.check.clone_from(&self.fired_check);
+        record.throttle_wait_ms = self
+            .throttle_wait
+            .map(|waited| u64::try_from(waited.as_millis()).unwrap_or(u64::MAX));
         if self.entry.stay {
             record.checkout = Some(self.launch_checkout());
         }
@@ -1120,6 +1218,8 @@ impl<'a> TaskFire<'a> {
         }
         let transition = run_log::record_transition(&self.task, &record);
         self.finished = true;
+        // A turn this fire never reported is released with its row.
+        self.throttle_turn = None;
         TaskFireFinished {
             record,
             presentation,
@@ -1617,19 +1717,29 @@ fn newest_active_run(paths: &StatePaths, name: &str) -> Result<Option<RunRecord>
 pub struct InFlightRun {
     pub holder: Option<RunLockInfo>,
     pub run: Option<RunRecord>,
+    /// The task's runs waiting for their turn in the start throttle; the
+    /// holder is one of them when its pid matches.
+    pub held: Vec<throttle::Held>,
 }
 
 /// The run of task `name` in flight under `root`. The run lock decides; the run
-/// record is read only while the lock is held, so a stale record is no run.
+/// record is read only while the lock is held, so a stale record is no run, and
+/// never for a holder still waiting in the start throttle, which has none.
 pub fn in_flight_run(name: &str, root: &Path) -> Result<Option<InFlightRun>> {
     let Some((_, holder)) = held_run_lock(name, root)? else {
         return Ok(None);
     };
     let project_root = WorkspaceResolver::persisted_project_root(root)
         .with_context(|| format!("resolving persisted project root at {}", root.display()))?;
-    let paths = StatePaths::for_project_root(&project_root)?;
-    let run = newest_active_run(&paths, name)?;
-    Ok(Some(InFlightRun { holder, run }))
+    let held = throttle::held(name, root);
+    // A holder still held for its turn has started no run of its own.
+    let holder_held = holder.is_some_and(|info| held.iter().any(|held| held.pid == info.pid));
+    let run = if holder_held {
+        None
+    } else {
+        newest_active_run(&StatePaths::for_project_root(&project_root)?, name)?
+    };
+    Ok(Some(InFlightRun { holder, run, held }))
 }
 
 pub(super) fn effective_spawn_timeout(
@@ -1687,6 +1797,8 @@ pub fn stop_task(
         && wait_for_run_lock_release_path(&lock, STOP_GRACE)?
     {
         append_stopped_record(name, root, info, run.as_ref());
+        // A run stopped while held for its turn dies holding a ticket.
+        throttle::reap();
         return Ok(StopOutcome::Stopped {
             run_id: run.map(|record| record.run_id),
             signaled: true,

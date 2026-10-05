@@ -369,6 +369,7 @@ fn resumed_registration_satisfies_the_bind_wait() {
 fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
     SupervisedRunRequest {
         spec: "codex".to_owned(),
+        throttle_turn: None,
         prompt: prompt.to_owned(),
         description: None,
         worktree: None,
