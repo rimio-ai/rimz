@@ -25,7 +25,7 @@ pub(in crate::harness::schedule) struct FakeHost {
     on_sleep: Mutex<Option<SleepHook>>,
     on_lock: Mutex<Option<SleepHook>>,
     /// Raised as Ctrl-C would be; only a hold that listens hears it.
-    interrupt: Arc<AtomicBool>,
+    pub(in crate::harness::schedule) interrupt: Arc<AtomicBool>,
     listening: AtomicUsize,
 }
 
@@ -232,7 +232,7 @@ fn admitted(admission: Admission) -> (Turn, Option<Duration>) {
 }
 
 fn admit_quiet(fake: &Arc<FakeHost>, config: &ThrottleConfig, run: &Run) -> Admission {
-    admit(&fake.host(), config, run, &mut |_| {}).expect("admit")
+    admit(&fake.host(), config, run, None, &mut |_| {}).expect("admit")
 }
 
 /// One pass for a ticket that is not this thread's, as its owner would run it.
@@ -294,6 +294,7 @@ fn a_pressure_limit_holds_until_both_averages_are_under_it() {
         &fake.host(),
         &config("cpu-pressure = 25\n"),
         &run("nightly"),
+        None,
         &mut |reason| heard.push(reason.to_owned()),
     )
     .expect("admit");
@@ -351,7 +352,7 @@ fn the_next_start_waits_for_the_report_then_the_provider_or_the_ceiling() {
         });
         fake.become_owner(2);
         let mut heard = Vec::new();
-        let admission = admit(&fake.host(), &pacing, &run("second"), &mut |reason| {
+        let admission = admit(&fake.host(), &pacing, &run("second"), None, &mut |reason| {
             heard.push(reason.to_owned());
         })
         .expect("admit");
@@ -402,7 +403,7 @@ fn with_pacing_off_the_next_start_is_admitted_at_the_report_and_counts_its_row()
     });
     fake.become_owner(2);
     let mut heard = Vec::new();
-    let skipped = admit(&fake.host(), &capped, &run("second"), &mut |reason| {
+    let skipped = admit(&fake.host(), &capped, &run("second"), None, &mut |reason| {
         heard.push((fake.elapsed_ms(), reason.to_owned()));
     })
     .expect("admit");
@@ -473,9 +474,15 @@ fn the_machine_cap_counts_only_working_agents_and_samples_every_five_seconds() {
         }
     });
     let mut heard = Vec::new();
-    let admission = admit(&fake.host(), &capped, &run("nightly"), &mut |reason| {
-        heard.push(reason.to_owned());
-    })
+    let admission = admit(
+        &fake.host(),
+        &capped,
+        &run("nightly"),
+        None,
+        &mut |reason| {
+            heard.push(reason.to_owned());
+        },
+    )
     .expect("admit");
     admitted(admission);
     // A lone agent is addressed by its kind; one among peers by its name.
@@ -643,6 +650,7 @@ fn a_configured_limit_this_host_cannot_read_fails_with_the_key_and_the_fix() {
         &fake.host(),
         &config("io-pressure = 40\n"),
         &run("nightly"),
+        None,
         &mut |_| {},
     )
     .expect_err("a gated fire errors");
@@ -769,7 +777,7 @@ fn an_existing_ticket_that_cannot_be_read_fails_admission() {
     std::fs::remove_file(&unreadable).unwrap();
     std::fs::create_dir(&unreadable).unwrap();
     fake.become_owner(2);
-    let error = admit(&fake.host(), &config(""), &run("second"), &mut |_| {})
+    let error = admit(&fake.host(), &config(""), &run("second"), None, &mut |_| {})
         .expect_err("an unreadable ticket may be a held turn");
     assert!(matches!(error, ThrottleError::Io { path, .. } if path == unreadable));
     assert_eq!(fake.tickets(), 1, "only the unreadable ticket is left");
@@ -837,7 +845,7 @@ fn ctrl_c_ends_a_hold_it_listens_for_and_leaves_no_ticket() {
     });
     fake.become_owner(2);
     let mut listening_when_heard = Vec::new();
-    let interrupted = admit(&fake.host(), &pacing, &run("second"), &mut |_| {
+    let interrupted = admit(&fake.host(), &pacing, &run("second"), None, &mut |_| {
         listening_when_heard.push(fake.listening.load(Ordering::SeqCst));
     })
     .expect("admit");
@@ -853,6 +861,62 @@ fn ctrl_c_ends_a_hold_it_listens_for_and_leaves_no_ticket() {
     assert_eq!(fake.elapsed_ms(), 2_000);
     assert_eq!(fake.listening.load(Ordering::SeqCst), 1);
     assert_eq!(fake.tickets(), 1, "only the first run's turn is left");
+}
+
+/// A run whose caller already listens is the one held behind `first`.
+fn admit_listening(fake: &Arc<FakeHost>, raised: &Arc<AtomicBool>) -> (Admission, Vec<String>) {
+    let pacing = config("max-wait = \"1m\"\n");
+    let (first, _) = admitted(admit_quiet(fake, &pacing, &run("first")));
+    fake.become_owner(2);
+    let mut heard = Vec::new();
+    let admission = admit(
+        &fake.host(),
+        &pacing,
+        &run("second"),
+        Some(Interrupts::raised_by(Arc::clone(raised))),
+        &mut |reason| heard.push(reason.to_owned()),
+    )
+    .expect("admit");
+    drop(first);
+    (admission, heard)
+}
+
+#[test]
+fn ctrl_c_heard_before_admission_ends_the_run_on_its_first_pass() {
+    let fake = FakeHost::new();
+    let (interrupted, heard) = admit_listening(&fake, &Arc::new(AtomicBool::new(true)));
+    assert!(
+        matches!(interrupted, Admission::Interrupted),
+        "{interrupted:?}"
+    );
+    assert_eq!(fake.elapsed_ms(), 0, "no recheck was slept");
+    assert!(heard.is_empty(), "no hold was announced: {heard:?}");
+    assert_eq!(fake.listening.load(Ordering::SeqCst), 0);
+    assert_eq!(fake.tickets(), 0);
+}
+
+#[test]
+fn a_held_run_keeps_the_listener_it_was_given() {
+    let fake = FakeHost::new();
+    let raised = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&raised);
+    fake.on_sleep(move |fake| {
+        if fake.elapsed_ms() == 2_000 {
+            flag.store(true, Ordering::SeqCst);
+        }
+    });
+    let (interrupted, heard) = admit_listening(&fake, &raised);
+    assert!(
+        matches!(interrupted, Admission::Interrupted),
+        "{interrupted:?}"
+    );
+    assert_eq!(heard, ["1 start ahead"]);
+    assert_eq!(fake.elapsed_ms(), 2_000);
+    assert_eq!(
+        fake.listening.load(Ordering::SeqCst),
+        0,
+        "a run given a listener registers no second one"
+    );
 }
 
 #[test]
