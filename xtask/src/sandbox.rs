@@ -95,6 +95,8 @@ impl HostSandbox {
         sandbox.trust_workspace_for_git(workspace_root)?;
         let skip_log = sandbox._root.path().join("skipped-tests");
         sandbox.env.insert(SKIP_LOG_ENV, skip_log);
+        let missing_codex = sandbox._root.path().join("missing-codex");
+        sandbox.env.insert(CODEX_BIN_ENV, missing_codex);
         Ok(sandbox)
     }
 
@@ -198,6 +200,13 @@ impl HostSandbox {
 /// `<test name>\t<reason>\n` line per self-skip, appended by the integration
 /// harness's skip helper (`crates/rimz/tests/integration/common/skip.rs`).
 const SKIP_LOG_ENV: &str = "RIMZ_TEST_SKIP_LOG";
+
+/// The codex binary override a test sandbox points at a path it never creates,
+/// so a test process and every session it births in-process read codex as not
+/// installed. The integration scrub sets the same default on each command it
+/// builds (`crates/rimz/tests/integration/common/command.rs`); this export
+/// covers the births that build no command.
+const CODEX_BIN_ENV: &str = "RIMZ_CODEX_BIN";
 
 const SKIP_NAMES_SHOWN: usize = 5;
 
@@ -777,6 +786,31 @@ mod tests {
                 .command_env()
                 .iter()
                 .all(|(key, _)| *key != SKIP_LOG_ENV)
+        );
+    }
+
+    #[test]
+    fn only_a_test_sandbox_exports_a_missing_codex_and_its_runs_keep_it() {
+        let workspace = TempDir::new().unwrap();
+        let sandbox = HostSandbox::for_tests(workspace.path()).unwrap();
+        let exported = sandbox.command_env();
+        let codex = exported
+            .iter()
+            .find_map(|(key, value)| (*key == CODEX_BIN_ENV).then_some(value))
+            .expect("test sandbox exports the codex override");
+        assert!(!codex.exists(), "{}", codex.display());
+        let ambient = [std::ffi::OsString::from(CODEX_BIN_ENV)];
+        assert_eq!(
+            test_removed_env(ambient.into_iter(), &sandbox.env),
+            ["NO_COLOR"]
+        );
+
+        let manual = HostSandbox::for_manual_command().unwrap();
+        assert!(
+            manual
+                .command_env()
+                .iter()
+                .all(|(key, _)| *key != CODEX_BIN_ENV)
         );
     }
 
