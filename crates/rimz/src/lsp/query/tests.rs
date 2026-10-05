@@ -1366,6 +1366,7 @@ fn file_qualified_targets_split_at_the_first_separator() {
     for (raw, file, name) in [
         ("src/lib.rs::Type::method", "src/lib.rs", "Type::method"),
         ("lib.rs::method", "lib.rs", "method"),
+        ("../a/lib.rs::Type::method", "../a/lib.rs", "Type::method"),
     ] {
         assert_eq!(
             Target::parse(Verb::Def, raw).unwrap(),
@@ -1377,7 +1378,12 @@ fn file_qualified_targets_split_at_the_first_separator() {
             Some(Path::new(file))
         );
     }
-    for raw in ["Type::method", "crate::deep::pathed", "rimz::store::Store"] {
+    for raw in [
+        "Type::method",
+        "crate::deep::pathed",
+        "rimz::store::Store",
+        "..Default::default",
+    ] {
         assert_eq!(file_qualified(raw), None, "{raw}");
         assert_eq!(Target::parse(Verb::Def, raw).unwrap().path(), None);
     }
