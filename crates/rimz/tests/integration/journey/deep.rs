@@ -2900,6 +2900,8 @@ fn zellij_recovery_survives_a_sidebar_that_outlives_its_session() {
     let stub_dir = write_hook_firing_agent(&env, "claude");
     let agent_path = path_with_front(&stub_dir);
     trust_agent_path(&env, "claude", &agent_path);
+    // The launch runs the account check, which needs the login's hooks.
+    env.install_agent_hooks("claude");
     let start = || {
         env.rimz()
             .env("PATH", &agent_path)
