@@ -1838,11 +1838,10 @@ fn doctor_reports_mixed_build_writers() {
             Some(PaneId::from_parts(MuxName::Tmux, pane)),
         );
         sidebar.build = Some(build.to_owned());
-        rimz::disk::atomic::write_temp_then_rename(
-            &rt.heartbeat_dir.join(format!("sidebar.{name}.json")),
-            &sidebar,
-        )
-        .expect("write sidebar heartbeat");
+        let path = rt.heartbeat_dir.join(format!("sidebar.{name}.json"));
+        rimz::disk::atomic::write_temp_then_rename(&path, &sidebar)
+            .expect("write sidebar heartbeat");
+        crate::common::room::date_heartbeat_as_live(&path);
     }
 
     let report = doctor_json(
