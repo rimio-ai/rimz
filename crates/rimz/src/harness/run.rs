@@ -186,6 +186,8 @@ pub struct SupervisedRunRequest {
     /// The account the launch runs under; a subagent on the room default
     /// inherits its same-kind parent's.
     pub login: crate::store::writer::LaunchLogin,
+    /// The loop throttle turn this launch holds; the launch commit reports it.
+    pub throttle_turn: Option<crate::harness::schedule::throttle::Turn>,
 }
 
 impl SupervisedRunRequest {
@@ -231,6 +233,7 @@ impl SupervisedRunRequest {
             passthrough: Vec::new(),
             managed_launch,
             login: crate::store::writer::LaunchLogin::RoomDefault,
+            throttle_turn: None,
         }
     }
 }

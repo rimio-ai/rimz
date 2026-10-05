@@ -379,7 +379,7 @@ fn task_timing_maps_to_watch_labels() {
             render::held_text(&timing.state(), now).as_deref(),
             (state == RowState::Held).then_some(label)
         );
-        assert_eq!(next_text(state, &timing, None, now), label);
+        assert_eq!(next_text(state, &timing, None, &[], now), label);
     }
 }
 
@@ -413,7 +413,7 @@ fn signal_and_watch_timing_map_to_live_watch_labels() {
         );
         assert_eq!(row_state_for_timing(&timing), state);
         assert_eq!(render::held_text(&timing.state(), now), None);
-        assert_eq!(next_text(state, &timing, None, now), label);
+        assert_eq!(next_text(state, &timing, None, &[], now), label);
     }
 }
 
@@ -439,11 +439,11 @@ fn running_watch_row_retains_next_fire_through_pause_overlay() {
         started_at: Timestamp::from_second(9_820).unwrap(),
     };
     assert_eq!(
-        next_text(RowState::Running, &timing, Some(holder), now),
+        next_text(RowState::Running, &timing, Some(holder), &[], now),
         "▸ running 3m"
     );
     assert_eq!(
-        next_text(RowState::Running, &timing, None, now),
+        next_text(RowState::Running, &timing, None, &[], now),
         "▸ running"
     );
     assert_eq!(

@@ -201,13 +201,18 @@ impl<'a> WatchSummary<'a> {
 
 fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> WatchRow {
     let running = task.running();
+    let held = if running.is_some() {
+        rimz::harness::schedule::throttle::held(task.name, &task.task.entry().resolved_root())
+    } else {
+        Vec::new()
+    };
     let next_ts = watch_next_timestamp(&task.timing, running.is_some());
     let state = if running.is_some() {
         RowState::Running
     } else {
         row_state_for_timing(&task.timing)
     };
-    let next_text = next_text(state, &task.timing, running.flatten(), context.now);
+    let next_text = next_text(state, &task.timing, running.flatten(), &held, context.now);
     watch_row(task.name, state, next_ts, next_text, context)
 }
 
@@ -256,10 +261,11 @@ fn next_text(
     state: RowState,
     timing: &schedule::TaskTiming,
     holder: Option<RunLockInfo>,
+    held: &[rimz::harness::schedule::throttle::Held],
     now: Timestamp,
 ) -> String {
     match state {
-        RowState::Running => render::running_text(holder, now),
+        RowState::Running => render::in_flight_text(holder, held, now),
         RowState::Held => {
             // row_state_for_timing maps only disabled and paused states to Held.
             render::held_text(&timing.state(), now)

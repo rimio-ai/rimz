@@ -37,6 +37,7 @@ pub mod signal;
 pub mod strikes;
 pub mod takeover;
 pub mod team;
+pub mod throttle;
 pub mod when;
 
 pub use fire::last_stamps;

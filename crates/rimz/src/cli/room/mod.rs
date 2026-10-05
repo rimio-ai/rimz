@@ -233,6 +233,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     refuse_legacy_only_home()?;
     let machine = crate::cli::machine_config();
     rimz::sandbox::preflight(machine.agents.isolation)?;
+    rimz::harness::schedule::throttle::preflight(&machine.r#loop.throttle)?;
     if let Some(shell) = &machine.agents.shell {
         rimz::harness::launch::validate_agent_shell(shell)?;
     }

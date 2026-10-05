@@ -186,7 +186,12 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
         Err(err) => format!("invalid: {err}"),
     };
     let state = match task.running() {
-        Some(holder) => ui::cell(running_text(holder, context.now)).fg(ui::palette::cool()),
+        Some(holder) => ui::cell(in_flight_text(
+            holder,
+            &rimz::harness::schedule::throttle::held(task.name, &entry.resolved_root()),
+            context.now,
+        ))
+        .fg(ui::palette::cool()),
         None => next_cell(&task.timing, context.now),
     };
     let (last, result) = context
@@ -639,11 +644,15 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
                 "run_id": in_flight.run.as_ref().map(|run| &run.run_id),
             })
         });
+        let (held, waiting) = in_flight.as_ref().map_or((None, Vec::new()), |in_flight| {
+            let (own, others) = split_held(in_flight.holder, &in_flight.held);
+            (own.map(held_json), others.map(held_json).collect())
+        });
         writeln!(
             ui::out(),
             "{}",
             serde_json::to_string_pretty(
-                &serde_json::json!({ "task": args.name, "entry": entry, "launches": launches, "runs": records, "running": running })
+                &serde_json::json!({ "task": args.name, "entry": entry, "launches": launches, "runs": records, "running": running, "held": held, "waiting": waiting })
             )?
         )?;
         return Ok(());
@@ -703,7 +712,33 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             full_spend: !show_agent_runs,
         },
     )?;
+    if entry.agent.is_some() && entry.throttle != Some(rimz::config::ThrottleSwitch::Off) {
+        write_throttle_readings(
+            &mut out,
+            &rimz::harness::schedule::throttle::readings(
+                &MachineConfig::load_lenient(),
+                &args.name,
+                entry,
+            ),
+        )?;
+    }
     Ok(())
+}
+
+/// What the start throttle reads on this machine now, beside any limit set.
+fn write_throttle_readings(
+    out: &mut impl Write,
+    readings: &[(&'static str, String)],
+) -> std::io::Result<()> {
+    if readings.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "\nTHROTTLE")?;
+    let mut kv = ui::KeyVals::new().indent(2);
+    for (label, text) in readings {
+        kv.push(*label, ui::cell(text));
+    }
+    kv.render(out)
 }
 
 /// The answer under the headline: the verdict, any fires nothing has answered, and how to stop a running task.
@@ -979,6 +1014,66 @@ pub(super) fn running_text(holder: Option<RunLockInfo>, now: Timestamp) -> Strin
     }
 }
 
+/// A run waiting for its turn in the start throttle, in place of running.
+fn held_run_text(held: &Held, now: Timestamp) -> String {
+    let since = i64::try_from(held.since_ms).unwrap_or(i64::MAX);
+    let elapsed = (now.as_millisecond().saturating_sub(since) / 1_000).max(0) as u64;
+    format!(
+        "held: {}, {}",
+        held.reason.as_deref().unwrap_or("waiting for its turn"),
+        ui::age_label(elapsed)
+    )
+}
+
+/// The holder's own waiting ticket, matched by pid, and the task's other
+/// waiting runs. A holder the lock does not name owns none.
+pub(super) fn split_held(
+    holder: Option<RunLockInfo>,
+    held: &[Held],
+) -> (Option<&Held>, impl Iterator<Item = &Held>) {
+    let own = holder.and_then(|info| held.iter().find(|held| held.pid == info.pid));
+    let others = held
+        .iter()
+        .filter(move |held| own.is_none_or(|own| !std::ptr::eq(own, *held)));
+    (own, others)
+}
+
+/// The task's waiting runs beside the one in flight: their count and the
+/// first one's reason.
+fn others_held_text<'a>(mut others: impl Iterator<Item = &'a Held>) -> Option<String> {
+    let first = others.next()?;
+    Some(format!(
+        "{} held: {}",
+        1 + others.count(),
+        first.reason.as_deref().unwrap_or("waiting for its turn")
+    ))
+}
+
+/// A run in flight as `list` and `watch` print it: held in place of running
+/// only when the run is itself waiting for its turn, with the task's other
+/// waiting runs beside it.
+pub(super) fn in_flight_text(holder: Option<RunLockInfo>, held: &[Held], now: Timestamp) -> String {
+    let (own, others) = split_held(holder, held);
+    let state = match own {
+        Some(own) => held_run_text(own, now),
+        None => running_text(holder, now),
+    };
+    match others_held_text(others) {
+        Some(others) => format!("{state} · {others}"),
+        None => state,
+    }
+}
+
+fn held_json(held: &Held) -> serde_json::Value {
+    serde_json::json!({
+        "pid": held.pid,
+        "checkout": held.checkout,
+        "since": Timestamp::from_millisecond(i64::try_from(held.since_ms).unwrap_or(i64::MAX)).ok(),
+        "reason": held.reason,
+        "position": held.position,
+    })
+}
+
 /// The running state with the holder's pid and the run's id, for `show` and `logs`.
 fn running_text_full(in_flight: &InFlightRun, now: Timestamp) -> String {
     let pid = in_flight
@@ -990,7 +1085,15 @@ fn running_text_full(in_flight: &InFlightRun, now: Timestamp) -> String {
         .as_ref()
         .map(|run| format!(" · run {}", run.run_id))
         .unwrap_or_default();
-    format!("{}{pid}{run}", running_text(in_flight.holder, now))
+    let (own, others) = split_held(in_flight.holder, &in_flight.held);
+    let state = match own {
+        Some(own) => held_run_text(own, now),
+        None => running_text(in_flight.holder, now),
+    };
+    let others = others_held_text(others)
+        .map(|others| format!(" · {others}"))
+        .unwrap_or_default();
+    format!("{state}{pid}{run}{others}")
 }
 
 fn write_show_headline(

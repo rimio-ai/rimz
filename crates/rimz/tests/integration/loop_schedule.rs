@@ -6408,6 +6408,308 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
     assert_eq!(record.error.as_deref(), Some("stopped by rimz loop stop"));
 }
 
+/// A fire that would start an agent waits behind another start's turn: it
+/// is skipped at `max-wait`, shows as held while it waits, and a stop leaves
+/// one `canceled` row and nothing of its own in the queue.
+#[cfg(unix)]
+#[test]
+fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    loop_ok(
+        &env,
+        &[
+            "loop", "add", "queued", "--agent", "claude", "--prompt", "work", "--stay", "--every",
+            "1h",
+        ],
+    );
+    // Another start holds the turn for as long as this test process lives.
+    let queue = env.rimz_home().join("loops/throttle");
+    std::fs::create_dir_all(&queue).expect("mkdir throttle queue");
+    std::fs::write(
+        queue.join(format!("{:020}-01890000-0000-7000-8000-000000000000", 1)),
+        json!({
+            "owner": { "pid": std::process::id(), "start": null },
+            "task": "other", "root": "/elsewhere", "checkout": "/elsewhere",
+            "enqueued_ms": 1, "state": "admitted",
+        })
+        .to_string(),
+    )
+    .expect("write the held turn");
+    let queued = || std::fs::read_dir(&queue).expect("read queue").count();
+
+    loop_ok(&env, &["config", "set", "loop.throttle.max-wait", "2s"]);
+    let output = env
+        .rimz()
+        .args(["loop", "run", "queued"])
+        .output()
+        .expect("run held loop");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record = last_loop_record(&env);
+    assert_eq!(record.result, LoopRunResult::ThrottleSkipped);
+    assert_eq!(record.error.as_deref(), Some("1 start ahead; held 2s"));
+    assert_eq!(queued(), 1, "a skipped run leaves the queue");
+    let show = loop_ok(&env, &["loop", "show", "queued"]);
+    assert!(
+        show.contains("throttle skipped") && show.contains("1 start ahead; held 2s"),
+        "{show}"
+    );
+    assert!(show.contains("THROTTLE"), "{show}");
+
+    loop_ok(&env, &["config", "set", "loop.throttle.max-wait", "30m"]);
+    let mut runner = env
+        .rimz()
+        .args(["loop", "run", "queued"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn held loop runner");
+    wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "queued"));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let show = loop {
+        let show = loop_ok(&env, &["loop", "show", "queued"]);
+        if show.contains("held: 1 start ahead") {
+            break show;
+        }
+        assert!(Instant::now() < deadline, "never shown as held: {show}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        show.contains(&format!("pid {}", runner.id())) && !show.contains("▸ running"),
+        "{show}"
+    );
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        list.contains("held: 1 start ahead") && !list.contains("▸ running"),
+        "{list}"
+    );
+    let document: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
+    assert_eq!(document["held"]["reason"], "1 start ahead");
+    assert_eq!(document["held"]["position"], 2);
+    assert_eq!(document["held"]["pid"], runner.id());
+    assert!(document["held"]["since"].is_string(), "{document}");
+    assert_eq!(document["running"]["pid"], runner.id());
+    assert_eq!(document["waiting"], json!([]));
+    assert_eq!(queued(), 2);
+
+    // Another checkout of the task waits in another process: the runner
+    // keeps its own reason, and the other shows beside it, never paired
+    // with the runner's pid.
+    let own_ticket = std::fs::read_dir(&queue)
+        .expect("read queue")
+        .map(|entry| entry.expect("queue entry").path())
+        .find(|path| {
+            std::fs::read_to_string(path).is_ok_and(|ticket| ticket.contains("\"queued\""))
+        })
+        .expect("the runner's ticket");
+    let mut other: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&own_ticket).unwrap()).unwrap();
+    other["owner"] = json!({ "pid": std::process::id(), "start": null });
+    other["checkout"] = json!("/elsewhere/checkout-b");
+    other["reason"] = serde_json::Value::Null;
+    let other_ticket = queue.join(format!(
+        "{:020}-01890000-0000-7000-8000-000000000001",
+        u64::MAX / 2
+    ));
+    std::fs::write(&other_ticket, other.to_string()).expect("write the other checkout's ticket");
+    let show = loop_ok(&env, &["loop", "show", "queued"]);
+    assert!(
+        show.contains(&format!(
+            "pid {} · 1 held: waiting for its turn",
+            runner.id()
+        )) && show.contains("held: 1 start ahead"),
+        "{show}"
+    );
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(list.contains("· 1 held: waiting for its turn"), "{list}");
+    let document: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
+    assert_eq!(document["held"]["pid"], runner.id());
+    assert_eq!(document["waiting"][0]["pid"], std::process::id());
+    assert_eq!(document["waiting"][0]["checkout"], "/elsewhere/checkout-b");
+    // Another checkout's run of the task is active: it is not the held
+    // runner's, which has no run yet.
+    let paths = env.state_path_for(&env.project_root);
+    paths.ensure_dirs().unwrap();
+    let mut active = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "work".to_owned(),
+        std::path::PathBuf::from("/elsewhere/checkout-c"),
+    );
+    active.status = RunStatus::Running;
+    active.loop_task = Some("queued".to_owned());
+    rimz::harness::run::create(&paths, &active).unwrap();
+    let show = loop_ok(&env, &["loop", "show", "queued"]);
+    assert!(
+        show.contains("held: 1 start ahead") && !show.contains(&active.run_id.to_string()),
+        "{show}"
+    );
+    let document: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
+    assert_eq!(document["running"]["pid"], runner.id());
+    assert!(document["running"]["run_id"].is_null(), "{document}");
+    rimz::harness::run::cancel(&paths, &active.run_id).unwrap();
+    std::fs::remove_file(&other_ticket).expect("remove the other checkout's ticket");
+
+    let stopped = loop_ok(&env, &["loop", "stop", "queued"]);
+    assert!(stopped.contains("stopped"), "{stopped}");
+    assert!(!runner.wait().expect("wait for stopped runner").success());
+    let rows: Vec<_> = read_loop_run_records(&env)
+        .into_iter()
+        .map(|row| row.result)
+        .collect();
+    assert_eq!(
+        rows,
+        [LoopRunResult::ThrottleSkipped, LoopRunResult::Canceled],
+        "a stop before any run record leaves exactly one row"
+    );
+    assert_eq!(queued(), 1, "the stopped run's ticket is reaped");
+    let document: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "queued", "--json"])).unwrap();
+    assert!(document["held"].is_null() && document["running"].is_null());
+}
+
+/// Ctrl-C ends a manual fire held by the start throttle after its check
+/// passed: the check's own interrupt handling is gone by then, so the hold
+/// listens for itself. The fire records `canceled` with the check it ran,
+/// leaves no ticket, and launches nothing.
+#[cfg(unix)]
+#[test]
+fn ctrl_c_ends_a_manual_fire_held_after_its_check_passed() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "checked",
+            "--every",
+            "15m",
+            "--check",
+            "printf ok > check-done",
+            "--timeout",
+            "5s",
+            "--on",
+            "success",
+            "--agent",
+            "claude",
+            "--prompt",
+            "must not launch",
+        ],
+    );
+    let queue = env.rimz_home().join("loops/throttle");
+    std::fs::create_dir_all(&queue).expect("mkdir throttle queue");
+    std::fs::write(
+        queue.join(format!("{:020}-01890000-0000-7000-8000-000000000000", 1)),
+        json!({
+            "owner": { "pid": std::process::id(), "start": null },
+            "task": "other", "root": "/elsewhere", "checkout": "/elsewhere",
+            "enqueued_ms": 1, "state": "admitted",
+        })
+        .to_string(),
+    )
+    .expect("write the held turn");
+    let held_tickets = || {
+        std::fs::read_dir(&queue)
+            .expect("read queue")
+            .filter_map(|entry| std::fs::read_to_string(entry.ok()?.path()).ok())
+            .filter(|ticket| ticket.contains("1 start ahead"))
+            .count()
+    };
+
+    let mut runner = env
+        .rimz()
+        .args(["loop", "fire", "checked"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn held fire");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while held_tickets() == 0 {
+        if Instant::now() >= deadline || runner.try_wait().unwrap().is_some() {
+            let _ = runner.kill();
+            let output = runner.wait_with_output().unwrap();
+            panic!(
+                "the fire was never held: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(env.project_root.join("check-done").exists());
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(runner.id() as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = runner.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = runner.kill();
+            let _ = runner.wait();
+            panic!("Ctrl-C did not end the held fire");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(130));
+    let record = last_loop_record(&env);
+    assert_eq!(record.result, LoopRunResult::Canceled);
+    assert_eq!(record.error.as_deref(), Some("interrupted while held"));
+    assert!(record.run_id.is_none(), "nothing launched");
+    assert_eq!(record.check.expect("the check that ran").code, Some(0));
+    assert_eq!(
+        std::fs::read_dir(&queue).expect("read queue").count(),
+        1,
+        "only the other start's turn is left"
+    );
+
+    // Fired again and released mid-wait, the fire records how long it held.
+    let mut runner = env
+        .rimz()
+        .args(["loop", "fire", "checked"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn held fire");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while held_tickets() == 0 {
+        assert!(Instant::now() < deadline, "the second fire was never held");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(1_500));
+    std::fs::remove_file(queue.join(format!("{:020}-01890000-0000-7000-8000-000000000000", 1)))
+        .expect("release the turn");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while runner.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            let _ = runner.kill();
+            panic!("the released fire never finished");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let record = last_loop_record(&env);
+    assert_ne!(record.result, LoopRunResult::ThrottleSkipped);
+    assert_ne!(record.result, LoopRunResult::Canceled);
+    assert!(
+        record
+            .throttle_wait_ms
+            .is_some_and(|waited| waited >= 1_000),
+        "{record:?}"
+    );
+}
+
 /// A scheduled `--in` spawn one-shot whose runner holds its lock with a Running
 /// run record, after the fire consumed its instance row.
 #[cfg(unix)]

@@ -97,7 +97,12 @@ pub(super) fn run_one(
         started,
     )?
     .with_condition(condition)
-    .with_checkout(checkout);
+    .with_checkout(checkout)
+    .with_hold_notice(move |reason| {
+        if mode == LoopRunMode::Manual {
+            let _ = writeln!(ui::out(), "held: {reason}");
+        }
+    });
     let mut plan = fire.prepare(&mut |root| {
         if !entry.stay
             && (mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly))
@@ -179,6 +184,7 @@ pub(super) fn run_one(
                     .leader_index
                     .and_then(|index| launched.identities.get(index))
                     .context("resident layout has no prompt leader")?;
+                fire.report_launch(&ctx.workspace.workspace_id, &leader.agent_id);
                 Ok(rimz::harness::schedule::runner::TaskFireEffect::Resident {
                     leader: leader.name.clone(),
                     handles: launched

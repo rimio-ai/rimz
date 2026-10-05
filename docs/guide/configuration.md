@@ -812,6 +812,8 @@ The rest tune what one fire is allowed to do:
 - `budget` caps each run in dollars. `budget-per-day` requires `budget` and skips a fire when today's recorded spend for the task, plus the next run's cap, would pass the daily amount.
 - `surplus` holds a task back unless the provider's usage window has room to spare: `"1.5x"` fires only while the budget left in the window outpaces the time left in it by half again. `surplus-after` adds an elapsed floor, and alone it still demands the break-even `1.0x`. Both fail closed when RimZ has no usable window reading, so a plain API key never fires a gated task. The model, worked through with numbers, is [budgets → the surplus gate](./budget.md#the-surplus-gate).
 
+A task that starts an agent also takes a turn in the start throttle, tuned by the file's top-level `[throttle]` table: `pace` (default `"10s"`, `"0s"` off) and `max-wait` (default `"30m"`), the caps `max-active` and `max-active-per-task`, the pressure limits `cpu-pressure`, `io-pressure`, and `memory-pressure` in percent, and the floors `min-memory` and `min-disk`. `rimz config set loop.throttle.pace 30s` writes one. A task's own `throttle = "off"` exempts it. The keys are explained in [pace agent starts](./loops.md#pace-agent-starts).
+
 Four things are worth knowing before you edit the file by hand:
 
 - `at` and `cron` resolve in the top-level [`timezone`](#sidebar-rendering), falling back to the system zone when it is unset.

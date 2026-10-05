@@ -91,6 +91,9 @@ fn worktree_run_locks_do_not_overlap_other_checkouts() {
         .unwrap()
         .with_checkout(Some(root.path().join(checkout)));
         fire.run_lock_path = |file, entry| Ok(entry.root.join(file));
+        // Each fire is its own start here: none launches, so none would pass
+        // the turn on to the next.
+        fire.throttle_host = throttle::tests::FakeHost::new().host();
         fire
     };
     let mut first = make("a");
@@ -1745,4 +1748,354 @@ fn a_pin_that_stops_resolving_at_launch_skips_and_every_other_error_strikes() {
             "{name}: the one-shot row is consumed"
         );
     }
+}
+
+fn throttled_fire<'a>(
+    name: &str,
+    entry: TaskEntry,
+    catalog: &'a TaskCatalog,
+    throttle_config: &str,
+    host: &Arc<throttle::tests::FakeHost>,
+) -> TaskFire<'a> {
+    let config: MachineConfig =
+        toml::from_str(&format!("[loop.throttle]\n{throttle_config}")).expect("machine config");
+    let mut fire = TaskFire::new(
+        name,
+        LoadedTask::new(name, entry, catalog::TaskSource::Config),
+        catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(config),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .expect("construct task fire");
+    fire.run_lock_path = |file, entry| Ok(entry.root.join(file));
+    fire.throttle_host = host.host();
+    fire
+}
+
+fn resident_entry(root: &Path) -> TaskEntry {
+    TaskEntry {
+        root: root.to_owned(),
+        agent: Some("claude".into()),
+        prompt: Some("repair".into()),
+        stay: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_held_resident_fire_is_skipped_at_max_wait_before_room_birth() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    host.set_pressure(41.0, 12.0);
+    let heard = std::cell::RefCell::new(Vec::new());
+    let mut fire = throttled_fire(
+        "throttle-held",
+        resident_entry(root.path()),
+        &catalog,
+        "cpu-pressure = 25\nmax-wait = \"3s\"\n",
+        &host,
+    )
+    .with_hold_notice(|reason| heard.borrow_mut().push(reason.to_owned()));
+    let TaskFirePlan::Done(done) = fire
+        .prepare(&mut |_| panic!("a held fire births no room"))
+        .unwrap()
+    else {
+        panic!("a fire held past max-wait is done")
+    };
+    assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
+    assert_eq!(
+        done.record.error.as_deref(),
+        Some("cpu pressure 41% >= 25%; held 3s")
+    );
+    assert!(matches!(done.notice, TaskFireNotice::Gate { .. }));
+    assert_eq!(*heard.borrow(), ["cpu pressure 41% >= 25%"]);
+    assert_eq!(host.tickets(), 0);
+    assert_eq!(
+        run_log::task_records(&logs_dir(), "throttle-held", Some(root.path()))
+            .iter()
+            .map(|record| record.result)
+            .collect::<Vec<_>>(),
+        [LoopRunResult::ThrottleSkipped],
+        "one row per fire"
+    );
+}
+
+#[test]
+fn a_resident_fire_released_mid_wait_launches_and_records_its_wait() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    host.set_pressure(41.0, 12.0);
+    host.on_sleep(|host| {
+        if host.elapsed_ms() == 2_000 {
+            host.set_pressure(3.0, 3.0);
+        }
+    });
+    let mut fire = throttled_fire(
+        "fixer",
+        resident_entry(root.path()),
+        &catalog,
+        "cpu-pressure = 25\n",
+        &host,
+    );
+    let mut births = 0;
+    let plan = fire
+        .prepare(&mut |_| {
+            // The room is born only once the fire holds the turn.
+            assert_eq!(host.elapsed_ms(), 5_000);
+            births += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert!(matches!(plan, TaskFirePlan::Resident { .. }));
+    assert_eq!(births, 1);
+    assert_eq!(host.tickets(), 1, "the turn is held until the launch");
+
+    // A second fire of the task overlaps on the run lock, never on the queue.
+    let mut again = throttled_fire(
+        "fixer",
+        resident_entry(root.path()),
+        &catalog,
+        "cpu-pressure = 25\n",
+        &host,
+    );
+    assert!(
+        matches!(again.prepare(&mut |_| panic!("overlapped")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped)
+    );
+    assert_eq!(host.tickets(), 1);
+
+    let done = fire
+        .finish(TaskFireEffect::Resident {
+            leader: "fixer".to_owned(),
+            handles: vec!["@fixer".to_owned()],
+            stopped: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(done.record.result, LoopRunResult::Launched);
+    assert_eq!(done.record.throttle_wait_ms, Some(5_000));
+    assert_eq!(host.tickets(), 0, "an unreported turn ends with its row");
+}
+
+#[test]
+fn a_fire_that_cannot_read_a_configured_limit_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    *host.pressure.lock().unwrap() = Err("/proc/pressure/cpu: No such file".to_owned());
+    let mut fire = throttled_fire(
+        "fixer",
+        resident_entry(root.path()),
+        &catalog,
+        "cpu-pressure = 25\n",
+        &host,
+    );
+    let error = fire
+        .prepare(&mut |_| panic!("an unreadable limit births no room"))
+        .unwrap_err();
+    assert!(error.to_string().contains("`loop.throttle.cpu-pressure`"));
+    assert_eq!(
+        fire.finish_error(&error).record.result,
+        LoopRunResult::Errored
+    );
+}
+
+#[test]
+fn min_disk_is_read_where_a_fresh_worktree_will_be_made() {
+    let dir = tempfile::tempdir().unwrap();
+    let mount = dir.path().join("mount");
+    std::fs::create_dir(&mount).unwrap();
+    let state = StatePaths::for_project_root(dir.path()).unwrap();
+    let fresh = TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("repair".to_owned()),
+        root: dir.path().to_path_buf(),
+        fire_at: Some(Timestamp::UNIX_EPOCH),
+        worktree: Some("feat".to_owned()),
+        ..TaskEntry::default()
+    };
+    let plain = TaskEntry {
+        worktree: None,
+        ..fresh.clone()
+    };
+    for (name, entry) in [("fresh", &fresh), ("plain", &plain)] {
+        crate::harness::schedule::instances::insert(&state, name, entry).unwrap();
+    }
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    let config: MachineConfig = toml::from_str(&format!(
+        "[agents.worktree]\ndir = \"{}/worktrees/{{repo}}\"\n[loop.throttle]\nmin-disk = \"1GB\"\n",
+        mount.display()
+    ))
+    .unwrap();
+    let config = Arc::new(config);
+    let measured = |name: &str| {
+        let mut fire = skipped_fire(name, &catalog, None);
+        fire.config = Arc::clone(&config);
+        fire.throttle_host = host.host();
+        let _ = fire.prepare_effect(None);
+        host.disk_reads().last().cloned()
+    };
+
+    // The worktree's directory does not exist yet: its nearest existing
+    // ancestor is the filesystem the launch will write to.
+    assert_eq!(measured("fresh"), Some(mount.clone()));
+    assert_eq!(measured("plain"), Some(dir.path().to_path_buf()));
+}
+
+#[test]
+fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root(dir.path()).unwrap();
+    let spawn = TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("repair".to_owned()),
+        root: dir.path().to_path_buf(),
+        fire_at: Some(Timestamp::UNIX_EPOCH),
+        ..TaskEntry::default()
+    };
+    let exempt = TaskEntry {
+        throttle: Some(ThrottleSwitch::Off),
+        ..spawn.clone()
+    };
+    let deliver = TaskEntry {
+        agent: None,
+        wait: Some(TaskTarget {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            session: crate::ids::AgentSessionId::from("gone-session"),
+            handle: "@gone".to_owned(),
+        }),
+        ..spawn.clone()
+    };
+    let check_only = TaskEntry {
+        agent: None,
+        check: Some("true".to_owned()),
+        ..spawn.clone()
+    };
+    for (name, entry) in [
+        ("held", &spawn),
+        ("exempt", &exempt),
+        ("deliver", &deliver),
+        ("check-only", &check_only),
+    ] {
+        crate::harness::schedule::instances::insert(&state, name, entry).unwrap();
+    }
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    let throttle_config: crate::config::ThrottleConfig =
+        toml::from_str("max-wait = \"3s\"\n").unwrap();
+    // Another start holds the turn: the queue itself holds every gated fire.
+    host.become_owner(9);
+    let throttle::Admission::Turn { turn: holder, .. } = throttle::admit(
+        &host.host(),
+        &throttle_config,
+        &throttle::Run {
+            task: "other".to_owned(),
+            root: PathBuf::from("/elsewhere"),
+            checkout: PathBuf::from("/elsewhere"),
+            disk: PathBuf::from("/elsewhere"),
+            workspace: state.workspace_id.clone(),
+        },
+        &mut |_| {},
+    )
+    .unwrap() else {
+        panic!("an empty queue admits")
+    };
+    host.become_owner(1);
+    let gated = |name: &str| {
+        let mut fire = skipped_fire(name, &catalog, None);
+        fire.config = Arc::new(toml::from_str("[loop.throttle]\nmax-wait = \"3s\"\n").unwrap());
+        fire.throttle_host = host.host();
+        fire
+    };
+    let row = |name: &str| {
+        crate::harness::schedule::instances::load_from(&state.root)
+            .0
+            .contains_key(name)
+    };
+    let fired_check = || {
+        let outcome = CheckOutcome::new(true, false, "ok".to_owned(), Some(0));
+        FiredCheck {
+            command: "true".to_owned(),
+            record: check_record(&outcome),
+            outcome,
+        }
+    };
+
+    // A held spawn waits with its one-shot row still armed, and the skip
+    // consumes the row as every other scheduled gate skip does. The check it
+    // fired on stays on the row.
+    let rows = state.root.clone();
+    host.on_sleep(move |_| {
+        assert!(
+            crate::harness::schedule::instances::load_from(&rows)
+                .0
+                .contains_key("held"),
+            "the row is consumed only by the launch or the skip"
+        );
+    });
+    let mut held = gated("held");
+    let TaskFirePlan::Done(done) = held.prepare_effect(Some(fired_check())).unwrap() else {
+        panic!("a held spawn is done")
+    };
+    assert_eq!(done.record.result, LoopRunResult::ThrottleSkipped);
+    assert_eq!(done.record.error.as_deref(), Some("1 start ahead; held 3s"));
+    assert_eq!(done.record.check.expect("the fired check").code, Some(0));
+    assert_eq!(host.elapsed_ms(), 3_000);
+    assert!(!row("held"));
+
+    // An exempt spawn, a delivery, and a check-only fire go straight to their
+    // effect: no wait and no ticket, though the queue is held.
+    let mut exempt = gated("exempt");
+    let error = exempt.prepare_effect(None).unwrap_err();
+    assert!(
+        error.to_string().contains("provider scope"),
+        "an exempt spawn reaches its launch: {error:#}"
+    );
+    assert!(exempt.throttle_turn.is_none());
+    let mut deliver = gated("deliver");
+    let plan = deliver.prepare_effect(None);
+    assert!(
+        !matches!(&plan, Ok(TaskFirePlan::Done(done)) if done.record.result == LoopRunResult::ThrottleSkipped),
+        "{plan:?}"
+    );
+    let mut checked = gated("check-only");
+    let finished = checked
+        .prepare_check(&mut |_| Ok(()))
+        .unwrap()
+        .break_value()
+        .expect("a check-only fire ends at its check");
+    assert_eq!(finished.record.result, LoopRunResult::Completed);
+    assert_eq!(host.elapsed_ms(), 3_000, "none waited");
+    assert_eq!(host.tickets(), 1, "only the holder's turn is queued");
+    assert!(
+        row("exempt"),
+        "the exempt spawn was not consumed before launch"
+    );
+
+    // Once the turn passes on, the same spawn holds it when it reaches its
+    // launch, and a launch error keeps the check it fired on.
+    drop(holder);
+    crate::harness::schedule::instances::insert(&state, "held", &spawn).unwrap();
+    let mut admitted = gated("held");
+    let error = admitted.prepare_effect(Some(fired_check())).unwrap_err();
+    assert!(error.to_string().contains("provider scope"), "{error:#}");
+    assert!(admitted.throttle_turn.is_some());
+    assert_eq!(host.tickets(), 1);
+    let errored = admitted.finish_error(&error);
+    assert_eq!(errored.record.result, LoopRunResult::Errored);
+    assert!(
+        errored.record.check.is_some(),
+        "an errored fire keeps its check"
+    );
+    assert_eq!(
+        host.tickets(),
+        0,
+        "a fire that never launched frees the turn"
+    );
 }

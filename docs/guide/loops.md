@@ -255,6 +255,27 @@ rimz loop add after-limit --after-reset 5h --wait --prompt 'The 5h window has re
 
 Add records the reset instant on the task, and the receipt shows the window's current percent left and when it resets. A window that has not started has no reset to wait for yet, so the task fires on the next tick. If the reset passes while no clock is running, or while the task is paused, it fires as soon as one sees it. It gets one attempt: whether the fire runs, is skipped by a gate, or fails, the task is gone afterwards. Add refuses what a window condition refuses, plus a window the provider is not enforcing and a `--surplus` gate on the provider's longest window, which is always closed right after that window resets. The rules are under [after a reset](../reference/cli/loop.md#after-a-reset).
 
+## Pace agent starts
+
+A burst of due tasks would otherwise start every agent in the same second, and each new agent loads a model session, a language server, and a build cache at once. RimZ starts them one at a time: every fire that starts an agent takes a turn in one queue for the whole machine, and the turn passes on when the new agent reports in or after ten seconds, whichever comes first. Wakes of running agents, check-only tasks, and fires their check skipped never queue.
+
+The `[throttle]` table in `loop.toml` tunes it, and can also hold starts back while the machine is busy:
+
+```toml
+[throttle]
+pace = "10s"              # "0s" turns pacing off
+max-wait = "30m"          # a fire held this long is skipped
+max-active = 6            # agents mid-turn, machine-wide
+max-active-per-task = 2   # agents mid-turn that one task started
+cpu-pressure = 60         # percent, Linux pressure-stall
+min-memory = "8GB"
+min-disk = "20GB"
+```
+
+Pressure numbers differ from one machine to the next, and inside a container they may be the host's. Read what `rimz loop show <task>` reports under a normal load before you pick a limit.
+
+A held fire shows `held: <reason>` in `rimz loop list` and `rimz loop show`, Ctrl-C ends a held `rimz loop fire` without starting anything, and `show` ends with what the machine reads now beside each limit. A fire still held at `max-wait` records `throttle skipped`, which is never a strike. `--throttle off` on `rimz loop add` exempts one task. Every key, and what counts as an active agent, is in the [loop reference](../reference/cli/loop.md#the-start-throttle).
+
 ## Budgets and strikes
 
 Two brakes bound a task that runs without you.

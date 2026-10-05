@@ -146,6 +146,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | `--budget <AMOUNT[/day]>` | `--agent` | Dollar cap for each spawned run. |
 | `--budget-per-day <AMOUNT>` | `--agent` with `--budget` | Daily dollar cap for the task; see [budgets](#budgets). |
 | `--surplus <RATIO>`, `--surplus-after <DUR>` | `--agent`, `--wait` | Fire only while the provider window has headroom; see [the surplus gate](#the-surplus-gate). |
+| `--throttle on\|off` | `--agent` | `off` exempts the task from [the start throttle](#the-start-throttle). Default `on`. |
 | `--root <PATH>` | all | Project whose room hosts the task. Default `.`. |
 | `--project` | `--agent`, check-only | Write the task to the project's `.rimz/config.toml`; see [project tasks](#project-tasks). |
 
@@ -343,6 +344,30 @@ The room, account, and quota caps are checked again when the agent launches and 
 
 A missing, incomplete, expired, or not-started window keeps the gate closed (which is why `--after-reset` on the longest window refuses a surplus gate), so an API-key account without window readings always skips. A managed Qwen `--agent` task paces against its account's 7-day window, and a Qwen `--wait` task always skips. A closed gate records `surplus skipped`, and `loop show` prints the gate and the recorded reason. The headroom model with a worked example is [budgets → the surplus gate](../../guide/budget.md#the-surplus-gate).
 
+### The start throttle
+
+Every fire that starts an agent, resident or one-shot, takes a turn in one queue shared by every room of this RimZ home, so a burst of due tasks starts its agents one after another. It is the last gate: it runs after the check and the deadline, and before the room is born or a one-shot's row is consumed. A `--wait` delivery, a check-only task, a fire its check skipped, and a task with `--throttle off` never enter the queue.
+
+The `[throttle]` table of `loop.toml` (`loop.throttle.*` to `rimz config set`) sets what a turn waits for:
+
+| Key | Default | A start waits while |
+| --- | --- | --- |
+| `pace` | `10s` | The previous start has not yet reported in. The turn passes on when the provider reports the new agent, or after `pace`, whichever is first. `0s` turns pacing off. |
+| `max-wait` | `30m` | Never longer than this: a fire still held then records `throttle skipped`. Greater than zero. |
+| `max-active` | unset | That many agents are mid-turn across every workspace of this home. |
+| `max-active-per-task` | unset | That many agents this task started are mid-turn in its project. |
+| `cpu-pressure`, `io-pressure`, `memory-pressure` | unset | Either the 10-second or the 60-second pressure-stall average of that resource is at or above this percent (`1` to `100`). |
+| `min-memory` | unset | Available memory is below this size (`8GB`). |
+| `min-disk` | unset | Free disk where the run will write is below this size: for a `--worktree` task, the filesystem its new worktree goes on (`[agents.worktree] dir`); otherwise the launch checkout. |
+
+`pace` and `max-wait` take `s`, `m`, or `h`. With `pace = "0s"` and no other key set the queue is off. An agent counts as active while its turn is running: one compacting its context, waiting on a prompt, resting, or ended does not. Starts are admitted in the order they queued, with one exception: once a waiting run is held by its task's own `max-active-per-task`, that run and every later waiting run of the task let runs of other tasks pass, and each keeps its place among the runs of its own task. Nothing else reorders: a run of another task held by any other limit, or a start that holds the turn, is never passed.
+
+A held fire holds its run lock, so the task shows as held rather than running and a later fire of it records `overlapped`. `loop fire` prints each new reason as `held: <reason>`, and Ctrl-C ends the wait: the fire records `canceled` with exit code `130`, keeps the check it ran, and starts nothing. A fire admitted after a hold records how long it waited, shown as `held 3m` in its `NOTE`. `loop stop` ends a held run like any other and leaves one `canceled` record.
+
+The pressure and memory readings are Linux's (`/proc/pressure`, `/proc/meminfo`). A configured limit this machine cannot read is refused rather than ignored: `rimz start` fails naming the key and the fix, and a fire records `error`. A workspace whose agents cannot be counted holds a capped start, with the workspace named in the reason. An unreadable queue file errors the fire; a malformed ticket is removed with a warning so other tasks can continue.
+
+What pressure means as a number depends on the machine, and in a container `/proc/pressure` may describe the host rather than the container. Before choosing a limit, watch the `THROTTLE` readings in `rimz loop show <task>` while the machine works as usual, and set the limit above them.
+
 ### Strikes
 
 After `--max-strikes` consecutive strikes (default `3`), the task disables itself, `loop list` shows `disabled · N strikes`, and `loop_disabled` notification handlers fire. `rimz loop enable` clears the count.
@@ -354,7 +379,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | `completed`, `delivered` otherwise | Resets the count. |
 | `skipped` after a passing check | Resets the count. |
 | `skipped` after a failing check, or a sibling signal | Neutral. |
-| `budget skipped`, `surplus skipped`, `account skipped`, `takeover blocked`, `overlapped`, `canceled`, `expired`, `target gone` | Neutral. |
+| `budget skipped`, `surplus skipped`, `account skipped`, `throttle skipped`, `takeover blocked`, `overlapped`, `canceled`, `expired`, `target gone` | Neutral. |
 | `start failed` — the fire left no run behind, so the occurrence is spent without one: either the runner was never spawned, or it exited before it could record anything | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
 ### Timeouts
@@ -403,6 +428,7 @@ A run whose task row is gone keeps a row until it ends, so the name `loop stop` 
 | STATE | Meaning |
 | --- | --- |
 | `▸ running 3m` | A run holds the task's run lock, for that long. It replaces every state below, held ones included, until the run ends; a `--wait` delivery or a `--stay` launch holds the lock for a second or two. |
+| `held: 1 start ahead, 3m` | The running fire is waiting for its turn in [the start throttle](#the-start-throttle): the reason, and how long it has waited. It takes the place of `▸ running`. |
 | `in 12m` | The next clock fire. |
 | `listening` | A signal subscription. |
 | `watching` | A `rimz wait` command, PID, check, or file watch. |
@@ -425,11 +451,11 @@ Footers count tasks blocked by trust and project tasks not yet enabled, with the
 
 A condition adds a `condition: <STATE text>` block immediately below the trigger. Each leaf term appears in expression order, followed by `✓` or `✗` for that term's truth and its current reading (`unknown` if absent). Negation applies to the expression, not the leaf's glyph.
 
-`loop show <name>` answers whether the task is working, then shows its evidence. It opens with the task's schedule and next fire or hold, or, while a run holds the task's run lock, `▸ running 3m · pid <PID> · run <run id>` in their place (the PID and elapsed time when the lock names its holder, the run id once the run has a record), then a health verdict from the latest conclusive run: its age, its status and duration, and the streak (how many consecutive conclusive runs ended the same way, and the age of the failure or good run that bounds the streak). A running task adds the `loop stop` command under the verdict. For a fired one-shot whose run is still active, the task row is already gone: `show` opens with `<name> — one-shot fired` and the same running text, then the agent, the `loop stop` command, and any recorded runs as `loop logs` prints them.
+`loop show <name>` answers whether the task is working, then shows its evidence. It opens with the task's schedule and next fire or hold, or, while a run holds the task's run lock, `▸ running 3m · pid <PID> · run <run id>` in their place (the PID and elapsed time when the lock names its holder, the run id once the run has a record), then a health verdict from the latest conclusive run: its age, its status and duration, and the streak (how many consecutive conclusive runs ended the same way, and the age of the failure or good run that bounds the streak). A run waiting in [the start throttle](#the-start-throttle) opens with `held: <reason>, 3m · pid <PID>` instead, or `held: waiting for its turn, 3m` before its first reading. Other runs of the task waiting in other processes, as a fan-out's checkouts do, follow as `· 2 held: <first reason>`, so a running checkout keeps its own state; `loop list` and `loop watch` show the same. A running task adds the `loop stop` command under the verdict. For a fired one-shot whose run is still active, the task row is already gone: `show` opens with `<name> — one-shot fired` and the same running text, then the agent, the `loop stop` command, and any recorded runs as `loop logs` prints them.
 
-A fire refused because the previous run was still active is spent: nothing queues or replays it. The run that refused it started before that fire, so the verdict says, in the warning tone, when such fires have had no run since: fires skipped while the active run holds the lock, fires skipped after the last run, or, when no run is active, fires skipped during the last run. A fire refused at another gate (`budget skipped`, `account skipped`, `surplus skipped`, `signal skipped`) ran nothing, so it does not clear the warning.
+A fire refused because the previous run was still active is spent: nothing queues or replays it. The run that refused it started before that fire, so the verdict says, in the warning tone, when such fires have had no run since: fires skipped while the active run holds the lock, fires skipped after the last run, or, when no run is active, fires skipped during the last run. A fire refused at another gate (`budget skipped`, `account skipped`, `surplus skipped`, `throttle skipped`, `signal skipped`) ran nothing, so it does not clear the warning.
 
-The sections below follow in this order, and the task's facts close the screen: action and check (one `task` row for a check-only task), `verify`, root (and `dir` for a linked worktree), source, effective timeout, budgets, surplus gate, spend, and `strikes N/max` once a strike is recorded.
+The sections below follow in this order, and the task's facts close the screen: action and check (one `task` row for a check-only task), `verify`, root (and `dir` for a linked worktree), source, effective timeout, budgets, surplus gate, `throttle off` for an exempt task, spend, and `strikes N/max` once a strike is recorded. For an `--agent` task that is not exempt, a `THROTTLE` section ends the screen with what the machine reads now, each beside its limit when one is set: the three pressure averages, available memory, free disk where the run will write (as `min-disk` reads it), the active agent count, and, with `max-active-per-task` set, the task's own active agent count.
 
 | Section | Contents |
 | --- | --- |
@@ -437,7 +463,7 @@ The sections below follow in this order, and the task's facts close the screen: 
 | `AGENT RUNS` | Check-gated `--agent` and `--wait` tasks only: how many fires escalated to the action, the total and average cost across every escalated run the log still holds that recorded one, and the five latest attempts, newest first. |
 | `RECENT RUNS` | The latest runs, newest first, identical consecutive runs collapsed into one row. An `overlapped` fire takes no row once a later run is recorded: it joins that run's `NOTE` as a count (`2 fires skipped, run already active`), and the runs on either side of it collapse. Overlapped fires with no later run keep one row at the top. The heading gives the runs these rows stand for out of the runs recorded. `-n, --runs <N>` sets how many rows, default `10`. `MODE` appears when the rows differ in mode, `COST` and `TOKENS` when a row has one. |
 
-`loop logs` and `loop show --json` keep one entry per fire, overlapped fires included. The JSON document's keys are `task`, `entry`, `launches`, `runs`, and `running`: `null` while no run holds the lock, otherwise an object with `pid`, `started_at`, and `run_id`, each `null` when the lock names no holder or the run has no record yet. A run lock that cannot be read warns on stderr and prints `null`.
+`loop logs` and `loop show --json` keep one entry per fire, overlapped fires included. The JSON document's keys are `task`, `entry`, `launches`, `runs`, `running`, `held`, and `waiting`. `running` is `null` while no run holds the lock, otherwise an object with `pid`, `started_at`, and `run_id`, each `null` when the lock names no holder or the run has no record yet. `held` is `null` unless that run is waiting in the start throttle, and then an object with `pid`, `checkout`, `since`, `reason` (`null` before the first reading), and `position`, its 1-based place in the queue. `waiting` lists the task's other runs waiting in the throttle, each an object of the same shape. A record admitted after a hold carries `throttle_wait_ms`. A run lock that cannot be read warns on stderr and prints `null`.
 
 A sample is in the [loops guide](../../guide/loops.md#what-a-fire-leaves-behind).
 

@@ -762,8 +762,53 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
     let holderless = InFlightRun {
         holder: None,
         run: None,
+        held: Vec::new(),
     };
     assert_eq!(running_text_full(&holderless, now), "▸ running");
+
+    let since_ms = u64::try_from((now - jiff::SignedDuration::from_secs(192)).as_millisecond())
+        .expect("after the epoch");
+    let mut held = Held {
+        pid: holder(200).pid,
+        checkout: "/repo/.worktrees/a".into(),
+        since_ms,
+        reason: Some("cpu pressure 41% >= 25%".to_owned()),
+        position: 2,
+    };
+    let waiting = InFlightRun {
+        holder: Some(holder(200)),
+        run: None,
+        held: vec![held.clone()],
+    };
+    assert_eq!(
+        running_text_full(&waiting, now),
+        format!(
+            "held: cpu pressure 41% >= 25%, 3m · pid {}",
+            holder(200).pid
+        )
+    );
+    let json = held_json(&held);
+    assert_eq!(json["pid"], holder(200).pid);
+    assert_eq!(json["checkout"], "/repo/.worktrees/a");
+    assert_eq!(json["reason"], "cpu pressure 41% >= 25%");
+    assert_eq!(json["position"], 2);
+    assert_eq!(
+        json["since"],
+        serde_json::json!(now - jiff::SignedDuration::from_secs(192))
+    );
+    held.reason = None;
+    assert_eq!(held_run_text(&held, now), "held: waiting for its turn, 3m");
+
+    let mut readings = Vec::new();
+    write_throttle_readings(
+        &mut readings,
+        &[("cpu pressure", "avg10 2% · avg60 3%".into())],
+    )
+    .expect("write");
+    let readings = String::from_utf8(readings).expect("utf8");
+    assert!(readings.starts_with("\nTHROTTLE\n"), "{readings}");
+    assert!(readings.contains("cpu pressure"), "{readings}");
+    assert!(readings.contains("avg10 2% · avg60 3%"), "{readings}");
 
     let pause = Arming {
         enabled: true,
@@ -775,6 +820,7 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
     let in_flight = InFlightRun {
         holder: Some(holder(180)),
         run: None,
+        held: Vec::new(),
     };
     let mut out = Vec::new();
     write_show_headline(&mut out, "task", &timing, Some(&in_flight), now).unwrap();
@@ -1458,4 +1504,60 @@ fn watch_history_uses_verdict_words_and_output_path() {
             assert!(!table.contains("0ms"), "{table}");
         }
     }
+}
+
+#[test]
+fn a_fan_out_shows_its_running_checkout_and_the_others_waiting_beside_it() {
+    let now = Timestamp::from_second(100_000).unwrap();
+    let running = RunLockInfo {
+        pid: 41,
+        started_at: now - jiff::SignedDuration::from_secs(120),
+    };
+    let since_ms = u64::try_from((now - jiff::SignedDuration::from_secs(30)).as_millisecond())
+        .expect("after the epoch");
+    let waiting = |pid: u32, checkout: &str, reason: Option<&str>, position| Held {
+        pid,
+        checkout: checkout.into(),
+        since_ms,
+        reason: reason.map(str::to_owned),
+        position,
+    };
+    // Checkout a launched and runs; b and c wait in other processes.
+    let held = [
+        waiting(42, "/repo/.worktrees/b", Some("2 starts ahead"), 3),
+        waiting(43, "/repo/.worktrees/c", None, 4),
+    ];
+    assert_eq!(
+        in_flight_text(Some(running), &held, now),
+        "▸ running 2m · 2 held: 2 starts ahead"
+    );
+    let in_flight = InFlightRun {
+        holder: Some(running),
+        run: None,
+        held: held.to_vec(),
+    };
+    assert_eq!(
+        running_text_full(&in_flight, now),
+        "▸ running 2m · pid 41 · 2 held: 2 starts ahead"
+    );
+    let (own, others) = split_held(Some(running), &held);
+    assert!(own.is_none());
+    assert_eq!(others.map(|held| held.pid).collect::<Vec<_>>(), [42, 43]);
+
+    // The holder is itself held: its own reason, never another checkout's.
+    let held = [
+        waiting(42, "/repo/.worktrees/b", Some("1 start ahead"), 2),
+        waiting(41, "/repo/.worktrees/a", Some("cpu pressure 41% >= 25%"), 3),
+    ];
+    assert_eq!(
+        in_flight_text(Some(running), &held, now),
+        "held: cpu pressure 41% >= 25%, 30s · 1 held: 1 start ahead"
+    );
+    let (own, _) = split_held(Some(running), &held);
+    assert_eq!(own.map(|held| held.pid), Some(41));
+    // A holder the lock does not name owns no ticket.
+    assert_eq!(
+        in_flight_text(None, &held, now),
+        "▸ running · 2 held: 1 start ahead"
+    );
 }

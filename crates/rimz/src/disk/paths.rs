@@ -1273,6 +1273,21 @@ pub fn loops_dir() -> PathBuf {
     rimz_home().join("loops")
 }
 
+/// The loop start throttle's queue: one ticket per run waiting for or holding
+/// the turn, shared by every room of this home.
+pub(crate) fn loop_throttle_queue_dir() -> PathBuf {
+    loops_dir().join("throttle")
+}
+
+pub(crate) fn loop_throttle_queue_lock() -> PathBuf {
+    loops_dir().join("throttle.lock")
+}
+
+/// A new ticket in `queue`; the name sorts by its enqueue time.
+pub(crate) fn loop_throttle_ticket_in(queue: &Path, enqueued_ms: u64) -> PathBuf {
+    queue.join(format!("{enqueued_ms:020}-{}", uuid::Uuid::now_v7()))
+}
+
 /// `rimz web` ttyd and share records, their locks, and the Zellij web config.
 pub fn web_dir() -> PathBuf {
     rimz_home().join("web")
