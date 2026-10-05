@@ -1380,6 +1380,133 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
     );
 }
 
+/// An agent left pending in a live room and brought back by hand is a normal
+/// agent again once its wrapper takes the pane: closing that pane ends it.
+#[test]
+fn closing_an_agent_resumed_while_pending_ends_it() {
+    use rimz::agents::LifecycleSignal;
+    use rimz::store::event::EventKind;
+
+    let Ok(tmux) = which::which("tmux") else {
+        crate::common::skip("tmux not on PATH");
+        return;
+    };
+    let env = Env::new();
+    let (lost, agent_path) = seed_lost_tmux_agent(&env);
+    let store = env.store();
+    let pending = || -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(&store.paths().pending_recovery).expect("record"))
+            .expect("pending-recovery JSON")
+    };
+    let birth = env
+        .rimz()
+        .env(
+            "PATH",
+            path_with_tmux_wrapper(
+                &env,
+                &tmux,
+                &agent_path,
+                r#"*" new-window "*" -n ##"*) exit 1 ;;"#,
+            ),
+        )
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .bounded_output()
+        .expect("run the birth");
+    assert!(
+        birth.status.success(),
+        "{}",
+        String::from_utf8_lossy(&birth.stderr)
+    );
+    assert_eq!(pending()["agents"], serde_json::json!([lost]));
+    let seeded = env.read_events().len();
+
+    let resumed = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .args(["--mux", "tmux", "agents", "resume", "#alpha"])
+        .bounded_output()
+        .expect("resume the pending agent");
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    // Each of alpha's attaches since the birth: the pane, the wrapper's pid,
+    // and the runtime owner's pid. The wrapper binds its own pid before it
+    // installs its signal handlers, then the provider's pid after the spawn.
+    let attaches = || {
+        env.read_events()
+            .into_iter()
+            .skip(seeded)
+            .filter_map(|event| match event.kind() {
+                EventKind::AgentAttach(payload) if payload.agent_id.as_str() == "alpha" => {
+                    Some((payload.pane_id, payload.pane_pid, payload.runtime_owner.pid))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // The provider's attach proves the wrapper is supervising: a hangup before
+    // its handlers kills it without settling the exit.
+    let supervising_pane = || {
+        attaches()
+            .into_iter()
+            .find(|(_, wrapper, owner)| *wrapper != Some(*owner))
+            .map(|(pane, _, _)| pane)
+    };
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let pane = loop {
+        if let Some(pane) = supervising_pane()
+            && pending()["agents"] == serde_json::json!([])
+        {
+            break pane;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the resumed wrapper never attached its provider; attaches (pane, wrapper pid, owner pid): {:?}; pending: {}",
+            attaches(),
+            pending()
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(pending()["agents"], serde_json::json!([]));
+
+    let socket = rimz::mux::tmux::managed_server_socket_path_under(&env.runtime_root);
+    let killed = std::process::Command::new(&tmux)
+        .arg("-S")
+        .arg(&socket)
+        .args(["kill-pane", "-t", pane.raw()])
+        .output()
+        .expect("run tmux kill-pane");
+    assert!(
+        killed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&killed.stderr)
+    );
+    let ended = || {
+        env.read_events().into_iter().skip(seeded).any(|event| {
+            matches!(
+                event.kind(),
+                EventKind::AgentLifecycle(payload)
+                    if matches!(payload.observation.signal, LifecycleSignal::Ended)
+                        && payload.event_name.as_deref() == Some("rimz.agent-ended")
+                        && payload.observation.agent_id.as_ref().map(|id| id.as_str())
+                            == Some("alpha")
+            )
+        })
+    };
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    while !ended() {
+        assert!(
+            Instant::now() < deadline,
+            "closing the resumed agent's pane never ended it; attaches (pane, wrapper pid, owner pid): {:?}; pending: {}",
+            attaches(),
+            pending()
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 /// A birth holds the recovery lock until it has confirmed its resume windows,
 /// so an attended start on the room it just made live cannot settle the same
 /// still-pending agents into a second window.
