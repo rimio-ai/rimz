@@ -16,12 +16,15 @@ use rimz::pane::PaneRef;
 use rimz::testkit::sandbox::{SandboxSpec, TestSandbox};
 use rimz::{EventEnvelope, RuntimePaths, StatePaths, Store, WorkspaceId, WorkspaceResolver};
 use serde_json::Value;
-use tempfile::TempDir;
 
 /// How many trailing diagnostic records an assertion message carries.
 const DIAG_TAIL_RECORDS: usize = 20;
 
 const RIMZ_HOME_DIR: &str = "rimz-home";
+
+/// Keeps a panicking fixture's roots for a flake hunt to read.
+const KEEP_FAILED_ENV: &str = "RIMZ_TEST_KEEP_FAILED";
+const KEPT_PREFIX: &str = "rimz-test-kept-";
 
 /// Canonicalize, falling back to the original path when it does not yet exist
 /// (a project root the test is about to create). Workspace IDs hash the
@@ -61,9 +64,8 @@ pub fn tmux_pane(raw: &str, command: &str, cwd: &Path) -> PaneRef {
 /// per-user agent config and the workspace never share a directory — and a
 /// configured `rimz` command builder pinned to private tmux and Zellij roots.
 pub struct Env {
-    sandbox: TestSandbox,
-    _home: TempDir,
-    _runtime: TempDir,
+    /// The roots' only deleter; taken by `Drop` so the roots move after it reaps.
+    sandbox: Option<TestSandbox>,
     /// The harness `$HOME`: per-user agent config (`.claude/`, `.codex/`) and
     /// the XDG roots live here.
     pub home_root: PathBuf,
@@ -72,6 +74,9 @@ pub struct Env {
     pub project_root: PathBuf,
     pub workspace_id: WorkspaceId,
     pub runtime_root: PathBuf,
+    /// Where a panicking drop keeps both roots instead of removing them:
+    /// `/tmp` when `RIMZ_TEST_KEEP_FAILED` is on at construction, else none.
+    pub keep_failed_under: Option<PathBuf>,
     /// A session-scrubbed process whose `/proc` environment the journey hook
     /// fallback reads as launch identity (see [`Env::agent_owner_pid`]). Spawned
     /// on first use, shared across every harness of one test, and kept alive for
@@ -84,6 +89,49 @@ impl Drop for Env {
         if let Some(owner) = self.agent_owner.get_mut() {
             let _ = owner.kill();
             let _ = owner.wait();
+        }
+        let Some(sandbox) = self.sandbox.take() else {
+            return;
+        };
+        match &self.keep_failed_under {
+            Some(parent) if std::thread::panicking() => {
+                sandbox.reap_keeping_roots();
+                self.move_kept_roots(parent);
+            }
+            _ => drop(sandbox),
+        }
+    }
+}
+
+impl Env {
+    /// Move both reaped roots into one fresh `rimz-test-kept-*` directory under
+    /// `parent` and name where each ended up; a root that cannot move stays put.
+    fn move_kept_roots(&self, parent: &Path) {
+        let kept = tempfile::Builder::new()
+            .prefix(KEPT_PREFIX)
+            .rand_bytes(6)
+            .tempdir_in(parent)
+            .map(tempfile::TempDir::keep)
+            .map_err(|err| err.to_string());
+        let mut placed = Vec::new();
+        for (name, root) in [("home", &self.home_root), ("runtime", &self.runtime_root)] {
+            let moved = kept.clone().and_then(|kept| {
+                let target = kept.join(name);
+                std::fs::rename(root, &target)
+                    .map(|()| target)
+                    .map_err(|err| err.to_string())
+            });
+            placed.push(match moved {
+                Ok(target) => format!("{name} {}", target.display()),
+                Err(err) => format!("{name} {} (not moved: {err})", root.display()),
+            });
+        }
+        #[allow(
+            clippy::print_stderr,
+            reason = "the kept paths are the flake hunt's output"
+        )]
+        {
+            eprintln!("{KEPT_PREFIX}roots: {}", placed.join(", "));
         }
     }
 }
@@ -110,6 +158,8 @@ impl Env {
             Path::new(env!("CARGO_BIN_EXE_rimz-test-reaper")),
         )
         .expect("arm test sandbox reaper");
+        // The armed sandbox now owns removal, and a kept root must survive.
+        let _ = (home.keep(), runtime.keep());
         let project_root = home_root.join("project");
         std::fs::create_dir_all(&project_root).expect("mkdir project root");
         let workspace_id = WorkspaceId::from_project_root(&project_root);
@@ -117,13 +167,13 @@ impl Env {
             std::fs::create_dir_all(home_root.join(dir)).expect("mkdir env root");
         }
         let env = Env {
-            sandbox,
-            _home: home,
-            _runtime: runtime,
+            sandbox: Some(sandbox),
             home_root,
             project_root,
             workspace_id,
             runtime_root,
+            keep_failed_under: rimz::utils::env::flag_enabled(KEEP_FAILED_ENV)
+                .then(|| PathBuf::from("/tmp")),
             agent_owner: std::sync::OnceLock::new(),
         };
         for dir in [
@@ -319,7 +369,10 @@ impl Env {
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null());
-                self.sandbox.pin_identity(&mut command);
+                self.sandbox
+                    .as_ref()
+                    .expect("the sandbox is taken only by Drop")
+                    .pin_identity(&mut command);
                 command.spawn().expect("spawn journey agent owner")
             })
             .id()

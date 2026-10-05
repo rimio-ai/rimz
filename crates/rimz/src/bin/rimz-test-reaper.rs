@@ -40,13 +40,15 @@ fn run() -> Result<(), String> {
     }
     let spec = parse_spec(&first)?;
 
-    let mut buffer = [0_u8; 64];
-    while std::io::stdin()
-        .read(&mut buffer)
-        .map_err(|err| format!("reading keepalive: {err}"))?
-        != 0
-    {}
-    rimz::testkit::sandbox::cleanup(&spec);
+    let mut keepalive = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut keepalive)
+        .map_err(|err| format!("reading keepalive: {err}"))?;
+    if keepalive.is_empty() {
+        rimz::testkit::sandbox::cleanup(&spec);
+    } else {
+        rimz::testkit::sandbox::reap(&spec);
+    }
     Ok(())
 }
 
