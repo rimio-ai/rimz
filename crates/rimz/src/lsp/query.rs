@@ -320,16 +320,17 @@ fn name_segments(raw: &str) -> Vec<String> {
 }
 
 /// Whether an anchor's head names a file: no whitespace, an extension of ASCII alphanumerics
-/// with at least one letter, and every `..` an entire `/`-separated component, so struct-update
-/// and range text such as `..Default` or `a..b` is not a file.
+/// with at least one letter, and no `/`-separated component that holds `..` beside a character
+/// other than a dot. Struct-update and range text such as `..Default` or `a..b` is not a file,
+/// while `..` and an abbreviating `...` stay path components.
 pub(super) fn is_file_head(path: &str) -> bool {
     let Some(extension) = Path::new(path).extension().and_then(|ext| ext.to_str()) else {
         return false;
     };
     !path.chars().any(char::is_whitespace)
-        && path
-            .split('/')
-            .all(|component| component == ".." || !component.contains(".."))
+        && path.split('/').all(|component| {
+            !component.contains("..") || component.bytes().all(|byte| byte == b'.')
+        })
         && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
         && extension.bytes().any(|byte| byte.is_ascii_alphabetic())
 }

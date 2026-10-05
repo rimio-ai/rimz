@@ -655,7 +655,7 @@ fn sample_anchors_match_the_hand_read_grammar() {
 
 #[test]
 fn extractor_handles_decorations_hints_and_excludes_nonanchors() {
-    let text = "`config.rs::ConfigErr::Definition(DefinitionErr)`\n`a.rs::Type<T>::method()` (~12-14)\n`a.rs::Type.field: Value`\n`a.rs::f:9:2`\n`a.rs:~7-8`\n`a.rs::` `Type::method` `config::Error` `a.rs` `cargo test 'a.rs::f'` `127.0.0.1:8080` `v1.2:3` `..Default::default()` `Foo{..Default::default()}` `a..b::c` `..Default:~3`\n```rust\n`a.rs::fake`\n```\n";
+    let text = "`config.rs::ConfigErr::Definition(DefinitionErr)`\n`a.rs::Type<T>::method()` (~12-14)\n`a.rs::Type.field: Value`\n`a.rs::f:9:2`\n`a.rs:~7-8`\n`a.rs::` `Type::method` `config::Error` `a.rs` `cargo test 'a.rs::f'` `127.0.0.1:8080` `v1.2:3` `..Default::default()` `Foo{..Default::default()}` `a..b::c` `..Default:~3` `...rest::x`\n```rust\n`a.rs::fake`\n```\n";
     let anchors = extract(text);
     assert_eq!(anchors.len(), 5);
     assert_eq!(
@@ -678,6 +678,7 @@ fn extractor_handles_decorations_hints_and_excludes_nonanchors() {
         assert_eq!(anchor(&format!("a.rs::f {hint}")).hint.unwrap()[0], 12);
     }
     assert_eq!(anchor("../src/a.rs::f").path, "../src/a.rs");
+    assert_eq!(anchor(".../x.rs::f").path, ".../x.rs");
     assert!(extract("```md\n`a.rs::f`\n```").is_empty());
     assert!(
         !extract(include_str!(

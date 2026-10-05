@@ -1367,6 +1367,7 @@ fn file_qualified_targets_split_at_the_first_separator() {
         ("src/lib.rs::Type::method", "src/lib.rs", "Type::method"),
         ("lib.rs::method", "lib.rs", "method"),
         ("../a/lib.rs::Type::method", "../a/lib.rs", "Type::method"),
+        (".../a/lib.rs::method", ".../a/lib.rs", "method"),
     ] {
         assert_eq!(
             Target::parse(Verb::Def, raw).unwrap(),
