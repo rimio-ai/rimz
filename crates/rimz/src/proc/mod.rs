@@ -10,6 +10,7 @@
 pub(crate) mod command;
 #[cfg(target_os = "macos")]
 mod macos;
+pub(crate) mod memory;
 mod pane_probe;
 
 pub(crate) use command::{command_program_basename, program_label, rimz_exec_worktree_path};

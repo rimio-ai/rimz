@@ -536,7 +536,8 @@ upward-dependencies = [
 # `USER_SHELL_ENV` is the stamp launch writes and `user_shell` reads;
 # launch validates a configured shell with `launchable_shell`.
 # `root_path_identity` reads what a process sees at a path in its own root; Linux and non-Linux definitions (+2).
-surface-budget = 108
+# `memory` is the host and cgroup memory reading that `lsp` and the loop throttle share: module, reading, error, sampler (+4).
+surface-budget = 112
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
