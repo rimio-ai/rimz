@@ -1,7 +1,7 @@
 //! Owner-death cleanup for integration-test process and filesystem namespaces.
 
 use std::ffi::OsStr;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread;
@@ -42,10 +42,12 @@ pub enum SandboxError {
 /// Owns one fixture's cleanup lease and the independent process that reaps it.
 ///
 /// The reaper's stdin is a keepalive: orderly drop and abrupt owner death both
-/// close it, so cleanup does not rely on this process reaching `Drop`.
+/// close it, so cleanup does not rely on this process reaching `Drop`. A byte
+/// written before the close asks the reaper to leave the roots on disk.
 pub struct TestSandbox {
     spec: SandboxSpec,
     reaper: Option<ReaperHandle>,
+    keep_roots: bool,
 }
 
 impl TestSandbox {
@@ -53,7 +55,11 @@ impl TestSandbox {
     pub fn arm(spec: SandboxSpec, reaper_bin: &Path) -> Result<Self, SandboxError> {
         validate(&spec)?;
         let reaper = Some(ReaperHandle::spawn(reaper_bin, &spec)?);
-        Ok(Self { spec, reaper })
+        Ok(Self {
+            spec,
+            reaper,
+            keep_roots: false,
+        })
     }
 
     pub fn spec(&self) -> &SandboxSpec {
@@ -74,14 +80,28 @@ impl TestSandbox {
             .env("HOME", &self.spec.home_root)
             .env("XDG_RUNTIME_DIR", &self.spec.runtime_root);
     }
+
+    /// Reap the fixture's processes now and leave both roots on disk.
+    pub fn reap_keeping_roots(mut self) {
+        self.keep_roots = true;
+    }
 }
 
 impl Drop for TestSandbox {
     fn drop(&mut self) {
-        if self.reaper.take().is_some_and(ReaperHandle::finish) {
+        let keep_roots = self.keep_roots;
+        if self
+            .reaper
+            .take()
+            .is_some_and(|reaper| reaper.finish(keep_roots))
+        {
             return;
         }
-        cleanup(&self.spec);
+        if keep_roots {
+            reap(&self.spec);
+        } else {
+            cleanup(&self.spec);
+        }
     }
 }
 
@@ -115,11 +135,16 @@ impl ReaperHandle {
         Ok(Self { child, keepalive })
     }
 
-    fn finish(self) -> bool {
+    fn finish(self, keep_roots: bool) -> bool {
         let Self {
             mut child,
-            keepalive,
+            mut keepalive,
         } = self;
+        if keep_roots {
+            // A reaper that already exited fails this write; its non-success
+            // status then sends the owner to the in-process fallback.
+            let _ = keepalive.write_all(b"k");
+        }
         drop(keepalive);
         let deadline = Instant::now() + REAPER_WAIT_TIMEOUT;
         loop {
@@ -200,6 +225,19 @@ pub fn cleanup(spec: &SandboxSpec) {
     if validate(spec).is_err() {
         return;
     }
+    reap(spec);
+    remove_tree_bounded(&spec.home_root);
+    if spec.runtime_root != spec.home_root {
+        remove_tree_bounded(&spec.runtime_root);
+    }
+}
+
+/// Tear down graceful mux endpoints and every marker-carrying process, leaving
+/// both roots on disk.
+pub fn reap(spec: &SandboxSpec) {
+    if validate(spec).is_err() {
+        return;
+    }
 
     let socket = crate::mux::tmux::managed_server_socket_path_under(&spec.runtime_root);
     if socket.exists() {
@@ -218,10 +256,6 @@ pub fn cleanup(spec: &SandboxSpec) {
     }
 
     reap_sandbox_processes(spec);
-    remove_tree_bounded(&spec.home_root);
-    if spec.runtime_root != spec.home_root {
-        remove_tree_bounded(&spec.runtime_root);
-    }
 }
 
 fn pin_zellij_env(command: &mut Command, spec: &SandboxSpec) {
