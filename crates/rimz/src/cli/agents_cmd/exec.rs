@@ -535,8 +535,11 @@ fn settle_after_exit(
         .map(|context| context.session_name.as_str())
         .unwrap_or(&invocation.workspace.session_name);
     let abrupt = child_exit_abrupt || cleanup_signal_received();
-    let session_accepts_close = !abrupt || session_accepts_agent_close(globals, session_name);
-    let deliberate = close_is_deliberate(abrupt, session_accepts_close);
+    let deliberate = close_is_deliberate(
+        abrupt,
+        || session_accepts_agent_close(globals, session_name),
+        || own_agent_pending_recovery(invocation, request),
+    );
     let linger = should_linger_subagent(request, keep, parent_ended);
     let ended_session = if deliberate && !linger && should_record_end_trace(request) {
         record_own_agent_end_trace(invocation, request)
@@ -827,8 +830,15 @@ fn drop_to_shell_after_agent_exit(
 /// Non-abrupt exits are deliberate. Abrupt exits are deliberate only while the
 /// mux session still accepts live pane closes; if the mux is gone or wedged,
 /// skip cleanup so the prior live-roster snapshot can recover the agent.
-fn close_is_deliberate(abrupt: bool, session_accepts_close: bool) -> bool {
-    !abrupt || session_accepts_close
+/// An agent a rebirth parked for recovery is not deliberately closed either:
+/// the listed session is then the reborn room. The park precedes the reborn
+/// session, so the record is read only after the listing.
+fn close_is_deliberate(
+    abrupt: bool,
+    session_accepts_close: impl FnOnce() -> bool,
+    agent_pending_recovery: impl FnOnce() -> bool,
+) -> bool {
+    !abrupt || (session_accepts_close() && !agent_pending_recovery())
 }
 
 fn enter_worktree(path: &Path) -> Result<PathBuf> {
@@ -1482,6 +1492,18 @@ fn record_own_agent_end_trace(
             None
         }
     }
+}
+
+fn own_agent_pending_recovery(
+    invocation: &ExecInvocationContext<'_>,
+    request: &rimz::harness::launch::ExecRequest,
+) -> bool {
+    let Ok(Some((kind, agent_id))) = resolve_own_agent_end_trace(invocation, request) else {
+        return false;
+    };
+    invocation
+        .store()
+        .is_ok_and(|store| store.is_pending_recovery(&kind, &agent_id))
 }
 
 fn resolve_own_agent_end_trace(

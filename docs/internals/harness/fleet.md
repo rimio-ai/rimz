@@ -450,12 +450,17 @@ agent process exits
   ├── clean child exit ─────────────────────────► deliberate
   └── abrupt (tab/pane close, signal)
         └── does the mux still list the session?
-              ├── yes (room alive, even mid-teardown) ─► deliberate
+              ├── yes (room alive, even mid-teardown)
+              │     └── is the agent in records/pending-recovery.json?
+              │           ├── no ─────────────────────────► deliberate
+              │           └── yes (the listed session is a reborn room) ─► not deliberate
               └── no  (reboot, mux crash, exited session, listing failed or timed out)
                      └────────────────────────────────► not deliberate
 ```
 
 The probe is the backend's session listing (`MuxBackend::session_accepts_agent_close`). A session that is listed but otherwise unresponsive counts as deliberate; only a failed or timed-out listing marks the server as gone. A live room with missing sidebar chrome still treats a pane close as deliberate.
+
+A listed name does not prove the room is the wrapper's own. A wrapper still on its exit ladder when the next start brings the room back sees the new session under the same name. Every rebirth parks the dead room's roster in the [pending-recovery record](../store.md#the-sessiondeath-record) before it creates the session, so the wrapper reads that record after the listing and treats an agent named there as lost, not closed: no end trace, no subscription retirement, no worktree cleanup, and the agent stays on offer.
 
 A deliberate exit records the durable `rimz.agent-ended` trace before any slower cleanup, so that agent stays out of automatic recovery. A parent's message can still [resume its ended child](./subagents.md#follow-ups-and-resume). Two deliberate exits skip the trace: a supervised non-subagent run that exits on run completion, whose run record already carries the outcome, and a subagent held open by `--keep` ([subagents.md](./subagents.md)). A non-deliberate exit skips both the trace and worktree cleanup, because recovery should come from the sidebar producer's latest live roster instead.
 

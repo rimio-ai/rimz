@@ -633,7 +633,8 @@ path = "crates/rimz/src/store"
 # The idle-stop request record: its codec module, entry, error, read, arm and withdraw (+6).
 # The snapshot carries an open PR's merge-queue state to the header marker as `WorktreePrQueue` (+1).
 # `ReportTo` is the run's durable report policy for `--detach`; `RunRecord::survives_parent` is the one survival predicate the wrapper watchdog and the orphan sweep read (+2).
-surface-budget = 362
+# `Store::is_pending_recovery` lets an exiting exec wrapper see its agent parked by a rebirth (+1).
+surface-budget = 363
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -884,11 +885,14 @@ allowed-dependencies = [
     "agents",
     "disk",
     "disk::paths",
+    "ids",
     "workspace::record",
 ]
+# `ids`: the agent key `Store::is_pending_recovery` takes.
 # The pending-recovery record module (+1).
 # The idle-stop record module (+1).
-surface-budget = 32
+# The exec wrapper asks whether its agent is parked for recovery (+1).
+surface-budget = 33
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
