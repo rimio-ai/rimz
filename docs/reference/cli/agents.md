@@ -264,9 +264,13 @@ A supervised run refuses at entry, before it writes a run record or opens a pane
 
 None of these writes a run record, so `agents wait` and the JSON have nothing to read afterwards. The two cap refusals exit `125` as listed; the hook and Codex-trust refusals exit `2`, and a flag combination the command rejects exits `1`, the same code a run that started and failed uses.
 
-Interactive agent and team launches warn, but continue, when the selected account has no folder-trust decision. Answer the provider's prompt in its pane or grant with `rimz trust grant --agents`. Claude's supervised runs do not require folder trust because its headless mode skips that dialog.
-
 Run records, the completion wakeup, streaming, and pane cleanup are described in [scripting.md](../../internals/harness/scripting.md).
+
+### The account check at launch
+
+Every launch RimZ performs checks the account it launches under, `default` included. An interactive agent or team launch, a cohort or lane resume, a [`restart`](#restart), a [`fork`](#fork), and a parent's message that [resumes an ended child](./subagents.md#follow-up-messages) refuse when that account's home is not a directory or RimZ's hooks there are not installed and trusted. The refusal comes before any pane opens or closes and before any record is written, and names the fix: `rimz hooks install <agent>` for `default`, `rimz accounts add <agent> <name>` for a named account, and the provider's own `/hooks` screen for hooks it has not trusted. Only the launched provider's account is judged. A plugin kind declares no home for RimZ to check, so it passes. [`rimz start`](./getting-started.md#start-the-room) is the one lenient entry: it refuses a broken named account and lets a room open on a broken `default`.
+
+The same launches warn, but continue, when the selected account has no folder-trust decision. Answer the provider's prompt in its pane or grant with `rimz trust grant --agents`. Claude's supervised runs do not require folder trust because its headless mode skips that dialog.
 
 ## Resume agents
 
@@ -341,6 +345,7 @@ When RimZ's own records for a lane are gone, Claude and Codex sessions are recov
 | `cannot relaunch '#docs' fresh with live members @coder; stop them with rimz agents stop, or resume without --fresh` | Fresh relaunch would duplicate live members; the error names their handles. |
 | `no saved team shape in '#docs'; resume without --fresh, or launch with rimz agents <spec> -w docs` | Fresh relaunch needs durable lane records; provider session files alone cannot reconstruct its shape. |
 | `no saved team in '#docs' to relaunch fresh; launch with:` | No saved team can be restored; the error includes the standalone relaunch commands. |
+| ``RimZ hooks are missing for claude account `default` at `<home>`; run `rimz hooks install claude` `` | An account a member would launch under fails the [account check](#the-account-check-at-launch); nothing is resumed. |
 
 Resume planning is described in [fleet.md → Resume and rebirth](../../internals/harness/fleet.md#resume-and-rebirth).
 
@@ -665,7 +670,7 @@ Resource columns read `-` where process metrics are unavailable for the platform
 rimz agents fork @coder --name twin
 ```
 
-The fork reuses the source profile's launch posture (system prompt files, model, effort, permission flags, and profile arguments), rendered from current configuration as `restart` does. A profile that no longer resolves forks without it and warns; a profile that now names a different provider refuses. The fork keeps the source's channel but not its team or role, so the role handle stays unique. Prompt caching is up to the provider and may start cold.
+The fork reuses the source profile's launch posture (system prompt files, model, effort, permission flags, and profile arguments), rendered from current configuration as `restart` does. A profile that no longer resolves forks without it and warns; a profile that now names a different provider refuses. The fork keeps the source's channel but not its team or role, so the role handle stays unique. Prompt caching is up to the provider and may start cold. A fork refuses when the account fails the [account check](#the-account-check-at-launch).
 
 The fork always opens in the source agent's worktree. From a user shell it takes over the current pane by default; `--new-pane` splits the current tab, `--new-tab` opens a new one, and `--bg` splits and keeps focus where it is. Agent callers split by default and preserve focus under the [focus rule](#channel-worktree-and-placement). `-n, --name <NAME>` sets its handle. It keeps the source's recorded `--isolation`, and `--isolation host|sandbox` replaces it. A fork takes no prompt: send the first instruction with `rimz message` once it opens.
 
@@ -744,7 +749,7 @@ A soft-stopped agent comes back like any stopped one: `rimz agents resume` reope
 
 A peer's open launcher-requested turn is failed before the replacement pane opens and becomes eligible for its launcher's fleet report. The replacement does not continue that turn's run.
 
-The replacement renders the agent's profile from current configuration, including its isolation default, then replays its saved model, effort, and `--agent` base. It keeps its role, team, channel, permission mode, and recorded `--isolation`; passthrough arguments do not carry over. A profile that now resolves to a different provider without a saved base restoring the original kind makes restart refuse and point to an explicit fresh launch.
+The replacement renders the agent's profile from current configuration, including its isolation default, then replays its saved model, effort, and `--agent` base. It keeps its role, team, channel, permission mode, and recorded `--isolation`; passthrough arguments do not carry over. A profile that now resolves to a different provider without a saved base restoring the original kind makes restart refuse and point to an explicit fresh launch. Restart also refuses, leaving the old pane and its session as they were, when the account fails the [account check](#the-account-check-at-launch).
 
 When the provider has no resume command or no recorded conversation, restart launches fresh and prints `restarted fresh as @<name> — <reason>`. The fresh agent may get a new name, because the old card still holds its handle while the replacement starts.
 

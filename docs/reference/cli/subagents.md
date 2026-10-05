@@ -249,7 +249,7 @@ A provider that registers before its first turn, such as Claude, initially repor
 
 A message still queued when its child ends is archived rather than left waiting for a vanished pane, and `rimz message show` reports `receiver ended; rimz message @<handle> resumes it`. The parent resends with `rimz message @<handle>`, which resumes the child.
 
-Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory, conversation, login, profile and provider resume support to remain usable; otherwise the miss names the reason. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
+Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory, conversation, login, profile and provider resume support to remain usable, and its account to pass the [account check](./agents.md#the-account-check-at-launch); otherwise the miss names the reason. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
 
 Room recovery also leaves children closed; [rebirth recovery](../../guide/configuration.md#resume) reports interrupted child runs to the parent instead.
 
