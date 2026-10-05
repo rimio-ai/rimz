@@ -1007,19 +1007,6 @@ fn resident_takeover_case(case: Takeover) {
     assert_eq!(read_loop_instances(&env).0.len(), team_members);
     let runtime = env.runtime_paths();
     crate::common::room::seed_live_zellij_room(&runtime, &workspace.session_name, Vec::new());
-    // The room stays live for the whole case, but its one-shot heartbeat has no
-    // writer: once it ages past `SIDEBAR_HEARTBEAT_TTL` on a slow host, the
-    // next fire rebirths the room first. Dating it ahead of the clock keeps it
-    // a live claim until the case returns.
-    let heartbeat = runtime.heartbeat_dir.join("sidebar.seeded.json");
-    let date_heartbeat = |modified: std::time::SystemTime| {
-        std::fs::File::options()
-            .write(true)
-            .open(&heartbeat)
-            .and_then(|file| file.set_modified(modified))
-            .expect("date the seeded heartbeat");
-    };
-    date_heartbeat(std::time::SystemTime::now() + Duration::from_secs(24 * 60 * 60));
     let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let trace = env.home_root.join("takeover.log");
