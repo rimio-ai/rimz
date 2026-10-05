@@ -136,7 +136,7 @@ The account, rate-limit, and credits caches live under `~/.rimz/cache/providers/
 
 | Cache | Keyed by | Holds |
 | --- | --- | --- |
-| `accounts.json` | `logins` | probed `AgentAccount` per login |
+| `accounts.json` | `logins` | probed `AgentAccount` per login, and the probe's `login` outcome (`logged_in`, `logged_out`; absent after a failed probe) |
 | `rate_limits.json` | `entries` (login) | fused windows, account scope, bound account key and its authoritative copy, pending refills, the unknown-episode marker; schema gated by `RATE_LIMITS_CACHE_VERSION` |
 | `credits.json` | `logins` | paid usage, Codex plan, Codex and Claude reset credits, the usage owner identity, and the direct-query claim |
 
@@ -219,7 +219,9 @@ The producer keeps each metered account current between turns when its spec decl
 
 An idle Codex account (one the machine catalog declares, `codex@default` included, that is neither a room default nor a live root stamp) has no panel, and [auto-redeem's expiry rescue](#auto-redeem) is its one reader. The same lane claims it through `claim_idle_account_usage`: the ordinary claim, held to `IDLE_OAUTH_USAGE_TTL` since the last attempt by any room, whatever that attempt's outcome. A transient failure, a settled auth failure, and a changed credential stamp all wait the floor, so a failing or logged-out spare account is not retried on the in-use tiers, and an account another room keeps fresh is never fetched here. An account config that does not load declares no idle account.
 
-Two CLI commands are readers outside the producer: `rimz providers` and `rimz accounts list` probe every listed login and call `refresh_provider_usage` for each logged-in one, on the same durable cadence and claim path unless `rimz providers --refresh` forces the read. The list also probes again each login whose stored record says logged out, so a login made since the last probe shows on the next run.
+Two CLI commands are readers outside the producer: `rimz providers` and `rimz accounts list` probe every listed login and call `refresh_provider_usage` for each logged-in one, on the same durable cadence and claim path unless `rimz providers --refresh` forces the read. The list also probes again each login whose stored record says logged out or has the ambiguous legacy shape below, so a login made since the last probe shows on the next run.
+
+A record's `login` field is what says whether the account is logged in. The account alone cannot: a logout probed while the kind has a live agent keeps the CLI version, the same bytes as a login the provider reports no facts about. `ProviderStatus::from_record` is the one reader. For a record an older build wrote without the field it infers from `ok` and the account, and reads that version-only shape as unavailable; the launch gates and `rimz providers` treat it as unknown until the next probe, and `rimz accounts list` probes it again on the spot.
 
 The claim is what makes the helper safe across rooms. Under the shared credits lock, scheduling derives the claim from the published account scope and credential stamp plus the prior same-scope usage owner, and records a UUID nonce, claim time, requested scope, and the optional stamp and owner. The helper receives the nonce and the `LoginKey` in its request. Before any provider call it re-reads the room's defaults and cached agent rollup, and cancels the claim only when the login is neither in use (a default or a resolvable live root stamp) nor an idle account. For an idle account it skips the realtime leg, which asks this room's Codex app server and so speaks for the room's own login, and runs the direct probe alone. Only the worker holding the matching nonce resolves credentials, contacts the provider, and publishes. Because the claim and `oauth_read_at_ms` share one lock, rooms admit one fetch; a failed spawn cancels its claim, and an expired claim becomes retryable.
 

@@ -117,6 +117,7 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
                 (
                     rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
                     rimz::agents::account::ProviderRecord {
+                        login: None,
                         probed_at_ms: now_ms,
                         ok: true,
                         account: None,
@@ -277,6 +278,7 @@ fn directory_room_without_git_backed_rows_forks_no_git() {
                     (
                         rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
                         rimz::agents::account::ProviderRecord {
+                            login: None,
                             probed_at_ms: now_ms,
                             ok: true,
                             account: None,

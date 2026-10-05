@@ -92,8 +92,7 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
             .kind
             .as_deref()
             .is_some_and(|filter| filter != login.kind().as_str())
-            || !record.ok
-            || record.account.is_none()
+            || ProviderStatus::from_record(Some(record)) != ProviderStatus::LoggedIn
         {
             continue;
         }

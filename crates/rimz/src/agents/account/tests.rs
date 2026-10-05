@@ -2,6 +2,107 @@ use super::*;
 use crate::ids::AgentKind;
 
 #[test]
+fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() {
+    use ProviderStatus::{LoggedIn, LoggedOut, Unavailable};
+    use RecordedLogin as Login;
+    let version_only = || {
+        Some(AgentAccount {
+            version: Some("2.1.0".to_owned()),
+            ..Default::default()
+        })
+    };
+    let planned = || {
+        Some(AgentAccount {
+            plan: Some("Max".to_owned()),
+            version: Some("2.1.0".to_owned()),
+            ..Default::default()
+        })
+    };
+    for (ok, account, login, expected, why) in [
+        (
+            true,
+            version_only(),
+            Some(Login::LoggedOut),
+            LoggedOut,
+            "a logout that kept the version",
+        ),
+        (
+            true,
+            None,
+            Some(Login::LoggedOut),
+            LoggedOut,
+            "a recorded logout",
+        ),
+        (
+            true,
+            version_only(),
+            Some(Login::LoggedIn),
+            LoggedIn,
+            "a login with no facts but a version",
+        ),
+        (
+            true,
+            Some(AgentAccount::default()),
+            Some(Login::LoggedIn),
+            LoggedIn,
+            "a login with no facts",
+        ),
+        (
+            true,
+            version_only(),
+            None,
+            Unavailable,
+            "an older build's ambiguous record",
+        ),
+        (
+            true,
+            Some(AgentAccount::default()),
+            None,
+            LoggedIn,
+            "an older build's login with no facts or version",
+        ),
+        (true, planned(), None, LoggedIn, "an older build's login"),
+        (true, None, None, LoggedOut, "an older build's logout"),
+        (false, planned(), None, Unavailable, "a failed probe"),
+    ] {
+        let record = ProviderRecord {
+            probed_at_ms: 1,
+            ok,
+            account,
+            login,
+        };
+        assert_eq!(
+            ProviderStatus::from_record(Some(&record)),
+            expected,
+            "{why}"
+        );
+        assert_eq!(
+            record.login_is_ambiguous(),
+            why == "an older build's ambiguous record",
+            "{why}"
+        );
+    }
+    assert_eq!(ProviderStatus::from_record(None), Unavailable);
+
+    let legacy: ProviderRecord =
+        serde_json::from_str(r#"{"probed_at_ms":1,"ok":true,"account":null}"#).unwrap();
+    assert_eq!(legacy.login, None);
+    assert_eq!(
+        serde_json::to_string(&legacy).unwrap(),
+        r#"{"probed_at_ms":1,"ok":true,"account":null}"#,
+        "an unrecorded login leaves the bytes an older build reads"
+    );
+    let recorded = ProviderRecord {
+        login: Some(Login::LoggedOut),
+        ..legacy
+    };
+    assert_eq!(
+        serde_json::to_string(&recorded).unwrap(),
+        r#"{"probed_at_ms":1,"ok":true,"account":null,"login":"logged_out"}"#
+    );
+}
+
+#[test]
 fn launch_exhaustion_requires_positive_matching_evidence() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     for (reading, reset, duration, expected) in [

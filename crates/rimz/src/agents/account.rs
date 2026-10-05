@@ -55,8 +55,22 @@ pub struct ProviderRecord {
     /// A failed probe retries on `ACCOUNTS_RETRY_TTL`; a confident result rides
     /// `ACCOUNTS_TTL`.
     pub ok: bool,
-    /// Probed account facts; `None` is an authoritative logged-out result.
+    /// Probed account facts. `None` on an `ok` record is a logged-out result,
+    /// but a logout can also carry the CLI version, so `login` decides.
     pub account: Option<AgentAccount>,
+    /// What the last confident probe found. Absent on an unavailable probe
+    /// and on a record an older build wrote, which `ProviderStatus::from_record`
+    /// reads from `ok` and `account`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<RecordedLogin>,
+}
+
+/// A confident probe's login outcome as `ProviderRecord` stores it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordedLogin {
+    LoggedIn,
+    LoggedOut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -67,12 +81,37 @@ pub enum ProviderStatus {
     Unavailable,
 }
 
+impl ProviderRecord {
+    /// An older build's `ok` record whose account carries nothing but the CLI
+    /// version: it wrote those bytes for a logout and for a login the provider
+    /// reported no facts about.
+    pub fn login_is_ambiguous(&self) -> bool {
+        self.ok
+            && self.login.is_none()
+            && self.account.as_ref().is_some_and(|account| {
+                let facts = AgentAccount {
+                    version: None,
+                    ..account.clone()
+                };
+                account.version.is_some() && facts == AgentAccount::default()
+            })
+    }
+}
+
 impl ProviderStatus {
+    /// The recorded login when the probe stored one. A record without one
+    /// reads from `ok` and `account` as an older build wrote them, and its
+    /// ambiguous shape is unknown rather than a guess.
     pub fn from_record(record: Option<&ProviderRecord>) -> Self {
-        match record {
-            Some(record) if record.ok && record.account.is_some() => Self::LoggedIn,
-            Some(record) if record.ok => Self::LoggedOut,
-            Some(_) | None => Self::Unavailable,
+        let Some(record) = record.filter(|record| record.ok) else {
+            return Self::Unavailable;
+        };
+        match record.login {
+            Some(RecordedLogin::LoggedIn) => Self::LoggedIn,
+            Some(RecordedLogin::LoggedOut) => Self::LoggedOut,
+            None if record.login_is_ambiguous() => Self::Unavailable,
+            None if record.account.is_some() => Self::LoggedIn,
+            None => Self::LoggedOut,
         }
     }
 }

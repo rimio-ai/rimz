@@ -1667,6 +1667,7 @@ fn a_pinned_account_that_cannot_run_skips_with_the_fix() {
     let work =
         crate::ids::LoginKey::new(AgentKind::new_unchecked("codex"), "work".parse().unwrap());
     let record = |ok| crate::agents::account::ProviderRecord {
+        login: None,
         probed_at_ms: 1,
         ok,
         account: None,
@@ -1696,13 +1697,46 @@ fn a_pinned_account_that_cannot_run_skips_with_the_fix() {
             && gone.contains("is not a directory; run `"),
         "{gone}"
     );
-    assert_eq!(
-        gate("codex", "work", &logged_out).unwrap_err(),
-        format!(
-            "codex account `work` is logged out; log in with `CODEX_HOME={} codex`",
-            home.display()
-        )
+    let skipped = format!(
+        "codex account `work` is logged out; log in with `CODEX_HOME={} codex`",
+        home.display()
     );
+    assert_eq!(gate("codex", "work", &logged_out).unwrap_err(), skipped);
+
+    // A logout that kept the CLI version skips by its recorded outcome; the
+    // same account without one is unknown and launches.
+    use crate::agents::account::RecordedLogin;
+    let version_only = |login| {
+        let mut cache = no_record.clone();
+        cache.logins.insert(
+            work.clone(),
+            crate::agents::account::ProviderRecord {
+                login,
+                probed_at_ms: 1,
+                ok: true,
+                account: Some(crate::agents::AgentAccount {
+                    version: Some("1.0.0".to_owned()),
+                    ..Default::default()
+                }),
+            },
+        );
+        cache
+    };
+    assert_eq!(
+        gate(
+            "codex",
+            "work",
+            &version_only(Some(RecordedLogin::LoggedOut))
+        )
+        .unwrap_err(),
+        skipped
+    );
+    for login in [Some(RecordedLogin::LoggedIn), None] {
+        assert_eq!(
+            gate("codex", "work", &version_only(login)).unwrap().key(),
+            work
+        );
+    }
 }
 
 #[test]

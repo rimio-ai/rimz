@@ -19,6 +19,7 @@ fn native_logins() -> Vec<ProviderLogin> {
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        login: None,
         probed_at_ms,
         ok,
         account,
@@ -356,11 +357,45 @@ fn refreshed_accounts_keep_versions_and_logged_out_active_kinds_keep_version_onl
             .and_then(|account| account.version.as_deref()),
         Some("0.78.0")
     );
+    // The kept version makes the account `Some`, so the record says which
+    // outcome it holds and every status reader sees the logout.
+    use crate::agents::account::{ProviderStatus, RecordedLogin};
+    let status = |cache: &AccountsCache| ProviderStatus::from_record(cache.logins.get(&key("pi")));
+    assert_eq!(
+        found.logins[&key("pi")].login,
+        Some(RecordedLogin::LoggedIn)
+    );
+    assert_eq!(
+        logged_out.logins[&key("pi")].login,
+        Some(RecordedLogin::LoggedOut)
+    );
+    assert_eq!(status(&logged_out), ProviderStatus::LoggedOut);
 
     let idle = probe_accounts_with(&due, &previous, &BTreeSet::new(), 20, |_kind, _active| {
         Some((AccountProbe::LoggedOut, None))
     });
     assert_eq!(idle.logins[&key("pi")].account, None);
+    assert_eq!(status(&idle), ProviderStatus::LoggedOut);
+
+    // A login the provider reports with no facts keeps the version too, and
+    // stays a login.
+    let bare = probe_accounts_with(&due, &previous, &active, 20, |_kind, _active| {
+        Some((AccountProbe::Found(AgentAccount::default()), None))
+    });
+    assert_eq!(
+        bare.logins[&key("pi")].account,
+        logged_out.logins[&key("pi")].account,
+        "the two outcomes store the same account"
+    );
+    assert_eq!(status(&bare), ProviderStatus::LoggedIn);
+
+    // A failed probe records no outcome: it keeps what it had and retries.
+    let failed = probe_accounts_with(&due, &logged_out, &active, 30, |_kind, _active| {
+        Some((AccountProbe::Unavailable, None))
+    });
+    assert_eq!(failed.logins[&key("pi")].login, None);
+    assert!(!failed.logins[&key("pi")].ok);
+    assert_eq!(status(&failed), ProviderStatus::Unavailable);
 }
 
 #[test]

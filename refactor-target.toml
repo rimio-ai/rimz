@@ -167,7 +167,8 @@ upward-dependencies = ["address"]
 # `newest_version` is the one version-order rule the provider panel fold and the accounts merge share (+1).
 # `runtime_control::installed_broker_bin`, the one answer to "is the broker's provider installed" for the room and daemon-view pane gates (+1).
 # The switch-hint pick and its result serve providers and accounts list (+2).
-surface-budget = 978
+# `RecordedLogin`, the probe outcome a `ProviderRecord` stores, and `ProviderRecord::login_is_ambiguous`, the legacy shape `accounts list` probes again (+2).
+surface-budget = 980
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

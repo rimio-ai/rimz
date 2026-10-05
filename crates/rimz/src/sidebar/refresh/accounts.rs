@@ -4,7 +4,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::RuntimePaths;
-use crate::agents::account::{AccountProbe, AccountsCache, ProviderRecord, read_accounts_cache};
+use crate::agents::account::{
+    AccountProbe, AccountsCache, ProviderRecord, RecordedLogin, read_accounts_cache,
+};
 use crate::agents::version::newest_version;
 use crate::agents::{AgentAccount, ProviderLogin, RoomLoginSet};
 use crate::ids::LoginKey;
@@ -392,6 +394,11 @@ fn merge_probe_results(
         } = result;
         let active = active_version_kinds.contains(key.kind.as_str());
         let ok = !matches!(&outcome, AccountProbe::Unavailable);
+        let login = match &outcome {
+            AccountProbe::Found(_) => Some(RecordedLogin::LoggedIn),
+            AccountProbe::LoggedOut => Some(RecordedLogin::LoggedOut),
+            AccountProbe::Unavailable => None,
+        };
         let previous_record = previous.logins.get(&key);
         let account = match outcome {
             AccountProbe::Found(mut account) => {
@@ -429,6 +436,7 @@ fn merge_probe_results(
                 probed_at_ms,
                 ok,
                 account,
+                login,
             },
         );
     }
