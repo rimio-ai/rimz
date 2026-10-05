@@ -261,6 +261,11 @@ impl Env {
             // Room start probes browser access best-effort. Keep the suite off
             // the developer's real ttyd; web tests replace this with the trace fixture.
             .env("RIMZ_TTYD_BIN", self.home_root.join("missing-ttyd"))
+            // A snapshot of a live codex root spawns a detached context refresh
+            // that would cold-start the host's `codex app-server` and rewrite
+            // the session sidecar mid-test. Tests that want the app-server set
+            // the `codex-appserver-stub` afterwards.
+            .env("RIMZ_CODEX_BIN", self.home_root.join("missing-codex"))
             .env_remove("ENV")
             .env_remove("BASH_ENV")
             .env_remove("ZDOTDIR")
@@ -794,4 +799,16 @@ fn rimz_command_pins_persistent_roots_and_both_mux_namespaces() {
             "{key} not scrubbed from a PTY command"
         );
     }
+}
+
+#[test]
+fn rimz_command_pins_the_codex_app_server_to_a_missing_binary() {
+    let env = Env::new();
+    let command = env.rimz();
+    let codex = command
+        .get_envs()
+        .find_map(|(name, value)| (name == "RIMZ_CODEX_BIN").then(|| value.map(PathBuf::from)))
+        .flatten()
+        .expect("RIMZ_CODEX_BIN missing from Env::rimz");
+    assert!(!codex.exists(), "{} exists", codex.display());
 }
