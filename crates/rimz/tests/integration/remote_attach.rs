@@ -1215,7 +1215,6 @@ fn tun_route_skips_dead_tcp_checkpoint_and_keeps_ssh_retries_fast() {
     let (ssh_config, _) = closed_ssh_endpoint(&env);
     std::fs::write(&master_plan, "255\n0\n").expect("write master plan");
 
-    let started = Instant::now();
     let out = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
         .env("RIMZ_TEST_SSH_MASTER_PLAN", &master_plan)
@@ -1229,15 +1228,15 @@ fn tun_route_skips_dead_tcp_checkpoint_and_keeps_ssh_retries_fast() {
         .bounded_output()
         .expect("run TUN-routed remote connect");
 
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success());
     assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "TUN bypass keeps the retry on reachable pacing"
+        !stderr.contains("waiting for network"),
+        "TUN bypass keeps the network up, so every retry takes reachable pacing\nstderr:\n{stderr}"
     );
     assert_eq!(master_invocation_count(&log), 2);
     assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("server route to dev-box uses TUN utun3 — TCP check skipped"),
+        stderr.contains("server route to dev-box uses TUN utun3 — TCP check skipped"),
         "the skipped checkpoint is visible"
     );
 }
