@@ -732,6 +732,7 @@ fn birth_managed_room(
 ) -> Result<()> {
     let was_live = preflight_health.is_some();
     let rebirth = if was_live {
+        tracing::debug!(workspace = %context.workspace_id(), "rebirth: session already live, inspection skipped");
         NormalRebirth::Live
     } else {
         match context.inspect_rebirth(no_resume) {
@@ -743,6 +744,7 @@ fn birth_managed_room(
                     report_previous_session_death(death);
                 }
                 let disposition = prompt_disposition(&preview, resume_prompt)?;
+                tracing::debug!(workspace = %context.workspace_id(), candidates = preview.candidate_count(), panes = preview.pane_count(), ?disposition, "rebirth: inspected");
                 preflight_recovery(&plan, disposition)?;
                 NormalRebirth::Selected {
                     plan: Box::new(plan),
