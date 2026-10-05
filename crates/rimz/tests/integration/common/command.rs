@@ -58,6 +58,13 @@ pub(super) fn provider_home_keys() -> impl Iterator<Item = &'static str> {
         .chain(PROVIDER_SIDECAR_KEYS)
 }
 
+/// The fixture's `RIMZ_CODEX_BIN`: a path that never exists, so a room reads
+/// codex as not installed on every host, as CI does. It opens no broker pane,
+/// its account pass starts no `codex`, whatever `PATH` holds, and a snapshot's
+/// detached context refresh cannot cold-start the host's `codex app-server`
+/// and rewrite a session sidecar mid-test.
+const MISSING_CODEX_BIN: &str = "/nonexistent/rimz-fixture-codex";
+
 /// The ambient environment keys [`ScrubSessionEnvExt::scrub_session_env`]
 /// drops from a child.
 fn ambient_session_keys() -> impl Iterator<Item = String> {
@@ -78,7 +85,10 @@ fn ambient_session_keys() -> impl Iterator<Item = String> {
 /// at builder construction: a test that *sets* one of these afterwards wins
 /// over the removal. Every builder that runs `rimz` or creates a mux server
 /// goes through this — a mux server captures the spawning environment and
-/// hands it to every pane it ever creates. Under coverage, point child profile
+/// hands it to every pane it ever creates. Point `RIMZ_CODEX_BIN` at a missing
+/// path, so no fixture child starts the developer's installed codex; a test
+/// about codex behaviour sets it afterwards to the app-server stub or its own
+/// fake. Under coverage, point child profile
 /// output at the null device: several fixtures intentionally SIGKILL long-lived
 /// child `rimz` processes, and a half-written `.profraw` poisons the merge even
 /// though the test process itself exited cleanly.
@@ -91,6 +101,7 @@ impl ScrubSessionEnvExt for Command {
         for key in ambient_session_keys() {
             self.env_remove(key);
         }
+        self.env("RIMZ_CODEX_BIN", MISSING_CODEX_BIN);
         suppress_child_coverage(self);
         self
     }
@@ -101,6 +112,7 @@ impl ScrubSessionEnvExt for portable_pty::CommandBuilder {
         for key in ambient_session_keys() {
             self.env_remove(key);
         }
+        self.env("RIMZ_CODEX_BIN", MISSING_CODEX_BIN);
         suppress_pty_child_coverage(self);
         self
     }
