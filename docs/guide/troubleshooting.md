@@ -191,7 +191,7 @@ rimz hooks install              # wire every detected agent that has an installe
 rimz hooks install claude       # wire one agent by name
 ```
 
-The install is additive, so your existing hooks stay, and `rimz doctor` reports per-agent hook status afterward. Restart the agent so it picks up the new hooks. To back the change out, `rimz hooks uninstall [AGENT]` removes exactly what RimZ added and restores any statusline it wrapped.
+The install is additive, so your existing hooks stay, and `rimz doctor` reports per-agent hook status afterward. Restart the agent so it picks up the new hooks. A restart, resume, or fork refuses until the hooks are installed and, for Codex, trusted in its `/hooks` screen. To back the change out, `rimz hooks uninstall [AGENT]` removes exactly what RimZ added and restores any statusline it wrapped.
 
 Three agents have a wrinkle beyond the install, and [agent support](../reference/agent-support.md) carries the rest of the per-agent detail. Kiro needs CLI 2.13.0 or later, and `rimz hooks install kiro` names the installed version when it refuses. Grok snapshots its hook registry for a running TUI, so after a reinstall reload the registry through Grok's Hooks UI or start a new session; a session still holding the old snapshot keeps calling the command RimZ replaced. Copilot reads its model and token figures from a local telemetry file, so an OTLP exporter configured in your environment routes them to your own pipeline and leaves that card carrying lifecycle alone; pin `COPILOT_OTEL_EXPORTER_TYPE=file` and an explicit `COPILOT_OTEL_FILE_EXPORTER_PATH` when you want both.
 

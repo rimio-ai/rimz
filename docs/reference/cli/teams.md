@@ -282,7 +282,7 @@ rimz teams stop forge -w feat-rate-limits
 | `stop` | Closes every live member, stopping each member's own subagents first. | `stopped @<handle>` per member it stopped, `error @<handle>: <reason>` per failure. |
 | `restart` | Relaunches every live member in declared role order, resuming each provider session where supported. | One restart line per member, `error @<handle>: <reason>` per failure. |
 
-`stop` and `restart` continue past a failed member and exit `1` when any member failed.
+`stop` and `restart` continue past a failed member and exit `1` when any member failed. A member whose account fails the [account check](./agents.md#the-account-check-at-launch) is one such `restart` failure; a team launch and `rimz teams resume` refuse whole on it.
 
 Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#worktree` or `-w NAME` selects by lane or worktree name. With no live cohort, the error suggests `rimz teams resume <team>`.
 
