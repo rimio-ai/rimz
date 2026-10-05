@@ -262,7 +262,7 @@ Five callers reach the removal path, in addition to failed-creation rollback in 
 | Non-abrupt exit, not a supervised run | Print the relaunch hint and exec a shell in the tree. No cleanup runs; `sweep` or `gc` reclaims the tree later. |
 | Non-abrupt exit of a supervised `-p` run | Run cleanup in the foreground; the dirty prompt is allowed. |
 | Signal (SIGHUP, SIGTERM) or tab or pane close, while the mux session still accepts closes | Spawn cleanup detached with `--non-interactive`, null stdio, and its own process group, so it outlives the closing pane. |
-| Abrupt exit with the mux session gone, wedged, or resurrected | Skip cleanup. Recovery comes from the sidebar producer's live roster. |
+| Abrupt exit with the mux session gone, wedged, or resurrected, or with the agent parked for recovery | Skip cleanup. Recovery comes from the sidebar producer's live roster. |
 
 Cleanup runs `rimz worktree cleanup <path>` through `reload::current_reexec_target`, the binary now on disk at the wrapper's executable path, which is the replacement when an install swapped the binary while the agent ran. When no re-exec target resolves, or a foreground spawn fails, it runs in-process instead; a failed detached spawn is reported on stderr. The helper reads the marker (no marker is a silent no-op), reads Git status, and, in non-interactive mode, waits `CLEANUP_SIGNAL_ROSTER_GRACE` (300 ms) so the store roster settles before it gathers protection facts. Those facts, session retirement, and message archival use the room named by `--root`, else the verified room pin in the environment, else the marker's `repo_root`; Git removal always runs against the marker's `repo_root`.
 

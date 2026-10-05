@@ -1066,14 +1066,33 @@ mod pane_exec {
                 assert_eq!(should_exec_agent_directly(&args, cap), cfg!(unix));
             }
         }
+    }
 
-        for (abrupt, accepts_close, expected) in [
-            (false, false, true),
-            (false, true, true),
-            (true, true, true),
-            (true, false, false),
+    #[test]
+    fn abrupt_exit_of_an_agent_parked_for_recovery_is_not_deliberate() {
+        for (abrupt, listed, pending, expected, expected_reads) in [
+            (false, false, false, true, &[][..]),
+            (false, true, true, true, &[]),
+            (true, false, false, false, &["listing"]),
+            (true, false, true, false, &["listing"]),
+            (true, true, false, true, &["listing", "pending"]),
+            (true, true, true, false, &["listing", "pending"]),
         ] {
-            assert_eq!(close_is_deliberate(abrupt, accepts_close), expected);
+            let reads = RefCell::new(Vec::new());
+            let deliberate = close_is_deliberate(
+                abrupt,
+                || {
+                    reads.borrow_mut().push("listing");
+                    listed
+                },
+                || {
+                    reads.borrow_mut().push("pending");
+                    pending
+                },
+            );
+            let case = format!("abrupt={abrupt} listed={listed} pending={pending}");
+            assert_eq!(deliberate, expected, "{case}");
+            assert_eq!(reads.into_inner(), expected_reads, "{case}");
         }
     }
 

@@ -58,6 +58,7 @@ use std::sync::Arc;
 
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::disk::{lock, paths};
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::event::EventEnvelope;
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -204,6 +205,13 @@ impl Store {
         Ok(snapshot.with_agent_context(context))
     }
 
+    /// Whether a rebirth parked this agent for the user's recovery decision
+    /// and no settlement has resumed or ended it yet. Lock-free.
+    pub fn is_pending_recovery(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> bool {
+        pending_recovery::read(&self.inner.paths.pending_recovery)
+            .contains(&(kind.clone(), agent_id.clone()))
+    }
+
     /// Walk the event log, returning every parseable record and logging
     /// torn records at `warn`.
     pub fn read_events(&self) -> Result<Vec<EventEnvelope>> {
@@ -275,6 +283,22 @@ mod tests {
         ] {
             assert!(path.is_dir(), "{} was not created", path.display());
         }
+    }
+
+    #[test]
+    fn pending_recovery_membership_reads_the_parked_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+        let runtime = RuntimePaths::under(workspace_id, &dir.path().join("runtime")).unwrap();
+        let store = Store::open(paths.clone(), runtime).unwrap();
+        let kind = AgentKind::new_unchecked("claude");
+        let parked = AgentSessionId::from("parked");
+
+        pending_recovery::park(&paths, &[(kind.clone(), parked.clone())].into()).unwrap();
+
+        assert!(store.is_pending_recovery(&kind, &parked));
+        assert!(!store.is_pending_recovery(&kind, &AgentSessionId::from("other")));
     }
 
     #[test]
