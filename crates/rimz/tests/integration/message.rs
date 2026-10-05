@@ -2905,7 +2905,9 @@ fn agent_broadcast_waits_for_peers_without_waiting_on_itself() {
     let out = child.wait_with_output().expect("wait for peer reply");
     assert!(
         out.status.success(),
-        "agent fanout wait failed: {}",
+        "agent fanout wait failed: {}\nstdout={}\nstderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout), "peer finished\n");
@@ -2940,7 +2942,9 @@ fn message_wait_json_emits_one_fanout_map() {
     let out = child.wait_with_output().expect("wait JSON fanout gather");
     assert!(
         out.status.success(),
-        "JSON fanout wait failed: {}",
+        "JSON fanout wait failed: {}\nstdout={}\nstderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     let replies: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply JSON");
@@ -3017,7 +3021,9 @@ fn message_wait_any_returns_only_the_first_terminal_leg() {
     let out = child.wait_with_output().expect("wait any fanout");
     assert!(
         out.status.success(),
-        "any wait failed: {}",
+        "any wait failed: {}\nstdout={}\nstderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(
