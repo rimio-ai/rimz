@@ -348,6 +348,8 @@ pub struct TaskFire<'a> {
     run_lock: Option<RunLockGuard>,
     run_lock_path: fn(&str, &TaskEntry) -> Result<PathBuf>,
     throttle_host: Arc<dyn throttle::Host>,
+    /// Ctrl-C heard from before the check on, for the hold to inherit.
+    check_interrupts: Option<throttle::Interrupts>,
     throttle_turn: Option<throttle::Turn>,
     throttle_wait: Option<Duration>,
     hold_notice: Option<HoldNotice<'a>>,
@@ -399,6 +401,7 @@ impl<'a> TaskFire<'a> {
             run_lock: None,
             run_lock_path,
             throttle_host: Arc::new(throttle::SystemHost),
+            check_interrupts: None,
             throttle_turn: None,
             throttle_wait: None,
             hold_notice: None,
@@ -439,6 +442,7 @@ impl<'a> TaskFire<'a> {
     /// The last gate of both ladders: take a turn in the start throttle. A
     /// fire that will not spawn an agent never reaches it.
     fn prepare_throttle(&mut self) -> Result<Option<TaskFireFinished>> {
+        let listening = self.check_interrupts.take();
         if self.entry.throttle == Some(ThrottleSwitch::Off) {
             return Ok(None);
         }
@@ -459,6 +463,7 @@ impl<'a> TaskFire<'a> {
             &self.throttle_host,
             &self.config.r#loop.throttle,
             &run,
+            listening,
             match self.hold_notice.as_mut() {
                 Some(notice) => notice.as_mut(),
                 None => &mut silent,
@@ -883,6 +888,13 @@ impl<'a> TaskFire<'a> {
             env.insert(
                 crate::workspace::ENV_WORKTREE_PATH.to_owned(),
                 dir.to_string_lossy().into_owned(),
+            );
+            // The check leaves SIGINT ignored once it returns, so listen first
+            // and let a hold this fire reaches inherit the listener.
+            self.check_interrupts = Some(
+                self.throttle_host
+                    .interrupts()
+                    .map_err(throttle::ThrottleError::Interrupts)?,
             );
             let check_started = Instant::now();
             let outcome = run_check(

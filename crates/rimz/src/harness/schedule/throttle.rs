@@ -261,9 +261,9 @@ impl Host for SystemHost {
     }
 }
 
-/// Ctrl-C while a run is held. The hold listens for itself rather than rely
-/// on whatever an earlier step left installed: a check's handler, once
-/// dropped, leaves SIGINT ignored.
+/// Ctrl-C while a run is held. A check's handler, once dropped, leaves
+/// SIGINT ignored, so a fire that runs a check listens from before it and
+/// hands this listener to the hold; a fire that ran none listens once held.
 pub(super) struct Interrupts {
     raised: Arc<AtomicBool>,
     id: Option<signal_hook::SigId>,
@@ -466,11 +466,13 @@ pub fn preflight(config: &ThrottleConfig) -> Result<()> {
 }
 
 /// Take a turn for `run`, waiting up to `max-wait`. `on_hold` hears each new
-/// blocking reason.
+/// blocking reason. A caller already `listening` for Ctrl-C hands its
+/// listener over; without one, the run listens once it is held.
 pub(super) fn admit(
     host: &Arc<dyn Host>,
     config: &ThrottleConfig,
     run: &Run,
+    listening: Option<Interrupts>,
     on_hold: &mut dyn FnMut(&str),
 ) -> Result<Admission> {
     if !gates(config) {
@@ -501,7 +503,7 @@ pub(super) fn admit(
     };
     let mut blocked: Option<(u64, Hold)> = None;
     let mut heard: Option<String> = None;
-    let mut interrupts: Option<Interrupts> = None;
+    let mut interrupts = listening;
     loop {
         let (waited_ms, hold) = {
             let _lock = WorkspaceLock::acquire(&host.queue_lock())?;

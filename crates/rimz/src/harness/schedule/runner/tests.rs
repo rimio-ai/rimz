@@ -2001,6 +2001,7 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
             disk: PathBuf::from("/elsewhere"),
             workspace: state.workspace_id.clone(),
         },
+        None,
         &mut |_| {},
     )
     .unwrap() else {
@@ -2098,4 +2099,65 @@ fn only_a_spawning_fire_that_is_not_exempt_takes_a_turn() {
         0,
         "a fire that never launched frees the turn"
     );
+}
+
+#[test]
+fn ctrl_c_from_the_check_on_ends_a_spawn_the_throttle_then_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root(dir.path()).unwrap();
+    let checked = TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("repair".to_owned()),
+        check: Some("true".to_owned()),
+        on: Some(CheckOn::Success),
+        root: dir.path().to_path_buf(),
+        fire_at: Some(Timestamp::UNIX_EPOCH),
+        ..TaskEntry::default()
+    };
+    crate::harness::schedule::instances::insert(&state, "checked", &checked).unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let host = throttle::tests::FakeHost::new();
+    let config: MachineConfig = toml::from_str("[loop.throttle]\nmax-wait = \"3s\"\n").unwrap();
+    // Another start holds the turn, so this fire would be held.
+    host.become_owner(9);
+    let throttle::Admission::Turn { turn: _holder, .. } = throttle::admit(
+        &host.host(),
+        &config.r#loop.throttle,
+        &throttle::Run {
+            task: "other".to_owned(),
+            root: PathBuf::from("/elsewhere"),
+            checkout: PathBuf::from("/elsewhere"),
+            disk: PathBuf::from("/elsewhere"),
+            workspace: state.workspace_id.clone(),
+        },
+        None,
+        &mut |_| {},
+    )
+    .unwrap() else {
+        panic!("an empty queue admits")
+    };
+    host.become_owner(1);
+    let mut fire = skipped_fire("checked", &catalog, None);
+    fire.config = Arc::new(config);
+    fire.throttle_host = host.host();
+
+    let fired_check = fire
+        .prepare_check(&mut |_| {
+            host.interrupt
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap()
+        .continue_value()
+        .expect("a passing check fires the spawn");
+    let TaskFirePlan::Done(done) = fire.prepare_effect(fired_check).unwrap() else {
+        panic!("an interrupted fire is done")
+    };
+    assert_eq!(done.record.result, LoopRunResult::Canceled);
+    assert_eq!(done.record.error.as_deref(), Some("interrupted while held"));
+    assert_eq!(done.presentation.exit_code, Some(130));
+    assert_eq!(done.record.check.expect("the fired check").code, Some(0));
+    assert_eq!(done.record.run_id, None);
+    assert_eq!(host.elapsed_ms(), 0, "the Ctrl-C was heard before any hold");
+    assert_eq!(host.tickets(), 1, "only the holder's turn is queued");
 }
