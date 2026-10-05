@@ -891,7 +891,7 @@ fn confirm_resume_tabs_reports_each_planned_window() {
         .backend
         .open_sidebar(&sidebar, None)
         .expect("open_sidebar");
-    server.wait_for_panes("rimz-confirm:#seeded", 3);
+    let panes = server.wait_for_panes("rimz-confirm:#seeded", 3);
 
     let absent = super::super::identity_marker_tab(work.path(), "absent", &[1]);
     let wider = super::super::identity_marker_tab(work.path(), "seeded", &[3]);
@@ -916,7 +916,26 @@ fn confirm_resume_tabs_reports_each_planned_window() {
     assert!(matches!(
         server
             .backend
-            .confirm_resume_tabs("rimz-no-such-session", &[seeded])[..],
+            .confirm_resume_tabs("rimz-no-such-session", std::slice::from_ref(&seeded))[..],
         [Err(ResumeTabUnconfirmed::Unlisted(_))]
     ));
+
+    // A user's `remain-on-exit` keeps the pane of an agent that exited at once.
+    let exited = &panes.iter().max_by_key(|pane| pane.left).expect("pane").id;
+    server.tmux(&["set-option", "-p", "-t", exited, "remain-on-exit", "on"]);
+    server.tmux(&["respawn-pane", "-k", "-t", exited, "true"]);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while server.display(exited, "#{pane_dead}") != "1" {
+        assert!(Instant::now() < deadline, "pane must stay dead");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        server
+            .backend
+            .confirm_resume_tabs("rimz-confirm", &[seeded]),
+        [Err(ResumeTabUnconfirmed::ShortOfPanes {
+            found: 1,
+            planned: 2
+        })]
+    );
 }

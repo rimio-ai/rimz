@@ -1132,18 +1132,14 @@ fn start_takes_project_accounts_only_under_trust() {
     );
 }
 
-/// The consumer proof for a birth whose resume window never opened: the agent
-/// survives the reap in the pending record and the next attended start offers it.
-#[test]
-fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
-    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
-    use rimz::store::event::EventKind;
+type LostAgent = (rimz::ids::AgentKind, rimz::ids::AgentSessionId);
 
-    let Ok(tmux) = which::which("tmux") else {
-        crate::common::skip("tmux not on PATH");
-        return;
-    };
-    let env = Env::new();
+/// A dead tmux room's one rostered `claude` agent, and the PATH resolving its
+/// shim. Its runtime owner is dead, so only the pending record stands between
+/// the agent and the reap.
+fn seed_lost_tmux_agent(env: &Env) -> (LostAgent, std::ffi::OsString) {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+
     std::fs::write(
         env.rimz_home().join("config.toml"),
         "[agents]\nisolation = 'host'\n",
@@ -1159,31 +1155,29 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
     .expect("claude shim");
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755))
         .expect("chmod claude shim");
-    // Fails the one command that opens a `#channel` resume window.
-    let failing = env.home_root.join("failing-tmux");
-    std::fs::create_dir_all(&failing).expect("tmux wrapper dir");
-    let wrapper = failing.join("tmux");
-    std::fs::write(
-        &wrapper,
-        format!(
-            "#!/bin/sh\ncase \" $* \" in *\" new-window \"*\" -n ##\"*) exit 1 ;; esac\nexec {} \"$@\"\n",
-            shlex::try_quote(tmux.to_str().expect("tmux path is UTF-8"))
-                .expect("quote tmux executable")
-        ),
-    )
-    .expect("tmux wrapper");
-    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
-        .expect("chmod tmux wrapper");
 
     let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     let worktree = env.project_root.join("alpha");
     std::fs::create_dir_all(&worktree).expect("worktree");
+    let lost = (
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("alpha"),
+    );
+    // Published first: the registering commit below already runs the reap.
+    rimz::store::live_roster::publish(&store.paths().live_roster, [lost.clone()].into())
+        .expect("publish the dead session's roster");
     let mut observation =
         AgentLifecycleObservation::new(Some("alpha".into()), LifecycleSignal::Registered);
     observation.agent_name = Some("alpha".into());
     observation.worktree_path = Some(worktree.display().to_string());
     observation.worktree_branch = Some("alpha".into());
+    observation.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        "alpha",
+        u32::MAX,
+        None,
+    ));
     store
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             workspace.workspace_id.clone(),
@@ -1193,69 +1187,37 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
             &observation,
         ))
         .expect("register lost agent");
-    let lost = (
-        rimz::ids::AgentKind::new_unchecked("claude"),
-        rimz::ids::AgentSessionId::from("alpha"),
-    );
-    rimz::store::live_roster::publish(&store.paths().live_roster, [lost.clone()].into())
-        .expect("publish the dead session's roster");
-    let pending = || -> serde_json::Value {
-        serde_json::from_slice(&std::fs::read(&store.paths().pending_recovery).expect("record"))
-            .expect("pending-recovery JSON")
-    };
-    let ended = || {
-        env.read_events()
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event.kind(),
-                    EventKind::AgentLifecycle(payload)
-                        if matches!(payload.observation.signal, LifecycleSignal::Ended)
-                )
-            })
-            .count()
-    };
-    let agent_path = path_with_front(&bin);
+    (lost, path_with_front(&bin))
+}
 
-    let birth = env
-        .rimz()
-        .env(
-            "PATH",
-            std::env::join_paths(
-                std::iter::once(failing.clone()).chain(std::env::split_paths(&agent_path)),
-            )
-            .expect("join PATH"),
-        )
-        .args(["--mux", "tmux", "start", "--no-attach"])
-        .bounded_output()
-        .expect("run the birth");
-    let stderr = String::from_utf8_lossy(&birth.stderr);
-    assert!(
-        birth.status.success(),
-        "an unopened tab is a warning: {stderr}"
-    );
-    assert!(
-        stderr.contains("could not open resumed tab #alpha")
-            && stderr.contains("stay pending for the next attended start"),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("rimz: resumed"), "{stderr}");
-    assert_eq!(pending()["agents"], serde_json::json!([lost]));
+/// `agent_path` behind a `tmux` that runs `arms` (shell `case` arms over its
+/// space-padded argv) before handing the command to the real one.
+fn path_with_tmux_wrapper(
+    env: &Env,
+    tmux: &Path,
+    agent_path: &std::ffi::OsStr,
+    arms: &str,
+) -> std::ffi::OsString {
+    let dir = env.home_root.join("wrapped-tmux");
+    std::fs::create_dir_all(&dir).expect("tmux wrapper dir");
+    let wrapper = dir.join("tmux");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in {arms} esac\nexec {} \"$@\"\n",
+            shlex::try_quote(tmux.to_str().expect("tmux path is UTF-8"))
+                .expect("quote tmux executable")
+        ),
+    )
+    .expect("tmux wrapper");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod tmux wrapper");
+    std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(agent_path)))
+        .expect("join PATH")
+}
 
-    // The next commit past the debounce stamp runs the reap.
-    let _ = std::fs::remove_file(store.paths().cache_dir.join("dead-reap.stamp"));
-    store
-        .append_event(&rimz::EventEnvelope::agent_lifecycle(
-            workspace.workspace_id.clone(),
-            &workspace.session_name,
-            "claude",
-            "SessionStart",
-            &AgentLifecycleObservation::new(Some("bystander".into()), LifecycleSignal::Registered),
-        ))
-        .expect("a commit that drives the reap");
-    assert_eq!(pending()["agents"], serde_json::json!([lost]));
-    assert_eq!(ended(), 0, "the reap leaves a pending agent alone");
-
+/// Run an attended tmux `start --no-attach` that answers yes to its prompt.
+fn attended_tmux_start_accepting(env: &Env, path: &std::ffi::OsStr) -> String {
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -1268,7 +1230,7 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
     env.pin_pty_command(&mut command);
     command.cwd(&env.project_root);
     command.args(["--mux", "tmux", "start", "--no-attach"]);
-    command.env("PATH", &agent_path);
+    command.env("PATH", path);
     command.env("TERM", "dumb");
     let mut child = pair
         .slave
@@ -1303,8 +1265,151 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
         panic!("attended start did not finish within {COMMAND_TIMEOUT:?}:\n{output}")
     });
     assert!(status.success(), "attended start failed: {output}");
+    output
+}
+
+/// The consumer proof for a birth whose resume window never opened: the agent
+/// survives the reap in the pending record and the next attended start offers it.
+#[test]
+fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::store::event::EventKind;
+
+    let Ok(tmux) = which::which("tmux") else {
+        crate::common::skip("tmux not on PATH");
+        return;
+    };
+    let env = Env::new();
+    let (lost, agent_path) = seed_lost_tmux_agent(&env);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let pending = || -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(&store.paths().pending_recovery).expect("record"))
+            .expect("pending-recovery JSON")
+    };
+    let ended = || {
+        env.read_events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.kind(),
+                    EventKind::AgentLifecycle(payload)
+                        if matches!(payload.observation.signal, LifecycleSignal::Ended)
+                )
+            })
+            .count()
+    };
+
+    let birth = env
+        .rimz()
+        .env(
+            "PATH",
+            // Fails the one command that opens a `#channel` resume window.
+            path_with_tmux_wrapper(
+                &env,
+                &tmux,
+                &agent_path,
+                r#"*" new-window "*" -n ##"*) exit 1 ;;"#,
+            ),
+        )
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .bounded_output()
+        .expect("run the birth");
+    let stderr = String::from_utf8_lossy(&birth.stderr);
+    assert!(
+        birth.status.success(),
+        "an unopened tab is a warning: {stderr}"
+    );
+    assert!(
+        stderr.contains("could not open resumed tab #alpha")
+            && stderr.contains("stay pending for the next attended start"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("rimz: resumed"), "{stderr}");
+    assert_eq!(pending()["agents"], serde_json::json!([lost]));
+
+    // The next commit past the debounce stamp runs the reap.
+    let _ = std::fs::remove_file(store.paths().cache_dir.join("dead-reap.stamp"));
+    store
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &AgentLifecycleObservation::new(Some("bystander".into()), LifecycleSignal::Registered),
+        ))
+        .expect("a commit that drives the reap");
+    assert_eq!(pending()["agents"], serde_json::json!([lost]));
+    assert_eq!(ended(), 0, "the reap leaves a pending agent alone");
+
+    let output = attended_tmux_start_accepting(&env, &agent_path);
     assert!(output.contains("Recover 1 agent (#alpha)?"), "{output}");
     assert!(output.contains("rimz: resumed 1 agent: #alpha"), "{output}");
     assert_eq!(pending()["agents"], serde_json::json!([]));
     assert_eq!(ended(), 0);
+}
+
+/// A birth holds the recovery lock until it has confirmed its resume windows,
+/// so an attended start on the room it just made live cannot settle the same
+/// still-pending agents into a second window.
+#[test]
+fn attended_start_waits_for_a_birth_to_confirm_its_resume_window() {
+    let Ok(tmux) = which::which("tmux") else {
+        crate::common::skip("tmux not on PATH");
+        return;
+    };
+    let env = Env::new();
+    let (_lost, agent_path) = seed_lost_tmux_agent(&env);
+    let reached = env.home_root.join("resume-window-reached");
+    let release = env.home_root.join("resume-window-release");
+    // Parks the birth where it opens the resume window: settled, the session
+    // live, and the agent not yet running in a pane.
+    let arms = format!(
+        r#"*" new-window "*" -n ##"*) : > {}; until [ -e {} ]; do sleep 0.05; done ;;"#,
+        shlex::try_quote(reached.to_str().expect("UTF-8 path")).expect("quote"),
+        shlex::try_quote(release.to_str().expect("UTF-8 path")).expect("quote"),
+    );
+    let mut birth = env.rimz();
+    birth
+        .env(
+            "PATH",
+            path_with_tmux_wrapper(&env, &tmux, &agent_path, &arms),
+        )
+        .args(["--mux", "tmux", "start", "--no-attach"]);
+    let birth = std::thread::spawn(move || birth.bounded_output().expect("run the birth"));
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    while !reached.exists() {
+        if Instant::now() >= deadline || birth.is_finished() {
+            let birth = birth.join().expect("join the birth");
+            panic!(
+                "birth never reached its resume window: {}",
+                String::from_utf8_lossy(&birth.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    let output = std::thread::scope(|scope| {
+        let attended = scope.spawn(|| attended_tmux_start_accepting(&env, &agent_path));
+        // Long enough for an unserialized start to settle on its own.
+        let unserialized = Instant::now() + Duration::from_secs(5);
+        while !attended.is_finished() && Instant::now() < unserialized {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        std::fs::write(&release, "").expect("release the birth");
+        attended.join().expect("attended start")
+    });
+    let birth = birth.join().expect("join the birth");
+    let stderr = String::from_utf8_lossy(&birth.stderr);
+    assert!(birth.status.success(), "{stderr}");
+    assert!(stderr.contains("rimz: resumed 1 agent: #alpha"), "{stderr}");
+    assert!(
+        !output.contains("rimz: resumed"),
+        "the birth already resumed the agent: {output}"
+    );
+    let pending: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&env.store().paths().pending_recovery).expect("record"),
+    )
+    .expect("pending-recovery JSON");
+    assert_eq!(pending["agents"], serde_json::json!([]));
 }

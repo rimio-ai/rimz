@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use crate::config::Isolation;
+use crate::disk::lock::WorkspaceLock;
 use crate::harness::rebirth::{RebirthDisposition, RebirthPlan};
 use crate::harness::resume::ResumePlan;
 use crate::mux::{
@@ -191,6 +192,14 @@ impl RoomContext {
             .as_ref()
             .map(|readiness| self.background_view(readiness, refresh_ms));
 
+        // Resumed agents stay pending until confirmation; the lock keeps an
+        // attended start on the now-live room from settling them a second time.
+        let _recovery = match rebirth {
+            Some(NormalRebirth::Selected { .. }) => Some(WorkspaceLock::acquire(
+                &self.runtime.lock_path("recovery.lock"),
+            )?),
+            _ => None,
+        };
         let seeded = match rebirth {
             Some(rebirth) => match rebirth {
                 NormalRebirth::Live => None,
