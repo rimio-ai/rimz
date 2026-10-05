@@ -595,6 +595,53 @@ fn roster_publication_rechecks_election_after_the_fetch() {
 }
 
 #[test]
+fn renderer_gets_the_snapshot_before_a_narrowing_probe() {
+    thread_local! {
+        static UPDATES: std::cell::RefCell<Option<std::sync::mpsc::Receiver<FetchUpdate>>> =
+            const { std::cell::RefCell::new(None) };
+        static SENT_BEFORE_PROBE: std::cell::Cell<Option<bool>> =
+            const { std::cell::Cell::new(None) };
+    }
+    let fixture = ConsumerFixture::new();
+    std::fs::remove_dir_all(&fixture.runtime.heartbeat_dir).unwrap();
+    let mut worker = fixture.worker();
+    let role = worker.observe_role();
+    let lost = [(AgentKind::new_unchecked("claude"), "lost".into())].into();
+    crate::store::live_roster::publish(&fixture.state.live_roster, lost).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    UPDATES.set(Some(rx));
+    let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
+
+    // The listing can take its whole timeout on a wedged server.
+    worker.session_listed = |_, _| {
+        let sent = UPDATES.with_borrow(|updates| {
+            matches!(
+                updates.as_ref().unwrap().try_recv(),
+                Ok(FetchUpdate::Snapshot { .. })
+            )
+        });
+        SENT_BEFORE_PROBE.set(Some(sent));
+        false
+    };
+    worker.publish_snapshot(
+        &fixture.state,
+        SnapshotPublication {
+            snapshot: SidebarSnapshot::build(
+                fixture.workspace_id.clone(),
+                Vec::new(),
+                jiff::Timestamp::UNIX_EPOCH,
+            ),
+            role,
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        },
+        &mut sink,
+    );
+
+    assert_eq!(SENT_BEFORE_PROBE.get(), Some(true));
+}
+
+#[test]
 fn roster_narrowing_needs_a_listed_session() {
     let fixture = ConsumerFixture::new();
     std::fs::remove_dir_all(&fixture.runtime.heartbeat_dir).unwrap();
@@ -711,12 +758,14 @@ impl ConsumerFixture {
     fn worker(&self) -> FetchWorker {
         let config = test_config(self.workspace_id.clone(), self.younger.clone());
         let election = ProducerElectionTracker::new(self.runtime.clone(), self.younger.clone());
-        FetchWorker::new(
+        let mut worker = FetchWorker::new(
             config,
             self.runtime.clone(),
             crate::diag::DiagSink::disabled(),
             election,
-        )
+        );
+        worker.session_listed = |_, _| panic!("a unit test must not ask a multiplexer");
+        worker
     }
 
     fn run(&self, request: FetchRequest) -> Vec<FetchUpdate> {

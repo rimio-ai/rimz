@@ -561,13 +561,8 @@ impl FetchWorker {
             source,
         } = publication;
         let final_producer = role.is_producer() && phase == FetchPhase::Final;
-        if final_producer && source == SnapshotSource::Produced && self.election.confirm_producer()
-        {
-            self.publish_live_roster(
-                state,
-                crate::sidebar::produce::live_roster_from_snapshot(&snapshot),
-            );
-        }
+        let roster = (final_producer && source == SnapshotSource::Produced)
+            .then(|| crate::sidebar::produce::live_roster_from_snapshot(&snapshot));
         let deliveries = if final_producer {
             evaluate_notifications(
                 &self.runtime,
@@ -586,6 +581,13 @@ impl FetchWorker {
             phase,
             source,
         });
+        // After the send: a narrowing write waits on a mux listing, which must
+        // not hold the frame.
+        if let Some(roster) = roster
+            && self.election.confirm_producer()
+        {
+            self.publish_live_roster(state, roster);
+        }
         deliver_notifications(
             &self.config,
             &self.runtime,
