@@ -296,6 +296,11 @@ pub struct RunRecord {
     /// terminal write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_at: Option<Timestamp>,
+    /// The child's `last_activity` at the provider-limit park its parent was
+    /// last told about. Activity is frozen while the turn is dead and advances
+    /// on any resume, so a later park carries a later value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub park_noticed_activity: Option<Timestamp>,
 }
 
 /// Who authored a run's first prompt: its launching agent, RimZ's loop, or a person.
@@ -434,6 +439,7 @@ impl RunRecord {
             updated_at: now,
             completed_at: None,
             parked_at: None,
+            park_noticed_activity: None,
         }
     }
 

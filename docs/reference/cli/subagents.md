@@ -177,6 +177,8 @@ rimz subagents wait calm-fox bright-owl --json --timeout 10m
 
 `subagents wait` is [`rimz agents wait`](./agents.md#wait) restricted to the caller's own children: the same output, `--any`, `--stream`, `--timeout`, JSON map, and exit codes. Use it when the next step needs a child's text before the fleet settles, or to reread a result after its pane and response file are gone; results stay readable from the durable run record.
 
+`wait` keeps blocking on a child that is [paused on a provider limit](#a-child-paused-on-a-provider-limit): the run has no answer yet and may still resume. Bound the join with `--timeout`, then read `subagents list`.
+
 At least one name is required. A bare `wait` fails and lists the caller's children, so a copied command never joins an older fleet by accident. A name that is not one of the caller's children fails with ``` `<name>` is not one of this agent's subagents ```.
 
 ## List children
@@ -210,6 +212,21 @@ A plain shell in the project directory has no current channel even when a team r
 | `description` | Current one-line description; omitted when empty |
 | `turn_error` | The provider error that explains `status`, with the fields `rimz agents --json` uses: `class` (`paused_rate_limit`, `paused_spend_limit`, `paused_overloaded`, `unknown`, `failed`) and `label`, the provider's message or `null`; omitted when there is none |
 | `run_id`, `run_status` | Newest supervised run and its status; omitted when there is no run |
+
+## A child paused on a provider limit
+
+When a child's turn parks on a provider rate or spend limit and its run remains open, RimZ tells the parent once per stop, with a message parked for the parent's next turn boundary. A reset alone does not guarantee continuation; automatic continuation depends on the configured [resume policy](../../guide/loops.md).
+
+```text
+Type: SUBAGENT_PAUSED
+From: @rimz
+Content:
+@still-silver stopped on a provider limit: "Usage limit reached". Its run stays open until its deadline in 24m. Wait for the reset, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere.
+```
+
+The quoted text is the provider's own message; when the provider gave none, the notice names the limit class instead (`a rate limit`, `a spend limit`). The deadline clause is omitted for a run with no deadline. A child that resumes and stops on a limit again produces a second notice. A child paused because its provider is overloaded, or parked by a RimZ budget, reads `paused` in `list` but sends no notice.
+
+The notice does not end or change the run, and it is not the fleet report: the report still arrives once every child has settled. The room's sidebar producer detects the stop, so a room with no sidebar running sends no notice. Detection waits for RimZ to record the provider's error and for a producer refresh; delivery then waits for the parent's next eligible turn boundary. There is no fixed delivery delay.
 
 ## Stop children
 

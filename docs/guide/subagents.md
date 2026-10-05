@@ -118,6 +118,8 @@ A parent that is itself a supervised run (`rimz agents -p`, or a scheduled task)
 
 Every child has a work deadline: 30 minutes unless the parent passes `--timeout`, and the defaults are yours to change ([subagent launches](./configuration.md#subagent-launches)). Supported providers receive warnings six and three minutes before it, so they can finish what is in flight instead of starting another investigation. At the deadline RimZ asks the child to stop and report. Three minutes later, a child still running is stopped and reports as `timed out`, with its last available assistant text marked as a partial response. The room enforces that limit whether or not anyone is waiting. Warning and stop delivery depend on the provider's hooks; the [deadline reference](../reference/cli/subagents.md#configure-the-deadline-ladder) lists support and overrides.
 
+A child that stops on a provider usage limit is not finished and has not failed. It reads `paused` in `rimz subagents list`, its run stays open until the deadline, and its parent gets one `SUBAGENT_PAUSED` message naming the child and the provider's error, so the parent can wait for the reset, stop the child, or relaunch the task on another provider ([reference](../reference/cli/subagents.md#a-child-paused-on-a-provider-limit)).
+
 To stop a child yourself, stop it like any agent. The parent's report lists it as `canceled`:
 
 ```sh

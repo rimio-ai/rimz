@@ -1874,3 +1874,34 @@ fn a_detached_team_run_reopens_detached() {
         .expect("leaving Done opens the next stretch");
     assert_eq!(reopened.report_to, ReportTo::Nobody);
 }
+
+#[test]
+fn a_park_is_claimed_once_until_the_child_acts_again() {
+    let (_dir, paths, record) = setup();
+    let parked: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
+    let resumed = parked + std::time::Duration::from_secs(600);
+    let stamp = || load(&paths, &record.run_id).unwrap().park_noticed_activity;
+
+    assert!(claim_park_notice(&paths, &record.run_id, parked).unwrap());
+    assert!(!claim_park_notice(&paths, &record.run_id, parked).unwrap());
+    assert_eq!(stamp(), Some(parked));
+    assert!(claim_park_notice(&paths, &record.run_id, resumed).unwrap());
+    assert!(!claim_park_notice(&paths, &record.run_id, parked).unwrap());
+    assert_eq!(stamp(), Some(resumed));
+
+    release_park_notice(&paths, &record.run_id, parked).unwrap();
+    assert_eq!(stamp(), Some(resumed));
+    release_park_notice(&paths, &record.run_id, resumed).unwrap();
+    assert_eq!(stamp(), None);
+    assert!(claim_park_notice(&paths, &record.run_id, resumed).unwrap());
+
+    cancel(&paths, &record.run_id).unwrap();
+    assert!(
+        !claim_park_notice(
+            &paths,
+            &record.run_id,
+            resumed + std::time::Duration::from_secs(1)
+        )
+        .unwrap()
+    );
+}

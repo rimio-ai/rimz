@@ -19,6 +19,7 @@ mod launch_resolve;
 mod list;
 mod logs;
 mod orphan_subagent;
+mod park_notice;
 mod placement;
 mod reconcile;
 mod refresh;
@@ -604,6 +605,9 @@ enum AgentsSubcmd {
     /// Hidden helper that interrupts an agent after its dollar cap is crossed.
     #[command(hide = true)]
     BudgetPark(HelperRequestArgs<BudgetParkRequest>),
+    /// Hidden helper that tells a parent its child stopped on a provider limit.
+    #[command(hide = true)]
+    ParkNotice(HelperRequestArgs<rimz::harness::park_notice::ParkNoticeRequest>),
     /// Hidden helper that settles a supervised run after its durable deadline.
     #[command(hide = true)]
     RunTimeout(HelperRequestArgs<RunTimeoutRequest>),
@@ -720,6 +724,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::CacheKeepalive(args)) => return cache_keepalive::run(args.request),
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args.request),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args.request),
+        Some(AgentsSubcmd::ParkNotice(args)) => return park_notice::run(args.request),
         Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args.request, globals),
         Some(AgentsSubcmd::OrphanSubagent(args)) => {
             return repair_orphan(args.request, globals);
