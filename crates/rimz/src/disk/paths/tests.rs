@@ -281,6 +281,23 @@ fn state_cleanup_appends_to_a_dotted_name_and_reports_failures() {
 }
 
 #[test]
+fn temp_unit_dirs_lists_canonical_and_reset_detached_units() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    assert!(paths.temp_unit_dirs().is_empty());
+
+    let live = paths.ensure_temp_unit(Some("otter")).unwrap();
+    fs::write(paths.tmp_dir.join("stray-file"), b"not a unit").unwrap();
+    let detached = paths.root.join("tmp.reset/fox");
+    fs::create_dir_all(&detached).unwrap();
+    fs::create_dir_all(paths.root.join("out.reset/fox")).unwrap();
+
+    let mut units = paths.temp_unit_dirs();
+    units.sort();
+    assert_eq!(units, [live, detached]);
+}
+
+#[test]
 fn runtime_paths_follow_lifetime_classes() {
     let dir = tempfile::tempdir().unwrap();
     let id = WorkspaceId::from_project_root(dir.path());

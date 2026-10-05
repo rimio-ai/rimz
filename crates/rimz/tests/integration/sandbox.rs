@@ -2349,6 +2349,175 @@ fn sandboxed_run_timeout_stops_provider() {
     );
 }
 
+/// A sandboxed agent's detached writer on its `/tmp`, alive after the agent's
+/// wrapper and bubblewrap are gone.
+struct ViewWriter {
+    env: Env,
+    pid: u32,
+    start: String,
+    unit: PathBuf,
+}
+
+impl ViewWriter {
+    fn start() -> Option<Self> {
+        use rimz::store::run::{RunRecord, RunStatus};
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+
+        if !available() {
+            return None;
+        }
+        let env = Env::new();
+        enable(&env);
+        env.record(&env.project_root);
+        let store = env.store();
+        let mut run = RunRecord::new(
+            env.workspace_id.clone(),
+            AgentKind::new_unchecked("codex"),
+            rimz::agents::PermissionMode::Auto,
+            "detached tmp writer".to_owned(),
+            env.project_root.clone(),
+        );
+        run.status = RunStatus::Running;
+        run.subagent = true;
+        run.keep = true;
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+        let shim_dir = write_env_dump_shim(&env, "codex");
+        // The wrapper probes `--version` on the host, outside the view, and a
+        // writer that inherits the shim's stdio would hang the wrapper.
+        std::fs::write(
+            shim_dir.join("codex"),
+            "#!/bin/sh\n\
+             [ \"$1\" = --version ] && exit 0\n\
+             setsid sh -c 'echo $$ > /tmp/writer-pid; i=0; while :; do i=$((i+1)); mkdir -p /tmp/d$((i%50)); : > /tmp/d$((i%50))/f$i; done' </dev/null >/dev/null 2>&1 &\n\
+             echo $$ > /tmp/agent-pid\n\
+             exec /usr/bin/sleep 60\n",
+        )
+        .unwrap();
+        let mut request = ExecRequest::bare_launch(run.kind.clone(), Vec::new());
+        request.run_id = Some(run.run_id.clone());
+        request.exit_on_run_completion = true;
+        let mut wrapper = env
+            .rimz()
+            .args(exec_args(&env, &request))
+            .env("PATH", path_with_front(&shim_dir))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let unit = store.paths().temp_unit_dir(None);
+        let read_pid = |name: &str| {
+            std::fs::read_to_string(unit.join(name))
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+        };
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let (pid, agent) = loop {
+            if let (Some(pid), Some(agent)) = (read_pid("writer-pid"), read_pid("agent-pid"))
+                && unit.join("d3").is_dir()
+            {
+                break (pid, agent);
+            }
+            assert!(Instant::now() < deadline, "writer did not start");
+            assert!(
+                wrapper.try_wait().unwrap().is_none(),
+                "wrapper exited before writer startup"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let start = rimz::proc::process_start_token(pid).unwrap();
+        wrapper.kill().unwrap();
+        wrapper.wait().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while rimz::proc::process_is_live(agent, None) {
+            assert!(Instant::now() < deadline, "agent outlived its wrapper");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let writer = Self {
+            env,
+            pid,
+            start,
+            unit,
+        };
+        assert!(writer.is_live(), "writer died with its agent");
+        Some(writer)
+    }
+
+    fn is_live(&self) -> bool {
+        rimz::proc::process_is_live(self.pid, Some(&self.start))
+    }
+
+    fn reset(&self, hard: bool) -> std::process::Output {
+        let mut args = vec!["--mux", "zellij", "reset", "--no-start", "--yes"];
+        if hard {
+            args.push("--hard");
+        }
+        self.env.rimz().args(args).bounded_output().unwrap()
+    }
+
+    fn assert_hard_reset_ends_it(&self) {
+        let output = self.reset(true);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "hard reset failed: {stderr}");
+        assert!(
+            stderr.contains("Sandbox views: ended 1 process still inside"),
+            "{stderr}"
+        );
+        assert!(!self.is_live(), "writer survived the hard reset");
+        let tmp = &self.env.state_path_for(&self.env.project_root).tmp_dir;
+        assert!(!tmp.exists(), "tmp/ survived the hard reset");
+        assert!(
+            !tmp.with_extension("reset").exists(),
+            "tmp.reset/ survived the hard reset"
+        );
+    }
+}
+
+#[test]
+fn hard_reset_ends_a_detached_writer_inside_a_sandbox_view() {
+    let Some(writer) = ViewWriter::start() else {
+        return;
+    };
+    let mut bystander = std::process::Command::new("/usr/bin/sleep");
+    bystander.arg("60");
+    for (key, value) in writer.env.rimz().get_envs() {
+        match value {
+            Some(value) => bystander.env(key, value),
+            None => bystander.env_remove(key),
+        };
+    }
+    let mut bystander = bystander.spawn().unwrap();
+    writer.assert_hard_reset_ends_it();
+    let spared = bystander.try_wait().unwrap().is_none();
+    let _ = bystander.kill();
+    let _ = bystander.wait();
+    assert!(spared, "hard reset ended a host process outside any view");
+}
+
+#[test]
+fn hard_reset_ends_a_writer_an_earlier_failed_reset_left_detached() {
+    let Some(writer) = ViewWriter::start() else {
+        return;
+    };
+    let tmp = writer.env.state_path_for(&writer.env.project_root).tmp_dir;
+    std::fs::rename(&tmp, tmp.with_extension("reset")).unwrap();
+    writer.assert_hard_reset_ends_it();
+}
+
+#[test]
+fn soft_reset_spares_a_detached_writer_inside_a_sandbox_view() {
+    let Some(writer) = ViewWriter::start() else {
+        return;
+    };
+    let output = writer.reset(false);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "soft reset failed: {stderr}");
+    assert!(!stderr.contains("Sandbox views"), "{stderr}");
+    assert!(writer.is_live(), "soft reset ended the writer");
+    assert!(writer.unit.join("writer-pid").is_file());
+}
+
 #[test]
 fn sandboxed_caller_prompt_file_under_tmp_resolves_to_its_temp_unit() {
     if !available() {

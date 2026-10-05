@@ -413,7 +413,7 @@ rimz reset --no-start   # tear down only, then print the rerun hint
 rimz reset --hard       # also forget history, runs, and scratch
 ```
 
-The rebuilt room comes up with no agents in it, whichever flags you pass. A plain reset keeps prior-agent history, transcripts, messages, run records, scratch and skill copies. `--hard` also deletes those transcripts, message history, runs, scratch, room temporary files, and prior-agent carryover. Rotated event archives and provider-owned session files remain. Standing fleet budget choices survive either reset.
+The rebuilt room comes up with no agents in it, whichever flags you pass. A plain reset keeps prior-agent history, transcripts, messages, run records, scratch and skill copies. `--hard` also deletes those transcripts, message history, runs, scratch, room temporary files, and prior-agent carryover. In a sandboxed room it first ends any background process an agent left running inside its sandbox view, since that process still uses the temporary files being deleted; if one will not stop, the reset names it and asks you to stop it and run `rimz reset --hard` again. Rotated event archives and provider-owned session files remain. Standing fleet budget choices survive either reset.
 
 ### Sweep stale state with `rimz gc`
 

@@ -342,7 +342,8 @@ allowed-dependencies = [
 # The ledger sweep reads an account ledger file name back to its account component (+1).
 # Detached recovery owns a classed state log (+1).
 # Reset detaches each state directory it removes through one classed helper (+1).
-surface-budget = 211
+# `StatePaths::temp_unit_dirs` lists the room's temp units, canonical and reset-detached, for the hard reset's view-holder sweep (+1).
+surface-budget = 212
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -495,7 +496,8 @@ path = "crates/rimz/src/mux"
 # Room entry asks the backend whether it can open a tab before attach (+1).
 # `SweepScope` names the process sweep's two scopes in place of a bool (+1).
 # `MuxBackend::confirm_resume_tabs` and its `ResumeTabUnconfirmed` error let a birth settle each resume tab on what the session holds (+2).
-surface-budget = 256
+# `recovery::temp_unit_holders` selects the processes a hard reset ends inside the room's sandbox views (+1).
+surface-budget = 257
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -526,7 +528,8 @@ upward-dependencies = [
 # The kernel tree high-water reader has Linux and non-Linux definitions.
 # `USER_SHELL_ENV` is the stamp launch writes and `user_shell` reads;
 # launch validates a configured shell with `launchable_shell`.
-surface-budget = 106
+# `root_path_identity` reads what a process sees at a path in its own root; Linux and non-Linux definitions (+2).
+surface-budget = 108
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
@@ -817,7 +820,8 @@ allowed-dependencies = [
     "proc",
     "workspace",
 ]
-surface-budget = 15
+# A hard reset ends the holders of the room's temp units before it deletes them (+1).
+surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/mux/zellij/session.rs"

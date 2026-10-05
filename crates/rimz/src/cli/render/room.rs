@@ -89,6 +89,14 @@ pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result
             "es"
         },
     )?;
+    let ended = report.view_processes_ended.len();
+    if ended > 0 {
+        writeln!(
+            stderr,
+            "Sandbox views: ended {ended} process{} still inside the room's sandbox views.",
+            if ended == 1 { "" } else { "es" },
+        )?;
+    }
     writeln!(
         stderr,
         "Room tmp and handled skill copies: {}; handleless copies: cleared.",
