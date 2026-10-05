@@ -290,6 +290,9 @@ pub(super) fn refresh_heavy_lanes(
     apply_live_day_spend(&mut budget_snapshot, &spending.workspace);
     crate::harness::budget::enforce(&budget_snapshot, runtime, store.as_ref(), config);
     let runs = crate::harness::run_timeout::enforce(state_paths, runtime, base.now);
+    if let Some(runs) = &runs {
+        crate::harness::park_notice::notify_parents(runs, &base.agents, runtime);
+    }
     let now_ms = base.now.as_millisecond().max(0) as u64;
     if let Some(runs) = runs
         && orphan_sweep_due(state.orphan_sweep_checked_at_ms, now_ms)

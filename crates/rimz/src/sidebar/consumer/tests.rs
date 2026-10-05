@@ -942,6 +942,82 @@ fn read_published_snapshot_folds_subagent_context() {
     );
 }
 
+/// The producer tick's own snapshot must carry a launched child with its
+/// context joined, or the park detector never sees the limit marker.
+#[test]
+fn read_published_snapshot_carries_a_launched_child_parked_on_a_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+
+    let worktree = dir.path().join("wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let wt = worktree.to_string_lossy().into_owned();
+    let parent_pane = pane("terminal_parent", "claude", &wt);
+    let child_pane = pane("terminal_child", "codex", &wt);
+    let mut parent = root_agent("claude", "parent-1", None);
+    parent.worktree_path = Some(wt.clone());
+    parent.pane = Some(parent_pane.clone());
+    let mut child = child_agent("codex", "parent-1", "child-1");
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.worktree_path = Some(wt);
+    child.pane = Some(child_pane.clone());
+    let error_at = child.last_activity + std::time::Duration::from_secs(1);
+    let context = AgentContext {
+        turn_error: Some(AgentTurnError {
+            class: TurnErrorClass::PausedRateLimit,
+            at: error_at,
+            label: Some("Usage limit reached".to_owned()),
+        }),
+        ..AgentContext::new("codex", error_at)
+    };
+    crate::store::agent_context::write(&runtime, "codex", "child-1", &context).unwrap();
+    let mut run = crate::store::run::RunRecord::new(
+        workspace.clone(),
+        child.kind.clone(),
+        crate::agents::PermissionMode::Auto,
+        "gate".to_owned(),
+        worktree.clone(),
+    );
+    run.subagent = true;
+    run.status = crate::store::run::RunStatus::Running;
+    run.agent_id = Some(child.agent_id.clone());
+    let mut rollup =
+        SidebarSnapshot::build_with_agents(workspace, vec![parent, child], Timestamp::now());
+    rollup = rollup.with_project_root(Some(worktree));
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+    let frame = assemble_frame(vec![parent_pane, child_pane], unix_now_ms(), "rimz-test");
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+
+    let snapshot = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        None,
+    )
+    .expect("published base");
+
+    let park = crate::harness::park_notice::unnoticed_park(&run, &snapshot.agents)
+        .expect("the producer's snapshot shows the park");
+    assert_eq!(park.child.agent_id, "child-1");
+    assert_eq!(park.parent.agent_id, "parent-1");
+    assert_eq!(
+        park.child
+            .displayed_turn_error()
+            .and_then(|(_, error)| error.label.as_deref()),
+        Some("Usage limit reached"),
+    );
+}
+
 #[test]
 fn consumer_own_view_counts_siblings_in_its_own_tab() {
     // A consumer reads the producer's session-wide pane list (`list-panes
