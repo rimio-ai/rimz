@@ -511,11 +511,7 @@ impl ZellijBackend {
 
     /// `zellij --session <name> action <verb> …`.
     pub(super) fn zellij_action(&self, session: &str) -> CommandSpec {
-        self.cmd().args([
-            "--session".to_owned(),
-            session.to_owned(),
-            "action".to_owned(),
-        ])
+        self.cmd().args(["--session", session, "action"])
     }
 
     pub(super) fn go_to_tab(&self, session: &str, index: u32) -> Result<()> {

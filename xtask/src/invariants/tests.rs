@@ -740,3 +740,29 @@ fn brand_resolution_invariant_keeps_descriptor_reads_in_theme_core() {
     assert!(!err.to_string().contains(&provider.display().to_string()));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn zellij_actions_must_name_the_session() {
+    let root = temp_repo_root("zellij-action-session");
+    let zellij = root.join("crates/rimz/src/mux/zellij");
+    std::fs::create_dir_all(&zellij).unwrap();
+    let backend = zellij.join("backend.rs");
+    let bare = concat!("self.cmd().args([\"act", "ion\", \"detach\"])\n");
+    let named = concat!(
+        "self.cmd().args([\"--sess",
+        "ion\", session, \"act",
+        "ion\"])\n"
+    );
+
+    std::fs::write(&backend, bare).unwrap();
+    let err =
+        ensure_zellij_actions_name_the_session(&root, std::slice::from_ref(&backend)).unwrap_err();
+    assert!(err.to_string().contains("ZellijBackend::zellij_action"));
+
+    std::fs::write(&backend, named).unwrap();
+    ensure_zellij_actions_name_the_session(&root, std::slice::from_ref(&backend)).unwrap();
+
+    let tests = zellij.join("tests.rs");
+    std::fs::write(&tests, bare).unwrap();
+    ensure_zellij_actions_name_the_session(&root, std::slice::from_ref(&tests)).unwrap();
+}
