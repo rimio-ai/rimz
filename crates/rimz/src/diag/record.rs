@@ -430,6 +430,11 @@ pub enum DiagEvent {
     ProducerDemoted {
         new_elder: SidebarInstanceId,
     },
+    /// A live-roster publication that would have dropped `dropped` was not
+    /// written, because the mux did not list this renderer's session.
+    LiveRosterHeld {
+        dropped: Vec<(AgentKind, AgentSessionId)>,
+    },
     RowConflict {
         agent_kind: AgentKind,
         agent_session_id: AgentSessionId,
@@ -589,7 +594,8 @@ impl DiagEvent {
             | Self::SelfCloseRejected { .. }
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
-            | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
+            | Self::ForeignSessionPane { .. }
+            | Self::LiveRosterHeld { .. } => DiagSeverity::Warn,
             Self::HostedCarryDropped {
                 reason:
                     HostedCarryDropReason::StartRegressed
@@ -670,6 +676,7 @@ impl DiagEvent {
             Self::ToolLoopEscalated { .. } => "tool_loop_escalated",
             Self::ProducerElected { .. } => "producer_elected",
             Self::ProducerDemoted { .. } => "producer_demoted",
+            Self::LiveRosterHeld { .. } => "live_roster_held",
             Self::RowConflict { .. } => "row_conflict",
             Self::DuplicatePaneId { .. } => "duplicate_pane_id",
             Self::ForeignSessionPane { .. } => "foreign_session_pane",
@@ -826,6 +833,7 @@ impl DiagEvent {
             Self::ForeignSessionPane { pane_id, session } => {
                 format!("{}:{pane_id}:{session}", self.kind_name())
             }
+            Self::LiveRosterHeld { dropped } => format!("{}:{dropped:?}", self.kind_name()),
             Self::LocalSessionBindRejected {
                 agent_kind,
                 agent_session_id,
@@ -1214,6 +1222,14 @@ impl DiagEvent {
             }
             Self::ProducerDemoted { new_elder } => {
                 format!("this renderer stopped producing; elder {new_elder}")
+            }
+            Self::LiveRosterHeld { dropped } => {
+                let dropped = dropped
+                    .iter()
+                    .map(|(kind, id)| format!("{kind}/{id}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("kept the recovery roster; session not listed, would drop {dropped}")
             }
             Self::RowConflict {
                 agent_kind,

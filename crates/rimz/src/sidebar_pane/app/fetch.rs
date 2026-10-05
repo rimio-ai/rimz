@@ -247,6 +247,7 @@ struct FetchWorker {
     meter: TickMeter,
     projection_publisher: crate::sidebar::workspace_projection::WorkspaceProjectionPublisher,
     tab_name_memo: TabNameMemo,
+    session_listed: fn(crate::MuxName, &str) -> bool,
 }
 
 struct FastFold {
@@ -281,6 +282,9 @@ impl FetchWorker {
             meter,
             projection_publisher: Default::default(),
             tab_name_memo: TabNameMemo::default(),
+            session_listed: |mux, session| {
+                crate::mux::backend_for(mux).session_accepts_agent_close(session)
+            },
         }
     }
 
@@ -559,14 +563,10 @@ impl FetchWorker {
         let final_producer = role.is_producer() && phase == FetchPhase::Final;
         if final_producer && source == SnapshotSource::Produced && self.election.confirm_producer()
         {
-            let roster = crate::sidebar::produce::live_roster_from_snapshot(&snapshot);
-            if let Err(err) = crate::store::live_roster::publish(&state.live_roster, roster) {
-                tracing::debug!(
-                    path = %state.live_roster.display(),
-                    error = %err,
-                    "live roster publish failed",
-                );
-            }
+            self.publish_live_roster(
+                state,
+                crate::sidebar::produce::live_roster_from_snapshot(&snapshot),
+            );
         }
         let deliveries = if final_producer {
             evaluate_notifications(
@@ -593,6 +593,33 @@ impl FetchWorker {
             &self.diag,
             deliveries,
         );
+    }
+
+    /// Removing an agent from the roster claims it left a living room, so a
+    /// narrowing write needs the mux to still list this session: a renderer
+    /// that outlives its session reads an agent-less room from the pane cache
+    /// and would otherwise empty the set the next birth recovers from.
+    fn publish_live_roster(
+        &self,
+        state: &StatePaths,
+        roster: std::collections::BTreeSet<(crate::ids::AgentKind, crate::ids::AgentSessionId)>,
+    ) {
+        let dropped: Vec<_> = crate::store::live_roster::read(&state.live_roster)
+            .map(|prior| prior.agents.difference(&roster).cloned().collect())
+            .unwrap_or_default();
+        if !dropped.is_empty() && !(self.session_listed)(self.config.mux, &self.config.session_name)
+        {
+            self.diag
+                .emit(crate::diag::record::DiagEvent::LiveRosterHeld { dropped });
+            return;
+        }
+        if let Err(err) = crate::store::live_roster::publish(&state.live_roster, roster) {
+            tracing::debug!(
+                path = %state.live_roster.display(),
+                error = %err,
+                "live roster publish failed",
+            );
+        }
     }
 }
 

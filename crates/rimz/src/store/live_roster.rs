@@ -1,7 +1,8 @@
 //! Persisted sidebar live roster: the current incarnation's live set.
 //!
 //! The elected sidebar producer writes the pane-backed root-agent set its mux
-//! session would lose if it died. The next room birth reads this snapshot before
+//! session would lose if it died, and drops an agent from it only while the mux
+//! still lists that session. The next room birth reads this snapshot before
 //! the new producer starts, parks its agents in the pending-recovery record
 //! (`pending_recovery.rs`), where they wait for the user's decision, then
 //! clears it at the rebirth boundary.

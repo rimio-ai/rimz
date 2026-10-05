@@ -1137,6 +1137,7 @@ fn classify_diagnostic(
         | DiagEvent::NewbornQuarantined { .. }
         | DiagEvent::LocalSessionBindRejected { .. }
         | DiagEvent::SubagentDigestBackstopped { .. }
+        | DiagEvent::LiveRosterHeld { .. }
         | DiagEvent::ClientReaped { settled: true, .. } => model::DoctorState::Contained,
         DiagEvent::FrameShrinkVerified { .. }
         | DiagEvent::PaneCarryRefuted { .. }

@@ -409,6 +409,16 @@ fn pane_listing_reruns_only_an_empty_success() {
 
 #[cfg(unix)]
 #[test]
+fn a_failed_session_listing_does_not_accept_an_agent_close() {
+    let (_temp, shim) = zellij_shim("#!/bin/sh\nprintf 'rimz-test [Created 1s ago]\\n'\n");
+    assert!(ZellijBackend::with_program_for_test(&shim).session_accepts_agent_close("rimz-test"));
+
+    let (_temp, shim) = zellij_shim("#!/bin/sh\necho 'socket refused' >&2\nexit 1\n");
+    assert!(!ZellijBackend::with_program_for_test(&shim).session_accepts_agent_close("rimz-test"));
+}
+
+#[cfg(unix)]
+#[test]
 fn pane_listing_rerun_stays_inside_the_caller_budget() {
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
