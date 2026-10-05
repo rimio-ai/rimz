@@ -255,7 +255,7 @@ fn launch_and_supervise(
     let (program, rest) = process.argv.split_first().ok_or_else(|| {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
     })?;
-    if should_exec_agent_directly(request) {
+    if should_exec_agent_directly(request, relaunch_cap) {
         return exec_agent_command(program, rest, &process.env, &process.unset);
     }
     reset_cleanup_signal_flag();
@@ -719,8 +719,17 @@ impl ProviderTerminal {
     fn restore(&self) {}
 }
 
-fn should_exec_agent_directly(request: &rimz::harness::launch::ExecRequest) -> bool {
+fn should_exec_agent_directly(
+    request: &rimz::harness::launch::ExecRequest,
+    relaunch_cap: u8,
+) -> bool {
+    let relaunchable = relaunch_cap > 0
+        && matches!(
+            request.action,
+            rimz::harness::launch::ExecAction::Launch { .. }
+        );
     cfg!(unix)
+        && !relaunchable
         && request.run_id.is_none()
         && request.worktree_path.is_none()
         && !request.exit_on_run_completion

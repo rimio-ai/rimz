@@ -3883,6 +3883,43 @@ fn a_zero_startup_relaunch_cap_settles_the_first_startup_death() {
     assert!(!stderr.contains("died at startup"), "{stderr}");
 }
 
+/// An in-place launch has no run, no pane to close, and no worktree: the
+/// wrapper stays behind it only to relaunch a startup death.
+#[cfg(unix)]
+#[test]
+fn an_in_place_launch_keeps_its_wrapper_and_relaunches_a_startup_death() {
+    let env = Env::new();
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    write_startup_relaunch_config(&env, "startup-relaunch-wait = \"0s\"");
+    let launch_id = "launch_in_place";
+    let mut request = startup_death_request(&env, launch_id);
+    request.close_pane_on_exit = false;
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_STARTUP_DEATHS", "1")
+        .bounded_output()
+        .expect("agents exec returns with its provider");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(launch_count(&launch_log), 2, "{stderr}");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the second provider's status: {stderr}"
+    );
+    assert!(
+        stderr.contains("relaunching in 0s (1 of 3, Ctrl-C cancels)"),
+        "{stderr}"
+    );
+    assert_eq!(launch_retries(&env).len(), 1);
+    assert!(!env.store().read_events().expect("launch events").iter().any(|event| matches!(
+        event.kind(), EventKind::AgentLaunch(ref payload) if payload.state == AgentLaunchState::Failed && payload.agent_id == launch_id
+    )));
+}
+
 #[cfg(unix)]
 #[test]
 fn a_stop_signal_during_the_startup_relaunch_wait_cancels_the_relaunch() {
