@@ -1130,6 +1130,118 @@ mod pane_exec {
         assert!(asked.get() >= 2, "asked after the wait, not only before it");
     }
 
+    /// A rebirth parks the agent after its wrapper took the pane; the wrapper's
+    /// abrupt exit then reads the record through a real store and stamps nothing.
+    #[test]
+    fn wrapper_of_an_agent_parked_after_its_attach_stamps_no_end() {
+        const CHILD: &str = "RIMZ_TEST_PARKED_WRAPPER";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    concat!(
+                        module_path!(),
+                        "::wrapper_of_an_agent_parked_after_its_attach_stamps_no_end"
+                    )
+                    .split_once("::")
+                    .expect("test module has a crate prefix")
+                    .1,
+                    "--nocapture",
+                ])
+                .env_remove("ZELLIJ_PANE_ID")
+                .env("TMUX_PANE", "%7")
+                .env(CHILD, "1")
+                .output()
+                .expect("run with the wrapper's pane");
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = test_workspace(dir.path());
+        let store = rimz::Store::open(
+            rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).expect("paths"),
+            rimz::RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).expect("runtime"),
+        )
+        .expect("store");
+        let kind = AgentKind::new_unchecked("claude");
+        let session = AgentSessionId::from("alpha");
+        store
+            .attach_agent_pane(
+                &kind,
+                &session,
+                None,
+                &rimz::ids::LoginName::default(),
+                &workspace.session_name,
+                &rimz::ids::PaneId::from_parts(MuxName::Tmux, "%7"),
+                rimz::pane::RuntimeOwner::new(
+                    rimz::pane::RuntimeOwnerKind::Agent,
+                    "alpha",
+                    std::process::id(),
+                    None,
+                ),
+                None,
+                None,
+                None,
+            )
+            .expect("the wrapper's attach");
+        let park = |agents: serde_json::Value| {
+            let record = &store.paths().pending_recovery;
+            std::fs::create_dir_all(record.parent().expect("records dir")).expect("records dir");
+            std::fs::write(
+                record,
+                serde_json::json!({"version": 1, "agents": agents}).to_string(),
+            )
+            .expect("write pending record");
+        };
+        let invocation = ExecInvocationContext {
+            workspace: &workspace,
+            cwd: dir.path().to_owned(),
+            store: RefCell::new(Some(store.clone())),
+            effective_isolation: None,
+        };
+        let request = minimal_exec_request(
+            "claude",
+            ExecAction::Resume {
+                session_id: "alpha".to_owned(),
+                extra_args: Vec::new(),
+            },
+        );
+        let ends = || {
+            store
+                .read_events()
+                .expect("read events")
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event.kind(),
+                        rimz::store::event::EventKind::AgentLifecycle(payload)
+                            if payload.event_name.as_deref() == Some(AGENT_ENDED_EVENT)
+                    )
+                })
+                .count()
+        };
+
+        park(serde_json::json!([["claude", "alpha"]]));
+        let parked = stamp_own_end_if_deliberate(&invocation, &request, true, false, || true);
+        assert_eq!(
+            parked,
+            (false, None),
+            "a parked agent's close is not deliberate"
+        );
+        assert_eq!(ends(), 0, "no end stamp for a parked agent");
+
+        park(serde_json::json!([]));
+        let closed = stamp_own_end_if_deliberate(&invocation, &request, true, false, || true);
+        assert_eq!(closed, (true, Some((kind, session))), "a pane close ends");
+        assert_eq!(ends(), 1);
+    }
+
     #[test]
     fn exit_hints_use_best_relaunch_identity() {
         let mut team = bare_exec_args();

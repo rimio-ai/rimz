@@ -535,17 +535,11 @@ fn settle_after_exit(
         .map(|context| context.session_name.as_str())
         .unwrap_or(&invocation.workspace.session_name);
     let abrupt = child_exit_abrupt || cleanup_signal_received();
-    let deliberate = close_is_deliberate(
-        abrupt,
-        || session_accepts_agent_close(globals, session_name),
-        || own_agent_pending_recovery(invocation, request),
-    );
     let linger = should_linger_subagent(request, keep, parent_ended);
-    let ended_session = if deliberate && !linger && should_record_end_trace(request) {
-        record_own_agent_end_trace(invocation, request)
-    } else {
-        None
-    };
+    let (deliberate, ended_session) =
+        stamp_own_end_if_deliberate(invocation, request, abrupt, linger, || {
+            session_accepts_agent_close(globals, session_name)
+        });
     if let Some((kind, agent_id)) = &ended_session {
         // The stamp above is a durable end no hook will ever report; its
         // subscriptions die with it here rather than waiting for gc. A wrapper
@@ -612,6 +606,25 @@ fn report_settled_child_or_log(context: &RunExecContext) {
             "could not queue settled subagent parent report",
         ),
     }
+}
+
+/// Whether this exit closes the agent deliberately, and the session it then
+/// stamped ended. A lingering subagent or a request that records no end
+/// stamps nothing.
+fn stamp_own_end_if_deliberate(
+    invocation: &ExecInvocationContext<'_>,
+    request: &rimz::harness::launch::ExecRequest,
+    abrupt: bool,
+    linger: bool,
+    session_accepts_close: impl FnOnce() -> bool,
+) -> (bool, Option<(AgentKind, AgentSessionId)>) {
+    let deliberate = close_is_deliberate(abrupt, session_accepts_close, || {
+        own_agent_pending_recovery(invocation, request)
+    });
+    let ended_session = (deliberate && !linger && should_record_end_trace(request))
+        .then(|| record_own_agent_end_trace(invocation, request))
+        .flatten();
+    (deliberate, ended_session)
 }
 
 fn should_linger_subagent(

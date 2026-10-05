@@ -316,6 +316,63 @@ fn attach_agent_pane_records_process_owned_placement() {
 }
 
 #[test]
+fn attaching_a_pane_takes_its_session_out_of_pending_recovery() {
+    use crate::store::pending_recovery;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+    let runtime_paths = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
+    let store = Store::open(paths.clone(), runtime_paths).expect("open store");
+    let kind = AgentKind::new_unchecked("claude");
+    let resumed = AgentSessionId::from("resumed");
+    let parked = AgentSessionId::from("parked");
+    pending_recovery::park(
+        &paths,
+        &[
+            (kind.clone(), resumed.clone()),
+            (kind.clone(), parked.clone()),
+        ]
+        .into(),
+    )
+    .expect("park");
+    let attach = |agent_id: &AgentSessionId| {
+        store
+            .attach_agent_pane(
+                &kind,
+                agent_id,
+                None,
+                &crate::ids::LoginName::default(),
+                "rimz-test",
+                &crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%4"),
+                crate::pane::RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    agent_id.as_str(),
+                    43,
+                    None,
+                ),
+                None,
+                None,
+                None,
+            )
+            .expect("attach");
+    };
+
+    attach(&resumed);
+    assert_eq!(
+        pending_recovery::read(&paths.pending_recovery),
+        [(kind.clone(), parked.clone())].into()
+    );
+
+    let record = std::fs::read(&paths.pending_recovery).expect("record");
+    attach(&AgentSessionId::from("unparked"));
+    assert_eq!(
+        std::fs::read(&paths.pending_recovery).expect("record"),
+        record
+    );
+}
+
+#[test]
 fn launch_event_builder_omits_blank_text() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());

@@ -21,7 +21,7 @@ use crate::store::event::{
 };
 use crate::workspace::{ResolvedWorkspace, record};
 
-use super::{Result, Store, StoreErr, event_log, message, runtime, snapshot};
+use super::{Result, Store, StoreErr, event_log, message, pending_recovery, runtime, snapshot};
 
 mod debounce;
 mod lifecycle;
@@ -497,6 +497,9 @@ impl Store {
     ///
     /// The owner names the agent process the row belongs to, and `login` the
     /// account that process runs under, which becomes the row's stamp.
+    ///
+    /// An agent bound to a pane is no longer waiting for recovery, so once the
+    /// attach is durable the session leaves the pending-recovery record.
     #[must_use = "durability barrier; check the result"]
     #[allow(clippy::too_many_arguments)]
     pub fn attach_agent_pane(
@@ -531,7 +534,14 @@ impl Store {
                     runtime_owner,
                 },
             ))
-        })
+        })?;
+        if let Err(err) = pending_recovery::settle(
+            &self.inner.paths,
+            &[(kind.clone(), agent_id.clone())].into(),
+        ) {
+            warn!(error = %err, %agent_id, "could not take the attached agent out of pending recovery");
+        }
+        Ok(())
     }
 
     /// Record the warnings the exec wrapper printed for one launch; an empty
