@@ -51,12 +51,20 @@ pub fn seed_sidebar_heartbeat(
     );
     let path = runtime.heartbeat_dir.join(format!("sidebar.{label}.json"));
     rimz::disk::atomic::write_temp_then_rename_cache(&path, &heartbeat).expect("write heartbeat");
+    date_heartbeat_as_live(&path);
+    path
+}
+
+/// A live renderer rewrites its heartbeat every beat; a one-shot seed has no
+/// writer, so readers would rightly drop it, and the runtime-claim sweep reap
+/// it, once the test outlasts `SIDEBAR_HEARTBEAT_TTL`. Give custom heartbeat
+/// fixtures the same 24-hour lifetime as the shared seed.
+pub fn date_heartbeat_as_live(path: &std::path::Path) {
     std::fs::File::options()
         .write(true)
-        .open(&path)
+        .open(path)
         .and_then(|file| file.set_modified(std::time::SystemTime::now() + SEEDED_HEARTBEAT_LIFE))
-        .expect("date heartbeat ahead");
-    path
+        .expect("date heartbeat ahead of the clock");
 }
 
 /// Publish the renderer's first heartbeat after birth (not before the rebirth
