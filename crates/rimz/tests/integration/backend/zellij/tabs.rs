@@ -399,6 +399,108 @@ fn directional_background_split_uses_exact_anchor_rectangle() {
 }
 
 #[test]
+fn directional_focus_split_divides_its_anchor_not_the_focused_pane() {
+    use rimz::mux::{SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget};
+
+    require_zellij!();
+    let room = LiveZellijSession::new("focus-split-anchor");
+    room.create_background();
+    let backend = room.backend();
+    let version = backend.version().expect("version");
+    if version
+        .split('.')
+        .nth(1)
+        .and_then(|part| part.parse::<u32>().ok())
+        .is_none_or(|minor| minor < 45)
+    {
+        crate::common::skip("zellij below 0.45");
+        return;
+    }
+    // 80 pane rows halve twice without a remainder, so Zellij has no odd row
+    // to hand to a neighbour and every untouched pane compares exactly.
+    let mut client = AttachedClient::attach(&room, 200, 82);
+    let live = |count: usize, context: &str| {
+        poll_until(
+            Duration::from_secs(5),
+            || list_panes(room.path(), room.name()),
+            |snapshot| {
+                snapshot
+                    .panes
+                    .iter()
+                    .filter(|pane| pane.is_live_terminal())
+                    .count()
+                    == count
+            },
+            context,
+        )
+        .panes
+        .into_iter()
+        .filter(|pane| pane.is_live_terminal())
+        .map(|pane| pane.geometry())
+        .collect::<Vec<_>>()
+    };
+    let pane_id = |id: u64| PaneId::from_parts(MuxName::Zellij, format!("terminal_{id}"));
+    let split = |pane_id, direction, focus| SplitPaneOptions {
+        target: SplitTarget::SessionPane {
+            session_name: room.name().to_owned(),
+            pane_id,
+        },
+        placement: SplitPlacement::Directional(direction),
+        command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
+        focus,
+        ..Default::default()
+    };
+    let bystander = live(1, "birth pane")[0];
+    backend
+        .split_pane(split(pane_id(bystander.id), SplitDirection::Right, false))
+        .expect("anchor pane");
+    let mut before = live(2, "anchor pane");
+    // A client that has sent input is the one a focus-taking spawn follows.
+    client.assert_input_reaches(&pane_id(bystander.id), "bystander before the focus split");
+    let bystander = *before
+        .iter()
+        .find(|pane| pane.id == bystander.id)
+        .expect("bystander");
+    let anchor = *before
+        .iter()
+        .find(|pane| pane.id != bystander.id)
+        .expect("anchor");
+
+    // Twice against one anchor: the shape of a lane resume restoring two agents.
+    for round in 1..=2 {
+        backend
+            .split_pane(split(pane_id(anchor.id), SplitDirection::Down, true))
+            .expect("focus-taking split");
+        let after = live(before.len() + 1, "focus-taking split");
+        let created = *after
+            .iter()
+            .find(|pane| before.iter().all(|known| known.id != pane.id))
+            .expect("created pane");
+        let halved = before
+            .iter()
+            .find(|pane| pane.id == anchor.id)
+            .expect("anchor before");
+        let now = after
+            .iter()
+            .find(|pane| pane.id == anchor.id)
+            .expect("anchor after");
+        assert_eq!(
+            (created.x, created.columns, now.rows + created.rows),
+            (halved.x, halved.columns, halved.rows),
+            "round {round}: the new pane takes its rows from the anchor: {after:?}"
+        );
+        for untouched in before.iter().filter(|pane| pane.id != anchor.id) {
+            assert!(
+                after.contains(untouched),
+                "round {round}: pane {untouched:?} moved: {after:?}"
+            );
+        }
+        client.assert_input_reaches(&pane_id(created.id), "pane created by the focus split");
+        before = after;
+    }
+}
+
+#[test]
 fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
     require_zellij!();
 

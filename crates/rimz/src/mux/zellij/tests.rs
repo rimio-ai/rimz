@@ -668,19 +668,15 @@ exit 0
     ] {
         assert!(log.contains(command), "{log}");
     }
-    assert!(
-        log.contains(&format!(
-            "--session rimz-test action new-pane --direction right --tab-id 42 --name {shell} | pane=7"
-        )),
-        "{log}"
-    );
-    assert!(
-        log.contains(
+    assert_eq!(
+        command_count(
+            &log,
             &format!(
                 "--session rimz-test action new-pane --direction right --no-focus --name {shell} | pane=7"
             )
         ),
-        "{log}"
+        2,
+        "focus-taking and background splits both name the exact anchor:\n{log}"
     );
     let anchored = log.lines().last().expect("anchored command");
     assert!(
@@ -690,13 +686,92 @@ exit 0
         "{log}"
     );
     assert!(
-        !anchored.contains("--tab-id") && !log.contains("focus-pane-id"),
+        !log.contains("--tab-id") && !log.contains("focus-pane-id"),
         "{log}"
     );
-    assert_eq!(
-        log.lines().count(),
-        6,
-        "expected split and lookup calls:\n{log}"
+    assert_eq!(log.lines().count(), 5, "expected split calls:\n{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn split_pane_focuses_the_printed_pane_after_an_exact_anchor_spawn() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
+printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log"
+case " $* " in
+  *" action new-pane "*) printf 'terminal_9\n' ;;
+  *" action focus-pane-id "*) exit 1 ;;
+esac
+exit 0
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    for focus in [true, false] {
+        backend
+            .split_pane(SplitPaneOptions {
+                target: SplitTarget::SessionPane {
+                    session_name: "rimz-test".to_owned(),
+                    pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+                },
+                placement: SplitPlacement::Directional(SplitDirection::Down),
+                focus,
+                ..Default::default()
+            })
+            .expect("a spawned pane outlives its failed focus jump");
+    }
+
+    let log = shim_log(&temp);
+    let lines = log.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 3, "{log}");
+    assert!(
+        lines[0].contains("action new-pane --direction down --no-focus")
+            && lines[0].ends_with("pane=7"),
+        "{log}"
+    );
+    assert!(
+        lines[1].starts_with("--session rimz-test action focus-pane-id terminal_9 "),
+        "{log}"
+    );
+    assert_eq!(lines[2], lines[0], "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn split_pane_focus_taking_directional_split_keeps_the_tab_anchor_below_zellij_045() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
+printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-panes "*) printf '[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3}]\n' ;;
+  *" action new-pane "*) printf 'terminal_9\n' ;;
+esac
+exit 0
+"#,
+    );
+    ZellijBackend::with_program_for_test(&shim)
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            placement: SplitPlacement::Directional(SplitDirection::Down),
+            focus: true,
+            ..Default::default()
+        })
+        .expect("legacy focus-taking split");
+
+    let log = shim_log(&temp);
+    assert!(
+        log.contains("action new-pane --direction down --tab-id 42 "),
+        "{log}"
+    );
+    assert!(
+        !log.contains("--no-focus") && !log.contains("focus-pane-id"),
+        "{log}"
     );
 }
 
