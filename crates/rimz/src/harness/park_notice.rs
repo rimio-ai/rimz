@@ -11,7 +11,7 @@ use super::auto_continue::limit_marker_active;
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{RunId, WorkspaceId};
-use crate::store::run::RunRecord;
+use crate::store::run::{ReportTo, RunRecord};
 use crate::store::snapshot::find_agent;
 use crate::utils::time::format_duration_coarse;
 
@@ -27,11 +27,11 @@ pub struct UnnoticedPark<'a> {
     pub parent: &'a AgentState,
 }
 
-/// The park `run` owes its parent a notice for: an open subagent run whose
-/// child's live turn died on a limit marker, with a live parent, and no notice
-/// claimed since the child last acted. `agents` must carry joined context.
+/// The park `run` owes its parent a notice for: an open subagent run that
+/// reports to its launcher, whose child's live turn died on a limit marker,
+/// with a live parent, and no notice claimed since the child last acted. `agents` must carry joined context.
 pub fn unnoticed_park<'a>(run: &RunRecord, agents: &'a [AgentState]) -> Option<UnnoticedPark<'a>> {
-    if !run.subagent || run.status.is_terminal() {
+    if !run.subagent || run.report_to != ReportTo::Launcher || run.status.is_terminal() {
         return None;
     }
     let child = find_agent(agents, run.kind.as_str(), run.agent_id.as_ref()?)?;
@@ -210,6 +210,9 @@ mod tests {
         let (agents, mut run) = fresh();
         run.subagent = false;
         assert!(!eligible(&run, &agents), "not a subagent run");
+        let (agents, mut run) = fresh();
+        run.report_to = ReportTo::Nobody;
+        assert!(!eligible(&run, &agents), "a detached run reports to nobody");
         let (agents, mut run) = fresh();
         run.agent_id = None;
         assert!(!eligible(&run, &agents), "no session yet");
