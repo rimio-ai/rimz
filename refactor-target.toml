@@ -451,7 +451,8 @@ path = "crates/rimz/src/harness"
 # `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+2).
 # A limit-parked child run: the park predicate, notice text and helper request cross the producer/CLI seam, with the locked claim and its release in `run`.
 # The producer tick calls the park detector (+1).
-surface-budget = 696
+# The public park_notice module itself also crosses the harness/CLI boundary (+1).
+surface-budget = 697
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
