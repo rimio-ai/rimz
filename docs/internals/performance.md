@@ -142,7 +142,7 @@ The choreography and write classes are [store.md → The write path](./store.md#
 | Merged read receipts | Unchanged generation: two metadata stamps and one shared in-memory merge | Keyed on the `generation.json` inode plus the directory stamp |
 | Reload poll | One `stat()` of the durable reload record per sidebar per second | Executable hashing runs only after that record's metadata changes; the embedded presence-plugin digest resolves once, lazily ([sidebar.md](./sidebar/sidebar.md#build-promotion)) |
 | Remote link probe | One JSON probe over the existing SSH ControlMaster every 2 s | Supervised remote attach only; `RIMZ_REMOTE_PROBE_MS=0` disables it |
-| `loop watch` repaint | Catalog, pause, run-log, and terminal reads once per second | Workspace identity resolves once before the loop |
+| `loop watch` repaint | Catalog, pause, run-log, and terminal reads once per second, plus one `locks/` listing per task root that opens and try-locks every `loop-run-*.lock` file there, free ones included | Workspace identity resolves once before the loop; the lock cost grows with stale run-lock files until `rimz gc` removes the free ones |
 
 `WORKTREE_ROW_CAP` (6) caps the idle and process tail in the renderer, never the snapshot. Active, paused, blocked, finished, focused, and unread rows render past the cap, so jump targets and unread convergence stay visible. The observer's pass scales with the full roster and the render and selection walks with the visible set; both stay bounded by live pane count across the 20 to 100 agent target. If that bound loosens, the fix is row virtualization in the renderer, never hiding rows from the snapshot.
 
