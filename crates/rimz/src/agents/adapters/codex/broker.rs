@@ -37,7 +37,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::app_server::{
-    AppServerErr, FramedTransport, JsonRpcTransport, codex_bin, initialize, write_frame,
+    AppServerErr, FramedTransport, JsonRpcTransport, codex_bin, initialize, installed_codex_bin,
+    write_frame,
 };
 use super::oauth_usage;
 use crate::sock::SocketGuard;
@@ -227,6 +228,11 @@ fn handle_client(
             }
         }
     }
+}
+
+/// The binary [`serve`] hosts, when codex is installed.
+pub(in crate::agents) fn installed_bin() -> Option<PathBuf> {
+    installed_codex_bin()
 }
 
 /// Run the broker: bring up the warm child, bind the per-session socket, and

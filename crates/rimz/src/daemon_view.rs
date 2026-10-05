@@ -328,7 +328,7 @@ pub fn ensure_loop_panel(
         session_name,
         project_root: &workspace.project_root,
         worktree_root: &workspace.worktree_root,
-        codex_present: which::which("codex").is_ok(),
+        codex_present: crate::agents::runtime_control::installed_broker_bin().is_some(),
     });
     let listing = list_daemon_panes(backend, session_name, workspace_id)?;
     if let Some(panel) = find_loop_panel(&listing.panes) {
@@ -681,7 +681,7 @@ impl ResolvedDaemonInputs {
     fn read(record: &record::WorkspaceRecord, record_path: &Path) -> Self {
         let rimz_bin = crate::proc::rimz_exe();
         let claude_bin = which::which("claude").ok();
-        let codex_bin = which::which("codex").ok();
+        let codex_bin = crate::agents::runtime_control::installed_broker_bin();
         let machine = crate::config::MachineConfig::load_lenient();
         let envs = crate::remote_control::HostLoginEnvs::for_room(record_path, &machine.accounts)
             .unwrap_or_else(|_| crate::remote_control::HostLoginEnvs::ambient());
@@ -866,7 +866,7 @@ pub(crate) fn ensure_daemon_view_with_readiness(
         machine,
         &rimz_bin,
         readiness,
-        which::which("codex").is_ok(),
+        crate::agents::runtime_control::installed_broker_bin().is_some(),
     );
     let _ = repair_daemon_view(backend, session_name, workspace_id, &view);
 }

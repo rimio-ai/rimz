@@ -9,6 +9,7 @@
 //! [`AgentDefinition::probe_account`]: crate::agents::AgentDefinition::probe_account
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde::Deserialize;
@@ -151,11 +152,14 @@ fn with_credentials_mtime(probe: AccountProbe, path: &std::path::Path) -> Accoun
 }
 
 fn probe_login_status(login_env: &BTreeMap<String, String>) -> AccountProbe {
-    probe_login_status_with(&mut login_status_command(login_env))
+    probe_login_status_with(&mut login_status_command(
+        &super::app_server::codex_bin(),
+        login_env,
+    ))
 }
 
-fn login_status_command(login_env: &BTreeMap<String, String>) -> Command {
-    let mut command = Command::new("codex");
+fn login_status_command(bin: &Path, login_env: &BTreeMap<String, String>) -> Command {
+    let mut command = Command::new(bin);
     command.args(["login", "status"]).stdin(Stdio::null());
     super::forward_login_env(&mut command, login_env);
     command
@@ -286,7 +290,8 @@ mod tests {
             ("CODEX_SQLITE_HOME".to_owned(), "/home/u/.codex".to_owned()),
             ("HOME".to_owned(), "/home/u".to_owned()),
         ]);
-        let command = login_status_command(&login_env);
+        let command = login_status_command(Path::new("/opt/override/codex"), &login_env);
+        assert_eq!(command.get_program(), "/opt/override/codex");
         let envs: Vec<_> = command
             .get_envs()
             .map(|(key, value)| (key.to_str().unwrap(), value.and_then(|v| v.to_str())))

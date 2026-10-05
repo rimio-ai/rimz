@@ -609,7 +609,7 @@ impl RoomContext {
                 session_name: &self.workspace.session_name,
                 project_root: &self.workspace.project_root,
                 worktree_root: &self.workspace.worktree_root,
-                codex_present: which::which("codex").is_ok(),
+                codex_present: crate::agents::runtime_control::installed_broker_bin().is_some(),
             }),
             sidebar: self.sidebar_options_with_resume(
                 &self.workspace.worktree_root,

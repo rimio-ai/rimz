@@ -165,7 +165,8 @@ upward-dependencies = ["address"]
 # AgentState::rowless_status gives `agents` and `subagents list` one status for a child with no row (+1).
 # TurnErrorClass::words names a labelless turn error for `subagents list` and the parent's park notice (+1).
 # `newest_version` is the one version-order rule the provider panel fold and the accounts merge share (+1).
-surface-budget = 975
+# `runtime_control::installed_broker_bin`, the one answer to "is the broker's provider installed" for the room and daemon-view pane gates (+1).
+surface-budget = 976
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -173,7 +174,8 @@ surface-budget = 1
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/codex"
-surface-budget = 8
+# 9: `broker::installed_bin` hands the `RIMZ_CODEX_BIN`-aware resolver to the neutral broker entry.
+surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/claude"

@@ -157,6 +157,12 @@ pub(crate) fn wiring_input_path(
 pub const MAX_REALTIME_ACCOUNT_USAGE_DURATION: std::time::Duration =
     std::time::Duration::from_secs(10);
 
+/// The binary [`serve_broker`] hosts, when its provider is installed. `None`
+/// means a room opens no broker pane.
+pub(crate) fn installed_broker_bin() -> Option<PathBuf> {
+    super::adapters::codex::broker::installed_bin()
+}
+
 /// Host one session's provider broker on `socket_path` until the pane closes.
 /// Codex is the only provider with a warm app-server to hold; the entry stays
 /// neutral so `cli/` never reaches past the private-adapter boundary.

@@ -220,7 +220,9 @@ The client connects to the warmest server available, each with a 6 second deadli
 
 1. The per-session [broker](../../../crates/rimz/src/agents/adapters/codex/broker.rs), run as `rimz codex app-server serve` in the `rimzd` tab, holds one handshaked `codex app-server` behind a unix socket. It answers `initialize` from cache, respawns and retries once on a closed stream, and respawns when `auth.json` changes.
 2. The per-user remote-control daemon's WebSocket control socket, at `RIMZ_CODEX_APP_SERVER_SOCK` or `$CODEX_HOME/app-server-control/app-server-control.sock`. An empty `RIMZ_CODEX_APP_SERVER_SOCK` skips it.
-3. A cold-spawned `codex app-server` (`RIMZ_CODEX_BIN` overrides the binary), so headless use still enriches.
+3. A cold-spawned `codex app-server`, so headless use still enriches.
+
+`RIMZ_CODEX_BIN` names the codex binary for every codex process RimZ starts on its own behalf: the broker's app-server, the cold spawn, and the `codex login status` probe. Set and non-empty, that path is the binary, and codex counts as installed only when it names an executable file. Unset or empty, the binary is the first `codex` on `PATH`. When codex is not installed the room opens no broker pane, at birth or at repair, and the login probe answers `Unavailable`. Agent launch, hook install, setup, and doctor do not read the variable: they find the `codex` a user launches through `PATH`.
 
 ### Resting-turn markers
 
@@ -318,7 +320,7 @@ The probe reads `$CODEX_HOME/auth.json` first:
 | `OPENAI_API_KEY` | logged in, unmetered |
 | `tokens.access_token` | logged in, metered, with the trimmed `tokens.account_id` |
 
-`codex login status` answers `LoggedOut` for "Not logged in", metered for ChatGPT, unmetered for an API key or Bedrock, and `Unavailable` for an unrecognized answer or a timeout.
+`codex login status` runs the binary `RIMZ_CODEX_BIN` resolves, the same one the app-server uses. It answers `LoggedOut` for "Not logged in", metered for ChatGPT, unmetered for an API key or Bedrock, and `Unavailable` for an unrecognized answer, a timeout, or a binary that does not start.
 
 ## Cost
 
