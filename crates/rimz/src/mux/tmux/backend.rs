@@ -906,6 +906,26 @@ impl MuxBackend for TmuxBackend {
                 return vec![Err(ResumeTabUnconfirmed::Unlisted(err.to_string())); tabs.len()];
             }
         };
+        // A user's `remain-on-exit` keeps the pane of an agent that exited.
+        let dead = match self
+            .cmd()
+            .args([
+                "list-panes",
+                "-s",
+                "-t",
+                session,
+                "-f",
+                "#{pane_dead}",
+                "-F",
+                "#{pane_id}",
+            ])
+            .run()
+        {
+            Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
+            Err(err) => {
+                return vec![Err(ResumeTabUnconfirmed::Unlisted(err.to_string())); tabs.len()];
+            }
+        };
         let config = crate::config::MachineConfig::load_lenient();
         let mut windows: Vec<(&str, ResumeTabShape)> = Vec::new();
         for pane in &listing.panes {
@@ -913,7 +933,11 @@ impl MuxBackend for TmuxBackend {
             else {
                 continue;
             };
-            let work = usize::from(!pane.is_rimz_sidebar() && !pane.is_floating);
+            let work = usize::from(
+                !pane.is_rimz_sidebar()
+                    && !pane.is_floating
+                    && !dead.lines().any(|id| id.trim() == pane.pane_id.raw()),
+            );
             match windows.iter_mut().find(|(id, _)| *id == window) {
                 Some((_, shape)) => shape.panes += work,
                 None => windows.push((

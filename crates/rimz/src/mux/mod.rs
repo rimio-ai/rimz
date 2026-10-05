@@ -1114,9 +1114,9 @@ pub trait MuxBackend: Send + Sync {
 
     /// Whether each tab a birth seeded is open in `session`, one result per
     /// tab in order. A tab is open when a live tab of its name holds at least
-    /// its panes besides sidebar chrome; each planned tab claims its own live
-    /// tab. Waits a bounded time for a layout still materializing, and reads
-    /// tab structure only, never pane content.
+    /// its panes besides sidebar chrome and exited panes; each planned tab
+    /// claims its own live tab. Waits a bounded time for a layout still
+    /// materializing, and reads tab structure only, never pane content.
     /// Expiring that wait after a successful listing preserves its last
     /// observed outcomes; any other listing failure, including an initial
     /// timeout, leaves every tab unconfirmed.
