@@ -31,10 +31,7 @@ fn env_drop_reaps_marker_children_before_removing_roots() {
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn marker child");
-    assert!(
-        sandbox_processes(&spec).contains(&marker_child.id()),
-        "the fixture roots identify its child before cleanup"
-    );
+    wait_for_marker_child(&spec, marker_child.id());
 
     drop(env);
 
@@ -62,6 +59,7 @@ fn env_unwind_reaps_marker_children_and_roots() {
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn marker child");
+    wait_for_marker_child(&spec, marker_child.id());
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let _env = env;
@@ -112,10 +110,7 @@ fn owner_sigkill_still_reaps_descendants_and_roots() {
         serde_json::from_str(&line).expect("parse fake-owner report")
     };
     assert_eq!(report.spec, spec);
-    assert!(
-        sandbox_processes(&report.spec).contains(&report.child_pid),
-        "fake owner's child carries its sandbox marker"
-    );
+    wait_for_marker_child(&report.spec, report.child_pid);
 
     owner.kill().expect("SIGKILL fake owner");
     owner.wait().expect("wait fake owner");
@@ -138,6 +133,18 @@ fn owner_sigkill_still_reaps_descendants_and_roots() {
         sandbox_processes(&report.spec).is_empty(),
         "no process retains the dead owner's marker"
     );
+}
+
+fn wait_for_marker_child(spec: &SandboxSpec, pid: u32) {
+    let started = Instant::now();
+    while !sandbox_processes(spec).contains(&pid) {
+        let waited = started.elapsed();
+        assert!(
+            waited < CLEANUP_WAIT,
+            "the fixture roots never identified marker child {pid} after {waited:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn wait_for_child_exit(child: &mut Child) {
