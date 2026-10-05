@@ -475,6 +475,8 @@ rimz start --tmux
 
 Before you read any timing, confirm from the shell that sends the messages that `command -v rimz` prints the staged path and `rimz --version` prints the branch build. If a login shell's rc (a `~/.zshrc` that prepends `~/.cargo/bin`, say) puts the installed `rimz` back first on `PATH`, the check silently runs the released binary. Once, that read as a false park miss.
 
+A room built by hand, outside `cargo xtask sandbox`, needs `XDG_RUNTIME_DIR` set to a short path (a few characters under `/tmp`): socket paths under a long directory exceed the AF_UNIX limit and the room fails to start. The state root may be long.
+
 ## Traps
 
 - A live check of anything the elder, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check.
