@@ -1289,6 +1289,37 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
             })
             .count()
     };
+    let seeded = env.read_events().len();
+    // Every event from the first birth on, so a failing `ended()` names its
+    // writer and places it against the resume.
+    let since_birth = || {
+        env.read_events()
+            .iter()
+            .skip(seeded)
+            .map(|event| {
+                let (name, signal, agent, owner_pid) = match event.kind() {
+                    EventKind::AgentLifecycle(payload) => (
+                        payload.event_name,
+                        Some(payload.observation.signal),
+                        payload.observation.agent_id,
+                        payload.observation.runtime_owner.map(|owner| owner.pid),
+                    ),
+                    EventKind::AgentAttach(payload) => (
+                        None,
+                        None,
+                        Some(payload.agent_id),
+                        Some(payload.runtime_owner.pid),
+                    ),
+                    _ => (None, None, None, None),
+                };
+                format!(
+                    "{} {} event={name:?} signal={signal:?} agent={agent:?} owner_pid={owner_pid:?}",
+                    event.timestamp, event.method
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
     let birth = env
         .rimz()
@@ -1330,13 +1361,23 @@ fn birth_keeps_agents_pending_when_their_resume_window_does_not_open() {
         ))
         .expect("a commit that drives the reap");
     assert_eq!(pending()["agents"], serde_json::json!([lost]));
-    assert_eq!(ended(), 0, "the reap leaves a pending agent alone");
+    assert_eq!(
+        ended(),
+        0,
+        "the reap leaves a pending agent alone; events since the first birth:\n{}",
+        since_birth()
+    );
 
     let output = attended_tmux_start_accepting(&env, &agent_path);
     assert!(output.contains("Recover 1 agent (#alpha)?"), "{output}");
     assert!(output.contains("rimz: resumed 1 agent: #alpha"), "{output}");
     assert_eq!(pending()["agents"], serde_json::json!([]));
-    assert_eq!(ended(), 0);
+    assert_eq!(
+        ended(),
+        0,
+        "the resume ends nobody; events since the first birth:\n{}",
+        since_birth()
+    );
 }
 
 /// A birth holds the recovery lock until it has confirmed its resume windows,
