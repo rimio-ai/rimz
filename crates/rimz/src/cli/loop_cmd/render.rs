@@ -53,6 +53,7 @@ pub(super) fn grouped_tasks<'a>(
                 .as_ref()
                 .map(schedule::last_stamps)
                 .unwrap_or_default();
+            let locks = RunLocks::list(&root);
             let tasks = entries
                 .into_iter()
                 .map(|(name, task)| ObservedTask {
@@ -65,7 +66,10 @@ pub(super) fn grouped_tasks<'a>(
                         arming_entries.get(&task.key(name)),
                         now_zoned,
                     ),
-                    run_lock: probe_run_lock(name, task.entry()),
+                    run_lock: match &locks {
+                        Ok(locks) => locks.state(name),
+                        Err(error) => Err(anyhow::anyhow!("{error:#}")),
+                    },
                 })
                 .collect();
             ObservedTaskGroup {
