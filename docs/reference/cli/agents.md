@@ -97,6 +97,8 @@ A launch that opens a new pane or tab prints a receipt: the checkout path, then 
 
 An agent-launched interactive peer with a nonempty prompt also gets a per-turn run before its pane opens. Only the prompt recipient gets that run in a layout. A team launch instead reports its leader once per `Done` ([team reports](./teams.md#team-reports)). Its receipt names the launcher-visible response file, the `AGENT_REPORT` that returns when the launcher's fleet settles, and `rimz agents wait <RUN_ID>`. Later launcher messages can open new reportable turns; user-typed turns do not. User launches, promptless launches, and `--resume` create no launch-prompt run. An adapter without native root turn-start and turn-end hooks creates none and its receipt says it will not report back. The peer stays interactive after reporting.
 
+`--detach` launches that prompt without the report: the run and its response file are still written and `rimz agents wait <RUN_ID>` still reads the answer, but no `AGENT_REPORT` returns for the launch, the launcher is not held open or shown as waiting, and the receipt says so. A launcher message sent after the launch turn settles still opens a reported turn; one that lands while the launch turn is open becomes part of the unreported answer. On a team launch the flag drops the `TEAM_REPORT` instead ([team reports](./teams.md#team-reports)). `--detach` is refused without a prompt, with `--resume`, and on `-p` without `--bg`, where the run prints its answer inline.
+
 Launches refuse before they create any pane or record when:
 
 - the final prompt exceeds 120 KiB (122880 bytes), counting `--stdin` content and any reminder text appended to it, because the provider receives the prompt as one argument (move detail into a file the agent reads);
@@ -180,6 +182,7 @@ Placement decides whether the launch takes over your pane, splits it, or opens a
 | `--new-pane` | Split the current tab. Single agent cell only. |
 | `--new-tab` | Open a new tab (tmux window). |
 | `--bg` | Keep focus where it is: an in-place launch becomes a split, and an already-live cohort or lane does not get a focus jump. Agent callers always get this focus behavior, including fork, resume, and restart, without passing the flag. With `-p`, `--bg` instead returns from a supervised run at once; see [Supervised runs](#supervised-runs--p). |
+| `--detach` | Not placement: launch the prompt without a report and without holding the launcher, as described under [Launch a layout](#launch-a-layout). |
 
 The split-versus-tab mechanics are in [fleet.md → Placement](../../internals/harness/fleet.md#placement).
 
@@ -242,6 +245,7 @@ In text mode, stdout carries only the final assistant answer, rendered by the sh
 | `--timeout <DURATION>` | Cap the run; exceeding it exits `124`. |
 | `--bg` | Print the run's pet name on stdout and return immediately, with a receipt on stderr. Use that name with `agents wait`, `agents show`, `agents stop`, or `message --steer`. Launched from an agent, the run joins that agent's [fleet report](./subagents.md#the-fleet-report), and the receipt says so. Refuses `--output-format stream-json`. |
 | `--keep` | Leave the pane open after the run completes; `rimz agents stop` reclaims it. |
+| `--detach` | With `--bg`, from an agent: keep the run out of that agent's fleet report and do not hold the agent for it. `agents wait` still reads the answer. Refused without `--bg`. |
 | `--max-turns <N>` | Cap agentic turns through the CLI's native limit (Claude and Grok `--max-turns`, Qwen `--max-session-turns`). Other kinds refuse the run with `<agent> does not support --max-turns`. |
 | `--retries <N>` | Rerun a failed (exit `1`) run up to `N` more times, appending the previous failure tail to the prompt. `--timeout` and `--budget` apply per attempt, timeout, budget, and cancel never retry, and the last attempt sets the exit code. |
 | `--verify <CMD>` | After each completed turn, run `CMD` in the run's directory; while it fails, re-prompt the same session with the failure evidence. The command's timeout is `--timeout`, or five minutes; a timed-out verify counts as failed. |

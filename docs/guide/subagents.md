@@ -126,7 +126,9 @@ rimz agents stop @calm-fox
 
 Stopping a parent, with `rimz agents stop` or `rimz teams stop`, stops its live children first. A parent that ends any other way takes its children with it: each child watches its parent and cancels itself when the parent's session ends, and the room sweeps up any child still running ten minutes after its parent ended.
 
-A child launched with `--keep` is the exception. Its pane stays open after it finishes and after its parent exits, for you to read; it closes when the parent runs `rimz subagents stop`, when you stop the parent, or when you close the pane by hand.
+A child launched with `--detach` is fire-and-forget: it stays out of the report, the parent is never held waiting for it, and it keeps working after the parent exits. Its pane closes when it finishes, and `rimz subagents wait <name>` still reads its answer if the parent wants it after all. Stopping the parent still stops it.
+
+A child launched with `--keep` is the other exception. Its pane stays open after it finishes and after its parent exits, for you to read; it closes when the parent runs `rimz subagents stop`, when you stop the parent, or when you close the pane by hand.
 
 What remains after a child ends is its run record under `~/.rimz/ws/<workspace-dir>/owned/runs/` and the session file its CLI wrote, so `rimz agents show` and the parent's `rimz subagents wait` still read the outcome. The answer files outlive the room; `rimz gc` removes one once it is 7 days old and no run record names its agent, and `rimz reset --hard` at once. A child has no restart or resume command. Its parent can continue an ended child's session by [messaging it](../reference/cli/subagents.md#follow-up-messages), where the provider supports resuming. Beyond that and the one relaunch of a CLI that died while starting, RimZ retries nothing: to run the task again, the parent launches the same profile and prompt. [Rebirth recovery](./configuration.md#resume) restores root agents but not children, and reports a child whose run was cut off as canceled to its parent.
 

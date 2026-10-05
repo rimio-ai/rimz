@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use crate::agents::AgentState;
-use crate::store::run::RunRecord;
+use crate::store::run::{ReportTo, RunRecord};
 
 /// Newest run of one launched child.
 pub(super) fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Option<&'a RunRecord> {
@@ -18,11 +18,11 @@ pub(super) fn has_members(agents: &[AgentState], launcher: &AgentState) -> bool 
     !crate::address::launched_fleet(agents, launcher).is_empty()
 }
 
-/// Newest non-peer run and all open or unclaimed peer turns per member, deduplicated by run id and ordered as `address::launched_fleet` orders its members.
+/// Newest non-peer run and all open or unclaimed peer turns per member, deduplicated by run id and ordered as `address::launched_fleet` orders its members. A member whose selected run reports to nobody has no row.
 pub struct FleetRuns<'a>(Vec<(&'a AgentState, &'a RunRecord)>);
 
 /// Open team runs report once at Done, separately from the per-member fleet digest.
-pub(super) fn open_team_runs<'a>(
+fn open_team_runs<'a>(
     agents: &[AgentState],
     runs: &'a [RunRecord],
     launcher: &AgentState,
@@ -36,6 +36,17 @@ pub(super) fn open_team_runs<'a>(
                 })
         })
         .collect()
+}
+
+/// Open team runs whose Done the launcher is still owed; a detached team owes none.
+pub(super) fn owed_team_runs<'a>(
+    agents: &[AgentState],
+    runs: &'a [RunRecord],
+    launcher: &AgentState,
+) -> Vec<&'a RunRecord> {
+    let mut owed = open_team_runs(agents, runs, launcher);
+    owed.retain(|run| run.report_to == ReportTo::Launcher);
+    owed
 }
 
 fn team_cohort_gone(agents: &[AgentState], instance: &str) -> bool {
@@ -91,7 +102,7 @@ impl<'a> FleetRuns<'a> {
                         }))
                         .map(move |run| (child, run))
                 })
-                .filter(|(_, run)| seen.insert(&run.run_id))
+                .filter(|(_, run)| run.report_to == ReportTo::Launcher && seen.insert(&run.run_id))
                 .collect(),
         )
     }
@@ -230,6 +241,18 @@ mod tests {
         assert!(!team_cohort_gone(&agents, "forge#feat-x"));
         agents.pop();
         assert!(team_cohort_gone(&[], "forge#feat-x"));
+        runs[0].report_to = crate::store::run::ReportTo::Nobody;
+        assert!(
+            owed_team_runs(&agents, &runs, &parent).is_empty(),
+            "a detached team owes its launcher no Done"
+        );
+        assert_eq!(
+            ended_team_runs(&agents, &runs, &parent).len(),
+            1,
+            "a dead detached cohort still settles its run"
+        );
+        runs[0].report_to = crate::store::run::ReportTo::Launcher;
+        assert_eq!(owed_team_runs(&agents, &runs, &parent).len(), 1);
         runs[0].status = crate::store::run::RunStatus::Completed;
         assert!(open_team_runs(&agents, &runs, &parent).is_empty());
         assert!(ended_team_runs(&agents, &runs, &parent).is_empty());
@@ -331,6 +354,33 @@ mod tests {
                 .is_empty()
         );
         assert!(FleetRuns::of(&agents, &[], &parent).is_empty());
+        runs[0].joined_at = None;
+        runs[0].report_to = crate::store::run::ReportTo::Nobody;
+        runs[0].status = crate::store::run::RunStatus::Running;
+        runs[1].report_message_id = None;
+        let mut attached_before = runs[0].clone();
+        attached_before.run_id = crate::ids::RunId::new();
+        attached_before.report_to = crate::store::run::ReportTo::Launcher;
+        attached_before.status = crate::store::run::RunStatus::Completed;
+        attached_before.started_at = runs[0].started_at - std::time::Duration::from_secs(60);
+        runs.push(attached_before);
+        let fleet = FleetRuns::of(&agents, &runs, &parent);
+        assert!(
+            !fleet.any_running(),
+            "a running detached member holds nobody"
+        );
+        let unreported = fleet.unreported();
+        assert_eq!(unreported.len(), 1, "only the attached member reports");
+        assert_eq!(unreported[0].1.run_id, runs[1].run_id);
+        assert_eq!(fleet.unsettled().len(), 1);
+        runs[0].status = crate::store::run::RunStatus::Completed;
+        let fleet = FleetRuns::of(&agents, &runs, &parent);
+        assert_eq!(
+            fleet.unreported().len(),
+            1,
+            "settled, it still owes nothing"
+        );
+        assert_eq!(fleet.settled().len(), 1);
         assert!(has_members(&agents, &parent), "runs are not membership");
         assert!(!has_members(&agents, &children[0]), "a child launched none");
     }

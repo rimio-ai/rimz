@@ -207,6 +207,9 @@ pub(crate) struct CohortLaunchArgs {
     /// Open the launch in a new tab/window instead of the current view.
     #[arg(long)]
     pub(crate) new_tab: bool,
+    /// Launch without a report and without holding the launcher; the result stays readable with `wait`.
+    #[arg(long)]
+    pub(crate) detach: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Args)]
@@ -840,6 +843,7 @@ fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -
         json,
     };
     let loop_task = rimz::harness::schedule::runner::loop_check_task();
+    validate_detach(&args.launch, args.launch.print || loop_task.is_some())?;
     if args.launch.print || loop_task.is_some() {
         let (request, presentation) = if let Some(task) = loop_task {
             into_loop_check_request(args, &task, &rimz::config::MachineConfig::load_lenient())?
@@ -858,6 +862,36 @@ fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -
         );
     }
     launch_layout(args, globals, true)
+}
+
+/// `--detach` drops the report a launch task owes; refuse it where no such report exists.
+fn validate_detach(launch: &AgentLaunchArgs, print: bool) -> Result<()> {
+    if !launch.cohort.detach {
+        return Ok(());
+    }
+    if launch.cohort.resume {
+        bail!(
+            "--detach cannot be combined with --resume: a resumed cohort has no launch task to detach; drop --detach"
+        );
+    }
+    if print {
+        if !launch.cohort.bg {
+            bail!(
+                "--detach on `-p` requires --bg: a foreground run prints its answer inline; add --bg, or drop --detach"
+            );
+        }
+        return Ok(());
+    }
+    if launch
+        .prompt
+        .as_deref()
+        .is_none_or(|prompt| prompt.trim().is_empty())
+    {
+        bail!(
+            "--detach requires a prompt: without a launch task no report is owed; add a prompt, or drop --detach"
+        );
+    }
+    Ok(())
 }
 
 fn into_loop_check_request(
@@ -986,6 +1020,7 @@ fn into_supervised_request(
     request.warn = args.launch.warn;
     request.grace = args.launch.grace;
     request.keep = args.launch.keep;
+    request.report_to = report_to(args.launch.cohort.detach);
     request.retries = args.launch.retries.unwrap_or(0);
     request.verify = args.launch.verify;
     request.max_attempts = args.launch.max_attempts;
@@ -997,6 +1032,14 @@ fn into_supervised_request(
             stream_text: false,
         },
     ))
+}
+
+pub(in crate::cli) fn report_to(detach: bool) -> rimz::store::run::ReportTo {
+    if detach {
+        rimz::store::run::ReportTo::Nobody
+    } else {
+        rimz::store::run::ReportTo::Launcher
+    }
 }
 
 fn validate_supervised_output(args: &AgentsArgs, output_format: OutputFormat) -> Result<()> {

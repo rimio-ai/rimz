@@ -91,6 +91,7 @@ pub(in crate::cli) fn run_print(
     globals: &GlobalFlags,
 ) -> Result<Option<RunRecord>> {
     let output_format = presentation.output_format;
+    let report_to = request.report_to;
     let Some(outcome) = run_supervised(request, presentation, globals)? else {
         return Ok(None);
     };
@@ -107,6 +108,7 @@ pub(in crate::cli) fn run_print(
                 &[agent_name.as_str()],
                 response_path.as_deref(),
                 false,
+                report_to,
             )?;
             None
         }
@@ -616,6 +618,7 @@ fn execute_attempt(
         prepared.launch.cwd.clone(),
     );
     record.keep = request.keep;
+    record.report_to = request.report_to;
     record.subagent = request.subagent;
     record.budget.clone_from(&agent_cell.launch.budget);
     record.deadline_at = request

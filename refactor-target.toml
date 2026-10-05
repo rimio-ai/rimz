@@ -626,7 +626,8 @@ path = "crates/rimz/src/store"
 # The pending-recovery record parks lost agents for the rebirth boundary and settlement (+5).
 # The idle-stop request record: its codec module, entry, error, read, arm and withdraw (+6).
 # The snapshot carries an open PR's merge-queue state to the header marker as `WorktreePrQueue` (+1).
-surface-budget = 360
+# `ReportTo` is the run's durable report policy for `--detach`; `RunRecord::survives_parent` is the one survival predicate the wrapper watchdog and the orphan sweep read (+2).
+surface-budget = 362
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -697,7 +698,8 @@ surface-budget = 38
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
-surface-budget = 24
+# `report_to` maps `--detach` to the run policy for both launch commands, so `subagents` keeps no copy (+1).
+surface-budget = 25
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/exec.rs"

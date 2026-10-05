@@ -220,6 +220,7 @@ A checkout holding another team (a live member, or team history with a board sta
 | `--isolation host\|sandbox` | Run every member under this isolation instead of the machine's `agents.isolation`, recorded per member. |
 | `--bg` | Keep focus where it is, as agent callers always do. See the [focus rule](./agents.md#channel-worktree-and-placement). |
 | `--new-tab` | Open the launch in a new tab or tmux window. |
+| `--detach` | Launch the prompt without a [team report](#team-reports) and without holding the launching agent. Refused without a prompt and with `--resume`. |
 
 `--resume` accepts `--isolation host|sandbox`, replacing each member's recorded isolation while keeping its conversation, and queues `PROMPT` to the leader after reopening. For model, effort, agent-base, tier, or permission overrides, use the `resume` verb below. `--from-pr`, `--channel`, `--description`, and `--budget` still conflict with resume. `--fresh` conflicts with `--resume` and `--from-pr`. Launch flags without a team name are refused with `team launch options require a team name`.
 
@@ -337,6 +338,8 @@ Memory: /home/me/proj-worktrees/feat-rate-limits/blackboard.md
 | Memory | The absolute path of the team's board, as seen by the launcher |
 
 The report is parked and delivered at the launcher's next turn boundary. The flip receipt adds a `report` line naming the launcher. A flip out of `Done` prints `report   TEAM_REPORT again at the next Done`, and the next `Done` sends a new report.
+
+A team launched with `--detach` sends no `TEAM_REPORT`. Its run still follows the board: `Done` and cohort death settle it and write the leader's response file, a flip out of `Done` opens the next detached stretch, and each flip receipt prints `report   none: the team was launched detached` in place of the report line. The launcher is not held open or shown as waiting for it; `rimz teams wait` still blocks on `Done`.
 
 The seats do not report their own turns, including turns the launcher opens with `rimz message`, and they add nothing to the launcher's fleet report. When every member ends before `Done`, the launcher receives one failure `TEAM_REPORT` with the last board stage and the leader's last response; if the board already reads `Done` at settlement, it receives the completed report instead. No report is sent when you launched the team yourself, when the launch had no prompt, when the leader's provider lacks native turn hooks (the launch receipt says so), after stop, restart, or room recovery settled the run, when the launcher has ended, or when the board is edited to `Done` by hand while the cohort stays live. Resume opens no new run, so a cohort resumed after death settlement reports nothing at its next `Done`.
 

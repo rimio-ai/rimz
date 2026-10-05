@@ -736,6 +736,7 @@ fn peer_launch_hook_claims_prompt_but_later_identical_human_turn_does_not() {
         rimz::agents::definition_by_kind("claude").unwrap(),
         "inspect the infra",
         &workspace().worktree_root,
+        rimz::store::run::ReportTo::Launcher,
     )
     .unwrap()
     .unwrap();

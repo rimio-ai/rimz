@@ -4,7 +4,7 @@ use std::io::Write;
 
 use anyhow::Result;
 use rimz::harness::run::RunLiveStatus;
-use rimz::store::run::{RunRecord, RunStatus};
+use rimz::store::run::{ReportTo, RunRecord, RunStatus};
 
 use crate::cli::render;
 use crate::cli::render::prose::Prose;
@@ -31,14 +31,16 @@ pub(crate) fn print_run_output(
 }
 
 /// Tell the launcher of background runs what happens next: an agent learns
-/// that one fleet report will wake it and where each captured response lands;
-/// a shell learns how to read the answers. `response_path` is the first
+/// that one fleet report will wake it, or that none will for a detached
+/// launch, and where each captured response lands; a shell learns how to read
+/// the answers. `response_path` is the first
 /// name's path as the launching agent sees it, `None` for a shell launch.
 pub(crate) fn write_background_receipt(
     err: &mut impl Write,
     names: &[&str],
     response_path: Option<&std::path::Path>,
     subagent: bool,
+    report_to: ReportTo,
 ) -> Result<()> {
     let handles = names
         .iter()
@@ -80,6 +82,14 @@ pub(crate) fn write_background_receipt(
             format!("rimz agents wait {}", names.join(" ")),
         )
     };
+    if report_to == ReportTo::Nobody {
+        writeln!(
+            err,
+            "{} {verb} detached in the background: no {report} reaches you and nothing holds your turn. Each {noun}'s captured response lands at {response_path} when that {noun} settles. To collect on purpose: {wait}",
+            handles.join(", "),
+        )?;
+        return Ok(());
+    }
     writeln!(
         err,
         "{} {verb} in the background. Each {noun}'s captured response lands at {response_path} when that {noun} settles. When every {noun} you launched has settled, one {report} from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: {wait}",

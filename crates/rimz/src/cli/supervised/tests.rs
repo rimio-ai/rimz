@@ -6,7 +6,7 @@ use rimz::harness::run::{RunCancellation, SupervisedRunRequest};
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::pane::PaneRef;
-use rimz::store::run::{RunStatus, WakeupFrame};
+use rimz::store::run::{ReportTo, RunStatus, WakeupFrame};
 use tokio::net::UnixDatagram;
 
 #[test]
@@ -394,6 +394,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         warn: Vec::new(),
         grace: None,
         keep: false,
+        report_to: ReportTo::Launcher,
         retries: 0,
         verify: None,
         max_attempts: None,
@@ -915,11 +916,20 @@ impl RunFixture {
 
 #[test]
 fn background_receipt_names_the_report_or_the_wait_command() {
-    let receipt = |names: &[&str], path: Option<&str>, subagent: bool| {
+    let receipt_for = |names: &[&str], path: Option<&str>, subagent: bool, report_to| {
         let mut err = Vec::new();
-        super::output::write_background_receipt(&mut err, names, path.map(Path::new), subagent)
-            .unwrap();
+        super::output::write_background_receipt(
+            &mut err,
+            names,
+            path.map(Path::new),
+            subagent,
+            report_to,
+        )
+        .unwrap();
         String::from_utf8(err).unwrap()
+    };
+    let receipt = |names: &[&str], path: Option<&str>, subagent: bool| {
+        receipt_for(names, path, subagent, ReportTo::Launcher)
     };
 
     assert_eq!(
@@ -941,6 +951,30 @@ fn background_receipt_names_the_report_or_the_wait_command() {
     assert_eq!(
         receipt(&["otter", "fox"], None, true),
         "@otter, @fox run in the background; print their final responses with: rimz agents wait otter fox\n"
+    );
+
+    assert_eq!(
+        receipt_for(
+            &["otter"],
+            Some("/state/out/planner/otter.output"),
+            true,
+            ReportTo::Nobody
+        ),
+        "@otter runs detached in the background: no SUBAGENT_REPORT reaches you and nothing holds your turn. Each subagent's captured response lands at /state/out/planner/otter.output when that subagent settles. To collect on purpose: rimz subagents wait @otter\n"
+    );
+    assert_eq!(
+        receipt_for(
+            &["otter", "fox"],
+            Some("/state/out/planner/otter.output"),
+            false,
+            ReportTo::Nobody
+        ),
+        "@otter, @fox run detached in the background: no AGENT_REPORT reaches you and nothing holds your turn. Each agent's captured response lands at /state/out/planner/<name>.output when that agent settles. To collect on purpose: rimz agents wait otter fox\n"
+    );
+    assert_eq!(
+        receipt_for(&["otter"], None, false, ReportTo::Nobody),
+        receipt(&["otter"], None, false),
+        "a shell is told nothing either way"
     );
 }
 

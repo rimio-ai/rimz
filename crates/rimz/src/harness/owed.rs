@@ -51,7 +51,7 @@ pub fn owed_wake(
                 }
             }
             if launched_team
-                && super::fleet::open_team_runs(&projection.agents, &runs, launcher)
+                && super::fleet::owed_team_runs(&projection.agents, &runs, launcher)
                     .iter()
                     .any(|run| {
                         let stage = super::scratch::board_stage(&run.worktree_path);
@@ -103,7 +103,7 @@ mod tests {
     use crate::store::message::{
         DeliveryGate, HarnessNotice, MessageRecord, MessageSender, MessageStatus,
     };
-    use crate::store::run::{RunRecord, RunStatus};
+    use crate::store::run::{ReportTo, RunRecord, RunStatus};
     use crate::store::writer::AgentLifecycleIntent;
     use crate::{RuntimePaths, StatePaths, WorkspaceId};
 
@@ -147,11 +147,12 @@ mod tests {
 
     #[test]
     fn owed_team_is_scoped_to_its_launcher_and_skips_done_boards() {
-        for (own, status, done, expected) in [
-            (true, RunStatus::Running, false, Some(OwedWake::Team)),
-            (true, RunStatus::Completed, false, None),
-            (false, RunStatus::Running, false, None),
-            (true, RunStatus::Running, true, None),
+        for (own, status, done, detached, expected) in [
+            (true, RunStatus::Running, false, false, Some(OwedWake::Team)),
+            (true, RunStatus::Completed, false, false, None),
+            (false, RunStatus::Running, false, false, None),
+            (true, RunStatus::Running, true, false, None),
+            (true, RunStatus::Running, false, true, None),
         ] {
             let (dir, store) = fixture();
             register(&store, "parent", None);
@@ -181,6 +182,9 @@ mod tests {
                 dir.path().into(),
             );
             record.status = status;
+            if detached {
+                record.report_to = ReportTo::Nobody;
+            }
             record.team = Some(crate::store::run::TeamRun {
                 launch_id: "leader".into(),
                 instance: "forge#external".into(),
@@ -257,16 +261,25 @@ mod tests {
 
     #[test]
     fn owed_fleet_includes_ended_unreported_children() {
-        for (status, joined, reported, expected) in [
-            (RunStatus::Running, false, false, Some(OwedWake::Subagents)),
+        for (status, joined, reported, report_to, expected) in [
+            (
+                RunStatus::Running,
+                false,
+                false,
+                ReportTo::Launcher,
+                Some(OwedWake::Subagents),
+            ),
             (
                 RunStatus::Completed,
                 false,
                 false,
+                ReportTo::Launcher,
                 Some(OwedWake::Subagents),
             ),
-            (RunStatus::Completed, true, false, None),
-            (RunStatus::Completed, false, true, None),
+            (RunStatus::Completed, true, false, ReportTo::Launcher, None),
+            (RunStatus::Completed, false, true, ReportTo::Launcher, None),
+            (RunStatus::Running, false, false, ReportTo::Nobody, None),
+            (RunStatus::Completed, false, false, ReportTo::Nobody, None),
         ] {
             let (dir, store) = fixture();
             register(&store, "parent", None);
@@ -281,6 +294,7 @@ mod tests {
             );
             run.agent_id = Some("child".into());
             run.status = status;
+            run.report_to = report_to;
             run.joined_at = joined.then_some(jiff::Timestamp::now());
             run.report_message_id = reported.then(crate::MessageId::new);
             super::super::run::create(store.paths(), &run).unwrap();
@@ -300,7 +314,7 @@ mod tests {
             assert_eq!(
                 owed_wake(&store, &kind, &"parent".into()).unwrap(),
                 expected,
-                "{status:?} joined={joined} reported={reported}"
+                "{status:?} joined={joined} reported={reported} {report_to:?}"
             );
         }
     }

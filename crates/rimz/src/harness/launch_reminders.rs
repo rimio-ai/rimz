@@ -73,8 +73,8 @@ const SUBAGENT_REMINDER_BODY: &str = concat!(
     "You are a subagent: a supervised child launched by another agent to ",
     "complete the task you were given. The task is scoped to this one run, so do the work ",
     "yourself rather than launching with Skill(rimz-agents, rimz-subagents, rimz-teams); ",
-    "nothing above your caller supervises a run you start. Report the result: your caller ",
-    "receives a completion report pointing to your final response after the fleet settles."
+    "nothing above your caller supervises a run you start. Report the result in your final ",
+    "response: it is the answer your caller reads once this run settles."
 );
 
 const SKILLS_REMINDER_BODY: &str = concat!(

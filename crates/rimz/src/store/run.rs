@@ -116,6 +116,22 @@ impl RunStatus {
     }
 }
 
+/// Who is told when a launched run settles. `Nobody` is a `--detach` launch:
+/// its answer is never owed, so no digest lists it and no launcher waits on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportTo {
+    #[default]
+    Launcher,
+    Nobody,
+}
+
+impl ReportTo {
+    fn is_launcher(&self) -> bool {
+        *self == Self::Launcher
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunVerify {
     pub cmd: String,
@@ -210,6 +226,9 @@ pub struct RunRecord {
     /// Pane-backed child launched through `rimz subagents`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub subagent: bool,
+    /// Report policy of the answer the launch prompt opened; absent means the launcher.
+    #[serde(default, skip_serializing_if = "ReportTo::is_launcher")]
+    pub report_to: ReportTo,
     /// Number of times this run reopened for a follow-up prompt.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub follow_ups: u32,
@@ -318,13 +337,18 @@ impl RunRecord {
                 ordinal,
                 report,
                 joined,
-                owed: report.is_none() && joined.is_none(),
+                owed: self.report_to == ReportTo::Launcher && report.is_none() && joined.is_none(),
                 earlier,
             })
     }
 
     pub fn owes_report(&self) -> bool {
         self.status.is_terminal() && self.answer_claims().any(|claim| claim.owed)
+    }
+
+    /// Whether this run outlives its parent agent: kept, or launched detached.
+    pub fn survives_parent(&self) -> bool {
+        self.keep || self.report_to == ReportTo::Nobody
     }
 
     pub fn prompt_origin(&self) -> RunPromptOrigin {
@@ -385,6 +409,7 @@ impl RunRecord {
             permission_mode,
             keep: false,
             subagent: false,
+            report_to: ReportTo::Launcher,
             follow_ups: 0,
             follow_up: None,
             opened_by: Vec::new(),
@@ -592,9 +617,15 @@ mod tests {
         let old: RunRecord = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(old.follow_ups, 0);
         assert_eq!(old.prompt_origin(), RunPromptOrigin::Human);
-        for field in ["follow_up", "opened_by", "earlier_answers"] {
+        for field in ["follow_up", "opened_by", "earlier_answers", "report_to"] {
             assert!(value.get(field).is_none());
         }
+        assert_eq!(old.report_to, ReportTo::Launcher);
+        let mut detached = value.clone();
+        detached["report_to"] = serde_json::json!("nobody");
+        let decoded: RunRecord = serde_json::from_value(detached.clone()).unwrap();
+        assert_eq!(decoded.report_to, ReportTo::Nobody);
+        assert_eq!(serde_json::to_value(decoded).unwrap(), detached);
         let mut answers = value.clone();
         answers["follow_up"] =
             serde_json::json!({"started_at": record.started_at, "prompt": "follow up"});
@@ -709,6 +740,29 @@ mod tests {
         assert_eq!(old.grace, None);
         assert!(old.warn.is_empty());
         assert_eq!(old.deadline_notice_at, None);
+    }
+
+    #[test]
+    fn a_detached_run_owes_no_answer_and_survives_its_parent() {
+        let mut record = RunRecord::new(
+            WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        record.status = RunStatus::Completed;
+        assert!(record.owes_report());
+        assert!(!record.survives_parent());
+        record.keep = true;
+        assert!(record.survives_parent());
+        record.keep = false;
+        record.report_to = ReportTo::Nobody;
+        assert!(record.survives_parent());
+        assert!(!record.owes_report());
+        let claims = record.answer_claims().collect::<Vec<_>>();
+        assert_eq!(claims.len(), 1, "the answer is still there to join");
+        assert!(!claims[0].owed);
     }
 
     #[test]
