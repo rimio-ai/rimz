@@ -194,7 +194,7 @@ Bare `rimz subagents` and `list` are the same read-only command. Which children 
 | a user shell in a channel | every child in the current channel | `SUBAGENT`, `PARENT`, `CHANNEL`, `KIND`, `STATUS`, `RUN` |
 | a user shell with no current channel | every child in the room | the same six columns |
 
-`STATUS` is the child's live agent status and `RUN` its newest run's outcome; the description prints as a muted line under each row. Provider-native subagents, which run inside the parent's own process, are not listed.
+`STATUS` uses the displayed-status rules of [`rimz agents show`](./agents.md), and `RUN` is the newest run's outcome; the two are independent. A child whose turn stopped on a provider limit, a spend cap, or an overloaded provider reads `paused` while its run stays `running`: the run is still open, and it ends at its [deadline](#configure-the-deadline-ladder) unless the child resumes or the parent stops it. The description prints as a muted line under each row; for a child stopped on a provider error, that line is the provider's message instead (`Usage limit reached`), or the error class in words when the provider gave none. Provider-native subagents, which run inside the parent's own process, are not listed. Unlike `agents show`, `list` does not read provider markers for ended or already-failed children, so those rows retain their settled status rather than showing an old provider pause.
 
 A plain shell in the project directory has no current channel even when a team runs in place there, because an in-place team's `<directory>/<team>` lane is carried by its panes, not the directory. `list` from that shell shows every channel, and the `CHANNEL` column tells the lanes apart.
 
@@ -206,8 +206,9 @@ A plain shell in the project directory has no current channel even when a team r
 | `parent` | The parent's handle |
 | `channel` | The child's lane; omitted when it has none |
 | `kind` | Agent kind |
-| `status` | Live agent status |
+| `status` | Agent status, as `rimz agents --json` spells it |
 | `description` | Current one-line description; omitted when empty |
+| `turn_error` | The provider error that explains `status`, with the fields `rimz agents --json` uses: `class` (`paused_rate_limit`, `paused_spend_limit`, `paused_overloaded`, `unknown`, `failed`) and `label`, the provider's message or `null`; omitted when there is none |
 | `run_id`, `run_status` | Newest supervised run and its status; omitted when there is no run |
 
 ## Stop children

@@ -640,9 +640,32 @@ struct ChildReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    turn_error: Option<ChildTurnError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     run_status: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ChildTurnError {
+    class: rimz::agents::TurnErrorClass,
+    label: Option<String>,
+}
+
+impl ChildReport {
+    /// The muted line under a row: why the child stopped, else what it is doing.
+    fn detail(&self) -> Option<String> {
+        match &self.turn_error {
+            Some(error) => Some(
+                error
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| error.class.words().to_owned()),
+            ),
+            None => self.description.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -676,6 +699,10 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
             .remove(&(agent.kind.clone(), agent.agent_id.clone()))
             .unwrap_or_default();
     }
+    rimz::store::agent_context::attach_rest_certificates(
+        ctx.store.runtime_paths(),
+        audit.agents.iter_mut(),
+    );
     let caller_identity = rimz::harness::ancestry::resolve_caller(&audit.agents);
     let caller = caller_identity.as_ref().and_then(|identity| {
         rimz::harness::ancestry::resolve_launch_caller(&audit.agents, identity).ok()
@@ -700,7 +727,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     let mut table = render::Table::new(headers).max_width(render::terminal_columns(120));
     for child in reports {
         let detail = child
-            .description
+            .detail()
             .map(|line| render::cell(line).fg(render::palette::muted()));
         let row = match scope {
             ListScope::Caller => vec![
@@ -758,8 +785,14 @@ fn child_reports(
                     }),
                 channel: child.channel(),
                 kind: child.kind.to_string(),
-                status: child.sleeping_over(child.status).as_str().to_owned(),
+                status: child.rowless_status().0.as_str().to_owned(),
                 description: child.activity_line(),
+                turn_error: child
+                    .displayed_turn_error()
+                    .map(|(class, error)| ChildTurnError {
+                        class,
+                        label: error.label.clone(),
+                    }),
                 run_id: run.map(|run| run.run_id.to_string()),
                 run_status: run.map(|run| run.status.as_str().to_owned()),
             }
