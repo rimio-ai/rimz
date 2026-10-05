@@ -564,3 +564,55 @@ fn live_launched_child_promotes_when_its_parent_has_no_row() {
         "promotion preserves pane addressing"
     );
 }
+
+#[test]
+fn seat_relaunched_from_its_leftover_shell_shows_before_the_first_turn() {
+    // The wrapper typed into the seat's shell is a child of the pane root, and
+    // its Bound event predates the provider CLI it execs into. The hosted
+    // lineage proves the tenancy the clocks cannot. The failed first launch
+    // still owns the root pid, and loses to the later relaunch.
+    let seat = |id: &str, status, pid: u32, active_ago: i64| {
+        let mut seat = agent("codex", id, status, 1)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(active_ago);
+        seat.launch_id = Some(seat.agent_id.clone());
+        seat.role = Some("coder".to_owned());
+        seat.team = Some("recon".to_owned());
+        seat.registered_at = Some(ago(active_ago + 2));
+        seat.pane.as_mut().expect("stamped pane").pane_pid = Some(pid);
+        seat.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            id,
+            pid,
+            None,
+        ));
+        seat
+    };
+    let failed = seat("launch_failed", AgentStatus::Failed, 84, 60);
+    let relaunched = seat("launch_relaunched", AgentStatus::Idle, 85, 10);
+    let live = PaneRef {
+        pane_pid: Some(84),
+        pane_process_start: Some(ago(5)),
+        hosted_agent_kind: Some(crate::ids::AgentKind::new_unchecked("codex")),
+        hosted_agent_process_start: Some(ago(5)),
+        hosted_agent_lineage: vec![85, 86],
+        ..pane("%1", "zsh", "/repo/main")
+    };
+
+    let snapshot = room(vec![failed, relaunched]).with_live_panes(vec![live], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "launch_relaunched");
+    let card = rows[0].as_agent().expect("agent card");
+    assert_eq!(card.handle.as_deref(), Some("coder"));
+    assert_eq!(card.team.as_deref(), Some("recon"));
+    assert_eq!(
+        snapshot
+            .pane_bound_roots()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["launch_relaunched"]
+    );
+}

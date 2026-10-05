@@ -441,11 +441,11 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     if !definition.capabilities.registers_lazily {
         return true;
     }
-    let stamp_owned_by_live_root = stamp_owned_by_live_pane_root(agent, stamped, pane);
-    if !stamp_owned_by_live_root && !pane_start_allows_bind(agent.last_activity, pane) {
+    let owner_lives_in_pane = owner_lives_in_live_pane(agent, pane);
+    if !owner_lives_in_pane && !pane_start_allows_bind(agent.last_activity, pane) {
         return false;
     }
-    if !stamp_owned_by_live_root
+    if !owner_lives_in_pane
         && pane
             .hosted_agent_process_start
             .is_some_and(|start| agent.last_activity < start)
@@ -472,29 +472,25 @@ fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: 
     }
 }
 
-/// Whether the card's owning agent process is still this pane's root. A resume
-/// wrapper records the same pid as both runtime owner and pane root, and that
-/// pid survives its exec into the provider. Hook-enriched stamps can carry the
-/// root pid too, but a shell-hosted agent's runtime owner is the child CLI, so
-/// it keeps the activity-clock guard below.
-fn stamp_owned_by_live_pane_root(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
-    let (Some(stamped_pid), Some(live_pid), Some(owner)) = (
-        stamped.pane_pid,
-        pane.pane_pid,
-        agent.runtime_owner.as_ref(),
-    ) else {
-        return false;
-    };
-    stamped_pid == live_pid
-        && owner.kind == crate::pane::RuntimeOwnerKind::Agent
-        && owner.subject_id == agent.agent_id.as_str()
-        && owner.pid == live_pid
+/// Whether the card's owning agent process is this pane's current tenant: the
+/// pane root, or a process on the single-child chain the producer walked from
+/// the root down to the hosted CLI. A launch wrapper records its own pid as
+/// runtime owner and that pid survives its exec into the provider, as the root
+/// when the mux spawned it and under the shell when it was typed into one. Its
+/// activity is recorded before that exec, so only lineage proves the tenancy;
+/// an owner off the chain keeps the activity-clock guards.
+fn owner_lives_in_live_pane(agent: &AgentState, pane: &PaneRef) -> bool {
+    agent.runtime_owner.as_ref().is_some_and(|owner| {
+        owner.kind == RuntimeOwnerKind::Agent
+            && owner.subject_id == agent.agent_id.as_str()
+            && (pane.pane_pid == Some(owner.pid) || pane.hosted_agent_lineage.contains(&owner.pid))
+    })
 }
 
 /// Defensive guard for exact-identity read-time binds: when the pane's process
 /// start is known, a session whose `last_activity` predates that start belongs
-/// to an older instance, not the process now in the pane. The cwd fallback has
-/// a stricter evidence gate and does not rely on this fail-open predicate.
+/// to an older instance, not the process now in the pane. Fail-open on an
+/// unknown start; the lazy cwd fallback adds its own evidence gate on top.
 fn pane_start_allows_bind(last_activity: Timestamp, pane: &PaneRef) -> bool {
     pane.pane_process_start
         .is_none_or(|start| last_activity >= start)
@@ -790,6 +786,44 @@ mod tests {
             agent.pane.as_ref().expect("stamped pane"),
             &live,
         ));
+    }
+
+    #[test]
+    fn shell_launched_lazy_stamp_binds_by_hosted_lineage_before_its_first_turn() {
+        for (label, lineage, binds) in [
+            ("owner on the hosted chain", vec![85, 86], true),
+            ("shell hosts another process", vec![91, 92], false),
+            ("no lineage published", Vec::new(), false),
+        ] {
+            let mut launched = agent("codex", "launch_relaunched", AgentStatus::Idle, 1)
+                .worktree("/repo/main")
+                .active_ago(10)
+                .in_pane("%4");
+            launched.pane.as_mut().expect("stamped pane").pane_pid = Some(85);
+            launched.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+                crate::pane::RuntimeOwnerKind::Agent,
+                "launch_relaunched",
+                85,
+                None,
+            ));
+            let live = PaneRef {
+                pane_id: PaneId::from_parts(MuxName::Tmux, "%4"),
+                pane_pid: Some(84),
+                pane_process_start: Some(ago(5)),
+                hosted_agent_kind: Some(AgentKind::new_unchecked("codex")),
+                hosted_agent_process_start: Some(ago(5)),
+                hosted_agent_lineage: lineage,
+                ..pane_cmd("%4", "tab_0", "zsh", None)
+            };
+            let agents = [launched];
+
+            let bound = PaneBindingIndex::new(&agents).stamped_agent(&live);
+            assert_eq!(
+                bound.map(|agent| agent.agent_id.as_str()),
+                binds.then_some("launch_relaunched"),
+                "{label}"
+            );
+        }
     }
 
     #[test]
