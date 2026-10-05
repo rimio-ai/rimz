@@ -101,8 +101,8 @@ fn resolve_limit(task: &str, raw_override: Option<&str>) -> Result<Option<Durati
 fn task_budget(task: &str) -> Option<Duration> {
     match task {
         "sandbox" | "screenshot" => None,
-        "ci" | "checks" | "lint" | "test" | "test-archive" | "coverage" | "perf" | "semver"
-        | "dist" | "install" | "install-dev" | "install-system" | "stage-install"
+        "ci" | "checks" | "lint" | "test" | "stress" | "test-archive" | "coverage" | "perf"
+        | "semver" | "dist" | "install" | "install-dev" | "install-system" | "stage-install"
         | "profile-build" => Some(LONG_BUDGET),
         _ => Some(DEFAULT_BUDGET),
     }
@@ -152,6 +152,7 @@ mod tests {
         assert_eq!(task_budget("docs-links"), Some(DEFAULT_BUDGET));
         assert_eq!(task_budget("ci"), Some(LONG_BUDGET));
         assert_eq!(task_budget("coverage"), Some(LONG_BUDGET));
+        assert_eq!(task_budget("stress"), Some(LONG_BUDGET));
     }
 
     #[test]

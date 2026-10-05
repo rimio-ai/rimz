@@ -241,7 +241,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ## Contributor command surface
 
-`cargo xtask <task>` is the entry point for contributor automation; new automation lands in `xtask/`, and the only tracked hook script is `.githooks/pre-commit`, which routes back to it. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `install-system`, `stage-install`, `dist`, `brew-formula`, `profile-build`, `hooks`, `fmt`, `lint`, `check`, `test`, `test-archive`, `deps`, `deny`, `vet`, `semver`, `externals`, `coverage`, `perf`, `atlas`, `invariants`, `docs-links`, `doc`, `gate`, `checks`, `ci`, `pricing-refresh`, `theme-refresh`, `screenshot`.
+`cargo xtask <task>` is the entry point for contributor automation; new automation lands in `xtask/`, and the only tracked hook script is `.githooks/pre-commit`, which routes back to it. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `install-system`, `stage-install`, `dist`, `brew-formula`, `profile-build`, `hooks`, `fmt`, `lint`, `check`, `test`, `stress`, `test-archive`, `deps`, `deny`, `vet`, `semver`, `externals`, `coverage`, `perf`, `atlas`, `invariants`, `docs-links`, `doc`, `gate`, `checks`, `ci`, `pricing-refresh`, `theme-refresh`, `screenshot`.
 
 Four deserve a note:
 

@@ -20,6 +20,7 @@ mod sccache;
 mod screenshot;
 mod source_files;
 mod spinner;
+mod stress;
 mod theme;
 
 #[cfg(test)]
@@ -116,6 +117,11 @@ const TASKS: &[TaskInfo] = &[
         name: "test",
         summary: "Run nextest filters, batch exact --name selections, or discover tests with --list.",
         runs: "cargo nextest run --workspace --all-features --locked [--name <test>]... [nextest filter]...; --list uses cargo nextest list; --deny-skips fails a run whose self-skip reason .config/allowed-test-skips.txt does not list",
+    },
+    TaskInfo {
+        name: "stress",
+        summary: "Loop one test's own binary under CPU load and count the failing copies.",
+        runs: "cargo xtask stress <test> [--copies N] [--jobs N] [--hogs N] [--env KEY=VALUE]... [--out DIR]: build and locate the binary of the one test <test> names (as `test --name` takes it), then run --copies (400) of `<binary> --exact <test> --test-threads=1`, --jobs (2 x CPUs) at a time, in the test sandbox while --hogs (one per CPU) busy processes hold the CPUs; print the load average before and after and `failed: K/N`, keep each failing copy's output and summary.txt under --out (a fresh temp directory), and exit non-zero when a copy failed",
     },
     TaskInfo {
         name: "test-archive",
@@ -225,6 +231,7 @@ fn main() -> Result<()> {
     if sandbox::run_reaper_mode(&args)? {
         return Ok(());
     }
+    stress::run_hog_mode(&args);
     match parse_args(&args)? {
         Action::Run { task, args } => {
             let root = runner::workspace_root()?;
@@ -293,6 +300,7 @@ fn task_accepts_args(task: &str) -> bool {
     matches!(
         task,
         "test"
+            | "stress"
             | "prune"
             | "install-system"
             | "test-archive"
@@ -357,6 +365,7 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "lint" => gates::fmt(root).and_then(|()| gates::lint_all_features(root)),
         "check" => gates::check(root),
         "test" => gates::test(root, args),
+        "stress" => stress::run(root, args),
         "test-archive" => gates::test_archive(root, args),
         "sandbox" => sandbox::run(root, args),
         "deny" => gates::deny(root),
