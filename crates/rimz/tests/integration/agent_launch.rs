@@ -3898,6 +3898,7 @@ fn an_in_place_launch_keeps_its_wrapper_and_relaunches_a_startup_death() {
     let output = env
         .rimz()
         .args(exec_args(&env, &request))
+        .env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]))
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_STARTUP_DEATHS", "1")
         .bounded_output()
@@ -3990,6 +3991,7 @@ fn interrupt_the_startup_relaunch_wait(
     let mut wrapper = env.rimz();
     wrapper
         .args(exec_args(env, request))
+        .env("SHELL", write_fake_login_shell(env, "rimz-test-sh", &[]))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
@@ -4248,6 +4250,7 @@ fn ctrl_c_cancels_the_relaunch_wait_after_a_startup_death_left_the_terminal_raw(
     env.pin_pty_command(&mut cmd);
     cmd.args(exec_args(&env, &request));
     cmd.cwd(env.project_root.as_os_str());
+    cmd.env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]));
     cmd.env("PATH", path_with_front(&shim_dir));
     cmd.env("RIMZ_TEST_STARTUP_STTY", "1");
     let mut wrapper = pair.slave.spawn_command(cmd).expect("spawn exec wrapper");
