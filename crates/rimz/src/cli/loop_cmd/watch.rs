@@ -58,15 +58,19 @@ fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: b
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&rimz::disk::paths::logs_dir(), &now_zoned, project_root);
     let context = ListRowContext { stats: &stats, now };
-    let groups = grouped_tasks(catalog.visible(), &arming_entries, &now_zoned)
+    let groups = grouped_tasks(catalog.visible(), project_root, &arming_entries, &now_zoned)
         .into_iter()
         .map(|group| WatchGroup {
             root: group.root,
             room_is_open: group.room_is_open,
             rows: group
                 .tasks
-                .into_iter()
-                .map(|task| watch_row_model(&task, &context))
+                .iter()
+                .map(|task| watch_row_model(task, &context))
+                .chain(group.rowless.iter().map(|(name, holder)| {
+                    let next_text = render::running_text(*holder, now);
+                    watch_row(name, RowState::Running, None, next_text, &context)
+                }))
                 .collect(),
         })
         .collect::<Vec<_>>();
@@ -203,7 +207,19 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
     } else {
         row_state_for_timing(&task.timing)
     };
-    let (glyph, glyph_style, failed, last_text, status_text) = context.stats.get(task.name).map_or(
+    let next_text = next_text(state, &task.timing, running.flatten(), context.now);
+    watch_row(task.name, state, next_ts, next_text, context)
+}
+
+/// A dashboard row: its state as given, its last-run columns from the name's history.
+fn watch_row(
+    name: &str,
+    state: RowState,
+    next_ts: Option<Timestamp>,
+    next_text: String,
+    context: &ListRowContext<'_>,
+) -> WatchRow {
+    let (glyph, glyph_style, failed, last_text, status_text) = context.stats.get(name).map_or(
         (
             "○",
             ui::palette::faint(),
@@ -224,13 +240,13 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
     );
 
     WatchRow {
-        name: task.name.to_owned(),
+        name: name.to_owned(),
         glyph,
         glyph_style,
         state,
         failed,
         next_ts,
-        next_text: next_text(state, &task.timing, running.flatten(), context.now),
+        next_text,
         last_text,
         status_text,
     }
