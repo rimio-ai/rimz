@@ -5798,7 +5798,7 @@ fn loop_stop_without_active_run_reports_no_active_run() {
 
 #[cfg(unix)]
 #[test]
-fn terminal_check_runs_interactive_shell_before_its_timeout() {
+fn terminal_check_runs_interactive_shell_to_completion() {
     if which::which("bash").is_err() {
         crate::common::skip("bash not on PATH");
         return;
