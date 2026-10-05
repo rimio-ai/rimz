@@ -251,10 +251,18 @@ impl CodexAppServer<WsTransport> {
     /// reap every daemon-mode session. `None` when no daemon control socket exists
     /// or it does not speak the current WebSocket control protocol — the liveness
     /// caller reads that as "unknown, keep all", never as "zero loaded". Used
-    /// only by the sidebar cache refresher's TTL-gated ghost reap.
+    /// by the sidebar cache refresher's TTL-gated ghost reap.
     pub(crate) fn connect_daemon(login_env: &BTreeMap<String, String>) -> Option<Self> {
-        let socket = daemon_socket(login_env).filter(|path| path.exists())?;
-        let transport = WsTransport::connect(&socket, DAEMON_PROBE_DEADLINE).ok()?;
+        Self::connect_daemon_at(&daemon_socket(login_env)?)
+    }
+
+    /// [`Self::connect_daemon`] on one named control socket, for the
+    /// account-link gate, which asks the socket under the account home.
+    fn connect_daemon_at(socket: &Path) -> Option<Self> {
+        if !socket.exists() {
+            return None;
+        }
+        let transport = WsTransport::connect(socket, DAEMON_PROBE_DEADLINE).ok()?;
         let mut client = Self::new(transport);
         client.handshake().ok()?;
         Some(client)

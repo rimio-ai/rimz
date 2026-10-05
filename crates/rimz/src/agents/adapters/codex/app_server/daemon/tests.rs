@@ -350,8 +350,6 @@ fn an_app_server_runs_under_a_home_only_while_its_recorded_process_lives() {
     let started = start_time(pid);
     write_app_record(home, &record(&started));
     assert!(app_server_runs_under(home), "live process, true start time");
-    let env = BTreeMap::from([("CODEX_HOME".to_owned(), home.display().to_string())]);
-    assert!(writes_history(&env));
     // The updater's record alone names no writer.
     let other = tempfile::tempdir().expect("tempdir");
     let state_dir = other.path().join("app-server-daemon");
@@ -368,4 +366,133 @@ fn an_app_server_runs_under_a_home_only_while_its_recorded_process_lives() {
     }
     process.wait().expect("wait");
     assert!(!app_server_runs_under(home), "dead pid");
+}
+
+/// A stand-in daemon on the control socket under `home`: it completes the
+/// handshake and answers `thread/loaded/list` with the current `reply`.
+struct StandInDaemon {
+    reply: std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
+    connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl StandInDaemon {
+    fn serve(home: &Path, reply: serde_json::Value) -> Self {
+        use std::sync::atomic::Ordering;
+        use tungstenite::Message;
+
+        let socket = control_socket(home);
+        std::fs::create_dir_all(socket.parent().expect("parent")).expect("mkdir");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind");
+        let daemon = Self {
+            reply: std::sync::Arc::new(std::sync::Mutex::new(reply)),
+            connections: std::sync::Arc::default(),
+        };
+        let (reply, connections) = (daemon.reply.clone(), daemon.connections.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                connections.fetch_add(1, Ordering::SeqCst);
+                let Ok(mut peer) = tungstenite::accept(stream.expect("accept")) else {
+                    continue;
+                };
+                while let Ok(Message::Text(frame)) = peer.read() {
+                    let request: serde_json::Value =
+                        serde_json::from_str(&frame).expect("a JSON-RPC frame");
+                    let result = match request["method"].as_str() {
+                        Some("initialize") => serde_json::json!({"userAgent": "codex/0.154.0"}),
+                        Some("thread/loaded/list") => reply.lock().expect("reply").clone(),
+                        _ => continue,
+                    };
+                    let response = serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": result});
+                    if peer
+                        .send(Message::Text(response.to_string().into()))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+        daemon
+    }
+
+    fn answer(&self, reply: serde_json::Value) {
+        *self.reply.lock().expect("reply") = reply;
+    }
+
+    fn connections(&self) -> usize {
+        self.connections.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_live_daemon_answers_with_the_threads_its_own_socket_lists() {
+    use serde_json::json;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let mut process = Command::new("sleep").arg("60").spawn().expect("spawn");
+    let pid = process.id();
+    let record = |start: &str| format!(r#"{{"pid":{pid},"processStartTime":"{start}"}}"#);
+    let started = start_time(pid);
+    write_app_record(home, &record(&started));
+    let live = |count| DaemonSessions::Live(std::num::NonZeroUsize::new(count).expect("nonzero"));
+    let env = |extra: &[(&str, &str)]| -> BTreeMap<String, String> {
+        extra
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .chain([("CODEX_HOME".to_owned(), home.display().to_string())])
+            .collect()
+    };
+
+    assert_eq!(sessions_under(home), DaemonSessions::Unknown, "no socket");
+
+    let daemon = StandInDaemon::serve(home, json!({"data": []}));
+    assert_eq!(sessions_under(home), DaemonSessions::Clear, "empty set");
+    assert_eq!(daemon.connections(), 1);
+    daemon.answer(json!({"data": ["thread-a"], "nextCursor": "next"}));
+    assert_eq!(
+        sessions_under(home),
+        DaemonSessions::Unknown,
+        "endless pages"
+    );
+    daemon.answer(json!({"data": ["thread-a", "thread-b"]}));
+    assert_eq!(sessions_under(home), live(2));
+    daemon.answer(json!({}));
+    assert_eq!(sessions_under(home), DaemonSessions::Unknown, "wire drift");
+
+    // Another account's daemon, reachable through the socket override, never
+    // answers for this home.
+    let other = tempfile::tempdir().expect("tempdir");
+    let elsewhere = StandInDaemon::serve(other.path(), json!({"data": ["thread-c"]}));
+    let override_path = control_socket(other.path()).display().to_string();
+    daemon.answer(json!({"data": []}));
+    for sock in [override_path.as_str(), ""] {
+        let env = env(&[("RIMZ_CODEX_APP_SERVER_SOCK", sock)]);
+        assert_eq!(writes_history(&env), DaemonSessions::Clear, "{sock:?}");
+    }
+    daemon.answer(json!({"data": ["thread-a"]}));
+    assert_eq!(
+        writes_history(&env(&[("RIMZ_CODEX_APP_SERVER_SOCK", "")])),
+        live(1)
+    );
+    assert_eq!(elsewhere.connections(), 0);
+
+    // Without a confirmed process no socket is opened, whatever it would say.
+    let asked = daemon.connections();
+    write_app_record(home, &record("Thu Jan  1 00:00:00 1970"));
+    assert_eq!(sessions_under(home), DaemonSessions::Clear, "start time");
+    std::fs::remove_file(home.join("app-server-daemon/app-server.pid")).expect("remove");
+    assert_eq!(sessions_under(home), DaemonSessions::Clear, "no record");
+    write_app_record(home, &record(&started));
+    process.kill().expect("kill");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app_server_runs_under(home) {
+        assert!(Instant::now() < deadline, "zombie");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(sessions_under(home), DaemonSessions::Clear, "zombie");
+    process.wait().expect("wait");
+    assert_eq!(sessions_under(home), DaemonSessions::Clear, "dead pid");
+    assert_eq!(daemon.connections(), asked);
 }

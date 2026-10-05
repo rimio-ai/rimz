@@ -43,16 +43,16 @@ impl Fixture {
     }
 
     fn run_with(&self, shared: bool, agents: Option<usize>) -> Result<ShareReport, ShareErr> {
-        self.run_under(shared, agents, false)
+        self.run_under(shared, agents, DaemonSessions::Clear)
     }
 
-    /// A reconcile with `daemon` answering whether a history-writing daemon
-    /// runs under the account home.
+    /// A reconcile with `daemon` answering for the live sessions a daemon
+    /// holds under the account home.
     fn run_under(
         &self,
         shared: bool,
         agents: Option<usize>,
-        daemon: bool,
+        daemon: DaemonSessions,
     ) -> Result<ShareReport, ShareErr> {
         reconcile_homes(
             &Homes {
@@ -538,7 +538,7 @@ fn same_home_through_symlink_refuses_without_changes() {
             default: &native,
             shared: true,
             lock: &temp.path().join("account.lock"),
-            daemon_writes: &|| false,
+            daemon_writes: &|| DaemonSessions::Clear,
         },
         &|| Some(0),
     )
@@ -889,8 +889,15 @@ fn contents(home: &Path) -> Vec<(PathBuf, String)> {
     found
 }
 
+fn live(sessions: usize) -> DaemonSessions {
+    DaemonSessions::Live(NonZeroUsize::new(sessions).unwrap())
+}
+
+const TOGGLE: &str =
+    "`rimz config set remote_control.codex false`, rerun, then set it back to `true`";
+
 #[test]
-fn a_live_daemon_refuses_a_directory_set_aside_and_leaves_the_home_as_it_was() {
+fn a_daemon_refuses_a_directory_set_aside_only_while_it_holds_or_hides_sessions() {
     let home = Fixture::new("codex");
     fs::create_dir_all(home.native.join("sessions")).unwrap();
     fs::create_dir_all(home.named.join("sessions/2026")).unwrap();
@@ -898,8 +905,9 @@ fn a_live_daemon_refuses_a_directory_set_aside_and_leaves_the_home_as_it_was() {
     fs::write(home.named.join("history.jsonl"), "account").unwrap();
     fs::write(home.native.join("history.jsonl"), "default").unwrap();
     let before = contents(&home.named);
+    let native = home.native.display();
 
-    let error = home.run_under(true, Some(0), true).unwrap_err();
+    let error = home.run_under(true, Some(0), live(2)).unwrap_err();
     assert!(
         matches!(&error, ShareErr::LiveDaemon { entry, .. } if entry == "sessions"),
         "{error}"
@@ -907,21 +915,33 @@ fn a_live_daemon_refuses_a_directory_set_aside_and_leaves_the_home_as_it_was() {
     assert_eq!(
         error.to_string(),
         format!(
-            "cannot share `sessions` of codex@work with {}: a remote-control daemon on the account writes to the copy in its home, which would move aside under it; stop it with `rimz config set remote_control.codex false`, rerun, then set it back to `true`, or set `history = \"standalone\"` under `[accounts.codex.work]`",
-            home.native.display()
+            "cannot share `sessions` of codex@work with {native}: the remote-control daemon on the account holds 2 live session(s) that write to the copy in its home, which would move aside under them; close them in the remote client and rerun once the daemon has unloaded them, or stop the daemon with {TOGGLE}, or set `history = \"standalone\"` under `[accounts.codex.work]`"
+        )
+    );
+    let error = home
+        .run_under(true, Some(0), DaemonSessions::Unknown)
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "cannot share `sessions` of codex@work with {native}: the remote-control daemon on the account did not report its sessions, so it may write to the copy in its home, which would move aside under it; stop it with {TOGGLE}, or set `history = \"standalone\"` under `[accounts.codex.work]`"
         )
     );
     assert_eq!(contents(&home.named), before);
 
-    // Agents are asked first, so their refusal stands under a daemon too.
+    // Agents are asked first, so their refusal stands under any daemon answer.
     for agents in [Some(1), None] {
-        let error = home.run_under(true, agents, true).unwrap_err();
-        assert!(matches!(error, ShareErr::LiveAgents { .. }), "{error}");
+        for daemon in [DaemonSessions::Clear, live(1), DaemonSessions::Unknown] {
+            let error = home.run_under(true, agents, daemon).unwrap_err();
+            assert!(matches!(error, ShareErr::LiveAgents { .. }), "{error}");
+        }
     }
     assert_eq!(contents(&home.named), before);
 
-    // The recorded process gone, the directory moves.
-    let report = home.run_under(true, Some(0), false).unwrap();
+    // A daemon that holds no session does not block the move.
+    let report = home
+        .run_under(true, Some(0), DaemonSessions::Clear)
+        .unwrap();
     assert!(
         report
             .set_aside
@@ -930,34 +950,51 @@ fn a_live_daemon_refuses_a_directory_set_aside_and_leaves_the_home_as_it_was() {
 }
 
 #[test]
-fn a_live_daemon_refuses_the_unlink_of_a_directory_and_leaves_the_link() {
+fn a_daemon_refuses_the_unlink_of_a_directory_only_while_it_holds_or_hides_sessions() {
     let home = Fixture::new("codex");
     fs::create_dir_all(home.native.join("sessions")).unwrap();
     fs::write(home.native.join("history.jsonl"), "typed").unwrap();
     home.run(true);
     let before = contents(&home.named);
+    let native = home.native.display();
 
-    let error = home.run_under(false, Some(0), true).unwrap_err();
-    assert!(
-        matches!(&error, ShareErr::LiveDaemonUnlink { .. }),
-        "{error}"
+    let error = home.run_under(false, Some(0), live(1)).unwrap_err();
+    let ShareErr::LiveDaemonUnlink { entry, .. } = &error else {
+        panic!("{error}");
+    };
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "cannot unlink `{entry}` of codex@work from {native}: the remote-control daemon on the account holds 1 live session(s) that write through that link, which would be removed under them; close them in the remote client and rerun once the daemon has unloaded them, or stop the daemon with {TOGGLE}, or remove `history = \"standalone\"` from `[accounts.codex.work]`"
+        )
     );
-    let text = error.to_string();
-    assert!(text.contains("cannot unlink `"), "{text}");
-    assert!(
-        text.contains(&format!("of codex@work from {}: a remote-control daemon on the account writes through that link, which would be removed under it; stop it with `rimz config set remote_control.codex false`, rerun, then set it back to `true`, or remove `history = \"standalone\"` from `[accounts.codex.work]`", home.native.display())),
-        "{text}"
+    let error = home
+        .run_under(false, Some(0), DaemonSessions::Unknown)
+        .unwrap_err();
+    let ShareErr::LiveDaemonUnlink { entry, .. } = &error else {
+        panic!("{error}");
+    };
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "cannot unlink `{entry}` of codex@work from {native}: the remote-control daemon on the account did not report its sessions, so it may write through that link, which would be removed under it; stop it with {TOGGLE}, or remove `history = \"standalone\"` from `[accounts.codex.work]`"
+        )
     );
     assert_eq!(contents(&home.named), before);
-    let error = home.run_under(false, Some(1), true).unwrap_err();
-    assert!(
-        matches!(error, ShareErr::LiveAgentsUnlink { .. }),
-        "{error}"
-    );
+    for agents in [Some(1), None] {
+        for daemon in [DaemonSessions::Clear, live(1), DaemonSessions::Unknown] {
+            let error = home.run_under(false, agents, daemon).unwrap_err();
+            assert!(
+                matches!(error, ShareErr::LiveAgentsUnlink { .. }),
+                "{error}"
+            );
+        }
+    }
+    assert_eq!(contents(&home.named), before);
 
     assert!(
         !home
-            .run_under(false, Some(0), false)
+            .run_under(false, Some(0), DaemonSessions::Clear)
             .unwrap()
             .unlinked
             .is_empty()

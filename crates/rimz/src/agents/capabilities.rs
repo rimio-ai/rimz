@@ -1031,10 +1031,15 @@ pub trait RuntimeControlCapability: CoreCapability {
         None
     }
 
-    /// Whether a provider daemon that writes session history runs under this
-    /// login's home. Read-only: it starts nothing and signals nothing.
-    fn runtime_control_writes_history(&self, _login_env: &BTreeMap<String, String>) -> bool {
-        false
+    /// The live sessions a provider daemon holds under this login's home,
+    /// each a writer of that home's session history. A daemon that holds none
+    /// is clear, and one that runs without reporting them is unknown.
+    /// Read-only: it starts nothing and signals nothing.
+    fn runtime_control_writes_history(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> runtime_control::DaemonSessions {
+        runtime_control::DaemonSessions::Clear
     }
 }
 

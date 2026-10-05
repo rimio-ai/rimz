@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -14,6 +15,7 @@ use serde::Deserialize;
 
 use super::super::CodexAdapter;
 use crate::agents::capabilities::LaunchCapability;
+use crate::agents::runtime_control::DaemonSessions;
 
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const PID_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -114,13 +116,29 @@ pub fn updater_skew(login_env: &BTreeMap<String, String>) -> Option<UpdaterSkew>
     updater_skew_under(&home)
 }
 
-/// Whether the app-server Codex recorded under this login's home is running:
-/// the process that appends the account's history by path. Read-only, and a
-/// record whose process cannot be confirmed answers no.
-pub fn writes_history(login_env: &BTreeMap<String, String>) -> bool {
+/// The threads the app-server Codex recorded under this login's home holds
+/// loaded: the sessions whose history it appends by path. Read-only. A record
+/// whose process cannot be confirmed is clear, and no socket is opened for it.
+pub fn writes_history(login_env: &BTreeMap<String, String>) -> DaemonSessions {
     CodexAdapter
         .config_home(login_env)
-        .is_some_and(|home| app_server_runs_under(&home))
+        .map_or(DaemonSessions::Clear, |home| sessions_under(&home))
+}
+
+/// Asks the control socket under `home` alone: the socket override of the
+/// login env could name another account's daemon.
+fn sessions_under(home: &Path) -> DaemonSessions {
+    if !app_server_runs_under(home) {
+        return DaemonSessions::Clear;
+    }
+    let loaded = super::CodexAppServer::connect_daemon_at(&control_socket(home))
+        .and_then(|mut client| client.loaded_threads().ok());
+    match loaded {
+        None => DaemonSessions::Unknown,
+        Some(ids) => {
+            NonZeroUsize::new(ids.len()).map_or(DaemonSessions::Clear, DaemonSessions::Live)
+        }
+    }
 }
 
 fn app_server_runs_under(home: &Path) -> bool {

@@ -29,6 +29,18 @@ impl RuntimeControlLiveness {
     }
 }
 
+/// What a provider daemon under one login's home holds that writes that
+/// home's session history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DaemonSessions {
+    /// No daemon writes history under the home: none runs, or it holds none.
+    Clear,
+    /// The daemon under the home holds this many live sessions.
+    Live(std::num::NonZeroUsize),
+    /// A daemon runs under the home and its sessions could not be read.
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeControlIssue {
     kind: &'static str,
@@ -124,11 +136,12 @@ pub(crate) fn updater_advisory(kind: &str, login_env: &BTreeMap<String, String>)
     super::find_definition(kind)?.runtime_control_advisory(login_env)
 }
 
-/// Whether a daemon of `kind` that writes session history runs under this
-/// login's home.
-pub(crate) fn writes_history(kind: &str, login_env: &BTreeMap<String, String>) -> bool {
-    super::find_definition(kind)
-        .is_some_and(|definition| definition.runtime_control_writes_history(login_env))
+/// The live sessions a daemon of `kind` holds under this login's home, each a
+/// writer of that home's history.
+pub(crate) fn writes_history(kind: &str, login_env: &BTreeMap<String, String>) -> DaemonSessions {
+    super::find_definition(kind).map_or(DaemonSessions::Clear, |definition| {
+        definition.runtime_control_writes_history(login_env)
+    })
 }
 
 pub(crate) fn wiring_input_path(
