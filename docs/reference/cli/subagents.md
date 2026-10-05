@@ -143,7 +143,7 @@ The report lists status and where each answer is, and asks for nothing: reading 
 | --- | --- |
 | Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; `background agent` replaces `subagent` when any row is a `-p --bg` run or a peer turn |
 | Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({size})`; `partial response:` for a timed-out child with text, or ending `, no response` |
-| Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled`. A child whose CLI exited nonzero before opening a session is launched once more first, so `failed` then means the second launch died too, and the reason is its output |
+| Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled`. A child whose CLI exited nonzero before opening a session is relaunched first, three times by default (`[agents] startup-relaunches`), so `failed` then means the last launch died too, and the reason is its output |
 | `in` / `after` | `after` for a timed-out answer, `in` for every other status; elapsed time is compact (`4m12s`) and starts at that answer's turn, not the child's launch |
 | Reason | The last non-empty line of the answer's failure tail, for a status other than completed |
 | Task | The launch answer uses `--description`, falling back to the prompt. Follow-ups use the shortened first line of their own stored prompt, omitted when unknown. Peer turns use their own prompt preview |

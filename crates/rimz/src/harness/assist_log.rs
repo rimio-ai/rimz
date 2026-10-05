@@ -135,16 +135,22 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// A subagent whose provider exited before opening a session, and the
-    /// one relaunch the exec wrapper answered it with.
+    /// A fresh launch whose provider exited before opening a session, and one
+    /// relaunch the exec wrapper answered it with.
     LaunchRetry {
         kind: AgentKind,
         label: String,
-        run_id: crate::ids::RunId,
-        /// The first process's exit code; absent when a signal killed it.
+        /// The run every attempt shares; absent for a launch without one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<crate::ids::RunId>,
+        /// Which relaunch of the launch this is, from 1; lines written before
+        /// the cap carry none and were the only one.
+        #[serde(default = "first_attempt")]
+        attempt: u8,
+        /// The exited process's exit code; absent when a signal killed it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
-        /// Spawn to exit of the first process.
+        /// Spawn to exit of the exited process.
         startup_ms: u64,
         relaunched: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -260,6 +266,10 @@ pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<AssistRecord> 
     });
     records.sort_by_key(|record| record.at);
     records
+}
+
+const fn first_attempt() -> u8 {
+    1
 }
 
 fn append_to(state_root: &Path, record: &AssistRecord, max_bytes: u64) {
@@ -453,8 +463,11 @@ mod tests {
                 assist: Assist::LaunchRetry {
                     kind: AgentKind::new_unchecked("codex"),
                     label: "@otter".into(),
-                    run_id: crate::ids::RunId::parse("run_0123456789abcdef0123456789abcdef")
-                        .expect("run id"),
+                    run_id: Some(
+                        crate::ids::RunId::parse("run_0123456789abcdef0123456789abcdef")
+                            .expect("run id"),
+                    ),
+                    attempt: 2,
                     exit_code: None,
                     startup_ms: 17_250,
                     relaunched: false,
@@ -471,9 +484,26 @@ mod tests {
             "label": "@otter", "run_id": "run_0123456789abcdef0123456789abcdef",
             "exit_code": 1, "startup_ms": 17250, "relaunched": true
         });
-        let decoded = serde_json::from_value::<AssistRecord>(retried.clone());
-        assert!(decoded.is_ok(), "launch retry is an assist: {decoded:?}");
-        assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), retried);
+        let decoded = serde_json::from_value::<AssistRecord>(retried).expect("pre-cap line");
+        assert!(
+            matches!(
+                decoded.assist,
+                Assist::LaunchRetry {
+                    run_id: Some(_),
+                    attempt: 1,
+                    relaunched: true,
+                    ..
+                }
+            ),
+            "{decoded:?}"
+        );
+        let rootless = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "launch_retry", "kind": "codex",
+            "label": "@otter", "attempt": 3, "exit_code": 1, "startup_ms": 900,
+            "relaunched": true
+        });
+        let decoded: AssistRecord = serde_json::from_value(rootless.clone()).expect("no run");
+        assert_eq!(serde_json::to_value(decoded).unwrap(), rootless);
         let stopped = serde_json::json!({
             "at": "2026-06-02T12:00:00Z", "assist": "idle_stop", "kind": "claude",
             "agent_id": "session-1", "label": "@coder", "idle_secs": 200,

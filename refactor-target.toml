@@ -446,13 +446,13 @@ path = "crates/rimz/src/harness"
 # 679: `idle_stop::project_requests`, the enrich-time projection of pending idle stops onto their agents.
 # 680: `idle_stop::closing_with`, the cascade the idle-stop helper guards run by run before it stops.
 # `WhenExpr::reads_forge` replaces the CLI's hand copy of the forge condition keys (+1).
-# The exec wrapper's startup-relaunch decision and its `ProviderExit` input (+2).
+# The exec wrapper's startup-relaunch decision and `ProviderExit` (+2), plus `StartupRelaunch` and `StartupEvidence` (+2).
 # `RebirthPlan::settle` returns a `SeededRecovery` whose tabs a birth seeds and whose `confirm` settles each tab on its outcome, replacing `materialize` and `settle_live` (+3).
 # `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+2).
 # A limit-parked child run: the park predicate, notice text and helper request cross the producer/CLI seam, with the locked claim and its release in `run`.
 # The producer tick calls the park detector (+1).
 # The public park_notice module itself also crosses the harness/CLI boundary (+1).
-surface-budget = 697
+surface-budget = 699
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1058,9 +1058,9 @@ allowed-dependencies = [
 # Peer creation, lookup, failure and adapter gating, plus record_run_delivery for peer enrollment and subagent stamping, are shared with the CLI.
 # Team runs: the hook finds the leader's open run; the flip settles or reopens it per Done.
 # Verify settlement is one call (settle_verify, VerifyStep); its three transitions are private.
-# The exec wrapper asks one pure decision, over its `ProviderExit`, whether a startup death is relaunched (+2).
+# The exec wrapper asks one pure decision over `ProviderExit` (+2), with `StartupEvidence` and `StartupRelaunch` as input and answer (+2).
 # The park-notice helper claims one park per child activity through a locked CAS, and gives it back when queueing fails.
-surface-budget = 48
+surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

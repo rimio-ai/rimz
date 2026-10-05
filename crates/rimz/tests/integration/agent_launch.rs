@@ -16,7 +16,7 @@ use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, Ev
 #[cfg(unix)]
 use crate::common::{
     CommandTimeoutExt, Env, canonical, exec_args, path_with_front, write_env_dump_shim,
-    write_failing_agent_shim, write_fake_bash_shell, write_fake_login_shell,
+    write_fake_bash_shell, write_fake_login_shell,
 };
 
 #[cfg(unix)]
@@ -3727,16 +3727,37 @@ async fn exec_failed_definition_persists_detail_before_releasing_run_waiter() {
     )));
 }
 
+/// A `codex` that appends one line to `log` per session launch and exits 7
+/// before any hook; the wrapper's version probe is not a launch. Launches
+/// past `RIMZ_TEST_STARTUP_DEATHS`, when set, exit 0 instead. Each launch
+/// leaves its environment in `<log>.env`, and with `RIMZ_TEST_STARTUP_STTY`
+/// set a death first leaves the terminal raw, as a TUI killed mid-setup does.
 #[cfg(unix)]
-#[test]
-fn close_pane_exec_reports_startup_failure_before_dropping_to_shell() {
-    let env = Env::new();
-    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let shim_dir = write_failing_agent_shim(&env, "codex", 7);
-    let idle_shell_marker = env.home_root.join("idle-shell.marker");
-    let launch_id = "launch_startup_failure";
-    seed_provisional_agent_launch(&env, launch_id, "pruner");
+fn write_counting_dead_agent(env: &Env, log: &std::path::Path) -> std::path::PathBuf {
+    let dir = env.home_root.join("agent-bin");
+    crate::common::write_path_shim(
+        &dir,
+        "codex",
+        &format!(
+            "if [ \"${{1:-}}\" = --version ]; then echo 0.159.2; exit 0; fi\nprintf 'launch\\n' >> '{log}'\nenv > '{log}.env'\nif [ \"$(($(wc -l < '{log}')))\" -gt \"${{RIMZ_TEST_STARTUP_DEATHS:-99}}\" ]; then exit 0; fi\nif [ -n \"${{RIMZ_TEST_STARTUP_STTY:-}}\" ]; then stty raw -echo; fi\nexit 7",
+            log = log.display()
+        ),
+    );
+    dir
+}
 
+#[cfg(unix)]
+fn write_startup_relaunch_config(env: &Env, body: &str) {
+    let home = env.rimz_home();
+    std::fs::create_dir_all(&home).expect("mkdir rimz home");
+    std::fs::write(home.join("config.toml"), format!("[agents]\n{body}\n"))
+        .expect("write machine config");
+}
+
+/// A root launch that keeps its wrapper, with a provisional card and no run.
+#[cfg(unix)]
+fn startup_death_request(env: &Env, launch_id: &str) -> ExecRequest {
+    seed_provisional_agent_launch(env, launch_id, "pruner");
     let mut request = fresh_exec("codex", None);
     request.close_pane_on_exit = true;
     request.identity = ExecIdentity {
@@ -3749,6 +3770,39 @@ fn close_pane_exec_reports_startup_failure_before_dropping_to_shell() {
         },
         ..ExecIdentity::default()
     };
+    request
+}
+
+#[cfg(unix)]
+fn launch_retries(env: &Env) -> Vec<rimz::harness::assist_log::Assist> {
+    rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
+        .into_iter()
+        .map(|record| record.assist)
+        .filter(|assist| {
+            matches!(
+                assist,
+                rimz::harness::assist_log::Assist::LaunchRetry { .. }
+            )
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn launch_count(log: &std::path::Path) -> usize {
+    std::fs::read_to_string(log).map_or(0, |log| log.lines().count())
+}
+
+#[cfg(unix)]
+#[test]
+fn close_pane_exec_relaunches_a_startup_death_to_the_cap_then_reports_the_failure() {
+    let env = Env::new();
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    let idle_shell_marker = env.home_root.join("idle-shell.marker");
+    write_startup_relaunch_config(&env, "startup-relaunch-wait = \"0s\"");
+    let launch_id = "launch_startup_failure";
+    let request = startup_death_request(&env, launch_id);
     let output = env
         .rimz()
         .args(exec_args(&env, &request))
@@ -3763,14 +3817,492 @@ fn close_pane_exec_reports_startup_failure_before_dropping_to_shell() {
         std::fs::read_to_string(&idle_shell_marker).expect("idle shell marker"),
         "idle shell\n"
     );
+    assert_eq!(launch_count(&launch_log), 4, "one launch, three relaunches");
+    let retries = launch_retries(&env);
+    assert_eq!(retries.len(), 3, "{retries:?}");
+    for (retry, expected) in retries.iter().zip(1u8..) {
+        match retry {
+            rimz::harness::assist_log::Assist::LaunchRetry {
+                label,
+                run_id,
+                attempt,
+                exit_code,
+                relaunched,
+                ..
+            } => {
+                assert_eq!(label, "@pruner");
+                assert_eq!(*run_id, None);
+                assert_eq!(*attempt, expected);
+                assert_eq!(*exit_code, Some(7));
+                assert!(*relaunched);
+            }
+            other => panic!("expected a launch_retry assist: {other:?}"),
+        }
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
+    for attempt in 1..=3 {
+        let line = format!(
+            "codex exited with code 7 before its session opened; relaunching in 0s ({attempt} of 3, Ctrl-C cancels)"
+        );
+        assert!(stderr.contains(&line), "{stderr}");
+    }
+    assert!(
+        stderr.contains("codex died at startup 4 times; not relaunching it again"),
+        "{stderr}"
+    );
     assert!(stderr.contains("failed to start"), "{stderr}");
     assert!(stderr.contains("exit status: 7"), "{stderr}");
     assert!(stderr.contains("rimz agents trim.pruner"), "{stderr}");
+    assert!(env.store().read_events().expect("launch events").iter().any(|event| matches!(
+        event.kind(), EventKind::AgentLaunch(ref payload) if payload.state == AgentLaunchState::Failed && payload.agent_id == launch_id
+    )));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_zero_startup_relaunch_cap_settles_the_first_startup_death() {
+    let env = Env::new();
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    write_startup_relaunch_config(&env, "startup-relaunches = 0");
+    let request = startup_death_request(&env, "launch_no_relaunch");
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim_dir))
+        .bounded_output()
+        .expect("agents exec returns without waiting on non-tty stdin");
+
+    assert_eq!(launch_count(&launch_log), 1);
+    assert_eq!(launch_retries(&env), Vec::new());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("failed to start"), "{stderr}");
+    assert!(!stderr.contains("relaunching"), "{stderr}");
+    assert!(!stderr.contains("died at startup"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stop_signal_during_the_startup_relaunch_wait_cancels_the_relaunch() {
+    use nix::sys::signal::{Signal, kill};
+    use std::io::Read as _;
+
+    let env = Env::new();
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    write_startup_relaunch_config(&env, "startup-relaunch-wait = \"5m\"");
+    let request = startup_death_request(&env, "launch_stopped_wait");
+    let mut wrapper = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim_dir))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn exec wrapper");
+    let mut stderr = wrapper.stderr.take().expect("wrapper stderr");
+    let mut seen = String::new();
+    let mut byte = [0u8; 1];
+    while !seen.contains("relaunching in 5m (1 of 3, Ctrl-C cancels)") {
+        assert_eq!(
+            stderr.read(&mut byte).expect("read wrapper stderr"),
+            1,
+            "the wrapper exited before it announced its wait: {seen}"
+        );
+        seen.push(byte[0] as char);
+    }
+    kill(
+        nix::unistd::Pid::from_raw(i32::try_from(wrapper.id()).expect("test pid fits i32")),
+        Signal::SIGTERM,
+    )
+    .expect("signal the waiting wrapper");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while wrapper.try_wait().expect("poll wrapper").is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = wrapper.kill();
+            panic!("the wrapper kept waiting after its stop signal");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    stderr
+        .read_to_string(&mut seen)
+        .expect("drain wrapper stderr");
+
+    assert_eq!(launch_count(&launch_log), 1, "no second launch: {seen}");
+    assert_eq!(launch_retries(&env), Vec::new());
+    assert!(!seen.contains("died at startup"), "{seen}");
+}
+
+/// Spawns `request` behind a five-minute relaunch wait, runs `during` once the
+/// wait is announced, and returns the wrapper's stderr once it exits.
+#[cfg(unix)]
+fn interrupt_the_startup_relaunch_wait(
+    env: &Env,
+    request: &ExecRequest,
+    command: impl FnOnce(&mut std::process::Command),
+    during: impl FnOnce(),
+) -> String {
+    use std::io::Read as _;
+
+    write_startup_relaunch_config(env, "startup-relaunch-wait = \"5m\"");
+    let mut wrapper = env.rimz();
+    wrapper
+        .args(exec_args(env, request))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    command(&mut wrapper);
+    let mut wrapper = wrapper.spawn().expect("spawn exec wrapper");
+    let mut stderr = wrapper.stderr.take().expect("wrapper stderr");
+    let mut seen = String::new();
+    let mut byte = [0u8; 1];
+    while !seen.contains("relaunching in 5m") {
+        if stderr.read(&mut byte).expect("read wrapper stderr") == 0 {
+            let _ = wrapper.wait();
+            return seen;
+        }
+        seen.push(byte[0] as char);
+    }
+    during();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while wrapper.try_wait().expect("poll wrapper").is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = wrapper.kill();
+            panic!("the wrapper kept waiting to relaunch: {seen}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    stderr
+        .read_to_string(&mut seen)
+        .expect("drain wrapper stderr");
+    seen
+}
+
+/// A terminal run is read at the respawn decision: the wrapper relaunches
+/// nothing for a run settled while it waited.
+#[cfg(unix)]
+#[test]
+fn a_run_canceled_during_the_startup_relaunch_wait_is_not_relaunched() {
+    let env = Env::new();
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    let store = env.store();
+    let run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        rimz::agents::PermissionMode::Auto,
+        "prune".into(),
+        env.project_root.clone(),
+    );
+    rimz::harness::run::create(store.paths(), &run).expect("pending run");
+    let mut request = startup_death_request(&env, "launch_canceled_wait");
+    request.run_id = Some(run.run_id.clone());
+    let stderr = interrupt_the_startup_relaunch_wait(
+        &env,
+        &request,
+        |wrapper| {
+            wrapper.env("PATH", path_with_front(&shim_dir));
+        },
+        || {
+            rimz::harness::run::cancel_and_wake(&store, &run.run_id).expect("cancel the run");
+        },
+    );
+
+    assert!(stderr.contains("relaunching in 5m"), "{stderr}");
+    assert_eq!(launch_count(&launch_log), 1, "{stderr}");
+    assert_eq!(launch_retries(&env), Vec::new());
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .expect("run")
+            .status,
+        rimz::store::run::RunStatus::Canceled
+    );
+}
+
+/// A late first hook from the dead provider opens the session; the wrapper
+/// reads the registered card at the respawn decision and relaunches nothing.
+#[cfg(unix)]
+#[test]
+fn a_session_registered_during_the_startup_relaunch_wait_is_not_relaunched() {
+    let env = Env::new();
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    let launch_id = "launch_late_hook";
+    let request = startup_death_request(&env, launch_id);
+    let provider_env = launch_log.with_extension("log.env");
+    let stderr = interrupt_the_startup_relaunch_wait(
+        &env,
+        &request,
+        |wrapper| {
+            wrapper.env("PATH", path_with_front(&shim_dir));
+        },
+        || {
+            let mut hook = env.hook_command("codex");
+            for line in std::fs::read_to_string(&provider_env)
+                .expect("provider environment")
+                .lines()
+            {
+                if let Some((key, value)) = line.split_once('=')
+                    && key.starts_with("RIMZ_")
+                {
+                    hook.env(key, value);
+                }
+            }
+            let payload = serde_json::json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "sess-late-hook",
+                "cwd": env.project_root,
+            });
+            let fed = env
+                .spawn_payload(hook, &payload.to_string())
+                .wait_with_output()
+                .expect("feed the late hook");
+            assert!(
+                fed.status.success(),
+                "{}",
+                String::from_utf8_lossy(&fed.stderr)
+            );
+        },
+    );
+
+    assert!(stderr.contains("relaunching in 5m"), "{stderr}");
+    assert_eq!(launch_count(&launch_log), 1, "{stderr}");
+    assert_eq!(launch_retries(&env), Vec::new());
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    assert!(
+        !snapshot
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id.as_str() == launch_id),
+        "the late hook replaced the provisional card: {:#?}",
+        snapshot.agents
+    );
+}
+
+/// A subagent whose parent ends after a startup death is settled as a parent
+/// end, whether the wrapper sees it in the first-hook grace or in the wait.
+#[cfg(unix)]
+fn parent_end_after_a_startup_death(parent_ended_before_launch: bool) {
+    let env = Env::new();
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
+        .expect("zellij trace shim");
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let kind = AgentKind::new_unchecked("codex");
+    let parent = |hook, signal| {
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                &workspace.session_name,
+                "codex",
+                hook,
+                &AgentLifecycleObservation::new(Some("parent".into()), signal),
+            ))
+            .expect("parent lifecycle");
+    };
+    parent("SessionStart", LifecycleSignal::Registered);
+    let launch_id = "launch_orphaned_child";
+    seed_launch(
+        &env,
+        launch_id,
+        "otter",
+        LaunchParams {
+            parent_agent_id: Some("parent".into()),
+            parent_agent_kind: Some(kind.clone()),
+            launch_depth: Some(1),
+            ..LaunchParams::default()
+        },
+    );
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "inspect".into(),
+        env.project_root.clone(),
+    );
+    run.subagent = true;
+    rimz::harness::run::create(store.paths(), &run).expect("pending run");
+    let mut request = fresh_exec("codex", Some("inspect"));
+    request.run_id = Some(run.run_id.clone());
+    request.subagent = true;
+    request.exit_on_run_completion = true;
+    request.close_pane_on_exit = true;
+    request.identity.name = Some("otter".to_owned());
+    request.identity.launch_id = Some(launch_id.to_owned());
+    if parent_ended_before_launch {
+        parent("SessionEnd", LifecycleSignal::Ended);
+    }
+    let mux_log = env.home_root.join("mux.log");
+    let wrapper_env = |wrapper: &mut std::process::Command| {
+        wrapper
+            .args(["--mux", "zellij"])
+            .env("PATH", path_with_front(&shim_dir))
+            .env("ZELLIJ_PANE_ID", "4")
+            .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
+            .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+            // Slower than the provider's death, inside the first-hook grace.
+            .env("RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS", "250");
+    };
+    let stderr = interrupt_the_startup_relaunch_wait(&env, &request, wrapper_env, || {
+        parent("SessionEnd", LifecycleSignal::Ended);
+    });
+
+    assert_eq!(
+        stderr.contains("relaunching in 5m"),
+        !parent_ended_before_launch,
+        "{stderr}"
+    );
+    assert_eq!(launch_count(&launch_log), 1, "{stderr}");
+    assert_eq!(launch_retries(&env), Vec::new());
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .expect("run")
+            .status,
+        rimz::store::run::RunStatus::Canceled,
+        "{stderr}"
+    );
+    let mux = std::fs::read_to_string(&mux_log).unwrap_or_default();
+    assert!(mux.contains("close-pane"), "{mux}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_parent_ended_in_the_first_hook_grace_cancels_the_startup_relaunch() {
+    parent_end_after_a_startup_death(true);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_parent_ended_in_the_startup_relaunch_wait_cancels_the_relaunch() {
+    parent_end_after_a_startup_death(false);
+}
+
+/// A provider that dies with the terminal raw would turn Ctrl-C into a byte
+/// the wrapper never sees; the wrapper restores the modes the provider
+/// started from before it waits.
+#[cfg(unix)]
+#[test]
+fn ctrl_c_cancels_the_relaunch_wait_after_a_startup_death_left_the_terminal_raw() {
+    use nix::sys::termios::LocalFlags;
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::{Read as _, Write as _};
+
+    let env = Env::new();
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    write_startup_relaunch_config(&env, "startup-relaunch-wait = \"5m\"");
+    let request = startup_death_request(&env, "launch_raw_terminal");
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 200,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open pty");
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut cmd);
+    cmd.args(exec_args(&env, &request));
+    cmd.cwd(env.project_root.as_os_str());
+    cmd.env("PATH", path_with_front(&shim_dir));
+    cmd.env("RIMZ_TEST_STARTUP_STTY", "1");
+    let mut wrapper = pair.slave.spawn_command(cmd).expect("spawn exec wrapper");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("pty reader");
+    let (tx, output) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut byte = [0u8; 1];
+        while reader.read(&mut byte).is_ok_and(|read| read == 1) {
+            if tx.send(byte[0]).is_err() {
+                break;
+            }
+        }
+    });
+    let mut seen = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !seen.contains("relaunching in 5m") {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match output.recv_timeout(remaining) {
+            Ok(byte) => seen.push(byte as char),
+            Err(_) => panic!("the wrapper never announced its wait: {seen}"),
+        }
+    }
+    pair.master
+        .take_writer()
+        .expect("pty writer")
+        .write_all(b"\x03")
+        .expect("press Ctrl-C");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while wrapper.try_wait().expect("poll wrapper").is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = wrapper.kill();
+            panic!("Ctrl-C did not cancel the relaunch wait: {seen}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    while let Ok(byte) = output.recv_timeout(std::time::Duration::from_millis(200)) {
+        seen.push(byte as char);
+    }
+
+    assert_eq!(launch_count(&launch_log), 1, "{seen}");
+    assert_eq!(launch_retries(&env), Vec::new());
+    let tty = std::fs::File::open(pair.master.tty_name().expect("pty path")).expect("open pty");
+    let modes = nix::sys::termios::tcgetattr(&tty).expect("pty modes");
+    assert!(
+        modes
+            .local_flags
+            .contains(LocalFlags::ISIG | LocalFlags::ICANON | LocalFlags::ECHO),
+        "the shell gets a working terminal back: {:?}",
+        modes.local_flags
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unparseable_startup_relaunch_wait_refuses_the_launch() {
+    let env = Env::new();
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    write_startup_relaunch_config(&env, "startup-relaunch-wait = \"soon\"");
+    let request = startup_death_request(&env, "launch_bad_wait");
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("PATH", path_with_front(&shim_dir))
+        .bounded_output()
+        .expect("agents exec refuses");
+
+    assert!(!output.status.success());
+    assert_eq!(launch_count(&launch_log), 0);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("agents.startup-relaunch-wait"), "{stderr}");
+    assert!(stderr.contains("s/m/h/d"), "{stderr}");
 }
 
 #[cfg(unix)]
 fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
+    seed_launch(
+        env,
+        launch_id,
+        agent_name,
+        LaunchParams {
+            role: Some("pruner".to_owned()),
+            team: Some("trim".to_owned()),
+            kind_ordinal: Some(1),
+            ..LaunchParams::default()
+        },
+    );
+}
+
+#[cfg(unix)]
+fn seed_launch(env: &Env, launch_id: &str, agent_name: &str, launch: LaunchParams) {
     let workspace = env.resolve_workspace(&env.project_root);
     let kind = AgentKind::new_unchecked("codex");
     let event = EventEnvelope::agent_launched(
@@ -3782,20 +4314,7 @@ fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
             launch_id: None,
             agent_name: agent_name.to_owned(),
             agent_name_explicit: false,
-            launch: LaunchParams {
-                profile: None,
-                mode: None,
-                role: Some("pruner".to_owned()),
-                model: None,
-                effort: None,
-                budget: None,
-                team: Some("trim".to_owned()),
-                launch_group: None,
-                launch_ordinal: None,
-                channel: None,
-                kind_ordinal: Some(1),
-                ..LaunchParams::default()
-            },
+            launch,
             state: AgentLaunchState::Starting,
             run_id: None,
             pane_id: None,
