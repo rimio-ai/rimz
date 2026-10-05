@@ -1130,22 +1130,7 @@ type LostAgent = (rimz::ids::AgentKind, rimz::ids::AgentSessionId);
 fn seed_lost_tmux_agent(env: &Env) -> (LostAgent, std::ffi::OsString) {
     use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 
-    std::fs::write(
-        env.rimz_home().join("config.toml"),
-        "[agents]\nisolation = 'host'\n",
-    )
-    .expect("machine config");
-    let bin = env.home_root.join("recovery-bin");
-    std::fs::create_dir_all(&bin).expect("agent bin");
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '2.1.0'; exit 0; fi\nexec sleep 600\n",
-    )
-    .expect("claude shim");
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755))
-        .expect("chmod claude shim");
-
+    let agent_path = host_claude_path(env);
     let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     let worktree = env.project_root.join("alpha");
@@ -1177,7 +1162,27 @@ fn seed_lost_tmux_agent(env: &Env) -> (LostAgent, std::ffi::OsString) {
             &observation,
         ))
         .expect("register lost agent");
-    (lost, path_with_front(&bin))
+    (lost, agent_path)
+}
+
+/// Host-isolation machine config and a PATH whose `claude` sleeps until killed.
+fn host_claude_path(env: &Env) -> std::ffi::OsString {
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .expect("machine config");
+    let bin = env.home_root.join("recovery-bin");
+    std::fs::create_dir_all(&bin).expect("agent bin");
+    let claude = bin.join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '2.1.0'; exit 0; fi\nexec sleep 600\n",
+    )
+    .expect("claude shim");
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod claude shim");
+    path_with_front(&bin)
 }
 
 /// `agent_path` behind a `tmux` that runs `arms` (shell `case` arms over its
@@ -1434,8 +1439,8 @@ fn closing_an_agent_resumed_while_pending_ends_it() {
         String::from_utf8_lossy(&resumed.stderr)
     );
     // Each of alpha's attaches since the birth: the pane, the wrapper's pid,
-    // and the runtime owner's pid. The wrapper binds its own pid before it
-    // installs its signal handlers, then the provider's pid after the spawn.
+    // and the runtime owner's pid. The wrapper binds its own pid first, then
+    // the provider's pid after the spawn.
     let attaches = || {
         env.read_events()
             .into_iter()
@@ -1448,8 +1453,9 @@ fn closing_an_agent_resumed_while_pending_ends_it() {
             })
             .collect::<Vec<_>>()
     };
-    // The provider's attach proves the wrapper is supervising: a hangup before
-    // its handlers kills it without settling the exit.
+    // The wrapper's first attach takes alpha out of pending recovery only after
+    // its commit; the provider's attach follows that, so the close counts as
+    // deliberate.
     let supervising_pane = || {
         attaches()
             .into_iter()
@@ -1507,6 +1513,147 @@ fn closing_an_agent_resumed_while_pending_ends_it() {
         );
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+/// A supervising wrapper owes the store an end from its first pane binding:
+/// a pane closed right after the wrapper's own attach still settles through
+/// `rimz.agent-ended`, never left to the reaper's inference.
+#[test]
+fn closing_a_pane_at_its_wrappers_first_attach_ends_the_agent() {
+    use rimz::agents::LifecycleSignal;
+    use rimz::store::event::EventKind;
+
+    let Ok(tmux) = which::which("tmux") else {
+        crate::common::skip("tmux not on PATH");
+        return;
+    };
+    let env = Env::new();
+    // The launch runs the account check, which needs the hooks.
+    env.install_agent_hooks("claude");
+    let agent_path = host_claude_path(&env);
+    let birth = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .bounded_output()
+        .expect("run the birth");
+    assert!(
+        birth.status.success(),
+        "{}",
+        String::from_utf8_lossy(&birth.stderr)
+    );
+    let seeded = env.read_events().len();
+    let events = || {
+        env.read_events()
+            .iter()
+            .skip(seeded)
+            .map(|event| {
+                let (name, signal, agent, owner_pid) = match event.kind() {
+                    EventKind::AgentLifecycle(payload) => (
+                        payload.event_name,
+                        Some(payload.observation.signal),
+                        payload.observation.agent_id,
+                        payload.observation.runtime_owner.map(|owner| owner.pid),
+                    ),
+                    EventKind::AgentAttach(payload) => (
+                        None,
+                        None,
+                        Some(payload.agent_id),
+                        Some(payload.runtime_owner.pid),
+                    ),
+                    _ => (None, None, None, None),
+                };
+                format!(
+                    "{} {} event={name:?} signal={signal:?} agent={agent:?} owner_pid={owner_pid:?}",
+                    event.timestamp, event.method
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let launched = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .args(["--mux", "tmux", "agents", "claude"])
+        .bounded_output()
+        .expect("launch the agent");
+    assert!(
+        launched.status.success(),
+        "{}",
+        String::from_utf8_lossy(&launched.stderr)
+    );
+    // The wrapper's own attach: it names the wrapper as the pane's owner.
+    let wrapper_attach = || {
+        env.read_events()
+            .into_iter()
+            .skip(seeded)
+            .find_map(|event| match event.kind() {
+                EventKind::AgentAttach(payload)
+                    if payload.pane_pid == Some(payload.runtime_owner.pid) =>
+                {
+                    Some((payload.agent_id, payload.pane_id))
+                }
+                _ => None,
+            })
+    };
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let (agent, pane) = loop {
+        if let Some(attach) = wrapper_attach() {
+            break attach;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the wrapper never attached its pane; events since the birth:\n{}",
+            events()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    };
+
+    let socket = rimz::mux::tmux::managed_server_socket_path_under(&env.runtime_root);
+    let killed = std::process::Command::new(&tmux)
+        .arg("-S")
+        .arg(&socket)
+        .args(["kill-pane", "-t", pane.raw()])
+        .output()
+        .expect("run tmux kill-pane");
+    assert!(
+        killed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&killed.stderr)
+    );
+    let end = || {
+        env.read_events()
+            .into_iter()
+            .skip(seeded)
+            .find_map(|event| match event.kind() {
+                EventKind::AgentLifecycle(payload)
+                    if matches!(payload.observation.signal, LifecycleSignal::Ended)
+                        && payload.observation.agent_id.as_ref() == Some(&agent) =>
+                {
+                    Some(payload.event_name)
+                }
+                _ => None,
+            })
+    };
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let ended_by = loop {
+        if let Some(name) = end() {
+            break name;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "closing the pane at the wrapper's first attach never ended {agent}; events since the birth:\n{}",
+            events()
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(
+        ended_by.as_deref(),
+        Some("rimz.agent-ended"),
+        "the wrapper must settle its own end; events since the birth:\n{}",
+        events()
+    );
 }
 
 /// A birth holds the recovery lock until it has confirmed its resume windows,

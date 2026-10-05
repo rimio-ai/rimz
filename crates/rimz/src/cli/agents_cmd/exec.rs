@@ -199,6 +199,15 @@ fn launch_and_supervise(
         exec_agent_command(program, rest, &process.env, &process.unset)?;
         return Ok(());
     }
+    // A supervising wrapper owes the store an end from its first binding on,
+    // so a hangup after that binding must reach the settle path. A direct exec
+    // keeps the default dispositions its provider would see.
+    let exec_directly = should_exec_agent_directly(request, relaunch_cap);
+    if !exec_directly {
+        reset_cleanup_signal_flag();
+        install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
+        install_interrupt_signal_handler().context("installing interrupt signal handler")?;
+    }
     if let Some(context) = run_context {
         record_own_run_pane(context);
     }
@@ -253,12 +262,9 @@ fn launch_and_supervise(
     let (program, rest) = process.argv.split_first().ok_or_else(|| {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
     })?;
-    if should_exec_agent_directly(request, relaunch_cap) {
+    if exec_directly {
         return exec_agent_command(program, rest, &process.env, &process.unset);
     }
-    reset_cleanup_signal_flag();
-    install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
-    install_interrupt_signal_handler().context("installing interrupt signal handler")?;
     let mut command = Command::new(program);
     command.args(rest);
     command.envs(&process.env);
