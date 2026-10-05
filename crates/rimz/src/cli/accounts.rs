@@ -478,13 +478,15 @@ fn login_readings(
     let started_ms = rimz::utils::time::unix_now_ms();
     let mut accounts = query_provider_accounts(&runtime, &logins, false);
     // A cached logout rides the ten-minute TTL, so it is probed again on
-    // every run: a login made since the last list shows at once.
+    // every run: a login made since the last list shows at once. So is an
+    // older build's record that does not say which outcome it holds.
     let logged_out: Vec<ProviderLogin> = logins
         .iter()
         .filter(|login| {
             accounts.logins.get(&login.key()).is_some_and(|record| {
                 record.probed_at_ms < started_ms
-                    && ProviderStatus::from_record(Some(record)) == ProviderStatus::LoggedOut
+                    && (record.login_is_ambiguous()
+                        || ProviderStatus::from_record(Some(record)) == ProviderStatus::LoggedOut)
             })
         })
         .cloned()

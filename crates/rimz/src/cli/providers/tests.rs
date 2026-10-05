@@ -7,6 +7,7 @@ use rimz::store::snapshot::{RemoteControlBadge, SidebarProviderPanel};
 
 fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
     ProviderRecord {
+        login: None,
         probed_at_ms,
         ok,
         account,

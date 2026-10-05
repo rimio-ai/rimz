@@ -681,6 +681,86 @@ fn list_probes_a_logged_out_account_again_on_every_run() {
     assert_eq!(probes(), settled, "a logged-in record keeps the due rule");
 }
 
+#[cfg(unix)]
+#[test]
+fn list_reads_the_recorded_login_and_probes_an_ambiguous_record_again() {
+    let env = Env::new();
+    for name in ["out", "bare", "legacy"] {
+        succeeded(&accounts(&env, &["add", "claude", name]));
+    }
+    // Only `out` is logged out; a fresh probe of the others finds a login.
+    let log = env.home_root.join("claude-probes");
+    crate::common::write_path_shim(
+        &provider_bin(&env),
+        "claude",
+        &format!(
+            "case \"$*\" in\n  \"auth status\") echo \"$CLAUDE_CONFIG_DIR\" >> '{log}'\n    case \"$CLAUDE_CONFIG_DIR\" in\n      */out) /bin/echo '{{\"loggedIn\": false}}'; exit 1;;\n      *) /bin/echo '{{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}}';;\n    esac;;\n  *) echo 0.0.0;;\nesac",
+            log = log.display()
+        ),
+    );
+    // What a room's sidebar publishes while a Claude agent runs: every
+    // account keeps the CLI version, logged out or not.
+    let now_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let record = |login: Option<&str>| {
+        let mut record = json!({
+            "probed_at_ms": now_ms - 1_000,
+            "ok": true,
+            "account": {"version": "2.1.0"},
+        });
+        if let Some(login) = login {
+            record["login"] = json!(login);
+        }
+        record
+    };
+    let cache = env.rimz_home().join("cache/providers/accounts.json");
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    std::fs::write(
+        &cache,
+        json!({"logins": {
+            "claude@default": record(Some("logged_in")),
+            "claude@out": record(Some("logged_out")),
+            "claude@bare": record(Some("logged_in")),
+            "claude@legacy": record(None),
+        }})
+        .to_string(),
+    )
+    .unwrap();
+
+    let rows: Value =
+        serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
+    let status = |name: &str| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["kind"] == "claude" && row["name"] == name)
+            .unwrap_or_else(|| panic!("no claude {name} row: {rows}"))["status"]
+            .clone()
+    };
+    assert_eq!(status("out"), "logged_out", "{rows}");
+    assert_eq!(status("bare"), "ready", "{rows}");
+    assert_eq!(status("legacy"), "ready", "{rows}");
+    let probed = std::fs::read_to_string(&log).unwrap_or_default();
+    let mut probed: Vec<&str> = probed
+        .lines()
+        .map(|home| home.rsplit('/').next().unwrap())
+        .collect();
+    probed.sort_unstable();
+    assert_eq!(
+        probed,
+        ["legacy", "out"],
+        "the recorded logins keep the due rule"
+    );
+    let stored: Value = serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
+    assert_eq!(stored["logins"]["claude@legacy"]["login"], "logged_in");
+    assert_eq!(stored["logins"]["claude@out"]["login"], "logged_out");
+}
+
 #[test]
 fn a_history_entry_on_another_filesystem_stays_in_the_account_home_and_out_of_the_pool() {
     use std::os::unix::fs::MetadataExt;

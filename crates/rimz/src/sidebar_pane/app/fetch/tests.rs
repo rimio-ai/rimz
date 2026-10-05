@@ -217,6 +217,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
                 (
                     crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind)),
                     crate::agents::account::ProviderRecord {
+                        login: None,
                         probed_at_ms: now_ms,
                         ok: true,
                         account: None,

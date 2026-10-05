@@ -134,6 +134,7 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
         )
         .unwrap();
         let record = ProviderRecord {
+            login: None,
             probed_at_ms: 1,
             ok: true,
             account: None,
@@ -171,6 +172,40 @@ fn launch_availability_judges_the_pinned_account_not_the_rooms() {
             .unavailable("codex", "astra"),
         Some(TierSkipReason::LoggedOut)
     );
+
+    // A logout probed while the kind had a live agent keeps the CLI version;
+    // the recorded outcome, not the account's presence, is what skips it.
+    let version_only = |login| ProviderRecord {
+        login,
+        probed_at_ms: 1,
+        ok: true,
+        account: Some(crate::agents::AgentAccount {
+            version: Some("1.0.0".to_owned()),
+            ..Default::default()
+        }),
+    };
+    let skip = |record: ProviderRecord| {
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &runtime.shared_accounts_path(),
+            &AccountsCache {
+                logins: [(room.clone(), record)].into(),
+            },
+        )
+        .unwrap();
+        LaunchAvailability::read(&runtime, &state, &config, now).unavailable("codex", "astra")
+    };
+    use crate::agents::account::RecordedLogin;
+    assert_eq!(
+        skip(version_only(Some(RecordedLogin::LoggedOut))),
+        Some(TierSkipReason::LoggedOut)
+    );
+    for login in [Some(RecordedLogin::LoggedIn), None] {
+        assert_ne!(
+            skip(version_only(login)),
+            Some(TierSkipReason::LoggedOut),
+            "{login:?}"
+        );
+    }
 }
 
 #[test]
