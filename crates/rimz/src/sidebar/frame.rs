@@ -125,6 +125,11 @@ pub struct PaneProcess {
     pub hosted_agent_kind: Option<AgentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosted_agent_process_start: Option<Timestamp>,
+    /// Pids on the single-child chain strictly below the pane root, in order,
+    /// down to and including the hosted CLI. Empty when the root is itself the
+    /// CLI or no hosted agent is proven.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosted_agent_lineage: Vec<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_session_id: Option<AgentSessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,6 +216,7 @@ impl PaneFrame {
             pane_process_start: pane.current.started_at,
             hosted_agent_kind: pane.current.hosted_agent_kind.clone(),
             hosted_agent_process_start: pane.current.hosted_agent_process_start,
+            hosted_agent_lineage: pane.current.hosted_agent_lineage.clone(),
             resumed_session_id: pane.current.resumed_session_id.clone(),
             elevated_agent: pane.current.elevated_agent.clone(),
             first_seen_at_ms: pane.first_seen_at_ms,
@@ -422,6 +428,7 @@ pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame,
                 started_at: pane.pane_process_start,
                 hosted_agent_kind: pane.hosted_agent_kind,
                 hosted_agent_process_start: pane.hosted_agent_process_start,
+                hosted_agent_lineage: pane.hosted_agent_lineage,
                 resumed_session_id,
                 elevated_agent: pane.elevated_agent,
             },

@@ -27,6 +27,9 @@ pub struct HostedAgentProcess {
     pub pid: u32,
     pub started_at: jiff::Timestamp,
     pub cwd: Option<PathBuf>,
+    /// Pids on the chain strictly below the pane root, in order, ending at
+    /// [`Self::pid`]. Empty when the root is itself the CLI.
+    pub lineage: Vec<u32>,
 }
 
 /// Whether a mux foreground command is an elevation entrypoint. The producer
@@ -229,6 +232,7 @@ fn pane_agent_process_for_root_with(
     cwd: &dyn Fn(u32) -> Option<PathBuf>,
 ) -> Option<HostedAgentProcess> {
     let mut pid = root_pid;
+    let mut lineage = Vec::new();
     for _ in 0..=PANE_AGENT_DESCENT_DEPTH {
         let command = cmdline(pid)?;
         if let Some(kind) = classify(&command) {
@@ -237,6 +241,7 @@ fn pane_agent_process_for_root_with(
                 pid,
                 started_at: process_start(pid)?,
                 cwd: cwd(pid),
+                lineage,
             });
         }
         let children = children(pid);
@@ -244,6 +249,7 @@ fn pane_agent_process_for_root_with(
             return None;
         };
         pid = *child;
+        lineage.push(pid);
     }
     None
 }
@@ -396,6 +402,30 @@ mod tests {
             (found.pid, found.started_at, found.cwd),
             (20, start, Some(cwd))
         );
+        assert_eq!(found.lineage, [20]);
+    }
+
+    #[test]
+    fn hosted_agent_lineage_is_the_chain_below_the_root() {
+        let start = timestamp("2026-07-01T10:00:00Z");
+        let cases = [
+            (
+                chain([
+                    (10, "zsh"),
+                    (20, "bwrap --unshare-pid"),
+                    (30, "/bin/sh"),
+                    (40, "codex"),
+                ])
+                .live(40, start, None),
+                vec![20, 30, 40],
+            ),
+            (chain([(10, "codex")]).live(10, start, None), Vec::new()),
+        ];
+
+        for (fixture, expected) in cases {
+            let found = fixture.hosted_agent(10).expect("hosted CLI");
+            assert_eq!(found.lineage, expected);
+        }
     }
 
     #[test]

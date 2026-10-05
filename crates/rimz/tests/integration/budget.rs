@@ -409,6 +409,7 @@ fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
         pane_process_start: None,
         hosted_agent_kind: None,
         hosted_agent_process_start: None,
+        hosted_agent_lineage: Vec::new(),
         resumed_session_id: None,
         elevated_agent: None,
         first_seen_at_ms: None,

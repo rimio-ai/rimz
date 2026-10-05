@@ -19,7 +19,7 @@ The binding question is therefore one question: does a live local pane bind the 
 
 ## Recognizing a hosted CLI
 
-A multiplexer sometimes reports only a shared runtime basename such as `node` for a pane. The pane producer then walks one bounded chain from the pane root, following a single child at each step, and classifies each full command line through the adapter registry. The outermost proven known CLI supplies the hosted kind and its process start. A chain that is unreadable, branches, lacks a start time, exceeds the depth limit, or matches no adapter supplies nothing. This applies to every adapter, independent of `registers_lazily`, which governs only how an unstamped session is recovered.
+A multiplexer sometimes reports only a shared runtime basename such as `node` for a pane. The pane producer then walks one bounded chain from the pane root, following a single child at each step, and classifies each full command line through the adapter registry. The outermost proven known CLI supplies the hosted kind, its process start, and the lineage: the pids on the chain below the root, down to the CLI. A chain that is unreadable, branches, lacks a start time, exceeds the depth limit, or matches no adapter supplies nothing. This applies to every adapter, independent of `registers_lazily`, which governs only how an unstamped session is recovered.
 
 ## Before a session binds
 

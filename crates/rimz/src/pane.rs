@@ -224,6 +224,13 @@ pub struct PaneRef {
     /// Start time of [`Self::hosted_agent_kind`]'s in-pane CLI process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosted_agent_process_start: Option<Timestamp>,
+    /// Pids on the single-child chain strictly below this pane's root, in
+    /// order, down to and including the hosted CLI. Producer-derived; empty
+    /// when the root is itself the CLI or no hosted agent is proven. Stamped
+    /// lazy binding reads it to prove a session's owner process still lives in
+    /// this pane.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosted_agent_lineage: Vec<u32>,
     /// Session id parsed from a resumed agent command such as
     /// `codex resume <session-id>`. Exact rebirth binding reads this before any
     /// cwd or process-start heuristic.
@@ -262,6 +269,7 @@ impl PaneRef {
             pane_process_start: None,
             hosted_agent_kind: None,
             hosted_agent_process_start: None,
+            hosted_agent_lineage: Vec::new(),
             resumed_session_id: None,
             elevated_agent: None,
             first_seen_at_ms: None,
