@@ -581,8 +581,10 @@ fn roster_publication_rechecks_election_after_the_fetch() {
         "rebirth must not read the late non-producer's empty roster",
     );
 
-    // With no elder, the same empty observation is a genuine exit, not a race.
+    // With no elder and the session still listed, the same empty observation
+    // is a genuine exit, not a race.
     std::fs::remove_file(&elder_path).unwrap();
+    worker.session_listed = |_, _| true;
     worker.publish_snapshot(&fixture.state, empty(), &mut sink);
     assert!(
         crate::store::live_roster::read(&fixture.state.live_roster)
@@ -590,6 +592,89 @@ fn roster_publication_rechecks_election_after_the_fetch() {
             .agents
             .is_empty()
     );
+}
+
+#[test]
+fn roster_narrowing_needs_a_listed_session() {
+    let fixture = ConsumerFixture::new();
+    std::fs::remove_dir_all(&fixture.runtime.heartbeat_dir).unwrap();
+    let diag = crate::diag::DiagSink::under(
+        fixture._dir.path().to_path_buf(),
+        fixture.workspace_id.clone(),
+        "rimz-test",
+        None,
+    );
+    let mut worker = fixture.worker();
+    worker.diag = diag.clone();
+    let role = worker.observe_role();
+    assert!(role.is_producer());
+    let roster = |ids: &[&str]| -> std::collections::BTreeSet<(AgentKind, AgentSessionId)> {
+        ids.iter()
+            .map(|id| (AgentKind::new_unchecked("claude"), (*id).into()))
+            .collect()
+    };
+    let produced = |ids: &[&str]| {
+        let now = jiff::Timestamp::now();
+        let panes: Vec<_> = ids
+            .iter()
+            .map(|id| crate::sidebar::produce::test_support::pane(id, Some("claude"), None))
+            .collect();
+        let agents = ids
+            .iter()
+            .zip(&panes)
+            .map(|(id, pane)| crate::agents::AgentState {
+                status: crate::agents::AgentStatus::Running,
+                pane: Some(pane.clone()),
+                ..crate::testkit::agent_state("claude", id, now)
+            })
+            .collect();
+        SnapshotPublication {
+            snapshot: SidebarSnapshot::build_with_agents(fixture.workspace_id.clone(), agents, now)
+                .with_live_panes(panes, None),
+            role,
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        }
+    };
+    let on_disk = || {
+        crate::store::live_roster::read(&fixture.state.live_roster)
+            .unwrap()
+            .agents
+    };
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), None);
+    crate::store::live_roster::publish(&fixture.state.live_roster, roster(&["a", "b"])).unwrap();
+    let before = std::fs::read(&fixture.state.live_roster).unwrap();
+
+    // A producer that outlived its session sees no agents, every cycle.
+    worker.session_listed = |_, _| false;
+    worker.publish_snapshot(&fixture.state, produced(&[]), &mut sink);
+    worker.publish_snapshot(&fixture.state, produced(&["a"]), &mut sink);
+    worker.publish_snapshot(&fixture.state, produced(&[]), &mut sink);
+    assert_eq!(std::fs::read(&fixture.state.live_roster).unwrap(), before);
+    assert_eq!(on_disk(), roster(&["a", "b"]), "a birth still parks both");
+    assert_eq!(
+        diagnostic_events(&diag),
+        [
+            crate::diag::record::DiagEvent::LiveRosterHeld {
+                dropped: roster(&["a", "b"]).into_iter().collect(),
+            },
+            crate::diag::record::DiagEvent::LiveRosterHeld {
+                dropped: roster(&["b"]).into_iter().collect(),
+            },
+        ],
+        "a repeat of one held set is rate-limited to one record",
+    );
+
+    // Nothing removed: written without asking the mux.
+    worker.session_listed = |_, _| panic!("an additive publication must not probe");
+    worker.publish_snapshot(&fixture.state, produced(&["a", "b", "c"]), &mut sink);
+    assert_eq!(on_disk(), roster(&["a", "b", "c"]));
+
+    // An agent that exits in a living room leaves the roster.
+    worker.session_listed = |_, _| true;
+    worker.publish_snapshot(&fixture.state, produced(&["a"]), &mut sink);
+    assert_eq!(on_disk(), roster(&["a"]));
 }
 
 impl ConsumerFixture {
