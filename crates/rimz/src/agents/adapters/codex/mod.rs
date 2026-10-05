@@ -1396,7 +1396,10 @@ impl crate::agents::capabilities::RuntimeControlCapability for CodexAdapter {
         app_server::daemon::updater_skew(login_env).map(|skew| skew.to_string())
     }
 
-    fn runtime_control_writes_history(&self, login_env: &BTreeMap<String, String>) -> bool {
+    fn runtime_control_writes_history(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> super::runtime_control::DaemonSessions {
         app_server::daemon::writes_history(login_env)
     }
 }

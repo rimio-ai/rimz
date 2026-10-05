@@ -5,9 +5,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use super::capabilities::SharedHomeKind;
+use super::runtime_control::DaemonSessions;
 use super::{AgentDefinition, ProviderLogin, skill_links};
 use crate::disk::lock::{LockErr, WorkspaceLock};
 use crate::ids::{AgentKind, LoginKey};
@@ -51,9 +53,9 @@ pub enum ShareErr {
         agents: Option<usize>,
     },
     #[error(
-        "cannot share `{entry}` of {account} with {}: a remote-control daemon on the account writes to the copy in its home, which would move aside under it; stop it with `rimz config set remote_control.{} false`, rerun, then set it back to `true`, or set `history = \"standalone\"` under `[accounts.{}.{}]`",
+        "cannot share `{entry}` of {account} with {}: {}, or set `history = \"standalone\"` under `[accounts.{}.{}]`",
         default_home.display(),
-        account.kind,
+        daemon_writers(*sessions, &account.kind, "to the copy in its home, which would move aside under"),
         account.kind,
         account.name
     )]
@@ -61,11 +63,13 @@ pub enum ShareErr {
         account: LoginKey,
         entry: String,
         default_home: PathBuf,
+        /// `None` when the daemon did not report its sessions.
+        sessions: Option<NonZeroUsize>,
     },
     #[error(
-        "cannot unlink `{entry}` of {account} from {}: a remote-control daemon on the account writes through that link, which would be removed under it; stop it with `rimz config set remote_control.{} false`, rerun, then set it back to `true`, or remove `history = \"standalone\"` from `[accounts.{}.{}]`",
+        "cannot unlink `{entry}` of {account} from {}: {}, or remove `history = \"standalone\"` from `[accounts.{}.{}]`",
         default_home.display(),
-        account.kind,
+        daemon_writers(*sessions, &account.kind, "through that link, which would be removed under"),
         account.kind,
         account.name
     )]
@@ -73,6 +77,8 @@ pub enum ShareErr {
         account: LoginKey,
         entry: String,
         default_home: PathBuf,
+        /// `None` when the daemon did not report its sessions.
+        sessions: Option<NonZeroUsize>,
     },
     /// A failure after entries were already set aside, which a rerun would no
     /// longer report.
@@ -101,6 +107,21 @@ fn live_writers(agents: Option<usize>, writes: &str) -> String {
         None => {
             format!("the live rooms could not be read, so agents on the account may write {writes}")
         }
+    }
+}
+
+/// What the account's daemon writes and the fixes that end it, up to the
+/// `history` alternative the caller appends.
+fn daemon_writers(sessions: Option<NonZeroUsize>, kind: &AgentKind, writes: &str) -> String {
+    let toggle =
+        format!("`rimz config set remote_control.{kind} false`, rerun, then set it back to `true`");
+    match sessions {
+        Some(count) => format!(
+            "the remote-control daemon on the account holds {count} live session(s) that write {writes} them; close them in the remote client and rerun once the daemon has unloaded them, or stop the daemon with {toggle}"
+        ),
+        None => format!(
+            "the remote-control daemon on the account did not report its sessions, so it may write {writes} it; stop it with {toggle}"
+        ),
     }
 }
 
@@ -296,8 +317,9 @@ pub fn check_distinct_homes(named_home: &Path, default_home: &Path) -> Result<()
 /// `default` has no links and answers `None`. `other_live_agents` counts the
 /// live agents on the account besides the one launching, or `None` when the
 /// live rooms cannot be read; it is asked only before a directory would move
-/// aside, and so is the provider, once no agent is counted, for a daemon
-/// writing history under the account home.
+/// aside, and so is the provider, once no agent is counted, for the live
+/// sessions a daemon holds under the account home: a daemon that holds none
+/// does not block, and one that does not report them does.
 pub fn reconcile(
     login: &ProviderLogin,
     ambient: &BTreeMap<String, String>,
@@ -339,8 +361,8 @@ struct Homes<'a> {
     default: &'a Path,
     shared: bool,
     lock: &'a Path,
-    /// Whether a provider daemon that writes history runs under `named`.
-    daemon_writes: &'a dyn Fn() -> bool,
+    /// The live sessions a provider daemon holds under `named`.
+    daemon_writes: &'a dyn Fn() -> DaemonSessions,
 }
 
 fn reconcile_homes(
@@ -405,9 +427,9 @@ fn reconcile_homes(
     }
     // A provider appends by path, so a directory, or a link to one, leaves
     // its slot only when no other agent on the account can be writing and no
-    // provider daemon runs under the account home. A link at an unshared name
-    // is exempt: the provider must own that name in each home, so the link is
-    // the defect.
+    // provider daemon holds a session under the account home. A link at an
+    // unshared name is exempt: the provider must own that name in each home,
+    // so the link is the defect.
     let set_aside = plan
         .iter()
         .find(|planned| matches!(planned.action, Action::SetAside(_)) && planned.slot.is_dir())
@@ -420,20 +442,29 @@ fn reconcile_homes(
         let agents = other_live_agents();
         let account = homes.account.clone();
         match (agents, unlink) {
-            (Some(0), _) if !(homes.daemon_writes)() => {}
-            (Some(0), false) => {
-                return Err(ShareErr::LiveDaemon {
-                    account,
-                    entry,
-                    default_home,
-                });
-            }
-            (Some(0), true) => {
-                return Err(ShareErr::LiveDaemonUnlink {
-                    account,
-                    entry,
-                    default_home,
-                });
+            (Some(0), _) => {
+                let sessions = match (homes.daemon_writes)() {
+                    DaemonSessions::Clear => None,
+                    DaemonSessions::Live(count) => Some(Some(count)),
+                    DaemonSessions::Unknown => Some(None),
+                };
+                if let Some(sessions) = sessions {
+                    return Err(if unlink {
+                        ShareErr::LiveDaemonUnlink {
+                            account,
+                            entry,
+                            default_home,
+                            sessions,
+                        }
+                    } else {
+                        ShareErr::LiveDaemon {
+                            account,
+                            entry,
+                            default_home,
+                            sessions,
+                        }
+                    });
+                }
             }
             (_, false) => {
                 return Err(ShareErr::LiveAgents {

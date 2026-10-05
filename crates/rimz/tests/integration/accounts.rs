@@ -685,10 +685,47 @@ fn a_history_entry_on_another_filesystem_stays_in_the_account_home_and_out_of_th
     assert!(spend.contains("spend:  $0.00 today"), "{spend}\n{added}");
 }
 
+/// Answer `thread/loaded/list` on the control socket under a Codex `home` with
+/// the ids currently in the returned list, as the account's daemon would.
+fn serve_loaded_threads(home: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+    use tungstenite::Message;
+
+    let control = home.join("app-server-control");
+    std::fs::create_dir_all(&control).unwrap();
+    let listener = std::os::unix::net::UnixListener::bind(control.join("app-server-control.sock"))
+        .expect("bind the stand-in control socket");
+    let loaded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let served = loaded.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut peer) = tungstenite::accept(stream.unwrap()) else {
+                continue;
+            };
+            while let Ok(Message::Text(frame)) = peer.read() {
+                let request: Value = serde_json::from_str(&frame).unwrap();
+                let result = match request["method"].as_str() {
+                    Some("initialize") => json!({"userAgent": "codex/0.154.0"}),
+                    Some("thread/loaded/list") => json!({"data": *served.lock().unwrap()}),
+                    _ => continue,
+                };
+                let response = json!({"jsonrpc": "2.0", "id": request["id"], "result": result});
+                if peer
+                    .send(Message::Text(response.to_string().into()))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    });
+    loaded
+}
+
 #[test]
-fn accounts_add_refuses_a_history_switch_under_a_live_codex_daemon() {
+fn accounts_add_refuses_a_history_switch_only_while_the_codex_daemon_has_sessions() {
     let env = Env::new();
-    let home = env.home_root.join("codex-work");
+    // A short name: the control socket under this home must fit a socket path.
+    let home = env.home_root.join("cw");
     let home_arg = home.display().to_string();
     succeeded(&accounts(
         &env,
@@ -720,21 +757,44 @@ fn accounts_add_refuses_a_history_switch_under_a_live_codex_daemon() {
     .unwrap();
 
     let switch = ["add", "codex", "work", "--history", "standalone"];
-    let refused = accounts(&env, &switch);
+    let toggle = "`rimz config set remote_control.codex false`, rerun, then set it back to `true`";
+    let config = "or remove `history = \"standalone\"` from `[accounts.codex.work]`";
+
+    // A daemon that cannot be asked may hold a session.
+    let silent = accounts(&env, &switch);
+    let after_silent = std::fs::read_link(&sessions);
+    let loaded = serve_loaded_threads(&home);
+    loaded.lock().unwrap().push("thread-a".to_owned());
+    let holding = accounts(&env, &switch);
+    let after_holding = std::fs::read_link(&sessions);
+    loaded.lock().unwrap().clear();
+    let idle = accounts(&env, &switch);
+    let still_running = daemon.try_wait().expect("poll the stand-in daemon");
     daemon.kill().expect("kill the stand-in daemon");
     daemon.wait().expect("reap the stand-in daemon");
-    let error = failed(&refused);
+
+    let error = failed(&silent);
     assert!(error.contains("cannot unlink `"), "{error}");
     assert!(
-        error.contains("a remote-control daemon on the account writes through that link"),
+        error.contains(&format!(
+            "the remote-control daemon on the account did not report its sessions, so it may write through that link, which would be removed under it; stop it with {toggle}, {config}"
+        )),
         "{error}"
     );
-    assert!(
-        error.contains("`rimz config set remote_control.codex false`"),
-        "{error}"
-    );
-    assert_eq!(std::fs::read_link(&sessions).unwrap(), linked);
+    assert_eq!(after_silent.unwrap(), linked);
 
-    succeeded(&accounts(&env, &switch));
+    let error = failed(&holding);
+    assert!(error.contains("cannot unlink `"), "{error}");
+    assert!(
+        error.contains(&format!(
+            "the remote-control daemon on the account holds 1 live session(s) that write through that link, which would be removed under them; close them in the remote client and rerun once the daemon has unloaded them, or stop the daemon with {toggle}, {config}"
+        )),
+        "{error}"
+    );
+    assert_eq!(after_holding.unwrap(), linked);
+
+    // Idle, the daemon does not block the switch and is left running.
+    succeeded(&idle);
+    assert!(still_running.is_none(), "{still_running:?}");
     assert!(std::fs::symlink_metadata(&sessions).is_err());
 }
