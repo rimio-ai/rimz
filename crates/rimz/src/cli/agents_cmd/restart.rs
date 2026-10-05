@@ -74,8 +74,10 @@ pub(in crate::cli) fn restart_resolved(
     )?;
 
     let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
-    let (action, login, fresh_reason) =
-        relaunch_action(agent, &logins, &rimz::agents::machine_login_catalog(), &cwd)?;
+    let catalog = rimz::agents::machine_login_catalog();
+    let (action, login, fresh_reason) = relaunch_action(agent, &logins, &catalog, &cwd)?;
+    rimz::agents::session_login(&agent.kind, login.as_ref(), &machine_config.accounts)?
+        .health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env()))?;
     if isolation == rimz::config::Isolation::Host {
         rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,

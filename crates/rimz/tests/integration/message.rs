@@ -2175,6 +2175,15 @@ fn queue_add_for_bound_agent_does_not_enumerate_panes() {
 
 #[test]
 fn parent_message_to_ended_child_reports_missing_conversation() {
+    assert_ended_child_resume_refusal(false);
+}
+
+#[test]
+fn parent_message_to_ended_child_refuses_a_login_without_hooks() {
+    assert_ended_child_resume_refusal(true);
+}
+
+fn assert_ended_child_resume_refusal(unhooked: bool) {
     let env = Env::new();
     env.install_agent_hooks("claude");
     for id in ["parent", "peer"] {
@@ -2215,6 +2224,10 @@ fn parent_message_to_ended_child_reports_missing_conversation() {
         .find(|agent| agent.agent_id == "child")
         .unwrap();
     assert!(child.ended_at.is_some(), "{child:?}");
+    if unhooked {
+        std::fs::write(env.project_root.join("missing.jsonl"), "{}\n").unwrap();
+        std::fs::remove_file(env.agent_config_path("claude")).unwrap();
+    }
     for caller in [Some("parent"), Some("peer"), None] {
         let mut command = env.rimz();
         if let Some(caller) = caller {
@@ -2234,7 +2247,18 @@ fn parent_message_to_ended_child_reports_missing_conversation() {
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         if caller == Some("parent") {
-            assert!(stderr.contains("no recorded conversation"), "{stderr}");
+            assert!(
+                stderr.contains(if unhooked {
+                    "cannot resume @otter: RimZ hooks are missing for claude account `default`"
+                } else {
+                    "no recorded conversation"
+                }),
+                "{stderr}"
+            );
+            assert!(
+                !unhooked || stderr.contains("; run `rimz hooks install claude`"),
+                "{stderr}"
+            );
         } else {
             assert!(!stderr.contains("cannot resume"), "{stderr}");
         }

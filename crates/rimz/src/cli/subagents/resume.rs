@@ -91,11 +91,14 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         &cwd,
     )?;
     let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let catalog = rimz::agents::machine_login_catalog();
     let (action, login, fresh_reason) =
-        agents_cmd::relaunch_action(child, &logins, &rimz::agents::machine_login_catalog(), &cwd)?;
+        agents_cmd::relaunch_action(child, &logins, &catalog, &cwd)?;
     if let Some(reason) = fresh_reason {
         bail!("{reason}");
     }
+    rimz::agents::session_login(&child.kind, login.as_ref(), &machine.accounts)?
+        .health(&catalog.native_ambient(&child.kind, &rimz::agents::ambient_env()))?;
     let runs = rimz::harness::run::list(store.paths())?;
     let run = newest_run_for_child(&runs, child)
         .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;
