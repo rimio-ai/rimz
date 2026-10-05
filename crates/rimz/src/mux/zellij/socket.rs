@@ -69,8 +69,9 @@ pub(super) fn refused_live_session(spec: &CommandSpec, output: &Output) -> bool 
     if session.is_some() {
         return socket.symlink_metadata().is_ok();
     }
-    // Zellij infers the session: any socket beside the `session_info`
-    // directory may be the one it refused.
+    // No `--session`: every action carries one, so this is a verb that names
+    // its session another way. Any socket beside the `session_info` directory
+    // may be the one it refused.
     std::fs::read_dir(socket).is_ok_and(|entries| {
         entries
             .flatten()

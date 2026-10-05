@@ -576,6 +576,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     let mut command = env.rimz();
     command.args(["--mux", "zellij"]).args(args)
         .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
         .env("PATH", path_with_front(&shim))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", env.home_root.join("agent-env"))
         .env("RIMZ_TEST_ZELLIJ_TRACE_CONTEXT", "1")
@@ -774,6 +775,10 @@ fn unsupported_plugin_peer_launch_explains_that_no_report_will_come() {
             "task",
         ])
         .env("ZELLIJ_PANE_ID", "1")
+        .env(
+            "ZELLIJ_SESSION_NAME",
+            env.resolve_workspace(&env.project_root).session_name,
+        )
         .env("RIMZ_AGENT_KIND", "claude")
         .env("RIMZ_AGENT_ID", "launch-session")
         .env("PATH", path_with_front(&shim))
@@ -833,6 +838,10 @@ fn peer_launch_reports_only_launcher_opened_turns() {
             "first task",
         ])
         .env("ZELLIJ_PANE_ID", "1")
+        .env(
+            "ZELLIJ_SESSION_NAME",
+            env.resolve_workspace(&env.project_root).session_name,
+        )
         .env("RIMZ_AGENT_KIND", "claude")
         .env("RIMZ_AGENT_ID", "launch-session")
         .env("PATH", path_with_front(&shim))

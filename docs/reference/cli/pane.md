@@ -126,9 +126,9 @@ These three act on the current room and take no target.
 
 `rimz pane zoom` toggles fullscreen for the pane the attached client is focused on. It needs exactly one attached client focused on one live pane, and otherwise fails with `pane zoom requires one attached client focused on one live pane`. When the focused pane is the sidebar, it focuses a working pane in the same tab and fullscreens that one instead; in a tab that holds only the sidebar, it prints `rimz: sidebar is the only pane in its view; nothing to zoom` to stderr, changes nothing, and exits `0`. `--session-name` targets another room session. The room's `[sidebar] zoom_key` (default `Alt+g`) runs this command; see [room keys](../../internals/multiplexers.md#room-keys).
 
-`rimz pane split` opens a shell in a new pane beside the calling pane and focuses it. The shell starts in the worktree root. The split runs side by side when the terminal is more than twice as wide (in columns) as it is tall (in rows), stacked otherwise, and side by side when no terminal is attached.
+`rimz pane split` opens a shell in a new pane beside the calling pane and focuses it; run from a shell outside any pane, it opens the pane in the room's session instead. The shell starts in the worktree root. The split runs side by side when the terminal is more than twice as wide (in columns) as it is tall (in rows), stacked otherwise, and side by side when no terminal is attached.
 
-`rimz pane detach` detaches from the room; the session keeps running and comes back on the next attach. The backends differ in which clients go: tmux detaches every client attached to the session, and Zellij detaches only the client the calling pane belongs to. On Zellij, `--session-name` has no effect; on tmux it names the session whose clients detach.
+`rimz pane detach` detaches from the room; the session keeps running and comes back on the next attach. The backends differ in which clients go: tmux detaches every client attached to the session, and Zellij detaches only the client the calling pane belongs to. On Zellij, `--session-name` has no effect, and the command runs only from a pane: outside one it fails with `this Zellij action has no session to address; run the command from a pane inside the room`. On tmux `--session-name` names the session whose clients detach.
 
 ## Bandwidth
 

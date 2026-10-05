@@ -802,6 +802,97 @@ fn pane_send_and_capture_address_the_resolved_room_among_two_sessions() {
     );
 }
 
+/// From a shell outside any pane, with two sessions live, `pane split` opens
+/// its pane in the resolved room, a split anchored on a room pane (the shape
+/// `agents restart` and `agents resume` pass) lands there too, and `pane detach`
+/// refuses before any Zellij action runs. The other session never changes.
+#[test]
+fn pane_split_and_detach_name_the_room_among_two_sessions() {
+    require_zellij!();
+
+    let env = Env::new();
+    let other_root = env.home_root.join("other");
+    std::fs::create_dir_all(&other_root).expect("mkdir other project");
+    let here = env.resolve_workspace(&env.project_root).session_name;
+    let other = env.resolve_workspace(&other_root).session_name;
+    let room = LiveZellijSession::from_namespace(crate::common::ZellijNamespace::new(), &here);
+    let xdg = room.path();
+    std::fs::write(xdg.join(".zshrc"), "# hermetic test shell\n")
+        .expect("write test shell profile");
+    room.create_background();
+    let created = room
+        .command()
+        .args(["attach", "--create-background", &other])
+        .bounded_output()
+        .expect("create second session");
+    assert!(created.status.success(), "second session");
+    let here_pane = wait_for_pane_count(xdg, &here, 1)[0].pane_id.clone();
+    wait_for_pane_count(xdg, &other, 1);
+
+    let trace = TempDir::new().expect("zellij trace tempdir");
+    let trace_log = trace.path().join("zellij.log");
+    let shim = trace.path().join("zellij");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            trace_log.display(),
+            which::which("zellij").expect("zellij path").display(),
+        ),
+    )
+    .expect("write zellij trace shim");
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod zellij trace shim");
+    let pane = |verb: &str| {
+        env.rimz()
+            .env("XDG_RUNTIME_DIR", xdg)
+            .env("XDG_CACHE_HOME", xdg)
+            .env("TMPDIR", xdg)
+            .env("RIMZ_ZELLIJ_BIN", &shim)
+            .args(["--mux", "zellij", "pane", verb])
+            .bounded_output()
+            .expect("run rimz pane")
+    };
+
+    let split = pane("split");
+    assert!(
+        split.status.success(),
+        "split: {}",
+        String::from_utf8_lossy(&split.stderr)
+    );
+    wait_for_pane_count(xdg, &here, 2);
+
+    room.backend()
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: here.clone(),
+                pane_id: here_pane,
+            },
+            focus: true,
+            ..Default::default()
+        })
+        .expect("split beside a room pane");
+    wait_for_pane_count(xdg, &here, 3);
+
+    let detach = pane("detach");
+    let stderr = String::from_utf8_lossy(&detach.stderr);
+    assert_eq!(detach.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(
+            "this Zellij action has no session to address; run the command from a pane inside the room"
+        ),
+        "{stderr}"
+    );
+    let log = std::fs::read_to_string(&trace_log).expect("read zellij trace");
+    assert!(!log.contains("action detach"), "{log}");
+    assert_eq!(expect_list_panes(xdg, &here).pane_refs().len(), 3);
+    assert_eq!(
+        expect_list_panes(xdg, &other).pane_refs().len(),
+        1,
+        "the other session gained a pane"
+    );
+}
+
 /// A room pane whose command has exited stays in the session while Zellij
 /// holds it, so `pane capture` still reads its last screen even though
 /// `pane list` omits it.

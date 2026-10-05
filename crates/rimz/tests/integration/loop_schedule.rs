@@ -698,6 +698,11 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
             "restart",
             &format!("@{}", agents[0].name.as_deref().unwrap()),
         ])
+        // The split names the room and resolves the replaced pane's tab there.
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            r#"[{"id":51,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        )
         .output()
         .unwrap();
     assert!(

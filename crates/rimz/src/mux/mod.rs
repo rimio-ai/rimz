@@ -135,6 +135,10 @@ pub enum MuxErr {
     #[error("session `{session}` is not active")]
     SessionNotFound { session: String },
     #[error(
+        "this Zellij action has no session to address; run the command from a pane inside the room"
+    )]
+    NoSessionToAddress,
+    #[error(
         "the RimZ tmux server cannot place panes: session `{session}` was asked for\n    {}\nbut its first pane opened in\n    {}\n\nThe server's own working directory has been deleted, and tmux skips a pane's\nrequested directory whenever it cannot read its own. Restart just the RimZ\nserver — this leaves any other tmux you are running untouched:\n\n    tmux -S {} kill-server\n",
         requested.display(),
         actual.display(),
@@ -616,6 +620,9 @@ pub enum CompanionPaneAppend {
 }
 
 /// Mux context used to resolve a pane split.
+///
+/// On Zellij, `Ambient` and `Pane` address the session the caller's own pane
+/// sits in and fail with [`MuxErr::NoSessionToAddress`] outside a pane.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SplitTarget {
     /// Use the caller's current mux context.
@@ -940,9 +947,10 @@ pub trait MuxBackend: Send + Sync {
     /// Recheck physical occupancy before birth; balancing after birth is best-effort.
     fn append_companion_pane(&self, opts: SplitPaneOptions) -> Result<CompanionPaneAppend>;
     /// Focus `pane`. Zellij pane ids are session-scoped, so callers outside a
-    /// room pane pass `Some(session)`; in-pane callers may pass `None` and let
-    /// `ZELLIJ_SESSION_NAME` resolve it. tmux ignores the session because pane
-    /// ids are server-global.
+    /// room pane pass `Some(session)`; with `None` the Zellij backend names the
+    /// caller's own `ZELLIJ_SESSION_NAME` and returns
+    /// [`MuxErr::NoSessionToAddress`] where there is none. tmux ignores the
+    /// session because pane ids are server-global.
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
     /// Toggle fullscreen for `pane`. tmux addresses it directly; Zellij sends
     /// the selected id to the presence plugin because an out-of-pane CLI

@@ -101,7 +101,8 @@ enum PaneSubcmd {
         #[arg(long)]
         session_name: Option<String>,
     },
-    /// Split off a new pane in the current view.
+    /// Split off a new pane beside the calling pane; from a shell outside any
+    /// pane, in the room's session.
     Split,
     /// Detach the attached client from a session; the session keeps running in
     /// the background and resurrects on the next attach. The `rimzd` daemon
@@ -109,8 +110,8 @@ enum PaneSubcmd {
     ///
     /// Client semantics differ by backend (accepted, not papered over): Zellij's
     /// `action detach` detaches the client whose process tree this pane belongs
-    /// to; tmux's `detach-client -s <session>` detaches every client of the
-    /// session.
+    /// to, so it runs only from a pane and ignores `--session-name`; tmux's
+    /// `detach-client -s <session>` detaches every client of the session.
     Detach {
         /// Session to detach. Defaults to the cwd's workspace session.
         #[arg(long)]
@@ -698,8 +699,10 @@ fn split(backend: &dyn MuxBackend, globals: &GlobalFlags) -> Result<()> {
         .unwrap_or_default();
     backend
         .split_pane(SplitPaneOptions {
-            target: rimz::mux::own_pane_id(backend.name())
-                .map_or(SplitTarget::Ambient, SplitTarget::Pane),
+            target: rimz::mux::own_pane_id(backend.name()).map_or_else(
+                || SplitTarget::Session(workspace.session_name.clone()),
+                SplitTarget::Pane,
+            ),
             cwd: Some(workspace.worktree_root.display().to_string()),
             command: None,
             title: None,

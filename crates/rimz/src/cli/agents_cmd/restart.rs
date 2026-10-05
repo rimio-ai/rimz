@@ -134,13 +134,9 @@ pub(in crate::cli) fn restart_resolved(
     }
     if let Err(err) = backend
         .split_pane(SplitPaneOptions {
-            target: if focus.takes_focus() {
-                rimz::mux::SplitTarget::Pane(old_pane.clone())
-            } else {
-                rimz::mux::SplitTarget::SessionPane {
-                    session_name: workspace.session_name.clone(),
-                    pane_id: old_pane.clone(),
-                }
+            target: rimz::mux::SplitTarget::SessionPane {
+                session_name: workspace.session_name.clone(),
+                pane_id: old_pane.clone(),
             },
             cwd: Some(cwd.display().to_string()),
             command: Some(argv),

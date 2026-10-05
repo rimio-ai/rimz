@@ -1,9 +1,11 @@
 //! Zellij `MuxBackend` implementation.
 //!
-//! Interactive actions run `zellij action <verb> ...` against the session
-//! inferred from the caller's `ZELLIJ_SESSION_NAME` env var. Operations that
-//! may run before the user attaches, such as native sidebar launch and wakeup
-//! fanout, carry the session name explicitly via `zellij --session <name>`.
+//! Every action runs as `zellij --session <name> action <verb> ...`, built by
+//! `ZellijBackend::zellij_action`. A caller that holds no session name gets
+//! the one its own pane sits in (`ZELLIJ_SESSION_NAME`), and outside a pane
+//! the action fails with `MuxErr::NoSessionToAddress` before Zellij is
+//! spawned: an unnamed action among several live sessions exits 0 and does
+//! nothing.
 //!
 //! The backend covers session lifecycle, pane I/O, focus, sidebar and tab
 //! layout, presence, and recovery. Backend caveats live in
@@ -395,6 +397,10 @@ pub struct ZellijBackend {
     /// Test-only responsiveness budget override.
     #[cfg(test)]
     health_probe_timeout: Option<Duration>,
+    /// Test-only stand-in for the caller's `ZELLIJ_SESSION_NAME`, which a
+    /// test never reads from the process environment.
+    #[cfg(test)]
+    ambient_session: Option<String>,
 }
 
 impl ZellijBackend {
@@ -441,6 +447,12 @@ impl ZellijBackend {
             program: Some(program.into()),
             ..Self::default()
         }
+    }
+
+    #[cfg(test)]
+    fn with_ambient_session_for_test(mut self, session: &str) -> Self {
+        self.ambient_session = Some(session.to_owned());
+        self
     }
 
     #[cfg(test)]
@@ -504,15 +516,6 @@ impl ZellijBackend {
             session.to_owned(),
             "action".to_owned(),
         ])
-    }
-
-    /// `zellij [--session <name>] action`; without a session Zellij infers it
-    /// from `ZELLIJ_SESSION_NAME` or the sole live session.
-    fn session_action(&self, session: Option<&str>) -> CommandSpec {
-        match session {
-            Some(session) => self.zellij_action(session),
-            None => self.cmd().arg("action"),
-        }
     }
 
     pub(super) fn go_to_tab(&self, session: &str, index: u32) -> Result<()> {

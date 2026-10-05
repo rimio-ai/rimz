@@ -21,7 +21,7 @@ fn large_zellij_paste_delivers_exact_pty_bytes() {
     let expected = format!("{BRACKET_PASTE_OPEN}{normalized}{BRACKET_PASTE_CLOSE}").into_bytes();
     backend
         .split_pane(SplitPaneOptions {
-            target: SplitTarget::Ambient,
+            target: SplitTarget::Session(room.name().to_owned()),
             cwd: Some(xdg.to_string_lossy().into_owned()),
             command: Some(vec![
                 "sh".to_owned(),

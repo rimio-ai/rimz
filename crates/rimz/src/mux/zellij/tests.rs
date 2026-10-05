@@ -376,28 +376,28 @@ fn pane_listing_reruns_only_an_empty_success() {
 
     let (temp, shim) = support::pane_roster_shim("[]");
     let listed = ZellijBackend::with_program_for_test(&shim)
-        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(5))
+        .raw_listed_panes("rimz-test", Duration::from_secs(5))
         .expect("an empty roster is an answer");
     assert!(listed.is_empty());
     assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 1);
 
     let (temp, shim) = support::pane_roster_shim("[{");
     let err = ZellijBackend::with_program_for_test(&shim)
-        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(5))
+        .raw_listed_panes("rimz-test", Duration::from_secs(5))
         .expect_err("malformed JSON is not an answer");
     assert!(matches!(err, MuxErr::Output { .. }), "{err}");
     assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 1);
 
     let (temp, shim) = support::failing_roster_shim();
     let err = ZellijBackend::with_program_for_test(&shim)
-        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(5))
+        .raw_listed_panes("rimz-test", Duration::from_secs(5))
         .expect_err("a failed listing is not an answer");
     assert!(matches!(err, MuxErr::Command { .. }), "{err}");
     assert_eq!(command_count(&shim_log(&temp), LIST_PANES), 1);
 
     let (temp, shim) = support::logging_shim();
     let err = ZellijBackend::with_program_for_test(&shim)
-        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(5))
+        .raw_listed_panes("rimz-test", Duration::from_secs(5))
         .expect_err("a listing that stays empty is not an answer");
     assert!(
         err.to_string()
@@ -420,7 +420,7 @@ exec sleep 30
     let started = std::time::Instant::now();
 
     let err = ZellijBackend::with_program_for_test(&shim)
-        .raw_listed_panes(Some("rimz-test"), Duration::from_secs(2))
+        .raw_listed_panes("rimz-test", Duration::from_secs(2))
         .expect_err("the rerun hangs");
 
     assert!(
@@ -614,7 +614,8 @@ esac
 exit 0
 "#,
     );
-    let backend = ZellijBackend::with_program_for_test(&shim);
+    let backend =
+        ZellijBackend::with_program_for_test(&shim).with_ambient_session_for_test("caller");
     for direction in [SplitDirection::Right, SplitDirection::Down] {
         backend
             .split_pane(SplitPaneOptions {
@@ -662,8 +663,8 @@ exit 0
     let log = shim_log(&temp);
     let shell = crate::proc::shell_pane_name();
     for command in [
-        "action new-pane --direction right --name rimz managed pane",
-        "action new-pane --direction down --name rimz managed pane",
+        "--session caller action new-pane --direction right --name rimz managed pane",
+        "--session caller action new-pane --direction down --name rimz managed pane",
     ] {
         assert!(log.contains(command), "{log}");
     }
@@ -704,6 +705,7 @@ exit 0
 fn split_pane_defaults_to_command_title_and_prefixes_environment() {
     let (temp, shim) = support::logging_shim();
     ZellijBackend::with_program_for_test(&shim)
+        .with_ambient_session_for_test("caller")
         .split_pane(SplitPaneOptions {
             focus: true,
             command: Some(vec!["/usr/bin/sleep".to_owned(), "600".to_owned()]),
@@ -713,7 +715,7 @@ fn split_pane_defaults_to_command_title_and_prefixes_environment() {
         .expect("command split");
     assert_eq!(
         shim_log(&temp).trim(),
-        "action new-pane --direction right --name sleep -- env RIMZ_TEST_VALUE=present /usr/bin/sleep 600"
+        "--session caller action new-pane --direction right --name sleep -- env RIMZ_TEST_VALUE=present /usr/bin/sleep 600"
     );
 }
 
@@ -1016,7 +1018,7 @@ fn split_pane_background_restores_client_instead_of_anchor_on_zellij_044() {
 
 #[cfg(unix)]
 #[test]
-fn split_pane_background_restores_ambient_client_on_zellij_044() {
+fn split_pane_background_restores_the_callers_session_client_on_zellij_044() {
     assert_background_split_restores_client(false);
 }
 
@@ -1046,6 +1048,7 @@ exit 0
 "#,
     );
     room.backend(&shim)
+        .with_ambient_session_for_test("caller")
         .split_pane(SplitPaneOptions {
             target: if named_session {
                 SplitTarget::SessionPane {
@@ -1066,7 +1069,7 @@ exit 0
         .expect("background split");
     let log = shim_log(&temp);
     if !named_session {
-        assert!(!log.contains("--session"), "{log}");
+        assert_actions_name(&log, "caller");
     }
     assert!(log.contains("action focus-pane-id terminal_9"), "{log}");
     assert!(!log.contains("action focus-pane-id terminal_7"), "{log}");
@@ -1074,6 +1077,121 @@ exit 0
         log.find("action list-clients").unwrap() < log.find("action new-pane").unwrap(),
         "{log}"
     );
+}
+
+/// Every logged line but a version probe is `--session <session> action …`.
+#[cfg(unix)]
+fn assert_actions_name(log: &str, session: &str) {
+    let prefix = format!("--session {session} action ");
+    assert!(!log.is_empty(), "no action ran");
+    for line in log.lines().filter(|line| *line != "--version") {
+        assert!(
+            line.starts_with(&prefix),
+            "not addressed to {session}: {line}"
+        );
+    }
+}
+
+/// A shim that answers the version probe with `version` and logs every other
+/// argv, with one client on `terminal_9` and panes 7 and 9 to list.
+#[cfg(unix)]
+fn versioned_action_shim(version: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+if [ "$1" = "--version" ]; then printf 'zellij {version}\n'; exit 0; fi
+printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-clients "*) printf '1 terminal_9 work\n' ;;
+  *" action list-panes "*) printf '[{{"id":7,"tab_id":42,"tab_position":0}},{{"id":9,"tab_id":43,"tab_position":1}}]\n' ;;
+esac
+exit 0
+"#
+    ))
+}
+
+#[cfg(unix)]
+#[test]
+fn every_split_focus_client_and_detach_action_names_the_session() {
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    for version in ["0.44.3", "0.45.0"] {
+        for (target, session) in [
+            (SplitTarget::Ambient, "caller"),
+            (SplitTarget::Pane(pane.clone()), "caller"),
+            (SplitTarget::Session("room-a".to_owned()), "room-a"),
+            (
+                SplitTarget::SessionPane {
+                    session_name: "room-a".to_owned(),
+                    pane_id: pane.clone(),
+                },
+                "room-a",
+            ),
+        ] {
+            for focus in [true, false] {
+                let (temp, shim) = versioned_action_shim(version);
+                ZellijBackend::with_program_for_test(&shim)
+                    .with_ambient_session_for_test("caller")
+                    .split_pane(SplitPaneOptions {
+                        target: target.clone(),
+                        focus,
+                        ..Default::default()
+                    })
+                    .expect("split");
+                let log = shim_log(&temp);
+                assert_actions_name(&log, session);
+                assert_eq!(command_count(&log, " action new-pane "), 1, "{log}");
+            }
+        }
+    }
+
+    let (temp, shim) = versioned_action_shim("0.45.0");
+    let backend =
+        ZellijBackend::with_program_for_test(&shim).with_ambient_session_for_test("caller");
+    backend.focus_pane(&pane, None).expect("focus");
+    backend
+        .client_view(crate::mux::ClientFocusOptions::default())
+        .expect("client view");
+    backend.detach("room-a").expect("detach");
+    assert_eq!(
+        shim_log(&temp),
+        "--session caller action focus-pane-id terminal_7\n\
+         --session caller action list-clients\n\
+         --session caller action detach\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_action_with_no_session_to_address_refuses_before_zellij_is_spawned() {
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    for version in ["0.44.3", "0.45.0"] {
+        let (temp, shim) = versioned_action_shim(version);
+        let backend = ZellijBackend::with_program_for_test(&shim);
+        let mut refusals = Vec::new();
+        for target in [SplitTarget::Ambient, SplitTarget::Pane(pane.clone())] {
+            for focus in [true, false] {
+                refusals.push(backend.split_pane(SplitPaneOptions {
+                    target: target.clone(),
+                    focus,
+                    ..Default::default()
+                }));
+            }
+        }
+        refusals.push(backend.focus_pane(&pane, None));
+        refusals.push(
+            backend
+                .client_view(crate::mux::ClientFocusOptions::default())
+                .map(|_| ()),
+        );
+        refusals.push(backend.detach("room-a"));
+        for refusal in refusals {
+            assert!(
+                matches!(refusal, Err(MuxErr::NoSessionToAddress)),
+                "{refusal:?}"
+            );
+        }
+        assert_eq!(shim_log(&temp), "", "zellij {version}");
+    }
 }
 
 #[cfg(unix)]
@@ -1086,7 +1204,8 @@ printf '%s\n' "$*" >> "$dir/zellij.log"
 exit 0
 "#,
     );
-    let backend = ZellijBackend::with_program_for_test(&shim);
+    let backend =
+        ZellijBackend::with_program_for_test(&shim).with_ambient_session_for_test("caller");
 
     backend
         .split_pane(SplitPaneOptions {
@@ -2585,20 +2704,18 @@ const REFUSE: &str = "printf 'There is no active session!\\n' >&2; exit 1";
 #[cfg(unix)]
 #[test]
 fn a_refusal_of_a_live_session_is_rerun_until_the_action_lands() {
-    for session in [Some("rimz-test"), None] {
-        let (temp, backend) = counting_action_shim(&format!(
-            "if [ \"$n\" -lt 3 ]; then {REFUSE}; fi; printf 'done\\n'"
-        ));
-        leave_session_socket(&temp, "rimz-test");
+    let (temp, backend) = counting_action_shim(&format!(
+        "if [ \"$n\" -lt 3 ]; then {REFUSE}; fi; printf 'done\\n'"
+    ));
+    leave_session_socket(&temp, "rimz-test");
 
-        let output = pinned(&temp, backend.session_action(session))
-            .arg("new-pane")
-            .run()
-            .expect("the refusal clears");
+    let output = pinned(&temp, backend.zellij_action("rimz-test"))
+        .arg("new-pane")
+        .run()
+        .expect("the refusal clears");
 
-        assert_eq!(output.stdout, b"done\n", "session {session:?}");
-        assert_eq!(action_runs(&temp), 3, "session {session:?}");
-    }
+    assert_eq!(output.stdout, b"done\n");
+    assert_eq!(action_runs(&temp), 3);
 }
 
 #[cfg(unix)]

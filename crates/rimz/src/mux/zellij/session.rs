@@ -128,7 +128,7 @@ impl ZellijBackend {
         consistency: PaneReadConsistency,
         timeout: Duration,
     ) -> Result<PaneTopologyCache> {
-        let session = self.resolve_topology_session(session)?;
+        let session = self.resolve_session(session)?;
         match consistency {
             PaneReadConsistency::Cached => self.cached_topology(
                 session,
@@ -230,14 +230,20 @@ impl ZellijBackend {
         })
     }
 
-    pub(super) fn resolve_topology_session(&self, session: Option<&str>) -> Result<String> {
+    /// The session an action addresses: the one the caller names, else the
+    /// one the caller's own pane sits in. Every action that may arrive without
+    /// a name resolves it here before any `zellij` process is spawned.
+    pub(super) fn resolve_session(&self, session: Option<&str>) -> Result<String> {
         if let Some(session) = session.filter(|session| !session.is_empty()) {
             return Ok(session.to_owned());
         }
-        std::env::var("ZELLIJ_SESSION_NAME")
-            .ok()
+        #[cfg(test)]
+        let ambient = self.ambient_session.clone();
+        #[cfg(not(test))]
+        let ambient = std::env::var("ZELLIJ_SESSION_NAME").ok();
+        ambient
             .filter(|session| !session.is_empty())
-            .ok_or_else(|| super::output_error("pane listing on Zellij needs a RimZ room session"))
+            .ok_or(MuxErr::NoSessionToAddress)
     }
 
     fn resolve_topology_workspace(
