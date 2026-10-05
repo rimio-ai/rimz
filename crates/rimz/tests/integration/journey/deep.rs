@@ -2871,6 +2871,156 @@ fn zellij_supervised_run_holds_its_account_history_link_until_it_dies() {
     assert_history_switch_follows_the_run(&env, &work_home, &agent);
 }
 
+/// A sidebar that outlives its Zellij session is elected producer once the
+/// dead elders' heartbeats lapse and sees an agent-less room in the pane cache.
+/// The next birth must still park the agent the session died with.
+#[cfg(target_os = "linux")]
+#[test]
+fn zellij_recovery_survives_a_sidebar_that_outlives_its_session() {
+    if which::which("zellij").is_err() {
+        crate::common::skip("zellij not on PATH");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let stub_dir = write_hook_firing_agent(&env, "claude");
+    let agent_path = path_with_front(&stub_dir);
+    trust_agent_path(&env, "claude", &agent_path);
+    let start = || {
+        env.rimz()
+            .env("PATH", &agent_path)
+            .env("RIMZ_TEST_AGENT_SLEEP_MS", "120000")
+            .args(["--mux", "zellij", "start", "--no-attach"])
+            .bounded_output_within(Duration::from_secs(45))
+            .expect("start room")
+    };
+    let started = start();
+    assert!(started.status.success(), "room start failed: {started:?}");
+    let session = workspace_session(&env);
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(40, 160, 0)));
+    let client = AttachProcess::spawn(&session, &parser, |cmd| {
+        env.pin_pty_command(cmd);
+    });
+    // A Zellij server lays out a new tab only for a client that has attached.
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    while parser
+        .lock()
+        .expect("parser")
+        .screen()
+        .contents()
+        .trim()
+        .is_empty()
+    {
+        assert!(Instant::now() < deadline, "the client never painted");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let launched = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .args(["--mux", "zellij", "agents", "claude", "hold the room"])
+        .args(["--name", "roster-worker", "--bg"])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch agent");
+    assert!(launched.status.success(), "launch failed: {launched:?}");
+    let agent = wait_for_named_agent(&env, "roster-worker", true, CAPTURE_BUDGET);
+    wait_for_live_roster_entry(&env, &agent, CAPTURE_BUDGET);
+
+    // The survivor: one of the room's own sidebars, started again outside it.
+    let (argv, environ) = std::fs::read_dir("/proc")
+        .expect("read /proc")
+        .filter_map(|entry| {
+            let dir = entry.ok()?.path();
+            let nul_separated = |name: &str| {
+                let bytes = std::fs::read(dir.join(name)).ok()?;
+                let text = String::from_utf8(bytes).ok()?;
+                Some(
+                    text.split_terminator('\0')
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>(),
+                )
+            };
+            Some((nul_separated("cmdline")?, nul_separated("environ")?))
+        })
+        .find(|(argv, environ)| {
+            argv.contains(&session)
+                && argv.windows(2).any(|pair| pair == ["sidebar", "serve"])
+                && !environ
+                    .iter()
+                    .any(|var| var.starts_with("RIMZ_SIDEBAR_WORKER="))
+        })
+        .expect("a sidebar supervisor of the room");
+    let mut survivor = CommandBuilder::from_argv(argv.iter().map(Into::into).collect());
+    survivor.env_clear();
+    for var in &environ {
+        if let Some((key, value)) = var.split_once('=')
+            && key != "RIMZ_SIDEBAR_INSTANCE_ID"
+        {
+            survivor.env(key, value);
+        }
+    }
+    survivor.cwd(&env.project_root);
+    let _survivor = AttachProcess::on_pty(survivor, &parser);
+
+    ZellijBackend::with_runtime_dir(&env.runtime_root)
+        .kill_session(&session)
+        .expect("end the session through its own socket");
+    drop(client);
+    let roster = env.store().paths().live_roster.clone();
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let survivor_published = || {
+        let emptied = std::fs::read(&roster)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .is_some_and(|roster| roster["agents"] == serde_json::json!([]));
+        emptied
+            || env
+                .diag_records(&session)
+                .iter()
+                .any(|record| matches!(record.event, DiagEvent::LiveRosterHeld { .. }))
+    };
+    while !survivor_published() {
+        assert!(
+            Instant::now() < deadline,
+            "the survivor never reached a roster publication:\n{}",
+            env.diag_tail(&session, DIAG_EVIDENCE_RECORDS)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let reborn = start();
+    let stderr = String::from_utf8_lossy(&reborn.stderr);
+    assert!(reborn.status.success(), "rebirth failed: {stderr}");
+    assert!(
+        stderr.contains("previous session ended with agents still running"),
+        "the birth read a roster without the lost agent: {stderr}\n{}",
+        env.diag_tail(&session, DIAG_EVIDENCE_RECORDS)
+    );
+    // A clientless rebirth may not lay out the resumed tab in time; the agent
+    // then stays parked, which recovers it just the same.
+    if stderr.contains("rimz: resumed 1 agent") {
+        return;
+    }
+    assert!(
+        stderr.contains("its agents stay pending for the next attended start"),
+        "the recovered agent was neither resumed nor left pending: {stderr}"
+    );
+    let pending: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&env.store().paths().pending_recovery).expect("pending-recovery record"),
+    )
+    .expect("pending-recovery JSON");
+    assert!(
+        pending["agents"]
+            .as_array()
+            .is_some_and(|agents| agents.contains(&serde_json::json!([agent.kind, agent.agent_id]))),
+        "the unopened tab's agent is not parked: {pending}\n{stderr}"
+    );
+}
+
 const SUPERVISED_ACCOUNT_RUN: [&str; 10] = [
     "agents",
     "claude",
@@ -3220,6 +3370,14 @@ impl AttachProcess {
         parser: &Arc<Mutex<vt100::Parser>>,
         pin: impl FnOnce(&mut CommandBuilder),
     ) -> Self {
+        let mut cmd = CommandBuilder::new("zellij");
+        cmd.args(["attach", session]);
+        pin(&mut cmd);
+        Self::on_pty(cmd, parser)
+    }
+
+    /// `cmd` on a PTY this test owns, so its room's death does not hang it up.
+    fn on_pty(cmd: CommandBuilder, parser: &Arc<Mutex<vt100::Parser>>) -> Self {
         let (rows, cols) = parser.lock().expect("parser").screen().size();
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -3229,10 +3387,7 @@ impl AttachProcess {
                 pixel_height: 0,
             })
             .expect("openpty");
-        let mut cmd = CommandBuilder::new("zellij");
-        cmd.args(["attach", session]);
-        pin(&mut cmd);
-        let child = pair.slave.spawn_command(cmd).expect("attach zellij");
+        let child = pair.slave.spawn_command(cmd).expect("spawn on pty");
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
