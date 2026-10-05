@@ -142,7 +142,7 @@ fn worktree_fire_lock_is_found_by_the_task_lookups() {
 
     let pid = std::process::id();
     assert!(matches!(
-        probe_run_lock("fixer", &entry).unwrap(),
+        RunLocks::list(root.path()).unwrap().state("fixer").unwrap(),
         RunLockState::Held(Some(info)) if info.pid == pid
     ));
     let in_flight = in_flight_run("fixer", root.path())
@@ -151,7 +151,7 @@ fn worktree_fire_lock_is_found_by_the_task_lookups() {
     assert_eq!(in_flight.holder.map(|info| info.pid), Some(pid));
     drop(fire);
     assert!(matches!(
-        probe_run_lock("fixer", &entry).unwrap(),
+        RunLocks::list(root.path()).unwrap().state("fixer").unwrap(),
         RunLockState::Available
     ));
 }
@@ -159,10 +159,6 @@ fn worktree_fire_lock_is_found_by_the_task_lookups() {
 #[test]
 fn task_lookup_reports_the_earliest_holder_among_its_held_locks() {
     let root = tempfile::tempdir().unwrap();
-    let entry = TaskEntry {
-        root: root.path().to_owned(),
-        ..TaskEntry::default()
-    };
     let locks = RuntimePaths::for_project_root(root.path())
         .unwrap()
         .locks_dir;
@@ -185,7 +181,7 @@ fn task_lookup_reports_the_earliest_holder_among_its_held_locks() {
     let _free = write("loop-run-fixer.lock", 33, 50);
     let other_task = write("loop-run-fixer-nightly.lock", 44, 10);
     other_task.try_lock().unwrap();
-    let holder = || match probe_run_lock("fixer", &entry).unwrap() {
+    let holder = || match RunLocks::list(root.path()).unwrap().state("fixer").unwrap() {
         RunLockState::Held(holder) => holder.map(|info| info.pid),
         RunLockState::Available => None,
     };
@@ -200,6 +196,69 @@ fn task_lookup_reports_the_earliest_holder_among_its_held_locks() {
     let holderless = std::fs::File::open(holderless).unwrap();
     holderless.try_lock().unwrap();
     assert_eq!(holder(), Some(22), "a holderless lock sorts last");
+}
+
+#[test]
+fn held_locks_no_row_claims_are_listed_under_their_whole_stem() {
+    let root = tempfile::tempdir().unwrap();
+    let locks = RuntimePaths::for_project_root(root.path())
+        .unwrap()
+        .locks_dir;
+    std::fs::create_dir_all(&locks).unwrap();
+    let hold = |file: &str, pid: u32| {
+        let path = locks.join(file);
+        let info = RunLockInfo {
+            pid,
+            started_at: Timestamp::from_second(100).unwrap(),
+        };
+        std::fs::write(&path, serde_json::to_vec(&info).unwrap()).unwrap();
+        let file = File::open(path).unwrap();
+        file.try_lock().unwrap();
+        file
+    };
+    let fan_out = "fan-ws_0123456789abcdef01234567";
+    assert_eq!(
+        run_lock_stem(&run_lock_file_name(fan_out, None)),
+        Some(fan_out)
+    );
+    assert_eq!(run_lock_stem("loop-watch-x.lock"), None);
+    let _later = hold(&run_lock_file_name("later", None), 11);
+    let _fan = hold(&run_lock_file_name(fan_out, None), 22);
+    let _watcher = hold("loop-watch-x.lock", 33);
+    std::fs::write(locks.join(run_lock_file_name("free", None)), "").unwrap();
+    std::fs::create_dir(locks.join(run_lock_file_name("ghost", None))).unwrap();
+    let rowless = |rows: &[&str]| {
+        RunLocks::list(root.path())
+            .unwrap()
+            .rowless(rows)
+            .into_iter()
+            .map(|(name, holder)| (name, holder.map(|info| info.pid)))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        rowless(&[]),
+        [
+            (fan_out.to_owned(), Some(22)),
+            ("later".to_owned(), Some(11))
+        ]
+    );
+    assert_eq!(rowless(&["fan"]), [("later".to_owned(), Some(11))]);
+    assert_eq!(
+        rowless(&["later", "ghost"]),
+        [(fan_out.to_owned(), Some(22))]
+    );
+
+    let snapshot = RunLocks::list(root.path()).unwrap();
+    assert!(snapshot.state("ghost").is_err());
+    assert!(matches!(
+        snapshot.state("later").unwrap(),
+        RunLockState::Held(Some(info)) if info.pid == 11
+    ));
+    assert!(
+        in_flight_run("later", root.path()).unwrap().is_some(),
+        "another name's unopenable lock does not fail the lookup"
+    );
 }
 
 #[test]

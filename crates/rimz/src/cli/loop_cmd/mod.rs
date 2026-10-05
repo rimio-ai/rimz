@@ -31,10 +31,9 @@ use rimz::harness::schedule::run_log::{
     RunTransition,
 };
 use rimz::harness::schedule::runner::{
-    AfterReset, CheckEcho, InFlightRun, RunLockInfo, RunLockState,
+    AfterReset, CheckEcho, InFlightRun, RunLockInfo, RunLockState, RunLocks,
     SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, after_reset as resolve_after_reset, in_flight_run,
-    parse_mode, parse_task_timeout, preflight_entry, probe_run_lock, task_login,
-    window_condition_provider,
+    parse_mode, parse_task_timeout, preflight_entry, task_login, window_condition_provider,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,

@@ -446,7 +446,8 @@ path = "crates/rimz/src/harness"
 # `WhenExpr::reads_forge` replaces the CLI's hand copy of the forge condition keys (+1).
 # The exec wrapper's startup-relaunch decision and its `ProviderExit` input (+2).
 # `RebirthPlan::settle` returns a `SeededRecovery` whose tabs a birth seeds and whose `confirm` settles each tab on its outcome, replacing `materialize` and `settle_live` (+3).
-surface-budget = 687
+# `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+2).
+surface-budget = 689
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1125,7 +1126,8 @@ allowed-dependencies = [
 # A task's account pin is a `LaunchLogin`, resolved once by `task_login` for the runner and `loop add` (+1).
 # Fan-out supplies its already-resolved marker checkout separately from task config.
 # Resident completion appends its assist after durable ledger publication.
-surface-budget = 47
+# `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+3).
+surface-budget = 50
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"

@@ -1777,45 +1777,98 @@ fn acquire_run_lock(path: &Path) -> Result<RunLockAttempt> {
     acquire_run_lock_file(file, path)
 }
 
-pub fn probe_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockState> {
-    Ok(match held_run_lock(name, &entry.resolved_root())? {
-        Some((_, holder)) => RunLockState::Held(holder),
-        None => RunLockState::Available,
-    })
+/// One listing of a root's `locks/`, with every run lock in it probed once.
+pub struct RunLocks {
+    files: Vec<RunLockFile>,
 }
 
-/// The held run lock of task `name` under `root`, with its holder. A fan-out
-/// task holds one lock per checkout; the earliest-started holder is the one
-/// reported, a holderless lock last.
-fn held_run_lock(name: &str, root: &Path) -> Result<Option<(PathBuf, Option<RunLockInfo>)>> {
-    let locks = run_lock_runtime(root)?.locks_dir;
-    let entries = match std::fs::read_dir(&locks) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            return Err(err)
-                .with_context(|| format!("listing loop run locks `{}`", locks.display()));
+struct RunLockFile {
+    name: String,
+    path: PathBuf,
+    state: Result<RunLockState>,
+}
+
+impl RunLocks {
+    /// List and probe the run locks under `root`; a root with no `locks/` has none.
+    pub fn list(root: &Path) -> Result<Self> {
+        let locks = run_lock_runtime(root)?.locks_dir;
+        let listing = || format!("listing loop run locks `{}`", locks.display());
+        let entries = match std::fs::read_dir(&locks) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self { files: Vec::new() });
+            }
+            Err(err) => return Err(err).with_context(listing),
+        };
+        let mut files = Vec::new();
+        for entry in entries {
+            let entry = entry.with_context(listing)?;
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if run_lock_stem(&name).is_none() {
+                continue;
+            }
+            let path = entry.path();
+            let state = probe_run_lock_path(&path);
+            files.push(RunLockFile { name, path, state });
         }
-    };
-    let mut held = Vec::new();
-    for entry in entries {
-        let entry =
-            entry.with_context(|| format!("listing loop run locks `{}`", locks.display()))?;
-        if !entry
-            .file_name()
-            .to_str()
-            .is_some_and(|file| is_run_lock_of(file, name))
-        {
-            continue;
-        }
-        let path = entry.path();
-        if let RunLockState::Held(holder) = probe_run_lock_path(&path)? {
-            held.push((path, holder));
-        }
+        Ok(Self { files })
     }
-    Ok(held
-        .into_iter()
-        .min_by_key(|(_, holder)| (holder.is_none(), holder.map(|info| info.started_at))))
+
+    /// Whether task `name` is running: held when any lock file it claims is.
+    pub fn state(&self, name: &str) -> Result<RunLockState> {
+        Ok(match self.held(name)? {
+            Some((_, holder)) => RunLockState::Held(holder),
+            None => RunLockState::Available,
+        })
+    }
+
+    /// The held locks none of `rows` claims, as task name and holder, by name.
+    /// The name is the file's whole stem, the one `in_flight_run` and
+    /// `stop_task` resolve back to that file.
+    pub fn rowless(&self, rows: &[&str]) -> Vec<(String, Option<RunLockInfo>)> {
+        let mut rowless = Vec::new();
+        for file in &self.files {
+            let Ok(RunLockState::Held(holder)) = &file.state else {
+                continue;
+            };
+            if rows.iter().any(|row| is_run_lock_of(&file.name, row)) {
+                continue;
+            }
+            if let Some(stem) = run_lock_stem(&file.name) {
+                rowless.push((stem.to_owned(), *holder));
+            }
+        }
+        rowless.sort_by(|(left, _), (right, _)| left.cmp(right));
+        rowless
+    }
+
+    /// The held run lock of task `name`, with its holder. A fan-out task holds
+    /// one lock per checkout; the earliest-started holder is the one reported,
+    /// a holderless lock last.
+    fn held(&self, name: &str) -> Result<Option<(&Path, Option<RunLockInfo>)>> {
+        let mut held = Vec::new();
+        for file in &self.files {
+            if !is_run_lock_of(&file.name, name) {
+                continue;
+            }
+            match &file.state {
+                Ok(RunLockState::Held(holder)) => held.push((file.path.as_path(), *holder)),
+                Ok(RunLockState::Available) => {}
+                Err(error) => bail!("{error:#}"),
+            }
+        }
+        Ok(held
+            .into_iter()
+            .min_by_key(|(_, holder)| (holder.is_none(), holder.map(|info| info.started_at))))
+    }
+}
+
+fn held_run_lock(name: &str, root: &Path) -> Result<Option<(PathBuf, Option<RunLockInfo>)>> {
+    Ok(RunLocks::list(root)?
+        .held(name)?
+        .map(|(path, holder)| (path.to_owned(), holder)))
 }
 
 fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
@@ -1851,6 +1904,15 @@ fn run_lock_file_name(name: &str, checkout: Option<&WorkspaceId>) -> String {
         Some(checkout) => format!("loop-run-{name}-{checkout}.lock"),
         None => format!("loop-run-{name}.lock"),
     }
+}
+
+/// The task name a bare run lock file carries, `run_lock_file_name`'s inverse.
+fn run_lock_stem(file: &str) -> Option<&str> {
+    let frame = run_lock_file_name("\0", None);
+    let (prefix, suffix) = frame.split_once('\0')?;
+    file.strip_prefix(prefix)?
+        .strip_suffix(suffix)
+        .filter(|stem| !stem.is_empty())
 }
 
 /// Whether `file` is task `name`'s run lock, bare or per-checkout.
