@@ -352,14 +352,7 @@ struct SandboxReaper {
 impl SandboxReaper {
     #[cfg(not(test))]
     fn spawn(root: &Path) -> Result<Option<Self>> {
-        // A build that relinks xtask while this process runs unlinks the path `current_exe`
-        // reads back (`/proc/self/exe` then names `… (deleted)`), and spawning that path fails
-        // with ENOENT. On Linux the magic link itself still execs the running image.
-        #[cfg(target_os = "linux")]
-        let executable = PathBuf::from("/proc/self/exe");
-        #[cfg(not(target_os = "linux"))]
-        let executable = std::env::current_exe().context("resolving xtask reaper executable")?;
-        let mut child = Command::new(executable)
+        let mut child = Command::new(self_executable()?)
             .arg(REAPER_ARG)
             .arg(root)
             .stdin(Stdio::piped())
@@ -401,6 +394,17 @@ impl SandboxReaper {
             }
         }
     }
+}
+
+/// The running xtask image, for a helper that re-enters it at a hidden argument.
+pub(crate) fn self_executable() -> Result<PathBuf> {
+    // A build that relinks xtask while this process runs unlinks the path `current_exe`
+    // reads back (`/proc/self/exe` then names `… (deleted)`), and spawning that path fails
+    // with ENOENT. On Linux the magic link itself still execs the running image.
+    if cfg!(target_os = "linux") {
+        return Ok(PathBuf::from("/proc/self/exe"));
+    }
+    std::env::current_exe().context("resolving the xtask executable")
 }
 
 pub(crate) fn run_reaper_mode(args: &[String]) -> Result<bool> {

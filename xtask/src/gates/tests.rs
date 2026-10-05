@@ -488,6 +488,8 @@ fn nextest_json_keeps_only_filterset_matches() {
     let output = r#"{
             "rust-suites": {
                 "xtask::bin/xtask": {
+                    "binary-path": "/target/debug/deps/xtask-0123",
+                    "cwd": "/checkout/xtask",
                     "testcases": {
                         "tests::matched": {
                             "filter-match": {"status": "matches"}
@@ -503,6 +505,74 @@ fn nextest_json_keeps_only_filterset_matches() {
         parse_nextest_list(output).unwrap(),
         vec!["tests::matched".to_owned()]
     );
+}
+
+fn listing(suites: &[(&str, &[(&str, &str)])]) -> String {
+    let suites: serde_json::Map<String, serde_json::Value> = suites
+        .iter()
+        .map(|(id, tests)| {
+            let testcases: serde_json::Map<String, serde_json::Value> = tests
+                .iter()
+                .map(|(name, status)| {
+                    (
+                        (*name).to_owned(),
+                        serde_json::json!({"filter-match": {"status": status}}),
+                    )
+                })
+                .collect();
+            (
+                (*id).to_owned(),
+                serde_json::json!({
+                    "binary-path": format!("/target/debug/deps/{id}-0123"),
+                    "cwd": format!("/checkout/{id}"),
+                    "testcases": testcases,
+                }),
+            )
+        })
+        .collect();
+    serde_json::json!({"rust-suites": suites}).to_string()
+}
+
+#[test]
+fn one_listed_match_resolves_to_its_binary_and_cwd() {
+    let output = listing(&[
+        ("unit", &[("doctor::mixed", "mismatch")]),
+        (
+            "integration",
+            &[("doctor::mixed", "matches"), ("doctor::other", "mismatch")],
+        ),
+    ]);
+
+    let test = sole_listed_test(&output, "doctor::mixed").unwrap();
+
+    assert_eq!(test.name, "doctor::mixed");
+    assert_eq!(
+        test.binary,
+        Path::new("/target/debug/deps/integration-0123")
+    );
+    assert_eq!(test.cwd, Path::new("/checkout/integration"));
+}
+
+#[test]
+fn zero_or_several_listed_matches_refuse_with_the_exact_name_fix() {
+    let none = listing(&[("integration", &[("doctor::mixed", "mismatch")])]);
+    let err = sole_listed_test(&none, "mixed").unwrap_err().to_string();
+    assert!(err.contains("no test is named `mixed`"), "{err}");
+    assert!(err.contains("cargo xtask test --list mixed"), "{err}");
+
+    let several = listing(&[
+        ("integration", &[("doctor::mixed", "matches")]),
+        (
+            "unit",
+            &[("cli::mixed", "matches"), ("cli::other", "mismatch")],
+        ),
+    ]);
+    let err = sole_listed_test(&several, "mixed").unwrap_err().to_string();
+    assert!(err.contains("`mixed` names 2 tests"), "{err}");
+    assert!(err.contains("\n  integration doctor::mixed"), "{err}");
+    assert!(err.contains("\n  unit cli::mixed"), "{err}");
+    assert!(!err.contains("cli::other"), "{err}");
+    assert!(err.contains("cargo xtask test --list mixed"), "{err}");
 }
 
 #[test]

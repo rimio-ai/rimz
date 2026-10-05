@@ -1237,6 +1237,9 @@ struct NextestList {
 
 #[derive(Deserialize)]
 struct ListedSuite {
+    #[serde(rename = "binary-path")]
+    binary_path: PathBuf,
+    cwd: PathBuf,
     testcases: BTreeMap<String, ListedTest>,
 }
 
@@ -1251,15 +1254,85 @@ struct ListedFilterMatch {
     status: String,
 }
 
-fn parse_nextest_list(output: &str) -> Result<Vec<String>> {
+/// Every test the filterset matched, each under its suite's binary id.
+fn listed_matches(output: &str) -> Result<Vec<(String, LocatedTest)>> {
     let listing: NextestList =
         serde_json::from_str(output).context("parsing `cargo nextest list` JSON")?;
-    Ok(listing
-        .rust_suites
-        .into_values()
-        .flat_map(|suite| suite.testcases)
-        .filter_map(|(name, test)| (test.filter_match.status == "matches").then_some(name))
+    let mut matches = Vec::new();
+    for (binary_id, suite) in listing.rust_suites {
+        for (name, test) in suite.testcases {
+            if test.filter_match.status == "matches" {
+                let located = LocatedTest {
+                    name,
+                    binary: suite.binary_path.clone(),
+                    cwd: suite.cwd.clone(),
+                };
+                matches.push((binary_id.clone(), located));
+            }
+        }
+    }
+    Ok(matches)
+}
+
+fn parse_nextest_list(output: &str) -> Result<Vec<String>> {
+    Ok(listed_matches(output)?
+        .into_iter()
+        .map(|(_, test)| test.name)
         .collect())
+}
+
+/// One test resolved to the executable that holds it.
+#[derive(Debug)]
+pub(crate) struct LocatedTest {
+    pub(crate) name: String,
+    pub(crate) binary: PathBuf,
+    pub(crate) cwd: PathBuf,
+}
+
+/// Build the workspace's test binaries and resolve `requested`, a name as
+/// `cargo xtask test --name` takes it, to the one test it names.
+pub(crate) fn locate_test(
+    root: &Path,
+    requested: &str,
+    sandbox: &HostSandbox,
+) -> Result<LocatedTest> {
+    let env = sandbox.command_env();
+    let removed = sandbox.removed_test_env();
+    let mut list_args = nextest_args("list");
+    list_args.extend([
+        "-E".to_owned(),
+        exact_name_filterset(&[requested.to_owned()]),
+        "--message-format".to_owned(),
+        "json".to_owned(),
+    ]);
+    let listed = capture_cargo_task(root, "test discovery", list_args, &env, &str_refs(&removed))?;
+    if !listed.status.success() {
+        report_task_failure(
+            "test discovery",
+            &failure_detail(&listed.output),
+            &format!("cargo xtask stress {requested}"),
+        );
+        bail!("test discovery failed");
+    }
+    sole_listed_test(&listed.stdout, requested)
+}
+
+fn sole_listed_test(output: &str, requested: &str) -> Result<LocatedTest> {
+    let mut matches = listed_matches(output)?;
+    let fix = format!(
+        "NEXT: pass one test's exact name, as `cargo xtask test --list {requested}` prints it"
+    );
+    match matches.len() {
+        0 => bail!("no test is named `{requested}`\n{fix}"),
+        1 => Ok(matches.remove(0).1),
+        several => {
+            let listed: String = matches
+                .iter()
+                .map(|(binary_id, test)| format!("\n  {binary_id} {}", test.name))
+                .collect();
+            bail!("`{requested}` names {several} tests; stress runs one:{listed}\n{fix}")
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -208,3 +208,22 @@ fn check_is_a_first_class_no_arg_task() {
             .contains("takes no arguments")
     );
 }
+
+#[test]
+fn stress_is_registered_as_a_task_that_takes_arguments() {
+    assert!(task_info("stress").is_some());
+    assert!(task_accepts_args("stress"));
+    let argv = args(&["stress", "doctor::mixed", "--copies", "10"]);
+    assert_eq!(
+        parse_args(&argv).unwrap(),
+        Action::Run {
+            task: "stress",
+            args: &argv[1..],
+        },
+    );
+    // No test name: the task's own parser refuses before anything is built.
+    let err = dispatch("stress", &[], Path::new("."))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("stress requires a test name"), "{err}");
+}
