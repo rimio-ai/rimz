@@ -269,7 +269,7 @@ Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come fro
 
 `--no-from` delivers the text with no header at all, for a script that wants the raw bytes.
 
-An agent's message lands as an ordinary conversation line, so the exchange belongs to the receiver's history like any other. `rimz transcript` reads a channel back, with each exchange grouped under the message that opened it. Its human view leaves out RimZ's own automation traffic; `rimz transcript --json` keeps everything. Name a launched child to read its separate conversation: `rimz transcript @swift-otter` ([transcript CLI](../reference/cli/transcript.md)).
+An agent's message lands as an ordinary conversation line, so the exchange belongs to the receiver's history like any other. `rimz transcript` reads a channel back, with each exchange grouped under the message that opened it. Its human view leaves out RimZ's own automation traffic; `rimz transcript --json` keeps everything. Name a launched child to read its separate conversation: `rimz transcript @swift-otter` ([transcript CLI](../reference/cli/transcript.md)). When a name could mean several agents, RimZ asks you to choose an address instead of silently opening another conversation. A live agent with no recorded lines shows an empty conversation; an unknown name fails.
 
 To keep watching a conversation, run `rimz transcript '#feature' -f`. Add `-n 10` to start with the last ten entries, then see new entries as they arrive. Stop following with Ctrl-C.
 

@@ -366,12 +366,12 @@ pub(crate) fn resolve_agent_one<'a>(
 ) -> Result<&'a AgentState> {
     resolve_hint(
         raw,
-        resolve_agent_one_unhinted(store, snapshot, raw, worktree_flag, current_channel),
+        resolve_agent_one_unhinted(Some(store), snapshot, raw, worktree_flag, current_channel),
     )
 }
 
 fn resolve_agent_one_unhinted<'a>(
-    store: &rimz::Store,
+    store: Option<&rimz::Store>,
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
@@ -383,6 +383,7 @@ fn resolve_agent_one_unhinted<'a>(
                 "@me requires an agent RimZ can identify; run this command from an agent pane"
             )
         };
+        let store = store.ok_or_else(unidentified)?;
         let caller = send::resolve_caller(store)?.ok_or_else(unidentified)?;
         let resolved = rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, &caller);
         if resolved.is_err() {

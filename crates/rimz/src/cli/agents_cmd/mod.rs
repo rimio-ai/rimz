@@ -124,7 +124,7 @@ fn resolve_live_or_audit(
     channel: Option<&str>,
 ) -> Result<(AgentState, bool)> {
     let live_error =
-        match super::resolve_agent_one_unhinted(store, snapshot, reference, None, channel) {
+        match super::resolve_agent_one_unhinted(Some(store), snapshot, reference, None, channel) {
             Ok(agent) => return Ok((agent.clone(), true)),
             Err(error) if super::resolution_missed(&error) => error,
             Err(error) => return Err(error),
