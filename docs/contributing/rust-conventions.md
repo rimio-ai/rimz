@@ -199,6 +199,8 @@ An agent tool sandbox can deny Unix socket binds: `PermissionDenied` from `UnixL
 
 Snapshot churn caused by transient IDs is a test-helper bug, not a product failure — fix the normalization.
 
+A provider stub that stays alive answers informational probes such as `--version` at once; a stub that sleeps through one spends the launch's startup deadline before the provider is spawned, and the failure appears only under full-suite load.
+
 When a change adds a verdict, marker, or timer to an existing state machine, enumerate how the new input interacts with each existing one and test the plausible simultaneous cases — at minimum a structural and a geometry change arriving together, and a pending classification against every backstop and retry path. Single-input tests pass on a machine whose bugs all live in the combined states.
 
 ## Dependency budget
