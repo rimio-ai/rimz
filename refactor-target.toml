@@ -3930,6 +3930,11 @@ reason = "The binary's supervised split and exec end-trace call the store-owned 
 
 [[verdict]]
 kind = "item"
+key = "store::agent_context::attach_child_display_context"
+reason = "The binary's subagents list joins live launched children's display context without widening the ownership and reaping guard; cli sees only pub."
+
+[[verdict]]
+kind = "item"
 key = "agents::adapters::cursor::statusline::deserialize_optional_object_lossy"
 reason = "Not the rule of transcript_fs's visitor: it swallows an inner error, so a current_usage spelling both a field and its alias degrades to None instead of failing the whole statusline payload (pinned by duplicate_usage_alias_drops_usage_without_losing_percentage, pass 25)."
 

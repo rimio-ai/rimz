@@ -1116,7 +1116,89 @@ fn child_reports_show_a_limit_parked_child_as_paused_beside_its_open_run() {
 
 #[test]
 fn nested_child_agrees_with_list_status_and_detail() {
-    let now = Timestamp::now();
+    use rimz::agents::{AgentStatus, TurnErrorClass};
+
+    for status in [AgentStatus::Running, AgentStatus::Failed] {
+        for label in [Some("Usage limit reached"), None] {
+            let (report, entry) = child_list_and_nested_entry(
+                status,
+                false,
+                Some((TurnErrorClass::PausedRateLimit, label)),
+            );
+            assert_eq!(report.status, "paused", "stored status: {status:?}");
+            assert_eq!(entry.status.as_str(), report.status);
+            assert_eq!(
+                report.detail().as_deref(),
+                Some(label.unwrap_or("rate limit"))
+            );
+            assert_eq!(entry.turn_error_label, report.detail());
+            assert_eq!(report.run_status.as_deref(), Some("running"));
+            let value = serde_json::to_value(report).expect("serialize child report");
+            assert_eq!(value["status"], "paused");
+            assert_eq!(value["turn_error"]["class"], "paused_rate_limit");
+            assert_eq!(value["turn_error"]["label"], serde_json::json!(label));
+        }
+    }
+}
+
+#[test]
+fn ended_child_keeps_its_settled_status_in_list_and_nested_entry() {
+    use rimz::agents::{AgentStatus, TurnErrorClass};
+
+    let (report, entry) = child_list_and_nested_entry(
+        AgentStatus::Failed,
+        true,
+        Some((TurnErrorClass::PausedRateLimit, Some("Usage limit reached"))),
+    );
+    assert_eq!(report.status, "failed");
+    assert_eq!(entry.status.as_str(), report.status);
+    assert!(report.turn_error.is_none());
+    assert!(report.detail().is_none());
+    assert!(entry.turn_error_label.is_none());
+    assert_eq!(report.run_status.as_deref(), Some("running"));
+}
+
+#[test]
+fn failed_child_without_sidecar_stays_failed_in_list_and_nested_entry() {
+    let (report, entry) =
+        child_list_and_nested_entry(rimz::agents::AgentStatus::Failed, false, None);
+    assert_eq!(report.status, "failed");
+    assert_eq!(entry.status.as_str(), report.status);
+    assert!(report.turn_error.is_none());
+    assert!(entry.turn_error_label.is_none());
+    assert_eq!(report.run_status.as_deref(), Some("running"));
+}
+
+#[test]
+fn failed_child_with_non_pausing_error_shows_its_provider_label() {
+    use rimz::agents::{AgentStatus, TurnErrorClass};
+
+    let (report, entry) = child_list_and_nested_entry(
+        AgentStatus::Failed,
+        false,
+        Some((TurnErrorClass::Failed, Some("Provider failed"))),
+    );
+    assert_eq!(report.status, "failed");
+    assert_eq!(report.detail().as_deref(), Some("Provider failed"));
+    assert_eq!(entry.status.as_str(), report.status);
+    assert_eq!(entry.turn_error_label, report.detail());
+    assert_eq!(report.run_status.as_deref(), Some("running"));
+    let value = serde_json::to_value(report).expect("serialize child report");
+    assert_eq!(value["turn_error"]["class"], "failed");
+    assert_eq!(value["turn_error"]["label"], "Provider failed");
+}
+
+fn child_list_and_nested_entry(
+    status: rimz::agents::AgentStatus,
+    ended: bool,
+    error: Option<(rimz::agents::TurnErrorClass, Option<&str>)>,
+) -> (ChildReport, rimz::store::snapshot::SidebarSubAgent) {
+    let now = Timestamp::from_second(1_700_000_000).expect("valid timestamp");
+    let dir = tempfile::tempdir().expect("context tempdir");
+    let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
+    let runtime =
+        rimz::disk::paths::RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime"))
+            .expect("runtime paths");
     let mut parent =
         rimz::agents::AgentState::stub("claude", "parent", rimz::agents::AgentStatus::Idle);
     parent.worktree_path = Some("/repo/main".to_owned());
@@ -1125,30 +1207,35 @@ fn nested_child_agrees_with_list_status_and_detail() {
     }))
     .unwrap();
     parent.pane = Some(pane.clone());
-    let mut child =
-        rimz::agents::AgentState::stub("claude", "child", rimz::agents::AgentStatus::Running);
+    let mut child = rimz::agents::AgentState::stub("claude", "child", status);
     child.parent_agent_id = Some(parent.agent_id.clone());
     child.parent_agent_kind = Some(parent.kind.clone());
     child.launch_depth = Some(1);
-    let mut context = rimz::agents::AgentContext::new("claude", now);
-    context.turn_error = Some(rimz::agents::AgentTurnError {
-        class: rimz::agents::TurnErrorClass::PausedRateLimit,
-        at: child.last_activity + Duration::from_secs(1),
-        label: None,
-    });
-    child.context = Some(context);
-    let agents = vec![parent, child.clone()];
-    let report = child_reports(&agents, &[&child], &[], now).remove(0);
-    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
-        rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo/main")),
-        agents,
-        now,
-    );
-    let snapshot = snapshot.with_live_panes(vec![pane], None);
-    let entry = &snapshot.worktree_groups[0].rows[0].sub_agents()[0];
-    assert_eq!(entry.status.as_str(), report.status);
-    assert_eq!(entry.status, child.rowless_status().0);
-    assert_eq!(entry.turn_error_label, report.detail());
+    child.turn_started_at = Some(now - Duration::from_secs(10));
+    child.last_activity = now - Duration::from_secs(1);
+    child.ended_at = ended.then_some(now);
+    if let Some((class, label)) = error {
+        let mut context = rimz::agents::AgentContext::new("claude", now);
+        context.turn_error = Some(rimz::agents::AgentTurnError {
+            class,
+            at: now,
+            label: label.map(str::to_owned),
+        });
+        let record =
+            rimz::agents::context::record::AgentContextRecord::new("claude", "child", context);
+        rimz::store::agent_context::write_record(&runtime, &record).expect("context sidecar");
+    }
+    let run = child_run(&child, rimz::store::run::RunStatus::Running, now);
+    let agents = vec![parent, child];
+    let mut list_agents = agents.clone();
+    attach_list_context(&runtime, &mut list_agents);
+    let report = child_reports(&list_agents, &[&list_agents[1]], &[run], now).remove(0);
+    let snapshot =
+        rimz::store::snapshot::SidebarSnapshot::build_with_agents(workspace_id, agents, now)
+            .with_agent_context(rimz::store::agent_context::read_all(&runtime))
+            .with_live_panes(vec![pane], None);
+    let entry = snapshot.worktree_groups[0].rows[0].sub_agents()[0].clone();
+    (report, entry)
 }
 
 #[test]
