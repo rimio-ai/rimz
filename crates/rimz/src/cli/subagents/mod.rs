@@ -771,7 +771,7 @@ fn child_reports(
     rows.sort_by_key(|(_, run)| match run {
         Some(run) => (
             u8::from(run.status.is_terminal()),
-            Some(Reverse(answer_start(run))),
+            Some(Reverse(run.answer_started_at())),
         ),
         None => (2, None),
     });
@@ -809,14 +809,14 @@ fn child_reports(
                     }),
                 run_id: run.map(|run| run.run_id.to_string()),
                 run_status: run.map(|run| run.status.as_str().to_owned()),
-                started_at: run.map(answer_start),
+                started_at: run.map(rimz::store::run::RunRecord::answer_started_at),
                 elapsed_secs: run.map(|run| {
                     let end = if run.status.is_terminal() {
                         run.completed_at.unwrap_or(run.updated_at)
                     } else {
                         now
                     };
-                    end.duration_since(answer_start(run)).as_secs().max(0) as u64
+                    end.duration_since(run.answer_started_at()).as_secs().max(0) as u64
                 }),
             }
         })
@@ -878,13 +878,6 @@ fn peer_handle(agents: &[AgentState], agent: &AgentState) -> String {
         .filter(|agent| !agent.is_provider_subagent())
         .collect::<Vec<_>>();
     rimz::address::agent_handle(agent, &peers, false)
-}
-
-/// The start of the answer a run is on now: a follow-up reopens the record without moving `started_at`.
-fn answer_start(run: &rimz::store::run::RunRecord) -> jiff::Timestamp {
-    run.follow_up
-        .as_ref()
-        .map_or(run.started_at, |turn| turn.started_at)
 }
 
 fn newest_run_for_child<'a>(

@@ -351,6 +351,13 @@ impl RunRecord {
         self.status.is_terminal() && self.answer_claims().any(|claim| claim.owed)
     }
 
+    /// The start of the answer this run is on now: a follow-up reopens the record without moving `started_at`.
+    pub fn answer_started_at(&self) -> Timestamp {
+        self.follow_up
+            .as_ref()
+            .map_or(self.started_at, |turn| turn.started_at)
+    }
+
     /// Whether this run outlives its parent agent: kept, or launched detached.
     pub fn survives_parent(&self) -> bool {
         self.keep || self.report_to == ReportTo::Nobody

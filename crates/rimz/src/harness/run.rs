@@ -913,10 +913,7 @@ fn fold_lifecycle(
         (None, None) | (Some(_), Some(_)) => {}
     }
     if reopen {
-        let started_at = record
-            .follow_up
-            .as_ref()
-            .map_or(record.started_at, |turn| turn.started_at);
+        let started_at = record.answer_started_at();
         record
             .earlier_answers
             .retain(|answer| answer.joined_at.is_none());
