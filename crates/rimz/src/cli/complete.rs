@@ -270,17 +270,20 @@ pub(crate) fn worktrees() -> Vec<CompletionCandidate> {
     let Some(context) = room_context() else {
         return Vec::new();
     };
-    worktrees_from(&context)
+    worktree_candidates(&owned_worktrees(&context))
 }
 
-fn worktrees_from(context: &RoomContext) -> Vec<CompletionCandidate> {
-    rimz::worktree::discover_owned(&context.workspace.project_root)
-        .unwrap_or_default()
-        .into_iter()
+fn owned_worktrees(context: &RoomContext) -> Vec<rimz::worktree::ManagedWorktree> {
+    rimz::worktree::discover_owned(&context.workspace.project_root).unwrap_or_default()
+}
+
+fn worktree_candidates(worktrees: &[rimz::worktree::ManagedWorktree]) -> Vec<CompletionCandidate> {
+    worktrees
+        .iter()
         .map(|worktree| {
             candidate(
-                worktree.marker.name,
-                worktree.branch.unwrap_or_else(|| "detached".to_owned()),
+                &worktree.marker.name,
+                worktree.branch.as_deref().unwrap_or("detached"),
             )
         })
         .collect()
@@ -290,32 +293,69 @@ pub(crate) fn channels() -> Vec<CompletionCandidate> {
     let Some(context) = room_context() else {
         return Vec::new();
     };
-    channels_from(&context)
+    launch_channels(&context.snapshot.agents, &owned_worktrees(&context))
 }
 
-fn channels_from(context: &RoomContext) -> Vec<CompletionCandidate> {
-    context
-        .snapshot
-        .agents
+/// Lanes an explicit `--channel` stamped on agents that have not ended. A
+/// worktree's own agents carry their checkout's name as the stamp, so the
+/// checkout tells the two apart, as in `rimz::channel::admit_worktree_name`.
+fn explicit_lanes(agents: &[AgentState]) -> std::collections::BTreeSet<&str> {
+    agents
         .iter()
-        .filter_map(rimz::agents::AgentState::channel)
-        .collect::<std::collections::BTreeSet<_>>()
+        .filter(|agent| agent.ended_at.is_none())
+        .filter_map(|agent| {
+            let lane = agent.channel.as_deref()?;
+            let checkout = agent
+                .worktree_path
+                .as_deref()
+                .and_then(|path| std::path::Path::new(path).file_name());
+            (checkout != Some(std::ffi::OsStr::new(lane))).then_some(lane)
+        })
+        .collect()
+}
+
+/// The explicit lanes `rimz::channel::admit_launch` would accept. Admission
+/// names a worktree by its branch; its directory name is the lane its own
+/// agents stamp, so neither is offered.
+fn launch_channels(
+    agents: &[AgentState],
+    worktrees: &[rimz::worktree::ManagedWorktree],
+) -> Vec<CompletionCandidate> {
+    explicit_lanes(agents)
         .into_iter()
+        .filter(|lane| rimz::channel::valid_name(lane))
+        .filter(|lane| {
+            !worktrees.iter().any(|worktree| {
+                worktree.marker.name == *lane || worktree.branch.as_deref() == Some(lane)
+            })
+        })
         .map(CompletionCandidate::new)
         .collect()
+}
+
+fn scope_candidates(
+    agents: &[AgentState],
+    worktrees: &[rimz::worktree::ManagedWorktree],
+) -> Vec<CompletionCandidate> {
+    let mut candidates = worktree_candidates(worktrees);
+    for lane in explicit_lanes(agents) {
+        if worktrees
+            .iter()
+            .any(|worktree| worktree.marker.name == lane)
+        {
+            continue;
+        }
+        candidates.push(CompletionCandidate::new(lane));
+        candidates.push(CompletionCandidate::new(format!("#{lane}")));
+    }
+    candidates
 }
 
 pub(crate) fn scope_names() -> Vec<CompletionCandidate> {
     let Some(context) = room_context() else {
         return Vec::new();
     };
-    let mut candidates = worktrees_from(&context);
-    for channel in channels_from(&context) {
-        let name = channel.get_value().to_string_lossy();
-        candidates.push(CompletionCandidate::new(name.as_ref()));
-        candidates.push(CompletionCandidate::new(format!("#{name}")));
-    }
-    candidates
+    scope_candidates(&context.snapshot.agents, &owned_worktrees(&context))
 }
 
 pub(crate) fn transcript_targets() -> Vec<CompletionCandidate> {
@@ -323,9 +363,16 @@ pub(crate) fn transcript_targets() -> Vec<CompletionCandidate> {
         return Vec::new();
     };
     let mut candidates = handles_from_agents(&context.snapshot.agents);
-    candidates.extend(channels_from(&context).into_iter().map(|channel| {
-        CompletionCandidate::new(format!("#{}", channel.get_value().to_string_lossy()))
-    }));
+    candidates.extend(
+        context
+            .snapshot
+            .agents
+            .iter()
+            .filter_map(AgentState::channel)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|lane| CompletionCandidate::new(format!("#{lane}"))),
+    );
     candidates
 }
 
@@ -403,6 +450,94 @@ mod tests {
             .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
             .collect();
         assert_eq!(values, ["@coder", "@all"]);
+    }
+
+    fn lane_agent(channel: Option<&str>, worktree_path: &str) -> AgentState {
+        AgentState {
+            channel: channel.map(str::to_owned),
+            worktree_path: Some(worktree_path.to_owned()),
+            ..rimz::testkit::agent_state("claude", "sess", jiff::Timestamp::UNIX_EPOCH)
+        }
+    }
+
+    fn managed_worktree(name: &str, branch: &str) -> rimz::worktree::ManagedWorktree {
+        let path = std::path::PathBuf::from(format!("/repo/.worktrees/{name}"));
+        rimz::worktree::ManagedWorktree {
+            marker: rimz::worktree::WorktreeMarker {
+                version: 1,
+                name: name.to_owned(),
+                branch: branch.to_owned(),
+                base_branch: None,
+                from_pr: None,
+                base_ref: "main".to_owned(),
+                repo_root: "/repo".into(),
+                worktree_path: path.clone(),
+                created_at: jiff::Timestamp::UNIX_EPOCH,
+            },
+            path,
+            branch: Some(branch.to_owned()),
+        }
+    }
+
+    fn lane_fixture() -> (Vec<AgentState>, Vec<rimz::worktree::ManagedWorktree>) {
+        let ended = AgentState {
+            ended_at: Some(jiff::Timestamp::UNIX_EPOCH),
+            ..lane_agent(Some("old"), "/repo")
+        };
+        let agents = vec![
+            lane_agent(Some("design"), "/repo"),
+            lane_agent(Some("design"), "/repo"),
+            ended,
+            lane_agent(Some("feat"), "/repo/.worktrees/feat"),
+            lane_agent(None, "/repo"),
+            lane_agent(Some("forge/cell"), "/repo"),
+            lane_agent(Some("owned"), "/repo"),
+            lane_agent(Some("topic/owned"), "/repo"),
+        ];
+        let worktrees = vec![
+            managed_worktree("feat", "feat"),
+            managed_worktree("owned", "topic/owned"),
+        ];
+        (agents, worktrees)
+    }
+
+    fn values(candidates: &[CompletionCandidate]) -> Vec<String> {
+        candidates
+            .iter()
+            .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn channel_completion_offers_only_lanes_a_launch_accepts() {
+        let (agents, worktrees) = lane_fixture();
+
+        assert_eq!(values(&launch_channels(&agents, &worktrees)), ["design"]);
+    }
+
+    #[test]
+    fn scope_completion_names_each_lane_once_and_keeps_worktree_branches() {
+        let (agents, worktrees) = lane_fixture();
+
+        let candidates = scope_candidates(&agents, &worktrees);
+
+        assert_eq!(
+            values(&candidates),
+            [
+                "feat",
+                "owned",
+                "design",
+                "#design",
+                "forge/cell",
+                "#forge/cell",
+                "topic/owned",
+                "#topic/owned",
+            ]
+        );
+        assert_eq!(
+            candidates[1].get_help().map(ToString::to_string).as_deref(),
+            Some("topic/owned")
+        );
     }
 
     #[test]
