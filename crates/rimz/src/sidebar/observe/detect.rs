@@ -568,10 +568,20 @@ impl Observer {
             };
             let order = deserialize_order(&from.value);
             let via_order = deserialize_order(&via.value);
-            // Ranking follows status, so a member whose ranking status differs
-            // between the frame the order left and the frame it returned on
-            // explains the reorder: a short turn or an answered ask.
-            if order_set(&order) != order_set(&via_order) || via.payload != back.payload {
+            if order_set(&order) != order_set(&via_order) {
+                continue;
+            }
+            // Ranking follows status, so a row that moved and whose ranking
+            // status differs between the frame the order left and the frame it
+            // returned on explains the reorder: a short turn or an answered
+            // ask. A row whose status changed and thereby reordered the group
+            // always moved itself; a cohort block moves with its members.
+            let explained_by_status = order
+                .iter()
+                .zip(&via_order)
+                .filter(|(was, flipped)| was != flipped)
+                .any(|(row_id, _)| via.payload.get(row_id) != back.payload.get(row_id));
+            if explained_by_status {
                 continue;
             }
             drafts.push(AnomalyDraft::from_sig(
