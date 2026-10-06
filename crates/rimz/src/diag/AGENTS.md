@@ -10,6 +10,10 @@ Local contract for `crates/rimz/src/diag/` — append-only JSONL evidence. Exten
 - **Only the sink touches disk.** Pure projection layers return diagnostics as data and hand them to `DiagSink`, so a fold stays testable and quiet.
 - Rate limiting lives with the sink: an identity window plus a per-kind ceiling bounds a loop that would otherwise flood the log.
 
+## Wire compatibility
+
+A new key or record shape on a diagnostic JSONL surface gets a new serde tag, never a distinguishing field on an existing variant. Older builds skip a line they cannot decode, but ignore unknown fields and would read that record as the old shape. Builds of different ages can share one home, so preserve existing tags and identities rather than silently changing their meaning.
+
 ## Accountability
 
 An internal repair keeps a durable record of what it did — [`focus_repair.rs`](./focus_repair.rs) is the worked example, pairing automatic sidebar focus repair with its own rotating log. User-benefiting automation instead appends an assist record and surfaces in `rimz stats`; the split lives in [loops.md](../../../../docs/internals/harness/loops.md#the-assist-log).
