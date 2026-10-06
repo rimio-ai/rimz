@@ -23,68 +23,64 @@ fn legacy_provider_aggregates_decode_as_default_logins() {
 #[test]
 fn provider_key_vocabulary_keeps_prior_shapes_and_round_trips_new_ones() {
     let login = || "claude@default".parse::<crate::ids::LoginKey>().unwrap();
-    let mana = |field| AggregateKey::ProviderMana {
+    let mana_field = |field| AggregateKey::ProviderManaField {
         login: login(),
         scope_id: None,
         duration_mins: Some(300),
         field,
     };
+    let period = |period| AggregateKey::ProviderSpendPeriod {
+        login: login(),
+        period,
+    };
     let rows = [
         (
-            AggregateKey::ProviderSpend {
-                login: login(),
-                period: SpendPeriod::Year,
-            },
+            AggregateKey::ProviderSpend { login: login() },
             r#"{"aggregate":"provider_spend","login":"claude@default"}"#,
             "provider_spend:claude@default",
         ),
         (
-            AggregateKey::ProviderSpend {
-                login: login(),
-                period: SpendPeriod::Headline,
-            },
-            r#"{"aggregate":"provider_spend","login":"claude@default","period":"headline"}"#,
+            period(SpendPeriod::Headline),
+            r#"{"aggregate":"provider_spend_period","login":"claude@default","period":"headline"}"#,
             "provider_spend:claude@default:headline",
         ),
         (
-            AggregateKey::ProviderSpend {
-                login: login(),
-                period: SpendPeriod::Week,
-            },
-            r#"{"aggregate":"provider_spend","login":"claude@default","period":"week"}"#,
+            period(SpendPeriod::Week),
+            r#"{"aggregate":"provider_spend_period","login":"claude@default","period":"week"}"#,
             "provider_spend:claude@default:week",
         ),
         (
-            AggregateKey::ProviderSpend {
-                login: login(),
-                period: SpendPeriod::Month,
-            },
-            r#"{"aggregate":"provider_spend","login":"claude@default","period":"month"}"#,
+            period(SpendPeriod::Month),
+            r#"{"aggregate":"provider_spend_period","login":"claude@default","period":"month"}"#,
             "provider_spend:claude@default:month",
         ),
         (
-            mana(WindowField::UsedPercentage),
+            AggregateKey::ProviderMana {
+                login: login(),
+                scope_id: None,
+                duration_mins: Some(300),
+            },
             r#"{"aggregate":"provider_mana","login":"claude@default","duration_mins":300}"#,
             "provider_mana:claude@default:300",
         ),
         (
-            mana(WindowField::ResetsAt),
-            r#"{"aggregate":"provider_mana","login":"claude@default","duration_mins":300,"field":"resets_at"}"#,
+            mana_field(WindowField::ResetsAt),
+            r#"{"aggregate":"provider_mana_field","login":"claude@default","duration_mins":300,"field":"resets_at"}"#,
             "provider_mana:claude@default:300:resets_at",
         ),
         (
-            mana(WindowField::Lifted),
-            r#"{"aggregate":"provider_mana","login":"claude@default","duration_mins":300,"field":"lifted"}"#,
+            mana_field(WindowField::Lifted),
+            r#"{"aggregate":"provider_mana_field","login":"claude@default","duration_mins":300,"field":"lifted"}"#,
             "provider_mana:claude@default:300:lifted",
         ),
         (
-            AggregateKey::ProviderMana {
+            AggregateKey::ProviderManaField {
                 login: login(),
                 scope_id: Some("premium".to_owned()),
                 duration_mins: None,
                 field: WindowField::ResetsAt,
             },
-            r#"{"aggregate":"provider_mana","login":"claude@default","scope_id":"premium","duration_mins":null,"field":"resets_at"}"#,
+            r#"{"aggregate":"provider_mana_field","login":"claude@default","scope_id":"premium","duration_mins":null,"field":"resets_at"}"#,
             "provider_mana:claude@default:scope:premium:resets_at",
         ),
     ];
@@ -119,13 +115,17 @@ fn provider_key_vocabulary_keeps_prior_shapes_and_round_trips_new_ones() {
         );
     }
 
-    let legacy_period: AggregateKey =
-        serde_json::from_str(r#"{"aggregate":"provider_spend","kind":"claude","period":"week"}"#)
-            .unwrap();
-    assert_eq!(
-        legacy_period.identity(),
-        "provider_spend:claude@default:week"
-    );
+    // A field an older build would have ignored is never how a key is told
+    // apart: the year and used-% variants reject nothing but carry no member
+    // a reader could miss.
+    for wire in [
+        r#"{"aggregate":"provider_spend","login":"claude@default","period":"week"}"#,
+        r#"{"aggregate":"provider_mana","login":"claude@default","duration_mins":300,"field":"lifted"}"#,
+    ] {
+        let key: AggregateKey = serde_json::from_str(wire).unwrap();
+        let json = serde_json::to_value(&key).unwrap();
+        assert!(json.get("period").is_none() && json.get("field").is_none());
+    }
 }
 
 fn workspace_id() -> WorkspaceId {
@@ -737,7 +737,6 @@ fn representative_events_keep_json_wire_shape() {
                 anomaly: AnomalyKind::AggregateOscillation {
                     aggregate: AggregateKey::ProviderSpend {
                         login: "claude@default".parse().unwrap(),
-                        period: SpendPeriod::Year,
                     },
                     from: "1234".to_owned(),
                     via: "0".to_owned(),
@@ -770,13 +769,11 @@ fn provider_mana_identity_prefers_scope_and_keeps_legacy_duration_wire() {
         login: "plugin@default".parse().unwrap(),
         scope_id: Some("build_minutes".to_owned()),
         duration_mins: None,
-        field: WindowField::UsedPercentage,
     };
     let deployment = AggregateKey::ProviderMana {
         login: "plugin@default".parse().unwrap(),
         scope_id: Some("deployments".to_owned()),
         duration_mins: None,
-        field: WindowField::UsedPercentage,
     };
     assert_ne!(build.identity(), deployment.identity());
     assert_eq!(
