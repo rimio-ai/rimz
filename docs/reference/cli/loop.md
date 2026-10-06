@@ -454,7 +454,7 @@ Listing is read-only and never creates a room store. Malformed local task state 
 
 ### `loop watch`
 
-`loop watch` holds the list open as a live dashboard, repainting countdowns and each running task's `▸ running 3m` every second. A run whose task row is gone is a running row there too, counted in the band's totals and never its `next:`; the dashboard prints no lock warnings. It is the loop pane in the room's `rimzd` tab.
+`loop watch` holds this room's tasks open as a compact live dashboard, repainting countdowns and each running task's `▸ running 3m` every second. From a worktree it still shows the whole room; outside any project it shows every known room. Its last-run columns use the same acting results as `list` and `show`, so sibling signals do not replace a good or failed run; with no acting run they read `heard <signal>`. Off, paused, and waiting-for-room tasks keep the list's state words. The band counts running, failed, held, and ok tasks; clocks waiting for a room are excluded from `next:`. A run whose task row is gone is a running row there too, counted in the band's totals and never its `next:`; the dashboard prints no lock warnings. It is the loop pane in the room's `rimzd` tab.
 
 ### `loop show`
 

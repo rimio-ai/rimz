@@ -6288,6 +6288,135 @@ fn loop_list_warns_once_when_the_run_locks_cannot_be_listed() {
 }
 
 #[test]
+fn loop_watch_keeps_acting_results_after_skipped_signals() {
+    use rimz::harness::schedule::run_log::SignalRecord;
+
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &toml::to_string(&LoopConfig {
+            tasks: Tasks(
+                ["good", "bad", "heard"]
+                    .map(|name| {
+                        (
+                            name.into(),
+                            TaskEntry {
+                                root: env.project_root.clone(),
+                                check: Some("true".into()),
+                                signal: Some("ci.failed".into()),
+                                ..TaskEntry::default()
+                            },
+                        )
+                    })
+                    .into(),
+            ),
+            ..LoopConfig::default()
+        })
+        .unwrap(),
+    );
+    let mut records = Vec::new();
+    for (name, result) in [
+        ("good", LoopRunResult::Completed),
+        ("bad", LoopRunResult::Failed),
+    ] {
+        let mut record = LoopRunRecord::new(name, result, LoopRunMode::Manual, 0);
+        record.root = Some(env.project_root.clone());
+        record.at = Timestamp::now() - SignedDuration::from_mins(10);
+        records.push(record);
+    }
+    for minutes in [7, 6, 5] {
+        for name in ["good", "bad", "heard"] {
+            let mut record =
+                LoopRunRecord::new(name, LoopRunResult::SignalSkipped, LoopRunMode::Manual, 0);
+            record.root = Some(env.project_root.clone());
+            record.at = Timestamp::now() - SignedDuration::from_mins(minutes);
+            record.signal = Some(SignalRecord {
+                name: "ci.passed".parse().unwrap(),
+                payload: serde_json::Map::new(),
+            });
+            records.push(record);
+        }
+    }
+    write_loop_run_records(&env, &records);
+
+    let output = loop_watch_frames(&env);
+    let good = output.lines().find(|line| line.contains("good")).unwrap();
+    assert!(
+        good.contains("10m ago") && good.contains("completed"),
+        "{output}"
+    );
+    let bad = output.lines().find(|line| line.contains("bad")).unwrap();
+    assert!(
+        bad.contains("10m ago") && bad.contains("failed"),
+        "{output}"
+    );
+    assert!(output.contains("✗ 1 failed"), "{output}");
+    assert!(output.contains("heard ci.passed"), "{output}");
+    assert!(!output.contains("skipped"), "{output}");
+}
+
+#[test]
+fn loop_watch_scopes_to_the_whole_callers_room() {
+    let env = Env::new();
+    let checkout = env.home_root.join("checkout");
+    let elsewhere = env.home_root.join("elsewhere");
+    std::fs::create_dir(&checkout).unwrap();
+    std::fs::create_dir(&elsewhere).unwrap();
+    write_loop_config(
+        &env,
+        &toml::to_string(&LoopConfig {
+            tasks: Tasks(BTreeMap::from([
+                (
+                    "local".into(),
+                    TaskEntry {
+                        root: env.project_root.clone(),
+                        check: Some("true".into()),
+                        every: Some("1h".into()),
+                        ..TaskEntry::default()
+                    },
+                ),
+                (
+                    "bound".into(),
+                    TaskEntry {
+                        root: env.project_root.clone(),
+                        dir: Some(checkout),
+                        check: Some("true".into()),
+                        every: Some("1h".into()),
+                        ..TaskEntry::default()
+                    },
+                ),
+                (
+                    "remote-task".into(),
+                    TaskEntry {
+                        root: elsewhere,
+                        check: Some("true".into()),
+                        every: Some("1h".into()),
+                        ..TaskEntry::default()
+                    },
+                ),
+            ])),
+            ..LoopConfig::default()
+        })
+        .unwrap(),
+    );
+
+    let output = loop_watch_frames(&env);
+    assert!(output.contains("loop · 2 tasks"), "{output}");
+    assert!(
+        output.contains("local") && output.contains("bound"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("remote-task") && !output.contains("~/elsewhere"),
+        "{output}"
+    );
+    assert!(
+        output.contains("waits for room") && !output.contains("next:"),
+        "{output}"
+    );
+}
+
+#[test]
 fn loop_watch_shows_a_run_whose_task_row_is_gone() {
     let env = Env::new();
     let holder = RunLockInfo {
@@ -6353,9 +6482,10 @@ fn loop_watch_stays_silent_and_drops_a_group_holding_only_a_listing_error() {
     let output = loop_watch_frames(&env);
 
     assert!(
-        output.contains("loop · 1 tasks")
-            && output.contains("~/elsewhere")
-            && output.contains("remote-task")
+        output.contains("loop · 0 tasks")
+            && output.contains("no loop tasks")
+            && !output.contains("~/elsewhere")
+            && !output.contains("remote-task")
             && !output.contains("~/project")
             && !output.contains("warning")
             && !output.contains("listing loop run locks"),
@@ -8569,8 +8699,7 @@ fn wait_for_path(path: &Path) {
     assert!(path.exists(), "timed out waiting for {}", path.display());
 }
 
-/// Run `loop watch --hold` in a pty from the project root for about one
-/// repaint, and return everything it wrote, stderr included.
+/// Run `loop watch --hold` in a pty through its first complete repaint, and return everything it wrote, stderr included.
 fn loop_watch_frames(env: &Env) -> String {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -8588,16 +8717,33 @@ fn loop_watch_frames(env: &Env) -> String {
     let mut child = pair.slave.spawn_command(cmd).expect("spawn loop watch");
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let reader_thread = std::thread::spawn(move || {
         let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
+        let mut buffer = [0; 4096];
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            output.extend_from_slice(&buffer[..count]);
+            // replace_frame ends each complete repaint with Clear(FromCursorDown).
+            if output.windows(3).any(|bytes| bytes == b"\x1b[J") {
+                let _ = ready_tx.send(());
+            }
+        }
         output
     });
-    std::thread::sleep(Duration::from_millis(1_200));
+    let ready = ready_rx.recv_timeout(Duration::from_secs(15));
     child.kill().expect("terminate loop watch");
     let _ = child.wait().expect("reap loop watch");
     drop(pair.master);
-    String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned()
+    let output = reader_thread.join().expect("join pty reader");
+    let output = String::from_utf8_lossy(&output).into_owned();
+    assert!(
+        ready.is_ok(),
+        "loop watch did not repaint: {ready:?}\n{output}"
+    );
+    output
 }
 
 fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {

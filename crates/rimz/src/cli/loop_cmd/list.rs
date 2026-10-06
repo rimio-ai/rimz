@@ -86,6 +86,17 @@ pub(super) enum TaskState {
 }
 
 impl TaskState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Off => "off",
+            Self::NotEnabled => "off · repo task, enable here to run",
+            Self::Paused => "paused",
+            Self::Running => "running",
+            Self::WaitsForRoom => "waits for room",
+        }
+    }
+
     pub(super) fn observe(timing: &schedule::TaskTiming, running: bool, open: bool) -> Self {
         if running {
             return Self::Running;
@@ -105,6 +116,23 @@ impl TaskState {
             ArmState::Live => Self::Live,
         }
     }
+
+    pub(super) fn held_text(state: &schedule::TaskTimingState, now: Timestamp) -> Option<String> {
+        Some(match state {
+            schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => {
+                Self::NotEnabled.label().into()
+            }
+            schedule::TaskTimingState::Disabled(_) => Self::Off.label().into(),
+            schedule::TaskTimingState::Paused(until) => {
+                format!(
+                    "{}, resumes {}",
+                    Self::Paused.label(),
+                    ui::rel_until(*until, now)
+                )
+            }
+            _ => return None,
+        })
+    }
 }
 
 #[derive(PartialEq, Eq, Serialize)]
@@ -120,17 +148,19 @@ struct Owner {
 }
 
 #[derive(Serialize)]
-struct LastRun {
-    at: Timestamp,
+pub(super) struct LastRun {
+    pub(super) at: Timestamp,
     result: LoopRunResult,
-    ok: bool,
+    pub(super) ok: bool,
     streak: usize,
+    #[serde(skip)]
+    pub(super) record: LoopRunRecord,
 }
 
 #[derive(Serialize)]
-struct Heard {
-    signal: String,
-    at: Timestamp,
+pub(super) struct Heard {
+    pub(super) signal: String,
+    pub(super) at: Timestamp,
 }
 
 #[derive(Serialize)]
@@ -157,9 +187,9 @@ pub(super) struct TaskRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) running_since: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    last: Option<LastRun>,
+    pub(super) last: Option<LastRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    heard: Option<Heard>,
+    pub(super) heard: Option<Heard>,
     spend_today_usd: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     budget_per_day_usd: Option<f64>,
@@ -488,6 +518,7 @@ impl TaskRow {
             result: acting.record.result,
             ok: acting.polarity == run_log::RunPolarity::Good,
             streak: acting.streak,
+            record: acting.record.clone(),
         });
         self.exit = stats
             .acting
@@ -499,11 +530,38 @@ impl TaskRow {
         });
     }
 
+    pub(super) fn state_text(&self, now: Timestamp) -> String {
+        if self.state == TaskState::Running {
+            return render::in_flight_text(self.running.flatten(), &self.held, now);
+        }
+        if matches!(
+            self.attention,
+            Some(Attention::CheckoutGone | Attention::Blocked | Attention::Invalid)
+        ) {
+            return self.reason.clone();
+        }
+        if self.state == TaskState::WaitsForRoom {
+            return self.state.label().into();
+        }
+        let Some(timing) = &self.timing else {
+            return "—".into();
+        };
+        if let Some(text) = TaskState::held_text(&timing.state(), now) {
+            return text;
+        }
+        match timing.state() {
+            schedule::TaskTimingState::Due(_) => "due".into(),
+            schedule::TaskTimingState::Upcoming(next) => ui::until_label(next, now),
+            schedule::TaskTimingState::Listening { .. }
+            | schedule::TaskTimingState::Watching { .. } => self.head.clone(),
+            state => state.condition_label().unwrap_or_else(|| "—".into()),
+        }
+    }
+
     pub(super) fn last_text(&self, now: Timestamp) -> String {
         let mut parts = vec![match self.state {
-            TaskState::Running => render::in_flight_text(self.running.flatten(), &self.held, now),
-            TaskState::Off => "off".into(),
-            TaskState::NotEnabled => "off · repo task, enable here to run".into(),
+            TaskState::Running => self.state_text(now),
+            TaskState::Off | TaskState::NotEnabled => self.state.label().into(),
             _ => match &self.last {
                 Some(last) if last.ok => {
                     let mut text = format!("✓ {}", ui::rel_age(last.at, now));
@@ -619,7 +677,7 @@ fn trigger_text(
             Trigger::Schedule(_) => {
                 let mut head = parsed.describe();
                 if state == TaskState::WaitsForRoom {
-                    head.push_str(" · waits for room");
+                    head.push_str(&format!(" · {}", state.label()));
                 } else if let Some(next) = timing.next_timestamp() {
                     head.push_str(&format!(" · next {}", ui::rel_until(next, now)));
                 }
@@ -631,8 +689,10 @@ fn trigger_text(
     if let Some(label) = &entry.label {
         head.push_str(&format!(" · {label}"));
     }
-    if let ArmState::Paused(until) = timing.arm_state() {
-        head.push_str(&format!(" · paused, resumes {}", ui::rel_until(until, now)));
+    if let ArmState::Paused(until) = timing.arm_state()
+        && let Some(text) = TaskState::held_text(&schedule::TaskTimingState::Paused(until), now)
+    {
+        head.push_str(&format!(" · {text}"));
     }
     let mut continuation = Vec::new();
     if let Some(hold) = &entry.hold {

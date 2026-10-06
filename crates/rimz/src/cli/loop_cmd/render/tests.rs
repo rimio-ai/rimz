@@ -31,18 +31,6 @@ fn true_condition_without_hold_renders_due() {
             .unwrap()
             .starts_with("condition: due\n")
     );
-    let mut table = ui::Table::new(["NEXT"]);
-    table.row([next_cell(&timing, now)]);
-    let mut out = Vec::new();
-    table.render(&mut out).unwrap();
-    assert!(String::from_utf8(out).unwrap().contains("due"));
-}
-
-#[test]
-fn room_badge_names_the_external_timer_only_without_a_room() {
-    assert_eq!(room_label_with_timer(false, true), "no room · timer");
-    assert_eq!(room_label_with_timer(false, false), "no room");
-    assert_eq!(room_label_with_timer(true, true), "room open");
 }
 
 fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
@@ -231,7 +219,7 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
 }
 
 #[test]
-fn budget_and_cost_labels_cover_capped_plain_and_empty_spend() {
+fn budget_label_names_the_run_and_daily_caps() {
     let entry = TaskEntry {
         budget: Some("$5.00".to_owned()),
         budget_per_day: Some("$20.00".to_owned()),
@@ -241,11 +229,6 @@ fn budget_and_cost_labels_cover_capped_plain_and_empty_spend() {
         budget_label(&entry).as_deref(),
         Some("$5 per run · $20 per day")
     );
-    assert_eq!(list_cost_label(&entry, 3.2).as_deref(), Some("$3.20/$20"));
-
-    let uncapped = TaskEntry::default();
-    assert_eq!(list_cost_label(&uncapped, 0.85).as_deref(), Some("$0.85"));
-    assert_eq!(list_cost_label(&uncapped, 0.0), None);
 }
 
 #[test]
@@ -653,28 +636,9 @@ fn source_detail_names_definition_path() {
 
 #[test]
 fn blocked_project_rendering_names_the_gate_and_fix() {
-    let mut table = ui::Table::new(["NEXT"]);
-    table.row([blocked_next_cell(TrustState::Stale)]);
-    let mut out = Vec::new();
-    table.render(&mut out).unwrap();
-    write_blocked_footer(&mut out, 2).unwrap();
-    write_disabled_footer(&mut out, 1).unwrap();
-
-    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(out.contains("blocked · trust"), "{out}");
-    assert!(
-        out.contains(
-            "2 task(s) blocked by project trust — review with `rimz trust`, approve with `rimz trust grant`"
-        ),
-        "{out}"
-    );
     assert_eq!(
         blocked_notice(TrustState::Untrusted),
         "project trust is untrusted — review with `rimz trust`, approve with `rimz trust grant`"
-    );
-    assert!(
-        out.contains("1 project task(s) disabled — arm with `rimz loop enable <name>`"),
-        "{out}"
     );
 }
 
@@ -699,17 +663,6 @@ fn interval_timing(
 }
 
 #[test]
-fn next_cell_uses_the_list_relative_time_label() {
-    let now = Timestamp::from_second(10_000).unwrap();
-    let upcoming = interval_timing(None, Timestamp::from_second(9_400).ok(), None, now);
-    let mut table = ui::Table::new(["NEXT"]);
-    table.row([next_cell(&upcoming, now)]);
-    let mut out = Vec::new();
-    table.render(&mut out).unwrap();
-    assert!(String::from_utf8(out).unwrap().contains("in 5m"));
-}
-
-#[test]
 fn signal_timing_renders_trigger_matches_and_listening_state() {
     let now = Timestamp::from_second(10_000).unwrap();
     let entry = TaskEntry {
@@ -727,13 +680,6 @@ fn signal_timing_renders_trigger_matches_and_listening_state() {
         None,
         &now.to_zoned(jiff::tz::TimeZone::UTC),
     );
-
-    let mut table = ui::Table::new(["NEXT"]);
-    table.row([next_cell(&timing, now)]);
-    let mut out = Vec::new();
-    table.render(&mut out).unwrap();
-    let list = String::from_utf8(out).unwrap();
-    assert!(list.contains("listening"), "{list}");
 
     let mut out = Vec::new();
     write_show_headline(&mut out, "task", &timing, None, now).unwrap();
@@ -849,31 +795,6 @@ fn show_headline_keeps_blocked_before_pause() {
     assert!(out.contains("next blocked · trust"), "{out}");
     assert!(!out.contains("paused"), "{out}");
     assert!(!out.contains("loop enable"), "{out}");
-}
-
-#[test]
-fn blocked_takeover_names_its_checkout_and_blocker_in_the_last_run_cell() {
-    let mut blocked = record(10, LoopRunResult::TakeoverBlocked);
-    blocked.checkout = Some(PathBuf::from("/repo-worktrees/auth"));
-    blocked.error = Some("@coder#auth is working".to_owned());
-    let stats = run_log::LoopRunStats {
-        acting: None,
-        heard: None,
-        runs: 1,
-        streak: 1,
-        last: blocked,
-        spend_today_usd: 0.0,
-    };
-    let (_, cell) = last_run_cells(&stats, Timestamp::from_second(20).unwrap());
-    let mut table = ui::Table::new(["LAST"]);
-    table.row([cell]);
-    let mut out = Vec::new();
-    table.render(&mut out).unwrap();
-    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
-    assert!(
-        out.contains("○ takeover blocked · /repo-worktrees/auth @coder#auth is working"),
-        "{out}"
-    );
 }
 
 #[test]
