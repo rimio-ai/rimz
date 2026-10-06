@@ -51,6 +51,9 @@ enum WaitSubcmd {
 
 #[derive(Debug, Default, Args)]
 struct WaitArgs {
+    /// Short description, one line of 1–60 characters after trimming.
+    #[arg(long, value_name = "TEXT", allow_hyphen_values = true, value_parser = super::parse_task_label)]
+    label: Option<String>,
     /// Wait out this duration once (less than 24h).
     #[arg(long = "in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     in_after: Option<Duration>,
@@ -103,6 +106,7 @@ impl WaitArgs {
             && self.grep.is_none()
             && self.on.is_none()
             && self.timeout.is_none()
+            && self.label.is_none()
     }
 }
 

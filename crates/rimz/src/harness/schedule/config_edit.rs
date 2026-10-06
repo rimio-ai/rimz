@@ -237,6 +237,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
     #[test]
     fn task_entry_serialization_uses_canonical_schema_and_store_policy() {
         let entry = TaskEntry {
+            label: None,
             agent: Some("claude".to_owned()),
             stay: false,
             each_worktree: false,

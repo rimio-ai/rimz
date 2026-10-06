@@ -101,6 +101,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         &ctx.workspace,
         DeliverySpec {
             name: DeliveryName::MintWait,
+            label: args.label,
             target: target.clone(),
             trigger,
             prompt: DeliveryPrompt::None,

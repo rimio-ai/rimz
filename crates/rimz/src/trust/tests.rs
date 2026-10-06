@@ -223,6 +223,20 @@ fn unknown_non_command_field_does_not_change_hash() {
 }
 
 #[test]
+fn task_labels_do_not_change_the_executable_hash() {
+    let base: ProjectConfig =
+        toml::from_str("[tasks.x]\ncheck = \"cargo test\"\nevery = \"1h\"\n").unwrap();
+    let labelled: ProjectConfig = toml::from_str(
+        "[tasks.x]\ncheck = \"cargo test\"\nevery = \"1h\"\nlabel = \"gate docs\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        executable_surface_hash(&base),
+        executable_surface_hash(&labelled)
+    );
+}
+
+#[test]
 fn runtime_env_key_does_not_enter_trust_hash() {
     let base = project_with("");
     let extra = project_with("[agents]\nruntime-env = false\n");

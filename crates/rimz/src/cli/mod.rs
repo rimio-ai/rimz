@@ -829,6 +829,14 @@ fn parse_mux(value: &str) -> std::result::Result<MuxName, String> {
     value.parse::<MuxName>().map_err(|err| err.to_string())
 }
 
+fn parse_task_label(value: &str) -> std::result::Result<String, &'static str> {
+    let label = value.trim();
+    if value.contains(['\n', '\r']) || !(1..=60).contains(&label.chars().count()) {
+        return Err("label must be one line of 1–60 characters");
+    }
+    Ok(label.to_owned())
+}
+
 pub(crate) fn confirm(prompt: &str) -> Result<bool> {
     confirm_with_default(prompt, false)
 }
