@@ -622,7 +622,7 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     run_streamed(root, "cargo", args, envs, removed_envs, progress).map_err(|error| {
-        match error.downcast_ref::<crate::runner::CaptureTimeout>() {
+        match error.downcast_ref::<crate::runner::BudgetOverrun>() {
             Some(timeout) => capture_timeout_error(timeout),
             None => error,
         }
@@ -875,7 +875,7 @@ fn failure_detail(output: &str) -> String {
     }
 }
 
-fn capture_timeout_error(timeout: &crate::runner::CaptureTimeout) -> anyhow::Error {
+fn capture_timeout_error(timeout: &crate::runner::BudgetOverrun) -> anyhow::Error {
     let detail = trim_cargo_noise(&timeout.output);
     let detail = if detail.is_empty() {
         "step printed nothing beyond progress lines"
