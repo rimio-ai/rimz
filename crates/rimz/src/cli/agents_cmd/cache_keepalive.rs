@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::harness::cache_keepalive::{CacheKeepaliveRequest, prompt};
+use rimz::harness::cache_keepalive::{CacheKeepaliveRequest, final_ping, prompt};
 use rimz::message::synthetic::{self, SyntheticMessage};
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
 use rimz::store::writer::DeliveryFailureDisposition;
@@ -22,9 +22,10 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
     let Some(agent) = request.target(&snapshot, &config.harness, now) else {
         return Ok(());
     };
+    let limit = final_ping(agent, &config.harness, now);
     let message = SyntheticMessage {
         agent,
-        text: prompt(agent, now),
+        text: prompt(agent, now, limit),
         sender: MessageSender::Harness {
             notice: HarnessNotice::CacheKeepalive,
         },
@@ -56,6 +57,7 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
             message_id: message.message_id.to_string(),
             delivered,
             error,
+            capped: limit.is_some(),
         },
     });
     outcome.context("delivering cache keepalive")?;
