@@ -21,6 +21,8 @@ use rimz::store::run::{EarlierAnswer, RunRecord, RunStatus, RunStoreErr};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{RuntimeScope, Store};
 
+use crate::cli::render;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ReportOutcome {
     Queued {
@@ -388,8 +390,9 @@ fn compose_answer_row(
     } else {
         Some(run.prompt.as_str())
     };
-    let elapsed =
-        format_compact_duration(finished_at.duration_since(started_at).as_secs().max(0) as u64);
+    let elapsed = render::format_compact_duration(
+        finished_at.duration_since(started_at).as_secs().max(0) as u64,
+    );
     let preposition = if status == RunStatus::TimedOut {
         "after"
     } else {
@@ -437,21 +440,6 @@ fn compose_answer_row(
         None => row.push_str(", no response"),
     }
     row
-}
-
-fn format_compact_duration(mut seconds: u64) -> String {
-    let mut rendered = String::new();
-    for (unit_seconds, suffix) in [(86_400, "d"), (3_600, "h"), (60, "m")] {
-        let amount = seconds / unit_seconds;
-        if amount > 0 {
-            rendered.push_str(&format!("{amount}{suffix}"));
-            seconds %= unit_seconds;
-        }
-    }
-    if seconds > 0 || rendered.is_empty() {
-        rendered.push_str(&format!("{seconds}s"));
-    }
-    rendered
 }
 
 fn child_name<'a>(child: &'a AgentState, run: &'a RunRecord) -> &'a str {
