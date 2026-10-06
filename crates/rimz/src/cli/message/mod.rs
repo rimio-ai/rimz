@@ -13,6 +13,7 @@ pub(super) use super::Ctx;
 use super::GlobalFlags;
 use super::address;
 use super::send::{self, SendFlags, resolve_message};
+use super::usage::{UsageError, shell_command};
 use crate::cli::render;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
@@ -40,9 +41,9 @@ pub struct MessageArgs {
     /// `--file` to deliver external contents verbatim.
     #[arg(allow_hyphen_values = true)]
     text: Option<String>,
-    /// Deliver after a successful/idle turn (`done`) or after success/idle/failure (`any`).
-    #[arg(long, value_parser = parse_gate, default_value = "done", conflicts_with = "steer")]
-    on: DeliveryGate,
+    /// Deliver after a successful/idle turn (`done`, the default) or after success/idle/failure (`any`).
+    #[arg(long, value_parser = parse_gate, conflicts_with = "steer")]
+    on: Option<DeliveryGate>,
     /// Write into the live turn now instead of parking for a turn boundary.
     #[arg(long, conflicts_with_all = ["schedule", "on"])]
     steer: bool,
@@ -126,6 +127,7 @@ enum MessageSubcmd {
         #[arg(
             value_name = "MESSAGE_ID",
             num_args = 1..,
+            required = true,
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::queued_message_ids)
         )]
         message_ids: Vec<MessageId>,
@@ -233,6 +235,9 @@ struct EditFlags {
 }
 
 pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
+    if args.target.is_none() {
+        targetless_send(&args)?;
+    }
     match args.command {
         Some(MessageSubcmd::List(args)) => list_messages(args, globals),
         Some(MessageSubcmd::Show { message_id, json }) => show_message(message_id, json, globals),
@@ -259,23 +264,28 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
         Some(MessageSubcmd::Deliver { message_id }) => deliver_message(message_id, globals),
         Some(MessageSubcmd::Sweep) => sweep_messages(globals),
         None => {
-            let Some(target) = args.target else {
+            let Some(target) = args.target.as_ref() else {
                 return list_messages(ListArgs::default(), globals);
             };
+            let target = target.to_owned();
             if !target.starts_with('@') && !target.contains(':') {
                 if target.starts_with("msg_") {
-                    bail!("did you mean `rimz message show {target}`?");
+                    return Err(UsageError::new(format!(
+                        "did you mean `rimz message show {target}`?"
+                    ))
+                    .into());
                 }
                 // Clap has already matched every real subcommand, so the word is
                 // one of two mistakes. Text behind it makes the intent a send,
                 // and the fix is the one word `require_mention` names; a bare
                 // word with nothing to deliver is a mistyped subcommand.
                 if args.text.is_some() || args.send.stdin || args.send.file.is_some() {
-                    rimz::address::require_mention(&target)?;
+                    rimz::address::require_mention(&target)
+                        .map_err(|err| UsageError::new(err.to_string()))?;
                 }
-                bail!(
+                return Err(UsageError::new(format!(
                     "unknown subcommand `{target}`; expected list, show <id>, edit <id>, steer <id>, interrupt <id>, requeue <id>, cancel <id>..., clear [target], or an @agent target"
-                );
+                )).into());
             }
             let piped = if args.send.stdin {
                 send::read_stdin_prompt()?
@@ -292,7 +302,7 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                 send_message(
                     target,
                     SendKind::Boundary {
-                        gate: args.on,
+                        gate: args.on.unwrap_or(DeliveryGate::Done),
                         schedule: args.schedule,
                         after: args.after,
                         when: args.when,
@@ -308,6 +318,79 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 const DEFAULT_MESSAGE_LIST_LIMIT: usize = 200;
+
+fn targetless_send(args: &MessageArgs) -> Result<()> {
+    let MessageArgs {
+        command: _,
+        target: _,
+        text: _,
+        on,
+        steer,
+        interrupt,
+        schedule,
+        after,
+        when,
+        send:
+            SendFlags {
+                worktree,
+                channel,
+                no_enter,
+                force,
+                all,
+                create,
+                smart_compact,
+                file,
+                stdin,
+                no_from,
+                wait,
+                json,
+                any,
+            },
+    } = args;
+    let send_only = [
+        (on.is_some(), "--on <ON>"),
+        (*steer, "--steer"),
+        (*interrupt, "--interrupt"),
+        (schedule.is_some(), "--schedule <DUR|HH:MM>"),
+        (!after.is_empty(), "--after <ADDR>"),
+        (!when.is_empty(), "--when <'ADDR STATUS DUR'>"),
+        (worktree.is_some(), "--worktree <WORKTREE>"),
+        (*no_enter, "--no-enter"),
+        (*force, "--force"),
+        (*create, "--create"),
+        (smart_compact.is_some(), "--smart-compact <PCT|TOKENS>"),
+        (file.is_some(), "--file <PATH>"),
+        (*stdin, "--stdin"),
+        (*no_from, "--no-from"),
+        (wait.is_some(), "--wait"),
+        (*any, "--any"),
+    ];
+    if let Some((_, flag)) = send_only.into_iter().find(|(given, _)| *given) {
+        return Err(UsageError::new(format!(
+            "{flag} needs a target and text: rimz message {flag} @agent \"text\"\nto list messages: rimz message list"
+        )).into());
+    }
+    let mut list = vec!["rimz", "message", "list"];
+    if let Some(channel) = channel {
+        list.extend(["--channel", channel]);
+    }
+    if *all {
+        list.push("--all");
+    }
+    if *json {
+        list.push("--json");
+    }
+    let explanation = if channel.is_some() {
+        "--channel here restricts recipients. for one lane's messages"
+    } else if *all {
+        "--all here fans a send out. for every lane's messages"
+    } else if *json {
+        "--json here formats --wait replies. for the inbox as JSON"
+    } else {
+        return Ok(());
+    };
+    Err(UsageError::new(format!("{explanation}: {}", shell_command(list))).into())
+}
 
 mod dispatch;
 mod edit;
@@ -370,6 +453,40 @@ mod tests {
     struct Harness {
         #[command(flatten)]
         args: MessageArgs,
+    }
+
+    #[test]
+    fn targetless_list_hints_parse_and_keep_all_shared_flags() {
+        for flags in [
+            vec!["--json"],
+            vec!["--all"],
+            vec!["--channel", "auth space"],
+            vec!["--json", "--all", "--channel", "auth space"],
+        ] {
+            let args =
+                Harness::try_parse_from(std::iter::once("rimz").chain(flags.iter().copied()))
+                    .unwrap()
+                    .args;
+            let error = targetless_send(&args).unwrap_err().to_string();
+            let (_, command) = error.split_once(": rimz message list").expect("list hint");
+            let words = shlex::split(&format!("rimz list{command}")).unwrap();
+            let parsed = Harness::try_parse_from(words).unwrap().args;
+            let Some(MessageSubcmd::List(list)) = parsed.command else {
+                panic!("list")
+            };
+            assert_eq!(list.json, args.send.json);
+            assert_eq!(list.all, args.send.all);
+            assert_eq!(list.channel, args.send.channel);
+        }
+        let args = Harness::try_parse_from(["rimz", "--json", "--file", "missing"])
+            .unwrap()
+            .args;
+        assert!(
+            targetless_send(&args)
+                .unwrap_err()
+                .to_string()
+                .starts_with("--file <PATH> needs a target and text:")
+        );
     }
 
     #[test]

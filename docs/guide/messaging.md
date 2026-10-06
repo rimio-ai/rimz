@@ -16,6 +16,8 @@ rimz message @all "freeze new work; I'm cutting a release"        # everyone in 
 
 The same command serves you, your scripts, and the agents themselves: a running agent hands work to a teammate with the line you would have typed. `rimz msg` is a shorter spelling of it, and of every subcommand below.
 
+If you leave the target off a send, RimZ refuses it and shows the command to use instead. Bare `rimz message` still reads your lane's messages; put inbox flags after `list`, as in `rimz message list --json`, rather than on the send form.
+
 When an agent messages a [peer it launched](./fleet.md#manage-a-running-room), the new turn reports its result back automatically. A steer into an already-running turn opens no separate report. Text you type during a launcher-requested turn becomes part of that turn's final answer; if the peer was waiting for its own children, your turn can finish that pending request too. A provider that omits prompt text from its turn-start hook cannot start a new report from that message; use `--wait` for a message-correlated reply instead.
 
 ## Address an agent
