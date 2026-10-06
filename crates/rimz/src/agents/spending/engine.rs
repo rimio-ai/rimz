@@ -2,7 +2,7 @@
 //! walk feeding the enrichment spine's global `value_tally`, per-workspace
 //! `workspace_value_tally`, and per-provider dashboard folds.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -489,6 +489,12 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             self.scope,
             self.spec,
         );
+        let published = read_provider_spending_cache(&self.provider_path);
+        if published.is_current_version()
+            && lowers_published_year(&published.spending, &result.spending)
+        {
+            return;
+        }
         let refreshed_at_ms = unix_now_ms();
         let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
         crate::agents::spending::write_provider_spending_cache(&self.provider_path, &provider);
@@ -498,6 +504,27 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             publish_workspace(self.runtime, scope_hash, &workspace);
         }
     }
+}
+
+/// Whether publishing `partial` would lower any published fleet, provider, or
+/// login figure. `year` is the widest window, so a row the partial has not
+/// reached yet lowers it. Only a finished walk may lower a published figure: a
+/// fresh walker resumes from a cursor file that can trail the publication.
+fn lowers_published_year(
+    published: &crate::agents::spending::Spending,
+    partial: &crate::agents::spending::Spending,
+) -> bool {
+    fn lowers<K: Ord>(
+        published: &BTreeMap<K, crate::agents::SpendTally>,
+        partial: &BTreeMap<K, crate::agents::SpendTally>,
+    ) -> bool {
+        published.iter().any(|(key, tally)| {
+            tally.year.usd > partial.get(key).map_or(0.0, |tally| tally.year.usd)
+        })
+    }
+    published.total.year.usd > partial.total.year.usd
+        || lowers(&published.by_provider, &partial.by_provider)
+        || lowers(&published.by_login, &partial.by_login)
 }
 
 #[allow(

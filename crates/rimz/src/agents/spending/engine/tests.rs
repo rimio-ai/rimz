@@ -1135,3 +1135,229 @@ fn empty_discovery_preserves_prior_nonzero_provider_publish() {
     );
     assert_eq!(published.spending.total.headline.usd, 981.0);
 }
+
+fn default_login_file(kind: &'static str, path: &std::path::Path) -> super::super::SpendingFile {
+    super::super::SpendingFile {
+        adapter: crate::agents::definition_by_kind(kind).unwrap(),
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind)),
+        path: path.to_path_buf(),
+    }
+}
+
+fn published_total_year_usd(runtime: &RuntimePaths) -> f64 {
+    read_provider_spending_cache(&runtime.shared_provider_spending_path())
+        .spending
+        .total
+        .year
+        .usd
+}
+
+#[test]
+fn fresh_walker_behind_the_publication_never_lowers_published_spend() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime paths");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let steady = dir.path().join("steady.jsonl");
+    let growing = dir.path().join("growing.jsonl");
+    let now_secs = unix_secs_now();
+    std::fs::write(&steady, claude_cost_line(now_secs, 2.5, "steady")).expect("transcript");
+    std::fs::write(&growing, claude_cost_line(now_secs, 1.25, "first")).expect("transcript");
+    let _discovered = override_discovered_spending_files_for_test(vec![
+        default_login_file("claude", &steady),
+        default_login_file("claude", &growing),
+    ]);
+    let spec = HeadlineSpec::default();
+
+    let mut warm = SpendingWalker::new();
+    walk_fleet_spending(&mut warm, &runtime, None, &spec, true);
+    std::fs::write(
+        &growing,
+        format!(
+            "{}\n{}",
+            claude_cost_line(now_secs, 1.25, "first"),
+            claude_cost_line(now_secs, 4.0, "second")
+        ),
+    )
+    .expect("transcript");
+    // Inside the persist interval: the cursor file stays behind this publication.
+    walk_fleet_spending(&mut warm, &runtime, None, &spec, true);
+    let published = published_total_year_usd(&runtime);
+    assert_eq!(published, 7.75);
+
+    let request = service_request(&runtime, None, &spec);
+    let context = super::request_context(&request, true);
+    let mut seen = Vec::new();
+    super::walk_fleet_spending_context(
+        &mut SpendingWalker::new(),
+        &runtime,
+        &context,
+        true,
+        &mut |_| seen.push(published_total_year_usd(&runtime)),
+    );
+
+    assert!(
+        seen.iter().all(|usd| *usd >= published),
+        "a checkpoint lowered the published total below {published}: {seen:?}"
+    );
+    assert_eq!(published_total_year_usd(&runtime), 7.75);
+}
+
+/// A checkpoint over one `claude@default` file at $1 and one `codex@default`
+/// file at $10, scoped to `project`.
+fn checkpoint_one_claude_ten_codex(runtime: &RuntimePaths, project: &std::path::Path) {
+    let now_secs = unix_secs_now();
+    let claude = project.join("claude.jsonl");
+    let codex = project.join("codex.jsonl");
+    let mut raw = read_spending_cache(&runtime.shared_spending_cursor_path());
+    for (path, usd, id) in [(&claude, 1.0, "claude"), (&codex, 10.0, "codex")] {
+        std::fs::write(path, "").expect("transcript");
+        raw.files.insert(
+            path.to_string_lossy().into_owned(),
+            file_cache_entry(path, vec![cached_entry(now_secs, usd, id)]),
+        );
+    }
+    let files = [
+        default_login_file("claude", &claude),
+        default_login_file("codex", &codex),
+    ];
+    let scope = SpendScope::from_roots(Some(project), &[]);
+    let spec = HeadlineSpec::default();
+    let mut progress = |_| {};
+    let mut observer = super::PublishingWalkObserver {
+        runtime,
+        provider_path: runtime.shared_provider_spending_path(),
+        files: &files,
+        user_inputs: &[],
+        now_secs,
+        scope: Some(&scope),
+        scope_hash: Some(scope.hash()),
+        spec: &spec,
+        progress: &mut progress,
+    };
+    crate::agents::spending::WalkObserver::on_interval(&mut observer, &raw);
+}
+
+fn claude_only_publication(year_usd: f64) -> ProviderSpendingCache {
+    single_kind_publication("claude", year_usd)
+}
+
+fn single_kind_publication(kind: &str, year_usd: f64) -> ProviderSpendingCache {
+    let mut tally = crate::agents::SpendTally::default();
+    tally.year.usd = year_usd;
+    let kind_login = crate::ids::AgentKind::new_unchecked(kind);
+    ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION,
+        refreshed_at_ms: 1,
+        spending: Spending {
+            total: tally.clone(),
+            by_provider: BTreeMap::from([(kind.to_owned(), tally.clone())]),
+            by_login: BTreeMap::from([(crate::ids::LoginKey::default_for(kind_login), tally)]),
+        },
+        ..Default::default()
+    }
+}
+
+fn checkpoint_fixture() -> (tempfile::TempDir, RuntimePaths, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("repo");
+    std::fs::create_dir(&project).expect("project");
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&project), dir.path())
+        .expect("runtime paths");
+    runtime.ensure_dirs().expect("runtime dirs");
+    (dir, runtime, project)
+}
+
+#[test]
+fn checkpoint_lower_for_one_login_is_withheld_though_the_total_grew() {
+    withheld_checkpoint_leaves_both_publications_untouched("claude");
+}
+
+#[test]
+fn checkpoint_missing_a_published_login_is_withheld_though_the_total_grew() {
+    withheld_checkpoint_leaves_both_publications_untouched("pi");
+}
+
+/// Publishes `kind` alone at $5, then checkpoints an $11 partial that holds
+/// claude at $1 and codex at $10.
+fn withheld_checkpoint_leaves_both_publications_untouched(kind: &str) {
+    let (_dir, runtime, project) = checkpoint_fixture();
+    let provider_path = runtime.shared_provider_spending_path();
+    let scope_hash = SpendScope::from_roots(Some(&project), &[]).hash();
+    let workspace_path = runtime.workspace_spending_path(&scope_hash);
+    write_provider_spending_cache(&provider_path, &single_kind_publication(kind, 5.0));
+    publish_workspace(&runtime, &scope_hash, 5.0);
+    let provider_before = std::fs::read(&provider_path).expect("provider cache");
+    let workspace_before = std::fs::read(&workspace_path).expect("workspace cache");
+
+    checkpoint_one_claude_ten_codex(&runtime, &project);
+
+    assert_eq!(
+        std::fs::read(&provider_path).expect("provider cache"),
+        provider_before,
+        "an $11 partial below the published $5 for {kind} must not publish"
+    );
+    assert_eq!(
+        std::fs::read(&workspace_path).expect("workspace cache"),
+        workspace_before,
+        "the sidecar is withheld with the provider publication"
+    );
+}
+
+#[test]
+fn checkpoint_at_or_above_every_published_figure_replaces_the_publication() {
+    let (_dir, runtime, project) = checkpoint_fixture();
+    let provider_path = runtime.shared_provider_spending_path();
+    // Equal for claude, and codex is absent from the publication.
+    write_provider_spending_cache(&provider_path, &claude_only_publication(1.0));
+
+    checkpoint_one_claude_ten_codex(&runtime, &project);
+
+    let published = read_provider_spending_cache(&provider_path);
+    assert_ne!(published.refreshed_at_ms, 1);
+    assert_eq!(published.spending.total.year.usd, 11.0);
+    assert_eq!(published.spending.by_provider["codex"].year.usd, 10.0);
+}
+
+#[test]
+fn checkpoint_replaces_a_publication_of_another_version() {
+    let (_dir, runtime, project) = checkpoint_fixture();
+    let provider_path = runtime.shared_provider_spending_path();
+    let outdated = ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION - 1,
+        ..claude_only_publication(5.0)
+    };
+    std::fs::write(&provider_path, serde_json::to_vec(&outdated).unwrap()).expect("publication");
+
+    checkpoint_one_claude_ten_codex(&runtime, &project);
+
+    let published = read_provider_spending_cache(&provider_path);
+    assert_eq!(published.version, PROVIDER_SPENDING_VERSION);
+    assert_eq!(published.spending.total.year.usd, 11.0);
+}
+
+#[test]
+fn finished_walk_lowers_the_publication() {
+    let (dir, runtime, _project) = checkpoint_fixture();
+    write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &claude_only_publication(5.0),
+    );
+    let transcript = dir.path().join("claude.jsonl");
+    std::fs::write(&transcript, claude_cost_line(unix_secs_now(), 2.5, "left"))
+        .expect("transcript");
+    let _discovered = override_discovered_spending_files_for_test(vec![default_login_file(
+        "claude",
+        &transcript,
+    )]);
+
+    walk_fleet_spending(
+        &mut SpendingWalker::new(),
+        &runtime,
+        None,
+        &HeadlineSpec::default(),
+        true,
+    );
+
+    assert_eq!(published_total_year_usd(&runtime), 2.5);
+}
