@@ -377,7 +377,11 @@ fn prepare_supervised(
     presentation: &SupervisedPresentation,
     globals: &GlobalFlags,
 ) -> Result<Option<PreparedRun>> {
-    crate::cli::check_launch_room(globals)?;
+    // Loop-owned launches have no agent caller, from either env or ancestry.
+    let loop_owned = request.loop_task.is_some();
+    if !loop_owned {
+        crate::cli::check_launch_room(globals)?;
+    }
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
     machine_config.agents.startup_relaunch_wait()?;
@@ -393,7 +397,11 @@ fn prepare_supervised(
     // `forge.reviewer`.
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let caller_identity = rimz::harness::ancestry::resolve_caller(&projection.agents);
+    let caller_identity = if loop_owned {
+        None
+    } else {
+        rimz::harness::ancestry::resolve_caller(&projection.agents)
+    };
     let caller = caller_identity
         .as_ref()
         .map(|identity| {
@@ -417,7 +425,7 @@ fn prepare_supervised(
         request.worktree.as_deref(),
     )?;
     let lane = request.channel.clone().or_else(|| {
-        if request.loop_task.is_some() {
+        if loop_owned {
             crate::cli::directory_channel(
                 &workspace,
                 cwd.as_deref().unwrap_or(&workspace.worktree_root),

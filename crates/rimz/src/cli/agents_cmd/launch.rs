@@ -247,7 +247,11 @@ pub(in crate::cli) fn launch_resolved(
         )?;
     }
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let caller = ancestry::resolve_caller(&projection.agents);
+    let caller = if loop_task.is_some() {
+        None
+    } else {
+        ancestry::resolve_caller(&projection.agents)
+    };
     let focus = LaunchFocus::resolve(args.launch.cohort.bg, caller.as_ref());
     let ancestry = ancestry::resolve_launch_ancestry(
         caller
