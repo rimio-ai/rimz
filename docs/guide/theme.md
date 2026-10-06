@@ -250,7 +250,7 @@ amber = { percent = 80, tokens = 256000 }
 red = { percent = 90, tokens = 384000 }
 ```
 
-`[theme.display.budget_bar]` names the *remaining* budget percent at which the draining provider bar reaches each warm stop. Its nested `[theme.display.budget_bar.burn_rate]` colors the reset marker instead, by how fast you are spending against how much of the window has passed. The values are percentages of even pace: `100` is on-pace, `200` is twice as fast as the window can sustain. Below `green` the marker starts cooling, and it saturates at `deep_green` once enough of the window has elapsed.
+`[theme.display.budget_bar]` names the *remaining* budget percent at which the draining provider bar reaches each warm stop. Its nested `[theme.display.budget_bar.burn_rate]` colors the sidebar reset marker and the CLI pace reading instead, by how fast you are spending against how much of the window has passed. The values are percentages of even pace: `100` is on-pace, `200` is twice as fast as the window can sustain. Below `green` the pace tone starts cooling, and it saturates at `deep_green` once enough of the window has elapsed.
 
 ```toml
 [theme.display.budget_bar]

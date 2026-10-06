@@ -41,10 +41,10 @@ Providers print in the dashboard's usage ranking: providers ordered by sessions 
 ```console
 $ rimz providers
 Claude · v2.1.274
-   ACCOUNT  PLAN        5h LEFT      7d LEFT      Fable LEFT  EXTRA        RESETS         SPEND 7d
-   default  Claude Max  38% · 1h23m  86% · 4d02h  –           $37.60 left  2 · exp 3d00h  $2,742.90
-   spare    logged out  –            –            –           –            –              -
-●  work     Claude Max  –            70% · 1d00h  69%         off          –              $12.00
+   ACCOUNT  PLAN        5h LEFT             7d LEFT             Fable LEFT  EXTRA        RESETS         SPEND 7d
+   default  Claude Max  38% · 1h23m · 0.9x  86% · 4d02h · 0.3x  –           $37.60 left  2 · exp 3d00h  $2,742.90
+   spare    logged out  –                   –                   –           –            –              -
+●  work     Claude Max  –                   70% · 1d00h · 0.4x  69%         off          –              $12.00
 
 Pi · v1.2.3
    ACCOUNT  PLAN          SPEND 7d
@@ -58,10 +58,12 @@ The heading is the provider and the CLI version of the first account that report
 | (marker) | `●` on the account a launch at the position uses, at most one per provider. `○` on the machine's default for new rooms (`[accounts.use]`, else `default`) when that row is not the `●` one. |
 | `ACCOUNT` | `default` (muted) or the named account. |
 | `PLAN` | The plan label, `–` when unknown, or the status (`logged out`, `unavailable`) when the account is not logged in. |
-| One column per window | Every window any account of the provider reports, labelled as in the block and suffixed `LEFT`. The cell is `N% · 1h23m` (what is left of the window, then time to reset), `100% · ready` before the window's clock starts, `N%` with no known reset, `∞` for a lifted limit or an account without subscription windows, or `–` when unknown. |
+| One column per window | Every window any account of the provider reports, labelled as in the block and suffixed `LEFT`. The cell is `N% · 1h23m · 0.9x` (what is left, time to reset, then pace), `100% · ready` before the window's clock starts, `N%` with no known reset, `∞` for a lifted limit or an account without subscription windows, or `–` when unknown. |
 | `EXTRA` | Only when some account reports paid usage: `off` when disabled, `$ left` when the remaining balance is known, else `$ used`, else `–`. |
 | `RESETS` | Only when some account reports reset credits: the count, then `exp` and the time to the soonest expiry (`2 · exp 3d00h`, or `2 · due` once it has passed), the bare count with no known expiry, `-` with none banked, `–` when unknown. |
 | `SPEND 7d` | The account's own spend over the trailing 7 days, `-` when it has none recorded. |
+
+Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration, reset time or positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker.
 
 When the `●` account has 20% or less left of a window and another logged-in account of the provider has strictly more left of the same window, a hint follows the table, naming the account with the most left (ties by name) and the command that moves the marker:
 
@@ -81,8 +83,8 @@ $ rimz providers claude
 Claude — Claude Max · logged in
   version:  v1.2.3
   account:  acct_123
-  5h:       38% left · resets in 1h23m
-  7d:       86% left · resets in 4d02h
+  5h:       38% left · resets in 1h23m · pace 0.9x
+  7d:       86% left · resets in 4d02h · pace 0.3x
   extra:    $12.40 used · $50.00 limit
   resets:   2 credits
             - 2023-11-17 17:13:20 -05:00 · in 3d00h
@@ -101,18 +103,20 @@ The rows print in this order, and a row with nothing to report is left out:
 | `account` | The provider's non-secret account id. |
 | `provider` | The backing provider, for agents that run on another provider's account. |
 | `scope` | `<provider>/<variant>`, when the account reading is scoped to one backing provider. |
-| One row per window | Labelled by its length (`5h`, `7d`) or by the provider's quota name. The value is `N% left · resets in 1h23m`, `100% left · ready` for a window whose clock has not started, `N% left · resets –` with no known reset, or `∞` for a limit the provider has lifted. |
+| One row per window | Labelled by its length (`5h`, `7d`) or by the provider's quota name. The value is `N% left · resets in 1h23m · pace 0.9x`, `100% left · ready` for a window whose clock has not started, `N% left · resets –` with no known reset, or `∞` for a limit the provider has lifted. |
 | `usage` | `∞` for an account without subscription windows, or `–` for a metered account with no window reading yet. |
 | `extra` | Paid usage beyond the windows: `disabled`, or whichever of `$ used`, `$ remaining`, and `$ limit` are known, or `–`. Without a provider-reported limit, `limit` is the display ceiling from [`[accounts.usage_limit_usd]`](../../guide/configuration.md#accounts). |
 | `resets` | Codex reset credits or Claude limit resets, only when at least one is banked: the count, then the soonest known expiries, up to three. |
 | `spend` | The account's spend over the trailing 7 and 30 days. A `default` account with none published prints `–`; a named account leaves the row out. |
 | `budget` | `$spent of $cap/day` for the account's daily cap, with `· parked` once the cap has parked agents ([Budget CLI](./budget.md#cap-the-room-and-accounts)). |
 
+Window rows use the same pace rules as the table, with `· pace –` during the first 5% and no pace in the blank states listed above.
+
 Each reset-credit expiry prints as `YYYY-MM-DD HH:MM:SS ±HH:MM` in the machine timezone, followed by `in <interval>`, or `due` once it has passed. When the cache holds only the soonest expiry, that one line prints.
 
 Windows, paid usage, and reset credits belong to the account, so each account reports its own. Spend and the daily cap belong to the history pool: `default` and the shared accounts of a provider report one figure, and a standalone account its own.
 
-With colour on, the dollar figures take the money colour, and each window's percentage takes the tone the sidebar's budget bar has at that remainder: green at a full window, warming to red as it drains, through the stops in `[theme.display.budget_bar]`. The same two rules colour the provider tables.
+With colour on, the dollar figures take the money colour, and each window's percentage takes the tone the sidebar's budget bar has at that remainder: green at a full window, warming to red as it drains, through the stops in `[theme.display.budget_bar]`. Pace takes the sidebar reset marker's tone through `[theme.display.budget_bar.burn_rate]`. The same rules colour the provider tables.
 
 ## How fresh the figures are
 
