@@ -31,6 +31,8 @@ const SESSION: &str = "rimz-diff-stats";
 /// over the shared [`Env`] (XDG roots + workspace id). Shared with the
 /// enrichment-cadence guards (`performance/enrichment_cadence.rs`), which
 /// drive the same produce path against the same shim.
+/// A fresh accounts cache isolates the PATH-wide git witness from host
+/// provider CLIs, which may fork git while answering an account probe.
 pub(crate) struct Fixture {
     pub(crate) env: Env,
     panes_path: PathBuf,
@@ -114,6 +116,23 @@ impl Fixture {
         std::os::unix::fs::symlink(git_trace_shim(), &git_link).expect("symlink git shim");
         let patched_path = prepend_path(&bin_dir);
         let git_log = env.project_root.join("git-trace.log");
+
+        let now_ms = rimz::utils::time::unix_now_ms();
+        env.publish_accounts(&rimz::agents::account::AccountsCache {
+            logins: rimz::agents::known_kinds()
+                .map(|kind| {
+                    (
+                        rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
+                        rimz::agents::account::ProviderRecord {
+                            login: None,
+                            probed_at_ms: now_ms,
+                            ok: true,
+                            account: None,
+                        },
+                    )
+                })
+                .collect(),
+        });
 
         Some(Self {
             env,
@@ -218,6 +237,34 @@ impl Fixture {
     pub(crate) fn git_log_contents(&self) -> String {
         std::fs::read_to_string(&self.git_log).unwrap_or_default()
     }
+}
+
+#[test]
+fn fixture_snapshot_never_starts_provider_account_probe() {
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let probe_log = fixture.env.project_root.join("cursor-account-probe.log");
+    crate::common::write_path_shim(
+        &fixture.env.project_root.join("bin"),
+        "cursor-agent",
+        "printf '%s\\n' \"$*\" >> \"$RIMZ_TEST_CURSOR_PROBE_LOG\"\nexit 1",
+    );
+    let output = fixture
+        .snapshot_command()
+        .env("RIMZ_TEST_CURSOR_PROBE_LOG", &probe_log)
+        .output()
+        .expect("spawn fixture snapshot");
+    assert!(
+        output.status.success(),
+        "fixture snapshot failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !probe_log.exists(),
+        "fixture snapshots must not start provider account probes:\n{}",
+        std::fs::read_to_string(&probe_log).unwrap_or_default(),
+    );
 }
 
 /// A cold producer probes every live worktree once, then warm concurrent tabs
