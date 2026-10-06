@@ -25,11 +25,6 @@ pub(super) const EVENT_STORE_TTL: Duration = Duration::from_secs(EVENT_PANE_TTL.
 /// yanking the user's current pane.
 pub(crate) const FOCUS_STRANDED_EVENT_TTL: Duration = Duration::from_secs(2);
 
-/// Minimum gap between repaints of an off-screen attached sidebar. Hidden
-/// panes refresh only when their glanceable roster/status/unread projection
-/// changes, keeping the buffer near-current without running animations.
-pub(crate) const BACKGROUND_PAINT_MIN_INTERVAL: Duration = Duration::from_secs(1);
-
 /// Maximum extra staleness an off-screen consumer renderer accepts before
 /// folding identity-free store/pane nudges. Watched renderers and the elected
 /// producer stay immediate.

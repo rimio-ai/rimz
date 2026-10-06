@@ -1,10 +1,8 @@
 //! Renderer-local unread reminder timing, actionable attention scope, and delivery through terminal notifications and configured handlers.
 
 use std::collections::{HashMap, HashSet};
-use std::io;
 
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 use tracing::debug;
 
 use crate::agents::AgentStatus;
@@ -14,6 +12,7 @@ use crate::sidebar::notify::{Notification, NotificationKind, spawn_notify_handle
 use crate::store::snapshot::SidebarSnapshot;
 
 use super::ServeConfig;
+use super::backend::PaneBackend;
 use super::notify::{BellNotice, emit_terminal_notification};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -38,7 +37,7 @@ impl RemindState {
     pub(super) fn maybe_remind(
         &mut self,
         config: &ServeConfig,
-        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        terminal: &mut Terminal<PaneBackend>,
         snapshot: &SidebarSnapshot,
         diag: &crate::diag::DiagSink,
     ) {

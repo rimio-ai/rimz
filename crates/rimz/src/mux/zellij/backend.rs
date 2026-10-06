@@ -1275,49 +1275,13 @@ impl MuxBackend for ZellijBackend {
         pane: &PaneId,
         min_observed_at_ms: Option<u64>,
     ) -> Result<WidthStep> {
-        ensure_pane_backend(pane, MuxName::Zellij)?;
-        let pane_id = ZellijPaneId::try_from(pane)
-            .ok()
-            .and_then(ZellijPaneId::terminal_id)
-            .ok_or_else(|| {
-                output_error(format!("target pane `{pane}` has no numeric topology id"))
-            })?;
-        let cache = Self::fresh_cached_topology(
+        super::WidthMemo::default().step(
             runtime,
             session,
+            pane,
             crate::utils::time::unix_now_ms(),
             min_observed_at_ms,
         )
-        .ok_or_else(|| {
-            output_error(format!(
-                "fresh pane topology is unavailable for session `{session}`"
-            ))
-        })?;
-        let tab_position = cache
-            .panes
-            .iter()
-            .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
-            .map(|candidate| candidate.tab_position)
-            .ok_or_else(|| {
-                output_error(format!(
-                    "target pane `{pane}` is absent from the topology cache"
-                ))
-            })?;
-        let view_cols = tab_view_cols(&cache.panes, tab_position).ok_or_else(|| {
-            output_error(format!("tab {tab_position} has no tiled topology width"))
-        })?;
-        let cols = u16::try_from(crate::mux::width::zellij_resize_step_cols(view_cols))
-            .unwrap_or(u16::MAX);
-        let stop_step_cols =
-            u16::try_from(crate::mux::width::zellij_resize_stop_step_cols(view_cols))
-                .unwrap_or(u16::MAX);
-        Ok(WidthStep {
-            cols,
-            stop_step_cols,
-            exact: false,
-            view_cols: u16::try_from(view_cols).unwrap_or(0),
-            fullscreen_active: Some(tab_fullscreen_active(&cache.panes, tab_position)),
-        })
     }
 
     fn nudge_sidebar_width(

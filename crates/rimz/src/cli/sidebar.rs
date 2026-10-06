@@ -100,6 +100,17 @@ enum SidebarSubcmd {
         #[arg(long)]
         refresh_ms: Option<u16>,
     },
+    /// Paint every sidebar pane of one mux session from one detached process.
+    /// Hidden: a pane's `serve` supervisor starts it and hands it the pane.
+    #[command(hide = true)]
+    Host {
+        #[arg(long)]
+        workspace_id: WorkspaceId,
+        #[arg(long)]
+        mux: MuxName,
+        #[arg(long)]
+        session_name: String,
+    },
     /// Repair missing, duplicate, wedged, or mis-docked sidebar panes without
     /// publishing a new build.
     Repair,
@@ -379,6 +390,7 @@ impl SidebarArgs {
             SidebarSubcmd::Snapshot { .. } => "sidebar snapshot",
             SidebarSubcmd::Frame { .. } => "sidebar frame",
             SidebarSubcmd::Serve { .. } => "sidebar serve",
+            SidebarSubcmd::Host { .. } => "sidebar host",
             SidebarSubcmd::Repair => "sidebar repair",
             #[cfg(feature = "testkit")]
             SidebarSubcmd::Fixture { .. } => "sidebar fixture",
@@ -454,6 +466,11 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             tick_seconds,
             refresh_ms,
         ),
+        SidebarSubcmd::Host {
+            workspace_id,
+            mux,
+            session_name,
+        } => host(workspace_id, mux, session_name),
         SidebarSubcmd::Repair => repair(globals),
         #[cfg(feature = "testkit")]
         SidebarSubcmd::Fixture {
@@ -1034,6 +1051,25 @@ fn serve(
     } else {
         rimz::sidebar_pane::supervise::run(config).context("supervising sidebar")
     }
+}
+
+fn host(workspace_id: WorkspaceId, mux: MuxName, session_name: String) -> Result<()> {
+    let machine_config = rimz::config::MachineConfig::load_lenient();
+    // What every pane of the session shares. Each pane's hello supplies its
+    // own instance id, pane id, and cadence.
+    let template = rimz::sidebar_pane::app::ServeConfig {
+        workspace_id,
+        mux,
+        session_name,
+        instance_id: rimz::ids::SidebarInstanceId::new(),
+        tick_seconds: 1,
+        refresh_ms_override: None,
+        timezone: machine_config.time_zone(),
+        notification_prefs: machine_config.notifications.clone(),
+        nav_keys: rimz::sidebar_pane::app::NavKeymap::from_config(&machine_config.sidebar.keys),
+        own_pane: None,
+    };
+    rimz::sidebar_pane::host::run(template).context("hosting sidebar panes")
 }
 
 fn resolve_serve_identity(

@@ -6,7 +6,6 @@ pub(super) mod probe;
 mod tty;
 
 pub use pacing::LiveGraphicsPacer;
-pub(super) use probe::detect as detect_pixel_render_caps;
 pub use probe::{PixelRenderCaps, detect_env as detect_pixel_render_env};
 
 use std::collections::{BTreeMap, BTreeSet};

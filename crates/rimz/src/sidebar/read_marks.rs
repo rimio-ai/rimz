@@ -29,6 +29,13 @@ thread_local! {
     static MERGED_READ_MARKS_CACHE: RefCell<Option<MergedReadMarksCache>> = const { RefCell::new(None) };
     #[cfg(test)]
     static MERGED_READ_MARKS_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    #[cfg(test)]
+    static STORE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_store_reads() -> usize {
+    STORE_READS.with(|reads| reads.replace(0))
 }
 
 struct MergedReadMarksCache {
@@ -166,7 +173,23 @@ impl ReadMarkStore {
     }
 
     pub(crate) fn load_merged(&self) -> Arc<ReadMarks> {
+        #[cfg(test)]
+        STORE_READS.with(|reads| reads.set(reads.get() + 1));
         ReadMarks::load_merged(&self.runtime)
+    }
+
+    pub(crate) fn include_own(&self, mut marks: Arc<ReadMarks>) -> Arc<ReadMarks> {
+        for (row_id, cleared_at_ms) in &self.own {
+            if marks
+                .cleared_at_ms(row_id)
+                .is_none_or(|seen| seen < *cleared_at_ms)
+            {
+                Arc::make_mut(&mut marks)
+                    .marks
+                    .insert(row_id.clone(), *cleared_at_ms);
+            }
+        }
+        marks
     }
 
     pub(crate) fn observe_fold(

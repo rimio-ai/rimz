@@ -17,6 +17,8 @@ use crate::sidebar_pane::pets::{PetAssets, PetPixelView};
 use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, placeholder_cluster};
 use crate::sidebar_pane::render::{self, UiState};
 use jiff::Timestamp;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 fn kitty_commands(bytes: &[u8]) -> Vec<std::collections::BTreeMap<String, String>> {
     String::from_utf8_lossy(bytes)
@@ -931,4 +933,37 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
         bell_decision(&snapshot(&ws), std::slice::from_ref(&work), false),
         BellDecision::NoOwnView
     );
+}
+
+#[test]
+fn a_stopped_forwarder_gives_up_on_a_full_inbox() {
+    use super::socket::{forward, forwarding_socket};
+    use std::sync::atomic::AtomicBool;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("inbox.sock");
+    let inbox = std::os::unix::net::UnixDatagram::bind(&path).unwrap();
+    super::fixtures::fill_inbox(&path);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let target = path.clone();
+    std::thread::spawn(move || {
+        let waker = forwarding_socket().unwrap();
+        let _ = tx.send(forward(&waker, b"key:j", &target, &AtomicBool::new(true)));
+    });
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)),
+        Ok(false),
+        "a stop is not held up by a renderer that stopped reading"
+    );
+
+    // Running, it waits for room rather than drop the word.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let waker = forwarding_socket().unwrap();
+        let _ = tx.send(forward(&waker, b"key:j", &path, &AtomicBool::new(false)));
+    });
+    std::thread::sleep(Duration::from_millis(400));
+    let mut word = [0u8; 16];
+    inbox.recv(&mut word).unwrap();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
 }

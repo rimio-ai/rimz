@@ -9,6 +9,16 @@ use crate::agents::AgentStatus;
 use crate::disk::{atomic, paths::RuntimePaths};
 use crate::store::snapshot::{SidebarRow, SidebarWorktreeGroup, WorktreePrState};
 
+#[cfg(test)]
+thread_local! {
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_reads() -> usize {
+    READS.with(|reads| reads.replace(0))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", content = "status", rename_all = "snake_case")]
 pub(crate) enum BodyFilter {
@@ -49,6 +59,8 @@ impl BodyFilter {
 }
 
 pub(crate) fn load(runtime: &RuntimePaths) -> Option<BodyFilter> {
+    #[cfg(test)]
+    READS.with(|reads| reads.set(reads.get() + 1));
     let path = runtime.sidebar_filter_path();
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,

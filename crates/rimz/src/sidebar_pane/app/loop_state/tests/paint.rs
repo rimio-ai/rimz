@@ -1,105 +1,6 @@
-//! What gets to paint: the glanceable content key that wakes an off-screen
-//! pane, and the resize hold that keeps a grow from painting torn width.
+//! Resize holds keep a grow from painting torn width.
 
 use super::*;
-
-/// One hidden-paint verdict: how the off-screen content changed, how long ago
-/// the last background paint was, and whether that change earns a paint.
-struct HiddenPaintCase {
-    label: &'static str,
-    prior: SidebarSnapshot,
-    current: SidebarSnapshot,
-    /// Age of the last background paint, or `None` for never painted.
-    last_paint_age: Option<Duration>,
-    paints: bool,
-    /// Whether the paint went through the background path, which stamps
-    /// `last_bg_paint`. The detached row paints through the foreground path.
-    stamps_background: bool,
-}
-
-#[test]
-fn hidden_paint_follows_the_glanceable_content_key() {
-    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
-    let ws = workspace();
-    let agent = |status| hidden_attached_agent_snapshot(&ws, status);
-    let process = |state| hidden_attached_process_snapshot(&ws, state);
-    let phased = |phase| {
-        let mut snapshot = agent(crate::agents::AgentStatus::Running);
-        set_agent_phase(&mut snapshot, phase);
-        snapshot
-    };
-    let mut detached = agent(crate::agents::AgentStatus::Waiting);
-    detached.presence = Some(crate::store::snapshot::SidebarPresence::Detached);
-
-    let cases = [
-        HiddenPaintCase {
-            label: "idle to running is a status change the off-screen tab must show",
-            prior: agent(crate::agents::AgentStatus::Idle),
-            current: agent(crate::agents::AgentStatus::Running),
-            last_paint_age: None,
-            paints: true,
-            stamps_background: true,
-        },
-        HiddenPaintCase {
-            label: "phase-only background change stays pending",
-            prior: phased(crate::agents::TurnPhase::Reasoning),
-            current: phased(crate::agents::TurnPhase::Acting),
-            last_paint_age: Some(crate::sidebar::timing::BACKGROUND_PAINT_MIN_INTERVAL),
-            paints: false,
-            stamps_background: false,
-        },
-        HiddenPaintCase {
-            label: "throttled background change stays pending",
-            prior: agent(crate::agents::AgentStatus::Idle),
-            current: agent(crate::agents::AgentStatus::Waiting),
-            last_paint_age: Some(Duration::ZERO),
-            paints: false,
-            stamps_background: false,
-        },
-        HiddenPaintCase {
-            label: "idle-to-stuck process state paints",
-            prior: process(crate::store::snapshot::ProcessState::Idle),
-            current: process(crate::store::snapshot::ProcessState::Stuck),
-            last_paint_age: None,
-            paints: true,
-            stamps_background: true,
-        },
-        HiddenPaintCase {
-            label: "detached dirty paints through the foreground path, not the background one",
-            prior: detached.clone(),
-            current: detached,
-            last_paint_age: None,
-            paints: true,
-            stamps_background: false,
-        },
-    ];
-
-    for case in cases {
-        let mut rig = Rig::with_own_pane(own_pane.clone());
-        rig.state.current = case.current;
-        rig.state.last_bg_key = Some(background_content_key(&case.prior));
-        rig.state.last_bg_paint = case.last_paint_age.map(|age| Instant::now() - age);
-        rig.state.dirty = true;
-        let stamp_before = rig.state.last_bg_paint;
-        let label = case.label;
-
-        rig.paint(false);
-
-        assert_eq!(!rig.state.dirty, case.paints, "{label}");
-        if case.stamps_background {
-            assert!(rig.state.last_bg_paint.is_some(), "{label}");
-            assert_eq!(
-                rig.state.last_bg_key.as_ref(),
-                Some(&background_content_key(&rig.state.current)),
-                "{label}"
-            );
-        } else if case.paints {
-            assert_eq!(rig.state.last_bg_paint, None, "{label}");
-        } else {
-            assert_eq!(rig.state.last_bg_paint, stamp_before, "{label}");
-        }
-    }
-}
 
 #[test]
 fn resize_hold_releases_only_on_a_post_engage_pane_stamp() {
@@ -299,6 +200,7 @@ fn resize_reprobe_adopts_probed_pet_render_caps() {
         rig.state.refresh_pet_render_caps_with(
             crate::MuxName::Tmux,
             "rimz-test",
+            &rig.terminal,
             |mux, session, _| {
                 observed = Some((mux, session.to_owned()));
                 probed
@@ -327,6 +229,7 @@ fn stale_tmux_caps_reprobe_is_bounded_and_adopts_changes() {
         crate::MuxName::Tmux,
         "rimz-test",
         stale,
+        &rig.terminal,
         |_, _, _| enabled,
     ));
     assert_eq!(rig.state.paint.caps(), enabled);
@@ -334,12 +237,14 @@ fn stale_tmux_caps_reprobe_is_bounded_and_adopts_changes() {
         crate::MuxName::Tmux,
         "rimz-test",
         stale,
+        &rig.terminal,
         |_, _, _| panic!("fresh caps must not re-probe"),
     ));
     assert!(!rig.state.refresh_pet_render_caps_if_stale_with(
         crate::MuxName::Zellij,
         "rimz-test",
         stale + std::time::Duration::from_secs(11),
+        &rig.terminal,
         |_, _, _| panic!("Zellij caps must not re-probe"),
     ));
 }
@@ -371,6 +276,7 @@ fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
             crate::MuxName::Tmux,
             "rimz-test",
             deadline - Duration::from_nanos(1),
+            &rig.terminal,
             |_, _, _| panic!("resize burst must not probe yet"),
         ));
     }
@@ -384,6 +290,7 @@ fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
         crate::MuxName::Tmux,
         "rimz-test",
         settled,
+        &rig.terminal,
         |_, _, _| enabled,
     ));
     assert!(rig.state.dirty);
@@ -391,6 +298,7 @@ fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
         crate::MuxName::Tmux,
         "rimz-test",
         settled,
+        &rig.terminal,
         |_, _, _| panic!("settled burst must probe only once"),
     ));
 }
@@ -398,7 +306,7 @@ fn resize_caps_probe_waits_for_quiet_and_dirties_the_changed_frame() {
 #[test]
 fn settled_resize_probe_dirties_the_frame_when_only_the_cell_aspect_changed() {
     let mut rig = Rig::new();
-    let probed = crate::sidebar_pane::pets::probe_cell_aspect();
+    let probed = rig.terminal.backend().cell_aspect();
     let stale = match probed {
         Some(_) => None,
         None => crate::config::CellAspect::from_ratio(2.0),
@@ -414,6 +322,7 @@ fn settled_resize_probe_dirties_the_frame_when_only_the_cell_aspect_changed() {
         crate::MuxName::Tmux,
         "rimz-test",
         Instant::now() + Duration::from_millis(510),
+        &rig.terminal,
         |_, _, _| caps,
     ));
     assert!(rig.state.dirty);
@@ -421,10 +330,11 @@ fn settled_resize_probe_dirties_the_frame_when_only_the_cell_aspect_changed() {
 
 #[test]
 fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
-    let caps = crate::sidebar_pane::pixel::detect_pixel_render_caps(
+    let caps = crate::sidebar_pane::pixel::probe::RoomCaps::default().detect(
         crate::MuxName::Zellij,
         "rimz-test",
         PixelRenderCaps::default(),
+        None,
     );
     assert_eq!(caps, PixelRenderCaps::default());
 

@@ -19,6 +19,16 @@ use crate::ids::{MuxClientId, MuxName, PaneId};
 use crate::mux::{ClientView, PRESENCE_STAMP_FRESH, PaneListing};
 use crate::pane::{ClientPaneView, PaneRef, SIDEBAR_CHROME_TITLE};
 
+#[cfg(test)]
+thread_local! {
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_reads() -> usize {
+    READS.with(|reads| reads.replace(0))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneTopologyCache {
     pub session_name: String,
@@ -388,6 +398,8 @@ pub fn read_pane_topology_cache(
     runtime: &RuntimePaths,
     session: &str,
 ) -> Option<PaneTopologyCache> {
+    #[cfg(test)]
+    READS.with(|reads| reads.set(reads.get() + 1));
     let bytes = std::fs::read(pane_topology_cache_path(runtime)).ok()?;
     let cache: PaneTopologyCache = serde_json::from_slice(&bytes).ok()?;
     (cache.session_name == session).then_some(cache)

@@ -92,6 +92,73 @@ fn row_with_context_pct(id: &str, pane: &str, group: &str, context_pct: Option<u
     row
 }
 
+#[test]
+fn own_roster_detection_keeps_siblings_events_and_streaks_local() {
+    let own_sig = |at_ms, rows, siblings, closed| super::super::sig::OwnFrameSig {
+        at_ms,
+        frame: crate::diag::record::FrameStamp {
+            produced_at_ms: Some(1),
+            rows,
+            agents: rows,
+            processes: 0,
+            pulled_rows: Some(1),
+            pulled_panes_produced_at_ms: Some(1),
+        },
+        own_view: Some(OwnViewSig {
+            sibling_count: siblings,
+            focused_pane: None,
+            working_pane_ids: vec!["zellij:terminal_1".to_owned()],
+        }),
+        events: EventsSig {
+            pane_closed: if closed {
+                vec![EventPaneSig {
+                    pane_id: "zellij:terminal_1".to_owned(),
+                    sent_at_ms: at_ms,
+                }]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        },
+        pane_ids: (0..rows)
+            .map(|_| Some("zellij:terminal_1".to_owned()))
+            .collect(),
+        gate_reject_streak: 7,
+        health_failure_streak: 9,
+    };
+    let mut active = OwnObserver::default();
+    let mut empty_tab = OwnObserver::default();
+    let mut closed_tab = OwnObserver::default();
+    for observer in [&mut active, &mut empty_tab, &mut closed_tab] {
+        assert!(observer.observe(own_sig(0, 1, 1, false)).is_empty());
+        assert!(
+            observer
+                .observe(own_sig(millis(OBSERVE_WARMUP), 1, 1, false))
+                .is_empty()
+        );
+    }
+    let now = millis(OBSERVE_WARMUP) + 1;
+    active.observe(own_sig(now, 0, 1, false));
+    empty_tab.observe(own_sig(now, 0, 0, false));
+    closed_tab.observe(own_sig(now, 0, 1, true));
+    let drafts = active.observe(own_sig(now + 1, 1, 1, false));
+    assert_eq!(
+        drafts.len(),
+        1,
+        "only the unexplained own roster disappearance flaps"
+    );
+    assert!(matches!(drafts[0].kind, AnomalyKind::RosterFlap { .. }));
+    assert_eq!(
+        (
+            drafts[0].gate_reject_streak,
+            drafts[0].health_failure_streak
+        ),
+        (7, 9)
+    );
+    assert!(empty_tab.observe(own_sig(now + 1, 1, 0, false)).is_empty());
+    assert!(closed_tab.observe(own_sig(now + 1, 1, 1, false)).is_empty());
+}
+
 fn row_with_total_tokens(id: &str, pane: &str, group: &str, total_tokens: Option<u64>) -> RowSig {
     let mut row = row(id, pane, group);
     row.watched.total_tokens = total_tokens;

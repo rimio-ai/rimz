@@ -23,11 +23,12 @@ fn run_cycle(
     let mut sink = ResultSink::new(tx, PathBuf::from("/nonexistent/rimz-test.sock"), None);
     worker.run_cycle(state, request, &mut sink);
     drop(sink);
-    rx.try_iter().collect()
+    rx.try_iter().map(|update| update.into_parts().0).collect()
 }
 
 fn snapshot(update: &FetchUpdate) -> &SidebarSnapshot {
     match update {
+        FetchUpdate::Shared { update, .. } => snapshot(update),
         FetchUpdate::Snapshot { snapshot, .. } => snapshot,
         FetchUpdate::Unchanged { .. } => panic!("expected snapshot, got unchanged"),
         FetchUpdate::Failed { error, .. } => panic!("expected snapshot, got: {error}"),
@@ -112,6 +113,98 @@ fn notification_panes_target_agent_panes() {
     };
 
     assert_eq!(notification_panes(&notification), vec![first, second]);
+}
+
+#[test]
+fn notification_reconciliation_reaches_the_younger_pane_before_its_bell() {
+    use super::super::notify::{BellDecision, bell_decision};
+
+    let fixture = ConsumerFixture::new();
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let runtime = RuntimePaths::under(fixture.workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    UnreadEpisodes::default().persist(&runtime).unwrap();
+    let mut worker = fixture.worker();
+    worker.runtime = runtime.clone();
+    worker.config.notification_prefs.coalesce_ms = 0;
+    let subscribers = Subscribers::default();
+    let (elder, elder_rx) = subscriber("01", "terminal_7", 2, "missing.sock".into());
+    let (younger, younger_rx) = subscriber("02", "terminal_8", 2, "missing.sock".into());
+    subscribe(&subscribers, elder);
+    subscribe(&subscribers, younger);
+    let mut sink = ResultSink::shared(subscribers, Covered::default());
+    let mut shared = crate::sidebar_pane::app::fixtures::agent_snapshot(&fixture.workspace_id);
+    shared.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Waiting;
+    shared.worktree_groups[0].rows[0].pane = Some(pane("terminal_9", "tab_2", false));
+    let target = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let frame = Arc::new(crate::sidebar::frame::assemble_frame(
+        vec![
+            pane("terminal_7", "tab_1", false),
+            pane("terminal_8", "tab_2", false),
+            pane("terminal_9", "tab_2", false),
+        ],
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    ));
+    let projected = worker.project_fold(
+        WorkspaceFold {
+            workspace: WorkspaceSnapshot(shared),
+            frame: Some(frame),
+        },
+        &mut sink,
+    );
+    let wake_path = runtime.sidebar_socket_path(&fixture.younger);
+    let notices = UnixDatagram::bind(&wake_path).unwrap();
+    crate::wakeup::heartbeat::write_heartbeat(
+        &runtime,
+        fixture.workspace_id.clone(),
+        &fixture.younger,
+        MuxName::Zellij,
+        "rimz-test",
+        &wake_path,
+        None,
+        None,
+    )
+    .unwrap();
+    notices
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    worker.publish_snapshot(
+        &fixture.state,
+        SnapshotPublication {
+            snapshot: projected,
+            role: FetchRole::Producer,
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Published,
+        },
+        &mut sink,
+    );
+
+    assert!(
+        snapshot(&elder_rx.recv().unwrap())
+            .rows()
+            .any(|row| row.unread)
+    );
+    let younger = younger_rx.recv().unwrap();
+    assert!(
+        snapshot(&younger).rows().any(|row| row.unread),
+        "this publication must carry the newly reconciled episode"
+    );
+    let mut bytes = [0; 4096];
+    let len = notices.recv(&mut bytes).unwrap();
+    let notice: crate::wakeup::events::SidebarEventEnvelope =
+        serde_json::from_slice(&bytes[..len]).unwrap();
+    let notice = notice.event;
+    assert!(
+        matches!(notice, SidebarEvent::Notify { ref panes, recheck_unread: true, .. } if panes.as_slice() == std::slice::from_ref(&target))
+    );
+    assert_eq!(
+        bell_decision(snapshot(&younger), &[target], true),
+        BellDecision::Fired
+    );
 }
 
 #[test]
@@ -236,9 +329,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     let election = ProducerElectionTracker::new(runtime.clone(), config.instance_id.clone());
     let request = FetchRequest {
         mode: FetchMode::HardRefresh,
-        min_pane_cache_ms: None,
-        published_frame_hint: false,
-        force_fold: false,
+        ..FetchRequest::default()
     };
     let mut worker = FetchWorker::new(config, runtime, crate::diag::DiagSink::disabled(), election);
     let outcomes = run_cycle(&mut worker, &state, request);
@@ -1073,9 +1164,7 @@ fn consumer_stamp_other_mandatory_folds_clear_before_ordinary_reseed() {
         FetchRequest::producer_fresh_panes(),
         FetchRequest {
             mode: FetchMode::HardRefresh,
-            min_pane_cache_ms: None,
-            published_frame_hint: false,
-            force_fold: false,
+            ..FetchRequest::default()
         },
     ] {
         let fixture = ConsumerFixture::new();
@@ -1334,4 +1423,586 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
         !snapshot.worktree_groups.is_empty(),
         "published panes are folded into the consumer snapshot"
     );
+}
+
+#[test]
+fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
+    let fixture = ConsumerFixture::new();
+    let panes = ["terminal_7", "terminal_8", "terminal_9"];
+    let frame = crate::sidebar::frame::assemble_frame(
+        panes.iter().map(|raw| pane(raw, "tab_1", false)).collect(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    std::fs::write(
+        fixture.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+
+    // Two panes of one host, eldest first; each excludes only itself.
+    let subscribers = Subscribers::default();
+    let mut updates = Vec::new();
+    for (id, own) in [("01", "terminal_7"), ("02", "terminal_8")] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let instance_id = SidebarInstanceId::parse(&format!("sb_{id:0>32}")).unwrap();
+        subscribers.lock().unwrap().insert(
+            instance_id.as_str().to_owned(),
+            Subscriber {
+                instance_id,
+                own_pane: Some(PaneId::from_parts(MuxName::Zellij, own)),
+                tick_seconds: 2,
+                refresh_override: None,
+                tx,
+                socket_path: PathBuf::from("missing.sock"),
+            },
+        );
+        updates.push((own, rx));
+    }
+    let mut worker = fixture.worker();
+    let mut sink = ResultSink::shared(subscribers, Covered::default());
+    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+
+    for (own, rx) in updates {
+        let received: Vec<FetchUpdate> = rx.try_iter().collect();
+        assert_eq!(received.len(), 1, "one fold reaches the renderer of {own}");
+        let shown: Vec<String> = snapshot(&received[0])
+            .rows()
+            .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.raw().to_owned()))
+            .collect();
+        let expected: Vec<&str> = panes.iter().copied().filter(|raw| *raw != own).collect();
+        assert_eq!(
+            shown, expected,
+            "the renderer of {own} excludes only itself"
+        );
+    }
+}
+
+#[test]
+fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
+    use crate::sidebar::observe;
+    let fixture = ConsumerFixture::new();
+    let frame = crate::sidebar::frame::assemble_frame(
+        (0..40)
+            .flat_map(|n| {
+                [
+                    pane(&format!("terminal_{n}"), &format!("tab_{n}"), false),
+                    pane(&format!("terminal_{}", n + 100), &format!("tab_{n}"), false),
+                ]
+            })
+            .collect(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    std::fs::write(
+        fixture.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    let subscribers = Subscribers::default();
+    let mut receivers = Vec::new();
+    for n in 0..40 {
+        let (sub, rx) = subscriber(
+            &format!("{n:02}"),
+            &format!("terminal_{n}"),
+            2,
+            PathBuf::from("missing.sock"),
+        );
+        receivers.push((sub.clone(), rx));
+        subscribe(&subscribers, sub);
+    }
+    let (tx, _rx) = std::sync::mpsc::sync_channel(64);
+    let mut worker = fixture.worker();
+    worker.observer = Some(observe::RoomObserver::new(tx.clone()));
+    let mut sink = ResultSink::shared(subscribers, Covered::default());
+    observe::take_extractions();
+    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+    assert_eq!(
+        observe::take_extractions(),
+        (1, 0),
+        "one common extraction for forty projections"
+    );
+    let mut common = None;
+    for (n, (sub, rx)) in receivers.into_iter().enumerate() {
+        let update = rx.try_recv().unwrap();
+        let FetchUpdate::Shared { context, .. } = &update else {
+            panic!("shared context missing")
+        };
+        let sig = context.observation.as_ref().unwrap();
+        if let Some(first) = &common {
+            assert!(Arc::ptr_eq(first, sig));
+        } else {
+            common = Some(sig.clone());
+        }
+        let mut config = worker.config.clone();
+        config.instance_id = sub.instance_id;
+        config.own_pane = sub.own_pane;
+        let own = config.own_pane.clone().unwrap();
+        let mut state = super::super::loop_state::LoopState::new(
+            config,
+            fixture.runtime.clone(),
+            PathBuf::from("missing.sock"),
+            crate::diag::DiagSink::disabled(),
+            std::sync::mpsc::channel().1,
+            None,
+            tx.clone(),
+            crate::sidebar_pane::pixel::PixelRenderCaps::default(),
+            None,
+        );
+        state.apply_latest_snapshot(update);
+        assert!(
+            !state
+                .current
+                .rows()
+                .any(|row| row.pane.as_ref().is_some_and(|pane| pane.pane_id == own))
+        );
+        assert_eq!(
+            state.current.own_view.as_ref().unwrap().working_pane_ids,
+            vec![PaneId::from_parts(
+                MuxName::Zellij,
+                format!("terminal_{}", n + 100)
+            )]
+        );
+    }
+    assert_eq!(
+        observe::take_extractions(),
+        (0, 40),
+        "only own parts are extracted per pane"
+    );
+}
+
+#[test]
+fn fold_file_reads_are_shared_across_forty_attachment_threads() {
+    use crate::mux::focus_anchor;
+    use crate::sidebar::{body_filter, read_marks};
+    let fixture = ConsumerFixture::new();
+    let frame = crate::sidebar::frame::assemble_frame(
+        (0..40)
+            .flat_map(|n| {
+                [
+                    pane(&format!("terminal_{n}"), &format!("tab_{n}"), false),
+                    pane(&format!("terminal_{}", n + 100), &format!("tab_{n}"), false),
+                ]
+            })
+            .collect(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    std::fs::write(
+        fixture.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    let subscribers = Subscribers::default();
+    let mut worker = fixture.worker();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let mut panes = Vec::new();
+    for n in 0..40 {
+        let (sub, rx) = subscriber(
+            &format!("{n:02}"),
+            &format!("terminal_{n}"),
+            2,
+            PathBuf::from("missing.sock"),
+        );
+        let mut config = worker.config.clone();
+        config.instance_id = sub.instance_id.clone();
+        config.own_pane = sub.own_pane.clone();
+        subscribe(&subscribers, sub);
+        let runtime = fixture.runtime.clone();
+        let ready = ready_tx.clone();
+        panes.push(std::thread::spawn(move || {
+            let mut state = super::super::loop_state::LoopState::new(
+                config,
+                runtime,
+                PathBuf::from("missing.sock"),
+                crate::diag::DiagSink::disabled(),
+                std::sync::mpsc::channel().1,
+                None,
+                std::sync::mpsc::sync_channel(64).0,
+                crate::sidebar_pane::pixel::PixelRenderCaps::default(),
+                None,
+            );
+            focus_anchor::take_reads();
+            body_filter::take_reads();
+            read_marks::take_store_reads();
+            ready.send(()).unwrap();
+            drop(ready);
+            state.apply_latest_snapshot(rx.recv().unwrap());
+            (
+                focus_anchor::take_reads(),
+                body_filter::take_reads(),
+                read_marks::take_store_reads(),
+            )
+        }));
+    }
+    drop(ready_tx);
+    for _ in 0..40 {
+        ready_rx.recv().unwrap();
+    }
+    focus_anchor::take_reads();
+    body_filter::take_reads();
+    let mut sink = ResultSink::shared(subscribers, Covered::default());
+    worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
+    let mut reads = (focus_anchor::take_reads(), body_filter::take_reads(), 0);
+    for pane in panes {
+        let own = pane.join().unwrap();
+        reads.0 += own.0;
+        reads.1 += own.1;
+        reads.2 += own.2;
+    }
+    assert_eq!(
+        reads.0, 1,
+        "focus-anchor observation is one room file read per fold"
+    );
+    assert_eq!(
+        reads.1, 1,
+        "body-filter observation is one room file read per fold"
+    );
+    assert_eq!(
+        reads.2, 0,
+        "attachments use the shared merged receipt baseline"
+    );
+}
+
+fn subscriber(
+    id: &str,
+    own: &str,
+    tick_seconds: u64,
+    socket_path: PathBuf,
+) -> (Subscriber, std::sync::mpsc::Receiver<FetchUpdate>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let subscriber = Subscriber {
+        instance_id: SidebarInstanceId::parse(&format!("sb_{id:0>32}")).unwrap(),
+        own_pane: Some(PaneId::from_parts(MuxName::Zellij, own)),
+        tick_seconds,
+        refresh_override: None,
+        tx,
+        socket_path,
+    };
+    (subscriber, rx)
+}
+
+fn subscribe(subscribers: &Subscribers, subscriber: Subscriber) {
+    subscribers
+        .lock()
+        .unwrap()
+        .insert(subscriber.instance_id.as_str().to_owned(), subscriber);
+}
+
+fn unsubscribe(subscribers: &Subscribers, id: &str) {
+    subscribers.lock().unwrap().remove(&format!("sb_{id:0>32}"));
+}
+
+fn shown_panes(update: &FetchUpdate) -> Vec<String> {
+    snapshot(update)
+        .rows()
+        .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.raw().to_owned()))
+        .collect()
+}
+
+/// Let the monotonic clock move past the last reading, so "observed before
+/// the cycle started" is never a tie.
+fn tick_clock() {
+    std::thread::sleep(Duration::from_millis(2));
+}
+
+#[test]
+fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
+    const PANES: usize = 8;
+    let fixture = ConsumerFixture::new();
+    let panes: Vec<String> = (1..=PANES).map(|id| format!("terminal_{id}")).collect();
+    let frame = crate::sidebar::frame::assemble_frame(
+        panes.iter().map(|id| pane(id, "tab_1", false)).collect(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    std::fs::write(
+        fixture.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    let subscribers = Subscribers::default();
+    let mut receivers = Vec::new();
+    for (index, own) in panes.iter().enumerate() {
+        let (subscriber, rx) = subscriber(&(index + 1).to_string(), own, 60, "missing.sock".into());
+        subscribe(&subscribers, subscriber);
+        receivers.push(rx);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::force_fold()).unwrap();
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = reads.clone();
+    let sink = ResultSink::shared(subscribers, Covered::default());
+    let mut worker = fixture.worker();
+    worker.election = crate::sidebar::ProducerElectionTracker::new(
+        fixture.runtime.clone(),
+        sink.cycle[0].instance_id.clone(),
+    );
+    let mut sender = Some(tx);
+    let mut mid_first = None;
+    worker.on_read = Some(Box::new(move || {
+        let read = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        tick_clock();
+        match read {
+            1 => {
+                mid_first = Some(Instant::now());
+                for _ in 0..PANES {
+                    sender
+                        .as_ref()
+                        .unwrap()
+                        .send(FetchRequest::default())
+                        .unwrap();
+                }
+            }
+            2 => {
+                for _ in 0..PANES {
+                    sender
+                        .as_ref()
+                        .unwrap()
+                        .send(FetchRequest {
+                            observed_at: mid_first.unwrap(),
+                            ..FetchRequest::default()
+                        })
+                        .unwrap();
+                }
+                sender = None;
+            }
+            _ => panic!("a publication failed to cover the staggered burst"),
+        }
+    }));
+    worker.run_resolving(rx, sink, |_| Ok(fixture.state.clone()));
+
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "count only cycles crossing the store-reader boundary"
+    );
+    for (own, rx) in panes.iter().zip(receivers) {
+        let updates: Vec<_> = rx.try_iter().collect();
+        assert_eq!(
+            updates.len(),
+            2,
+            "every subscriber receives both real publications"
+        );
+        for update in updates {
+            assert_eq!(
+                shown_panes(&update),
+                panes
+                    .iter()
+                    .filter(|pane| *pane != own)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn requests_a_finished_fold_cannot_answer_still_run() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let covered = Covered::default();
+    tx.send(FetchRequest::default()).unwrap();
+    let mut sender = Some(tx);
+    let mut cycles = Vec::new();
+    let mut mid_first = None;
+    drive(&rx, &covered, |cycle| {
+        cycles.push(cycle.request);
+        covered.record(cycle);
+        let Some(tx) = sender.as_ref() else {
+            return;
+        };
+        tick_clock();
+        match cycles.len() {
+            1 => {
+                mid_first = Some(Instant::now());
+                tx.send(FetchRequest::default()).unwrap();
+            }
+            // Observed before the second fold started, but asking more than
+            // its ordinary request did.
+            2 => {
+                let observed_at = mid_first.unwrap();
+                for request in [
+                    FetchRequest::hard_refresh(),
+                    FetchRequest::force_fold(),
+                    FetchRequest::producer_fresh_panes(),
+                    FetchRequest::pane_frame_published(),
+                ] {
+                    tx.send(FetchRequest {
+                        observed_at,
+                        ..request
+                    })
+                    .unwrap();
+                }
+                sender = None;
+            }
+            _ => {}
+        }
+    });
+    assert_eq!(cycles.len(), 3, "every stronger request runs");
+    let last = cycles[2];
+    assert_eq!(last.mode, FetchMode::HardRefresh);
+    assert!(last.force_fold && last.published_frame_hint);
+}
+
+#[test]
+fn a_fold_that_failed_answers_nothing() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let covered = Covered::default();
+    tx.send(FetchRequest::default()).unwrap();
+    let mut sender = Some(tx);
+    let mut cycles = 0;
+    let observed_at = Instant::now();
+    tick_clock();
+    // Nothing went out, so nothing is recorded.
+    drive(&rx, &covered, |_cycle| {
+        cycles += 1;
+        if let Some(tx) = sender.take() {
+            tx.send(FetchRequest {
+                observed_at,
+                ..FetchRequest::default()
+            })
+            .unwrap();
+        }
+    });
+    assert_eq!(cycles, 2);
+}
+
+#[test]
+fn a_follow_up_a_finished_fold_answered_is_not_sent() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let covered = Covered::default();
+    let mut dispatcher = FetchDispatcher::for_plane(tx, covered.clone());
+    dispatcher.request(FetchRequest::default(), false);
+    rx.try_recv().expect("first request");
+    dispatcher.request(FetchRequest::default(), true);
+    tick_clock();
+    covered.record(Coverage {
+        started: Instant::now(),
+        request: FetchRequest::default(),
+    });
+
+    dispatcher.complete(true);
+    assert!(
+        rx.try_recv().is_err(),
+        "the plane's fold that started after it answers the follow-up"
+    );
+    assert!(
+        !dispatcher.in_flight,
+        "nothing is left waiting for an answer"
+    );
+
+    dispatcher.request(FetchRequest::default(), false);
+    rx.try_recv().expect("next request");
+    dispatcher.request(FetchRequest::default(), true);
+    dispatcher.complete(true);
+    rx.try_recv()
+        .expect("a follow-up observed after the last fold started goes out");
+}
+
+#[test]
+fn one_publication_serves_the_renderers_its_cycle_began_with() {
+    let fixture = ConsumerFixture::new();
+    let frame = crate::sidebar::frame::assemble_frame(
+        ["terminal_7", "terminal_8", "terminal_9"]
+            .iter()
+            .map(|raw| pane(raw, "tab_1", false))
+            .collect(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    std::fs::write(
+        fixture.runtime.pane_frame_path(),
+        serde_json::to_vec(&frame).unwrap(),
+    )
+    .unwrap();
+    let subscribers = Subscribers::default();
+    let (eldest, eldest_rx) = subscriber("01", "terminal_7", 2, PathBuf::from("missing.sock"));
+    let (younger, younger_rx) = subscriber("02", "terminal_8", 2, PathBuf::from("missing.sock"));
+    subscribe(&subscribers, eldest);
+    subscribe(&subscribers, younger);
+    let mut worker = fixture.worker();
+    let mut sink = ResultSink::shared(subscribers.clone(), Covered::default());
+    sink.begin_cycle();
+    let (workspace, frame) = worker
+        .reader
+        .read_adopting_workspace(&fixture.state)
+        .unwrap();
+    let folded = worker.project_fold(WorkspaceFold { workspace, frame }, &mut sink);
+
+    // The eldest leaves and a new pane arrives between fold and publication.
+    unsubscribe(&subscribers, "01");
+    let (newcomer, newcomer_rx) = subscriber("03", "terminal_9", 2, PathBuf::from("missing.sock"));
+    subscribe(&subscribers, newcomer);
+    sink.publish(FetchUpdate::Snapshot {
+        snapshot: Box::new(folded),
+        role: FetchRole::Consumer,
+        phase: FetchPhase::Final,
+        source: SnapshotSource::Published,
+    });
+
+    let younger: Vec<_> = younger_rx.try_iter().collect();
+    assert_eq!(younger.len(), 1);
+    assert_eq!(
+        shown_panes(&younger[0]),
+        ["terminal_7", "terminal_9"],
+        "the younger pane gets its own view, not the departed eldest's"
+    );
+    let eldest: Vec<_> = eldest_rx.try_iter().collect();
+    assert_eq!(shown_panes(&eldest[0]), ["terminal_8", "terminal_9"]);
+    assert!(
+        newcomer_rx.try_iter().next().is_none(),
+        "a pane that attached mid-cycle waits for its own first fetch"
+    );
+}
+
+#[test]
+fn the_worker_keeps_the_tick_of_its_eldest_renderer() {
+    let fixture = ConsumerFixture::new();
+    let subscribers = Subscribers::default();
+    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 60, PathBuf::from("missing.sock"));
+    let (younger, _younger_rx) = subscriber("02", "terminal_8", 1, PathBuf::from("missing.sock"));
+    subscribe(&subscribers, eldest);
+    subscribe(&subscribers, younger);
+    let worker = fixture.worker();
+    let mut sink = ResultSink::shared(subscribers.clone(), Covered::default());
+
+    assert_eq!(worker.stand(&sink).tick, Duration::from_secs(60));
+    unsubscribe(&subscribers, "01");
+    sink.begin_cycle();
+    assert_eq!(
+        worker.stand(&sink).tick,
+        Duration::from_secs(1),
+        "the next eldest's tick takes over"
+    );
+}
+
+#[test]
+fn a_full_renderer_inbox_holds_neither_the_worker_nor_another_renderer() {
+    let dir = tempfile::tempdir().unwrap();
+    let full = dir.path().join("full.sock");
+    let _stalled = std::os::unix::net::UnixDatagram::bind(&full).unwrap();
+    crate::sidebar_pane::app::fixtures::fill_inbox(&full);
+    let subscribers = Subscribers::default();
+    let (eldest, _eldest_rx) = subscriber("01", "terminal_7", 2, dir.path().join("a.sock"));
+    let (stalled, _stalled_rx) = subscriber("02", "terminal_8", 2, full);
+    let (other, other_rx) = subscriber("03", "terminal_9", 2, dir.path().join("c.sock"));
+    for subscriber in [eldest, stalled, other] {
+        subscribe(&subscribers, subscriber);
+    }
+    let mut sink = ResultSink::shared(subscribers, Covered::default());
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        sink.publish(FetchUpdate::Unchanged {
+            role: FetchRole::Consumer,
+        });
+        let _ = done_tx.send(());
+    });
+
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the publication returns with one inbox full");
+    assert!(matches!(
+        other_rx.try_recv(),
+        Ok(FetchUpdate::Unchanged { .. })
+    ));
 }

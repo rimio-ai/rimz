@@ -28,6 +28,8 @@ One pass builds one frame, in this order.
 
 Steps 1 through 8 run in the elected producer and are published once for every renderer in the session; the split, caches, and timings are [state.md](./state.md#one-fetch-cycle). Step 9 runs in each renderer.
 
+Only watched attachments paint. A capture of a hidden sidebar pane shows its last visible frame, including in a detached session; it is not a fresh snapshot. Hidden attachments still apply every delivered projection, refresh heartbeats, drain wakeups, and handle self-close and reload. A fold that lists the pane or its working siblings in `viewed_panes`, or a resize wakeup, paints the current state within one base frame ([the paint clock](./state.md#the-paint-clock)).
+
 Two commands split a bug between the halves. `rimz sidebar snapshot --json` runs steps 1 through 8 and prints the result: if the wrong answer is already in the JSON, the bug is in the producer. `rimz sidebar frame` renders that snapshot without capturing through the mux, so a correct snapshot with a wrong frame points at `sidebar_pane/`. Both take `--workspace-id`; an id with no state on this machine and no `--session-name` names no room, so both skip the producer and render the empty rollup under the machine config, creating nothing under the state or runtime roots.
 
 ## Where the code lives
@@ -342,9 +344,11 @@ Provider budgets are account-scoped: every session of a provider shares one acco
 
 ## The serve loop
 
-`rimz sidebar serve` is the renderer process. A supervisor owns the pane command's PID and runs the TUI as a worker, so a worker crash, a reload, and a self-close request each resolve without losing the pane. The worker runs on a fixed timestep, folds each wakeup through [`loop_state.rs`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs), and paints from the last committed snapshot; data flow into it is [state.md](./state.md#one-fetch-cycle).
+`rimz sidebar serve` is the pane's command. Its supervisor owns the pane command's PID and the pane's terminal, and hands the painting to the session's room host, so a painter crash, a reload, and a self-close request each resolve without losing the pane ([state.md → The room host and its attachments](./state.md#the-room-host-and-its-attachments)). The pane's loop runs on a fixed timestep, folds each wakeup through [`loop_state.rs`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs), and paints from the last committed snapshot; data flow into it is [state.md](./state.md#one-fetch-cycle).
 
-The worker tells the supervisor what it wants through its exit code ([`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs)).
+A pane the host is painting reaches its supervisor over the attach stream: `self-close` takes the confirmation path below, `reload` attaches again to the next build's host, and a stream that ends with no word attaches again, or falls back to a worker when the attachment was young.
+
+A pane the host cannot take runs the same loop in a worker process the supervisor spawns. The worker tells the supervisor what it wants through its exit code ([`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs)).
 
 | Worker exit | Supervisor action |
 |---|---|
@@ -355,7 +359,7 @@ The worker tells the supervisor what it wants through its exit code ([`supervise
 
 Respawns back off exponentially from one second to 60 seconds and reset after a stable minute.
 
-Each renderer writes its own heartbeat in process and binds a per-instance wakeup socket. The heartbeat record, its protocol version, and its TTL are wire, in [`wakeup/heartbeat.rs`](../../../crates/rimz/src/wakeup/heartbeat.rs). Heartbeat write failures log as best-effort liveness failures, and the normal relaunch path repairs them.
+Each pane's loop writes its own heartbeat in process and binds a per-instance wakeup socket, whichever process it runs in. The heartbeat record, its protocol version, and its TTL are wire, in [`wakeup/heartbeat.rs`](../../../crates/rimz/src/wakeup/heartbeat.rs). Heartbeat write failures log as best-effort liveness failures, and the normal relaunch path repairs them.
 
 ### Launch
 
@@ -365,13 +369,13 @@ Launch is idempotent by heartbeat. Only readable, current-protocol, fresh heartb
 
 ### Drawing
 
-Every animation reads the wall-clock animation phase, not the age of the data, so motion stays smooth over stale data and golden tests pin each frame deterministically. A terminal resize is a wakeup too: a watcher turns `SIGWINCH` into a socket nudge, and the frame repaints through the synchronous input path.
+Every animation reads the wall-clock animation phase, not the age of the data, so motion stays smooth over stale data and golden tests pin each frame deterministically. A terminal resize is a wakeup too: the process holding the pane's terminal turns `SIGWINCH` into a socket nudge, the loop reads the new size from the pane's output, and the frame repaints through the synchronous input path.
 
 Row emphasis has two depths. The read pulse is an OKLab lightness ramp on the row glyph. The unread blink hard-toggles between the resting tone and a bright crest across the lead glyph, name, description, and make-up buckets, so it reads as on and off at every color depth; under `NO_COLOR` it keeps the shape and the on-phase bold. Palette depth is resolved by the renderer, because terminal capability is local: `theme.mode = "auto"` emits RGB on truecolor terminals and quantized 256-color tones elsewhere ([theme.md](../theme.md#color-depth-and-graceful-degradation)).
 
 ### Self-close
 
-A sidebar shares its tab with the user's panes and has no reason to outlive them. The worker requests self-close, and the supervisor decides.
+A sidebar shares its tab with the user's panes and has no reason to outlive them. The pane's loop requests self-close, and the supervisor decides.
 
 The worker reads the sibling count from the producer's own-view summary ([`SelfCloseState::should_close`](../../../crates/rimz/src/sidebar_pane/app/lifecycle.rs)). Once it has seen a working sibling, a zero count requests self-close immediately, because the producer verifies any shrink toward empty before publishing it. A sidebar that has never seen a sibling (session birth or resurrection, before the mux materializes the tab) waits `SELF_CLOSE_EMPTY_CONFIRM` (5 seconds) of continuous emptiness first, so a tab born sidebar-only still cleans itself up. An unknown count never closes. A producer frame that omits the sidebar's own pane is re-pulled through the mux's `PreferAuthoritative` seam before it feeds the count.
 

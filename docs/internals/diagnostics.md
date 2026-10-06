@@ -111,7 +111,7 @@ Filter on the kind as well as the severity: `mixed_build_writers` and `newborn_q
 
 ## The frame-stream observer
 
-Every sidebar renderer carries an observer that watches its own committed frame stream, the fused and gated `SidebarSnapshot` sequence the renderer paints. Only the elected elder's writer records an evidence-rich `frame_anomaly` when the stream misbehaves: a roster that empties and refills, a duplicated card, a phantom row, a value that bounces between two figures, a card whose pane or process is gone.
+The room plane observes its shared workspace stream once, and each renderer observes its own committed roster, the fused and gated `SidebarSnapshot` sequence it paints. Only the elected elder's writer records an evidence-rich `frame_anomaly` when a stream misbehaves: a roster that empties and refills, a duplicated card, a phantom row, a value that bounces between two figures, a card whose pane or process is gone. A room-common anomaly names the eldest renderer of that publication in `instance_id`; an own-roster anomaly names its renderer. Rebinding shares the sink's existing rate limit, not a new limit per pane.
 
 The observer reads the stream and emits records; it never changes what the renderer commits or paints. It exists because this class of bug heals itself within seconds and leaves nothing behind. A caught anomaly becomes a detector test ([below](#from-anomaly-to-regression-test)), and a detection that proves reliable becomes a prevention guard, either renderer-side in the [commit gate](../../crates/rimz/src/sidebar_pane/app/gate.rs) or at the source in producer frame validation.
 
@@ -119,13 +119,13 @@ The observer reads the stream and emits records; it never changes what the rende
 
 ### The commit point
 
-Every mutation of the rendered snapshot passes through one chokepoint, `observe_commit` in [`app::loop_state`](../../crates/rimz/src/sidebar_pane/app/loop_state.rs), reached by both the pull path and the event-overlay path, so the observer runs exactly once per committed fold.
+Every mutation of a rendered snapshot passes through `observe_commit` in [`app::loop_state`](../../crates/rimz/src/sidebar_pane/app/loop_state.rs), reached by both pulls and event overlays. It extracts only the pane's own view, roster counts and pane membership, active events, and gate/health streaks for own-roster detection. No observation signature is extracted when the plane has no diagnostics writer.
 
-After each commit it reduces the snapshot to a compact `FrameSig` and runs every pure detector inline, in microseconds, before the loop moves on. The signature holds row identities sorted by row id, card kinds, pane ids and pids, group keys and rendered order, watched values, own-view and active-event context, and the gate and health streaks.
+Before local projection the fetch worker extracts one room-common `FrameSig`: sorted row identities, card kinds, pane ids and pids, groups and baseline order, watched values, aggregates, and pulled membership. Every projection shares that signature by `Arc`; the writer runs its common detectors once. Common detection describes the workspace baseline, not each pane's gated or order-held presentation. The worker's fast and produced publications have distinct baselines and therefore distinct signatures. Scoped overlay events feed a deduplicated room observation store as well as each pane's unchanged fusion store.
 
 - The row signature leaves out renderer-local presentation state (unread stamp, selection, scroll), so presentation churn reads as unchanged content.
-- The signature also carries scalars from the un-fused pulled snapshot: `pulled_rows`, pulled row and pane membership, the pulled frame stamp, and pulled dashboard aggregates. Every record therefore separates the elder's pulled truth from its committed fold; these scalars do not attribute faults across renderers.
-- Detectors send drafts over a bounded 64-slot channel to the writer thread. A full channel drops the draft and stamps the drop count as `dropped_msgs` on the next draft that gets through, so the render thread never waits on the observer.
+- The common signature retains un-fused pulled membership, frame stamp, and dashboard aggregates. Own records retain their projected pulled row count and the common pulled stamp alongside their actual committed counts and local streaks.
+- Room signatures and own drafts travel over a bounded 64-slot channel. A full channel drops the message and carries its drop count into the next passing anomaly, so neither the worker nor the renderer waits on the observer.
 
 The windowed detectors stay off during `OBSERVE_WARMUP` (10s) after the first frame-backed commit, because startup and reload transients are expected, and they stay off while the committed fold has no pane frame. The per-frame checks run from the first commit.
 

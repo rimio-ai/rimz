@@ -24,6 +24,16 @@ pub(crate) const FOCUS_ANCHOR_FRESH: Duration = Duration::from_millis(2500);
 
 const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v3";
 
+#[cfg(test)]
+thread_local! {
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_reads() -> usize {
+    READS.with(|reads| reads.replace(0))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FocusOrigin {
@@ -170,6 +180,8 @@ pub(crate) fn store(runtime: &RuntimePaths, anchor: &FocusAnchor) -> atomic::Res
 }
 
 pub fn load(runtime: &RuntimePaths) -> Option<FocusAnchor> {
+    #[cfg(test)]
+    READS.with(|reads| reads.set(reads.get() + 1));
     let path = runtime.focus_anchor_path();
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,

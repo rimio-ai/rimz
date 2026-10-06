@@ -44,7 +44,7 @@ struct Inner {
     workspace_id: WorkspaceId,
     session_name: String,
     instance_id: Option<SidebarInstanceId>,
-    limiter: Mutex<Limiter>,
+    limiter: Arc<Mutex<Limiter>>,
 }
 
 #[derive(Clone, Copy)]
@@ -174,7 +174,7 @@ impl DiagSink {
                 workspace_id,
                 session_name: session_name.into(),
                 instance_id,
-                limiter: Mutex::new(Limiter::new(DIAG_RATE_LIMIT_WINDOW)),
+                limiter: Arc::new(Mutex::new(Limiter::new(DIAG_RATE_LIMIT_WINDOW))),
             })),
         }
     }
@@ -185,6 +185,20 @@ impl DiagSink {
 
     pub(crate) fn is_enabled(&self) -> bool {
         self.inner.is_some()
+    }
+
+    pub(crate) fn for_renderer(&self, instance_id: crate::ids::SidebarInstanceId) -> Self {
+        Self {
+            inner: self.inner.as_ref().map(|inner| {
+                Arc::new(Inner {
+                    state_root: inner.state_root.clone(),
+                    workspace_id: inner.workspace_id.clone(),
+                    session_name: inner.session_name.clone(),
+                    instance_id: Some(instance_id),
+                    limiter: inner.limiter.clone(),
+                })
+            }),
+        }
     }
 
     pub fn log_path(&self) -> Option<PathBuf> {

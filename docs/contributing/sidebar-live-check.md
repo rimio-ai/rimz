@@ -178,6 +178,24 @@ On the team's tab, run the sidebar's Look and take a fresh Capture. Count rows f
 
 The recorded row was `row0=8` on both backends. tmux focus moved from `%3` to `%8`, matching `Role: @reviewer#probe  tmux:%8`. On Zellij, `8=forge.reviewer@#probe` joined the focused set, matching `Role: @reviewer#probe  zellij:terminal_8`.
 
+## Room host
+
+A room with a terminal on its sidebar panes runs one `rimz sidebar host` for the session and one `rimz sidebar serve` supervisor per tab, with no worker beside them ([state.md](../internals/sidebar/state.md#the-room-host-and-its-attachments)). Take the process shape from inside the room, where the session name is on your card:
+
+```sh
+ps -eo pid,ppid,rss,args | grep -E 'rimz sidebar (host|serve)' | grep -v grep
+```
+
+Expect one `sidebar host` line and one `sidebar serve` line per tab. The host's parent is the `sidebar serve` supervisor that started it, and once that supervisor exits the host is reparented; it runs in its own session either way, so no pane's job control reaches it. A `sidebar serve` pair on one tab, a parent and a child with the same arguments, is a pane on its fallback worker; that is correct right after a host death and wrong in a settled room.
+
+Three checks cover what a unit test cannot:
+
+1. **Host death.** Kill the host by PID with `kill -9`. Every pane keeps its last frame, then repaints: each supervisor reads the end of its stream and attaches to a host one of them starts, or runs its own worker when its attachment was younger than the stable-run window. Look on each tab, then repeat the `ps` and confirm one host again once the room has been quiet for a minute and a tab's worker has next exited.
+2. **Supervisor death.** Kill one tab's `sidebar serve` by PID. The host drops that pane: its heartbeat and wakeup socket leave the room's runtime directory (the testkit build's `rimz sidebar renderers` no longer lists the instance), and the other tabs keep painting.
+3. **Last pane.** Close every tab's sidebar pane, or kill the session. The host exits about ten seconds after its last pane detaches; `ps` shows no `sidebar host` for the session after that.
+
+A reload is the fourth: after `rimz reload` onto a new build the host's PID changes and every tab repaints once, with no tab left on a worker.
+
 ## Inspect the data behind a card
 
 A frame shows what the renderer decided; `rimz sidebar snapshot --json` shows what it decided it from. Run it from the binary you built, not the installed one: both the default and `--no-produce` fold the rows in the calling process, so the snapshot is always your code's output, and the only way to see another build's behaviour is to run that build. What the flag trades is the pane truth underneath: the default forks `list-panes` and git for a current roster, while `--no-produce` reuses the pane frame and agent projection the producer already published and forks neither, which makes it the cheap read in a room you would rather not disturb.

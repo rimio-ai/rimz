@@ -1,24 +1,23 @@
 //! Paint one sidebar frame, including pixel-pet image residency.
 
 use std::io::{self, Write};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::Backend;
 
 use crate::MuxName;
 use crate::config::{CellAspect, PixelMode};
 use crate::sidebar_pane::pets::{
-    PetAssets, PetBody, PetViewFrame, PixelPainter, effective_render_tier, probe_cell_aspect,
+    PetAssets, PetBody, PetViewFrame, PixelPainter, effective_render_tier,
 };
 use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
+use crate::sidebar_pane::pixel::probe::CAPS_REFRESH_INTERVAL;
 use crate::sidebar_pane::pixel::{
     BEGIN_SYNC, END_SYNC, PixelRenderCaps, PixelSlot, write_synchronized_pixel_output,
 };
 use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
-
-const CAPS_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
 enum PixelSession {
     Disabled,
@@ -52,7 +51,7 @@ impl FramePainter {
             meter_painter,
             caps,
             last_caps_refresh: Instant::now(),
-            probed_aspect: probe_cell_aspect(),
+            probed_aspect: None,
             pixel_session: slot.map_or(PixelSession::Disabled, PixelSession::Pending),
             pixel_wrap,
         }
@@ -72,7 +71,7 @@ impl FramePainter {
         }
     }
 
-    #[cfg(test)]
+    /// The painted pane's cell aspect; `None` keeps the configured one.
     pub(super) fn set_probed_aspect(&mut self, aspect: Option<CellAspect>) {
         self.probed_aspect = aspect;
     }
@@ -91,12 +90,13 @@ impl FramePainter {
         &mut self,
         mux: MuxName,
         session_name: &str,
+        cell_aspect: Option<CellAspect>,
         detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
     ) -> bool {
         let previous = (self.caps, self.probed_aspect);
         self.caps = detect(mux, session_name, self.caps);
         self.last_caps_refresh = Instant::now();
-        self.probed_aspect = probe_cell_aspect();
+        self.probed_aspect = cell_aspect;
         (self.caps, self.probed_aspect) != previous
     }
 
@@ -177,9 +177,9 @@ impl FramePainter {
         }
     }
 
-    pub(super) fn draw_and_paint<W: Write>(
+    pub(super) fn draw_and_paint<B: Backend<Error = io::Error> + Write>(
         &mut self,
-        terminal: &mut Terminal<CrosstermBackend<W>>,
+        terminal: &mut Terminal<B>,
         snapshot: &SidebarSnapshot,
         alert: Option<&render::Alert>,
         ui: &mut UiState,
@@ -194,7 +194,7 @@ impl FramePainter {
             Ok(())
         })();
         let end_result = terminal.backend_mut().write_all(END_SYNC);
-        let flush_result = terminal.backend_mut().flush();
+        let flush_result = Write::flush(terminal.backend_mut());
         body_result.and(end_result).and(flush_result)
     }
 

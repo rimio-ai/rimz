@@ -26,6 +26,84 @@ fn native_step(cols: u16, exact: bool) -> crate::mux::WidthStep {
 }
 
 #[test]
+fn forty_width_backstops_share_topology_but_keep_pane_inputs() {
+    use crate::mux::zellij::pane_topology;
+    use std::sync::{Arc, Mutex};
+    let (_dir, runtime, _) = controller(MuxName::Zellij);
+    write_zellij_topology(&runtime);
+    let mut cache = pane_topology::read_pane_topology_cache(&runtime, "rimz-test").unwrap();
+    let template = std::mem::take(&mut cache.panes);
+    cache.panes = (0..40)
+        .flat_map(|n| {
+            template.iter().cloned().map(move |mut pane| {
+                pane.id += 2 * n;
+                pane.tab_position = n;
+                if pane.id % 2 == 0 {
+                    pane.pane_columns = pane.pane_columns.map(|cols| cols + n);
+                    pane.is_fullscreen = n == 39;
+                }
+                pane
+            })
+        })
+        .collect();
+    pane_topology::write_pane_topology_cache(&runtime, &cache).unwrap();
+    let geometry = Arc::new(Mutex::new(crate::mux::zellij::WidthMemo::default()));
+    let diag = DiagSink::disabled();
+    let mut controllers: Vec<_> = (0..40)
+        .map(|n| {
+            let mut own = WidthController::new(
+                runtime.clone(),
+                "rimz-test".to_owned(),
+                Some(PaneId::from_parts(
+                    MuxName::Zellij,
+                    format!("terminal_{}", 2 * n + 1),
+                )),
+                MuxName::Zellij,
+                crate::mux::SidebarWidth::default(),
+            );
+            own.geometry = geometry.clone();
+            own.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
+            own
+        })
+        .collect();
+    pane_topology::take_reads();
+    crate::mux::zellij::take_width_derivations();
+    for (n, own) in controllers.iter_mut().enumerate() {
+        own.backstop(
+            Some(30 + n as u16),
+            Some(n + 1),
+            Some(cache.produced_at_ms),
+            &diag,
+        );
+        assert_eq!(own.current_view_cols, Some(200 + n as u16));
+        assert_eq!(own.last_siblings, Some(n + 1));
+        assert_eq!(own.fullscreen_observed_at_ms, Some(cache.produced_at_ms));
+        assert_eq!(own.convergence.is_fullscreen_held(), n == 39);
+    }
+    assert_eq!(
+        pane_topology::take_reads(),
+        0,
+        "unchanged topology backstops do no JSON reads"
+    );
+    assert_eq!(crate::mux::zellij::take_width_derivations(), 0);
+    assert!(
+        controllers[0]
+            .refresh_target(Some(cache.produced_at_ms + 1), false)
+            .is_none()
+    );
+    assert!(
+        controllers[1]
+            .refresh_target(Some(cache.produced_at_ms), false)
+            .is_some()
+    );
+    assert_eq!(
+        pane_topology::take_reads(),
+        0,
+        "each pane's freshness floor is checked against the shared table"
+    );
+}
+
+#[test]
 fn exact_feedback_never_widens_the_native_tolerance() {
     let now = Instant::now();
     let mut control = WidthControl::new(Some(target(60)));

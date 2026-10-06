@@ -8,6 +8,8 @@
 //! [`crate::store`].
 
 pub mod app;
+mod attach;
+pub mod host;
 pub mod pets;
 pub(crate) mod pixel;
 pub use pixel::probe::{ZellijKittySupport, probe_zellij_kitty};

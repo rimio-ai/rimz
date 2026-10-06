@@ -101,6 +101,13 @@ impl EventStore {
         self.enforce_cap();
     }
 
+    pub(crate) fn has_focus_since(&self, sent_at_ms: u64, now_ms: u64) -> bool {
+        self.active(now_ms).any(|event| {
+            event.sent_at_ms >= sent_at_ms
+                && matches!(event.event, SidebarEvent::FocusChanged { .. })
+        })
+    }
+
     pub(super) fn active(&self, now_ms: u64) -> impl Iterator<Item = &StoredEvent> {
         let ttl_ms = EVENT_STORE_TTL.as_millis() as u64;
         self.events

@@ -1,25 +1,22 @@
 //! Runtime loop for the native sidebar process.
 //!
-//! `serve` owns the fixed-timestep process shell and worker wiring; `loop_state` owns renderer transitions and loop-lifetime context. Its collaborators own the fetch cycle, state and unread folds, regression gate, health debounce, lifecycle latches, order holds, reload decisions, and selection.
+//! `serve` owns the fallback worker's process shell; `attachment` owns one pane's fixed-timestep loop, `plane` the data plane every pane of a process shares, and `loop_state` renderer transitions and loop-lifetime context. Its collaborators own the fetch cycle, state and unread folds, regression gate, health debounce, lifecycle latches, order holds, reload decisions, and selection.
 
 use std::cell::Cell;
-use std::io::{self, Write};
+use std::io;
+use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
-use crate::diag::record::DiagEvent;
 use crate::disk::paths::PathErr;
-use crate::sidebar::observe::{self, ObserveMsg};
-use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
-use crate::sidebar_pane::pixel::{PixelLease, PixelRenderCaps, detect_pixel_render_caps};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
-use ratatui::Terminal;
-use ratatui::backend::{ClearType, CrosstermBackend};
 use tracing::{debug, warn};
 
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 
+mod attachment;
+mod backend;
 mod cache_refresh;
 #[cfg(feature = "testkit")]
 mod demo;
@@ -35,6 +32,7 @@ mod loop_state;
 mod notify;
 mod order_hold;
 mod paint;
+mod plane;
 mod reload;
 mod remind;
 mod selection;
@@ -45,11 +43,15 @@ mod tmux_watch;
 mod transcript_watch;
 mod width_control;
 
-use self::loop_state::{LoopFlow, LoopState};
-use self::socket::{bind_socket, spawn_event_waker, write_heartbeat};
+use self::socket::spawn_event_waker;
 use self::timing::FRAME_MIN_TIMEOUT;
-use fetch::{FetchDispatcher, FetchRequest, FetchUpdate, spawn_fetch_worker};
-use input::wait_for_wakeup;
+
+pub(super) use self::attachment::{Attachment, AttachmentExit, CloseHandle};
+pub(super) use self::backend::PaneBackend;
+#[cfg(test)]
+pub(super) use self::backend::tests::Pty;
+pub(super) use self::plane::DataPlane;
+pub(super) use self::socket::EventForwarder;
 
 #[cfg(feature = "testkit")]
 pub use demo::{serve_fixture, serve_gallery};
@@ -108,217 +110,85 @@ pub enum ServeOutcome {
     SelfCloseRequested,
 }
 
+/// The worker's terminal as crossterm finds it: the controlling tty, so a
+/// worker whose stdout goes elsewhere still sizes from the pane it runs in.
+fn ambient_window() -> io::Result<ratatui::backend::WindowSize> {
+    ratatui::crossterm::terminal::window_size()
+        .map(|window| ratatui::backend::WindowSize {
+            columns_rows: ratatui::layout::Size::new(window.columns, window.rows),
+            pixels: ratatui::layout::Size::new(window.width, window.height),
+        })
+        .or_else(|_| {
+            let (columns, rows) = ratatui::crossterm::terminal::size()?;
+            Ok(ratatui::backend::WindowSize {
+                columns_rows: ratatui::layout::Size::new(columns, rows),
+                pixels: ratatui::layout::Size::default(),
+            })
+        })
+}
+
+/// The fallback worker: one attachment over this process's own stdout, with
+/// its own data plane. It holds the pane's terminal modes and reads its input,
+/// which a pane painted by the room host leaves to the supervisor.
 pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     crate::build_id::warm();
     reap_inherited_zombies();
-    set_terminal_title()?;
     let runtime = RuntimePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;
-    let election =
-        crate::sidebar::ProducerElectionTracker::new(runtime.clone(), config.instance_id.clone());
     let diag = crate::diag::DiagSink::for_workspace(
         config.workspace_id.clone(),
         config.session_name.clone(),
         Some(config.instance_id.clone()),
     );
     install_panic_diagnostic_hook(diag.clone());
-    let socket_path = runtime.sidebar_socket_path(&config.instance_id);
-    let socket = bind_socket(&socket_path)?;
-    let _socket_cleanup = RuntimeFileGuard {
-        path: socket_path.clone(),
-    };
-    // Drop the heartbeat on exit too — including the self-close below. A
-    // lingering heartbeat stays mtime-fresh for `SIDEBAR_HEARTBEAT_TTL`, during
-    // which `rimz`'s freshness gate would skip relaunch and let a plain
-    // `attach` rebirth the session with no sidebar.
-    let _heartbeat_cleanup = RuntimeFileGuard {
-        path: runtime.sidebar_heartbeat_path(&config.instance_id),
-    };
+    let attachment = Attachment::open(config.clone(), &runtime, diag.clone())?;
     // Redraw the instant the pane is resized — most importantly when a user
     // attaches to a background session and Zellij sizes the pane for the first
-    // time. The watcher nudges this loop through the same wakeup socket the
-    // store uses, so a resize is just another wakeup; without it the first
+    // time. The watcher nudges the attachment through the same wakeup socket
+    // the store uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
-    let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
-    let pet_render_caps =
-        detect_pixel_render_caps(config.mux, &config.session_name, PixelRenderCaps::default());
-    if config.mux == MuxName::Tmux
-        && let Err(err) = escalate_own_pane_passthrough()
-    {
-        warn!(
-            session = %config.session_name,
-            error = %err,
-            "sidebar pane passthrough escalation failed",
-        );
-    }
-    spawn_event_waker(socket_path.clone(), config.nav_keys.clone());
-    let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend)?;
-    ratatui::backend::Backend::clear_region(terminal.backend_mut(), ClearType::All)?;
-    terminal.swap_buffers();
-
-    let initial_width = terminal.size().map(|s| s.width).ok();
-    // Without a diagnostics sink there is nowhere to record anomalies, so the
-    // receiver drops here and the loop's sends simply count as dropped.
-    let (observe_tx, observe_rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(64);
-    let _observe_handle = diag.is_enabled().then(|| {
-        observe::writer::spawn(runtime.clone(), diag.clone(), election.clone(), observe_rx)
+    let input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
+    spawn_event_waker(
+        attachment.socket_path().to_path_buf(),
+        config.nav_keys.clone(),
+    );
+    let backend = PaneBackend::ambient(io::stdout().as_fd().try_clone_to_owned()?, ambient_window)?;
+    let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGTERM])?;
+    let signal_stop = signals.handle();
+    let close = attachment.close_handle();
+    let signal_thread = std::thread::spawn(move || {
+        if signals.forever().next().is_some() {
+            close.close();
+        }
     });
-    let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
-    let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchUpdate>();
-    let pixel_lease = match PixelLease::acquire(&runtime) {
-        Ok(Some(lease)) => Some(lease),
-        Ok(None) => {
-            warn!("sidebar pixel slots exhausted; using cell rendering for this worker");
-            None
+    let plane = DataPlane::start(&config, &runtime, &diag);
+    let outcome = attachment.run(&plane, backend);
+    signal_stop.close();
+    let _ = signal_thread.join();
+    // `process::exit` never runs RAII drops, so every arm below relies on
+    // `run` having released the attachment's runtime files before it returned.
+    match outcome? {
+        AttachmentExit::GaveUp => {
+            std::process::exit(crate::sidebar_pane::supervise::RESPAWN_EXIT_CODE)
         }
-        Err(err) => {
-            warn!(error = %err, "sidebar pixel lease failed; using cell rendering for this worker");
-            None
+        AttachmentExit::Reload => {
+            // Keep raw mode and mouse capture alive across the supervisor re-exec:
+            // the replacement worker re-enables the same modes, and disabling them
+            // here opens a reporting gap that outer terminals can turn into arrow
+            // keys sent to the active pane.
+            input_mode.preserve_for_reexec();
+            std::process::exit(crate::sidebar_pane::supervise::RELOAD_EXIT_CODE)
         }
-    };
-    let mut state = LoopState::new(
-        config.clone(),
-        runtime.clone(),
-        socket_path.clone(),
-        diag.clone(),
-        result_rx,
-        initial_width,
-        observe_tx,
-        pet_render_caps,
-        pixel_lease.as_ref().map(|lease| lease.slot),
-    );
-    // Zellij's percentage template needs a startup trim on capped wide views.
-    // tmux births through its live absolute-column hook; its resize wakeups
-    // own later convergence, avoiding a startup resize that can reflow the
-    // sidebar's scrollback before the self-close paint hold is armed.
-    if initial_width.is_some() && config.mux == MuxName::Zellij {
-        state.run_width_control(
-            &mut terminal,
-            crate::diag::record::SidebarWidthControlTrigger::Retarget,
-        );
-    }
-
-    // The snapshot fetch (fast in-process fold plus optional produce) runs on a
-    // background worker, so animation and input never block on it. The worker
-    // posts `SNAPSHOT_WAKEUP` when a result is ready; the frame/tick path also
-    // drains the result channel so that wakeup stays a latency hint. The
-    // dispatcher coalesces requests so a store-delta storm or a slow produce
-    // can never queue more than one extra run.
-    // `JoinHandle` drops without blocking: the thread runs to completion on its
-    // own when `request_tx` is dropped at function exit.
-    let _fetch_handle = spawn_fetch_worker(
-        config.clone(),
-        runtime.clone(),
-        diag.clone(),
-        election.clone(),
-        request_rx,
-        (result_tx, socket_path.clone()),
-    );
-    let _cache_refresh_handle = cache_refresh::spawn(
-        config.clone(),
-        runtime.clone(),
-        diag.clone(),
-        election.clone(),
-    );
-    let mut fetch = FetchDispatcher::new(request_tx);
-
-    // tmux fast path: the elected producer streams control-mode topology
-    // nudges into this loop's socket so a pane open/close can publish a fresh
-    // pane frame in tens of milliseconds instead of waiting out the poll.
-    // Latency only — the poll stays the presence backstop. Zellij reaches the
-    // same producer-publication path through its presence plugin.
-    if config.mux == MuxName::Tmux {
-        let _ = tmux_watch::spawn(
-            runtime.clone(),
-            config.session_name.clone(),
-            election.clone(),
-        );
-    }
-
-    // The elected producer watches every session whose adapter declares transcript-tail context and has a transcript path, so mid-turn token/cost updates repaint without waiting for the next hook or tick. Latency only — the tick backstop stays truth; the elder gate scopes the work on both backends.
-    let _ = transcript_watch::spawn(runtime.clone(), election);
-
-    // Write the heartbeat immediately so the freshness gate never sees a gap.
-    // Errors are non-fatal; the gate re-probes after the TTL.
-    if let Err(err) = write_heartbeat(&config, &runtime, &socket_path) {
-        warn!(
-            session = %config.session_name,
-            error = %err,
-            "initial heartbeat write failed",
-        );
-    }
-
-    // Fire the first fetch on the background worker and start the main loop
-    // immediately rather than blocking on a synchronous call: the first fetch
-    // can take several seconds (Zellij just started, git cold-start), and a
-    // blocked main thread delays the self-close watchdog, stalling cleanup.
-    // The placeholder snapshot renders while the first real result is in flight.
-    fetch.request(FetchRequest::default(), false);
-
-    // One fixed-timestep event loop. Events fold into the in-process model and
-    // mark the frame dirty; the loop paints at most once per configured base
-    // frame boundary, coalescing every change that landed mid-frame into a
-    // single paint. Data and animation ride this frame grid; input paints
-    // synchronously for instant feedback (see `apply_input`). The grid stays
-    // warm while there is something to show (`active`) and relaxes to the
-    // `tick` backstop when idle, snapping back the instant an event or
-    // animation arrives. Fetches run off-thread. Width geometry probes still
-    // fork on target refresh, structural, classification, and commit events
-    // (or the first press without cached geometry), never on cached presses
-    // or resize feedback. Width commits and trailing capability refreshes run once
-    // after their bursts settle; resize actuators run off-thread.
-    let loop_result: Result<()> = (|| {
-        while !state.should_exit {
-            let (active, mut timeout) = state.frame_timing();
-            timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
-            socket.set_read_timeout(Some(timeout))?;
-            match state.on_wakeup(&mut fetch, &mut terminal, wait_for_wakeup(&socket)?)? {
-                LoopFlow::Continue => {}
-                LoopFlow::Repoll => continue,
-                LoopFlow::Exit => break,
-            }
-
-            state.run_maintenance(&mut fetch);
-            state.run_width_control_backstop(&mut terminal);
-            state.maybe_remind(&mut terminal);
-            state.paint_frame_if_due(&mut terminal, active)?;
+        AttachmentExit::SelfClose => {
+            // A cache-backed empty fold is only a request. Keep terminal modes
+            // continuous while the supervisor checks mux truth; it restores them
+            // if the authoritative verdict really closes the pane, or the
+            // replacement worker reasserts them after a rejected request.
+            input_mode.preserve_for_reexec();
+            Ok(ServeOutcome::SelfCloseRequested)
         }
-        Ok(())
-    })();
-    state.clear_pixel(&mut terminal);
-    loop_result?;
-    if !state.reload_requested
-        && !state.tab_emptied
-        && let Some(cause) = state.exit_cause
-    {
-        diag.emit_unlimited(DiagEvent::RendererExit { cause });
+        AttachmentExit::Closed => Ok(ServeOutcome::Stopped),
     }
-    if state.exit_cause == Some(crate::diag::record::RendererExitCause::DegradedGaveUp) {
-        drop(_socket_cleanup);
-        drop(_heartbeat_cleanup);
-        std::process::exit(crate::sidebar_pane::supervise::RESPAWN_EXIT_CODE);
-    }
-    if state.reload_requested {
-        // Keep raw mode and mouse capture alive across the supervisor re-exec:
-        // the replacement worker re-enables the same modes, and disabling them
-        // here opens a reporting gap that outer terminals can turn into arrow
-        // keys sent to the active pane. Runtime files still release explicitly
-        // because `process::exit` never runs RAII drops.
-        _input_mode.preserve_for_reexec();
-        drop(_socket_cleanup);
-        drop(_heartbeat_cleanup);
-        std::process::exit(crate::sidebar_pane::supervise::RELOAD_EXIT_CODE);
-    }
-    if state.tab_emptied {
-        // A cache-backed empty fold is only a request. Keep terminal modes
-        // continuous while the supervisor checks mux truth; it restores them
-        // if the authoritative verdict really closes the pane, or the
-        // replacement worker reasserts them after a rejected request.
-        _input_mode.preserve_for_reexec();
-        return Ok(ServeOutcome::SelfCloseRequested);
-    }
-    Ok(ServeOutcome::Stopped)
 }
 
 fn fetch_deadline_timeout(base: Duration, deadline: Option<Instant>, now: Instant) -> Duration {
@@ -331,7 +201,7 @@ fn fetch_deadline_timeout(base: Duration, deadline: Option<Instant>, now: Instan
     })
 }
 
-fn install_panic_diagnostic_hook(diag: crate::diag::DiagSink) {
+pub(super) fn install_panic_diagnostic_hook(diag: crate::diag::DiagSink) {
     let prior = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if produce_panic_diagnostic_suppressed() {
@@ -413,12 +283,6 @@ fn with_produce_panic_diagnostic_suppressed<T>(f: impl FnOnce() -> T) -> T {
 
 fn produce_panic_diagnostic_suppressed() -> bool {
     PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED.with(Cell::get)
-}
-
-fn set_terminal_title() -> io::Result<()> {
-    let mut stdout = io::stdout();
-    write!(stdout, "\x1b]2;{}\x07", crate::pane::SIDEBAR_CHROME_TITLE)?;
-    stdout.flush()
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ const MIN_PIXEL_ZELLIJ_VERSION: (u32, u32, u32) = (0, 45, 0);
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
 const KITTY_QUERY_TIMEOUT: Duration = Duration::from_millis(500);
 const KITTY_PROBE_ID: u32 = 0x52_49_4d;
+pub(in crate::sidebar_pane) const CAPS_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PixelRenderCaps {
@@ -103,20 +104,68 @@ struct RenderingClient {
     pid: u32,
 }
 
-pub(in crate::sidebar_pane) fn detect(
-    mux: MuxName,
-    session_name: &str,
-    prev: PixelRenderCaps,
-) -> PixelRenderCaps {
-    detect_with(mux, session_name, prev, &LiveProbe)
+#[derive(Default)]
+pub(in crate::sidebar_pane) struct RoomCaps {
+    tmux: Option<(Instant, TmuxRoomCaps)>,
+}
+
+struct TmuxRoomCaps {
+    kitty_clients: Option<bool>,
+    version_ok: Option<bool>,
+    passthrough: Option<std::collections::BTreeMap<String, bool>>,
+}
+
+impl RoomCaps {
+    pub(in crate::sidebar_pane) fn detect(
+        &mut self,
+        mux: MuxName,
+        session_name: &str,
+        prev: PixelRenderCaps,
+        own_pane: Option<&crate::ids::PaneId>,
+    ) -> PixelRenderCaps {
+        self.detect_with(
+            mux,
+            session_name,
+            prev,
+            Instant::now(),
+            &LiveProbe::for_pane(own_pane),
+        )
+    }
+
+    fn detect_with(
+        &mut self,
+        mux: MuxName,
+        session_name: &str,
+        prev: PixelRenderCaps,
+        now: Instant,
+        probe: &impl Probe,
+    ) -> PixelRenderCaps {
+        if mux != MuxName::Tmux {
+            return detect_zellij(prev);
+        }
+        if self.tmux.as_ref().is_none_or(|(sampled, _)| {
+            now.saturating_duration_since(*sampled) >= CAPS_REFRESH_INTERVAL
+        }) {
+            let mut sample = TmuxRoomCaps::read(session_name, probe);
+            sample.passthrough = probe.tmux_pane_passthrough(session_name).ok();
+            self.tmux = Some((now, sample));
+        }
+        self.tmux
+            .as_ref()
+            .map_or(prev, |(_, caps)| caps.for_pane(session_name, probe, prev))
+    }
 }
 
 pub fn detect_env() -> (PixelRenderCaps, bool) {
-    detect_env_with(&LiveProbe)
+    detect_env_with(&LiveProbe::ambient())
 }
 
 trait Probe {
     fn tmux_version(&self) -> io::Result<String>;
+    fn tmux_pane_passthrough(
+        &self,
+        session_name: &str,
+    ) -> io::Result<std::collections::BTreeMap<String, bool>>;
     fn tmux_allow_passthrough(&self, target: &str) -> io::Result<String>;
     fn tmux_set_pane_passthrough_all(&self, pane: &str) -> io::Result<()>;
     fn tmux_rendering_clients(&self, session_name: &str) -> io::Result<Vec<RenderingClient>>;
@@ -126,8 +175,10 @@ trait Probe {
     fn env_var(&self, key: &str) -> Option<String>;
 }
 
-pub(in crate::sidebar_pane) fn escalate_own_pane_passthrough() -> io::Result<()> {
-    escalate_with(&LiveProbe)
+pub(in crate::sidebar_pane) fn escalate_own_pane_passthrough(
+    own_pane: Option<&crate::ids::PaneId>,
+) -> io::Result<()> {
+    escalate_with(&LiveProbe::for_pane(own_pane))
 }
 
 fn escalate_with(probe: &impl Probe) -> io::Result<()> {
@@ -140,6 +191,7 @@ fn escalate_with(probe: &impl Probe) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn detect_with(
     probed_mux: MuxName,
     session_name: &str,
@@ -167,29 +219,55 @@ fn detect_env_with(probe: &impl Probe) -> (PixelRenderCaps, bool) {
 }
 
 fn detect_tmux(session_name: &str, probe: &impl Probe, prev: PixelRenderCaps) -> PixelRenderCaps {
-    let kitty_clients = match probe.tmux_rendering_clients(session_name) {
-        Ok(clients) if !clients.is_empty() => rendering_clients_allowed(&clients, probe),
-        _ => prev.kitty_clients,
-    };
-    let passthrough_target = probe
-        .env_var("TMUX_PANE")
-        .filter(|pane| !pane.is_empty())
-        .unwrap_or_else(|| session_name.to_owned());
-    let pixel_transport = match (
-        probe.tmux_version(),
-        probe.tmux_allow_passthrough(&passthrough_target),
-    ) {
-        (Ok(version), Ok(allow)) => {
-            let version_ok = crate::mux::tmux::parse_version(&version)
-                .is_some_and(|version| version >= MIN_PIXEL_TMUX_VERSION);
-            let passthrough_ok = matches!(allow.trim(), "on" | "all");
-            version_ok && passthrough_ok
+    TmuxRoomCaps::read(session_name, probe).for_pane(session_name, probe, prev)
+}
+
+impl TmuxRoomCaps {
+    fn read(session_name: &str, probe: &impl Probe) -> Self {
+        let kitty_clients = match probe.tmux_rendering_clients(session_name) {
+            Ok(clients) if !clients.is_empty() => Some(rendering_clients_allowed(&clients, probe)),
+            _ => None,
+        };
+        let version_ok = probe.tmux_version().ok().map(|version| {
+            crate::mux::tmux::parse_version(&version)
+                .is_some_and(|version| version >= MIN_PIXEL_TMUX_VERSION)
+        });
+        Self {
+            kitty_clients,
+            version_ok,
+            passthrough: None,
         }
-        _ => prev.pixel_transport,
-    };
-    PixelRenderCaps {
-        pixel_transport,
-        kitty_clients,
+    }
+
+    fn for_pane(
+        &self,
+        session_name: &str,
+        probe: &impl Probe,
+        prev: PixelRenderCaps,
+    ) -> PixelRenderCaps {
+        let target = probe
+            .env_var("TMUX_PANE")
+            .filter(|pane| !pane.is_empty())
+            .unwrap_or_else(|| session_name.to_owned());
+        let passthrough = self
+            .passthrough
+            .as_ref()
+            .and_then(|panes| panes.get(&target))
+            .copied()
+            .map(Ok)
+            .unwrap_or_else(|| {
+                probe
+                    .tmux_allow_passthrough(&target)
+                    .map(|allow| matches!(allow.trim(), "on" | "all"))
+            });
+        let pixel_transport = match (self.version_ok, passthrough) {
+            (Some(version_ok), Ok(allow)) => version_ok && allow,
+            _ => prev.pixel_transport,
+        };
+        PixelRenderCaps {
+            pixel_transport,
+            kitty_clients: self.kitty_clients.unwrap_or(prev.kitty_clients),
+        }
     }
 }
 
@@ -215,9 +293,49 @@ fn env_present(probe: &impl Probe, key: &str) -> bool {
     probe.env_var(key).is_some_and(|value| !value.is_empty())
 }
 
-struct LiveProbe;
+/// Live tmux and process reads. `tmux_pane` answers `TMUX_PANE` for a painter that is not the pane's own process; `None` reads the ambient environment.
+struct LiveProbe {
+    tmux_pane: Option<Option<String>>,
+}
+
+impl LiveProbe {
+    fn ambient() -> Self {
+        Self { tmux_pane: None }
+    }
+
+    fn for_pane(own_pane: Option<&crate::ids::PaneId>) -> Self {
+        Self {
+            tmux_pane: Some(
+                own_pane
+                    .filter(|pane| pane.mux() == MuxName::Tmux)
+                    .map(|pane| pane.raw().to_owned()),
+            ),
+        }
+    }
+}
 
 impl Probe for LiveProbe {
+    fn tmux_pane_passthrough(
+        &self,
+        session_name: &str,
+    ) -> io::Result<std::collections::BTreeMap<String, bool>> {
+        let output = run_tmux([
+            "list-panes",
+            "-s",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_id}\t#{allow-passthrough}",
+        ])?;
+        output
+            .lines()
+            .map(|line| {
+                let (pane, allow) = line.split_once('\t')?;
+                Some((pane.to_owned(), matches!(allow.trim(), "on" | "all")))
+            })
+            .collect::<Option<_>>()
+            .ok_or_else(|| io::Error::other("invalid pane passthrough listing"))
+    }
     fn tmux_version(&self) -> io::Result<String> {
         run_tmux(["-V"])
     }
@@ -260,7 +378,10 @@ impl Probe for LiveProbe {
     }
 
     fn env_var(&self, key: &str) -> Option<String> {
-        std::env::var(key).ok()
+        match (&self.tmux_pane, key) {
+            (Some(pane), "TMUX_PANE") => pane.clone(),
+            _ => std::env::var(key).ok(),
+        }
     }
 }
 

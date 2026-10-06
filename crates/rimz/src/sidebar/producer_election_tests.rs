@@ -113,3 +113,60 @@ fn producer_election_tracker_invalid_elder_falls_back_to_next_valid() {
         assert_eq!(tracker.full_scan_count(), 2);
     }
 }
+
+#[test]
+fn a_host_competes_as_its_eldest_pane_against_a_fallback_worker() {
+    let h = Harness::new();
+    let (worker, eldest, younger) = (instance("01"), instance("02"), instance("03"));
+    let worker_path = h.write(&worker);
+    h.write(&eldest);
+    h.write(&younger);
+
+    // The host paints `eldest` and `younger`; the fallback worker is older than both.
+    let host = ProducerElectionTracker::new(h.runtime.clone(), eldest.clone());
+    assert_eq!(host.elder_instance(), Some(worker));
+
+    std::fs::remove_file(&worker_path).unwrap();
+    assert_eq!(
+        host.elder_instance_at(SystemTime::now() + SIDEBAR_HEARTBEAT_TTL),
+        None,
+        "its own younger pane never out-ranks the host",
+    );
+}
+
+#[test]
+fn rebinding_moves_every_clone_to_the_new_eldest_pane() {
+    let h = Harness::new();
+    let (eldest, worker, younger) = (instance("02"), instance("05"), instance("07"));
+    let eldest_heartbeat = h.write(&eldest);
+    h.write(&worker);
+    h.write(&younger);
+    let host = ProducerElectionTracker::new(h.runtime.clone(), eldest);
+    let lane = host.clone();
+    assert_eq!(lane.elder_instance(), None);
+
+    // The eldest pane detached, taking its heartbeat: the host now stands as
+    // `younger`, which the worker out-ranks, and the memoized producer
+    // verdict must not survive.
+    std::fs::remove_file(eldest_heartbeat).unwrap();
+    host.rebind(younger);
+
+    assert_eq!(lane.elder_instance(), Some(worker));
+    assert!(!lane.confirm_producer());
+}
+
+#[test]
+fn an_abstaining_tracker_is_never_the_producer_until_rebound() {
+    let h = Harness::new();
+    let own = instance("02");
+    let host = ProducerElectionTracker::new(h.runtime.clone(), own.clone());
+    assert_eq!(host.elder_instance(), None);
+
+    host.abstain();
+    assert!(host.elder_instance().is_some());
+    assert!(!host.confirm_producer());
+
+    host.rebind(own);
+    assert_eq!(host.elder_instance(), None);
+    assert!(host.confirm_producer());
+}

@@ -21,6 +21,455 @@ use rimz::diag::record::{DiagEnvelope, DiagEvent};
 use crate::common::Env;
 
 #[test]
+#[cfg(target_os = "linux")]
+fn transient_fallback_waits_for_a_stable_worker_to_exit_before_attaching() {
+    transient_fallback(false);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn transient_fallback_rejection_backs_off_the_next_worker_probe() {
+    transient_fallback(true);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn all_young_attachments_start_one_successor_after_their_workers_are_stable() {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    use sha2::Digest;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().unwrap();
+    let key = sha2::Sha256::digest(b"tmux\0rimz-test");
+    let socket = runtime
+        .sock_dir
+        .join(format!("host.{}.sock", hex::encode(&key[..6])));
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut panes: Vec<_> = (0..2)
+        .map(|index| {
+            let pty = nix::pty::openpty(
+                Some(&nix::pty::Winsize {
+                    ws_col: 40,
+                    ws_row: 12,
+                    ws_xpixel: 320,
+                    ws_ypixel: 192,
+                }),
+                None,
+            )
+            .unwrap();
+            nix::fcntl::fcntl(
+                &pty.master,
+                nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+            )
+            .unwrap();
+            let tty = std::fs::File::from(pty.slave);
+            let starts = env.home_root.join(format!("young-starts-{index}"));
+            let mut command =
+                supervisor_command(&env, &env.home_root.join("unused-exit"), &starts, "");
+            command
+                .env("RIMZ_TEST_SIDEBAR_STABLE_RUN_MS", "2000")
+                .env("RIMZ_TEST_SIDEBAR_HOST_PROBE_INTERVAL_MS", "100")
+                .stdin(tty.try_clone().unwrap())
+                .stdout(tty);
+            (
+                FallbackSupervisor {
+                    child: command.spawn().unwrap(),
+                    starts,
+                },
+                std::fs::File::from(pty.master),
+            )
+        })
+        .collect();
+    let mut accepted = Vec::new();
+    let mut ids = Vec::new();
+    for _ in &panes {
+        let mut stream =
+            fallback_connection(&listener, Duration::from_secs(10)).expect("young attachment");
+        ids.push(
+            rimz::SidebarInstanceId::parse(
+                fallback_hello(&stream)["instance_id"].as_str().unwrap(),
+            )
+            .unwrap(),
+        );
+        stream
+            .write_all(b"{\"accept\":{\"build\":null}}\n")
+            .unwrap();
+        accepted.push(stream);
+    }
+    drop(listener);
+    std::fs::remove_file(&socket).unwrap();
+    drop(accepted);
+    let workers: Vec<_> = panes
+        .iter()
+        .map(|(supervisor, _)| {
+            wait_for_start_after(
+                &supervisor.starts,
+                &env.rimz_bin(),
+                0,
+                Duration::from_secs(10),
+            );
+            std::fs::read_to_string(&supervisor.starts)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .parse::<u32>()
+                .unwrap()
+        })
+        .collect();
+    let hosts = || {
+        rimz::proc::list_processes()
+            .into_iter()
+            .filter(|process| {
+                process.cmdline.contains(" sidebar host ")
+                    && process.cmdline.contains(env.workspace_id.as_str())
+            })
+            .collect::<Vec<_>>()
+    };
+    let no_start_until = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < no_start_until {
+        assert!(
+            hosts().is_empty(),
+            "no successor start before worker stability"
+        );
+        assert!(
+            workers
+                .iter()
+                .all(|pid| kill(Pid::from_raw(*pid as i32), None).is_ok())
+        );
+        for (_, output) in &mut panes {
+            let _ = output.read_to_end(&mut Vec::new());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        for (_, output) in &mut panes {
+            let _ = output.read_to_end(&mut Vec::new());
+        }
+        let reaped = workers
+            .iter()
+            .all(|pid| kill(Pid::from_raw(*pid as i32), None).is_err());
+        let attached = ids.iter().all(|id| {
+            rimz::wakeup::heartbeat::SidebarHeartbeat::read_from(
+                &runtime.sidebar_heartbeat_path(id),
+            )
+            .is_ok_and(|beat| beat.size.is_some())
+        });
+        if reaped && attached {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "all young-loss workers must exit and attach to their successor without a new pane"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        hosts().len(),
+        1,
+        "the stable probes coordinate one successor"
+    );
+    for (supervisor, _) in &panes {
+        assert_eq!(
+            std::fs::read_to_string(&supervisor.starts)
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct FallbackSupervisor {
+    child: Child,
+    starts: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for FallbackSupervisor {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        for line in std::fs::read_to_string(&self.starts)
+            .unwrap_or_default()
+            .lines()
+        {
+            let pid = line
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .parse::<i32>()
+                .unwrap();
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn fallback_connection(
+    listener: &std::os::unix::net::UnixListener,
+    timeout: Duration,
+) -> Option<std::os::unix::net::UnixStream> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                return Some(stream);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(err) => panic!("accept: {err}"),
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn fallback_hello(stream: &std::os::unix::net::UnixStream) -> serde_json::Value {
+    use std::io::BufRead;
+    let mut line = String::new();
+    std::io::BufReader::new(stream)
+        .read_line(&mut line)
+        .unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn fallback_worker_restores_tty_and_runtime_files_on_sigterm() {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    use std::io::Read;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let runtime = env.runtime_paths();
+    let id = rimz::SidebarInstanceId::new();
+    let pty = nix::pty::openpty(
+        Some(&nix::pty::Winsize {
+            ws_col: 40,
+            ws_row: 12,
+            ws_xpixel: 320,
+            ws_ypixel: 192,
+        }),
+        None,
+    )
+    .unwrap();
+    nix::fcntl::fcntl(
+        &pty.master,
+        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+    )
+    .unwrap();
+    let tty = std::fs::File::from(pty.slave);
+    let original = nix::sys::termios::tcgetattr(&tty).unwrap();
+    let mut output = std::fs::File::from(pty.master);
+    let mut command = supervisor_command(
+        &env,
+        &env.home_root.join("unused-exit"),
+        &env.home_root.join("worker-start"),
+        "",
+    );
+    command
+        .env("RIMZ_SIDEBAR_WORKER", "1")
+        .env("RIMZ_SIDEBAR_INSTANCE_ID", id.as_str())
+        .stdin(tty.try_clone().unwrap())
+        .stdout(tty.try_clone().unwrap())
+        .stderr(Stdio::piped());
+    let mut worker = command.spawn().unwrap();
+    let mut bytes = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !runtime.sidebar_heartbeat_path(&id).exists() {
+        let _ = output.read_to_end(&mut bytes);
+        if Instant::now() >= deadline || worker.try_wait().unwrap().is_some() {
+            let _ = worker.kill();
+            let failed = worker.wait_with_output().unwrap();
+            panic!(
+                "worker did not publish its heartbeat: {} {}",
+                failed.status,
+                String::from_utf8_lossy(&failed.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !nix::sys::termios::tcgetattr(&tty)
+            .unwrap()
+            .local_flags
+            .contains(nix::sys::termios::LocalFlags::ICANON)
+    );
+    kill(Pid::from_raw(worker.id() as i32), Signal::SIGTERM).unwrap();
+    let status = wait_child(&mut worker, Duration::from_secs(3));
+    let _ = output.read_to_end(&mut bytes);
+
+    assert!(
+        status.success(),
+        "SIGTERM must exit through the worker's cleanup, not default signal death: {status}"
+    );
+    assert_eq!(nix::sys::termios::tcgetattr(&tty).unwrap(), original);
+    assert!(!runtime.sidebar_heartbeat_path(&id).exists());
+    assert!(
+        !runtime
+            .sock_dir
+            .join(format!("sidebar.{}.sock", id.short()))
+            .exists()
+    );
+    assert!(
+        bytes
+            .windows(b"\x1b[?1006l\x1b[?1000l".len())
+            .any(|part| part == b"\x1b[?1006l\x1b[?1000l")
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn transient_fallback(reject_again: bool) {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    use sha2::Digest;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::os::unix::net::UnixListener;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().unwrap();
+    let key = sha2::Sha256::digest(b"tmux\0rimz-test");
+    let socket = runtime
+        .sock_dir
+        .join(format!("host.{}.sock", hex::encode(&key[..6])));
+    let listener = UnixListener::bind(socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let pty = nix::pty::openpty(
+        Some(&nix::pty::Winsize {
+            ws_col: 40,
+            ws_row: 12,
+            ws_xpixel: 320,
+            ws_ypixel: 192,
+        }),
+        None,
+    )
+    .unwrap();
+    nix::fcntl::fcntl(
+        &pty.master,
+        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+    )
+    .unwrap();
+    let tty = std::fs::File::from(pty.slave);
+    let mut output = std::fs::File::from(pty.master);
+    let starts = env.home_root.join("fallback-starts");
+    let mut command = supervisor_command(&env, &env.home_root.join("unused-exit"), &starts, "");
+    command
+        .env("RIMZ_TEST_SIDEBAR_STABLE_RUN_MS", "300")
+        .env("RIMZ_TEST_SIDEBAR_HOST_PROBE_INTERVAL_MS", "200")
+        .env("RIMZ_TEST_SIDEBAR_SELF_CLOSE_PROBE", "empty")
+        .stdin(tty.try_clone().unwrap())
+        .stdout(tty.try_clone().unwrap());
+    let mut running = FallbackSupervisor {
+        child: command.spawn().unwrap(),
+        starts,
+    };
+    let mut first =
+        fallback_connection(&listener, Duration::from_secs(3)).expect("initial attachment");
+    let id =
+        rimz::SidebarInstanceId::parse(fallback_hello(&first)["instance_id"].as_str().unwrap())
+            .unwrap();
+    first
+        .write_all(b"{\"reject\":{\"reason\":\"capacity\"}}\n")
+        .unwrap();
+    drop(first);
+
+    for retry in 0..=usize::from(reject_again) {
+        wait_for_start_after(
+            &running.starts,
+            &env.rimz_bin(),
+            retry,
+            Duration::from_secs(3),
+        );
+        let worker_pid: i32 = std::fs::read_to_string(&running.starts)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let began = Instant::now();
+        let early = if retry == 0 {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_millis(300)
+        };
+        assert!(
+            fallback_connection(&listener, early).is_none(),
+            "no probe before stability or rejection backoff"
+        );
+        let mut bytes = Vec::new();
+        let _ = output.read_to_end(&mut bytes);
+        let probe = fallback_connection(&listener, Duration::from_secs(3))
+            .expect("stable fallback must probe a reachable host");
+        assert!(began.elapsed() >= early);
+        let mut line = String::new();
+        assert_eq!(
+            BufReader::new(probe).read_line(&mut line).unwrap(),
+            0,
+            "probe is a bare connect, never a hello"
+        );
+        let mut attached = fallback_connection(&listener, Duration::from_secs(3))
+            .expect("normal attach after worker exit");
+        assert_eq!(fallback_hello(&attached)["instance_id"], id.as_str());
+        assert!(
+            kill(Pid::from_raw(worker_pid), None).is_err(),
+            "worker must be reaped before the next hello"
+        );
+        assert!(!runtime.sidebar_heartbeat_path(&id).exists());
+        assert!(
+            !runtime
+                .sock_dir
+                .join(format!("sidebar.{}.sock", id.short()))
+                .exists()
+        );
+        let _ = output.read_to_end(&mut bytes);
+        assert!(
+            bytes
+                .windows(b"\x1b[?1006l\x1b[?1000l".len())
+                .any(|part| part == b"\x1b[?1006l\x1b[?1000l"),
+            "SIGTERM must let the worker restore mouse modes before reattachment"
+        );
+        if reject_again && retry == 0 {
+            attached
+                .write_all(b"{\"reject\":{\"reason\":\"capacity\"}}\n")
+                .unwrap();
+            continue;
+        }
+        attached
+            .write_all(b"{\"accept\":{\"build\":null}}\n{\"control\":\"self-close\"}\n")
+            .unwrap();
+        drop(attached);
+    }
+    assert!(wait_child(&mut running.child, Duration::from_secs(3)).success());
+}
+
+#[test]
 fn sidebar_supervisor_records_worker_abort_and_respawns() {
     let env = Env::new();
     env.record(&env.project_root);

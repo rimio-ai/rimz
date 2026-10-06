@@ -22,7 +22,7 @@ struct Rig {
     result_tx: std::sync::mpsc::Sender<FetchUpdate>,
     fetch: FetchDispatcher,
     requests: Receiver<FetchRequest>,
-    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: Terminal<PaneBackend>,
 }
 
 impl Rig {
@@ -103,6 +103,25 @@ impl Rig {
         });
     }
 
+    fn shared_fold(
+        &mut self,
+        snapshot: SidebarSnapshot,
+        inputs: Arc<super::super::fetch::FoldInputs>,
+    ) {
+        self.deliver(FetchUpdate::Shared {
+            update: Box::new(FetchUpdate::Snapshot {
+                snapshot: Box::new(snapshot),
+                role: FetchRole::Producer,
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Produced,
+            }),
+            context: Arc::new(super::super::fetch::FoldShared {
+                inputs,
+                ..Default::default()
+            }),
+        });
+    }
+
     /// Drive `on_snapshot` over a channel carrying exactly `update`.
     fn deliver(&mut self, update: FetchUpdate) {
         self.result_tx.send(update).expect("send fetch outcome");
@@ -121,7 +140,7 @@ impl Rig {
             self.result_tx.send(update).expect("send fetch outcome");
         }
         self.state.last_heartbeat.get_or_insert_with(Instant::now);
-        self.state.run_maintenance(&mut self.fetch);
+        self.state.run_maintenance(&mut self.fetch, &self.terminal);
     }
 
     fn input(&mut self, action: KeyAction) {
@@ -158,7 +177,6 @@ impl Rig {
 
     fn set_pulled(&mut self, snapshot: &SidebarSnapshot) {
         self.state.last_focus_observation = FocusObservation::from_snapshot(snapshot);
-        self.state.last_pulled_sig = observe::PulledFrameSig::from_snapshot(snapshot);
         self.state.overlay_baseline = Some(snapshot.clone());
     }
 
@@ -168,10 +186,10 @@ impl Rig {
     }
 }
 
-fn terminal_with_width(cols: u16) -> Terminal<CrosstermBackend<io::Stdout>> {
+fn terminal_with_width(cols: u16) -> Terminal<PaneBackend> {
     let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, cols, 24));
     Terminal::with_options(
-        CrosstermBackend::new(io::stdout()),
+        PaneBackend::headless(std::io::sink()),
         ratatui::TerminalOptions { viewport },
     )
     .expect("terminal")
@@ -225,34 +243,6 @@ fn snapshot_with_focused_pane(ws: &WorkspaceId, active: PaneId) -> SidebarSnapsh
         own_view_is_daemon: false,
     });
     snapshot.focused_pane = Some(active);
-    snapshot
-}
-
-fn hidden_attached_agent_snapshot(
-    ws: &WorkspaceId,
-    status: crate::agents::AgentStatus,
-) -> SidebarSnapshot {
-    let mut snapshot = agent_snapshot(ws);
-    set_agent_status(&mut snapshot, status);
-    hide(snapshot)
-}
-
-fn hidden_attached_process_snapshot(
-    ws: &WorkspaceId,
-    state: crate::store::snapshot::ProcessState,
-) -> SidebarSnapshot {
-    let mut snapshot = process_snapshot(ws, 1);
-    snapshot.worktree_groups[0].rows[0]
-        .as_process_mut()
-        .expect("process row")
-        .state = state;
-    hide(snapshot)
-}
-
-fn hide(mut snapshot: SidebarSnapshot) -> SidebarSnapshot {
-    snapshot.own_view = Some(own_view());
-    snapshot.viewed_panes.clear();
-    snapshot.presence = Some(crate::store::snapshot::SidebarPresence::Active);
     snapshot
 }
 

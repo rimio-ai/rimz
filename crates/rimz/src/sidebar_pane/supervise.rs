@@ -11,6 +11,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -21,9 +22,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::diag::record::DiagEvent;
 use crate::ids::SidebarInstanceId;
-use crate::sidebar_pane::app::ServeConfig;
-use crate::tui::{MouseCapture, Screen, restore_terminal};
+use crate::sidebar_pane::app::{EventForwarder, ServeConfig};
+use crate::sidebar_pane::attach::Control;
+use crate::tui::{MouseCapture, Screen, TerminalModeGuard, restore_terminal};
 use tracing::debug;
+
+mod host_link;
+
+use self::host_link::{HostEvent, HostLink};
 
 const WORKER_ENV: &str = "RIMZ_SIDEBAR_WORKER";
 const INSTANCE_ENV: &str = "RIMZ_SIDEBAR_INSTANCE_ID";
@@ -72,6 +78,66 @@ const RESPAWN_STABLE_RUN: Duration = Duration::from_secs(60);
 const RECORD_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const WORKER_HANDOFF_GRACE: Duration = Duration::from_secs(10);
 const SUPERVISOR_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
+const HOST_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+const HOST_PROBE_MAX: Duration = Duration::from_secs(5 * 60);
+
+struct HostRetry {
+    interval: Duration,
+    next_probe: Instant,
+    after_probe: bool,
+}
+
+impl Default for HostRetry {
+    fn default() -> Self {
+        Self {
+            interval: host_probe_interval(),
+            next_probe: Instant::now(),
+            after_probe: false,
+        }
+    }
+}
+
+impl HostRetry {
+    fn worker_started(&mut self, started: Instant, stable_run: Duration) {
+        self.next_probe = started + stable_run.max(self.interval);
+    }
+
+    fn probe_if_due(&mut self, now: Instant, connect: impl FnOnce() -> Option<UnixStream>) -> bool {
+        if now < self.next_probe {
+            return false;
+        }
+        self.next_probe = now + self.interval;
+        let available = connect().is_some();
+        if !available {
+            self.interval = self.interval.saturating_mul(2).min(HOST_PROBE_MAX);
+            self.next_probe = now + self.interval;
+        }
+        self.after_probe |= available;
+        available
+    }
+
+    fn attach_finished(&mut self, accepted: bool) {
+        if accepted {
+            self.interval = host_probe_interval();
+        } else if self.after_probe {
+            self.interval = self.interval.saturating_mul(2).min(HOST_PROBE_MAX);
+        }
+        self.after_probe = false;
+    }
+}
+
+#[cfg(feature = "testkit")]
+fn host_probe_interval() -> Duration {
+    duration_override(
+        "RIMZ_TEST_SIDEBAR_HOST_PROBE_INTERVAL_MS",
+        HOST_PROBE_INTERVAL,
+    )
+}
+
+#[cfg(not(feature = "testkit"))]
+fn host_probe_interval() -> Duration {
+    HOST_PROBE_INTERVAL
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SidebarSuperviseErr {
@@ -106,13 +172,17 @@ pub fn run_worker(
 }
 
 pub fn run(config: ServeConfig) -> Result<()> {
+    use std::io::IsTerminal;
+
     let args = env::args_os().skip(1).collect::<Vec<_>>();
     let mut backoff = RESPAWN_BACKOFF_INITIAL;
     let mut pane_watchdog = PaneWatchdog::from_config(&config);
     let mut record_watch = RecordWatch::new(&config.workspace_id);
     let supervisor_build = crate::build_id::current().map(str::to_owned);
     let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone()).ok();
+    let mut host_retry = (runtime.is_some() && io::stdout().is_terminal()).then(HostRetry::default);
     let mut exec_state = PendingExec::default();
+    let mut host_allowed = true;
     loop {
         // Spawn from the durable room target even when its bytes match this
         // supervisor. The supervisor may still occupy an unlinked temp image;
@@ -125,40 +195,93 @@ pub fn run(config: ServeConfig) -> Result<()> {
         let current = crate::reload::current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
         let worker_build = worker_build(&target, supervisor_build.as_deref());
         let exe = worker_executable(target, current);
-        let started = Instant::now();
-        let mut child = spawn_worker(&exe, &args, &config)?;
-        let worker_pid = worker_pid(&child);
-        record_test_worker_start(&exe, child.id());
-        spawn_test_stray_if_requested();
-
-        let stderr_tail = Arc::new(Mutex::new(StderrTail::new(STDERR_TAIL_BYTES)));
-        let stderr_handle = child
-            .stderr
-            .take()
-            .map(|stderr| drain_stderr(stderr, stderr_tail.clone()));
-        let worker = wait_for_worker_and_reap_strays(
-            worker_pid,
-            WorkerMonitor {
-                record_watch: &mut record_watch,
-                exec_state: &mut exec_state,
-                worker_build: worker_build.as_deref(),
-                supervisor_build: supervisor_build.as_deref(),
-                started,
-                runtime: runtime.as_ref(),
-                config: &config,
-                watchdog: &mut pane_watchdog,
-                orphan_reap_pending: false,
-                handoff_deadline: None,
-            },
-        );
-        drop(child);
-        if let Some(handle) = stderr_handle {
-            let _ = handle.join();
+        let attached = match (&runtime, host_allowed) {
+            (Some(runtime), true) => {
+                attach_to_host(&config, runtime, &exe, supervisor_build.as_deref())
+            }
+            _ => None,
+        };
+        if let Some(retry) = host_retry.as_mut() {
+            retry.attach_finished(attached.is_some());
         }
-        let worker = worker?;
-        match worker {
+        let started = Instant::now();
+        let round = match attached {
+            Some(attached) => {
+                let host_build = attached.link.build.clone();
+                let exit = attached.watch(HostMonitor {
+                    record_watch: &mut record_watch,
+                    exec_state: &mut exec_state,
+                    supervisor_build: supervisor_build.as_deref(),
+                    started,
+                    watchdog: &mut pane_watchdog,
+                });
+                // A host that died young may die again: the pane's own
+                // worker paints the next round, and the round after asks
+                // for a host again.
+                host_allowed =
+                    exit != WorkerExit::HostLost || started.elapsed() >= respawn_stable_run();
+                Round {
+                    exit,
+                    build: host_build,
+                    worker_pid: None,
+                    stderr_excerpt: String::new(),
+                }
+            }
+            None => {
+                host_allowed = true;
+                let mut child = spawn_worker(&exe, &args, &config)?;
+                if let Some(retry) = host_retry.as_mut() {
+                    retry.worker_started(started, respawn_stable_run());
+                }
+                let worker_pid = worker_pid(&child);
+                record_test_worker_start(&exe, child.id());
+                spawn_test_stray_if_requested();
+
+                let stderr_tail = Arc::new(Mutex::new(StderrTail::new(STDERR_TAIL_BYTES)));
+                let stderr_handle = child
+                    .stderr
+                    .take()
+                    .map(|stderr| drain_stderr(stderr, stderr_tail.clone()));
+                let worker = wait_for_worker_and_reap_strays(
+                    worker_pid,
+                    WorkerMonitor {
+                        record_watch: &mut record_watch,
+                        exec_state: &mut exec_state,
+                        worker_build: worker_build.as_deref(),
+                        supervisor_build: supervisor_build.as_deref(),
+                        started,
+                        runtime: runtime.as_ref(),
+                        config: &config,
+                        watchdog: &mut pane_watchdog,
+                        orphan_reap_pending: false,
+                        handoff_deadline: None,
+                        host_available_pending: false,
+                        host_retry: host_retry.as_mut(),
+                    },
+                );
+                drop(child);
+                if let Some(handle) = stderr_handle {
+                    let _ = handle.join();
+                }
+                Round {
+                    exit: worker?,
+                    build: worker_build,
+                    worker_pid: Some(worker_pid.as_raw()),
+                    stderr_excerpt: stderr_tail
+                        .lock()
+                        .map(|tail| tail.excerpt())
+                        .unwrap_or_default(),
+                }
+            }
+        };
+        let worker_build = round.build;
+        match round.exit {
+            // The next round attaches again, to a host some pane starts.
+            WorkerExit::HostLost | WorkerExit::HostAvailable => {}
             WorkerExit::OrphanReaped => {
-                record_orphan_reap(&config, worker_pid.as_raw());
+                if let Some(worker_pid) = round.worker_pid {
+                    record_orphan_reap(&config, worker_pid);
+                }
                 remove_orphan_runtime_files(&config);
                 return Ok(());
             }
@@ -202,12 +325,8 @@ pub fn run(config: ServeConfig) -> Result<()> {
                 }
             },
             WorkerExit::Respawn { signal, exit_code } => {
-                let stderr_excerpt = stderr_tail
-                    .lock()
-                    .map(|tail| tail.excerpt())
-                    .unwrap_or_default();
                 restore_terminal(MouseCapture::Stdout, Screen::Main);
-                record_signal_death(&config, signal, exit_code, stderr_excerpt);
+                record_signal_death(&config, signal, exit_code, round.stderr_excerpt);
                 let (delay, next) = respawn_backoff(backoff, started.elapsed());
                 debug!(
                     delay_ms = delay.as_millis(),
@@ -225,6 +344,159 @@ pub fn run(config: ServeConfig) -> Result<()> {
         }
     }
 }
+
+/// One turn of the supervise loop: a host attachment or a worker, from start
+/// to the exit the loop acts on.
+struct Round {
+    exit: WorkerExit,
+    /// The build that painted the pane this round.
+    build: Option<String>,
+    worker_pid: Option<i32>,
+    stderr_excerpt: String,
+}
+
+/// A pane the room host is painting: the link to the host, and the terminal
+/// this process holds for it.
+struct Attached {
+    link: HostLink,
+    modes: TerminalModeGuard,
+    forwarder: EventForwarder,
+}
+
+/// Hand this pane to the session's host. `None` leaves it to a worker: the
+/// output is not a terminal a host could size, no host answered or could be
+/// started in time, or the host said no.
+fn attach_to_host(
+    config: &ServeConfig,
+    runtime: &crate::RuntimePaths,
+    exe: &Path,
+    supervisor_build: Option<&str>,
+) -> Option<Attached> {
+    use std::io::IsTerminal;
+    use std::os::fd::AsFd;
+
+    let stdout = io::stdout();
+    if !stdout.is_terminal() {
+        return None;
+    }
+    let stream = connect_to_host(config, runtime, exe)?;
+    // Set the pane's modes before the host can paint: afterwards the host
+    // owns every byte written to it, and a mode sequence from here would
+    // land inside one of its frames.
+    let modes = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main).ok()?;
+    let hello = host_link::hello_for(config, supervisor_build);
+    let Some(link) = HostLink::open(stream, &hello, stdout.as_fd(), host_link::REPLY_WAIT) else {
+        // The worker that paints instead asserts the same modes.
+        modes.preserve_for_handoff();
+        return None;
+    };
+    let wake_path = runtime.sidebar_socket_path(&config.instance_id);
+    // The host sized the pane from its fd at the hello; a resize that raced
+    // the handover is settled by one more look.
+    if let Ok(waker) = std::os::unix::net::UnixDatagram::unbound() {
+        let _ = waker.send_to(b"resize", &wake_path);
+    }
+    let forwarder = EventForwarder::start(wake_path, config.nav_keys.clone());
+    Some(Attached {
+        link,
+        modes,
+        forwarder,
+    })
+}
+
+fn connect_to_host(
+    config: &ServeConfig,
+    runtime: &crate::RuntimePaths,
+    exe: &Path,
+) -> Option<UnixStream> {
+    host_link::connect(config, runtime, host_link::HOST_WAIT, || {
+        let state = crate::StatePaths::for_workspace(config.workspace_id.clone())
+            .map_err(io::Error::other)?;
+        let log = state.sidebar_host_log(config.mux, &config.session_name);
+        host_link::spawn_host(exe, config, runtime, &log)
+    })
+}
+
+struct HostMonitor<'a> {
+    record_watch: &'a mut RecordWatch,
+    exec_state: &'a mut PendingExec,
+    supervisor_build: Option<&'a str>,
+    started: Instant,
+    watchdog: &'a mut Option<PaneWatchdog>,
+}
+
+impl Attached {
+    /// Stay attached until the host or this pane ends it, then give the tty
+    /// back to whichever process paints next.
+    fn watch(mut self, monitor: HostMonitor<'_>) -> WorkerExit {
+        let exit = watch_host(&mut self.link, monitor);
+        drop(self.link);
+        self.forwarder.stop();
+        // Every way out keeps the pane's modes continuous: a worker or the
+        // next attachment asserts the same ones, and a confirmed close
+        // restores them itself.
+        self.modes.preserve_for_handoff();
+        exit
+    }
+}
+
+fn watch_host(link: &mut HostLink, monitor: HostMonitor<'_>) -> WorkerExit {
+    loop {
+        match link.poll(reap_poll_interval()) {
+            HostEvent::Control(Control::SelfClose) => return WorkerExit::ConfirmSelfClose,
+            HostEvent::Control(Control::Reload) => return WorkerExit::Reload,
+            HostEvent::Lost => return WorkerExit::HostLost,
+            HostEvent::Quiet => {}
+        }
+        reap_exited_children();
+        let now = Instant::now();
+        if let Some(change) = monitor.record_watch.poll_if_due(now) {
+            // A host on a superseded build leaves by itself and says
+            // `reload`; the record only tells this supervisor whether it
+            // has a build of its own to move to.
+            let _ = apply_record_change(
+                monitor.exec_state,
+                &change,
+                monitor.supervisor_build,
+                link.build.as_deref(),
+            );
+        }
+        if monitor
+            .exec_state
+            .promotable(
+                link.build.as_deref(),
+                now.saturating_duration_since(monitor.started),
+                respawn_stable_run(),
+            )
+            .is_some()
+        {
+            return WorkerExit::Reload;
+        }
+        if monitor
+            .watchdog
+            .as_mut()
+            .is_some_and(|watchdog| watchdog.probe_if_due(now))
+        {
+            return WorkerExit::OrphanReaped;
+        }
+    }
+}
+
+/// A host this supervisor started stays its child. One that exits after this
+/// supervisor re-exec'd has no reaper thread left to collect it, so the
+/// attached loop does what the worker wait does on every poll.
+#[cfg(all(unix, not(test)))]
+fn reap_exited_children() {
+    use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+
+    while matches!(
+        waitpid(nix::unistd::Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)),
+        Ok(status) if status != WaitStatus::StillAlive
+    ) {}
+}
+
+#[cfg(any(not(unix), test))]
+fn reap_exited_children() {}
 
 fn worker_executable(
     target: crate::reload::WorkspaceReexecTarget,
@@ -273,6 +545,9 @@ enum WorkerExit {
         exit_code: Option<i32>,
     },
     OrphanReaped,
+    /// The room host painting this pane went away without a word.
+    HostLost,
+    HostAvailable,
 }
 
 fn classify_worker_exit(
@@ -348,13 +623,13 @@ impl PendingExec {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum RecordChange {
+pub(super) enum RecordChange {
     Verified(crate::reload::StagedBuild),
     Unavailable,
 }
 
 #[derive(Debug)]
-struct RecordWatch {
+pub(super) struct RecordWatch {
     workspace_id: crate::ids::WorkspaceId,
     record_path: PathBuf,
     last_seen_mtime: Option<SystemTime>,
@@ -362,7 +637,7 @@ struct RecordWatch {
 }
 
 impl RecordWatch {
-    fn new(workspace_id: &crate::ids::WorkspaceId) -> Self {
+    pub(super) fn new(workspace_id: &crate::ids::WorkspaceId) -> Self {
         let record_path = crate::StatePaths::for_workspace(workspace_id.clone())
             .map(|paths| paths.workspace_record)
             .unwrap_or_default();
@@ -375,7 +650,7 @@ impl RecordWatch {
         }
     }
 
-    fn poll_if_due(&mut self, now: Instant) -> Option<RecordChange> {
+    pub(super) fn poll_if_due(&mut self, now: Instant) -> Option<RecordChange> {
         if now < self.next_poll {
             return None;
         }
@@ -784,17 +1059,23 @@ struct WorkerMonitor<'a> {
     watchdog: &'a mut Option<PaneWatchdog>,
     orphan_reap_pending: bool,
     handoff_deadline: Option<Instant>,
+    host_available_pending: bool,
+    host_retry: Option<&'a mut HostRetry>,
 }
 
 #[cfg(unix)]
 impl WorkerMonitor<'_> {
     fn terminal(&self, exit_code: Option<i32>, signal: Option<i32>) -> WorkerExit {
-        classify_worker_exit(
+        let exit = classify_worker_exit(
             self.orphan_reap_pending,
             self.handoff_deadline.is_some(),
             exit_code,
             signal,
-        )
+        );
+        if self.host_available_pending && matches!(exit, WorkerExit::Respawn { .. }) {
+            return WorkerExit::HostAvailable;
+        }
+        exit
     }
 
     fn poll(&mut self, worker_pid: nix::unistd::Pid, now: Instant) -> Result<()> {
@@ -837,6 +1118,23 @@ impl WorkerMonitor<'_> {
         {
             kill_worker(worker_pid, Signal::SIGKILL)?;
             self.orphan_reap_pending = true;
+        }
+        if !self.orphan_reap_pending
+            && self.handoff_deadline.is_none()
+            && !self.host_available_pending
+            && let (Some(retry), Some(runtime)) = (self.host_retry.as_mut(), self.runtime)
+            && retry.probe_if_due(now, || {
+                let current =
+                    crate::reload::current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
+                let exe = worker_executable(
+                    crate::reload::recorded_reexec_target(&self.config.workspace_id),
+                    current,
+                );
+                connect_to_host(self.config, runtime, &exe)
+            })
+        {
+            kill_worker(worker_pid, Signal::SIGTERM)?;
+            self.host_available_pending = true;
         }
         Ok(())
     }
@@ -1303,470 +1601,4 @@ fn record_test_worker_start(exe: &Path, pid: u32) {
 fn record_test_worker_start(_exe: &Path, _pid: u32) {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stderr_tail_keeps_bounded_suffix() {
-        let mut tail = StderrTail::new(5);
-
-        tail.push(b"abc");
-        tail.push(b"def");
-
-        assert_eq!(tail.excerpt(), "bcdef");
-    }
-
-    #[test]
-    fn stderr_tail_truncates_large_chunk_to_suffix() {
-        let mut tail = StderrTail::new(4);
-
-        tail.push(b"abcdef");
-
-        assert_eq!(tail.excerpt(), "cdef");
-    }
-
-    #[test]
-    fn worker_exit_classifier_honours_orphan_then_handoff_then_status() {
-        assert_eq!(
-            classify_worker_exit(false, false, Some(RELOAD_EXIT_CODE), None),
-            WorkerExit::Reload
-        );
-        assert_eq!(
-            classify_worker_exit(false, false, Some(PANIC_EXIT_CODE), None),
-            WorkerExit::Respawn {
-                signal: None,
-                exit_code: Some(PANIC_EXIT_CODE)
-            }
-        );
-        assert_eq!(
-            classify_worker_exit(false, false, Some(SELF_CLOSE_EXIT_CODE), None),
-            WorkerExit::ConfirmSelfClose
-        );
-        assert_eq!(
-            classify_worker_exit(false, true, Some(SELF_CLOSE_EXIT_CODE), None),
-            WorkerExit::Reload,
-            "requested handoff outranks an exit code"
-        );
-        assert_eq!(
-            classify_worker_exit(true, true, Some(RELOAD_EXIT_CODE), None),
-            WorkerExit::OrphanReaped,
-            "orphan reap outranks handoff and exit code"
-        );
-        assert_eq!(
-            classify_worker_exit(false, false, None, None),
-            WorkerExit::Respawn {
-                signal: None,
-                exit_code: None
-            },
-            "ECHILD's unknown status is abnormal termination"
-        );
-    }
-
-    #[test]
-    fn respawn_backoff_doubles_caps_and_resets_after_a_stable_run() {
-        assert_eq!(
-            respawn_backoff(Duration::from_secs(1), Duration::from_secs(2)),
-            (Duration::from_secs(1), Duration::from_secs(2))
-        );
-        assert_eq!(
-            respawn_backoff(Duration::from_secs(60), Duration::from_secs(2)),
-            (Duration::from_secs(60), Duration::from_secs(60))
-        );
-        assert_eq!(
-            respawn_backoff(Duration::from_secs(32), RESPAWN_STABLE_RUN),
-            (Duration::from_secs(1), Duration::from_secs(2))
-        );
-    }
-
-    #[test]
-    fn pane_watchdog_requires_three_fresh_absences() {
-        let mut watchdog = PaneWatchdog {
-            pane: crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1"),
-            mux: crate::ids::MuxName::Tmux,
-            session_name: "rimz-test".to_owned(),
-            workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/repo")),
-            next_probe: Instant::now(),
-            strikes: 0,
-            last_observed_at_ms: None,
-        };
-
-        assert!(!watchdog.observe(PaneProbe::Absent(1)));
-        assert!(!watchdog.observe(PaneProbe::Absent(1)));
-        assert_eq!(watchdog.strikes, 1, "a cached absence counts once");
-        assert!(!watchdog.observe(PaneProbe::Unknown));
-        assert_eq!(watchdog.strikes, 1);
-        assert!(!watchdog.observe(PaneProbe::Present(2)));
-        assert_eq!(watchdog.strikes, 0);
-        assert!(!watchdog.observe(PaneProbe::Absent(3)));
-        assert!(!watchdog.observe(PaneProbe::Absent(4)));
-        assert!(watchdog.observe(PaneProbe::Absent(5)));
-    }
-
-    #[test]
-    fn pane_watchdog_requires_authoritative_mux_truth() {
-        let watchdog = PaneWatchdog {
-            pane: crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_9"),
-            mux: crate::ids::MuxName::Zellij,
-            session_name: "rimz-test".to_owned(),
-            workspace_id: crate::ids::WorkspaceId::from_project_root(Path::new("/repo")),
-            next_probe: Instant::now(),
-            strikes: 0,
-            last_observed_at_ms: None,
-        };
-
-        let options = watchdog.probe_options();
-        assert_eq!(
-            options.consistency,
-            crate::mux::PaneReadConsistency::RequireAuthoritative
-        );
-        assert_eq!(options.command_timeout, Some(PANE_PROBE_TIMEOUT));
-    }
-
-    #[test]
-    fn pane_watchdog_presence_ladder_escalates_only_on_suspicion() {
-        let pane = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_9");
-        let roster = crate::mux::CachedPaneRoster {
-            pane_ids: vec![pane.clone()],
-            observed_at_ms: 42,
-        };
-        let escalations = std::cell::Cell::new(0);
-        let escalate = || {
-            escalations.set(escalations.get() + 1);
-            PaneProbe::Absent(43)
-        };
-
-        assert_eq!(
-            ladder_probe(&pane, Some(&roster), escalate),
-            PaneProbe::Present(42),
-        );
-        assert_eq!(escalations.get(), 0);
-
-        let missing = crate::mux::CachedPaneRoster {
-            pane_ids: Vec::new(),
-            observed_at_ms: 44,
-        };
-        assert_eq!(
-            ladder_probe(&pane, Some(&missing), escalate),
-            PaneProbe::Absent(43),
-        );
-        assert_eq!(ladder_probe(&pane, None, escalate), PaneProbe::Absent(43));
-        assert_eq!(escalations.get(), 2);
-    }
-
-    #[test]
-    fn self_close_verdict_requires_authoritative_view_emptiness() {
-        let own_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1");
-        let sibling_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%2");
-        let pane = |pane_id: crate::ids::PaneId, view_id: Option<&str>, is_floating: bool| {
-            crate::pane::PaneRef {
-                pane_id,
-                session_name: "rimz-test".to_owned(),
-                view_id: view_id.map(str::to_owned),
-                is_floating,
-                ..crate::pane::PaneRef::from_id(crate::ids::PaneId::from_parts(
-                    crate::ids::MuxName::Tmux,
-                    "%unused",
-                ))
-            }
-        };
-
-        assert_eq!(self_close_verdict(&[], &own_id), SelfCloseVerdict::PaneGone);
-        assert!(matches!(
-            self_close_verdict(&[pane(own_id.clone(), None, false)], &own_id),
-            SelfCloseVerdict::Keep { .. }
-        ));
-        assert_eq!(
-            self_close_verdict(&[pane(own_id.clone(), Some("@1"), false)], &own_id),
-            SelfCloseVerdict::Empty {
-                floating_siblings: 0
-            }
-        );
-        assert!(matches!(
-            self_close_verdict(
-                &[
-                    pane(own_id.clone(), Some("@1"), false),
-                    pane(sibling_id.clone(), Some("@1"), false),
-                ],
-                &own_id,
-            ),
-            SelfCloseVerdict::Keep { siblings: 1, .. }
-        ));
-        assert_eq!(
-            self_close_verdict(
-                &[
-                    pane(own_id.clone(), Some("@1"), false),
-                    pane(sibling_id, Some("@1"), true),
-                ],
-                &own_id,
-            ),
-            SelfCloseVerdict::Empty {
-                floating_siblings: 1
-            }
-        );
-    }
-
-    #[test]
-    fn self_close_accepts_only_reproduced_pane_absence() {
-        assert_eq!(
-            reconfirm_pane_gone(|| Ok(SelfCloseVerdict::PaneGone), || {}),
-            SelfCloseConfirmation::PaneGone
-        );
-
-        assert_eq!(
-            reconfirm_pane_gone(
-                || {
-                    Ok(SelfCloseVerdict::Empty {
-                        floating_siblings: 0,
-                    })
-                },
-                || {},
-            ),
-            SelfCloseConfirmation::Keep {
-                siblings: 0,
-                reason: "authoritative absence not reproduced".to_owned(),
-            }
-        );
-
-        assert_eq!(
-            reconfirm_pane_gone(|| Err("mux timed out".to_owned()), || {}),
-            SelfCloseConfirmation::Keep {
-                siblings: 0,
-                reason: "pane-gone reconfirmation probe failed: mux timed out".to_owned(),
-            }
-        );
-    }
-
-    #[test]
-    fn authoritative_probe_is_shared_across_consumers() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
-        let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let pane = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1");
-        let watchdog = PaneWatchdog {
-            pane: pane.clone(),
-            mux: crate::ids::MuxName::Tmux,
-            session_name: "rimz-test".to_owned(),
-            workspace_id,
-            next_probe: Instant::now(),
-            strikes: 0,
-            last_observed_at_ms: None,
-        };
-        let calls = std::cell::Cell::new(0);
-        let observed_at_ms = crate::utils::time::unix_now_ms();
-        let first = shared_authoritative_pane_probe(&watchdog, &runtime, || {
-            calls.set(calls.get() + 1);
-            Some(AuthoritativePaneProbe {
-                mux: crate::ids::MuxName::Tmux,
-                session_name: "rimz-test".to_owned(),
-                observed_at_ms,
-                pane_ids: vec![pane],
-            })
-        });
-        let second = shared_authoritative_pane_probe(&watchdog, &runtime, || {
-            calls.set(calls.get() + 1);
-            None
-        });
-
-        assert_eq!(first, PaneProbe::Present(observed_at_ms));
-        assert_eq!(second, first);
-        assert_eq!(calls.get(), 1, "one producer feeds every consumer");
-    }
-
-    #[test]
-    fn authoritative_probe_rejects_malformed_and_mismatched_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
-        let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let watchdog = PaneWatchdog {
-            pane: crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1"),
-            mux: crate::ids::MuxName::Zellij,
-            session_name: "rimz-test".to_owned(),
-            workspace_id,
-            next_probe: Instant::now(),
-            strikes: 0,
-            last_observed_at_ms: None,
-        };
-        std::fs::write(runtime.authoritative_pane_probe_path(), b"not json").unwrap();
-        assert!(
-            read_authoritative_pane_probe(&runtime, &watchdog, crate::utils::time::unix_now_ms())
-                .is_none()
-        );
-
-        crate::sidebar::cache::write_authoritative_pane_probe(
-            &runtime,
-            &AuthoritativePaneProbe {
-                mux: crate::ids::MuxName::Tmux,
-                session_name: "other".to_owned(),
-                observed_at_ms: crate::utils::time::unix_now_ms(),
-                pane_ids: Vec::new(),
-            },
-        )
-        .unwrap();
-        assert!(
-            read_authoritative_pane_probe(&runtime, &watchdog, crate::utils::time::unix_now_ms())
-                .is_none()
-        );
-
-        crate::sidebar::cache::write_authoritative_pane_probe(
-            &runtime,
-            &AuthoritativePaneProbe {
-                mux: watchdog.mux,
-                session_name: watchdog.session_name.clone(),
-                observed_at_ms: 1,
-                pane_ids: Vec::new(),
-            },
-        )
-        .unwrap();
-        assert!(read_authoritative_pane_probe(&runtime, &watchdog, 60_001).is_none());
-    }
-
-    #[test]
-    fn authoritative_probe_cache_accepts_both_mux_identities() {
-        for (mux, pane_raw) in [
-            (crate::ids::MuxName::Zellij, "terminal_1"),
-            (crate::ids::MuxName::Tmux, "%1"),
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
-            let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-            runtime.ensure_dirs().unwrap();
-            let pane = crate::ids::PaneId::from_parts(mux, pane_raw);
-            let watchdog = PaneWatchdog {
-                pane: pane.clone(),
-                mux,
-                session_name: "rimz-test".to_owned(),
-                workspace_id,
-                next_probe: Instant::now(),
-                strikes: 0,
-                last_observed_at_ms: None,
-            };
-            crate::sidebar::cache::write_authoritative_pane_probe(
-                &runtime,
-                &AuthoritativePaneProbe {
-                    mux,
-                    session_name: "rimz-test".to_owned(),
-                    observed_at_ms: 10,
-                    pane_ids: vec![pane],
-                },
-            )
-            .unwrap();
-
-            let probe = read_authoritative_pane_probe(&runtime, &watchdog, 11).unwrap();
-            assert_eq!(
-                pane_probe_for(&probe, &watchdog.pane),
-                PaneProbe::Present(10)
-            );
-        }
-    }
-
-    #[test]
-    fn worker_spawn_prefers_the_durable_target_even_for_matching_bytes() {
-        let durable = std::path::PathBuf::from("/state/rimz/builds/same/rimz");
-        let ephemeral = std::path::PathBuf::from("/tmp/build/rimz (deleted)");
-        assert_eq!(
-            worker_executable(
-                crate::reload::WorkspaceReexecTarget::Verified(crate::reload::StagedBuild {
-                    path: durable.clone(),
-                    build: "same".to_owned(),
-                }),
-                ephemeral,
-            ),
-            durable,
-        );
-    }
-
-    #[test]
-    fn record_change_requires_a_new_mtime_and_preserves_verification() {
-        let prior = SystemTime::UNIX_EPOCH;
-        let next = prior + Duration::from_secs(1);
-        let target = crate::reload::StagedBuild {
-            path: PathBuf::from("/state/builds/next/rimz"),
-            build: "next".to_owned(),
-        };
-        assert_eq!(
-            record_change(
-                Some(prior),
-                Some(prior),
-                crate::reload::WorkspaceReexecTarget::Verified(target.clone()),
-            ),
-            None,
-        );
-        assert_eq!(
-            record_change(
-                Some(prior),
-                Some(next),
-                crate::reload::WorkspaceReexecTarget::Verified(target.clone()),
-            ),
-            Some(RecordChange::Verified(target)),
-        );
-        assert_eq!(
-            record_change(
-                Some(prior),
-                Some(next),
-                crate::reload::WorkspaceReexecTarget::Invalid,
-            ),
-            Some(RecordChange::Unavailable),
-        );
-    }
-
-    #[test]
-    fn pending_exec_waits_for_the_replacement_worker_stability_window() {
-        let target = crate::reload::StagedBuild {
-            path: PathBuf::from("/state/builds/new/rimz"),
-            build: "new".to_owned(),
-        };
-        let mut pending = PendingExec::default();
-        pending.observe(
-            &crate::reload::WorkspaceReexecTarget::Verified(target.clone()),
-            Some("old"),
-        );
-
-        assert!(
-            pending
-                .promotable(Some("old"), RESPAWN_STABLE_RUN, RESPAWN_STABLE_RUN)
-                .is_none(),
-            "the old worker cannot promote the new supervisor",
-        );
-        assert!(
-            pending
-                .promotable(
-                    Some("new"),
-                    RESPAWN_STABLE_RUN - Duration::from_millis(1),
-                    RESPAWN_STABLE_RUN,
-                )
-                .is_none(),
-            "the new worker must first serve stably",
-        );
-        assert_eq!(
-            pending.promotable(Some("new"), RESPAWN_STABLE_RUN, RESPAWN_STABLE_RUN),
-            Some(target),
-        );
-    }
-
-    #[test]
-    fn pending_exec_resets_when_the_record_changes() {
-        let target = |build: &str| {
-            crate::reload::WorkspaceReexecTarget::Verified(crate::reload::StagedBuild {
-                path: PathBuf::from(format!("/state/builds/{build}/rimz")),
-                build: build.to_owned(),
-            })
-        };
-        let mut pending = PendingExec::default();
-        pending.observe(&target("first"), Some("old"));
-        pending.reject("first");
-        pending.observe(&target("first"), Some("old"));
-        assert!(
-            pending.target.is_none(),
-            "a rejected build waits for a new record"
-        );
-
-        pending.observe(&target("second"), Some("old"));
-        assert_eq!(
-            pending.target.as_ref().map(|target| target.build.as_str()),
-            Some("second")
-        );
-        assert_eq!(pending.rejected_build, None);
-    }
-}
+mod tests;

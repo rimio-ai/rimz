@@ -17,17 +17,21 @@ use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
 
 use super::ServeConfig;
+use super::fetch::Stand;
 use super::timing::tick_for;
 
 const DAEMON_VIEW_REPAIR_TTL: Duration = Duration::from_secs(30);
 
+/// `stand` names the renderer's pane and data tick at each refresh: a room
+/// host stands as its eldest pane, which changes as panes attach and detach.
 pub(super) fn spawn(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     election: ProducerElectionTracker,
+    stand: impl Fn() -> Stand + Send + 'static,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || refresh_loop(config, runtime, diag, election))
+    std::thread::spawn(move || refresh_loop(config, runtime, diag, election, stand))
 }
 
 fn refresh_loop(
@@ -35,6 +39,7 @@ fn refresh_loop(
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
     election: ProducerElectionTracker,
+    stand: impl Fn() -> Stand,
 ) {
     crate::lane::set(crate::lane::WorkLane::CacheRefresh);
     let mut cursor = RollupCursor::new();
@@ -47,7 +52,7 @@ fn refresh_loop(
     let mut daemon_checked_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
     let mut refresh_state = crate::sidebar::refresh::ProducerRefreshState::default();
     loop {
-        std::thread::sleep(tick_for(config.tick_seconds));
+        std::thread::sleep(stand().tick);
         if election.elder_instance().is_some() {
             continue;
         }
@@ -61,13 +66,14 @@ fn refresh_loop(
             }
         };
         let tick = meter.begin();
+        let own_pane = stand().own_pane;
         let result = refresh_guarded(&mut cursor, |cursor| {
             crate::sidebar::produce::refresh_producer_caches(
                 cursor,
                 &state,
                 &runtime,
                 &config.session_name,
-                config.own_pane.as_ref(),
+                own_pane.as_ref(),
                 &mut refresh_state,
             )
         });

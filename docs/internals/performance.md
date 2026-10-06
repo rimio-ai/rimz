@@ -28,11 +28,11 @@ The design keeps the three goals apart by putting them on separate threads, sepa
 
 ### The render thread
 
-Each tab runs one `rimz sidebar serve` supervisor and worker pair ([`sidebar_pane::app::serve`](../../crates/rimz/src/sidebar_pane/app.rs)). The supervisor owns reload convergence and crash capture. The worker runs up to seven long-lived threads, and only the render/input loop faces the human.
+Each tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz sidebar host` per mux session paints every pane of the room ([`sidebar_pane::host`](../../crates/rimz/src/sidebar_pane/host.rs)). The supervisor keeps the pane's terminal modes and input, and owns reload convergence. The host runs one render/input loop per pane, each on its own thread, over one set of data-plane threads, so a room pays the per-process cost of a renderer once rather than once per tab. Each pane still owns its snapshot: the shared fold is projected once per pane (`project_local` consumes its own copy of the workspace) and each pane's loop holds the result, so a room's memory still grows with its tab count by one snapshot per pane. A pane the host cannot take is painted by a worker process of its own, the same loop and data plane for one pane ([state.md → Fallback](./sidebar/state.md#fallback)).
 
-The render loop spins the animation, applies input, fuses overlay events, and folds a snapshot the fetch worker finished. It blocks only in `recv` on its own wakeup socket, which receives store and pane wakeups as well as the event waker thread's terminal input and resize nudges. It never forks, never fsyncs, and never reads the pane roster. A mux action the loop starts (a jump, a width nudge) runs on a short-lived detached thread.
+A render loop spins the animation, applies input, fuses overlay events, and projects a fold the fetch worker finished. It blocks only in `recv` on its own wakeup socket, which receives store and pane wakeups as well as the supervisor's terminal input and resize words. It never forks, never fsyncs, and never reads the pane roster. A mux action the loop starts (a jump, a width nudge) runs on a short-lived detached thread.
 
-The other long-lived threads are the event waker, the fetch worker, the cache refresher, the observer writer, the tmux control-mode watch, and the transcript watch. What each owns, and which ones stop working when their renderer is not the producer, is the thread table in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers).
+The data-plane threads, one set per host, are the fetch worker, the cache refresher, the observer writer, the tmux control-mode watch, and the transcript watch; the terminal event reader lives in each pane's supervisor. What each owns, and which ones stop working when their renderer is not the producer, is the thread table in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers).
 
 ### One producer, many consumers
 
@@ -40,7 +40,7 @@ The external reads a room needs (the pane roster, git, the forge, provider accou
 
 The eldest live renderer is the **producer**: it runs the reads and publishes the results as runtime caches. Every other renderer is a **consumer**: it folds those caches in process through [`PublishedSnapshotReader`](../../crates/rimz/src/sidebar/consumer.rs) and applies only what is local to it (its own pane exclusion, its own view, presence). A consumer forks nothing.
 
-N tabs therefore cost one set of external reads plus N-1 in-process folds. This is the largest lever in the design: a 20-tab room costs about what a 2-tab room costs. The election mechanics live in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers), and the account-global spend walker has its own election in [spending.md](./agents/spending.md#one-walk-per-namespace).
+N tabs therefore cost one set of external reads, and each room's host folds once for all its panes. A wake reaches every pane and each pane asks the shared fetch worker for a fold; a fold answers every request whose cause a pane observed before the fold started, and both the worker and the panes drop a request the last fold answered ([`sidebar_pane::app::fetch`](../../crates/rimz/src/sidebar_pane/app/fetch.rs) `Coverage`). A burst whose wakes all land within one fold costs at most two folds for any tab count; a wake that lands later is indistinguishable from a new change and costs one more. This is the largest lever in the design: in external reads, a 20-tab room costs about what a 2-tab room costs. The election mechanics live in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers), and the account-global spend walker has its own election in [spending.md](./agents/spending.md#one-walk-per-namespace).
 
 ### Why the election is safe
 
@@ -81,7 +81,7 @@ A performance change follows these rules. An earlier rule outranks a later one w
 5. **Single-flight, then coalesce.** One fetch runs at a time. A burst of requests collapses to one fetch, and a request racing an in-flight fetch leaves exactly one follow-up, never a queue.
 6. **Pay the external read once per window.** A short TTL bounds pane discovery, git, and forge probes, and the last good result is reused. A failed probe backs off and keeps its last known good value. A degraded roster read backfills missing fields per pane instead of painting a corrupt frame.
 7. **Take the cheapest correct read.** Catch-up is O(delta bytes) from the persisted fold base, never O(history). Skip work that cannot matter: unchanged inputs cost a stat, and a room with no agents skips the sidecar scans.
-8. **One producer per workspace, one renderer per tab.** Production is capped, renderer count is not: every tab keeps its own renderer so no pane goes dark. Recovering from a stale producer belongs to the election, never to consumers.
+8. **One producer per workspace, one render loop per tab.** Production is capped, render-loop count is not: every tab keeps its own loop, heartbeat, and wakeup socket so no pane goes dark, and one pane's failure closes that pane alone. Recovering from a stale producer belongs to the election, never to consumers.
 
 ## The cost map
 
@@ -94,6 +94,8 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 | Frame redraw | Sub-millisecond in process; 413 µs at 40 agents | The fixed `refresh_ms` grid; off-screen animation relaxes to the data backstop; a frame never starts a fetch |
 | Overlay fuse | 75 µs owned, 100 µs with an active overlay, at 40 agents | Pure: no IO, no subprocess, no clock read |
 | Jump to a pane | One mux client fork, tens to hundreds of ms | Detached thread; the focus intent it writes reaches the frame through the fold ([state.md](./sidebar/state.md#focus-intent)) |
+| Tmux graphics capabilities | One room-wide client/process/version sample and one pane-option listing | Ten-second plane cadence; a missing pane or unavailable listing uses a targeted permission query; escalation remains per pane |
+| Zellij width observation | One topology parse and pane geometry table per changed file stamp; a metadata check and lookup thereafter | Shared per plane; freshness and each pane's observation floor stay live ([multiplexers.md](./multiplexers.md#width)) |
 
 ### The fetch worker
 
@@ -103,6 +105,7 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 | Event-log fold | Warm cursor: one stat of the log and one of the carryover, plus the appended frames; the projection clones only the rows it keeps. Unchanged log: shared handles only | Guard tests `delta_fold_is_o_new_bytes` and `warm_fold_parses_unchanged_carryover_zero_times` |
 | Consumer unchanged check | Metadata stamps on five inputs after an adoption; the full input set after a fallback | A matching stamp skips the fold; `CONSUMER_UNCHANGED_BACKSTOP_MS` forces one anyway ([state.md](./sidebar/state.md#the-skip-memo)) |
 | Workspace projection | Producer: one enrichment and one serialize per changed fold. Consumer: one parse-cached clone plus its local projection | Adoption requires an exact source match; any mismatch falls back to a full local fold with no mux read ([state.md](./sidebar/state.md#adoption-and-fallback)) |
+| Fold observations | One focus-anchor read, one body-filter read and one merged read-mark observation per real cycle, shared by every attachment | Pane-local application keeps selection, confirmation and receipts; live nonce comparison guards retirement ([state.md](./sidebar/state.md#focus-intent)) |
 | Pane roster (producer) | Zellij: one topology read plus a `zellij pipe` nudge. tmux: one `list-panes` call | `SNAPSHOT_CACHE_TTL` while a client drives it, `EVENT_PANE_TTL` while the presence stamp is fresh; one attempt per data tick |
 | Process metrics (producer) | A due sample reads one metrics record per process | Per-pane focused and background stamps in `lanes/metrics-sample.json`; the full process-table walk runs only on pane churn |
 | Agent projection (producer) | Unchanged tick: metadata stamps only, no directory enumeration | One batched discovery call per kind and one wiring probe per data tick |
@@ -231,7 +234,7 @@ Totals across a fleet of 2 to 5 rooms:
 | --- | --- | --- | --- | --- |
 | CPU, idle | ~0 | ~0 | ~0 | Loops block in `recv`; off-screen animation pauses |
 | CPU, busy | <0.3 core | ~0.3 to 0.8 core | ~0.5 to 1.5 core | One producer per room, bursting toward the 8-root git cap, never on the render thread |
-| RAM, resident | ~80 to 150 MiB | ~100 to 180 MiB | ~120 to 220 MiB | Renderers plus one spend walker, room-local rollups, prepared cell-pet grids |
+| RAM, resident | ~80 to 150 MiB | ~100 to 180 MiB | ~120 to 220 MiB | One host per room plus a small supervisor and one snapshot copy per tab, one spend walker, room-local rollups, prepared cell-pet grids |
 | Durable write | ~1 to 3 KiB/s | ~2 to 4 KiB/s | ~2 to 5 KiB/s | Lifecycle frames pinned at 1 KiB or less, summed across rooms |
 | fsync rate | ~rooms/s | ~rooms/s | ~rooms/s | One group `fdatasync` per second per workspace |
 | State on disk | Tens of MiB | Tens of MiB | ~100s of MiB | Rotation-capped event log plus ~5 KiB of snapshot per agent, per workspace |
@@ -251,7 +254,7 @@ The fetch worker builds snapshots; the render loop blocks in `recv` and folds a 
 
 ### Only the watched tab animates
 
-Each renderer knows its own pane and the latest focus view, so it can tell whether a client is looking at its tab. A watched tab keeps the normal grid. An unwatched or detached tab treats motion as idle, wakes on the data backstop, and clamps its folds to `UNWATCHED_FOLD_CLAMP` for store and topology nudges and `UNWATCHED_METRICS_FOLD_CLAMP` for metrics-only publications. Deferred requests merge the strongest freshness requirement and the earliest deadline, and an immediate fold absorbs any deferred one, so a hidden tab folds once per clamp. A dirty fold still paints once, keeping the hidden buffer current for the next tab switch. When ownership is unknown the renderer counts as watched, so tests, demos, and cold starts keep the responsive path. The hidden paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
+Each renderer knows its own pane and the latest focus view, so it can tell whether a client is looking at its tab. A watched tab keeps the normal grid. An unwatched or detached tab treats motion as idle, wakes on the data backstop, and clamps its fetch requests to `UNWATCHED_FOLD_CLAMP` for store and topology nudges and `UNWATCHED_METRICS_FOLD_CLAMP` for metrics-only publications. Deferred requests merge the strongest freshness requirement and the earliest deadline, and an immediate fold absorbs any deferred one. Every delivered projection is still applied per attachment, but a hidden attachment retains its dirty frame without rendering cells, diffing, or writing it. Reveal resumes painting within one base frame. When ownership is unknown the renderer counts as watched, so tests, demos, and cold starts keep the responsive path. The hidden paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
 
 ### One producer per workspace
 

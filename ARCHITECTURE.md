@@ -25,6 +25,8 @@ Detail lives in four places, narrowing as you go:
 
 There is no general RimZ daemon. Store writes belong to CLI or hook subprocesses, and the sidebar is a native pane that reads store state in process.
 
+The sidebar's painter is one detached process per mux session, the hidden `rimz sidebar host`. Each tab's sidebar pane runs a `rimz sidebar serve` supervisor that holds the pane's terminal and hands the host its output, and the host paints every pane of the room over one shared data plane. It is started by the first pane that finds none, exits ten seconds after its last pane detaches, and is replaced on reload; a pane it cannot take is painted by that pane's own worker process ([state.md](./docs/internals/sidebar/state.md#the-room-host-and-its-attachments)).
+
 An attended recovery into a clientless Zellij room uses a bounded detached `rimz recover-parked` helper: it waits for attach, then settles the user's decision through the same room recovery path. Its output goes to the room's state log. [Resume and rebirth](./docs/internals/harness/fleet.md#resume-and-rebirth) owns the consent, locking, and failure rules.
 
 Optional [shared language servers](./docs/internals/lsp.md) each have a hidden `rimz lsp serve` broker: a nonce-checked Unix query and attach socket per checkout/server key and an on-demand stdio server. Agent wrappers and attached editors hold process leases; the broker remains dormant between server lifetimes and exits after lease-release grace or checkout removal. Agent queries and editor requests admit and start dormant servers; idle timeout, eviction, memory pressure, hand stops, crashes, and team Done flips return them to dormant. Required launch admission starts eagerly. Admission and the memory watchdog coordinate across rooms with a machine lock. Brokers write their own runtime entries and lifetime cost history, plus diagnostics, never agent store state.
@@ -34,7 +36,8 @@ The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz lo
 ```text
 terminal emulator
   mux session (Zellij or tmux)
-    sidebar renderer (native pane, read-only on the store)
+    sidebar panes (one supervisor each, holding the pane's terminal)
+  sidebar host (one per session, detached; paints every pane, read-only on the store)
       elected user-scoped spending service thread (disposable warm cache)
     shells, scripts, agents, CI helpers
                 │

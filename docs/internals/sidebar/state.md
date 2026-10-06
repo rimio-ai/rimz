@@ -78,7 +78,10 @@ The renderer threads, in `crates/rimz/src/sidebar_pane/`:
 
 | Module | What it owns |
 | --- | --- |
-| [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs) | The process shell: terminal setup, runtime-file guards, worker wiring, the fixed-timestep serve loop, and exit handling. |
+| [`host.rs`](../../../crates/rimz/src/sidebar_pane/host.rs), [`attach.rs`](../../../crates/rimz/src/sidebar_pane/attach.rs) | The room host: the attach listener, one attachment thread per pane, lifetime and reload; and the attach wire it shares with the supervisor. |
+| [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs) | The fallback worker's process shell: terminal modes, the event reader, and exit codes. |
+| [`app/attachment.rs`](../../../crates/rimz/src/sidebar_pane/app/attachment.rs), [`app/backend.rs`](../../../crates/rimz/src/sidebar_pane/app/backend.rs) | One pane: runtime-file guards, the fixed-timestep loop, and the terminal backend bound to the pane's output fd. |
+| [`app/plane.rs`](../../../crates/rimz/src/sidebar_pane/app/plane.rs) | The data plane one process runs for all its panes, and each pane's subscription to it. |
 | [`app/loop_state.rs`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs) | Renderer state transitions, focus repair, maintenance deadlines, and paint eligibility. |
 | [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | Request coalescing, and the fetch worker's role observation, produce cadence, and result publication. |
 | [`app/cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The election-gated heavy-lane refresher. |
@@ -89,11 +92,55 @@ Start at `enrich.rs` to learn what a snapshot is made of, at `app/fetch.rs` to l
 
 ## Renderers, the producer, and consumers
 
-Every tab runs one `rimz sidebar serve` process. Each writes its own heartbeat, binds its own wakeup socket, and paints its own frame, and none waits on another to paint.
+Every tab's sidebar pane runs one `rimz sidebar serve` supervisor, and one `rimz sidebar host` per mux session paints all of them. Each pane still has its own heartbeat, its own wakeup socket, and its own frame loop, and none waits on another to paint; what the panes of a session share is one process and one data plane.
 
-Sidebar instance ids are UUIDv7, so they sort by birth. The renderer that finds no fresh heartbeat older than its own is the producer, and every other renderer is a consumer. Election trusts `SIDEBAR_HEARTBEAT_TTL` (5 seconds), the same TTL the launch gate uses, and each renderer restamps its heartbeat every `HEARTBEAT_WRITE_INTERVAL` (2 seconds). A killed producer therefore holds the role for at most one TTL before the next-eldest renderer takes over.
+### The room host and its attachments
 
-The long-lived threads of one renderer share a process-local `ProducerElectionTracker`. A consumer returns its cached elder with no filesystem work until that heartbeat's mtime-derived expiry, then validates only that one heartbeat; an invalid or expired elder falls back to one directory scan. A cached producer rescans every `HEARTBEAT_WRITE_INTERVAL`, so a resumed older renderer demotes it promptly. The tracker only accelerates the election: launch gating, reload and build convergence, wakeup fanout, rebirth purge, and the orphan sweep keep their uncached full scans.
+The supervisor keeps the pane's tty: it holds raw mode and mouse capture, reads keys, clicks, and resizes, and forwards them as wakeup words. It hands the host only the pane's output, as a file descriptor. The host ([`host.rs`](../../../crates/rimz/src/sidebar_pane/host.rs)) is detached from every terminal and runs one **attachment** per pane ([`app/attachment.rs`](../../../crates/rimz/src/sidebar_pane/app/attachment.rs)), each on its own thread with its own `LoopState`, selection, order holds, width control, and pixel lease.
+
+Attached input uses the supervisor's launch-time `sidebar.keys` navigation map. Reconnecting to a host does not re-read that map; the supervisor adopts edits when it re-execs onto the recorded build.
+
+| Owned by | What |
+| --- | --- |
+| Supervisor, one per pane | Terminal modes, the input and resize reader, the attach connection, self-close confirmation against the mux, the pane-liveness probe, its own re-exec onto a new build. |
+| Attachment, one per pane, in the host | The heartbeat (`instance_id` the supervisor's, `pane_id` the pane's, `build` the host's, `size` read from the pane fd), the wakeup socket at the pane's usual path, the frame loop, renderer-local state. |
+| Host, one per session | The data plane ([`app/plane.rs`](../../../crates/rimz/src/sidebar_pane/app/plane.rs)): one fetch worker, one cache refresher, one tmux watch, one transcript watch, one observer writer, one election identity. |
+
+An attachment never touches the host's own terminal state, because the host has none. Geometry comes from `tcgetwinsize` on the pane fd and is read again on every `resize` word. A pane the mux has not laid out yet reports `0x0`: its heartbeat carries no `size` and nothing is drawn until the first resize sizes it. A write error on the fd, which is how a closed pane first shows, closes the attachment exactly as the supervisor's end of stream does. A panic in one attachment closes that attachment alone.
+
+One fold serves every pane. The fetch worker folds the renderer-independent workspace once per cycle, then projects it once per attachment, excluding that attachment's own pane. Tab names, the live roster, and notification delivery are decided once per fold, on the eldest attachment's view; each attachment still decides for itself whether a notification rings in its tab.
+
+Tmux graphics capability probes share a plane-owned ten-second sample of the rendering clients, process ancestry, version, and per-pane passthrough options. A session-wide pane listing preserves each pane's permission; a pane born after the sample, or an unavailable listing, uses a targeted query. Passthrough escalation and fd-derived cell aspect remain pane-local. Zellij keeps its previous capabilities, as before.
+
+With diagnostics enabled, the fetch worker extracts one shared observation signature before local projection and the writer detects common anomalies once; attachments detect only their own committed roster. With no writer, no observation signature is built. Attribution and evidence scope are in [diagnostics](../diagnostics.md#the-commit-point).
+
+### The attach wire
+
+The host listens on a stream socket in the runtime `sock/` directory, named by a digest of the mux and session name. One connection is one pane, and end of stream from either side detaches it.
+
+1. The supervisor sends one JSON line and, riding the same message as `SCM_RIGHTS`, its stdout: `protocol` (`rimz.sidebar-attach.v1`), `instance_id`, `pane_id`, `supervisor_build`, and the pane's `tick_seconds` and `refresh_ms` launch overrides when set.
+2. The host answers `{"accept":{"build":"…"}}` or `{"reject":{"reason":"…"}}`. The named reasons are `protocol` (another wire version), `build` (the host is leaving for a newer build), and `capacity`; any other text is a host-side failure.
+3. After an accept only the host writes: `{"control":"self-close"}` when the pane's tab looks empty, `{"control":"reload"}` when the host is leaving for another build. The supervisor sends nothing more; input goes to the attachment's wakeup socket.
+
+A connection that closes without a hello is dropped silently, which is what the socket GC's liveness probe looks like.
+
+### Fallback
+
+The host is an optimisation the pane never depends on. When the supervisor's stdout is not a terminal, when no host answers and none can be started within the attach wait, or when the hello is rejected, the supervisor spawns one worker: one attachment over its own stdout with its own data plane, holding the tty itself. A host that dies ends every stream at once; each supervisor attaches again, to a host one of them starts, and a pane whose attachment lasted less than the stable-run window takes the worker instead, so a host that keeps failing cannot hold a pane blank.
+
+For a terminal pane, fallback is transient. After the worker survives the 60s stable window, the supervisor probes on a 30s cadence through the same coordinated connect-or-start path as attachment: if no host answers, the spawn-lock winner starts the recorded build's host. The probe sends no hello and keeps the worker painting until a connection succeeds. Success sends the worker SIGTERM and waits for its exit, allowing the worker to restore tty modes and remove its runtime files before the next round's normal attach and hello. An unsuccessful start/connect or an unsuccessful attach after that probe doubles the probe interval, capped at 5min; the next worker's first probe waits for both stability and that interval. Acceptance resets the interval to 30s. Build reload retains priority over host recovery. A non-terminal fallback retries only when its worker exits.
+
+### Host lifetime and reload
+
+The supervisor that finds no host takes the session's spawn lock and starts one from the room's verified recorded build, falling back to its own executable, with the host's stderr appended to `log/sidebar-host.<session key>.log` under the room's state directory so a host that fails at startup leaves its error there. The host calls `setsid`, runs with the mux's per-pane and session variables removed so nothing attributes it to a pane, and holds the session's host lock for life: a second host for the same session waits out its predecessor and exits if that one stays.
+
+The host leaves in three ways. With no connection for ten seconds it exits. When the workspace record names a verified build other than its own, or an attachment's reload request finds one, it removes its socket, sends `reload` on every stream, and exits once the attachments have let go; supervisors then find no host and start the recorded build's. The room teardown sweep kills it like any other process carrying the session's tokens. A supervisor re-execs itself onto the recorded build once its attachment has run the stable window under a host of that build.
+
+### Election
+
+Sidebar instance ids are UUIDv7, so they sort by birth. The host stands in the election as its eldest attachment, moving to the next when that one detaches and abstaining while it has none. A fallback worker older than every attachment out-ranks the host and is a correct producer. The renderer that finds no fresh heartbeat older than its own is the producer, and every other renderer is a consumer. Election trusts `SIDEBAR_HEARTBEAT_TTL` (5 seconds), the same TTL the launch gate uses, and each renderer restamps its heartbeat every `HEARTBEAT_WRITE_INTERVAL` (2 seconds). A killed producer therefore holds the role for at most one TTL before the next-eldest renderer takes over.
+
+The long-lived threads of one renderer process share a process-local `ProducerElectionTracker`. A consumer returns its cached elder with no filesystem work until that heartbeat's mtime-derived expiry, then validates only that one heartbeat; an invalid or expired elder falls back to one directory scan. A cached producer rescans every `HEARTBEAT_WRITE_INTERVAL`, so a resumed older renderer demotes it promptly. The tracker only accelerates the election: launch gating, reload and build convergence, wakeup fanout, rebirth purge, and the orphan sweep keep their uncached full scans.
 
 These threads gate on the election:
 
@@ -111,7 +158,7 @@ A dead producer is an ordinary degradation. Status keeps flowing through consume
 
 ## One fetch cycle
 
-The serve loop reads no data itself. It blocks on its wakeup socket, hands work to the fetch worker, and folds the result when the worker nudges it back. Everything below runs on the worker.
+An attachment's loop reads no data itself. It blocks on its wakeup socket, hands work to the process's fetch worker, and folds the result when the worker nudges it back. Requests from several attachments that are waiting together merge into one cycle. Everything below runs on the worker.
 
 A request carries a mode, an optional pane-cache floor, and two flags:
 
@@ -328,7 +375,7 @@ The overlay store ([`event_store.rs`](../../../crates/rimz/src/sidebar/event_sto
 | `PanesChanged` | none | Nudge a producer pull: topology moved, identity unknown. | Projector fallback, or an incomplete tmux layout |
 | `StoreDelta` | optional event method and lifecycle signal | Refetch the rollup. A session start or end also requests fresh panes. | Store and context-sidecar writers ([store.md → wakeups](../store.md#wakeups)) |
 | `PaneFramePublished` | publication kind (topology, metrics, or presence) | Fold the just-published pane frame from cache. The kind sets how long a hidden consumer may coalesce first. | Producer |
-| `FocusIntent` | target `pane_id`, nonce | Fold the durable focus anchor now, so hidden peer tabs repaint before the mux switch reveals them. | Renderer jumps |
+| `FocusIntent` | target `pane_id`, nonce | Fold the durable focus anchor now, so hidden peer tabs adopt the target before the mux switch reveals them. | Renderer jumps |
 | `FocusStranded` | owning sidebar `pane_id`, generation, client views | Focus repair in the matching renderer: keep its baseline if that is a live visible work sibling, otherwise pick the leftmost sibling. Distinct client views leave focus alone, because `focus-pane-id` is session-global. Dropped after `FOCUS_STRANDED_EVENT_TTL` (2 seconds) so late delivery cannot yank focus. | Host presence projector, from a settled Zellij switch or a tmux window switch |
 | `WidthTargetChanged` | none | Re-read the room-runtime width share, resolve it against this renderer's view, and converge only its own pane. | The resolver or renderer that published a new target |
 | `BodyFilterChanged` | none | Re-read the cockpit lens and adopt it without a producer fetch. | A renderer that changed or auto-cleared the lens |
@@ -402,6 +449,10 @@ Fusion is pure over pulled truth, the event store, and `now_ms`. It runs on the 
 
 Every RimZ-initiated focus action, a user jump or an automatic repair, is a durable two-phase intent in `lanes/focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)). The file is workspace-wide and client-scoped. It carries a nonce, the session, the target pane, the origin, the exact pre-action client map, the viewport offset, and the frozen row order from the source frame.
 
+The fetch worker reads the anchor once for a fold cycle and shares that observation with every projection, alongside the room body filter and merged read-mark baseline. Each attachment still resolves focus against its own pulled observation and events, applies scroll and order only to its own selection, and owns confirmation and read-receipt writes. Explicit actions and event-only folds read live state. Retiring an observed intent always compares its nonce with the live file, so a newer intent written after the shared read cannot be cleared by an older fold. Gate and health reduction remain pane-local and perform no common file reads.
+
+The shared input cut is stamped before its reads. A pane's later focus-anchor observation takes precedence over older cuts; an actual retirement fences their pre-jump focus unless a subsequent native focus event supersedes it. Ordinary anchor absence does not fence native focus. A later local filter observation or write makes older filter sync non-authoritative. A subsequent cut still converges missed events, and the complete snapshot still passes through fusion, gate, health and local application. Receipt lookup merges the pane's own retained marks into the shared baseline without another room read, so an old cut cannot renew a clear for unchanged activity.
+
 The intent has two states:
 
 - **`Requested`** is written, and wakes every renderer with `FocusIntent`, before the one-way mux focus command. It supplies a bounded presentation overlay, so peer tabs adopt the target, viewport offset, and frozen order while the destination is still hidden.
@@ -455,7 +506,7 @@ Data cadence and paint cadence are separate clocks, which is why the sidebar sta
 
 Input paints synchronously off the grid, an overlay event fuses and paints on arrival, and a burst of events coalesces to one paint per base frame. The data backstop is `rimz sidebar serve --tick-seconds` (default 1): `refresh_ms` changes paint cadence, never pull cadence.
 
-A sidebar in an unviewed tab suspends animation and repaints only when its roster, status, or unread projection changes, at most once per `BACKGROUND_PAINT_MIN_INTERVAL` (1 second). Turn phase, gauges, process metrics, spend, git facts, and animation phase do not trigger a hidden paint. The serve loop also wakes when the order hold expires, to fire the fold that lets rows and groups settle back to live rank once the user goes idle.
+A sidebar in an unviewed tab suspends animation and emits no frame bytes, including when the session is detached. It retains a dirty frame while applying every delivered projection and all gate, health, focus, receipt, and lifecycle work. A viewed-pane fold resumes the grid and paints within one base frame; a resize wakeup optimistically resumes watching and paints immediately unless the grow-resize self-close hold is engaged. Unknown ownership still counts as watched. The serve loop also wakes when the order hold expires, to fire the fold that lets rows and groups settle back to live rank once the user goes idle. Hidden capture semantics are owned by [sidebar.md](./sidebar.md#from-store-to-screen).
 
 ## Failure modes
 

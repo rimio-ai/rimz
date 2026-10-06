@@ -1,11 +1,106 @@
-//! Zellij topology projection and sidebar classification.
+//! Zellij topology projection, width observation and sidebar classification.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use crate::disk::parse_cache::StampedPath;
 use crate::ids::PaneId;
 use crate::mux::width::{sidebar_width_off_spec, zellij_resize_stop_step_cols};
-use crate::mux::zellij::pane_topology::{PaneTopologyPane, ZellijPaneId};
+use crate::mux::zellij::pane_topology::{
+    PaneTopologyCache, PaneTopologyPane, ZellijPaneId, pane_topology_cache_is_fresh,
+    pane_topology_cache_path, read_pane_topology_cache,
+};
+use crate::mux::{WidthStep, ensure_pane_backend};
 use crate::pane::SIDEBAR_CHROME_TITLE;
+
+#[cfg(test)]
+thread_local! {
+    static WIDTH_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_width_derivations() -> usize {
+    WIDTH_DERIVATIONS.with(|count| count.replace(0))
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct WidthMemo {
+    slot: Option<(StampedPath, String, Option<WidthTable>)>,
+}
+
+#[derive(Debug)]
+struct WidthTable {
+    cache: PaneTopologyCache,
+    panes: HashMap<u64, (u64, Option<WidthStep>)>,
+}
+
+impl WidthTable {
+    fn new(cache: PaneTopologyCache) -> Self {
+        let mut tabs = HashMap::new();
+        let mut panes = HashMap::new();
+        for pane in cache.panes.iter().filter(|pane| !pane.is_plugin) {
+            let step = *tabs.entry(pane.tab_position).or_insert_with(|| {
+                tab_view_cols(&cache.panes, pane.tab_position).map(|view_cols| WidthStep {
+                    cols: u16::try_from(crate::mux::width::zellij_resize_step_cols(view_cols))
+                        .unwrap_or(u16::MAX),
+                    stop_step_cols: u16::try_from(zellij_resize_stop_step_cols(view_cols))
+                        .unwrap_or(u16::MAX),
+                    exact: false,
+                    view_cols: u16::try_from(view_cols).unwrap_or(0),
+                    fullscreen_active: Some(tab_fullscreen_active(&cache.panes, pane.tab_position)),
+                })
+            });
+            panes.entry(pane.id).or_insert((pane.tab_position, step));
+        }
+        Self { cache, panes }
+    }
+}
+
+impl WidthMemo {
+    pub(crate) fn step(
+        &mut self,
+        runtime: &crate::RuntimePaths,
+        session: &str,
+        pane: &PaneId,
+        now_ms: u64,
+        floor: Option<u64>,
+    ) -> crate::mux::Result<WidthStep> {
+        ensure_pane_backend(pane, crate::ids::MuxName::Zellij)?;
+        let pane_id = ZellijPaneId::try_from(pane)
+            .ok()
+            .and_then(ZellijPaneId::terminal_id)
+            .ok_or_else(|| {
+                super::output_error(format!("target pane `{pane}` has no numeric topology id"))
+            })?;
+        let stamp = StampedPath::of(&pane_topology_cache_path(runtime));
+        if self
+            .slot
+            .as_ref()
+            .is_none_or(|(cached, cached_session, _)| *cached != stamp || cached_session != session)
+        {
+            self.slot = Some((
+                stamp,
+                session.to_owned(),
+                read_pane_topology_cache(runtime, session).map(WidthTable::new),
+            ));
+        }
+        let table = self
+            .slot
+            .as_ref()
+            .and_then(|(_, _, table)| table.as_ref())
+            .filter(|table| pane_topology_cache_is_fresh(&table.cache, now_ms, floor))
+            .ok_or_else(|| {
+                super::output_error(format!(
+                    "fresh pane topology is unavailable for session `{session}`"
+                ))
+            })?;
+        let (tab, step) = table.panes.get(&pane_id).ok_or_else(|| {
+            super::output_error(format!(
+                "target pane `{pane}` is absent from the topology cache"
+            ))
+        })?;
+        step.ok_or_else(|| super::output_error(format!("tab {tab} has no tiled topology width")))
+    }
+}
 
 /// A live, non-plugin sidebar pane is one Zellij still titles with the shared
 /// sidebar chrome title.
@@ -85,6 +180,8 @@ pub(super) fn parse_new_pane_id(stdout: &str) -> Option<ZellijPaneId> {
 /// A single pane cannot prove the viewport: the sidebar is materialized first,
 /// so that shape is a mid-layout snapshot whose extent is only the sidebar's.
 pub(super) fn tab_view_cols(panes: &[PaneTopologyPane], tab_position: u64) -> Option<u64> {
+    #[cfg(test)]
+    WIDTH_DERIVATIONS.with(|count| count.set(count.get() + 1));
     let mut extents = panes
         .iter()
         .filter(|pane| pane.tab_position == tab_position && pane.is_terminal())
