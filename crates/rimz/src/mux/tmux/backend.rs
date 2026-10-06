@@ -267,7 +267,7 @@ impl MuxBackend for TmuxBackend {
         Ok(parse_client_view(&output.stdout))
     }
 
-    fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
+    fn split_pane(&self, opts: SplitPaneOptions) -> Result<Option<PaneId>> {
         // tmux has no native analogue for Zellij's stacked panes; it tiles the
         // requested zone evenly instead.
         // `-d` keeps focus on the splitting pane; omit it to land in the new
@@ -316,7 +316,7 @@ impl MuxBackend for TmuxBackend {
         if opts.placement == SplitPlacement::Stacked {
             self.even_column_best_effort(&pane_id, "tmux.split_pane.even_column");
         }
-        Ok(())
+        Ok(Some(PaneId::from_parts(MuxName::Tmux, pane_id)))
     }
 
     fn append_companion_pane(&self, mut opts: SplitPaneOptions) -> Result<CompanionPaneAppend> {

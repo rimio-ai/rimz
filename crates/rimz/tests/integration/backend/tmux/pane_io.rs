@@ -32,7 +32,7 @@ fn split_pane_injects_env_vars() {
     let focused = server.display("split", "#{pane_id}");
     let mut env = BTreeMap::new();
     env.insert("RIMZ_TEST_VAR".to_owned(), "marker-rimz-env".to_owned());
-    server
+    let created = server
         .backend
         .split_pane(SplitPaneOptions {
             target: SplitTarget::Ambient,
@@ -71,6 +71,7 @@ fn split_pane_injects_env_vars() {
         .iter()
         .find(|p| p.pane_id.raw() != "%0")
         .expect("split created a new pane id");
+    assert_eq!(created, Some(new_pane.pane_id.clone()));
     assert!(
         new_pane
             .spawn_command

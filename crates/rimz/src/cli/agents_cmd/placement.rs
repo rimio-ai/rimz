@@ -158,7 +158,9 @@ pub(super) fn execute(
     let in_place = request.placement == Placement::SamePane;
     let result = prepare(request).and_then(|prepared| match prepared {
         PreparedPlacement::NewTab(options) => backend.open_tab(&options).map_err(Into::into),
-        PreparedPlacement::NewPane(options) => backend.split_pane(options).map_err(Into::into),
+        PreparedPlacement::NewPane(options) => {
+            backend.split_pane(options).map(|_| ()).map_err(Into::into)
+        }
         PreparedPlacement::SamePane { argv, env, cwd } => {
             // A successful exec never returns, so the launch counts as placed here.
             on_launched();

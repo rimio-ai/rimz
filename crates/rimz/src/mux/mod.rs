@@ -939,7 +939,7 @@ pub trait MuxBackend: Send + Sync {
         let _ = opts;
         Ok(ClientView::default())
     }
-    fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
+    fn split_pane(&self, opts: SplitPaneOptions) -> Result<Option<PaneId>>;
 
     /// Append to a dedicated child tab, preserving existing processes and chrome.
     /// Recheck physical occupancy before birth; balancing after birth is best-effort.

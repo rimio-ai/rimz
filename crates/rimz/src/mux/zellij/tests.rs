@@ -627,7 +627,7 @@ exit 0
     let backend =
         ZellijBackend::with_program_for_test(&shim).with_ambient_session_for_test("caller");
     for direction in [SplitDirection::Right, SplitDirection::Down] {
-        backend
+        let created = backend
             .split_pane(SplitPaneOptions {
                 placement: SplitPlacement::Directional(direction),
                 focus: true,
@@ -635,6 +635,7 @@ exit 0
                 ..Default::default()
             })
             .expect("directional split");
+        assert_eq!(created, None, "no printed id is still a successful split");
     }
     backend
         .split_pane(SplitPaneOptions {
@@ -719,7 +720,7 @@ exit 0
     );
     let backend = ZellijBackend::with_program_for_test(&shim);
     for focus in [true, false] {
-        backend
+        let created = backend
             .split_pane(SplitPaneOptions {
                 target: SplitTarget::SessionPane {
                     session_name: "rimz-test".to_owned(),
@@ -730,6 +731,10 @@ exit 0
                 ..Default::default()
             })
             .expect("a spawned pane outlives its failed focus jump");
+        assert_eq!(
+            created,
+            Some(PaneId::from_parts(crate::MuxName::Zellij, "terminal_9"))
+        );
     }
 
     let log = shim_log(&temp);
@@ -762,7 +767,7 @@ esac
 exit 0
 "#,
     );
-    ZellijBackend::with_program_for_test(&shim)
+    let created = ZellijBackend::with_program_for_test(&shim)
         .split_pane(SplitPaneOptions {
             target: SplitTarget::SessionPane {
                 session_name: "rimz-test".to_owned(),
@@ -773,6 +778,10 @@ exit 0
             ..Default::default()
         })
         .expect("legacy focus-taking split");
+    assert_eq!(
+        created,
+        Some(PaneId::from_parts(crate::MuxName::Zellij, "terminal_9"))
+    );
 
     let log = shim_log(&temp);
     assert!(
@@ -1255,11 +1264,15 @@ fn an_action_with_no_session_to_address_refuses_before_zellij_is_spawned() {
         let mut refusals = Vec::new();
         for target in [SplitTarget::Ambient, SplitTarget::Pane(pane.clone())] {
             for focus in [true, false] {
-                refusals.push(backend.split_pane(SplitPaneOptions {
-                    target: target.clone(),
-                    focus,
-                    ..Default::default()
-                }));
+                refusals.push(
+                    backend
+                        .split_pane(SplitPaneOptions {
+                            target: target.clone(),
+                            focus,
+                            ..Default::default()
+                        })
+                        .map(|_| ()),
+                );
             }
         }
         refusals.push(backend.focus_pane(&pane, None));
