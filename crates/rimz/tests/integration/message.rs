@@ -856,13 +856,13 @@ fn message_when_latches_met_dwell_and_schedules_future_trip() {
 }
 
 #[test]
-fn sweep_delivers_harness_wake_to_loop_zone_agent() {
+fn sweep_delivers_harness_wake_to_stamped_daemon_view_agent() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(
         &env,
-        "sess-loop-zone",
-        "feature-loop-zone",
+        "sess-daemon-view",
+        "feature-daemon-view",
         &[("ZELLIJ_PANE_ID", "3")],
     );
     let mut pane = agent_pane(&env, "claude");
@@ -883,18 +883,18 @@ fn sweep_delivers_harness_wake_to_loop_zone_agent() {
         &env,
         json!({
             "hook_event_name": "Stop",
-            "session_id": "sess-loop-zone",
-            "worktree_branch": "feature-loop-zone",
+            "session_id": "sess-daemon-view",
+            "worktree_branch": "feature-daemon-view",
         }),
         &[("ZELLIJ_PANE_ID", "3")],
     );
 
-    let trace_log = env.project_root.join("zellij-loop-zone-wake-trace.log");
+    let trace_log = env.project_root.join("zellij-daemon-view-wake-trace.log");
     run_success(
         traced_rimz(&env, &trace_log)
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
             .args(["message", "sweep"]),
-        "sweep loop-zone wake",
+        "sweep daemon-view wake",
     );
 
     assert_eq!(

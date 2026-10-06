@@ -848,6 +848,7 @@ fn open_tab_after_anchor_inserts_next_to_it() {
     let anchor = PaneId::from_parts(MuxName::Tmux, server.display(session, "#{pane_id}"));
     server.tmux(&["new-window", "-d", "-t", session, "-n", "middle", "sh"]);
     server.tmux(&["new-window", "-d", "-t", session, "-n", "tail", "sh"]);
+    server.tmux(&["select-window", "-t", &format!("{session}:tail")]);
 
     server
         .backend
@@ -881,6 +882,11 @@ fn open_tab_after_anchor_inserts_next_to_it() {
         .map(|(_, name)| name)
         .collect::<Vec<_>>();
     assert_eq!(names, ["anchor", "inserted", "middle", "tail"], "{windows}");
+    assert_eq!(
+        server.display(session, "#{window_name}"),
+        "tail",
+        "anchored focus: false must preserve the active window, not focus the anchor",
+    );
 }
 
 #[test]

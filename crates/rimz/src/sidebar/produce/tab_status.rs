@@ -324,6 +324,27 @@ mod tests {
     }
 
     #[test]
+    fn waiting_loop_tab_gets_a_glyph_but_daemon_view_does_not() {
+        let now = Timestamp::from_second(1_700_000_000).expect("time");
+        let snapshot = snapshot(vec![(AgentStatus::Waiting, "%2", now)], now);
+        let renames = desired_tab_renames(
+            &snapshot,
+            &named_frame("loop rimzd", &["rimz-sidebar", "claude"]),
+            "zsh",
+        );
+        assert_eq!(renames.len(), 1);
+        assert_eq!(renames[0].desired_name, "loop rimzd ?");
+        assert!(
+            desired_tab_renames(
+                &snapshot,
+                &named_frame("rimzd", &["rimz-sidebar", "claude"]),
+                "zsh",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn pane_named_tab_releases_only_after_the_last_agent_leaves() {
         let now = Timestamp::from_second(1_700_000_000).expect("time");
         let frame = named_frame("opus+codex", &["codex", "opus"]);

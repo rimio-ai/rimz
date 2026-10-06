@@ -180,7 +180,6 @@ pub struct SupervisedRunRequest {
     pub retries: u32,
     pub verify: Option<String>,
     pub max_attempts: Option<u32>,
-    pub loop_zone: bool,
     pub loop_task: Option<String>,
     /// The `### Loop` reminder body the loop fire composed; every attempt's
     /// pane request carries it.
@@ -234,7 +233,6 @@ impl SupervisedRunRequest {
             retries: 0,
             verify: None,
             max_attempts: None,
-            loop_zone: false,
             loop_task: None,
             loop_reminder: None,
             passthrough: Vec::new(),

@@ -82,7 +82,7 @@ fn check_task_from_identity(task: Option<String>, has_agent: bool) -> Option<Str
     task.filter(|task| !has_agent && !task.is_empty())
 }
 
-/// Apply the shared deadline and cleanup policy without changing placement.
+/// Apply loop-owned deadline, cleanup, and scheduled-tab placement policy.
 pub fn shape_loop_owned(
     request: &mut SupervisedRunRequest,
     task: &str,
@@ -90,6 +90,7 @@ pub fn shape_loop_owned(
     mode: LoopRunMode,
 ) -> Result<()> {
     request.timeout = effective_spawn_timeout(mode, request.timeout, configured_timeout(config)?);
+    request.force_new_tab |= mode == LoopRunMode::Scheduled;
     request.loop_task = Some(task.to_owned());
     request.self_cleanup_on_completion = !request.keep;
     Ok(())
@@ -1038,7 +1039,6 @@ impl<'a> TaskFire<'a> {
         request.keep = self.keep;
         request.verify.clone_from(&self.entry.verify);
         request.max_attempts = self.entry.max_attempts;
-        request.loop_zone = self.mode == LoopRunMode::Scheduled;
         shape_loop_owned(&mut request, &self.name, &self.config, self.mode)?;
         request.loop_reminder = Some(self.loop_reminder(request.timeout));
         Ok(request)

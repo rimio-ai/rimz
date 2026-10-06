@@ -25,7 +25,6 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RunPlacement {
     Split,
-    LoopZone,
     SubagentZone,
     Tab,
 }
@@ -36,12 +35,9 @@ pub(super) enum RunPlacement {
 pub(super) fn run_placement(
     force_new_tab: bool,
     has_ambient_pane: bool,
-    loop_zone: bool,
     subagent: bool,
 ) -> RunPlacement {
-    if loop_zone && !force_new_tab {
-        RunPlacement::LoopZone
-    } else if force_new_tab || !has_ambient_pane {
+    if force_new_tab || !has_ambient_pane {
         RunPlacement::Tab
     } else if subagent {
         RunPlacement::SubagentZone
@@ -273,7 +269,10 @@ fn open_attempt_pane(
         room.backend()
             .open_tab(&TabOptions {
                 env: env.clone(),
-                title,
+                title: request
+                    .loop_task
+                    .as_ref()
+                    .map_or(title, |task| format!("loop {task}")),
                 panes: LayoutPanes {
                     columns: vec![LayoutColumn {
                         panes: vec![pane.clone()],
@@ -289,12 +288,8 @@ fn open_attempt_pane(
             .map_err(anyhow::Error::from)
     };
     let mut subagent_zone_guard = None;
-    let open_result = match run_placement(
-        request.force_new_tab,
-        target.is_some(),
-        request.loop_zone,
-        request.subagent,
-    ) {
+    let open_result = match run_placement(request.force_new_tab, target.is_some(), request.subagent)
+    {
         RunPlacement::Split => room
             .backend()
             .split_pane(SplitPaneOptions {
@@ -308,18 +303,6 @@ fn open_attempt_pane(
                 focus: false,
             })
             .map_err(anyhow::Error::from),
-        RunPlacement::LoopZone => {
-            match supervised::pane::split_into_loop_zone(
-                room.backend(),
-                &prepared.workspace,
-                &prepared.launch.cwd,
-                env.clone(),
-                pane,
-            )? {
-                true => Ok(()),
-                false => tab(format!("run {}", prepared.adapter.spec().kind)),
-            }
-        }
         RunPlacement::SubagentZone => match supervised::pane::lock_subagent_zone(&prepared.store) {
             Ok(guard) => {
                 subagent_zone_guard = Some(guard);

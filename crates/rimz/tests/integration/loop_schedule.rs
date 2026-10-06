@@ -29,6 +29,73 @@ use crate::common::{
     write_path_shim,
 };
 
+#[cfg(unix)]
+#[test]
+fn scheduled_agent_opens_named_tab_despite_ambient_pane() {
+    use crate::common::CommandTimeoutExt;
+
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let trace = env.home_root.join("scheduled-tab.log");
+    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":2,"tab_name":"rimzd","title":"loop","pane_command":"rimz loop watch --hold"}]"#;
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(panes).unwrap(),
+    );
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.rimzd]\nevery = \"1h\"\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\ntimeout = \"1s\"\nthrottle = \"off\"\n",
+            env.project_root.to_str().unwrap(),
+        ),
+    );
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "loop", "run", "rimzd"])
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.0")
+        .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
+        .env("ZELLIJ_PANE_ID", "2")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap();
+    let trace = std::fs::read_to_string(trace).unwrap_or_default();
+    let tabs = trace
+        .lines()
+        .filter(|line| line.contains("action\tnew-tab"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tabs.len(),
+        1,
+        "{trace}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(tabs[0].contains("\t--name\tloop rimzd"), "{trace}");
+    assert!(tabs[0].contains("\t--no-focus"), "{trace}");
+    assert!(
+        trace
+            .lines()
+            .any(|line| line.starts_with("layout\t") && line.contains("rimz-sidebar")),
+        "run tab must dock a sidebar: {trace}",
+    );
+    assert!(!trace.contains("\tnew-pane\t"), "{trace}");
+}
+
 #[test]
 fn resident_layout_refuses_account_pin() {
     let env = Env::new();

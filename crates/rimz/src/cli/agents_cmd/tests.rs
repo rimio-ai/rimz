@@ -1184,7 +1184,6 @@ mod launch_options {
             assert_eq!(request.loop_task.as_deref(), Some("nightly"));
             // The check script wrote this prompt, not the rule.
             assert_eq!(request.loop_reminder, None);
-            assert!(request.loop_zone);
             assert!(!request.background);
             assert_eq!(request.keep, keep);
             assert_eq!(request.self_cleanup_on_completion, !keep);
@@ -1192,16 +1191,16 @@ mod launch_options {
                 request.timeout,
                 Some(std::time::Duration::from_secs(seconds))
             );
-            assert!(!request.force_new_tab);
+            assert!(request.force_new_tab);
         }
-        // A long-lived check worker opts out of the loop zone into its own tab.
+        // `--new-tab` stays accepted and changes nothing.
         let (request, _) = into_loop_check_request(
             parse_agents(&["rimz", "claude", "check", "--new-tab"]),
             "nightly",
             &config,
         )
         .unwrap();
-        assert!(request.loop_zone && request.force_new_tab);
+        assert!(request.force_new_tab);
         for (argv, expected) in [
             (vec!["rimz", "claude"], "with a prompt"),
             (vec!["rimz", "claude", "check", "--bg"], "remove `--bg`"),

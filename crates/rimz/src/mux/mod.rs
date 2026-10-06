@@ -833,9 +833,8 @@ pub struct DaemonView {
     /// host takes focus within the view when present, otherwise the first
     /// content pane takes it.
     pub hosts: Vec<HostPane>,
-    /// Always-present loop dashboard pane. Scheduled loop runs split against it
-    /// so their transient panes land in the runtime column, not beside the
-    /// sidebar or a user work pane.
+    /// Always-present loop dashboard pane, restored by daemon-view repair.
+    /// Loop runs open in their own tabs, never beside it.
     pub loop_panel: HostPane,
 }
 
