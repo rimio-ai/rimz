@@ -1320,6 +1320,69 @@ fn checkpoint_at_or_above_every_published_figure_replaces_the_publication() {
 }
 
 #[test]
+fn checkpoint_lower_for_the_workspace_is_withheld_though_no_fleet_figure_fell() {
+    let (_dir, runtime, project) = checkpoint_fixture();
+    let provider_path = runtime.shared_provider_spending_path();
+    let scope_hash = SpendScope::from_roots(Some(&project), &[]).hash();
+    let workspace_path = runtime.workspace_spending_path(&scope_hash);
+    write_provider_spending_cache(&provider_path, &claude_only_publication(1.0));
+    publish_workspace(&runtime, &scope_hash, 20.0);
+    let provider_before = std::fs::read(&provider_path).expect("provider cache");
+    let workspace_before = std::fs::read(&workspace_path).expect("workspace cache");
+
+    checkpoint_one_claude_ten_codex(&runtime, &project);
+
+    assert_eq!(
+        std::fs::read(&workspace_path).expect("workspace cache"),
+        workspace_before,
+        "a partial scoped below the published $20 must not publish the sidecar"
+    );
+    assert_eq!(
+        std::fs::read(&provider_path).expect("provider cache"),
+        provider_before,
+        "the provider publication is withheld with the sidecar"
+    );
+}
+
+#[test]
+fn checkpoint_ignores_a_sidecar_of_another_version_or_scope() {
+    use crate::agents::spending::WORKSPACE_SPENDING_VERSION;
+    for (version, other_scope) in [
+        (WORKSPACE_SPENDING_VERSION - 1, false),
+        (WORKSPACE_SPENDING_VERSION, true),
+    ] {
+        let (_dir, runtime, project) = checkpoint_fixture();
+        let provider_path = runtime.shared_provider_spending_path();
+        let scope_hash = SpendScope::from_roots(Some(&project), &[]).hash();
+        let workspace_path = runtime.workspace_spending_path(&scope_hash);
+        write_provider_spending_cache(&provider_path, &claude_only_publication(1.0));
+        let mut sidecar = crate::agents::spending::WorkspaceSpendingCache {
+            version,
+            scope_hash: if other_scope {
+                "b".repeat(64)
+            } else {
+                scope_hash.clone()
+            },
+            ..Default::default()
+        };
+        sidecar.tally.year.usd = 20.0;
+        std::fs::write(&workspace_path, serde_json::to_vec(&sidecar).unwrap()).expect("sidecar");
+
+        checkpoint_one_claude_ten_codex(&runtime, &project);
+
+        assert_ne!(
+            read_provider_spending_cache(&provider_path).refreshed_at_ms,
+            1,
+            "version {version}, other scope {other_scope}"
+        );
+        let published = read_workspace_spending_cache(&workspace_path);
+        assert_eq!(published.scope_hash, scope_hash);
+        assert!(published.is_current_version());
+        assert!(published.tally.year.usd < 20.0);
+    }
+}
+
+#[test]
 fn checkpoint_replaces_a_publication_of_another_version() {
     let (_dir, runtime, project) = checkpoint_fixture();
     let provider_path = runtime.shared_provider_spending_path();
