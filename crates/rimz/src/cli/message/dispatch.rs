@@ -376,8 +376,8 @@ pub(super) fn message_miss(
     channel: Option<&str>,
     err: &anyhow::Error,
 ) -> Result<()> {
+    render::report(err);
     let mut out = render::err();
-    writeln!(out, "{err:#}")?;
     let agents = rimz::address::addressable_agents(snapshot)
         .into_iter()
         .filter(|agent| {
