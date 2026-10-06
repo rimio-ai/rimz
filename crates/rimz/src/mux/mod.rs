@@ -176,7 +176,7 @@ fn args_summary(args: &str) -> String {
             continue;
         }
         if token.starts_with('-') {
-            skip_value_for_flag = matches!(token, "--session");
+            skip_value_for_flag = matches!(token, "--session" | "-S");
             continue;
         }
         kept.push(token);
@@ -1239,6 +1239,12 @@ fn require_held_pane(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_summary_omits_the_tmux_socket() {
+        let summary = args_summary("-S /run/user/1000/rimz/tmux/server list-panes -s -t room");
+        assert_eq!(summary, "list-panes room ...");
+    }
 
     #[test]
     fn pane_from_env_value_normalizes_per_mux() {

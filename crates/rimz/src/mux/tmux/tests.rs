@@ -1,5 +1,25 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn command_failure_omits_socket_from_native_stderr() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let shim = temp.path().join("tmux");
+    std::fs::write(&shim, "#!/bin/sh\nprintf 'error connecting to %s (No such file or directory)\\n' \"$2\" >&2\nexit 1\n").unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let socket = temp.path().join("socket with spaces");
+    let mut spec = TmuxBackend::with_socket(&socket)
+        .cmd()
+        .args(["capture-pane", "-p"]);
+    spec.program = shim.to_string_lossy().into_owned();
+    let error = spec.run().unwrap_err().to_string();
+    assert!(!error.contains("socket with spaces"), "{error}");
+    assert!(!error.contains("spaces capture-pane"), "{error}");
+    assert!(error.contains("No such file or directory"), "{error}");
+}
+
 /// Argv past the `-S <socket>` prefix every managed command carries, so a verb
 /// assertion stays about the verb. [`managed_endpoint_prefixes_every_command`]
 /// owns the prefix itself.

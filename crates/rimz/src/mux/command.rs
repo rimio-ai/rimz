@@ -35,7 +35,8 @@ pub struct CommandSpec {
     pub env_remove: BTreeSet<String>,
     pub cwd: Option<PathBuf>,
     stdin: Option<Vec<u8>>,
-    refusal_retry: Option<RefusalRetry>,
+    refusal_retry: Option<Box<RefusalRetry>>,
+    error_redaction: Option<(usize, &'static str)>,
 }
 
 /// A backend's rule for rerunning a command its far side refused before
@@ -63,6 +64,26 @@ impl std::fmt::Debug for CommandSpec {
 }
 
 impl CommandSpec {
+    pub(super) fn redact_arg_in_errors(mut self, index: usize, replacement: &'static str) -> Self {
+        self.error_redaction = Some((index, replacement));
+        self
+    }
+
+    fn error_text(&self, text: String) -> String {
+        match self.error_redaction {
+            Some((index, replacement)) => text.replace(&self.args[index], replacement),
+            None => text,
+        }
+    }
+
+    pub(super) fn command_error(&self, stderr: String) -> MuxErr {
+        MuxErr::Command {
+            program: self.program.clone(),
+            args: self.error_text(self.args.join(" ")),
+            stderr: self.error_text(stderr),
+        }
+    }
+
     pub fn new(program: impl Into<String>) -> Self {
         Self {
             program: program.into(),
@@ -72,11 +93,12 @@ impl CommandSpec {
             cwd: None,
             stdin: None,
             refusal_retry: None,
+            error_redaction: None,
         }
     }
 
     pub(in crate::mux) fn retry_refusal(mut self, retry: RefusalRetry) -> Self {
-        self.refusal_retry = Some(retry);
+        self.refusal_retry = Some(Box::new(retry));
         self
     }
 
@@ -191,7 +213,7 @@ impl CommandSpec {
         let mut reruns = 0;
         let result = loop {
             let result = self.run_bounded_inner(timeout, started);
-            let Some(retry) = self.refusal_retry else {
+            let Some(retry) = self.refusal_retry.as_deref() else {
                 break result;
             };
             let refused = matches!(&result, Ok(output) if (retry.is_refusal)(self, output));
@@ -232,11 +254,7 @@ impl CommandSpec {
                 stderr = %stderr,
                 "mux command exited unsuccessfully",
             );
-            return Err(MuxErr::Command {
-                program: self.program.clone(),
-                args: self.args.join(" "),
-                stderr,
-            });
+            return Err(self.command_error(stderr));
         }
         Ok(output)
     }
@@ -304,7 +322,7 @@ impl CommandSpec {
         let remaining = || timeout.saturating_sub(started.elapsed());
         let timeout_error = || MuxErr::Timeout {
             program: self.program.clone(),
-            args: self.args.join(" "),
+            args: self.error_text(self.args.join(" ")),
             seconds: timeout.as_secs(),
         };
         let status = match rx.recv_timeout(remaining()) {

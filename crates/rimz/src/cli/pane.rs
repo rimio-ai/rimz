@@ -28,7 +28,7 @@ pub struct PaneArgs {
 
 #[derive(Debug, Subcommand)]
 enum PaneSubcmd {
-    /// List panes known to the active multiplexer.
+    /// Show every pane: who is in it, its status, and its id.
     List {
         /// Emit JSON.
         #[arg(long)]
@@ -37,16 +37,7 @@ enum PaneSubcmd {
         #[arg(long)]
         session_name: Option<String>,
     },
-    /// Profile the current room's per-pane render output (run on the host serving the room).
-    Bandwidth {
-        /// Sampling window in seconds.
-        #[arg(long, default_value_t = 5)]
-        secs: u64,
-        /// Emit JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Capture a pane's visible text.
+    /// Print what a pane shows right now.
     Capture {
         /// Pane id, agent address, or `sidebar` (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
         #[arg(add = clap_complete::ArgValueCandidates::new(
@@ -63,59 +54,67 @@ enum PaneSubcmd {
         #[arg(long)]
         ansi: bool,
     },
-    /// Send text or named keys to a pane as if typed.
+    /// Type text and press keys in a pane.
+    #[command(after_help = format!("Sends in a fixed order: TEXT, then each --key, then Enter. To press a key first, run a separate send.\n\nKeys: {}\n\nTo prompt an agent, use `rimz message`; to answer its question, `rimz answer`.", NamedKey::NAMES.join(", ")))]
     Send {
         /// Pane id, agent address, or `sidebar` (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::pane_targets
         ))]
         target: String,
-        /// Press Enter after text and explicit keys.
+        /// Press Enter last.
         #[arg(long)]
         enter: bool,
-        /// Press a named key. Repeat to press several keys in order.
+        /// Press a named key; repeat for several, pressed in the order given.
         #[arg(long, value_parser = parse_key)]
         key: Vec<NamedKey>,
         /// Literal text to type. May start with `-`; use `--` to escape a command flag, including `-h`/`--help`.
         #[arg(allow_hyphen_values = true)]
         text: Option<String>,
     },
-    /// Focus a pane.
+    /// Jump to a pane.
     Focus {
         /// Pane id, agent address, or `sidebar` (`zellij:terminal_3`, `tmux:%1`, `@coder#lane`).
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::pane_targets
         ))]
         target: String,
-        /// Session to re-check before focusing when process-start metadata is provided.
+        /// Room session the pane belongs to. Defaults to the cwd's workspace session.
         #[arg(long)]
         session_name: Option<String>,
         /// Refuse to focus if this pane id has been reused since the snapshot.
-        #[arg(long)]
+        #[arg(long, hide = true)]
         pane_process_start: Option<String>,
     },
-    /// Toggle fullscreen for the focused work pane. If the sidebar is focused,
-    /// focus and fullscreen a working sibling instead.
+    /// Toggle fullscreen for the focused pane.
+    ///
+    /// If the sidebar is focused, focus and fullscreen a working sibling instead.
     Zoom {
         /// Session to inspect. Defaults to the cwd's workspace session.
         #[arg(long)]
         session_name: Option<String>,
     },
-    /// Split off a new pane beside the calling pane; from a shell outside any
-    /// pane, in the room's session.
-    Split,
-    /// Detach the attached client from a session; the session keeps running in
-    /// the background and resurrects on the next attach. The `rimzd` daemon
-    /// tab's sidebar issues this once the daemon tab is the only tab left.
+    /// Open a shell in a new pane beside this one.
     ///
-    /// Client semantics differ by backend (accepted, not papered over): Zellij's
-    /// `action detach` detaches the client whose process tree this pane belongs
-    /// to, so it runs only from a pane and ignores `--session-name`; tmux's
-    /// `detach-client -s <session>` detaches every client of the session.
+    /// Prints the new pane's id. From a shell outside any pane, opens the pane in the room's session.
+    Split,
+    /// Leave the room running and detach.
+    ///
+    /// Zellij detaches only the client it is run from and ignores --session-name.
+    /// tmux detaches every client of the session.
     Detach {
         /// Session to detach. Defaults to the cwd's workspace session.
         #[arg(long)]
         session_name: Option<String>,
+    },
+    /// Measure which panes write the most output.
+    Bandwidth {
+        /// Sampling window in seconds.
+        #[arg(long, default_value_t = 5)]
+        secs: u64,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -200,6 +199,11 @@ struct ResolvedPaneTarget {
 }
 
 fn classify_pane_target(raw: &str) -> Result<PaneTarget> {
+    if raw.starts_with('#') {
+        bail!(
+            "`{raw}` is a channel; a channel holds several panes. Run `rimz pane list` and pass one pane's id or `@handle#channel`"
+        );
+    }
     if raw.starts_with('@') {
         return Ok(PaneTarget::Address(raw.to_owned()));
     }
@@ -214,6 +218,15 @@ fn classify_pane_target(raw: &str) -> Result<PaneTarget> {
 }
 
 fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneTarget> {
+    if raw.strip_prefix('%').is_some_and(|digits| {
+        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+    }) && rimz::mux::auto_detect_backend(globals.mux)? == rimz::MuxName::Tmux
+    {
+        return Ok(ResolvedPaneTarget {
+            pane: PaneId::from_parts(rimz::MuxName::Tmux, raw),
+            session_name: None,
+        });
+    }
     match classify_pane_target(raw)? {
         PaneTarget::Id(pane) => Ok(ResolvedPaneTarget {
             pane,
@@ -310,6 +323,17 @@ fn list(
     session_name: Option<String>,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
+    if let Some(name) = &session_name
+        && let Ok(sessions) = backend.list_sessions()
+        && !sessions.contains(name)
+    {
+        let live = if sessions.is_empty() {
+            "none".to_owned()
+        } else {
+            sessions.join(", ")
+        };
+        bail!("session `{name}` is not active; live sessions: {live}");
+    }
     let session = match session_name {
         Some(name) => name,
         None => workspace
@@ -697,22 +721,24 @@ fn split(backend: &dyn MuxBackend, globals: &GlobalFlags) -> Result<()> {
     let direction = rimz::mux::detect_terminal_size()
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();
-    backend
-        .split_pane(SplitPaneOptions {
-            target: rimz::mux::own_pane_id(backend.name()).map_or_else(
-                || SplitTarget::Session(workspace.session_name.clone()),
-                SplitTarget::Pane,
-            ),
-            cwd: Some(workspace.worktree_root.display().to_string()),
-            command: None,
-            title: None,
-            close_on_exit: false,
-            env: rimz::room::pane_identity_env(&workspace, &workspace.worktree_root, None, true),
-            placement: SplitPlacement::Directional(direction),
-            focus: true,
-        })
-        .map(|_| ())
-        .map_err(Into::into)
+    let created = backend.split_pane(SplitPaneOptions {
+        target: rimz::mux::own_pane_id(backend.name()).map_or_else(
+            || SplitTarget::Session(workspace.session_name.clone()),
+            SplitTarget::Pane,
+        ),
+        cwd: Some(workspace.worktree_root.display().to_string()),
+        command: None,
+        title: None,
+        close_on_exit: false,
+        env: rimz::room::pane_identity_env(&workspace, &workspace.worktree_root, None, true),
+        placement: SplitPlacement::Directional(direction),
+        focus: true,
+    })?;
+    match created {
+        Some(pane) => writeln!(render::out(), "{pane}")?,
+        None => writeln!(render::err(), "Pane opened; Zellij reported no pane id.")?,
+    }
+    Ok(())
 }
 
 fn detach(
@@ -774,6 +800,100 @@ mod tests {
     struct Harness {
         #[command(flatten)]
         args: PaneArgs,
+    }
+
+    #[test]
+    fn pane_help_orders_the_user_actions() {
+        let help = crate::cli::Cli::try_parse_from(["rimz", "pane", "--help"])
+            .unwrap_err()
+            .to_string();
+        let mut previous = 0;
+        for verb in [
+            "list",
+            "capture",
+            "send",
+            "focus",
+            "zoom",
+            "split",
+            "detach",
+            "bandwidth",
+        ] {
+            let position = help.find(&format!("  {verb} ")).expect("verb in help");
+            assert!(position > previous, "{help}");
+            previous = position;
+        }
+        assert!(
+            help.contains("rimz message") && help.contains("rimz transcript"),
+            "{help}"
+        );
+    }
+
+    #[test]
+    fn focus_hides_but_accepts_the_process_guard() {
+        let help = Harness::try_parse_from(["rimz", "focus", "--help"])
+            .unwrap_err()
+            .to_string();
+        assert!(!help.contains("pane-process-start"), "{help}");
+        assert!(
+            Harness::try_parse_from(["rimz", "focus", "tmux:%7", "--pane-process-start", "123"])
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn send_help_explains_order_and_keys() {
+        let help = Harness::try_parse_from(["rimz", "send", "--help"])
+            .unwrap_err()
+            .to_string();
+        let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            help.contains("Sends in a fixed order: TEXT, then each --key, then Enter."),
+            "{help}"
+        );
+        assert!(
+            help.contains("rimz message") && help.contains("rimz answer"),
+            "{help}"
+        );
+        for key in "enter escape tab shift-tab backspace up down left right ctrl-c ctrl-d ctrl-u space delete home end page-up page-down ctrl-a ctrl-e ctrl-l".split_whitespace() {
+            assert!(help.contains(key), "{key}: {help}");
+        }
+        for key in NamedKey::NAMES {
+            assert!(help.contains(key), "{key}: {help}");
+        }
+    }
+
+    #[test]
+    fn bare_tmux_id_uses_the_selected_backend() {
+        for mux in ["tmux", "zellij"] {
+            let globals = crate::cli::Cli::try_parse_from(["rimz", "--mux", mux])
+                .unwrap()
+                .global;
+            let resolved = resolve_pane_target("%7", &globals);
+            if mux == "tmux" {
+                assert_eq!(
+                    resolved.expect("bare tmux id").pane,
+                    PaneId::from_parts(MuxName::Tmux, "%7")
+                );
+            } else {
+                assert!(
+                    resolved
+                        .err()
+                        .unwrap()
+                        .to_string()
+                        .contains("invalid pane target")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn channel_target_explains_how_to_choose_a_pane() {
+        let error = classify_pane_target("#lane").unwrap_err().to_string();
+        assert!(error.contains("channel holds several panes"), "{error}");
+        assert!(
+            error.contains("rimz pane list") && error.contains("@handle#channel"),
+            "{error}"
+        );
     }
 
     #[test]

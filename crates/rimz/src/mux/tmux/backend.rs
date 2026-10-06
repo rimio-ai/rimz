@@ -225,11 +225,7 @@ impl MuxBackend for TmuxBackend {
             if stderr.contains("no server running") || stderr.contains("error connecting") {
                 return Ok(Vec::new());
             }
-            return Err(MuxErr::Command {
-                program: spec.program.clone(),
-                args: spec.args.join(" "),
-                stderr: stderr.into_owned(),
-            });
+            return Err(spec.command_error(stderr.into_owned()));
         }
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()

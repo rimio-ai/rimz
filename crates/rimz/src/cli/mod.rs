@@ -587,7 +587,10 @@ enum Subcmd {
     /// Destroys a stuck or resurrected Zellij session and sweeps its orphaned
     /// processes.
     Reset(reset::ResetArgs),
-    /// Pane primitives backed by the selected mux backend.
+    /// Read and drive the room's panes directly.
+    #[command(
+        after_help = "To prompt an agent use `rimz message`; to read its conversation, `rimz transcript`."
+    )]
     Pane(pane::PaneArgs),
     /// Pricing snapshot projection helper. Contributor automation calls this.
     #[command(hide = true)]

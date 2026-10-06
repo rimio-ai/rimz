@@ -15,16 +15,16 @@ rimz pane bandwidth --secs 10
 
 | Verb | What it does | Changes the room |
 | --- | --- | --- |
-| `list` | Prints every pane in the room, grouped by tab. | No |
-| `capture <TARGET>` | Prints the text a pane shows. | No |
-| `send <TARGET>` | Types text and presses named keys in a pane. | Input to that pane |
-| `focus <TARGET>` | Moves the attached client to a pane. | Focus |
-| `zoom` | Toggles fullscreen for the focused work pane. | Layout |
-| `split` | Opens a shell in a new pane beside the current one. | Layout |
-| `detach` | Detaches the client; the room keeps running. | Client only |
-| `bandwidth` | Samples each pane's output write rate. | No |
+| `list` | Show every pane: who is in it, its status, and its id. | No |
+| `capture <TARGET>` | Print what a pane shows right now. | No |
+| `send <TARGET>` | Type text and press keys in a pane. | Input to that pane |
+| `focus <TARGET>` | Jump to a pane. | Focus |
+| `zoom` | Toggle fullscreen for the focused pane. | Layout |
+| `split` | Open a shell in a new pane beside this one. | Layout |
+| `detach` | Leave the room running and detach. | Client only |
+| `bandwidth` | Measure which panes write the most output. | No |
 
-The [global flags](../cli.md#global-flags) apply. Every verb exits `0` on success and `1` with the error on stderr.
+See [global flags](../cli.md#global-flags) and [exit codes](../cli.md#exit-codes).
 
 ## Pane targets
 
@@ -39,6 +39,8 @@ The [global flags](../cli.md#global-flags) apply. Every verb exits `0` on succes
 The current room is the one `--root` names, else the calling pane's room, else the room of the working directory; `--root <project>` addresses another room. `capture` and `send` first check that the room holds the target pane, and touch nothing when it does not: a pane outside the room fails with `pane <id> is not in room <session>; run \`rimz pane list\` to see its panes, or pass \`--root <project>\` to address another room`, and a room whose panes cannot be listed fails with `could not check that pane <id> is in room <session>` and the multiplexer's error. The check applies to agent and `sidebar` targets too, so an agent whose pane has closed is refused rather than written past. A Zellij pane whose command has exited but which Zellij still holds open remains a valid target, so `capture` still reads a crashed agent's last screen, though `rimz pane list` omits it. A Zellij pane that another pane replaced in place (`zellij action new-pane --in-place`) is refused as not in the room until the replacement closes: Zellij accepts a write or a screen dump for a suppressed pane and does nothing.
 
 Copy pane ids from `rimz pane list`. A target that fits none of the forms fails with `invalid pane target` and points at `rimz pane list`; an agent with no pane fails with `agent <name> has no bound pane`; a room with no sidebar fails with `session <name> has no sidebar pane`.
+
+With tmux selected, a bare `%N` is also accepted as `tmux:%N` and checked against the room. Zellij rejects that shorthand. A `#channel` is not a pane: run `rimz pane list` and pass one pane's id or `@handle#channel`.
 
 ## List panes
 
@@ -62,6 +64,8 @@ Agent labels are best effort. They come from the room's agent records, so with n
 | --- | --- |
 | `--session-name <NAME>` | List another multiplexer session instead of the current room. Agent labels and `(self)` appear only for the current room. On Zellij the session must be a RimZ room, because the pane roster comes from RimZ's presence plugin. Outside a room this flag is required. |
 | `--json` | Print the tab tree as JSON. |
+
+An explicit `--session-name` that is not live fails with the requested name and the live session names (or `none`). If the live-session read fails, the command attempts the pane listing as usual.
 
 The JSON document has `session`, `mux`, and `tabs`. Each tab has `view_id` and `name` (each omitted when the multiplexer gives none) and `panes`. Fields that have no value are omitted:
 
@@ -110,6 +114,12 @@ Key names are case-insensitive, and `_`, `+`, or a space may stand in for `-`:
 | `backspace` | `bspace`, `bs` |
 | `up`, `down`, `left`, `right` | |
 | `ctrl-c`, `ctrl-d`, `ctrl-u` | `control-c`, `c-c` (and likewise for `d` and `u`) |
+| `space` | |
+| `delete` | `del` |
+| `home`, `end` | |
+| `page-up` | `pgup` |
+| `page-down` | `pgdn` |
+| `ctrl-a`, `ctrl-e`, `ctrl-l` | `control-a`, `c-a` (and likewise for `e` and `l`) |
 
 ## Focus a pane
 
@@ -117,7 +127,7 @@ Key names are case-insensitive, and `_`, `+`, or a space may stand in for `-`:
 
 | Flag | Meaning |
 | --- | --- |
-| `--session-name <NAME>` | The room session the pane belongs to. |
+| `--session-name <NAME>` | Room session the pane belongs to. Defaults to the cwd's workspace session. |
 | `--pane-process-start <TIMESTAMP>` | Guard against a reused pane id. The command lists panes first and fails with `pane <id> is no longer present` when the pane is gone, or `pane <id> was reused since the sidebar snapshot` when its process start time (an RFC 3339 timestamp) differs from this value. |
 
 ## Zoom, split, and detach
@@ -127,6 +137,8 @@ These three act on the current room and take no target.
 `rimz pane zoom` toggles fullscreen for the pane the attached client is focused on. It needs exactly one attached client focused on one live pane, and otherwise fails with `pane zoom requires one attached client focused on one live pane`. When the focused pane is the sidebar, it focuses a working pane in the same tab and fullscreens that one instead; in a tab that holds only the sidebar, it prints `rimz: sidebar is the only pane in its view; nothing to zoom` to stderr, changes nothing, and exits `0`. `--session-name` targets another room session. The room's `[sidebar] zoom_key` (default `Alt+g`) runs this command; see [room keys](../../internals/multiplexers.md#room-keys).
 
 `rimz pane split` opens a shell in a new pane beside the calling pane and focuses it; run from a shell outside any pane, it opens the pane in the room's session instead. The shell starts in the worktree root. The split runs side by side when the terminal is more than twice as wide (in columns) as it is tall (in rows), stacked otherwise, and side by side when no terminal is attached.
+
+The new pane's normalized id (`tmux:%3` or `zellij:terminal_7`) is the only line on stdout. On Zellij this is the id reported at spawn, allocated before the pane mounts. If Zellij reports no parseable id, stdout stays empty and stderr says the pane opened without a reported id; the command still exits successfully.
 
 `rimz pane detach` detaches from the room; the session keeps running and comes back on the next attach. The backends differ in which clients go: tmux detaches every client attached to the session, and Zellij detaches only the client the calling pane belongs to. On Zellij, `--session-name` has no effect, and the command runs only from a pane: outside one it fails with `this Zellij action has no session to address; run the command from a pane inside the room`. On tmux `--session-name` names the session whose clients detach.
 
