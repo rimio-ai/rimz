@@ -711,10 +711,12 @@ fn window_spans(window: &RateLimitWindow, now: Timestamp) -> Option<Vec<render::
             },
         )
     };
-    Some(vec![
+    let mut spans = vec![
         render::percent_left_cell(left),
         cell(format!(" left · {tail}")),
-    ])
+    ];
+    spans.extend(render::window_pace_cell(window, now));
+    Some(spans)
 }
 
 fn money_cell(value: f64) -> render::Cell {

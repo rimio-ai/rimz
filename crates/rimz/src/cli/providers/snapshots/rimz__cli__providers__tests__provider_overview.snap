@@ -3,10 +3,10 @@ source: crates/rimz/src/cli/providers/tests.rs
 expression: text
 ---
 Claude · v2.1.274
-   ACCOUNT  PLAN        5h LEFT      7d LEFT      Fable LEFT  EXTRA        RESETS         SPEND 7d
-   default  Claude Max  38% · 1h23m  86% · 4d02h  –           $37.60 left  2 · exp 3d00h  $2,742.90
-   spare    logged out  –            –            –           –            –              -
-●  work     Claude Max  –            70% · 1d00h  69%         off          –              $12.00
+   ACCOUNT  PLAN        5h LEFT             7d LEFT             Fable LEFT  EXTRA        RESETS         SPEND 7d
+   default  Claude Max  38% · 1h23m · 0.9x  86% · 4d02h · 0.3x  –           $37.60 left  2 · exp 3d00h  $2,742.90
+   spare    logged out  –                   –                   –           –            –              -
+●  work     Claude Max  –                   70% · 1d00h · 0.4x  69%         off          –              $12.00
 
 Pi · v1.2.3
    ACCOUNT  PLAN          SPEND 7d

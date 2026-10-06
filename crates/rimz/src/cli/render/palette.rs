@@ -35,6 +35,14 @@ impl CliTheme {
         self.style(self.palette.budget_tone(remaining_pct, &self.budget_bar))
     }
 
+    fn pace(&self, reading: rimz::agents::context::PaceReading) -> anstyle::Style {
+        self.style(
+            self.palette
+                .pace_tone(reading, &self.budget_bar.burn_rate)
+                .unwrap_or_else(|| self.palette.body()),
+        )
+    }
+
     fn identity(&self, kind: &str) -> anstyle::Style {
         self.style(resolve_provider_brand(kind, &self.providers).tone(&self.palette))
     }
@@ -110,6 +118,10 @@ pub(crate) fn budget(remaining_pct: u8) -> anstyle::Style {
     THEME.budget(remaining_pct)
 }
 
+pub(crate) fn pace(reading: rimz::agents::context::PaceReading) -> anstyle::Style {
+    THEME.pace(reading)
+}
+
 pub(crate) fn human_chip() -> anstyle::Style {
     anstyle::Style::new()
         .bg_color(Some(tone_color(THEME.palette.cool())))
@@ -172,6 +184,29 @@ mod tests {
         let tuned = CliTheme::resolve(&theme, true);
         assert_eq!(tuned.budget(80), tuned.style(tuned.palette.warn()));
         assert_ne!(tuned.budget(80), default.budget(80));
+    }
+
+    #[test]
+    fn pace_style_rests_at_body_and_follows_configured_bands() {
+        use rimz::agents::context::PaceReading;
+        let default = CliTheme::resolve(&ThemeConfig::default(), true);
+        let reading = |ratio| PaceReading {
+            ratio,
+            elapsed_share: 1.0,
+        };
+        assert_eq!(
+            default.pace(reading(1.0)),
+            default.style(default.palette.body())
+        );
+        assert_eq!(
+            default.pace(reading(2.0)),
+            default.style(default.palette.alarm())
+        );
+        let mut theme = ThemeConfig::default();
+        theme.display.budget_bar.burn_rate.red = 300;
+        let tuned = CliTheme::resolve(&theme, true);
+        assert_ne!(tuned.pace(reading(2.0)), default.pace(reading(2.0)));
+        assert_eq!(tuned.pace(reading(3.0)), tuned.style(tuned.palette.alarm()));
     }
 
     #[test]

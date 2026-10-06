@@ -397,9 +397,41 @@ pub(crate) fn percent_left_cell(left: u8) -> Cell {
     cell(format!("{left}%")).fg(palette::budget(left))
 }
 
+fn pace_text(ratio: f64) -> String {
+    let rounded = (ratio * 10.0).round() / 10.0;
+    if rounded >= 10.0 {
+        return ">10x".to_owned();
+    }
+    format!("{rounded:.1}x")
+}
+
+fn window_pace(
+    window: &rimz::agents::RateLimitWindow,
+    now: Timestamp,
+) -> Option<(String, anstyle::Style)> {
+    if window.lifted || window.not_started(now) || window.is_spent() {
+        return None;
+    }
+    let reading = window.pace(now)?;
+    Some(if reading.past_floor() {
+        (pace_text(reading.ratio), palette::pace(reading))
+    } else {
+        ("–".to_owned(), palette::faint())
+    })
+}
+
+/// The detail view's trailing pace span, absent when the window has no displayable pace.
+pub(crate) fn window_pace_cell(
+    window: &rimz::agents::RateLimitWindow,
+    now: Timestamp,
+) -> Option<Cell> {
+    let (text, style) = window_pace(window, now)?;
+    Some(cell(" · pace").suffix(text, style))
+}
+
 /// A rate-limit window's table cell in what is left: `∞` when lifted,
 /// `N% · ready` before its clock starts, else the percentage with its reset
-/// countdown when known. `None` without a reading.
+/// countdown and pace when known. `None` without a reading.
 pub(crate) fn window_cell(window: &rimz::agents::RateLimitWindow, now: Timestamp) -> Option<Cell> {
     if window.lifted {
         return Some(cell("∞"));
@@ -408,13 +440,17 @@ pub(crate) fn window_cell(window: &rimz::agents::RateLimitWindow, now: Timestamp
     if window.not_started(now) {
         return Some(percent.suffix("· ready", palette::body()));
     }
-    Some(match window.resets_at {
+    let mut percent = match window.resets_at {
         Some(deadline) => percent.suffix(
             format!("· {}", rimz::theme::fmt::reset_countdown(deadline, now)),
             palette::body(),
         ),
         None => percent,
-    })
+    };
+    if let Some((text, style)) = window_pace(window, now) {
+        percent = percent.suffix("·", palette::body()).suffix(text, style);
+    }
+    Some(percent)
 }
 
 pub(crate) fn terminal_columns(fallback: usize) -> usize {
@@ -487,7 +523,7 @@ enum Align {
 pub(crate) struct Cell {
     text: String,
     style: Option<anstyle::Style>,
-    suffix: Option<(String, anstyle::Style)>,
+    suffixes: Vec<(String, anstyle::Style)>,
 }
 
 /// Start a plain (unstyled) cell from any text.
@@ -495,7 +531,7 @@ pub(crate) fn cell(text: impl Into<String>) -> Cell {
     Cell {
         text: text.into(),
         style: None,
-        suffix: None,
+        suffixes: Vec::new(),
     }
 }
 
@@ -508,7 +544,7 @@ impl Cell {
 
     /// Append a separately styled label after this cell's primary text.
     pub(crate) fn suffix(mut self, text: impl Into<String>, style: anstyle::Style) -> Self {
-        self.suffix = Some((text.into(), style));
+        self.suffixes.push((text.into(), style));
         self
     }
 
@@ -523,7 +559,12 @@ impl Cell {
     }
 
     fn width(&self) -> usize {
-        self.text.width() + self.suffix.as_ref().map_or(0, |(text, _)| 1 + text.width())
+        self.text.width()
+            + self
+                .suffixes
+                .iter()
+                .map(|(text, _)| 1 + text.width())
+                .sum::<usize>()
     }
 
     fn write_styled(&self, w: &mut impl Write) -> std::io::Result<()> {
@@ -531,18 +572,22 @@ impl Cell {
             Some(style) => write!(w, "{}{}{}", style.render(), self.text, style.render_reset()),
             None => write!(w, "{}", self.text),
         }?;
-        if let Some((text, style)) = &self.suffix {
+        for (text, style) in &self.suffixes {
             write!(w, " {}{}{}", style.render(), text, style.render_reset())?;
         }
         Ok(())
     }
 
     fn clipped(&self, width: usize) -> Self {
-        let suffix_width = self.suffix.as_ref().map_or(0, |(text, _)| 1 + text.width());
+        let suffix_width = self
+            .suffixes
+            .iter()
+            .map(|(text, _)| 1 + text.width())
+            .sum::<usize>();
         Cell {
             text: clip_to_width(&self.text, width.saturating_sub(suffix_width)),
             style: self.style,
-            suffix: self.suffix.clone(),
+            suffixes: self.suffixes.clone(),
         }
     }
 
@@ -770,7 +815,7 @@ impl Table {
             Cell {
                 text: line,
                 style: cell.style,
-                suffix: None,
+                suffixes: Vec::new(),
             }
             .write_styled(w)?;
             writeln!(w)?;
