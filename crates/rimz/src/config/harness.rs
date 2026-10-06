@@ -251,6 +251,60 @@ impl<'de> Deserialize<'de> for IdleCompactMode {
     }
 }
 
+/// How long an idle agent's prompt cache is held warm after its last real turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeepWarm {
+    /// Let the cache expire on the provider's clock.
+    #[default]
+    Off,
+    /// Ping before each cache expiry until this long after the last real turn ended.
+    For(Duration),
+}
+
+impl fmt::Display for KeepWarm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Off => f.write_str("off"),
+            Self::For(horizon) => {
+                f.write_str(&crate::utils::time::format_duration_compact(*horizon))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("keep-warm takes off or a duration such as 2h")]
+pub struct KeepWarmParseError;
+
+impl FromStr for KeepWarm {
+    type Err = KeepWarmParseError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        if raw == "off" {
+            return Ok(Self::Off);
+        }
+        parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
+            .ok()
+            .filter(|horizon| !horizon.is_zero())
+            .map(Self::For)
+            .ok_or(KeepWarmParseError)
+    }
+}
+
+impl Serialize for KeepWarm {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for KeepWarm {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 /// Harness behavior shared by immediate and parked message send paths.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -291,6 +345,9 @@ pub struct HarnessConfig {
     /// Compact a team member on hand-off: the role's `flip-compact` overrides this setting, then unset falls back to 120k for a Plan owner or 180k otherwise; `off` disables compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_compact: Option<FlipCompact>,
+    /// The shortest prompt-cache TTL keep-warm will hold; `None` (`off`) admits any known TTL.
+    #[serde(with = "keep_warm_min_ttl_serde")]
+    pub keep_warm_min_ttl: Option<Duration>,
 }
 
 impl Default for HarnessConfig {
@@ -305,6 +362,7 @@ impl Default for HarnessConfig {
             compact_instruction: None,
             idle_compact: IdleCompactMode::default(),
             flip_compact: None,
+            keep_warm_min_ttl: Some(DEFAULT_KEEP_WARM_MIN_TTL),
         }
     }
 }
@@ -409,6 +467,34 @@ mod prompt_cache_ttl_serde {
             .map(|(kind, ttl)| (kind, format_off_or_duration(*ttl)))
             .collect::<BTreeMap<_, _>>()
             .serialize(serializer)
+    }
+}
+
+const DEFAULT_KEEP_WARM_MIN_TTL: Duration = Duration::from_secs(15 * 60);
+
+mod keep_warm_min_ttl_serde {
+    use super::*;
+
+    pub(super) const FLOOR_ERROR: &str =
+        "harness.keep_warm_min_ttl must be off or a duration such as 15m";
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        match raw.parse::<KeepWarm>() {
+            Ok(KeepWarm::Off) => Ok(None),
+            Ok(KeepWarm::For(floor)) => Ok(Some(floor)),
+            Err(_) => Err(serde::de::Error::custom(FLOOR_ERROR)),
+        }
+    }
+
+    pub fn serialize<S>(floor: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(&floor.map_or(KeepWarm::Off, KeepWarm::For))
     }
 }
 
@@ -522,6 +608,43 @@ mod tests {
                 "{raw}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn keep_warm_takes_off_or_a_positive_duration() {
+        assert_eq!("off".parse::<KeepWarm>(), Ok(KeepWarm::Off));
+        assert_eq!(
+            "2h".parse::<KeepWarm>(),
+            Ok(KeepWarm::For(Duration::from_secs(7200)))
+        );
+        assert_eq!(KeepWarm::For(Duration::from_secs(7200)).to_string(), "2h");
+        for raw in ["true", "on", "0", "0s", "2x", ""] {
+            assert_eq!(raw.parse::<KeepWarm>(), Err(KeepWarmParseError), "{raw}");
+        }
+    }
+
+    #[test]
+    fn keep_warm_floor_defaults_to_fifteen_minutes_and_takes_off() {
+        assert_eq!(
+            HarnessConfig::default().keep_warm_min_ttl,
+            Some(Duration::from_secs(900))
+        );
+        for (raw, expected) in [("off", None), ("5m", Some(Duration::from_secs(300)))] {
+            let config: HarnessConfig =
+                toml::from_str(&format!("keep_warm_min_ttl = {raw:?}")).unwrap();
+            assert_eq!(config.keep_warm_min_ttl, expected, "{raw}");
+            assert_eq!(
+                toml::from_str::<HarnessConfig>(&toml::to_string(&config).unwrap()).unwrap(),
+                config
+            );
+        }
+        let err = toml::from_str::<HarnessConfig>("keep_warm_min_ttl = \"5x\"")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("harness.keep_warm_min_ttl must be off or a duration such as 15m"),
+            "{err}"
+        );
     }
 
     #[test]

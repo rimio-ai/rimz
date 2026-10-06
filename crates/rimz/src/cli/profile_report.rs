@@ -631,6 +631,7 @@ mod tests {
             description: None,
             subagents: None,
             model_reminder: None,
+            keep_warm: None,
             mode: None,
             model: None,
             effort: None,

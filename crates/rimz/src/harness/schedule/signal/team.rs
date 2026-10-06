@@ -410,6 +410,47 @@ mod tests {
     }
 
     #[test]
+    fn a_ping_only_turn_emits_no_team_signal() {
+        let mut seat = member("coder", "auth", AgentStatus::Success);
+        seat.phase = TurnPhase::Idle;
+        let rows = [seat.clone(), member("judge", "auth", AgentStatus::Idle)];
+        let audit = |prior: &AgentState, signal: LifecycleSignal, keepalive_prompt| {
+            let transition = AgentState::transition(Some(prior), &signal, keepalive_prompt);
+            LifecycleEvent::new(
+                EventId::new(),
+                jiff::Timestamp::UNIX_EPOCH,
+                WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                prior.kind.clone(),
+                prior.agent_id.clone(),
+                prior.name.clone(),
+                None,
+                signal,
+                Some(prior.status),
+                transition,
+            )
+        };
+        let opened = audit(&seat, LifecycleSignal::TurnStarted { turn_id: None }, true);
+        assert_eq!(opened.status, AgentStatus::Success);
+        assert!(derive(&opened, &rows, &[]).is_empty());
+        seat.ping_turn = true;
+        for signal in [
+            turn_end(),
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        ] {
+            let closed = audit(&seat, signal, false);
+            assert_eq!(closed.prior_status, Some(closed.status));
+            assert!(
+                derive(&closed, &rows, &[]).is_empty(),
+                "no team.idle or team.failed for a ping"
+            );
+        }
+    }
+
+    #[test]
     fn launched_child_stop_is_terminal_but_ignored_nonterminal_events_do_not_emit() {
         let mut child = member("child", "auth", AgentStatus::Success);
         child.parent_agent_id = Some(AgentSessionId::from("parent"));

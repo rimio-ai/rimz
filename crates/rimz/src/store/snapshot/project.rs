@@ -713,6 +713,7 @@ fn carried_base(
         state.turn_started_at = prior.turn_started_at;
         state.user_turn_started_at = prior.user_turn_started_at;
         state.keepalive_since = prior.keepalive_since;
+        state.pinged_at = prior.pinged_at;
         state.registered_at = prior.registered_at.or(Some(event_ts));
     }
     state
@@ -879,7 +880,10 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         state.worktree_branch = Some(branch);
     }
     state.task = task;
-    if let Some(prompt) = input.observation.prompt.as_deref() {
+    // An open ping's prompt is the harness's, not the agent's latest ask.
+    if let Some(prompt) = input.observation.prompt.as_deref()
+        && !state.ping_turn
+    {
         state.observe_prompt(prompt);
     }
     if let Some(description) = &input.observation.description {
@@ -1051,8 +1055,17 @@ fn fold_lifecycle(
         kind,
         compaction_closed,
         opened_turn,
+        ping,
         ..
-    } = AgentState::transition(prior, &signal);
+    } = AgentState::transition(
+        prior,
+        &signal,
+        prompt.is_some_and(crate::store::message::prompt_is_keepalive_only),
+    );
+    if let (Some(edge), Some(prior)) = (ping, prior) {
+        carry_across_ping(state, prior, timestamp, edge);
+        return false;
+    }
     state.status = next.status;
     state.phase = next.phase;
     state.compacting_since = next.compacting.then_some(timestamp);
@@ -1102,17 +1115,22 @@ fn fold_lifecycle(
     if opened_turn || resets_context {
         state.turn_started_at = Some(timestamp);
     }
-    state.turn_ended_at = if !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
+    let closes_request = !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
         && matches!(
             signal,
             lifecycle::LifecycleSignal::TurnEnded { .. }
                 | lifecycle::LifecycleSignal::TurnInterrupted { .. }
                 | lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
-        ) {
+        );
+    state.turn_ended_at = if closes_request {
         Some(timestamp)
     } else {
         prior.and_then(|p| p.turn_ended_at)
     };
+    // A ping stays open across a report the machine ignored; anything else it
+    // grew into folds as that work.
+    state.ping_turn = prior.is_some_and(|prior| prior.ping_turn)
+        && matches!(kind, lifecycle::TransitionKind::Ignored { .. });
     // A delivered prompt opens a provider turn but continues the user's task.
     let harness_prompt = matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. })
         && prompt.is_some_and(crate::store::message::prompt_is_harness_delivered);
@@ -1120,8 +1138,8 @@ fn fold_lifecycle(
         state.user_turn_started_at = Some(timestamp);
     }
     // A run of keepalive-only turns keeps the last real request it followed.
-    // Any other prompt ends the run even when it resumes a parked row; a ping
-    // on a parked row leaves `turn_started_at` alone, so it opens no run.
+    // Any other prompt ends the run even when it resumes a parked row. An inert
+    // ping opens its run in `carry_across_ping`, including on a parked row.
     let turn_started = matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. });
     let keepalive_turn =
         turn_started && prompt.is_some_and(crate::store::message::prompt_is_keepalive_only);
@@ -1209,6 +1227,45 @@ fn fold_lifecycle(
         || (already_retired
             && matches!(signal, lifecycle::LifecycleSignal::CompactionEnded { .. }));
     retires_usage
+}
+
+/// A ping-only turn's edge: the agent reads exactly as `prior` left it, and
+/// only the open-ping flag and the ping's close time move.
+fn carry_across_ping(
+    state: &mut AgentState,
+    prior: &AgentState,
+    timestamp: Timestamp,
+    edge: lifecycle::PingEdge,
+) {
+    state.ping_turn = edge != lifecycle::PingEdge::Close;
+    state.pinged_at = if edge == lifecycle::PingEdge::Close {
+        Some(timestamp)
+    } else {
+        prior.pinged_at
+    };
+    // A run of pings keeps the last real request it followed: the clock the keepalive cap reads.
+    if edge == lifecycle::PingEdge::Open {
+        state.keepalive_since = prior.keepalive_since.or(prior.last_request_at());
+    }
+    state.status = prior.status;
+    state.phase = prior.phase;
+    state.last_activity = prior.last_activity;
+    state.compacting_since = prior.compacting_since;
+    state.compacted_awaiting_prompt = prior.compacted_awaiting_prompt;
+    state.turn_started_at = prior.turn_started_at;
+    state.turn_ended_at = prior.turn_ended_at;
+    state.user_turn_started_at = prior.user_turn_started_at;
+    state.waiting_since = prior.waiting_since;
+    state.open_ask.clone_from(&prior.open_ask);
+    state.queued_asks.clone_from(&prior.queued_asks);
+    state.started_turn_id.clone_from(&prior.started_turn_id);
+    state
+        .superseded_turn_id
+        .clone_from(&prior.superseded_turn_id);
+    state
+        .interrupted_turn_id
+        .clone_from(&prior.interrupted_turn_id);
+    state.compaction_retired = prior.compaction_retired;
 }
 
 struct WorktreeProjection {

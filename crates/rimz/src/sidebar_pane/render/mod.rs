@@ -74,10 +74,10 @@ use self::sections::DashboardMode;
 use self::theme::Theme;
 
 #[cfg(test)]
-fn age_heat_amount_for_test(age_secs: i64) -> f32 {
-    let first_quarter = crate::agents::ATTENTION_AGE_CEILING_SECS / 4;
+fn age_heat_amount_for_test(age_secs: i64, ceiling_secs: i64) -> f32 {
+    let first_quarter = ceiling_secs / 4;
     debug_assert!(age_secs > first_quarter);
-    let heat_span = crate::agents::ATTENTION_AGE_CEILING_SECS - first_quarter;
+    let heat_span = ceiling_secs - first_quarter;
     ((age_secs - first_quarter) as f32 / heat_span as f32).min(1.0)
 }
 

@@ -365,6 +365,22 @@ pub struct Transition {
     /// prompt boundary; other reconciled progress and auto-compaction resumes
     /// stamp only when they enter `Running` from a non-running prior state.
     pub opened_turn: bool,
+    /// The signal is a ping-only turn's edge ([`TransitionKind::Ignored`] with
+    /// `next` equal to the prior state): the fold stamps only the cache clock,
+    /// and hook side effects that read as the agent's activity skip it.
+    pub ping: Option<PingEdge>,
+}
+
+/// How a signal touches a ping-only turn, which is no work of the agent's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PingEdge {
+    /// A keepalive-only prompt opened a turn from rest.
+    Open,
+    /// The open ping's own turn closed: the cache request completed.
+    Close,
+    /// A report for a real turn the row already knows arrived while the ping
+    /// was open: ignored, and the ping stays open.
+    Report,
 }
 
 /// Provider turn ids the prior record remembers, which [`step`] correlates
@@ -434,6 +450,7 @@ pub(crate) fn step(
             compaction_closed: false,
             waiting_cleared: false,
             opened_turn: false,
+            ping: None,
         };
     }
 
@@ -474,6 +491,7 @@ pub(crate) fn step(
         compaction_closed,
         waiting_cleared,
         opened_turn,
+        ping: None,
     }
 }
 

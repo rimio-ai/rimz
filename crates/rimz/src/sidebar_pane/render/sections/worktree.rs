@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use crate::agents::AgentStatus;
+use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use crate::config::GlyphRole;
 use crate::store::snapshot::{
     PipelinePosition, SidebarPipeline, SidebarStatusCount, SidebarWorktreeGroup,
@@ -418,7 +418,10 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
             activity_short(max_last_activity, ctx.now).map_or_else(Vec::new, |label| {
                 let seconds = age_secs(max_last_activity, ctx.now);
                 vec![Span::styled(
-                    format!("{} {label}", elapsed_glyph(ctx.theme, seconds)),
+                    format!(
+                        "{} {label}",
+                        elapsed_glyph(ctx.theme, seconds, ATTENTION_AGE_CEILING_SECS)
+                    ),
                     ctx.theme.muted(),
                 )]
             })
@@ -428,7 +431,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
             vec![Span::styled(
                 format!(
                     "{} {}",
-                    elapsed_glyph(ctx.theme, seconds),
+                    elapsed_glyph(ctx.theme, seconds, ATTENTION_AGE_CEILING_SECS),
                     age_label(seconds)
                 ),
                 ctx.theme.muted(),

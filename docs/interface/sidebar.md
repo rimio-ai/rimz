@@ -93,7 +93,7 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `97%` | session cache hit: green from 90%, yellow from 70%, red below |
 | `↻ 2` | completed context compactions |
 | `⟲ 5` | consecutive identical tool calls, shown from 3 through 19 |
-| `◔ 8m` | an age or elapsed time; the face fills by the quarter hour: `◔` to 15 minutes, `◑` to 30, `◕` to 45, `●` to 60, `◉` past an hour |
+| `◔ 8m` | an age or elapsed time; the face fills by the quarter hour: `◔` to 15 minutes, `◑` to 30, `◕` to 45, `●` to 60, `◉` past an hour. A card's own age clock fills by the quarter of its provider's prompt-cache lifetime instead. |
 | `200k`, `1m` | the model's context window size |
 | `$1.27` | cost in dollars, two decimals |
 | `⋯ bg` after the description | the turn finished while background work it started is still running |
@@ -263,7 +263,7 @@ On a narrow sidebar the identity line drops the reasoning token first, then the 
 
 On the stats line, a column that is zero or unreported is left out. A provider that reports only session totals, as stock Droid does, shows `◇ total ↘ input ↗ output ◌ cache-read` on this line instead, and its meter stays empty. The cache hit is cached input divided by all input, and it is absent until the session has input counters.
 
-The meter draws windows up to 256k tokens linearly and larger ones on a log curve that reaches full strength at 1M, so a large window keeps detail in its working range. The percent is always the raw share in use. The age clock heats toward red as the hour approaches, because a prompt after an hour of quiet usually re-reads the whole context uncached. It measures the agent's own quiet time, so a parent waiting on its subagents keeps heating while they work — its own session is making no call, and its cache ages the whole wait. The children's own times ride their entries under the card. Bands, curve, and tones are set under [`[theme.display]`](../guide/theme.md#display).
+The meter draws windows up to 256k tokens linearly and larger ones on a log curve that reaches full strength at 1M, so a large window keeps detail in its working range. The percent is always the raw share in use. The age clock fills and heats over the provider's prompt-cache lifetime — 60 minutes for Claude, 30 for Codex, or your [`[harness.prompt_cache_ttl]`](../guide/configuration.md#idle-compaction) override — and turns red at it, because a prompt after that much quiet usually re-reads the whole context uncached. A provider with no known lifetime keeps the hour. While a [keep-warm horizon](../guide/configuration.md#keep-warm) is actively holding the cache, the clock instead shows the time since the agent's last real turn in steady green, filling over the horizon; once the horizon passes, the usual ramp resumes from the last ping. Wait and subagent clocks, the worktree clock, and the card's breathing keep the hour scale. Outside a hold the age clock counts from the later of the agent's own activity and its last cache ping, so a ping restarts the ramp without reading as work. The age clock measures the agent's own quiet time, so a parent waiting on its subagents keeps heating while they work — its own session is making no call, and its cache ages the whole wait. The children's own times ride their entries under the card. Bands, curve, and tones are set under [`[theme.display]`](../guide/theme.md#display).
 
 ### Card shapes
 

@@ -118,6 +118,8 @@ pub(super) enum AssistEvent {
         label: Option<String>,
         idle_secs: u64,
         waits: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        horizon_secs: Option<u64>,
         message_id: String,
         delivered: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -401,6 +403,7 @@ impl AssistEvent {
                 label,
                 idle_secs,
                 waits,
+                horizon_secs,
                 message_id,
                 delivered,
                 error,
@@ -412,6 +415,7 @@ impl AssistEvent {
                 label,
                 idle_secs,
                 waits,
+                horizon_secs,
                 message_id,
                 delivered,
                 error,
@@ -785,21 +789,30 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             label,
             idle_secs,
             waits,
+            horizon_secs,
             error,
             capped,
             ..
         } => {
             let agent = label.as_deref().unwrap_or(kind.as_str());
-            let idle = rimz::utils::time::format_duration_compact(Duration::from_secs(*idle_secs));
+            let compact =
+                |secs| rimz::utils::time::format_duration_compact(Duration::from_secs(secs));
+            let idle = compact(*idle_secs);
+            let holding = horizon_secs
+                .map(|horizon| format!(", holding warm ({})", compact(horizon)))
+                .unwrap_or_default();
             let error = error
                 .as_deref()
                 .map(|error| format!(" ({})", first_line(error)))
                 .unwrap_or_default();
             let noun = if *waits == 1 { "wait" } else { "waits" };
+            let waits = if *waits == 0 && horizon_secs.is_some() {
+                String::new()
+            } else {
+                format!(" — {waits} {noun} pending")
+            };
             let limit = if *capped { ", limit reached" } else { "" };
-            format!(
-                "{time} ◷ {agent} cache keepalive after {idle} — {waits} {noun} pending{error}{limit}"
-            )
+            format!("{time} ◷ {agent} cache keepalive after {idle}{holding}{waits}{error}{limit}")
         }
         AssistEvent::IdleStop {
             label,
@@ -1419,6 +1432,49 @@ mod tests {
         assert!(lines.contains("message msg_1 · delivered true"));
         assert!(lines.contains("gate closed"));
         assert_eq!(lines.matches("2 waits pending, limit reached").count(), 1);
+    }
+
+    #[test]
+    fn keep_warm_pings_count_as_keepalives_and_name_their_horizon() {
+        let record = |horizon: Option<u64>, waits: usize| {
+            serde_json::from_value::<AssistRecord>(serde_json::json!({
+                "at": "2026-01-01T00:00:00Z", "assist": "cache_keepalive",
+                "kind": "codex", "agent_id": "session-1", "label": "@coder",
+                "idle_secs": 1740, "waits": waits, "horizon_secs": horizon,
+                "message_id": "msg_1", "delivered": true,
+            }))
+            .expect("keep-warm assist wire format")
+        };
+        let stats = AssistStats::from_records(
+            "all",
+            vec![
+                record(Some(7200), 0),
+                record(Some(5400), 1),
+                record(None, 1),
+            ],
+        );
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["rollup"]["keepalives"], 3);
+        // Newest first; equal stamps reverse the record order.
+        assert_eq!(json["events"][2]["horizon_secs"], 7200);
+        assert!(json["events"][0].get("horizon_secs").is_none());
+        let lines = stats
+            .events
+            .iter()
+            .map(|event| forensic_line(event, &jiff::tz::TimeZone::UTC))
+            .collect::<Vec<_>>();
+        assert!(
+            lines[2].contains("@coder cache keepalive after 29m, holding warm (2h)")
+                && !lines[2].contains("pending"),
+            "{}",
+            lines[2]
+        );
+        assert!(
+            lines[1].contains("cache keepalive after 29m, holding warm (90m) — 1 wait pending"),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[0].contains("cache keepalive after 29m — 1 wait pending"));
     }
 
     #[test]

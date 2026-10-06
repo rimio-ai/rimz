@@ -288,7 +288,7 @@ impl std::str::FromStr for Isolation {
 
 /// A named agent profile. `agent` is a base reference: either a built-in agent
 /// kind or another profile that resolves to one.
-/// Also deserialized from trusted repository TOML: new deserializable fields must enter `crate::trust::ExecutableProfile` with a hash test, or be `#[serde(skip)]`.
+/// Also deserialized from trusted repository TOML: a new deserializable field must enter `crate::trust::ExecutableProfile` with a hash test, be `#[serde(skip)]`, or shape no command at all (as `budget` and `keep_warm` only gate RimZ's own notices).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
@@ -330,6 +330,9 @@ pub struct Profile {
     pub effort: Option<String>,
     #[serde(default)]
     pub budget: Option<String>,
+    /// How long a solo agent's prompt cache is held warm after its last real turn; unset means off.
+    #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]
+    pub keep_warm: Option<super::KeepWarm>,
     /// The agent's native auto-compaction window as a token count; rendered per adapter, with unsupported adapters refusing the launch.
     #[serde(
         default,
@@ -566,6 +569,9 @@ pub struct RoleBinding {
         skip_serializing_if = "Option::is_none"
     )]
     pub idle_compact: Option<super::IdleCompactMode>,
+    /// How long this team member's prompt cache is held warm after its last real turn; unset means off.
+    #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]
+    pub keep_warm: Option<super::KeepWarm>,
     /// A replacement system prompt. Relative paths use the declaring file's
     /// directory, so a role in `~/.agents/teams/<name>/team.toml` can name a
     /// prompt shipped beside that fragment.

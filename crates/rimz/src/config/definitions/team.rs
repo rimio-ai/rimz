@@ -5,7 +5,8 @@ use std::path::Path;
 
 use crate::agents;
 use crate::config::{
-    FlipCompact, IdleCompactMode, Profile, PromptSource, RoleBinding, Team, TeamSignalBinding,
+    FlipCompact, IdleCompactMode, KeepWarm, Profile, PromptSource, RoleBinding, Team,
+    TeamSignalBinding,
 };
 use crate::harness::team_prompt::BUILT_IN_CONSENSUS;
 use crate::store::message::AutoCompact;
@@ -189,6 +190,11 @@ fn roster(
                 .idle_compact
                 .as_deref()
                 .map(|value| idle_compact(path, value))
+                .transpose()?,
+            keep_warm: role
+                .keep_warm
+                .as_deref()
+                .map(|value| keep_warm(path, value))
                 .transpose()?,
             signals: signals(path, role.signals.as_deref())?,
             owns,
@@ -382,6 +388,12 @@ fn idle_compact(path: &Path, value: &str) -> Result<IdleCompactMode, DefinitionE
             format!("sets `idle-compact: {value}`; rimz takes off, on, or a duration such as 25m"),
         )
     })
+}
+
+pub(super) fn keep_warm(path: &Path, value: &str) -> Result<KeepWarm, DefinitionErr> {
+    value
+        .parse::<KeepWarm>()
+        .map_err(|error| DefinitionErr::new(path, format!("sets `keep-warm: {value}`; {error}")))
 }
 
 fn flip_compact(path: &Path, value: &str) -> Result<FlipCompact, DefinitionErr> {

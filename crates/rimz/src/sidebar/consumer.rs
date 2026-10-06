@@ -367,6 +367,7 @@ fn consumer_fold_inputs_stamp(
         runtime.diff_stats_path(),
         runtime.cohort_spend_path(),
         runtime.pipeline_path(),
+        runtime.keep_warm_path(),
         runtime.pr_state_path(),
         runtime.shared_accounts_path(),
         runtime.shared_rate_limits_path(),
@@ -414,6 +415,7 @@ fn consumer_projection_inputs_stamp(
             runtime.pane_frame_path(),
             workspace_projection_path(runtime),
             runtime.pipeline_path(),
+            runtime.keep_warm_path(),
         ]
         .into_iter()
         .map(|path| StampedPath::of(&path))

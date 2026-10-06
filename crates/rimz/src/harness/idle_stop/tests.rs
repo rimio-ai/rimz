@@ -767,3 +767,59 @@ fn producer_spawns_for_a_due_request_paces_and_leaves_the_record_alone() {
     assert_eq!(crate::store::idle_stop::read(paths), [request]);
     assert!(read_fire_record(&fire_record_path(runtime, &agent.kind, &agent.agent_id)).is_some());
 }
+
+#[test]
+fn pings_neither_defer_a_stop_nor_let_keep_warm_hold_against_it() {
+    let (_dir, store) = fixture();
+    let ping = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    let append = |signal: LifecycleSignal, prompt: Option<&str>| {
+        let mut observation = AgentLifecycleObservation::new(Some("session-1".into()), signal);
+        observation.prompt = crate::agents::SanitizedPrompt::new(prompt);
+        store
+            .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+                session_name: "idle-stop-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .expect("append");
+    };
+    let end = || LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    append(LifecycleSignal::TurnStarted { turn_id: None }, Some("do X"));
+    append(end(), None);
+    let rested_at = store.snapshot().unwrap().agents[0].turn_ended_at.unwrap();
+    append(LifecycleSignal::TurnStarted { turn_id: None }, Some(ping));
+    append(end(), None);
+    let mut agent = store.snapshot().unwrap().agents[0].clone();
+    assert!(agent.pinged_at > Some(rested_at));
+    let stop = IdleStop {
+        after_secs: 180,
+        requested_at: rested_at,
+        requested_by: None,
+    };
+    let due = rested_at
+        .checked_add(jiff::SignedDuration::from_secs(180))
+        .unwrap();
+    assert_eq!(
+        decide_alone(&store, &agent, &stop, due),
+        Verdict::Stop { idle_secs: 180 },
+        "the stop runs from the real rest, not the ping"
+    );
+
+    agent.idle_stop = Some(PendingIdleStop { stop, due_at: None });
+    assert_eq!(
+        crate::harness::cache_keepalive::holds(
+            &agent,
+            Some(std::time::Duration::from_secs(7200)),
+            &crate::config::HarnessConfig::default(),
+            rested_at,
+        ),
+        None,
+        "a requested stop ends the hold"
+    );
+}

@@ -168,7 +168,9 @@ upward-dependencies = ["address"]
 # `runtime_control::installed_broker_bin`, the one answer to "is the broker's provider installed" for the room and daemon-view pane gates (+1).
 # The switch-hint pick and its result serve providers and accounts list (+2).
 # `RecordedLogin`, the probe outcome a `ProviderRecord` stores, and `ProviderRecord::login_is_ambiguous`, the legacy shape `accounts list` probes again (+2).
-surface-budget = 980
+# PingEdge names how a signal touches a ping-only turn, for the store fold and the lifecycle hook (+1).
+# AgentState::rests_in_lifecycle is the durable rest both the ping-open rule and the keep-warm hold read (+1).
+surface-budget = 982
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -294,7 +296,8 @@ upward-dependencies = [
 # MachineConfig::require_readable_core shares birth/worktree refusal; ConfigEditor::use_account preserves machine selection edits (+2).
 # MachineConfig::model_alias exposes machine pins to the launch wrapper (+1).
 # AccountHistory carries a named account's history mode to the login catalog and `rimz accounts` (+1).
-surface-budget = 186
+# KeepWarm parses the role/profile horizon and the floor for definitions, config edit, harness policy, and `agents validate` (+1).
+surface-budget = 187
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -359,7 +362,8 @@ allowed-dependencies = [
 # `StatePaths::temp_unit_dirs` lists the room's temp units, canonical and reset-detached, for the hard reset's view-holder sweep (+1).
 # The loop start throttle's queue directory, lock, and ticket name are built here (+3).
 # GC reaches the retired named-channel record through one classed-path accessor (+1).
-surface-budget = 216
+# The keep-warm producer cache path is built here for the refresh lane, enrichment, and the consumer stamp (+1).
+surface-budget = 217
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -469,7 +473,9 @@ path = "crates/rimz/src/harness"
 # The keepalive helper reads the final-ping rule beside the shared eligibility recheck (+1).
 # `run::VERIFY_MAX_ATTEMPTS_DEFAULT`, the verify cap shared with the CLI (+1).
 # The exec wrapper re-wakes a resumed team member's open stage through `team_stage::rewake_resumed` (+1).
-surface-budget = 712
+# KeepWarmPolicy and its load/horizon/holding share one keep-warm admission between the keepalive helper, idle compaction, and the sidebar producer cache (+4).
+# `holds` is the one held-or-not predicate the ping, compaction, and the per-fold card projection share (+1).
+surface-budget = 717
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -654,7 +660,8 @@ path = "crates/rimz/src/store"
 # `ReportTo` is the run's durable report policy for `--detach`; `RunRecord::survives_parent` is the one survival predicate the wrapper watchdog and the orphan sweep read (+2).
 # `Store::is_pending_recovery` lets an exiting exec wrapper see its agent parked by a rebirth (+1).
 # `RunRecord::answer_started_at` is the one current-answer start the list, the report row, and the reopen fold read (+1).
-surface-budget = 364
+# CacheClock carries the card's provider cache window and keep-warm hold from enrichment to the renderer (+1).
+surface-budget = 365
 
 [[module]]
 path = "crates/rimz/src/theme"

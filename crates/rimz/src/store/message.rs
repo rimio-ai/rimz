@@ -1068,7 +1068,7 @@ pub(crate) fn prompt_is_harness_delivered(prompt: &str) -> bool {
         .all(|section| section.origin != SectionOrigin::Human)
 }
 
-/// True when every section of a non-blank prompt is a `CACHE_KEEPALIVE` notice.
+/// True when every section of a non-blank prompt is a `CACHE_KEEPALIVE` notice, so the turn it opens is no work of the agent's.
 pub(in crate::store) fn prompt_is_keepalive_only(prompt: &str) -> bool {
     !prompt.trim().is_empty()
         && split_batched_prompt(prompt).into_iter().all(|section| {

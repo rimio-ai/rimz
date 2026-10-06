@@ -1642,6 +1642,141 @@ fn hooks_bind_and_complete_supervised_run() {
     );
 }
 
+#[test]
+fn a_ping_only_turn_leaves_the_team_leaders_reply_and_activity_alone() {
+    let env = Env::new();
+    let store = env.store();
+    let mut record = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "lead".to_owned(),
+        env.project_root.clone(),
+    );
+    record.team = Some(rimz::store::run::TeamRun {
+        launch_id: AgentSessionId::from("sess-lead"),
+        instance: "forge#main".to_owned(),
+    });
+    let run_id = record.run_id.clone();
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
+    let hook = |payload: serde_json::Value| {
+        let mut command = env.hook_command("codex");
+        command.env(rimz::harness::launch::ENV_RUN_ID, run_id.as_str());
+        let out = env
+            .spawn_payload(command, &payload.to_string())
+            .wait_with_output()
+            .expect("wait hook");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let turn = |prompt: &str, reply: &str| {
+        hook(
+            json!({"hook_event_name": "UserPromptSubmit", "session_id": "sess-lead", "prompt": prompt}),
+        );
+        hook(
+            json!({"hook_event_name": "Stop", "session_id": "sess-lead", "last_assistant_message": reply}),
+        );
+    };
+    let agent = || store.snapshot().expect("snapshot").agents[0].clone();
+    turn("plan the work", "real answer");
+    let rested = agent();
+    turn(
+        "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.",
+        "ok",
+    );
+    let led = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
+    assert_eq!(led.last_message.as_deref(), Some("real answer"));
+    let pinged = agent();
+    assert_eq!(pinged.status, rested.status);
+    assert_eq!(
+        pinged.last_activity, rested.last_activity,
+        "the activity heartbeat skips the ping"
+    );
+    assert!(pinged.pinged_at.is_some());
+}
+
+#[test]
+fn a_duplicate_real_verdict_inside_a_ping_moves_nothing() {
+    let env = Env::new();
+    let store = env.store();
+    let mut record = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("grok"),
+        PermissionMode::Auto,
+        "lead".to_owned(),
+        env.project_root.clone(),
+    );
+    record.team = Some(rimz::store::run::TeamRun {
+        launch_id: AgentSessionId::from("sess-lead"),
+        instance: "forge#main".to_owned(),
+    });
+    let run_id = record.run_id.clone();
+    rimz::harness::run::create(store.paths(), &record).expect("create run");
+    let hook = |payload: serde_json::Value| {
+        let mut command = env.hook_command("grok");
+        command.env(rimz::harness::launch::ENV_RUN_ID, run_id.as_str());
+        let out = env
+            .spawn_payload(command, &payload.to_string())
+            .wait_with_output()
+            .expect("wait hook");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let start = |id: &str, prompt: &str| {
+        hook(
+            json!({"hookEventName": "user_prompt_submit", "sessionId": "sess-lead", "promptId": id, "prompt": prompt}),
+        );
+    };
+    let stop = |id: &str, reply: &str| {
+        hook(
+            json!({"hookEventName": "stop", "sessionId": "sess-lead", "promptId": id, "reason": "end_turn", "lastAssistantMessage": reply}),
+        );
+    };
+    let agent = || store.snapshot().expect("snapshot").agents[0].clone();
+    let reply = || {
+        rimz::harness::run::load(store.paths(), &run_id)
+            .expect("load run")
+            .last_message
+    };
+    start("r1", "plan the work");
+    stop("r1", "real answer");
+    let rested = agent();
+    assert_eq!(reply().as_deref(), Some("real answer"));
+    start(
+        "p1",
+        "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.",
+    );
+    stop("r1", "duplicate answer");
+    let duplicated = agent();
+    assert!(
+        duplicated.ping_turn,
+        "the duplicate is not the ping's close"
+    );
+    assert_eq!(duplicated.pinged_at, None);
+    stop("p1", "ok");
+    let pinged = agent();
+    assert_eq!(reply().as_deref(), Some("real answer"));
+    for state in [&duplicated, &pinged] {
+        assert_eq!(state.status, rested.status);
+        assert_eq!(state.last_activity, rested.last_activity);
+        assert_eq!(state.turn_started_at, rested.turn_started_at);
+        assert_eq!(state.turn_ended_at, rested.turn_ended_at);
+    }
+    assert!(pinged.pinged_at.is_some() && !pinged.ping_turn);
+    start("r2", "next task");
+    stop("r2", "next answer");
+    let next = agent();
+    assert_eq!(reply().as_deref(), Some("next answer"));
+    assert!(next.turn_ended_at > rested.turn_ended_at);
+    assert_eq!(next.started_turn_id.as_deref(), Some("r2"));
+}
+
 mod parked {
     use super::*;
     use crate::common::wait::{register_calling_agent, wait_instances, wait_ok};

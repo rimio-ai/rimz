@@ -94,10 +94,17 @@ pub(super) fn handle_lifecycle_hook(
     if derived_rotation_due || released.is_some_and(|released| released.receipt.rotation_due) {
         spawn_auto_rotation(workspace);
     }
+    // A cache ping's open or close is not agent activity: it leaves the
+    // heartbeat, active time, and the supervised run's reply and verdict alone.
+    let ping_edge = recorded
+        .as_ref()
+        .and_then(|recorded| recorded.receipt.transition.as_ref())
+        .is_some_and(|transition| transition.ping.is_some());
     let mut run_id = session_run_id(store, agent, agent_id.as_ref());
     let assistant_message =
         record_assistant_response(workspace, store, agent, decoded, recorded.as_ref());
-    if let (Some(run_id), Some((agent_id, message))) = (run_id.as_ref(), assistant_message)
+    if let (Some(run_id), Some((agent_id, message)), false) =
+        (run_id.as_ref(), assistant_message, ping_edge)
         && let Err(err) = rimz::harness::run::record_assistant_message(
             store.paths(),
             run_id,
@@ -149,14 +156,16 @@ pub(super) fn handle_lifecycle_hook(
     let context_agent_id = observed_agent_id
         .or_else(|| decoded.context_agent_id().cloned())
         .or_else(|| agent_id.clone());
-    active_time::record(
-        store,
-        agent,
-        decoded,
-        recorded.as_ref(),
-        context_agent_id.as_deref(),
-        &event_name,
-    );
+    if !ping_edge {
+        active_time::record(
+            store,
+            agent,
+            decoded,
+            recorded.as_ref(),
+            context_agent_id.as_deref(),
+            &event_name,
+        );
+    }
     if let Some(agent_id) = context_agent_id {
         let parent_activity_id = match signal {
             Some(LifecycleSignal::SubagentStopped { .. }) => parent_agent_id,
@@ -178,6 +187,7 @@ pub(super) fn handle_lifecycle_hook(
                 turn_ended,
                 tool_run,
                 tool_used: root_tool_used,
+                ping_edge,
             },
         });
     }
@@ -186,14 +196,16 @@ pub(super) fn handle_lifecycle_hook(
         let assistant_message = assistant_message_for_lifecycle(recorded, run_id.is_some(), || {
             decoded.final_message().map(ToOwned::to_owned)
         });
-        run_completion = record_run_lifecycle(
-            store,
-            agent,
-            &event_name,
-            recorded,
-            assistant_message.as_deref(),
-            run_id.as_ref(),
-        );
+        if !ping_edge {
+            run_completion = record_run_lifecycle(
+                store,
+                agent,
+                &event_name,
+                recorded,
+                assistant_message.as_deref(),
+                run_id.as_ref(),
+            );
+        }
         if root_tool_used
             && agent.spec().capabilities.hook_context.is_some()
             && let Some(run_id) = run_id.as_ref()
@@ -419,6 +431,7 @@ struct LifecycleEventContext<'a> {
     turn_ended: bool,
     tool_run: rimz::agent_activity::ToolRun<'a>,
     tool_used: bool,
+    ping_edge: bool,
 }
 
 struct ContextSidecarInput<'a> {
@@ -563,6 +576,7 @@ mod tests {
                 turn_ended: false,
                 tool_run: rimz::agent_activity::ToolRun::Reset,
                 tool_used: false,
+                ping_edge: false,
             },
         });
         assert!(

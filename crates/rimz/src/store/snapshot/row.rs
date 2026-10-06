@@ -387,6 +387,10 @@ pub struct AgentCard {
     /// [`SidebarRow::own_last_activity`], never directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_last_activity: Option<Timestamp>,
+    /// The provider prompt-cache clock the card's age pin reads, stamped by
+    /// enrichment only for a provider with a known cache TTL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheClock>,
     /// Current children and prior-turn finished children, nested under the parent.
     /// `sub_agent_count` also includes reaped running ghosts retained by the store.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -407,6 +411,21 @@ pub struct AgentCard {
     /// Label explaining why the row projected to failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error_label: Option<String>,
+}
+
+/// How long a card's prompt cache stays warm: the provider TTL its age pin
+/// fills over, the last request (pings included) that TTL counts from, and
+/// while a keep-warm horizon holds the cache, the end of the last real turn and
+/// the instant the horizon lets go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheClock {
+    pub ceiling_secs: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_request_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warm_until: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_since: Option<Timestamp>,
 }
 
 impl Default for AgentCard {
@@ -437,6 +456,7 @@ impl Default for AgentCard {
             context_severity: None,
             registered_at: None,
             own_last_activity: None,
+            cache: None,
             sub_agents: Vec::new(),
             compacting: false,
             compaction_count: 0,

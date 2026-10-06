@@ -54,6 +54,7 @@ Follow the project's instructions and report what you verified.
 | `effort` | Provider-specific absolute effort (YAML integer or string), or omit for the selected model's default. Relative `+N` / `-N` values are refused. |
 | `auto-compact` | Native compaction window: integer or string token count from `100k` through `1M`, inclusive; no percentages or decimals. |
 | `budget` | Dollar cap as string or number; a string such as `20/day` selects a daily cap. |
+| `keep-warm` | Prompt-cache [keep-warm](#keep-warm) horizon for a solo seat: `off` or a duration such as `2h`. |
 | `model-reminder` | Boolean controlling the model identity in the launch reminder for solo agents and subagents. Defaults on; team members never show model names. |
 | `traits` | Trait names substituted into this definition's body. |
 | `tools` | Tool-name list, translated to provider arguments below. |
@@ -71,7 +72,7 @@ The nearest definition setting `tier:`, `model:`, or a registered `agent:` kind 
 
 `agent:` follows only definitions in its own namespace: an agent cannot inherit a subagent or vice versa. Without `agent:`, a recognized model alias, model ID, or prefix determines the kind: Claude's roster and `claude-` prefix, and Codex's roster and `gpt-` prefix. Unknown models use the chain's kind or require `agent:` when none exists. A model implying a different kind from a registered `agent:` in the same definition is an error; a child model may change its ancestor's kind.
 
-Children inherit `tier` or `model`, `mode`, `isolation`, `effort`, `auto-compact`, `budget`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
+Children inherit `tier` or `model`, `mode`, `isolation`, `effort`, `auto-compact`, `budget`, `keep-warm`, `tools`, `allowed-tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
 
 Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases `astra`, `sol`, `luna`, and `terra` follow their account catalog's newest family model at fresh launch, subject to effort support; definitions retain the requested alias. Machine [model alias pins](../guide/configuration.md#model-aliases) take precedence. Resume and fork keep the session's recorded model for alias postures. A kind whose adapter declares native auto-compaction support defaults to `258k`; other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model`, `effort`, or `auto-compact` field. Defaults are filled only when supported.
 
@@ -147,6 +148,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `signals` | Optional nonempty signal-binding list. |
 | `flip-compact` | Stage-handoff compaction threshold or `off`. |
 | `idle-compact` | Idle team compaction: `off`, `on`, or a duration; inherits the machine setting when omitted. |
+| `keep-warm` | Prompt-cache [keep-warm](#keep-warm) horizon for this seat: `off` or a duration; not inherited from the definition. |
 
 Role fields override inherited definition fields. Unlike standalone chains, a seat's recognized model may select a different runtime kind; an unrecognized model keeps the original kind. That kind needs its own base. Tools are rendered again for the selected kind. Traits combine leaf-definition → role → team, deduplicated; ancestor crafts remain unchanged. Added traits require `${traits}` in the leaf body. Nonleaders lose `AskUserQuestion`. Every nonempty seat skill list gains `reflect`, which must pass the same library checks. Empty and omitted skill lists stay unchanged.
 
@@ -185,6 +187,12 @@ A selector is `family.event` or `family.*`: the family begins with a lowercase A
 `on` uses the configured provider prompt-cache lifetime minus one minute; a duration supplies the threshold directly. Unknown or disabled lifetimes skip the role under `on`, and an adapter without a native compact command always skips. See [idle compaction](../guide/configuration.md#idle-compaction) for the provider defaults, overrides, and eligibility.
 
 This field is valid only on a team role. A standalone definition is rejected because a solo seat is never idle-compacted.
+
+### Keep-warm
+
+`keep-warm` accepts `off` or a positive duration such as `2h` (units `s`, `m`, `h`, `d`). A bare YAML `off` (the boolean `false`) means `off`; `true`, numbers, and unitless text are refused. Omission means off.
+
+On a standalone definition it sets the horizon for a solo agent launched from that profile and is inherited through `agent`; a TOML profile inherits it through its `agent` base the same way. On a team role it sets the seat's horizon; a seat reads only its role, never the definition behind it. The horizon holds only when the provider's prompt-cache lifetime is known and at least `harness.keep_warm_min_ttl`; `rimz agents validate` warns at the definition when it will not: the lifetime is unknown or under the floor, or `harness.cache_keepalive` is off; it also notes a horizon longer than `harness.cache_keepalive_max`, which the pings stop at. A `subagents` definition may carry the field but no seat reads it, and validate says so. See [keep-warm](../guide/configuration.md#keep-warm) for what a horizon does and costs.
 
 ### Flip compaction
 

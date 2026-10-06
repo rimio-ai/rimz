@@ -6,6 +6,7 @@ use jiff::Timestamp;
 
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
+use rimz::harness::cache_keepalive::KeepWarmPolicy;
 use rimz::harness::idle_compact::{IdleCompactRequest, fire_point, resolve_mode, should_compact};
 use rimz::ids::MessageId;
 use rimz::message::compact::{
@@ -27,12 +28,14 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let store = &ctx.store;
     let agent = find_agent(&snapshot.agents, &request.kind, &request.agent_id)
         .context("idle-compaction target agent is no longer in the rollup")?;
-    let teams = rimz::config::effective::teams(&config, Some(&workspace.project_root));
-    let mode = resolve_mode(agent, &teams, config.harness.idle_compact);
+    let policy = KeepWarmPolicy::load(&config, Some(&workspace.project_root));
+    let mode = resolve_mode(agent, &policy.teams, config.harness.idle_compact);
     let window = fire_point(agent, mode, &config.harness);
     let command = rimz::agents::compact_command(agent, &config.harness);
     let now = Timestamp::now();
-    if !should_compact(agent, command.as_deref(), window, now) {
+    if !should_compact(agent, command.as_deref(), window, now)
+        || policy.holding(agent, &config.harness, now).is_some()
+    {
         return Ok(());
     }
     let expected_command =

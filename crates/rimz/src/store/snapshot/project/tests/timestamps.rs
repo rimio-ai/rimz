@@ -596,7 +596,238 @@ fn keepalive_since_holds_the_last_real_request_across_a_run_of_pings() {
     events.push(event(7000, Some(keepalive), turn()));
     assert_eq!(
         since(&events),
-        None,
-        "a ping resuming a parked row opens no run"
+        Some(events[5].timestamp),
+        "a ping to a parked row opens a run from the wake it parked"
     );
+}
+
+#[test]
+fn a_ping_only_turn_moves_only_the_cache_clock() {
+    let ping = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    let lifecycle = |at: i64, prompt: Option<&str>, signal: serde_json::Value| {
+        raw_lifecycle_at(
+            "claude",
+            at,
+            json!({ "agent_id": "a", "prompt": prompt, "signal": signal }),
+        )
+    };
+    let started = |at, prompt, id: &str| {
+        lifecycle(at, prompt, json!({"signal": "turn_started", "turn_id": id}))
+    };
+    let ended = |at, id: &str| {
+        lifecycle(
+            at,
+            None,
+            json!({"signal": "turn_ended", "errored": false, "parked_on_background": false, "turn_id": id}),
+        )
+    };
+    let interrupted = |at, id: &str| {
+        lifecycle(
+            at,
+            None,
+            json!({"signal": "turn_interrupted", "turn_id": id}),
+        )
+    };
+    let fold = |events: &[EventEnvelope]| reduce_agent_states(events).remove(0);
+    let mixed = format!("{ping}\n\nType: WAIT\nFrom: @rimz\nContent:\nwoke");
+    let observable = |state: &AgentState| {
+        (
+            state.status,
+            state.phase,
+            state.last_activity,
+            state.turn_started_at,
+            state.turn_ended_at,
+            state.user_turn_started_at,
+            state.started_turn_id.clone(),
+            state.superseded_turn_id.clone(),
+            state.interrupted_turn_id.clone(),
+        )
+    };
+    for (opener, rest) in [
+        (Some("do X"), AgentStatus::Success),
+        (
+            Some("Type: WAIT\nFrom: @rimz\nContent:\nwoke"),
+            AgentStatus::Success,
+        ),
+        (
+            Some("Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nhi"),
+            AgentStatus::Success,
+        ),
+        (Some(mixed.as_str()), AgentStatus::Success),
+        (None, AgentStatus::Success),
+        (Some("do X"), AgentStatus::Idle),
+    ] {
+        let mut events = vec![started(1, opener, "r1")];
+        events.push(if rest == AgentStatus::Idle {
+            interrupted(2, "r1")
+        } else {
+            ended(2, "r1")
+        });
+        let before = fold(&events);
+        assert_eq!(before.status, rest, "{opener:?}");
+        assert_eq!(
+            before.turn_ended_at,
+            Some(events[1].timestamp),
+            "{opener:?}"
+        );
+        assert_eq!(before.pinged_at, None);
+
+        events.push(started(3, Some(ping), "p1"));
+        let open = fold(&events);
+        assert!(open.ping_turn, "{opener:?}");
+        assert_eq!(observable(&open), observable(&before), "{opener:?}");
+        assert_eq!(
+            open.keepalive_since,
+            Some(events[0].timestamp),
+            "{opener:?}"
+        );
+
+        events.push(ended(4, "p1"));
+        let closed = fold(&events);
+        assert!(!closed.ping_turn);
+        assert_eq!(observable(&closed), observable(&before), "{opener:?}");
+        assert_eq!(closed.pinged_at, Some(events[3].timestamp));
+        assert_eq!(closed.last_request_at(), Some(events[3].timestamp));
+        assert_eq!(closed.keepalive_since, open.keepalive_since);
+        let decoded: AgentState =
+            serde_json::from_value(serde_json::to_value(&closed).unwrap()).unwrap();
+        assert_eq!(decoded.pinged_at, closed.pinged_at);
+
+        events.push(lifecycle(5, None, json!({"signal": "registered"})));
+        let cleared = fold(&events);
+        assert_eq!(cleared.pinged_at, Some(events[3].timestamp));
+        assert_eq!(cleared.keepalive_since, None, "a reset ends the run");
+
+        events.extend([started(6, Some("next"), "r2"), ended(7, "r2")]);
+        let real = fold(&events);
+        assert_eq!(real.turn_ended_at, Some(events[6].timestamp));
+        assert_eq!(real.last_request_at(), Some(events[5].timestamp));
+    }
+
+    // A ping that grows into work the user must see folds as that work.
+    let base = vec![
+        started(1, Some("do X"), "r1"),
+        ended(2, "r1"),
+        started(3, Some(ping), "p1"),
+    ];
+    let mut tool = base.clone();
+    tool.push(lifecycle(
+        4,
+        None,
+        json!({"signal": "tool_used", "mutates": false, "edits": false}),
+    ));
+    let state = fold(&tool);
+    assert!(!state.ping_turn);
+    assert_eq!(state.status, AgentStatus::Running);
+    assert_eq!(state.last_activity, tool[3].timestamp);
+    let mut asking = base.clone();
+    asking.push(lifecycle(
+        4,
+        None,
+        json!({"signal": "awaiting_input", "kind": "permission"}),
+    ));
+    let state = fold(&asking);
+    assert!(!state.ping_turn);
+    assert_eq!(state.status, AgentStatus::Waiting);
+
+    // A real turn's late report stays ignored while a ping is open.
+    let late = vec![
+        started(1, Some("do X"), "r1"),
+        started(2, Some("again"), "r2"),
+        ended(3, "r2"),
+        started(4, Some(ping), "p1"),
+        ended(5, "r1"),
+    ];
+    let state = fold(&late);
+    assert!(state.ping_turn, "the stale report is not the ping's close");
+    assert_eq!(state.turn_ended_at, Some(late[2].timestamp));
+    assert_eq!(state.status, AgentStatus::Success);
+
+    // So does a duplicate verdict for the real turn the ping followed: only the
+    // ping's own close moves the cache clock, and the next real turn folds.
+    let mut dup = late[..4].to_vec();
+    let rested = fold(&dup[..3]);
+    dup.extend([ended(5, "r2"), interrupted(6, "r2")]);
+    let state = fold(&dup);
+    assert!(
+        state.ping_turn,
+        "a duplicate real verdict is not the ping's close"
+    );
+    assert_eq!(observable(&state), observable(&rested));
+    assert_eq!(state.pinged_at, None);
+    dup.push(ended(7, "p1"));
+    let state = fold(&dup);
+    assert!(!state.ping_turn);
+    assert_eq!(observable(&state), observable(&rested));
+    assert_eq!(state.pinged_at, Some(dup[6].timestamp));
+    dup.extend([started(8, Some("next"), "r3"), ended(9, "r3")]);
+    let state = fold(&dup);
+    assert_eq!(state.status, AgentStatus::Success);
+    assert_eq!(state.started_turn_id.as_deref(), Some("r3"));
+    assert_eq!(state.turn_started_at, Some(dup[7].timestamp));
+    assert_eq!(state.turn_ended_at, Some(dup[8].timestamp));
+
+    let fresh = fold(&[lifecycle(1, None, json!({"signal": "registered"}))]);
+    let encoded = serde_json::to_value(&fresh).unwrap();
+    assert!(encoded.get("ping_turn").is_none() && encoded.get("pinged_at").is_none());
+}
+
+#[test]
+fn a_ping_on_a_row_parked_on_background_work_moves_only_the_cache_clock() {
+    let ping = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    let lifecycle = |at: i64, prompt: Option<&str>, signal: serde_json::Value| {
+        raw_lifecycle_at(
+            "claude",
+            at,
+            json!({ "agent_id": "a", "prompt": prompt, "signal": signal }),
+        )
+    };
+    let started = |at, prompt| lifecycle(at, prompt, json!({"signal": "turn_started"}));
+    let parked_end = |at| {
+        lifecycle(
+            at,
+            None,
+            json!({"signal": "turn_ended", "errored": false, "parked_on_background": true}),
+        )
+    };
+    let fold = |events: &[EventEnvelope]| reduce_agent_states(events).remove(0);
+    let mut events = vec![started(1, Some("start the dev server")), parked_end(2)];
+    let rested = fold(&events);
+    assert_eq!(
+        (rested.status, rested.phase),
+        (AgentStatus::Running, TurnPhase::Parked)
+    );
+    assert_eq!(rested.effective_status(), AgentStatus::Success);
+    let observable = |state: &AgentState| {
+        (
+            state.status,
+            state.phase,
+            state.last_activity,
+            state.turn_started_at,
+            state.turn_ended_at,
+            state.user_turn_started_at,
+        )
+    };
+
+    events.push(started(3, Some(ping)));
+    let open = fold(&events);
+    assert!(open.ping_turn, "a parked row rests, so the ping is no work");
+    assert_eq!(observable(&open), observable(&rested));
+    assert_eq!(open.keepalive_since, Some(events[0].timestamp));
+    events.push(parked_end(4));
+    let closed = fold(&events);
+    assert!(!closed.ping_turn);
+    assert_eq!(
+        observable(&closed),
+        observable(&rested),
+        "the ping's close never renews the horizon anchor"
+    );
+    assert_eq!(closed.pinged_at, Some(events[3].timestamp));
+
+    // A turn still in flight is no rest: the same prompt opens real work.
+    let working = [started(1, Some("build it")), started(2, Some(ping))];
+    let active = fold(&working);
+    assert!(!active.ping_turn);
+    assert_eq!(active.status, AgentStatus::Running);
+    assert_eq!(active.turn_started_at, Some(working[1].timestamp));
 }

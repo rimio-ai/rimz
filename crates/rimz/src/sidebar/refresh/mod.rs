@@ -13,8 +13,9 @@ use crate::agents::spending::{
     SpendScope, SpendingCaches, WorkspaceSpendingCache, read_workspace_spending_cache,
 };
 use crate::agents::{AgentAccount, AgentState};
-use crate::config::{MachineConfig, TeamsConfig};
+use crate::config::MachineConfig;
 use crate::forge::pr_state::PrLink;
+use crate::harness::cache_keepalive::KeepWarmPolicy;
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{RuntimePaths, Store};
 
@@ -24,6 +25,7 @@ pub(super) mod credits;
 pub(super) mod daemon_reap;
 mod git_refs;
 pub mod git_stats;
+pub(super) mod keep_warm;
 pub(super) mod live_spend;
 pub(super) mod pipeline;
 mod pr;
@@ -269,14 +271,20 @@ pub(super) fn refresh_heavy_lanes(
         &config.resume,
         &resume_messages,
     );
-    let teams = if base.agents.iter().any(|agent| agent.team.is_some()) {
-        crate::config::effective::teams(config, base.project_root.as_deref())
+    let policy = if base
+        .agents
+        .iter()
+        .any(|agent| agent.team.is_some() || agent.profile.is_some())
+    {
+        KeepWarmPolicy::load(config, base.project_root.as_deref())
     } else {
-        TeamsConfig::default()
+        KeepWarmPolicy::default()
     };
-    crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &teams);
+    let teams = &policy.teams;
+    crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &policy);
     crate::harness::idle_stop::stop_idle_agents(base, state_paths, runtime);
-    crate::harness::cache_keepalive::keepalive_agents(base, runtime, &config.harness);
+    crate::harness::cache_keepalive::keepalive_agents(base, runtime, &config.harness, &policy);
+    keep_warm::publish(base, runtime, &config.harness, &policy);
     crate::harness::auto_redeem::redeem_credits(
         &panels.providers,
         &credits::idle_reset_credits(runtime, &logins),
@@ -323,7 +331,7 @@ pub(super) fn refresh_heavy_lanes(
         &mut state.cohort_rollup,
         &mut state.cohort_effort,
     );
-    pipeline::refresh_pipeline_for(base, runtime, config, &teams);
+    pipeline::refresh_pipeline_for(base, runtime, config, teams);
     let pr_cache = produce_pr_states(base, runtime);
     trunk::produce_trunk_state(base, runtime, config.sidebar.trunk.as_deref());
 

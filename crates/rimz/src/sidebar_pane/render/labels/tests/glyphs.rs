@@ -54,7 +54,7 @@ fn card_emphasis_maps_attention_tiers() {
 }
 
 #[test]
-fn elapsed_glyph_fills_by_the_quarter_hour() {
+fn elapsed_glyph_fills_by_the_quarter_of_its_ceiling() {
     let theme = Theme::fixed(false);
     for (secs, glyph) in [
         (0, "◔"),
@@ -68,7 +68,28 @@ fn elapsed_glyph_fills_by_the_quarter_hour() {
         (3601, "◉"),
         (48 * 3600, "◉"),
     ] {
-        assert_eq!(elapsed_glyph(&theme, secs), glyph, "elapsed_glyph({secs})");
+        assert_eq!(
+            elapsed_glyph(&theme, secs, 3600),
+            glyph,
+            "elapsed_glyph({secs}, 3600)"
+        );
+    }
+    for (secs, glyph) in [
+        (0, "◔"),
+        (450, "◔"),
+        (451, "◑"),
+        (900, "◑"),
+        (901, "◕"),
+        (1350, "◕"),
+        (1351, "●"),
+        (1800, "●"),
+        (1801, "◉"),
+    ] {
+        assert_eq!(
+            elapsed_glyph(&theme, secs, 1800),
+            glyph,
+            "a 30m cache window fills twice as fast: elapsed_glyph({secs}, 1800)"
+        );
     }
 }
 
@@ -629,10 +650,11 @@ fn activity_age_style_slides_with_the_clock_age() {
     let red = theme.alarm(Modifier::empty());
     let heat = |age_secs: i64| {
         theme.style(
-            theme.warm_heat_tone(age_heat_amount_for_test(age_secs)),
+            theme.warm_heat_tone(age_heat_amount_for_test(age_secs, 3600)),
             Modifier::empty(),
         )
     };
+    let activity_age_style = |theme: &Theme, age| activity_age_style(theme, age, 3600);
     assert_eq!(activity_age_style(&theme, 60), theme.muted());
     assert_eq!(activity_age_style(&theme, 900), theme.muted());
     assert_eq!(
@@ -650,6 +672,21 @@ fn activity_age_style_slides_with_the_clock_age() {
         activity_age_style(&theme, 3601),
         red,
         "alarm clamps once the cache is likely invalidated"
+    );
+}
+
+#[test]
+fn activity_age_style_ramps_over_the_given_ceiling() {
+    let theme = Theme::fixed(false);
+    assert_eq!(super::activity_age_style(&theme, 450, 1800), theme.muted());
+    assert_eq!(
+        super::activity_age_style(&theme, 1125, 1800),
+        theme.style(theme.warm_heat_tone(0.5), Modifier::empty()),
+        "a 30m window reaches the ramp's midpoint at 18m45s"
+    );
+    assert_eq!(
+        super::activity_age_style(&theme, 1800, 1800),
+        theme.alarm(Modifier::empty())
     );
 }
 

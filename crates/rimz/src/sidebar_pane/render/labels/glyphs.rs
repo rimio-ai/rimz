@@ -39,31 +39,38 @@ const NERD_AGE_SLICES: [&str; 8] = [
     "\u{f0aa5}", // nf-md-circle_slice_8
 ];
 
-/// The clock-fill glyph for an elapsed span, filling toward the hour: Unicode
-/// fills a quarter per quarter hour — `◔` to 15m, `◑` to 30m, `◕` to 45m, `●`
-/// to the hour — while the Nerd Font preset fills an eighth per 7.5 minutes
-/// across the `circle_slice` series. Both read the ringed `◉` past the hour, so
-/// any time readout on a card carries its magnitude iconographically. One cell,
-/// so it never disturbs alignment.
-pub(in crate::sidebar_pane::render) fn elapsed_glyph(theme: &Theme, secs: i64) -> String {
-    if secs > 3600 {
+/// The clock-fill glyph for an elapsed span, filling toward `ceiling_secs` —
+/// the hour for attention clocks, the provider's cache TTL for a card's age
+/// pin: Unicode fills a quarter per quarter of the ceiling (`◔`, `◑`, `◕`,
+/// `●`), while the Nerd Font preset fills an eighth per eighth across the
+/// `circle_slice` series. Both read the ringed `◉` past the ceiling, so any
+/// time readout on a card carries its magnitude iconographically. One cell, so
+/// it never disturbs alignment.
+pub(in crate::sidebar_pane::render) fn elapsed_glyph(
+    theme: &Theme,
+    secs: i64,
+    ceiling_secs: i64,
+) -> String {
+    if secs > ceiling_secs {
         return theme.glyph(GlyphRole::ClockOver).to_owned();
     }
     match theme.glyph_kind() {
         GlyphSetKind::NerdFont => {
-            let eighth = (secs.max(0) / 450).min(7) as usize;
+            let eighth = (secs.max(0) * 8 / ceiling_secs.max(1)).min(7) as usize;
             NERD_AGE_SLICES[eighth].to_owned()
         }
-        GlyphSetKind::Unicode => theme.glyph(elapsed_quarter_role(secs)).to_owned(),
+        GlyphSetKind::Unicode => theme
+            .glyph(elapsed_quarter_role(secs, ceiling_secs))
+            .to_owned(),
     }
 }
 
-/// The Unicode quarter-clock role for an elapsed span under an hour.
-fn elapsed_quarter_role(secs: i64) -> GlyphRole {
-    match secs {
-        i64::MIN..=900 => GlyphRole::ClockQ1,
-        901..=1800 => GlyphRole::ClockQ2,
-        1801..=2700 => GlyphRole::ClockQ3,
+/// The Unicode quarter-clock role for an elapsed span within its ceiling.
+fn elapsed_quarter_role(secs: i64, ceiling_secs: i64) -> GlyphRole {
+    match 4 * secs {
+        quarters if quarters <= ceiling_secs => GlyphRole::ClockQ1,
+        quarters if quarters <= 2 * ceiling_secs => GlyphRole::ClockQ2,
+        quarters if quarters <= 3 * ceiling_secs => GlyphRole::ClockQ3,
         _ => GlyphRole::ClockQ4,
     }
 }

@@ -187,6 +187,7 @@ mod tests {
                 compaction_closed: true,
                 waiting_cleared: false,
                 opened_turn: false,
+                ping: None,
             },
         );
         let json = serde_json::to_string(&value).unwrap();

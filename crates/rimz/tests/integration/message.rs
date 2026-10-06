@@ -2079,6 +2079,7 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
                 .target(
                     &current,
                     &toml::from_str("[prompt_cache_ttl]\nclaude = \"61s\"").unwrap(),
+                    &Default::default(),
                     jiff::Timestamp::now()
                 )
                 .is_some(),

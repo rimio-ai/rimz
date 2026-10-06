@@ -1568,6 +1568,23 @@ fn harness_idle_compact_validation_accepts_modes_and_duration() {
 }
 
 #[test]
+fn harness_keep_warm_floor_validation_accepts_off_and_durations() {
+    let floor = parse_key("harness.keep_warm_min_ttl").expect("floor key");
+    for value in ["off", "15m", "1h"] {
+        validate_set_value(&floor, &Value::from(value)).expect("keep-warm floor");
+    }
+    for value in [Value::from("on"), Value::from("15"), Value::from(true)] {
+        let err = validate_set_value(&floor, &value)
+            .expect_err("invalid keep-warm floor")
+            .to_string();
+        assert_eq!(
+            err,
+            "harness.keep_warm_min_ttl must be off or a duration such as 15m"
+        );
+    }
+}
+
+#[test]
 fn retired_idle_compaction_is_rejected_then_removed_preserving_other_settings() {
     for (mode, has_after) in [("auto", true), ("always", false), ("off", true)] {
         let dir = tempfile::tempdir().unwrap();

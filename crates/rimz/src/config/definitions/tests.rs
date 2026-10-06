@@ -568,6 +568,78 @@ fn idle_compact_rejects_unitless_role_and_solo_field() {
 }
 
 #[test]
+fn keep_warm_lands_on_solo_profiles_with_inheritance_and_on_role_bindings() {
+    let root = team_fixture();
+    definition(
+        root.path(),
+        "agents/warm.md",
+        "agent: claude\ntools: [Bash]\nkeep-warm: 2h",
+        "Warm.",
+    );
+    definition(root.path(), "agents/heir.md", "agent: warm", "Heir.");
+    definition(
+        root.path(),
+        "agents/cold.md",
+        "agent: warm\nkeep-warm: off",
+        "Cold.",
+    );
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        &format!("{TEAM_ROLES}\n    keep-warm: 90m"),
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let two_hours = Some(crate::config::KeepWarm::For(
+        std::time::Duration::from_secs(7200),
+    ));
+    assert_eq!(loaded.agent_profiles.0["warm"].keep_warm, two_hours);
+    assert_eq!(loaded.agent_profiles.0["heir"].keep_warm, two_hours);
+    assert_eq!(
+        loaded.agent_profiles.0["cold"].keep_warm,
+        Some(crate::config::KeepWarm::Off)
+    );
+    assert_eq!(loaded.agent_profiles.0["worker"].keep_warm, None);
+    let team = &loaded.teams.0["probe"];
+    assert_eq!(team.roles[0].keep_warm, None);
+    assert_eq!(
+        team.roles[1].keep_warm,
+        Some(crate::config::KeepWarm::For(
+            std::time::Duration::from_secs(5400)
+        ))
+    );
+    let seat = &loaded.agent_profiles.0[&team.roles[1].profile];
+    assert_eq!(
+        seat.keep_warm, None,
+        "the role binding owns a seat's horizon"
+    );
+    let roles = serde_json::to_value(&team.roles).unwrap();
+    assert_eq!(roles[1]["keep-warm"], "90m");
+}
+
+#[test]
+fn keep_warm_refuses_flags_numbers_and_unitless_text() {
+    for value in ["true", "0", "2x"] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/warm.md",
+            &format!("agent: claude\ntools: [Bash]\nkeep-warm: {value}"),
+            "Warm.",
+        );
+        error(root.path(), "keep-warm takes off or a duration such as 2h");
+        let root = team_fixture();
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!("{TEAM_ROLES}\n    keep-warm: {value}"),
+            "Pipeline.",
+        );
+        error(root.path(), "keep-warm takes off or a duration such as 2h");
+    }
+}
+
+#[test]
 fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
     let root = team_fixture();
     team_definition(

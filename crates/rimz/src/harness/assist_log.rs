@@ -102,6 +102,9 @@ pub enum Assist {
         label: Option<String>,
         idle_secs: u64,
         waits: usize,
+        /// The keep-warm horizon that held the agent for this ping; `None` when only a pending wait qualified it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        horizon_secs: Option<u64>,
         message_id: String,
         delivered: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -432,6 +435,7 @@ mod tests {
                     label: Some("@coder".into()),
                     idle_secs: 3540,
                     waits: 2,
+                    horizon_secs: Some(7200),
                     message_id: "msg_1".into(),
                     delivered: true,
                     error: None,
