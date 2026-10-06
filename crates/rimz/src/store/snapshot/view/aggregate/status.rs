@@ -124,7 +124,7 @@ pub(super) fn project_display_status(
         let has_live_child = agent
             .sub_agents
             .iter()
-            .any(|child| child.status == AgentStatus::Running);
+            .any(|child| child.holds_parent_turn());
         let turn_error = display_turn_error(
             status,
             agent.context.as_ref(),

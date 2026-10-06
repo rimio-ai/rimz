@@ -419,6 +419,7 @@ fn provider_child_attention_matches_declared_status_count() {
         .expect("agent row")
         .sub_agents
         .push(SidebarSubAgent {
+            turn_error_label: None,
             id: "child".to_owned(),
             prior_turn: false,
             name: "Explore".to_owned(),

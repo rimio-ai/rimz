@@ -627,6 +627,8 @@ struct ChildReport {
     description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     turn_error: Option<ChildTurnError>,
+    #[serde(skip)]
+    turn_error_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -646,15 +648,9 @@ struct ChildTurnError {
 impl ChildReport {
     /// The muted line under a row: why the child stopped, else what it is doing.
     fn detail(&self) -> Option<String> {
-        match &self.turn_error {
-            Some(error) => Some(
-                error
-                    .label
-                    .clone()
-                    .unwrap_or_else(|| error.class.words().to_owned()),
-            ),
-            None => self.description.clone(),
-        }
+        self.turn_error_label
+            .clone()
+            .or_else(|| self.description.clone())
     }
 }
 
@@ -801,6 +797,7 @@ fn child_reports(
                 kind: child.kind.to_string(),
                 status: child.rowless_status().0.as_str().to_owned(),
                 description: child.activity_line(),
+                turn_error_label: child.displayed_turn_error_label(),
                 turn_error: child
                     .displayed_turn_error()
                     .map(|(class, error)| ChildTurnError {

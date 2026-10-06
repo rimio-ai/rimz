@@ -2,6 +2,122 @@ use super::*;
 use crate::agents::{PendingWait, PendingWaitTrigger};
 
 #[test]
+fn paused_child_keeps_parent_delegating_head_and_pet() {
+    let parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    let mut child = agent(
+        "child",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("review"),
+    );
+    child.parent_agent_id = Some("parent".into());
+    let mut snapshot = snapshot_with(vec![parent, child]);
+    let ui = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    let running = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 28);
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents[0]
+        .status = AgentStatus::Paused;
+    assert_eq!(
+        selected_pet_action(&snapshot, &ui),
+        crate::sidebar_pane::pets::PetAction::Waiting
+    );
+    assert_eq!(
+        animation_cadence_for_test(&snapshot),
+        AnimationCadence::Fast
+    );
+    let paused = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 28);
+    let parent_line = |screen: &str| {
+        screen
+            .lines()
+            .find(|line| line.contains("claude"))
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(parent_line(&paused), parent_line(&running));
+}
+
+#[test]
+fn paused_child_headline_stays_in_live_band() {
+    let parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    let mut paused = agent("paused", "claude", AgentStatus::Running, None, None, None);
+    paused.parent_agent_id = Some("parent".into());
+    paused.launch_depth = Some(1);
+    paused.profile = Some("review".to_owned());
+    paused.registered_at = Some(fixed_now() - Duration::from_secs(100));
+    paused.last_activity = fixed_now() - Duration::from_secs(10);
+    paused.description = Some("hidden task".to_owned());
+    let mut context = crate::agents::AgentContext::new("claude", fixed_now());
+    context.turn_error = Some(crate::agents::AgentTurnError {
+        class: crate::agents::TurnErrorClass::PausedRateLimit,
+        at: fixed_now(),
+        label: Some("usage limit\nreached".to_owned()),
+    });
+    paused.context = Some(context);
+    let mut running = paused.clone();
+    running.agent_id = "running".into();
+    running.profile = Some("build".to_owned());
+    running.registered_at = Some(fixed_now() - Duration::from_secs(50));
+    running.context = None;
+    let snapshot = snapshot_with(vec![parent, paused, running]);
+    let ui = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    for (width, name) in [
+        (54, "paused_child_entry"),
+        (28, "paused_child_entry_narrow"),
+    ] {
+        let bytes = snapshot_to_bytes_with_alert_and_ui(&snapshot, None, &ui, width, 28);
+        let mut parser = vt100::Parser::new(28, width, 0);
+        parser.process(&bytes);
+        let screen = parser.screen().contents();
+        let (line_index, line) = screen
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains("review"))
+            .unwrap();
+        assert!(line.contains("⏸"), "{screen}");
+        assert!(line.contains("usage"), "{screen}");
+        let col = line.chars().position(|ch| ch == 'u').unwrap();
+        assert!(
+            parser
+                .screen()
+                .cell(line_index as u16, col as u16)
+                .unwrap()
+                .italic()
+        );
+        assert!(screen.find("review").unwrap() < screen.find("build").unwrap());
+        if width == 54 {
+            assert!(line.contains("usage limit reached"));
+        } else {
+            assert!(!line.contains("usage limit reached"));
+        }
+        assert_snapshot(name, screen);
+    }
+}
+
+#[test]
 fn delegation_bands_keep_live_children_and_fold_older_ones() {
     let mut parent = agent(
         "parent",

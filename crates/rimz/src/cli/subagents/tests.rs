@@ -909,6 +909,7 @@ fn child_report_json_includes_parent_and_omits_an_unknown_channel() {
         status: "running".to_owned(),
         description: None,
         turn_error: None,
+        turn_error_label: None,
         run_id: None,
         run_status: None,
         started_at: None,
@@ -1103,6 +1104,43 @@ fn child_reports_show_a_limit_parked_child_as_paused_beside_its_open_run() {
     assert_eq!(unlabelled.detail().as_deref(), Some("rate limit"));
     let value = serde_json::to_value(&unlabelled).expect("serialize child report");
     assert!(value["turn_error"]["label"].is_null());
+}
+
+#[test]
+fn nested_child_agrees_with_list_status_and_detail() {
+    let now = Timestamp::now();
+    let mut parent =
+        rimz::agents::AgentState::stub("claude", "parent", rimz::agents::AgentStatus::Idle);
+    parent.worktree_path = Some("/repo/main".to_owned());
+    let pane: rimz::pane::PaneRef = serde_json::from_value(serde_json::json!({
+        "pane_id": "tmux:%1", "session_name": "test", "command": "claude", "cwd": "/repo/main"
+    }))
+    .unwrap();
+    parent.pane = Some(pane.clone());
+    let mut child =
+        rimz::agents::AgentState::stub("claude", "child", rimz::agents::AgentStatus::Running);
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    let mut context = rimz::agents::AgentContext::new("claude", now);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        class: rimz::agents::TurnErrorClass::PausedRateLimit,
+        at: child.last_activity + Duration::from_secs(1),
+        label: None,
+    });
+    child.context = Some(context);
+    let agents = vec![parent, child.clone()];
+    let report = child_reports(&agents, &[&child], &[], now).remove(0);
+    let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo/main")),
+        agents,
+        now,
+    );
+    let snapshot = snapshot.with_live_panes(vec![pane], None);
+    let entry = &snapshot.worktree_groups[0].rows[0].sub_agents()[0];
+    assert_eq!(entry.status.as_str(), report.status);
+    assert_eq!(entry.status, child.rowless_status().0);
+    assert_eq!(entry.turn_error_label, report.detail());
 }
 
 #[test]

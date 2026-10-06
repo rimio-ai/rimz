@@ -170,7 +170,8 @@ upward-dependencies = ["address"]
 # `RecordedLogin`, the probe outcome a `ProviderRecord` stores, and `ProviderRecord::login_is_ambiguous`, the legacy shape `accounts list` probes again (+2).
 # PingEdge names how a signal touches a ping-only turn, for the store fold and the lifecycle hook (+1).
 # AgentState::rests_in_lifecycle is the durable rest both the ping-open rule and the keep-warm hold read (+1).
-surface-budget = 982
+# AgentState::displayed_turn_error_label shares the nested entry and list wording (+1).
+surface-budget = 983
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -661,7 +662,8 @@ path = "crates/rimz/src/store"
 # `Store::is_pending_recovery` lets an exiting exec wrapper see its agent parked by a rebirth (+1).
 # `RunRecord::answer_started_at` is the one current-answer start the list, the report row, and the reopen fold read (+1).
 # CacheClock carries the card's provider cache window and keep-warm hold from enrichment to the renderer (+1).
-surface-budget = 365
+# SidebarSubAgent::holds_parent_turn shares delegation liveness with the renderer (+1).
+surface-budget = 366
 
 [[module]]
 path = "crates/rimz/src/theme"

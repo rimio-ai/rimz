@@ -12,6 +12,13 @@ fn subagent_context_window_round_trips_and_accepts_legacy_json() {
         "last_activity": row_time(), "tokens": {"window": 190_000}
     });
     let legacy: SidebarSubAgent = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(legacy.turn_error_label, None);
+    assert!(
+        serde_json::to_value(&legacy)
+            .unwrap()
+            .get("turn_error_label")
+            .is_none()
+    );
     assert!(
         serde_json::to_value(legacy)
             .unwrap()
@@ -19,9 +26,11 @@ fn subagent_context_window_round_trips_and_accepts_legacy_json() {
             .is_none()
     );
     value["context_window"] = serde_json::json!(200_000);
+    value["turn_error_label"] = serde_json::json!("rate limit");
     let child: SidebarSubAgent = serde_json::from_value(value).unwrap();
     let encoded = serde_json::to_value(&child).unwrap();
     assert_eq!(encoded["context_window"], 200_000);
+    assert_eq!(encoded["turn_error_label"], "rate limit");
     assert_eq!(encoded["tokens"], serde_json::json!({"window": 190_000}));
     assert_eq!(
         serde_json::from_value::<SidebarSubAgent>(encoded).unwrap(),
