@@ -80,6 +80,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
             &message.message_id,
             &delivery.check,
             &delivery.verdict,
+            &raw_target,
             now,
         )?;
     }
@@ -393,6 +394,7 @@ pub(super) fn render_delivery_check(
     message_id: &MessageId,
     check: &deliver::DeliveryCheck,
     verdict: &str,
+    target: &str,
     now: Timestamp,
 ) -> Result<()> {
     writeln!(out)?;
@@ -435,7 +437,7 @@ pub(super) fn render_delivery_check(
     kv.push("pane", condition_cell(ok, detail));
     kv.render(out)?;
     writeln!(out, "  {verdict}")?;
-    if let Some(hint) = delivery_action_hint(&check.verdict(), message_id) {
+    if let Some(hint) = delivery_action_hint(&check.verdict(), message_id, target) {
         writeln!(out, "  {}", render::paint(render::palette::faint(), &hint))?;
     }
     Ok(())
@@ -557,7 +559,7 @@ fn ask_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
     let detail = if check.ask.waiting {
         "waiting in pane".to_owned()
     } else if check.ask.force {
-        "ok (--force)".to_owned()
+        "ok (forced)".to_owned()
     } else {
         "ok".to_owned()
     };
@@ -697,6 +699,7 @@ pub(super) fn render_verdict(
 pub(super) fn delivery_action_hint(
     verdict: &deliver::DeliveryVerdict,
     message_id: &MessageId,
+    target: &str,
 ) -> Option<String> {
     match verdict {
         deliver::DeliveryVerdict::Scheduled { .. } => Some(format!(
@@ -713,7 +716,7 @@ pub(super) fn delivery_action_hint(
             Some(format!("force now: rimz message steer {message_id}"))
         }
         deliver::DeliveryVerdict::AskWaiting => Some(format!(
-            "force now: rimz message steer {message_id} --force"
+            "see it: rimz asks show {target}      answer it: rimz answer {target} <choice>"
         )),
         deliver::DeliveryVerdict::NoPane { .. } | deliver::DeliveryVerdict::Ready => None,
         deliver::DeliveryVerdict::ReceiverEnded => None,
@@ -723,6 +726,15 @@ pub(super) fn delivery_action_hint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_wait_hint_routes_to_the_prompt_and_answer() {
+        let id = "msg_0000000000000001".parse().unwrap();
+        assert_eq!(
+            delivery_action_hint(&deliver::DeliveryVerdict::AskWaiting, &id, "@coder").as_deref(),
+            Some("see it: rimz asks show @coder      answer it: rimz answer @coder <choice>")
+        );
+    }
 
     use rimz::agents::AgentStatus;
     use rimz::ids::{MessageId, MuxName, PaneId};
@@ -743,7 +755,7 @@ mod tests {
             render_verdict(&verdict, "@otter", Some(&receiver), Timestamp::UNIX_EPOCH),
             "stuck: receiver @otter has ended; rimz message @otter resumes it"
         );
-        assert_eq!(delivery_action_hint(&verdict, &id), None);
+        assert_eq!(delivery_action_hint(&verdict, &id, "@otter"), None);
     }
 
     #[test]
@@ -755,7 +767,7 @@ mod tests {
             "waiting: @otter is resuming; delivers when its provider registers"
         );
         assert_eq!(
-            delivery_action_hint(&verdict, &id),
+            delivery_action_hint(&verdict, &id, "@otter"),
             Some(format!("force now: rimz message steer {id}"))
         );
     }
@@ -821,7 +833,7 @@ mod tests {
         check.agent.present = false;
         check.gate.open = false;
         assert_eq!(
-            delivery_action_hint(&check.verdict(), &message_id),
+            delivery_action_hint(&check.verdict(), &message_id, "@claude"),
             Some("force now: rimz message steer msg_0000000000000001".to_owned())
         );
     }

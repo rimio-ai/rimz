@@ -76,6 +76,8 @@ sent to @planner#auth (msg_06gc05nhj9q2b4t7)
 
 Nothing is locked in until it lands: `rimz message cancel msg_06gc05m0d327d1d0` stops a message still waiting, and `rimz message steer msg_06gc05m0d327d1d0` promotes that exact record past its gate.
 
+Other receipts name the opening time, the first unmet `--after` or `--when` condition, the blocking message id, or the missing live pane. A resumed provider gets a receipt saying it is starting. When a prompt owns the input, the receipt says your text will not be read until that prompt is answered and points to `rimz asks show @coder` and `rimz answer @coder <choice>`. `message show` gives the same pair of commands for that blocker.
+
 **Steer the live turn.** `--steer` writes into the live turn now, the way typing into its pane would, so you can redirect it mid-thought. If RimZ is already writing a command, message, or answer to that pane, steer waits up to 30 seconds for that write to finish, its submit key included, rather than inserting text halfway through it.
 
 ```sh
