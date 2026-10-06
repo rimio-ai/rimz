@@ -733,6 +733,156 @@ fn resident_show_summarizes_worktree_conditions() {
         summary.contains("condition: evaluated per owned worktree · 0 launched"),
         "{summary}"
     );
+    assert!(!summary.contains("SUBSCRIPTIONS"), "{summary}");
+}
+
+#[test]
+fn loop_show_lists_each_derived_subscription() {
+    loop_show_subscriptions_case(false);
+}
+
+#[test]
+fn loop_show_loads_subscriptions_and_results_from_the_tasks_room() {
+    loop_show_subscriptions_case(true);
+}
+
+fn loop_show_subscriptions_case(other_room: bool) {
+    use rimz::harness::schedule::run_log::SignalRecord;
+
+    let env = Env::new();
+    let root = if other_room {
+        let root = env.home_root.join("other-room");
+        std::fs::create_dir(&root).unwrap();
+        root
+    } else {
+        env.project_root.clone()
+    };
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.sweep]\nroot = {root:?}\nagent = \"codex\"\nprompt = \"repair\"\nstay = true\nwhen = [\"pr=open\"]\n"
+        ),
+    );
+    let subscription = |checkout: &str, handle: &str, signal: &str| TaskEntry {
+        root: root.clone(),
+        dir: Some(env.home_root.join(checkout)),
+        loop_task: Some("sweep".into()),
+        wait: Some(TaskTarget {
+            kind: AgentKind::new_unchecked("codex"),
+            session: "session".into(),
+            handle: handle.into(),
+        }),
+        signal: Some(signal.into()),
+        ..TaskEntry::default()
+    };
+    let mut unrelated = subscription("feature-a", "@fixer#feature-a", "ci.failed");
+    unrelated.loop_task = Some("another-loop".into());
+    let mut team_only = unrelated.clone();
+    team_only.loop_task = None;
+    team_only.team = Some("forge#feature-a".parse().unwrap());
+    let tasks = Tasks(BTreeMap::from([
+        (
+            "derived-a".into(),
+            subscription("feature-a", "@fixer#feature-a", "ci.failed"),
+        ),
+        (
+            "derived-b".into(),
+            subscription("feature-a", "@fixer#feature-a", "pr.merged"),
+        ),
+        (
+            "derived-c".into(),
+            subscription("feature-b", "@reviewer#feature-b", "ci.failed"),
+        ),
+        (
+            "derived-d".into(),
+            subscription("feature-b", "@reviewer#feature-b", "ci.passed"),
+        ),
+        ("unrelated".into(), unrelated),
+        ("team-only".into(), team_only),
+    ]));
+    let path = env
+        .state_path_for(&root)
+        .root
+        .join("records/loop-instances.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_vec(&tasks).unwrap()).unwrap();
+    let record = |name: &str, result: LoopRunResult, minutes: i64| {
+        let mut record = LoopRunRecord::new(name, result, LoopRunMode::Scheduled, 0);
+        record.root = Some(root.clone());
+        record.at = Timestamp::now() - SignedDuration::from_mins(minutes);
+        if result == LoopRunResult::SignalSkipped {
+            record.signal = Some(SignalRecord {
+                name: tasks.0[name].signal.as_deref().unwrap().parse().unwrap(),
+                payload: serde_json::Map::new(),
+            });
+        }
+        record
+    };
+    let mut foreign = record("derived-a", LoopRunResult::Failed, 1);
+    foreign.root = Some(env.home_root.join("foreign-room"));
+    write_loop_run_records(
+        &env,
+        &[
+            record("derived-a", LoopRunResult::Delivered, 5),
+            record("derived-b", LoopRunResult::Completed, 4),
+            record("derived-b", LoopRunResult::SignalSkipped, 3),
+            record("derived-b", LoopRunResult::SignalSkipped, 2),
+            record("derived-b", LoopRunResult::SignalSkipped, 1),
+            record("derived-d", LoopRunResult::SignalSkipped, 1),
+            foreign,
+        ],
+    );
+    let shown = loop_ok(&env, &["loop", "show", "sweep"]);
+    let subscriptions = shown
+        .split_once("SUBSCRIPTIONS\n")
+        .unwrap_or_else(|| panic!("missing SUBSCRIPTIONS block: {shown}"))
+        .1
+        .split("\n\n")
+        .next()
+        .unwrap();
+    for (name, checkout, target, signal, last) in [
+        (
+            "derived-a",
+            "feature-a",
+            "@fixer#feature-a",
+            "ci.failed",
+            "✓ 5m ago",
+        ),
+        (
+            "derived-b",
+            "feature-a",
+            "@fixer#feature-a",
+            "pr.merged",
+            "✓ 4m ago",
+        ),
+        (
+            "derived-c",
+            "feature-b",
+            "@reviewer#feature-b",
+            "ci.failed",
+            "never fired",
+        ),
+        (
+            "derived-d",
+            "feature-b",
+            "@reviewer#feature-b",
+            "ci.passed",
+            "heard ci.passed 1m ago",
+        ),
+    ] {
+        let row = subscriptions
+            .lines()
+            .find(|line| line.contains(name))
+            .unwrap_or_else(|| panic!("missing {name}: {shown}"));
+        for cell in [checkout, target, signal, last] {
+            assert!(row.contains(cell), "missing {cell}: {row}");
+        }
+        assert_eq!(subscriptions.matches(name).count(), 1, "{shown}");
+    }
+    assert!(!subscriptions.contains("unrelated"), "{shown}");
+    assert!(!subscriptions.contains("team-only"), "{shown}");
+    assert!(!subscriptions.contains("✗ failed"), "{shown}");
+    assert!(!subscriptions.contains("skipped"), "{shown}");
 }
 
 #[cfg(unix)]
