@@ -498,7 +498,7 @@ The join succeeds only when every leg completes; otherwise it takes the first no
 
 One deadline spans fan-out dispatch and every reply turn. A human's bare `--wait` is indefinite, an agent's defaults to one hour, and an explicit duration wins. On expiry every unfinished `Sent` record is marked timed out, every unfinished leg is classified `TimedOut`, and the command exits 124.
 
-Text output streams labeled replies in completion order; `--json` buffers one handle-keyed map. A single agent that writes no assistant message yields empty stdout and a note on stderr.
+Before polling, the CLI prints each ordinary delivery receipt on stderr, including in JSON mode. Text output streams labeled replies in completion order; `--json` buffers one handle-keyed map. A single agent that writes no assistant message yields empty stdout and a note on stderr. Each `ReplyResult` carries its leg's last observed message status, so deadline hints describe the same queued, sent, or delivered state that timeout settlement acted on without re-reading the store. The timeout header and per-leg hints go to stderr in both output modes.
 
 ## Scheduling and wakeups
 

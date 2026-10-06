@@ -174,7 +174,7 @@ With `--interrupt --wait`, the turn the prompt starts is the reply. RimZ waits f
 | `--json` | Print one map keyed by agent handle after the join settles. Requires `--wait`. |
 | `--any` | Return when the first reply turn ends, successful or not, and print only that reply. The other messages stay in flight. Requires `--wait`. |
 
-Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting` or `paused` is still in progress, so a script that needs a bound passes a deadline. With `--steer --wait`, the rest of the live turn is the reply.
+At the start, stderr prints each target's ordinary send receipt, including its message id, even with `--json`. Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting` or `paused` is still in progress, so a script that needs a bound passes a deadline. With `--steer --wait`, the rest of the live turn is the reply.
 
 After printing a subagent or launched peer's reply, `--wait` claims that answer for its launcher during an open turn, or for a human shell. Other agents and unattended callers claim nothing. Only the answer opened by the sent message is claimed; earlier unread answers still reach the fleet report. If the answer has not settled before the wait's deadline, it remains eligible for reporting. An already queued report containing other unread answers can still repeat a claimed row.
 
@@ -194,6 +194,8 @@ The exit code is the first non-completed target's run status, in target order:
 | `124` | The deadline passed. Unfinished targets read `timed_out`, and `--json` still prints the map. |
 | `125` | A budget cap stopped the turn. |
 | `130` | Canceled. |
+
+At the deadline, stderr starts with `rimz: wait timed out` (naming unfinished targets for a fan-out), then explains each unfinished message. Queued or claimed text stays queued and will deliver; withdraw it with `rimz message cancel <id>`. Text already typed but not acknowledged must not be resent. A delivered message is still being worked on. Read later replies with `rimz agents logs @handle`. These hints also accompany the JSON map.
 
 A wait is refused before sending when a target has no lifecycle state, is not running, or lacks installed and trusted hooks. It is also refused with `--create`, `--schedule`, or `--no-enter`. A wait that would deadlock, because the target is waiting on the caller's own reply, is refused or aborted with the blocking handle and message named; any parked text stays queued. A single target holding an open prompt fails with the `waiting on your input` error.
 

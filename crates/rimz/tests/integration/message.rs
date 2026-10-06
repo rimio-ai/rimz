@@ -2931,6 +2931,17 @@ fn steer_wait_times_out_without_turn_started_ack() {
     );
 }
 
+fn assert_sent_receipts(stderr: &[u8], expected: usize) {
+    let text = String::from_utf8_lossy(stderr);
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("sent to ") && line.contains(" (msg_"))
+            .count(),
+        expected,
+        "{text}"
+    );
+}
+
 #[test]
 fn message_wait_prints_the_reply_after_the_turn_ends() {
     let env = Env::new();
@@ -2942,14 +2953,31 @@ fn message_wait_prints_the_reply_after_the_turn_ends() {
     )
     .expect("seed transcript");
 
-    let child = traced_rimz(&env, "zellij-wait-reply-trace.log")
+    let mut child = traced_rimz(&env, "zellij-wait-reply-trace.log")
         .args(["message", "@claude", "--wait", "did it land?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn message --wait");
 
+    let stderr = child.stderr.take().unwrap();
+    let (receipt_tx, receipt_rx) = std::sync::mpsc::channel();
+    let stderr_reader = std::thread::spawn(move || {
+        use std::io::{BufRead, Read};
+        let mut reader = std::io::BufReader::new(stderr);
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        let _ = receipt_tx.send(first);
+        let mut rest = String::new();
+        reader.read_to_string(&mut rest).unwrap();
+        rest
+    });
+
     wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
+    let receipt = receipt_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("receipt arrives before the receiver starts its reply turn");
+    assert!(receipt.starts_with("sent to @claude"), "{receipt}");
     agent.start(&env, "did it land?");
     let store = env.store();
     let message = store
@@ -2975,7 +3003,8 @@ fn message_wait_prints_the_reply_after_the_turn_ends() {
     let out = child.wait_with_output().expect("wait message --wait");
     assert!(out.status.success());
     assert_eq!(String::from_utf8_lossy(&out.stdout), "migration landed\n");
-    assert!(out.stderr.is_empty());
+    assert!(receipt.contains(&run.opened_by[0].to_string()));
+    assert!(stderr_reader.join().unwrap().is_empty());
     assert!(env.store().list_messages().unwrap().is_empty());
     let joined = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
     assert!(joined.joined_at.is_some());
@@ -3011,7 +3040,7 @@ fn message_wait_gathers_fanout_replies_in_completion_order() {
         String::from_utf8_lossy(&out.stdout),
         "@claude#feature-gather-second:\nsecond finished\n\n@claude#feature-gather-first:\nfirst finished\n"
     );
-    assert!(out.stderr.is_empty());
+    assert_sent_receipts(&out.stderr, 2);
 }
 
 #[test]
@@ -3046,7 +3075,7 @@ fn agent_broadcast_waits_for_peers_without_waiting_on_itself() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout), "peer finished\n");
-    assert!(out.stderr.is_empty());
+    assert_sent_receipts(&out.stderr, 1);
     assert!(
         env.read_events()
             .iter()
@@ -3097,7 +3126,7 @@ fn message_wait_json_emits_one_fanout_map() {
         );
         assert!(replies[label].get("error").is_none());
     }
-    assert!(out.stderr.is_empty());
+    assert_sent_receipts(&out.stderr, 2);
 }
 
 #[test]
@@ -3165,7 +3194,7 @@ fn message_wait_any_returns_only_the_first_terminal_leg() {
         String::from_utf8_lossy(&out.stdout),
         "@claude#feature-any-second:\nwinner\n"
     );
-    assert!(out.stderr.is_empty());
+    assert_sent_receipts(&out.stderr, 2);
 }
 
 #[test]
@@ -3189,7 +3218,8 @@ fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
         assert_eq!(replies[label]["status"], "timed_out");
         assert!(replies[label]["reply"].is_null());
     }
-    assert!(out.stderr.is_empty());
+    assert_sent_receipts(&out.stderr, 2);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("rimz: wait timed out for "));
     assert_eq!(
         env.read_events()
             .iter()
@@ -3217,6 +3247,20 @@ fn message_wait_timeout_marks_only_sent_leg_and_keeps_queued_leg() {
     let queued_label = "@claude#feature-mixed-queued";
     assert_eq!(replies[sent_label]["status"], "timed_out");
     assert_eq!(replies[queued_label]["status"], "timed_out");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let sent_id = replies[sent_label]["message_id"].as_str().unwrap();
+    let queued_id = replies[queued_label]["message_id"].as_str().unwrap();
+    assert!(
+        stderr.contains(&format!("sent to {sent_label} ({sent_id})")),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("queued for {queued_label} ({queued_id})")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rimz: wait timed out for "), "{stderr}");
+    assert!(stderr.contains(&format!("  {queued_label}: {queued_id} is still queued and will deliver. withdraw it: rimz message cancel {queued_id}   read the reply later: rimz agents logs {queued_label}")), "{stderr}");
+    assert!(stderr.contains(&format!("  {sent_label}: {sent_id} was typed into the pane and not acknowledged; do not resend. check: rimz agents logs {sent_label}")), "{stderr}");
 
     let timed_out = env
         .read_events()

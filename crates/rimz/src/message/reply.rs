@@ -55,6 +55,7 @@ pub enum ReplyFailure {
 pub struct ReplyResult {
     pub label: String,
     pub message_id: MessageId,
+    pub message_status: MessageStatus,
     pub status: RunStatus,
     pub final_message: Option<String>,
     pub failure: Option<ReplyFailure>,
@@ -469,6 +470,7 @@ impl Leg {
         ReplyResult {
             label: self.target.label.clone(),
             message_id: self.message_id.clone(),
+            message_status: self.message_status,
             // Results are constructed only from indices marked settled.
             status: self.done.expect("settled reply leg has status"),
             final_message: self.last_message.clone(),

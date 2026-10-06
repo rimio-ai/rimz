@@ -12,7 +12,9 @@ use crate::cli::render::prose::{Prose, prose_width};
 use crate::cli::send::WaitSpec;
 use crate::cli::spinner::Spinner;
 use rimz::harness::run::report;
+use rimz::ids::MessageId;
 use rimz::message::reply::{ReplyFailure, ReplyProgress, ReplyResult, ReplyUpdate, ReplyWait};
+use rimz::store::message::MessageStatus;
 use rimz::store::run::RunStatus;
 
 const POLL: Duration = Duration::from_millis(500);
@@ -71,8 +73,8 @@ pub(super) fn wait_for_replies(
                     .settled
                     .iter()
                     .filter(|result| result.status == RunStatus::TimedOut)
-                    .map(|result| result.label.clone())
                     .collect::<Vec<_>>();
+                print_timeout(total, &timed_out, wait)?;
                 for result in update.settled {
                     gathered.insert(result.label.clone(), result);
                 }
@@ -81,8 +83,6 @@ pub(super) fn wait_for_replies(
                     for result in gathered.values() {
                         claim(result);
                     }
-                } else {
-                    print_timeout(total, &timed_out, wait)?;
                 }
                 std::process::exit(RunStatus::TimedOut.exit_code());
             }
@@ -336,7 +336,7 @@ fn print_json_replies(
     Ok(())
 }
 
-fn print_timeout(total: usize, timed_out: &[String], wait: WaitSpec) -> Result<()> {
+fn print_timeout(total: usize, timed_out: &[&ReplyResult], wait: WaitSpec) -> Result<()> {
     let mut err = render::err();
     let hint = if wait.mode.uses_agent_default() {
         " (default 1h for agent callers; use --wait=<duration> to change)"
@@ -349,8 +349,17 @@ fn print_timeout(total: usize, timed_out: &[String], wait: WaitSpec) -> Result<(
         writeln!(
             err,
             "rimz: wait timed out for {}{hint}",
-            timed_out.join(", ")
+            timed_out
+                .iter()
+                .map(|result| result.label.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         )?;
+    }
+    for result in timed_out {
+        if let Some(hint) = timeout_hint(result.message_status, &result.label, &result.message_id) {
+            writeln!(err, "  {hint}")?;
+        }
     }
     err.flush()?;
     Ok(())
@@ -362,9 +371,47 @@ fn next_sleep(deadline: Option<Instant>) -> Duration {
     })
 }
 
+fn timeout_hint(status: MessageStatus, label: &str, id: &MessageId) -> Option<String> {
+    Some(match status {
+        MessageStatus::Queued | MessageStatus::Claimed => format!(
+            "{label}: {id} is still queued and will deliver. withdraw it: rimz message cancel {id}   read the reply later: rimz agents logs {label}"
+        ),
+        MessageStatus::Sent => format!(
+            "{label}: {id} was typed into the pane and not acknowledged; do not resend. check: rimz agents logs {label}"
+        ),
+        MessageStatus::Delivered => format!(
+            "{label}: {id} was delivered; {label} is still working on it. read the reply later: rimz agents logs {label}"
+        ),
+        _ => return None,
+    })
+}
+
 fn return_or_exit(status: RunStatus) -> Result<()> {
     if status == RunStatus::Completed {
         return Ok(());
     }
     std::process::exit(status.exit_code());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_hints_distinguish_queued_sent_and_delivered() {
+        let id = "msg_0000000000000001".parse().unwrap();
+        let actual = [
+            MessageStatus::Queued,
+            MessageStatus::Claimed,
+            MessageStatus::Sent,
+            MessageStatus::Delivered,
+        ]
+        .map(|status| timeout_hint(status, "@coder", &id));
+        let queued = "@coder: msg_0000000000000001 is still queued and will deliver. withdraw it: rimz message cancel msg_0000000000000001   read the reply later: rimz agents logs @coder";
+        assert_eq!(actual, [
+            Some(queued.to_owned()), Some(queued.to_owned()),
+            Some("@coder: msg_0000000000000001 was typed into the pane and not acknowledged; do not resend. check: rimz agents logs @coder".to_owned()),
+            Some("@coder: msg_0000000000000001 was delivered; @coder is still working on it. read the reply later: rimz agents logs @coder".to_owned()),
+        ]);
+    }
 }

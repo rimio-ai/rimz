@@ -125,6 +125,15 @@ pub(super) fn send_message(
         Err(err) => return Err(map_dispatch_err(err)),
     };
     if let Some(reply_wait) = result.reply {
+        {
+            let mut err = render::err();
+            for outcome in &result.outcomes {
+                if let Some(line) = send::render_dispatch_outcome(kind, outcome) {
+                    writeln!(err, "{line}")?;
+                }
+            }
+            err.flush()?;
+        }
         return reply::wait_for_replies(
             store,
             &workspace.session_name,
