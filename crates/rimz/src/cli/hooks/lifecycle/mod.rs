@@ -680,6 +680,8 @@ mod tests {
             "real prompt".to_owned(),
             rimz::store::message::DeliveryGate::Done,
         );
+        store.queue_message(&command, "session").unwrap();
+        store.queue_message(&prompt, "session").unwrap();
         store
             .record_sent_batch(std::slice::from_ref(&command), "session")
             .unwrap()

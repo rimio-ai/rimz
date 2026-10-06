@@ -31,7 +31,7 @@ fn claim_moves_message_out_of_pending_until_send_failure_requeues() {
     assert_eq!(claimed.attempts, 1);
     assert!(q.list_pending_messages().unwrap().is_empty());
 
-    q.record_message_delivery_failure(&message.message_id, "pane missing", "session")
+    q.record_message_delivery_failure(&claimed, "pane missing", "session")
         .unwrap();
     let pending = q.list_pending_messages().unwrap();
     assert_eq!(pending.len(), 1);
@@ -56,7 +56,7 @@ fn steer_claim_skips_fifo_and_schedule_but_keeps_claim_ttl() {
         .unwrap()
         .expect("steer claims non-head");
     assert_eq!(claimed.message_id, second.message_id);
-    q.record_message_delivery_failure(&second.message_id, "pane missing", "session")
+    q.record_message_delivery_failure(&claimed, "pane missing", "session")
         .unwrap();
     assert!(
         q.claim_message_for_steer(&second.message_id, Timestamp::now())
@@ -93,7 +93,7 @@ fn fifth_send_failure_abandons_message() {
             .unwrap()
             .expect("claimed");
         assert_eq!(claimed.attempts, attempt);
-        q.record_message_delivery_failure(&message.message_id, "pane missing", "session")
+        q.record_message_delivery_failure(&claimed, "pane missing", "session")
             .unwrap();
     }
 
@@ -230,13 +230,9 @@ fn release_batch_resets_every_claim_field() {
         .claim_delivery_batch(&first.message_id, AgentStatus::Idle, Timestamp::now())
         .unwrap()
         .expect("batch claimed");
-    let ids = claimed
-        .iter()
-        .map(|message| message.message_id.clone())
-        .collect::<Vec<_>>();
 
     let released = q
-        .release_message_claims(&ids, "waiting for compaction", "session")
+        .release_message_claims(&claimed, "waiting for compaction", "session")
         .unwrap();
 
     assert_eq!(released.len(), 2);
@@ -271,14 +267,10 @@ fn batch_failure_preserves_sent_and_requeues_or_abandons_the_rest() {
         .expect("batch claimed");
     q.record_sent_batch(std::slice::from_ref(&claimed[0]), "session")
         .unwrap();
-    let ids = claimed
-        .iter()
-        .map(|message| message.message_id.clone())
-        .collect::<Vec<_>>();
 
     let result = q
         .record_message_delivery_failures(
-            &ids,
+            &claimed,
             None,
             DeliveryFailureDisposition::Retry,
             "pane missing",
@@ -300,4 +292,233 @@ fn batch_failure_preserves_sent_and_requeues_or_abandons_the_rest() {
             .any(|message| message.message_id == abandoned.message_id
                 && message.status == MessageStatus::Abandoned)
     );
+}
+
+#[test]
+fn claim_stamp_survives_the_queue_file() {
+    let q = Queue::new();
+    let message = q.queue(1);
+    let claimed = q
+        .claim_message_for_delivery(&message.message_id, Timestamp::now())
+        .unwrap()
+        .expect("claimed");
+
+    let on_disk = q.by_id(&message.message_id);
+
+    assert!(claimed.last_attempt_at.is_some());
+    assert_eq!(on_disk.attempts, claimed.attempts);
+    assert_eq!(on_disk.last_attempt_at, claimed.last_attempt_at);
+    q.record_message_delivery_failure(&claimed, "write failed", "session")
+        .unwrap();
+    let requeued = q.by_id(&message.message_id);
+    assert_eq!(requeued.status, MessageStatus::Queued);
+    assert_eq!(requeued.last_error.as_deref(), Some("write failed"));
+}
+
+/// Another sender's claim on `claimed`'s record: still `Claimed` under that stamp, with no terminal
+/// entry and no event beyond the original queueing.
+fn assert_claim_untouched(q: &Queue, claimed: &MessageRecord) {
+    let live = q.by_id(&claimed.message_id);
+    assert_eq!(live.status, MessageStatus::Claimed);
+    assert_eq!(live.attempts, claimed.attempts);
+    assert_eq!(live.last_attempt_at, claimed.last_attempt_at);
+    assert!(q.history().is_empty());
+    assert_eq!(q.count("message.errored"), 0);
+    assert_eq!(q.count("message.queued"), q.live().len());
+}
+
+/// `tail` claimed by A at `now`, then re-claimed by B's batch after the TTL. Returns A's stale record
+/// and B's record of the tail.
+fn tail_reclaimed_after_ttl(q: &Queue) -> (MessageRecord, MessageRecord) {
+    let first = q.queue(1);
+    let tail = q.queue(2);
+    let now = Timestamp::now();
+    let stale = q
+        .claim_message_for_steer(&tail.message_id, now)
+        .unwrap()
+        .expect("A claims the tail");
+    let reclaimed = q
+        .claim_delivery_batch(&first.message_id, AgentStatus::Idle, now + CLAIM_TTL)
+        .unwrap()
+        .expect("B claims the batch after the TTL")
+        .remove(1);
+    assert_eq!(reclaimed.message_id, tail.message_id);
+    (stale, reclaimed)
+}
+
+#[test]
+fn unheld_miss_leaves_another_senders_claim_and_its_sent_lands() {
+    let q = Queue::new();
+    let message = q.queue(1);
+    let claimed = q
+        .claim_message_for_delivery(&message.message_id, Timestamp::now())
+        .unwrap()
+        .expect("B claims");
+
+    let result = q
+        .record_unheld_delivery_miss(
+            &message.message_id,
+            DeliveryFailureDisposition::Terminal,
+            "gate closed",
+            "session",
+        )
+        .unwrap();
+
+    assert!(!result.head_sent);
+    assert_claim_untouched(&q, &claimed);
+    let sent = q
+        .record_sent_batch(std::slice::from_ref(&claimed), "session")
+        .unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(q.by_id(&message.message_id).status, MessageStatus::Sent);
+    assert_eq!(q.count("message.sent"), 1);
+    assert!(q.history().is_empty());
+}
+
+#[test]
+fn stale_hold_gives_up_nothing_and_the_new_claims_sent_lands() {
+    let q = Queue::new();
+    let (stale, reclaimed) = tail_reclaimed_after_ttl(&q);
+
+    let failure = q
+        .record_message_delivery_failures(
+            std::slice::from_ref(&stale),
+            None,
+            DeliveryFailureDisposition::Terminal,
+            "write failed",
+            "session",
+        )
+        .unwrap();
+    let send_error = q
+        .record_send_error(&stale, "pane vanished", "session")
+        .unwrap();
+    let released = q
+        .release_message_claims(std::slice::from_ref(&stale), "parked", "session")
+        .unwrap();
+
+    assert!(!failure.head_sent);
+    assert_eq!(send_error, None);
+    assert!(released.is_empty());
+    assert_claim_untouched(&q, &reclaimed);
+    q.record_sent_batch(std::slice::from_ref(&reclaimed), "session")
+        .unwrap();
+    assert_eq!(q.by_id(&reclaimed.message_id).status, MessageStatus::Sent);
+    assert_eq!(q.count("message.sent"), 1);
+    assert!(q.history().is_empty());
+}
+
+#[test]
+fn a_fresh_sends_hold_ends_when_another_sender_claims_the_record() {
+    let q = Queue::new();
+    let fresh = q.queue(1);
+    let claimed = q
+        .claim_message_for_delivery(&fresh.message_id, Timestamp::now())
+        .unwrap()
+        .expect("B claims the fresh record");
+
+    let send_error = q.record_send_error(&fresh, "waiting", "session").unwrap();
+
+    assert_eq!(send_error, None);
+    assert_claim_untouched(&q, &claimed);
+    let unclaimed = q.queue(2);
+    let errored = q
+        .record_send_error(&unclaimed, "waiting", "session")
+        .unwrap()
+        .expect("an unclaimed fresh record is held by its sender");
+    assert_eq!(errored.status, MessageStatus::Errored);
+}
+
+#[test]
+fn failure_after_sent_leaves_the_record_sent_and_reports_it() {
+    let q = Queue::new();
+    let (stale, reclaimed) = tail_reclaimed_after_ttl(&q);
+    q.record_sent_batch(std::slice::from_ref(&reclaimed), "session")
+        .unwrap();
+
+    let unheld = q
+        .record_unheld_delivery_miss(
+            &reclaimed.message_id,
+            DeliveryFailureDisposition::Terminal,
+            "gate closed",
+            "session",
+        )
+        .unwrap();
+    let stale_held = q
+        .record_message_delivery_failures(
+            std::slice::from_ref(&stale),
+            None,
+            DeliveryFailureDisposition::Terminal,
+            "write failed",
+            "session",
+        )
+        .unwrap();
+
+    assert!(unheld.head_sent);
+    assert!(stale_held.head_sent);
+    assert_eq!(q.by_id(&reclaimed.message_id).status, MessageStatus::Sent);
+    assert!(q.history().is_empty());
+    assert_eq!(q.count("message.errored"), 0);
+}
+
+#[test]
+fn sent_after_cancel_stays_canceled_and_creates_nothing() {
+    let q = Queue::new();
+    let message = q.queue(1);
+    let claimed = q
+        .claim_message_for_delivery(&message.message_id, Timestamp::now())
+        .unwrap()
+        .expect("claimed");
+    assert!(
+        q.cancel_message(&message.message_id, "session", "user canceled")
+            .unwrap()
+    );
+
+    let sent = q
+        .record_sent_batch(std::slice::from_ref(&claimed), "session")
+        .unwrap();
+
+    assert!(sent.is_empty());
+    assert!(q.live().is_empty());
+    let history = q.history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].message_id, message.message_id);
+    assert_eq!(history[0].status, MessageStatus::Canceled);
+    assert_eq!(q.count("message.sent"), 0);
+}
+
+#[test]
+fn sent_for_a_record_never_queued_creates_nothing() {
+    let q = Queue::new();
+
+    let sent = q.record_sent_batch(&[q.record(1)], "session").unwrap();
+
+    assert!(sent.is_empty());
+    assert!(q.live().is_empty());
+    assert!(q.events().is_empty());
+}
+
+#[test]
+fn unheld_miss_settles_a_queued_record_by_its_disposition() {
+    let q = Queue::new();
+    let retried = q.queue(1);
+    let errored = q.queue(2);
+
+    for (record, disposition) in [
+        (&retried, DeliveryFailureDisposition::Retry),
+        (&errored, DeliveryFailureDisposition::Terminal),
+    ] {
+        q.record_unheld_delivery_miss(&record.message_id, disposition, "gate closed", "session")
+            .unwrap();
+    }
+
+    let live = q.live();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].message_id, retried.message_id);
+    assert_eq!(live[0].status, MessageStatus::Queued);
+    assert_eq!(live[0].last_error.as_deref(), Some("gate closed"));
+    let history = q.history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].message_id, errored.message_id);
+    assert_eq!(history[0].status, MessageStatus::Errored);
+    assert_eq!(q.count("message.errored"), 1);
 }

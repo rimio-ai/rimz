@@ -121,6 +121,8 @@ Queued ──► Claimed ──► Sent ──► Delivered
 
 `Queued` and `Claimed` are open states (`is_open()`). `Claimed` is a short lease taken immediately before a write so a concurrent deliverer cannot double-send. A claim older than `CLAIM_TTL` (15 s) counts as expired, so a crash mid-send leaves a redeliverable record.
 
+A claim also protects the attempt from other senders' give-ups. Retrying, erroring, or releasing a record takes the record the sender was handed, and the writer applies the give-up only while that record's `attempts` and `last_attempt_at` still match the live one (the hold); a sender that has no such record (the boundary helper in `synthetic.rs`) can only settle a `Queued` record and leaves a `Claimed` one alone. Recording `Sent` needs no hold, because the text is already in the pane, but it only marks a live record: a record that a cancel, clear, or archive already finalized stays in that terminal state and is not recreated.
+
 `Sent` means bytes reached the pane. The record stays live until a lifecycle hook confirms it or the reconciler gives up, because a write does not prove the agent took the text.
 
 `Delivered` means the agent acknowledged: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`. Neither event confirms the other body.
@@ -279,7 +281,7 @@ When either scan finds that, the guard cancels the digest with reason `joined be
 
 A guard that cannot answer never sends. When the run scan or the cancel fails, the helper warns with the message id. Before the claim it simply stops. After the claim it calls `release_message_claims` to return the digest to `Queued` without an attempt penalty, refreshes the wake stamp, and stops; an error from the release or the refresh propagates, but an unreadable run file does not abort the sweep. The queued digest keeps its FIFO head position on its card, like any head that cannot deliver.
 
-One race remains. The post-claim scan closes the window where stale pre-claim state survives a claim, but a join after that scan can still race the send, because the store's workspace lock does not span pane I/O (the per-pane write lock does, and it serializes writers, not store transitions). The join-side cancel accepts a `Queued` or `Claimed` record and leaves a `Sent` one for confirmation, since a cancel cannot retract a paste. When the guard cancels a record named by `message steer`, the command exits 1 with `message <id> is no longer queued`.
+One race remains. The post-claim scan closes the window where stale pre-claim state survives a claim, but a join after that scan can still race the send, because the store's workspace lock does not span pane I/O (the per-pane write lock does, and it serializes writers, not store transitions). The join-side cancel accepts a `Queued` or `Claimed` record and leaves a `Sent` one for confirmation, since a cancel cannot retract a paste. A cancel that lands while the paste is being written stands: the sender's `Sent` mark finds no live record, warns with the message id, and the record stays `Canceled`. When the guard cancels a record named by `message steer`, the command exits 1 with `message <id> is no longer queued`.
 
 ### Batching
 
@@ -370,7 +372,7 @@ The send path spaces messages, not a paste and its submit: it sleeps one message
 
 ### The Sent-before-submit barrier
 
-[`write_batch`](../../../crates/rimz/src/message/send.rs) records the batch as `Sent` after all its text lands and before it presses Enter. A submitted message is therefore always preceded by its durable record and audit event. A crash between text and submit leaves a `Sent` record whose text sits unsubmitted in the composer, which the reconciler handles. The reverse order would let an agent start a turn RimZ has no record of.
+[`write_batch`](../../../crates/rimz/src/message/send.rs) records the batch as `Sent` after all its text lands and before it presses Enter. A submitted message is therefore always preceded by its durable record and audit event. A crash between text and submit leaves a `Sent` record whose text sits unsubmitted in the composer, which the reconciler handles. A record that a cancel, clear, or archive finalized during the write is not recreated as `Sent`: the write logs a warning naming the message ids and still presses Enter, since the paste cannot be retracted and text left in the composer would glue onto the next write. The reverse order would let an agent start a turn RimZ has no record of.
 
 ### The message header
 

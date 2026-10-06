@@ -301,7 +301,22 @@ fn write_batch(
     }
     // Record the send once the text lands and before the submit keystroke, so a
     // submitted message is always preceded by its durable record and audit event.
-    store.record_sent_batch(batch, &workspace.session_name)?;
+    let recorded = store.record_sent_batch(batch, &workspace.session_name)?;
+    let unrecorded = batch
+        .iter()
+        .filter(|message| {
+            !recorded
+                .iter()
+                .any(|sent| sent.message_id == message.message_id)
+        })
+        .map(|message| message.message_id.as_str())
+        .collect::<Vec<_>>();
+    if !unrecorded.is_empty() {
+        tracing::warn!(
+            ?unrecorded,
+            "text written for messages finalized during the write"
+        );
+    }
     if head.enter {
         // Raw-typed commands carry no paste close marker, so wait for composer
         // paste-burst state to flush before submitting.

@@ -287,6 +287,7 @@ fn launcher_steer_never_enrolls_a_later_human_turn() {
             DeliveryGate::Any,
         );
         steer.sender = launcher();
+        h.store.queue_message(&steer, "test").unwrap();
         let records = h.store.record_sent_batch(&[steer], "test").unwrap();
         let delivered = ack(&h, &peer, DeliveryAck::TurnStarted { prompt });
         assert_eq!(delivered.len(), usize::from(prompt.is_none()));
