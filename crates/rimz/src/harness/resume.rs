@@ -578,11 +578,8 @@ pub struct ResumePlan {
     /// the focus target). Panes inside each tab are freshest-first.
     pub tabs: Vec<ResumeTab>,
     /// One entry per team tab in `tabs` whose restore began a launch batch
-    /// (a tab with only resumed seats has none); never for `channel_tabs`.
+    /// (a tab with only resumed seats has none).
     pub team_launches: Vec<TeamTabLaunch>,
-    /// Empty named channels restored as one shell pane each, seeded after
-    /// `tabs`; they carry no agent, so recovery counts leave them out.
-    pub channel_tabs: Vec<ResumeTab>,
     /// Prior sessions whose resume commands were seeded into those tabs.
     pub resumed: BTreeSet<(AgentKind, AgentSessionId)>,
     /// Candidates not resumed, each with its reason — the start report names them.
@@ -675,7 +672,6 @@ impl DetailedResumePlan {
         ResumePlan {
             tabs: self.tabs.into_iter().map(|planned| planned.tab).collect(),
             team_launches: Vec::new(),
-            channel_tabs: Vec::new(),
             resumed: self.resumed,
             skipped: self.skipped,
             agents_to_end: self.agents_to_end,
@@ -852,7 +848,6 @@ impl RecoveryPlan {
         let mut resume = ResumePlan {
             tabs: Vec::with_capacity(self.entries.len()),
             team_launches: Vec::new(),
-            channel_tabs: Vec::new(),
             resumed: self.base_resumed,
             skipped: self.skipped,
             agents_to_end: self.agents_to_end,

@@ -107,7 +107,7 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 |------|---------|
 | `⑂ name` | a worktree group, named by its branch |
 | `↩ name` | a worktree group whose work has landed |
-| `# name` | a named channel with no git state |
+| `# name` | an explicit `--channel` lane with no git state |
 | `✓` `✕` `◌` beside the name | the trunk's HEAD-commit CI, or a branch's open or merged pull request's CI: passing, failing, running |
 | `#91` | the branch's pull request |
 | `#522→#530→#540,#541` | a same-repository PR stack, bottom first; comma-separated branches end the stack |

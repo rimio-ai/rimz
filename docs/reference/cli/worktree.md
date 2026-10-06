@@ -1,6 +1,6 @@
 # Worktree CLI
 
-`rimz worktree` creates, lists, enters, lands, and removes RimZ-owned worktrees: ordinary `git worktree` checkouts, each on its own branch, that RimZ marks at creation. Every verb acts only on a marked tree, so a checkout you made with `git worktree add` is never listed, merged, swept, or removed. A worktree's name is also its [channel](./channel.md), and `rimz agents --worktree` launches agents into the same trees ([Channel, worktree, and placement](./agents.md#channel-worktree-and-placement)). Why and when to isolate work this way is the [worktrees guide](../../guide/worktrees.md); the marker, the landed proof, and the protection rules are in [the worktree internals](../../internals/harness/worktrees.md).
+`rimz worktree` creates, lists, enters, lands, and removes RimZ-owned worktrees: ordinary `git worktree` checkouts, each on its own branch, that RimZ marks at creation. Every verb acts only on a marked tree, so a checkout you made with `git worktree add` is never listed, merged, swept, or removed. A worktree's name is also its [channel](../../guide/messaging.md#channels), and `rimz agents --worktree` launches agents into the same trees ([Channel, worktree, and placement](./agents.md#channel-worktree-and-placement)). Why and when to isolate work this way is the [worktrees guide](../../guide/worktrees.md); the marker, the landed proof, and the protection rules are in [the worktree internals](../../internals/harness/worktrees.md).
 
 ```sh
 rimz worktree new [NAME] [--base <BASE>] [--branch <BRANCH>]
@@ -28,7 +28,7 @@ A name is one or more segments of ASCII letters, digits, `_`, or `-`, separated 
 
 Trees live under the `[agents.worktree] dir` template, `../{repo}-worktrees` by default, where `{repo}` is the repository's directory name and a relative path resolves from the repository root ([configuration](../../guide/configuration.md#worktrees)). `cd`, `merge`, and `remove` take the same name and resolve it the same way, so `feat/login` and `feat-login` both reach the `feat-login` tree.
 
-Named channels and worktrees share one namespace in a repository room ([channel names](./channel.md#channel-names)).
+Explicit `--channel` lanes and worktrees share one namespace in a repository room ([`--channel`](./agents.md#channel-worktree-and-placement)).
 
 ## Create a worktree
 
@@ -64,7 +64,7 @@ When a fresh tree's local base branch tracks an upstream and is behind it, creat
 | Refusal | When |
 | --- | --- |
 | ``worktree `NAME` already exists at PATH`` | The directory exists, marked or not. A launch with `-w NAME` reuses a marked tree instead. |
-| ``channel `NAME` is a named channel; use `rimz channel new` or pick another name`` | A named channel holds the name you passed. |
+| ``channel `NAME` is held by live agents; pick another name, or stop them with `rimz agents stop` `` | Live agents launched with `--channel NAME` hold the name you passed. |
 | ``invalid worktree name `NAME`; ...`` | The name breaks the [name rules](#names-and-paths). |
 | `base ref cannot be empty` | `--base ''`. |
 

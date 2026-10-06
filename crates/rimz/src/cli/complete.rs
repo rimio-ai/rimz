@@ -294,10 +294,14 @@ pub(crate) fn channels() -> Vec<CompletionCandidate> {
 }
 
 fn channels_from(context: &RoomContext) -> Vec<CompletionCandidate> {
-    rimz::channel::list(&context.store.paths().channels_record)
-        .unwrap_or_default()
+    context
+        .snapshot
+        .agents
+        .iter()
+        .filter_map(rimz::agents::AgentState::channel)
+        .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
-        .map(|channel| CompletionCandidate::new(channel.name))
+        .map(CompletionCandidate::new)
         .collect()
 }
 

@@ -37,32 +37,21 @@ The `@` sigil is required, so a stray word never reaches an agent: `rimz message
 
 A channel groups the agents working one line of work inside a room. The sidebar groups its cards by channel, an address targets it with `#channel`, and RimZ reopens it as its own Zellij tab or tmux window when it restores the room. Your pane always sits in one, which is why a bare `@codex` scopes to it and you only reach across when you name another.
 
-A channel comes from one of three places:
+A channel is never created or removed on its own: it is derived from what backs it, and it exists for as long as that does. A `#name` comes from one of four places:
 
 - **A Git worktree.** Every agent working an isolated worktree shares that channel, named for the worktree ([worktrees guide](./worktrees.md)).
-- **A named channel.** A durable `#design`, `#ops`, or `#release` group with no worktree behind it.
-- **A team or the room directory.** A named team launched in place gets a channel of its own, and agents with no other channel fall back to the project directory's name.
-
-`rimz channel list` shows all three, with who is in each:
-
-```console
-$ rimz channel list
-CHANNEL        BACKING    AGENTS
-#auth          worktree   @coder @reviewer
-#design        named      @planner
-#query-engine  directory  @claude
-```
-
-A named channel is one record in the room's state, and creating one opens a tab for it in the running room. There is no branch and no directory behind it, so it costs nothing to make and nothing to keep. Names take ASCII letters, numbers, `_`, and `-`.
+- **An explicit `--channel`.** A launch with `--channel design` puts its agents in `#design`, a lane with no branch and no directory behind it. It lasts while agents run in it.
+- **A team in place.** A named team launched at the room root gets a channel of its own, `<dir>/<team>`.
+- **The working directory.** Agents with no other channel fall back to their directory's name.
 
 ```sh
-rimz channel new design                          # register a durable #design channel
-rimz agents claude --channel design "draft it"   # launch straight into the channel
+rimz agents claude --channel design "draft it"   # launch straight into #design, in a tab of that name
 rimz message @planner#design --create "plan it"  # reach into it; --create launches one if none is there
-rimz channel rm design                           # remove the record; the agents in it keep running
+rimz agents list --all                           # every lane that has agents, with who is in each
+rimz worktree list                               # every worktree lane, with or without agents
 ```
 
-Named channels and worktrees share one namespace, so a name belongs to one or the other and never both: `rimz channel new auth` is refused while a worktree named `auth` exists, and `rimz channel rm auth` sends you to [`rimz worktree remove`](./worktrees.md) instead. How channels render on screen, with their headers and groups, is [the sidebar guide](./sidebar.md); the full command surface is [cli/channel.md](../reference/cli/channel.md).
+A `--channel` name takes ASCII letters, numbers, `_`, and `-`. Those lanes and worktrees share one namespace, so a name belongs to one or the other and never both: `--channel auth` is refused while a worktree named `auth` exists, and `rimz worktree new auth` is refused while live agents hold a `#auth` lane. How channels render on screen, with their headers and groups, is [the sidebar guide](./sidebar.md); the launch flags are in [cli/agents.md](../reference/cli/agents.md#channel-worktree-and-placement).
 
 ## Park, steer, interrupt, or schedule
 
@@ -176,7 +165,7 @@ Each fan-out delivery is prefixed with the selector you typed, so what lands in 
 
 When an agent sends `@all`, RimZ drops that caller and sends to its peers; with no peers it errors rather than talking to itself. An exact handle still permits a deliberate self-message, and an explicit selector fan-out such as `--all @claude` keeps every match, sender included.
 
-`--create` launches an agent when the address matches none: a kind (`@codex`) or a profile (`@planner`) opens fresh with your text as its first prompt. `--worktree feat-a` launches it in that worktree, while an inline `#feat-a` or `--channel feat-a` registers a named channel and launches there.
+`--create` launches an agent when the address matches none: a kind (`@codex`) or a profile (`@planner`) opens fresh with your text as its first prompt. `--worktree feat-a` launches it in that worktree, while an inline `#feat-a` or `--channel feat-a` launches into that lane.
 
 ## Compact before the message lands
 
@@ -306,5 +295,5 @@ Claude, Codex, and Pi accept answers this way, each within limits set by what it
 - [The sidebar](./sidebar.md): reading the channels and the messages they carry on screen.
 - [Scripting agents](./scripting.md): turning the same handles into one-shot runs with an exit code for a pipeline.
 - [Loops and schedules](./loops.md): scheduled and handler-driven messages that steer the fleet unattended.
-- [cli/message.md](../reference/cli/message.md), [cli/asks.md](../reference/cli/asks.md), [cli/channel.md](../reference/cli/channel.md): the exact flags.
+- [cli/message.md](../reference/cli/message.md), [cli/asks.md](../reference/cli/asks.md): the exact flags.
 - [Message internals](../internals/harness/messaging.md): the delivery engine underneath.

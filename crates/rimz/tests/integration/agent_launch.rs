@@ -123,6 +123,24 @@ fn agent_launch_refuses_a_login_without_hooks() {
 }
 
 #[test]
+fn explicit_channel_launch_refuses_an_invalid_name() {
+    assert_launch_focus(
+        &["agents", "claude", "--channel", "bad/name"],
+        true,
+        "channel-name",
+    );
+}
+
+#[test]
+fn explicit_channel_launch_refuses_a_managed_worktree_name() {
+    assert_launch_focus(
+        &["agents", "claude", "--channel", "demo"],
+        true,
+        "channel-worktree",
+    );
+}
+
+#[test]
 fn agent_restart_refuses_a_login_without_hooks() {
     assert_launch_focus(&["agents", "restart", "@planner"], true, "unhooked");
 }
@@ -477,6 +495,13 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     }
     let shim = write_env_dump_shim(&env, "claude");
     let workspace = env.resolve_workspace(&env.project_root);
+    if action == "channel-worktree" {
+        assert!(init_launch_repo(&env.project_root));
+        env.rimz()
+            .args(["worktree", "new", "demo"])
+            .assert()
+            .success();
+    }
     if matches!(args[1], "restart" | "resume") || action == "cohort" || hold {
         let worktree = if root_hold {
             if channel_hold {
@@ -586,7 +611,6 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     }
     let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
     let events_before = std::fs::read(env.state_path_for(&env.project_root).events_log).unwrap();
-    let channels_before = std::fs::read(env.state_path_for(&env.project_root).channels_record).ok();
     let log = env.home_root.join("mux.log");
     let mut command = env.rimz();
     command.args(["--mux", "zellij"]).args(args)
@@ -631,6 +655,28 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
             events_before
         );
         assert!(!log.exists(), "a refused launch must not reach the mux");
+        return;
+    }
+    if let "channel-name" | "channel-worktree" = action {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains(if action == "channel-name" {
+                "invalid channel name `bad/name`"
+            } else {
+                "channel `demo` is backed by a worktree; use `--worktree demo`"
+            }),
+            "{stderr}"
+        );
+        assert_eq!(
+            serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+            before
+        );
+        assert_eq!(
+            std::fs::read(env.state_path_for(&env.project_root).events_log).unwrap(),
+            events_before
+        );
+        assert!(!std::fs::read_to_string(&log).unwrap().contains("new-tab"));
         return;
     }
     if matches!(
@@ -700,10 +746,6 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         assert_eq!(
             std::fs::read(env.state_path_for(&env.project_root).events_log).unwrap(),
             events_before
-        );
-        assert_eq!(
-            std::fs::read(env.state_path_for(&env.project_root).channels_record).ok(),
-            channels_before
         );
         assert!(!std::fs::read_to_string(&log).unwrap().contains("new-tab"));
         if matches!(action, "hold-live" | "hold-channel-derived") {

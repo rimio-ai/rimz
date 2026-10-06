@@ -888,43 +888,39 @@ fn worktree_new_rejects_empty_base() {
 }
 
 #[test]
-fn worktree_new_refuses_named_channel_conflict() {
+fn worktree_new_refuses_a_name_live_agents_hold_as_a_lane() {
     if git_missing() {
         return;
     }
     let env = Env::new();
     init_repo(&env.project_root);
 
-    env.rimz()
-        .args(["channel", "new", "demo"])
-        .assert()
-        .success();
+    env.install_agent_hooks("claude");
+    crate::channel::register_idle_lane_agent(&env, "sess-lane", "demo", None);
 
     env.rimz()
         .args(["worktree", "new", "demo"])
         .assert()
         .failure()
-        .stderr(contains("channel `demo` is a named channel"));
+        .stderr(contains("channel `demo` is held by live agents"));
 }
 
 #[test]
-fn worktree_new_checks_dashed_channel_for_branch_style_name() {
+fn worktree_new_checks_dashed_lane_for_branch_style_name() {
     if git_missing() {
         return;
     }
     let env = Env::new();
     init_repo(&env.project_root);
 
-    env.rimz()
-        .args(["channel", "new", "feat-great"])
-        .assert()
-        .success();
+    env.install_agent_hooks("claude");
+    crate::channel::register_idle_lane_agent(&env, "sess-lane", "feat-great", None);
 
     env.rimz()
         .args(["worktree", "new", "feat/great"])
         .assert()
         .failure()
-        .stderr(contains("channel `feat-great` is a named channel"));
+        .stderr(contains("channel `feat-great` is held by live agents"));
 }
 
 #[test]

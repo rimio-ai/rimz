@@ -28,7 +28,6 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | [stats.md](./cli/stats.md) | `rimz stats`: the machine-wide token and dollar panel, cache freshness, the held dashboard, JSON fields, and the assist timeline. |
 | [providers.md](./cli/providers.md) | `rimz providers`: login status, rate-limit windows, credits, spend, and daily-cap state, with freshness and JSON fields. |
 | [budget.md](./cli/budget.md) | `rimz agents budget` and `rimz budget`: inspecting and changing one agent's dollar cap and the room and provider-account daily caps, and what a cap blocks. |
-| [channel.md](./cli/channel.md) | `rimz channel`: creating, listing, and removing durable named lanes without a Git checkout. |
 | [worktree.md](./cli/worktree.md) | `rimz worktree`: creating, checking out a pull request, listing, entering, landing, removing, and sweeping RimZ-owned Git worktrees. |
 | [loop.md](./cli/loop.md) | `rimz loop`: clock, signal, and watch tasks; project tasks; waits and checks; budgets, the surplus gate, and strikes; run forensics; and the timer. |
 | [hooks-trust.md](./cli/hooks-trust.md) | `rimz hooks` and `rimz trust`: installing and removing agent hooks, and granting or revoking project trust. |

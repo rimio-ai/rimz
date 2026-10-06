@@ -250,7 +250,7 @@ mod tests {
             let out = paths.out_reader_dir(Some("retired")).join("child.output");
             let shared = paths.room_shared_dir.join("task/note");
             let cache = paths.cache_dir.join("obsolete.json");
-            let record = paths.channels_record.clone();
+            let record = paths.fleet_budget_record.clone();
             for path in [&audit, &owned, &tmp, &out, &shared, &cache, &record] {
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 fs::write(path, b"retained").unwrap();

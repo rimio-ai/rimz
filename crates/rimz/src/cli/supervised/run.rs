@@ -552,7 +552,7 @@ fn prepare_supervised(
     }
     let kind = adapter.spec().kind_id();
     if let Some(channel) = request.channel.as_deref() {
-        rimz::channel::register(&workspace, store.paths(), channel)?;
+        rimz::channel::admit_launch(&workspace, channel)?;
     }
     // An inferred lane joins the exact channel it was inferred from, rather than
     // one recomputed from the caller's cwd.

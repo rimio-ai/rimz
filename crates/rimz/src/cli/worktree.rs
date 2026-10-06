@@ -158,7 +158,10 @@ fn new_worktree(
         .as_ref()
         .map(|requested| requested.name.as_str())
     {
-        rimz::channel::ensure_worktree_name_available(store.paths(), name)?;
+        // An unreadable snapshot holds no lane, so the name stays available.
+        if let Ok(snapshot) = store.snapshot_cached() {
+            rimz::channel::admit_worktree_name(&snapshot.agents, name)?;
+        }
     }
     let created = if let Some(pr) = from_pr.as_ref() {
         let create = |choice| {

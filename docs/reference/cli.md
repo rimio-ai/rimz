@@ -14,7 +14,7 @@ This page indexes every command and states the rules that hold across all of the
 | Provider accounts | `accounts` | [Accounts](./cli/accounts.md) |
 | Shared code navigation | `lsp` | [Language servers](./cli/lsp.md) |
 | Cost, usage, and budgets | `stats`, `providers`, `budget` | [Stats](./cli/stats.md) · [Providers](./cli/providers.md) · [Budget](./cli/budget.md) |
-| Lanes, worktrees, and schedules | `channel`, `worktree`, `loop` | [Channels](./cli/channel.md) · [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) |
+| Worktrees and schedules | `worktree`, `loop` | [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) |
 | Hooks and trust | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
 | Configure appearance and behavior | `config`, `list-themes`, `list-pets` | [Config](./cli/config.md) |
 | Find RimZ's files | `paths` | [Paths](./cli/paths.md) |

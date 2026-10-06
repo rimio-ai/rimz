@@ -231,7 +231,7 @@ impl RoomContext {
 
         let resume_tabs = seeded
             .iter()
-            .flat_map(|seeded| seeded.tabs().iter().chain(seeded.channel_tabs()))
+            .flat_map(|seeded| seeded.tabs())
             .cloned()
             .collect();
         let sidebar = self.sidebar_options_with_resume(&cwd, resume_tabs, refresh_ms);

@@ -7,7 +7,6 @@ mod agents_cmd;
 mod answer;
 mod asks;
 mod budget;
-mod channel;
 mod codex;
 mod complete;
 mod config;
@@ -135,7 +134,6 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Uninstall(args)) => uninstall::run(args, &globals),
         Some(Subcmd::Update(args)) => update::run(args, &globals),
-        Some(Subcmd::Channel(args)) => channel::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
         Some(Subcmd::Subagents(args)) => subagents::run(*args, &globals),
@@ -221,6 +219,9 @@ where
             ),
             Some("tab") => anyhow::bail!(
                 "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `<agents_home>/teams/<name>.md`"
+            ),
+            Some("channel") => anyhow::bail!(
+                "`rimz channel` has been removed; channels are implicit: launch into one with `rimz agents <spec> --channel <name>`, and see lanes with `rimz agents list --all` and `rimz worktree list`"
             ),
             _ => {}
         }
@@ -558,8 +559,6 @@ enum Subcmd {
     Uninstall(uninstall::UninstallArgs),
     /// Update RimZ to the latest release.
     Update(update::UpdateArgs),
-    /// Create, list, and remove named channels.
-    Channel(channel::ChannelArgs),
     /// Create, enter, merge, sweep, and remove RimZ-owned git worktrees.
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in RimZ-owned worktrees.

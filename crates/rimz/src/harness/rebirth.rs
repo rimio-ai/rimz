@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 
+use crate::Store;
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::{RuntimePaths, StatePaths, cache_home};
@@ -16,12 +17,11 @@ use crate::harness::resume::{
     plan_resume_detailed, resume_session_present, split_team_and_flat,
 };
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
-use crate::mux::{LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, ResumeTab};
+use crate::mux::{MuxBackend, ResumeTab};
 use crate::store::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
 use crate::store::runtime::{AgentLiveness, agent_liveness};
 use crate::store::snapshot::find_agent;
 use crate::store::{live_roster, pending_recovery};
-use crate::{Store, channel};
 
 /// How long a boundary inspection waits for the dead room's agent processes:
 /// an exec wrapper holds its provider through two signal graces after the
@@ -159,7 +159,6 @@ pub struct RebirthPlan {
     planned: RecoveryPlan,
     recovery_off: bool,
     requires_sandbox: bool,
-    empty_tabs: Vec<ResumeTab>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -346,26 +345,11 @@ impl RebirthPlan {
         }
         let (resume, tab_agents) = match disposition {
             RebirthDisposition::RecoverKeep | RebirthDisposition::RecoverDrop => {
-                materialize_recovery(
-                    store.as_ref(),
-                    &self.paths,
-                    session_name,
-                    self.planned,
-                    self.empty_tabs,
-                )
+                materialize_recovery(store.as_ref(), &self.paths, session_name, self.planned)
             }
-            // Declining at the prompt starts bare; recovery switched off
-            // decides the agents alone, and the channel tabs still restore.
-            RebirthDisposition::Decline if !self.recovery_off => {
+            RebirthDisposition::Defer | RebirthDisposition::Decline => {
                 (ResumePlan::default(), Vec::new())
             }
-            RebirthDisposition::Defer | RebirthDisposition::Decline => (
-                ResumePlan {
-                    channel_tabs: self.empty_tabs,
-                    ..ResumePlan::default()
-                },
-                Vec::new(),
-            ),
         };
         let resumed = tab_agents
             .iter()
@@ -444,11 +428,6 @@ impl SeededRecovery {
     /// The tabs whose agents this settlement resumes.
     pub(crate) fn tabs(&self) -> &[ResumeTab] {
         &self.resume.tabs
-    }
-
-    /// The empty named channels restored beside them.
-    pub(crate) fn channel_tabs(&self) -> &[ResumeTab] {
-        &self.resume.channel_tabs
     }
 
     /// Finish the settlement tab by tab. `outcome` says whether the tab at a
@@ -659,7 +638,6 @@ fn inspect_at(
         recovery_off,
     );
     let requires_sandbox = planned.requires_sandbox(machine.agents.isolation);
-    let empty_tabs = empty_named_channel_tabs(&paths);
     Ok(RebirthPlan {
         paths,
         runtime,
@@ -673,7 +651,6 @@ fn inspect_at(
         planned,
         recovery_off,
         requires_sandbox,
-        empty_tabs,
     })
 }
 
@@ -747,7 +724,6 @@ fn inspect_live_scope(
         planned,
         recovery_off,
         requires_sandbox,
-        empty_tabs: Vec::new(),
     }
 }
 
@@ -945,12 +921,8 @@ fn materialize_recovery(
     paths: &StatePaths,
     session_name: &str,
     planned: RecoveryPlan,
-    empty_tabs: Vec<ResumeTab>,
 ) -> (ResumePlan, Vec<BTreeSet<(AgentKind, AgentSessionId)>>) {
-    let MaterializedRecovery {
-        resume: mut final_plan,
-        tab_agents,
-    } = match planned.materialize(
+    let MaterializedRecovery { resume, tab_agents } = match planned.materialize(
         session_name,
         RecoveryMaterializer::BestEffort {
             store,
@@ -966,49 +938,7 @@ fn materialize_recovery(
             }
         }
     };
-    final_plan.channel_tabs = empty_tabs
-        .into_iter()
-        .filter(|tab| {
-            !final_plan
-                .tabs
-                .iter()
-                .any(|existing| existing.label == tab.label)
-        })
-        .collect();
-    (final_plan, tab_agents)
-}
-
-fn empty_named_channel_tabs(paths: &StatePaths) -> Vec<ResumeTab> {
-    let Ok(record) = crate::workspace::record::read(&paths.workspace_record) else {
-        return Vec::new();
-    };
-    channel::list(&paths.channels_record)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|channel| {
-            let label = format!("#{}", channel.name);
-            ResumeTab {
-                env: crate::workspace::pane_pin_env(
-                    &paths.workspace_id,
-                    &record.project_root,
-                    &record.project_root,
-                    Some(&channel.name),
-                ),
-                cwd: record.project_root.clone(),
-                layout: LayoutPanes {
-                    columns: vec![LayoutColumn {
-                        panes: vec![PaneCmd {
-                            argv: vec![crate::proc::user_shell_program()],
-                            name: Some(label.clone()),
-                        }],
-                        stacked: false,
-                    }],
-                    focused_pane: 0,
-                },
-                label,
-            }
-        })
-        .collect()
+    (resume, tab_agents)
 }
 
 fn record_agents_ended(

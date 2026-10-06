@@ -212,17 +212,6 @@ impl Fixture {
             ))
             .expect("touch agent event");
     }
-
-    fn seed_named_channel(&self, name: &str) {
-        let workspace = crate::workspace::WorkspaceResolver::resolve(&self.project, None)
-            .expect("resolve workspace");
-        crate::workspace::record::write(
-            &self.paths,
-            &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
-        )
-        .expect("workspace record");
-        crate::channel::register(&workspace, &self.paths, name).expect("channel record");
-    }
 }
 
 fn key(id: &str) -> (AgentKind, AgentSessionId) {
@@ -380,16 +369,11 @@ fn decline_archives_crash_and_records_zero_recovered_without_tabs() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
-    fixture.seed_named_channel("auth");
     let plan = fixture.inspect(false);
 
     let outcome = materialize(plan, RebirthDisposition::Decline, "rimz-test");
 
     assert!(outcome.tabs.is_empty());
-    assert!(
-        outcome.channel_tabs.is_empty(),
-        "an answered No starts bare"
-    );
     assert!(!fixture.paths.live_roster.exists());
     assert!(pending(&fixture).is_empty());
     let marker: LastDeathMarker =
@@ -745,22 +729,19 @@ fn unattended_birth_with_recovery_off_parks_agents_for_a_later_recovery() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
-    fixture.seed_named_channel("auth");
     let plan = fixture.inspect(true);
 
     assert_eq!(plan.preview().pane_count(), 0);
     assert_eq!(plan.preview().candidate_count(), 1);
     let outcome = materialize(plan, RebirthDisposition::Defer, "rimz-test");
     assert!(outcome.tabs.is_empty());
-    assert_eq!(outcome.channel_tabs.len(), 1);
-    assert_eq!(outcome.channel_tabs[0].label, "#auth");
     let marker: LastDeathMarker =
         serde_json::from_slice(&std::fs::read(&fixture.paths.last_death_marker).unwrap())
             .expect("marker");
     assert_eq!(
         marker.recovered,
         Some(0),
-        "a restored channel shell is not a recovered agent"
+        "a deferred agent is not a recovered one"
     );
     assert_eq!(ended_events(&fixture), []);
     assert_eq!(pending(&fixture), [key("live")].into());
@@ -787,17 +768,16 @@ fn unattended_birth_with_recovery_off_parks_agents_for_a_later_recovery() {
 }
 
 #[test]
-fn decline_with_recovery_off_ends_candidates_and_keeps_the_channel_tabs() {
+fn decline_with_recovery_off_ends_candidates() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
-    fixture.seed_named_channel("auth");
     let plan = fixture.inspect(true);
     assert!(plan.preview().recovery_off());
 
     let outcome = materialize(plan, RebirthDisposition::Decline, "rimz-test");
 
-    assert_eq!(outcome.channel_tabs.len(), 1);
+    assert!(outcome.tabs.is_empty());
     assert_eq!(
         ended_events(&fixture),
         vec![("rimz.recovery-declined".to_owned(), "live".into())]
@@ -1195,7 +1175,6 @@ fn live_settlement_writes_no_boundary_and_leaves_live_agents_alone() {
         let lost = dir.path().join("lost");
         let alive = dir.path().join("alive");
         let fixture = Fixture::new(&[("lost", &lost, true), ("alive", &alive, true)]);
-        fixture.seed_named_channel("auth");
         park_roster(&fixture.paths).expect("park before birth");
         record_boundary_at(
             fixture.paths.clone(),
@@ -1236,10 +1215,6 @@ fn live_settlement_writes_no_boundary_and_leaves_live_agents_alone() {
 
         let recovers = disposition.recovers();
         assert_eq!(outcome.tabs.len(), usize::from(recovers));
-        assert!(
-            outcome.channel_tabs.is_empty(),
-            "the live room has its tabs"
-        );
         assert_eq!(
             ended_events(&fixture),
             if recovers {
@@ -1265,43 +1240,26 @@ fn live_settlement_writes_no_boundary_and_leaves_live_agents_alone() {
 }
 
 #[test]
-fn empty_named_channel_tabs_restore_one_pinned_shell_per_channel() {
-    let fixture = Fixture::new(&[]);
-    fixture.seed_named_channel("auth");
-    fixture.seed_named_channel("docs");
-    let record = crate::workspace::record::read(&fixture.paths.workspace_record).expect("record");
+fn agentless_rebirth_seeds_nothing_whatever_the_retired_channel_record_holds() {
+    for record in [
+        br#"{"auth":{"name":"auth","created_at":"2026-01-01T00:00:00Z"}}"#.as_slice(),
+        b"not json",
+    ] {
+        for disposition in [RebirthDisposition::Defer, RebirthDisposition::RecoverKeep] {
+            let fixture = Fixture::new(&[]);
+            let workspace = crate::workspace::WorkspaceResolver::resolve(&fixture.project, None)
+                .expect("resolve workspace");
+            crate::workspace::record::write(
+                &fixture.paths,
+                &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
+            )
+            .expect("workspace record");
+            std::fs::write(fixture.paths.retired_channels_record(), record).expect("record");
 
-    let tabs = empty_named_channel_tabs(&fixture.paths);
+            let outcome = materialize(fixture.inspect(false), disposition, "rimz-test");
 
-    assert_eq!(tabs.len(), 2);
-    for (tab, name) in tabs.iter().zip(["auth", "docs"]) {
-        let label = format!("#{name}");
-        assert_eq!(tab.label, label);
-        assert_eq!(tab.cwd, record.project_root);
-        assert_eq!(
-            tab.layout.columns,
-            [LayoutColumn {
-                panes: vec![PaneCmd {
-                    argv: vec![crate::proc::user_shell_program()],
-                    name: Some(label),
-                }],
-                stacked: false,
-            }]
-        );
-        assert_eq!(
-            tab.env
-                .get(crate::workspace::ENV_CHANNEL)
-                .map(String::as_str),
-            Some(name)
-        );
-        assert_eq!(
-            tab.env.get(crate::workspace::ENV_WORKTREE_PATH),
-            Some(&record.project_root.display().to_string())
-        );
-        assert_eq!(
-            tab.env.get(crate::workspace::ENV_WORKSPACE_ID),
-            Some(&fixture.paths.workspace_id.to_string())
-        );
+            assert_eq!(outcome, ResumePlan::default(), "{disposition:?}");
+        }
     }
 }
 

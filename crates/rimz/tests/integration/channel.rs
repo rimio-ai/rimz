@@ -1,93 +1,10 @@
-//! Integration coverage for `rimz channel`.
+//! Integration coverage for channel-scoped addressing: `#name` message routing
+//! and bare-role spawn inside a team lane.
 
-use assert_cmd::assert::OutputAssertExt;
-use predicates::str::contains;
 use rimz::store::message::MessageStatus;
-use serde_json::{Value, json};
-use std::path::Path;
-use std::process::Command;
+use serde_json::json;
 
-use crate::common::git::git_missing;
 use crate::common::{Env, zellij_trace_shim};
-
-#[test]
-fn channel_new_list_and_remove_round_trip() {
-    let env = Env::new();
-
-    env.rimz()
-        .args(["channel", "new", "design"])
-        .assert()
-        .success()
-        .stdout(contains("created design"));
-
-    let out = env
-        .rimz()
-        .args(["channel", "list", "--json"])
-        .output()
-        .expect("spawn list");
-    assert!(out.status.success(), "channel list succeeds");
-    let parsed: Value = serde_json::from_slice(&out.stdout).expect("json");
-    let entries = parsed.as_array().expect("array");
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0]["channel"], "design");
-    assert_eq!(entries[0]["backing"], "named");
-    assert_eq!(entries[0]["agents"].as_array().expect("agents").len(), 0);
-
-    env.rimz()
-        .args(["channel", "rm", "design"])
-        .assert()
-        .success()
-        .stdout(contains("removed design"));
-
-    let out = env
-        .rimz()
-        .args(["channel", "list", "--json"])
-        .output()
-        .expect("spawn list");
-    assert!(out.status.success(), "channel list succeeds");
-    let parsed: Value = serde_json::from_slice(&out.stdout).expect("json");
-    assert!(parsed.as_array().expect("array").is_empty());
-}
-
-#[test]
-fn channel_new_validates_bare_names() {
-    let env = Env::new();
-
-    env.rimz()
-        .args(["channel", "new", "bad/name"])
-        .assert()
-        .failure()
-        .stderr(contains("invalid channel name"));
-}
-
-#[test]
-fn channel_new_refuses_worktree_conflict() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-
-    env.rimz()
-        .args(["channel", "new", "demo"])
-        .assert()
-        .failure()
-        .stderr(contains(
-            "channel `demo` is backed by a worktree; use `--worktree demo`",
-        ));
-
-    let store = env.store();
-    let channels =
-        rimz::channel::list(&store.paths().channels_record).expect("read named channels");
-    assert!(
-        channels.is_empty(),
-        "collision must not write a named record"
-    );
-}
 
 #[test]
 fn message_routes_to_named_channel_targets() {
@@ -264,7 +181,12 @@ fn register_idle_channel_agent(env: &Env, session_id: &str, channel: &str) {
 
 /// Seed one idle agent stamped into `channel`, optionally carrying the team it
 /// launched under — the stamp channel-aware spawn reads the lane's team from.
-fn register_idle_lane_agent(env: &Env, session_id: &str, channel: &str, team: Option<&str>) {
+pub(crate) fn register_idle_lane_agent(
+    env: &Env,
+    session_id: &str,
+    channel: &str,
+    team: Option<&str>,
+) {
     let payload = json!({
         "hook_event_name": "SessionStart",
         "session_id": session_id,
@@ -317,32 +239,4 @@ fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
         elevated_agent: None,
         first_seen_at_ms: None,
     }
-}
-
-fn init_repo(path: &Path) {
-    git(path, &["init", "-b", "main"]);
-    git(path, &["config", "user.email", "rimz@example.com"]);
-    git(path, &["config", "user.name", "RimZ Test"]);
-    commit_file(path, "README.md", "fixture\n", "initial");
-}
-
-fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {
-    std::fs::write(repo.join(name), contents).expect("write committed file");
-    git(repo, &["add", name]);
-    git(repo, &["commit", "-m", message]);
-}
-
-fn git(cwd: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("spawn git");
-    assert!(
-        output.status.success(),
-        "git {} failed\nstdout:\n{}\nstderr:\n{}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
 }

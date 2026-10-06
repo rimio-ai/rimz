@@ -501,6 +501,22 @@ fn removed_top_level_command_rejects_before_global_help() {
     );
     assert!(reject_removed_top_level_tokens_from([OsString::from("run")]).is_err());
     assert!(reject_removed_top_level_tokens_from([OsString::from("tab")]).is_err());
+    for args in [
+        vec!["channel", "new", "x"],
+        vec!["--mux", "tmux", "channel", "list"],
+    ] {
+        let err = reject_removed_top_level_tokens_from(args.into_iter().map(OsString::from))
+            .expect_err("removed channel noun")
+            .to_string();
+        for replacement in [
+            "`rimz channel` has been removed",
+            "rimz agents <spec> --channel <name>",
+            "rimz agents list --all",
+            "rimz worktree list",
+        ] {
+            assert!(err.contains(replacement), "{err}");
+        }
+    }
     assert!(reject_removed_top_level_tokens_from([OsString::from("agents")]).is_ok());
     assert!(
         reject_removed_top_level_tokens_from([OsString::from("docs"), OsString::from("autoping"),])

@@ -238,7 +238,7 @@ surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/channel.rs"
-surface-budget = 10
+surface-budget = 5
 
 [[module]]
 path = "crates/rimz/src/child_process.rs"
@@ -352,7 +352,8 @@ allowed-dependencies = [
 # Reset detaches each state directory it removes through one classed helper (+1).
 # `StatePaths::temp_unit_dirs` lists the room's temp units, canonical and reset-detached, for the hard reset's view-holder sweep (+1).
 # The loop start throttle's queue directory, lock, and ticket name are built here (+3).
-surface-budget = 215
+# GC reaches the retired named-channel record through one classed-path accessor (+1).
+surface-budget = 216
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -1297,7 +1298,7 @@ reason = "The run driver births the room and places, presents and closes attempt
 [[verdict]]
 kind = "item"
 key = "cli::supervised::run::prepare_supervised"
-reason = "Residual is fail-fast admission in pinned refusal order (room check, worktree config, caller ancestry, subagent allowlist before the lane snapshot read, then sandbox, login, program and LSP preflight, channel registration); the launch plan itself is harness::plan::plan_supervised_launch (pass 32c)."
+reason = "Residual is fail-fast admission in pinned refusal order (room check, worktree config, caller ancestry, subagent allowlist before the lane snapshot read, then sandbox, login, program and LSP preflight, channel admission); the launch plan itself is harness::plan::plan_supervised_launch (pass 32c)."
 
 [[verdict]]
 kind = "item"
@@ -4632,22 +4633,12 @@ reason = "Serde skip predicate shared with forge::pr_state::PrLink; empty displa
 [[verdict]]
 kind = "item"
 key = "channel::Result"
-reason = "Return alias of the pub channel reads cli/channel.rs and cli/complete.rs drive (pass 24c)."
+reason = "Return alias of the pub namespace admissions the launch and worktree handlers call."
 
 [[verdict]]
 kind = "item"
 key = "channel::ChannelErr"
-reason = "Error of the pub channel reads cli/channel.rs and cli/complete.rs drive (pass 24c)."
-
-[[verdict]]
-kind = "item"
-key = "channel::ChannelRecord"
-reason = "The record cli/channel.rs and cli/complete.rs read out of the channel file (pass 24c)."
-
-[[verdict]]
-kind = "item"
-key = "channel::Channels"
-reason = "The record set cli/channel.rs and cli/complete.rs read and list (pass 24c)."
+reason = "Error of the pub namespace admissions the launch and worktree handlers call."
 
 [[verdict]]
 kind = "item"
@@ -4722,7 +4713,7 @@ reason = "Field type of UiState::gate_notice, so it follows the field to pane re
 [[verdict]]
 kind = "guard"
 key = "$0.root_class!=RootClass::Repo"
-reason = "Four sites turn one workspace-root fact into three different outcomes: channel.rs:145 returns an empty channel set, cli/gc.rs:324 reports WorktreeSweepStatus::Skipped, cli/worktree.rs:117 and cli/agents_cmd/resume.rs:183 bail with their own message (pass 24c)."
+reason = "Four sites turn one workspace-root fact into three different outcomes: channel.rs:77 returns an empty channel set, cli/gc.rs:324 reports WorktreeSweepStatus::Skipped, cli/worktree.rs:117 and cli/agents_cmd/resume.rs:183 bail with their own message (pass 24c)."
 
 [[verdict]]
 kind = "item"

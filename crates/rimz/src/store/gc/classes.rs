@@ -51,6 +51,11 @@ pub(super) fn collect_state(
                 waits_removed = report.wait_outputs_removed;
                 result
             }
+            Class::Records => sweep.remove_file_if_exists(
+                &paths.retired_channels_record(),
+                |report| report.sidecar_files_removed += 1,
+                &mut report,
+            ),
             _ => Ok(()),
         };
         if let Err(err) = result {

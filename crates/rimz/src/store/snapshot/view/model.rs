@@ -130,7 +130,7 @@ impl SidebarProviderPanel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarWorktreeKind {
-    /// A durable named cooperation lane. A worktree-backed lane carries the git
+    /// A cooperation lane. A worktree-backed lane carries the git
     /// story and leads with fork/merge glyphs; a plain lane has no git story
     /// and leads with `#`.
     Channel,

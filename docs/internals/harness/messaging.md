@@ -1,6 +1,6 @@
 # The message system
 
-> How text reaches a running agent: the durable record, the delivery decision, the pane write, the reply wait, and the channel lanes that scope addressing. The code is `crates/rimz/src/message/`. [fleet.md](./fleet.md) maps this area and owns the [address grammar](./fleet.md#the-address) this module resolves through; [transcript.md](./transcript.md) owns the conversation log that confirmed deliveries write and the ask records that hold delivery back. For users, the commands are [cli/message.md](../../reference/cli/message.md) and [cli/channel.md](../../reference/cli/channel.md).
+> How text reaches a running agent: the durable record, the delivery decision, the pane write, the reply wait, and the channel lanes that scope addressing. The code is `crates/rimz/src/message/`. [fleet.md](./fleet.md) maps this area and owns the [address grammar](./fleet.md#the-address) this module resolves through; [transcript.md](./transcript.md) owns the conversation log that confirmed deliveries write and the ask records that hold delivery back. For users, the command is [cli/message.md](../../reference/cli/message.md).
 
 ## What the module does
 
@@ -572,13 +572,15 @@ Read paths use the stamped lane and fall back to the worktree basename only for 
 
 Lane equality scopes target resolution, rendered handles, sidebar grouping, `agents list`, pane overlays, `message list`, transcripts, and recovery. Branch names are display metadata on the worktree card and never define a lane.
 
-### The registry
+### The shared namespace
 
-`channels.json`, beside `workspace.json` in the workspace store, holds only bare named channels: a name and a creation time, written under the workspace lock with temp-file-plus-rename. Worktree lanes take their durable truth from the `rimz-worktree.json` marker ([worktrees.md](./worktrees.md)), and team and directory lanes derive from the stamped launch identity. `rimz channel list` unions all three.
+No lane has a record of its own. Worktree lanes take their durable truth from the `rimz-worktree.json` marker ([worktrees.md](./worktrees.md)), and explicit, team, and directory lanes derive from the launch identity stamped on each agent. Worktrees still list without agents, but an empty explicit lane has no independent record to list or restore. A rebirth restores agent tabs only.
 
-The sidebar is presence-driven, so a group appears only while a pane runs in that lane. An empty named channel still persists, lists, and reopens as an empty tab on rebirth. Named channels last until `rimz channel rm`; `rimz gc` acts only on worktrees.
+The sidebar is presence-driven, so a group appears only while a pane runs in that lane.
 
-Named channels and RimZ-owned worktrees share one namespace. `rimz channel new NAME` refuses an existing worktree channel and `rimz worktree new NAME` refuses an existing named channel, each naming the other command as the fix.
+Explicit lanes and RimZ-owned worktrees share one namespace, and `channel.rs` owns both halves of the rule. An explicit `--channel NAME` launch is refused for a malformed name and for a name a managed worktree owns (`channel::admit_launch`, a Git read with no store access). `rimz worktree new NAME` is refused while a live agent holds the lane (`channel::admit_worktree_name`): an agent row with no end stamp, liveness other than dead, the lane stamped, and a checkout that is not the worktree of that name.
+
+`records/channels.json` is retired. Earlier builds kept explicit lanes there; no code reads or writes it, and `rimz gc` removes a leftover file under the `records` class.
 
 ### Addressing into a lane
 

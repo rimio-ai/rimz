@@ -26,7 +26,6 @@ impl StatePaths {
             self.cache_dir.clone(),
             self.workspace_record.clone(),
             self.room_bin.clone(),
-            self.channels_record.clone(),
             self.boot_marker.clone(),
             self.live_roster.clone(),
             self.pending_recovery.clone(),
