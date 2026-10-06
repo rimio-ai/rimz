@@ -66,6 +66,34 @@ pub(super) fn compose_wait(
     body
 }
 
+/// The message a launching fire opens its agent with: the event that fired
+/// the rule, then the prompt. A fire with no event is the prompt alone, since
+/// the launch reminder's Loop section already carries the standing frame.
+pub(super) fn compose_launch(name: &str, evidence: &Evidence<'_>, prompt: &str) -> String {
+    let event = match evidence {
+        Evidence::Condition(condition) => condition
+            .readings
+            .iter()
+            .map(|(key, reading)| {
+                let reading = reading
+                    .as_deref()
+                    .map_or_else(|| "unknown".to_owned(), one_line);
+                format!("{}: {reading}", one_line(key))
+            })
+            .collect::<Vec<_>>(),
+        Evidence::Signal(signal) => {
+            let mut event = vec![signal_headline(signal)];
+            event.extend(signal_details(signal));
+            event
+        }
+        Evidence::Scheduled | Evidence::Manual => return prompt.to_owned(),
+    };
+    format!(
+        "Rule `{name}` fired here. {}\n\n{prompt}",
+        event.join(" · ")
+    )
+}
+
 fn wait_line(task: &TaskEntry, meta: Option<&WaitMeta>, evidence: &Evidence<'_>) -> String {
     if let Evidence::Condition(condition) = evidence {
         return format!("waited on {}", condition.when);

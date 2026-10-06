@@ -240,7 +240,7 @@ Firing runs in the emitting process, with no queue. A signal reaches only the ta
 
 `--signal --wait` with the same target session, selector, matches, and root as a live subscription prints `already subscribed as <name>` and writes nothing, even when the prompt or `--once` differ.
 
-A signal fire's prompt opens with a subject line and a verdict line carrying the task name, then the task's `--prompt`:
+A signal delivered to a running agent (`--wait`) opens with a subject line and a verdict line carrying the task name, then the task's `--prompt`:
 
 ```text
 waited on ci.failed on check-multi #729 @88824c2
@@ -277,7 +277,17 @@ detail: {"a":1}
 env: prod
 ```
 
-A condition fire prints its readings by the same rule, `team.stage: Done`, with `unknown` for a reading that had no value. A manual `loop fire` of a signal task delivers `fired by hand [<task>]` with no field lines. The run record keeps the signal name and payload, truncating a payload over 4 KiB. `rimz loop logs <task>` prints the payload as one JSON line under each run's `signal:` line, and still reads the retained runs of a fired `--once` task. For a task still registered, `rimz loop show <task> --json` prints those records whole.
+A condition delivery prints its readings by the same rule, `team.stage: Done`, with `unknown` for a reading that had no value. A manual `loop fire` of a signal `--wait` task delivers `fired by hand [<task>]` with no field lines.
+
+A fire that launches an agent (`--agent`) sends a shorter message, since the launched agent's reminder already says which rule started it and why. The event is one line holding the same subject and fields, joined by ` · `, then the prompt:
+
+```text
+Rule `smoke` fired here. deploy.finished · detail: {"a":1} · env: prod
+
+run the smoke suite against the new deploy
+```
+
+A condition launch lists its readings on that line (``Rule `ship` fired here. team.stage: Done``). A clock fire and a manual `loop fire` have no event, so the agent gets the prompt alone. The run record keeps the signal name and payload, truncating a payload over 4 KiB. `rimz loop logs <task>` prints the payload as one JSON line under each run's `signal:` line, and still reads the retained runs of a fired `--once` task. For a task still registered, `rimz loop show <task> --json` prints those records whole.
 
 Project tasks may use `--signal` and `--match`, and a subscription satisfies their repeat requirement.
 
