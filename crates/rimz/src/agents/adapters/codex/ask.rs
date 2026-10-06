@@ -208,6 +208,9 @@ pub(super) fn answer_plan(
     }
 }
 
+pub(super) const PLAN_PANE_ACTIONS: &str =
+    "keep-planning, clear-context implementation, and refinement";
+
 fn plan_approval_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, AnswerPlanErr> {
     let [answer] = answers else {
         return Err(AnswerPlanErr::Invalid(
@@ -218,10 +221,9 @@ fn plan_approval_answer_plan(answers: &[AskReply]) -> Result<Vec<AnswerStep>, An
         // Codex 0.144.3, verified 2026-07-13: the selector opens on
         // "Yes, implement this plan" and Enter submits "Implement the plan."
         [0] if answer.text.is_none() => Ok(vec![AnswerStep::Key(NamedKey::Enter)]),
-        _ => Err(AnswerPlanErr::Invalid(
-            "plan approvals accept only `implement`; keep-planning, clear-context implementation, and refinement require the Codex pane"
-                .to_owned(),
-        )),
+        _ => Err(AnswerPlanErr::Invalid(format!(
+            "plan approvals accept only `implement`; {PLAN_PANE_ACTIONS} require the Codex pane"
+        ))),
     }
 }
 

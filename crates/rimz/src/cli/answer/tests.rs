@@ -1,4 +1,5 @@
 use super::*;
+use rimz::agents::AskKind;
 use rimz::transcript::{AskOption, AskQuestion};
 
 fn question(multi_select: bool) -> AskQuestion {
@@ -25,35 +26,35 @@ fn selectors_accept_indices_labels_and_multiselect() {
     );
 
     let reply = validate_reply(
-        AskKind::Question,
         &question(true),
         AskReply {
             picks: vec![0, 1],
             ..AskReply::default()
         },
+        None,
     )
     .unwrap();
     assert_eq!(reply.picks, vec![0, 1]);
     assert!(
         validate_reply(
-            AskKind::Question,
             &question(false),
             AskReply {
                 picks: vec![0, 1],
                 ..AskReply::default()
             },
+            None,
         )
         .unwrap_err()
         .contains("single-select")
     );
     assert!(
         validate_reply(
-            AskKind::Question,
             &question(true),
             AskReply {
                 picks: vec![0, 0],
                 ..AskReply::default()
             },
+            None,
         )
         .unwrap_err()
         .contains("only once")
@@ -68,8 +69,8 @@ fn structured_answers_require_one_object_per_question() {
             pick: vec![JsonPick::Label("safe".to_owned())],
             text: None,
         }],
-        AskKind::Question,
         &questions,
+        None,
     )
     .unwrap_err();
     assert!(error.contains("expected 2 JSON answer objects"));
@@ -86,35 +87,6 @@ fn label_resolution_rejects_case_insensitive_ambiguity() {
             .unwrap_err()
             .contains("ambiguous")
     );
-}
-
-#[test]
-fn menu_only_actions_name_the_agent_pane() {
-    for (kind, option, rejected) in [
-        (AskKind::Permission, "allow", "deny"),
-        (AskKind::PlanApproval, "approve", "keep-planning"),
-    ] {
-        let question = AskQuestion {
-            question: "Continue?".to_owned(),
-            options: vec![AskOption::from(option.to_owned())],
-            multi_select: false,
-            has_option_previews: false,
-        };
-        let selector_error = resolve_answer_selector(kind, rejected, &question).unwrap_err();
-        assert!(selector_error.contains("agent pane"));
-        assert!(selector_error.contains(&format!("valid options: 1={option}")));
-
-        let text_error = validate_reply(
-            kind,
-            &question,
-            AskReply {
-                text: Some("instructions".to_owned()),
-                ..AskReply::default()
-            },
-        )
-        .unwrap_err();
-        assert!(text_error.contains("agent pane"));
-    }
 }
 
 #[test]

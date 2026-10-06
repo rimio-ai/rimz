@@ -44,5 +44,9 @@ fn open_asks_render_as_an_actionable_list() {
         rendered.contains("Choose deployment path?"),
         "missing question: {rendered}"
     );
-    assert!(rendered.contains("ask_"), "missing ask id: {rendered}");
+    assert!(!rendered.contains("ask_"), "unexpected ask id: {rendered}");
+    assert!(
+        rendered.contains("rimz answer @claude#project <1|2>"),
+        "missing answer command: {rendered}"
+    );
 }

@@ -17,7 +17,7 @@ rimz asks --json          # the same rows as JSON
 | `--all` | Include asks from every channel. Outside a channel the list already covers every channel. |
 | `--json` | Print a JSON array of [ask rows](#ask-json), `[]` when nothing is open. |
 
-The table has the columns `ASK`, `AGENT`, `KIND`, `AGE`, and `QUESTION`, oldest ask first. `KIND` reads `permission`, `plan approval`, or `question`, and `QUESTION` is the first line of the first question. With no open asks the command prints `no agent in #<channel> is asking anything — rimz asks --all shows every channel` and exits `0`; where the list already covers every channel (with `--all`, or outside a channel) the line is `no agent is asking anything`.
+The table has the columns `AGENT`, `KIND`, `AGE`, and `ASK`, oldest ask first. Each row has a second line with the next command to run. Permissions point to `rimz agents focus` first, so you can inspect the full tool call before deciding. Supported questions offer an `answer` command; unsupported prompts point to the pane. `ASK` previews the first question, with its numbered options for a question, or names how many additional questions follow. A plan previews the plan's first line rather than its approval header. With no open asks the command prints `no agent in #<channel> is asking anything — rimz asks --all shows every channel` and exits `0`; where the list already covers every channel (with `--all`, or outside a channel) the line is `no agent is asking anything`.
 
 A provider subagent (a child the agent spawned inside its own session) that raises a prompt appears as `child-name (via @root)`, because the prompt is drawn in the root agent's pane. In JSON, `agent.handle` is the root's address and `agent.name` is the child. A child whose root agent is no longer live is left out of the list. Target a child's ask by its `ask_id`.
 
@@ -30,23 +30,23 @@ rimz asks show ask_0123456789abcdef --json
 
 The target is an agent address or an ask id. An address resolves in the current channel, as everywhere else ([addressing agents](./agents.md#addressing-agents)); an ask id matches in any channel.
 
-The human form prints a header line, the agent's context message, and each question with its numbered options:
+The human form prints a header line, the agent's context message when present, and each question with its numbered options:
 
 ```console
-$ rimz asks show @planner
-ask_0123456789abcdef  @planner#auth  question · 4m
-
-▌ A staged rollout limits the blast radius.
+$ rimz --tmux asks show ask_06gh3qs0ee47p7o0
+ask_06gh3qs0ee47p7o0  @coder#probe  question · 0s
 
 Choose a rollout
   1. safe
      Stage the rollout
   2. fast
+
+answer here:  rimz answer @coder#probe <1|2>
 ```
 
-The context lines render as Markdown under the [agent prose](../cli.md#agent-prose) rule. Questions are numbered only when an ask has more than one, and an option with a caution prints it after the label, as in `1. approve [caution: enables auto-accept for subsequent edits]`.
+The context lines render as Markdown under the [agent prose](../cli.md#agent-prose) rule. Questions are numbered only when an ask has more than one, and an option with a caution prints it after the label, as in `1. approve [caution: enables auto-accept for subsequent edits]`. A permission's detail is labelled a summary: the pane shows the full tool call. The closing block gives the answer command, any actions reserved for the pane, and its focus command.
 
-`show` exits `1` when the address resolves to an agent that is not asking, when the ask id is no longer open, or when a subagent's root agent is gone.
+`show` exits `1` when the address resolves to an agent that is not asking, when the ask id matches no open ask or is malformed, or when a subagent's root agent is gone. `answer` exits `2` for these cases. An unmatched id may have been answered, replaced, or never existed; `rimz asks` lists the open ones.
 
 ## Ask JSON
 
@@ -150,7 +150,7 @@ Structured input is a JSON array with one object per question, in order. Use it 
 4. Send the keys. A provider subagent's answer goes to its root agent's pane.
 5. Wait for confirmation: the blocking ask closes or the agent records an answer for it. `--no-wait` stops before this step.
 
-On success `answer` prints `answered <ask_id> for <handle>`, or `sent answer for <ask_id> to <handle>` with `--no-wait`. Errors print `error: <message>` on stderr. A blocking ask that closes during step 5 for any reason, including being dismissed in the pane, counts as confirmed.
+On success `answer` prints `answered <handle>: <choice>  <ask_id>`, or `sent answer to <handle>: <choice>  <ask_id>` with `--no-wait`. The choice includes selected labels, quoted free text, and any selected option's caution. A child appears as `child (via <root handle>)`. Errors print `error: <message>` on stderr. With no answer supplied, a supported ask lists its choices and the answer command. A blocking ask that closes during step 5 for any reason, including being dismissed in the pane, counts as confirmed.
 
 ### Exit codes
 
@@ -160,15 +160,15 @@ On success `answer` prints `answered <ask_id> for <handle>`, or `sent answer for
 | --- | --- |
 | `0` | The agent confirmed the answer, or `--no-wait` sent it. |
 | `1` | No room, or the store could not be read or written. |
-| `2` | The target is not an agent or not asking, the ask is no longer current, the agent has no live pane, the pane stayed busy for 30 seconds, or sending failed. A send that fails partway may leave some keys in the pane. An invalid command line (such as `--wait 5d`) also exits `2`. |
+| `2` | The target is not an agent or not asking, the ask id is malformed or matches no open ask, the ask was answered or replaced before sending, the agent has no live pane, the pane stayed busy for 30 seconds, or sending failed. A send that fails partway may leave some keys in the pane. An invalid command line (such as `--wait 5d`) also exits `2`. |
 | `3` | The answer is invalid for the ask, the `--json` input cannot be read or parsed, or the agent does not support the answer (including Codex async questions). |
-| `4` | A blocking ask's keys were sent, but the agent did not confirm before the `--wait` deadline. |
+| `4` | A blocking ask's keys were sent, but the agent did not confirm before the `--wait` deadline. Do not resend. The error gives `rimz asks show` and `rimz pane capture` commands to check. |
 
 `rimz asks` follows the [CLI-wide exit codes](../cli.md#exit-codes).
 
 ## What each agent accepts
 
-`rimz answer` answers only what an agent's prompt UI lets it drive and confirm. Every other kind exits `3` with `<kind> does not support structured answers`.
+`rimz answer` answers only what an agent's prompt UI lets it drive and confirm. Other supported agent kinds route you to their pane with `rimz agents focus` and exit `3`. Codex permissions do the same, with or without a selector. Unknown agent kinds retain their adapter lookup error.
 
 | Agent | Question | Permission | Plan approval |
 | --- | --- | --- | --- |

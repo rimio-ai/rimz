@@ -12,6 +12,257 @@ const QUESTION_CONTEXT: &str = concat!(
     "It also leaves time to observe each stage."
 );
 
+#[test]
+fn human_question_routes_and_missing_selector_show_options() {
+    let env = Env::new();
+    assert!(
+        env.run_hook("claude", &question_payload(&env))
+            .status
+            .success()
+    );
+    let output = env.rimz().args(["asks"]).bounded_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("1 safe · 2 fast"), "{stdout}");
+    assert!(!stdout.contains("ask_"), "{stdout}");
+    assert!(stdout.contains("<1|2>"), "{stdout}");
+    let output = env
+        .rimz()
+        .args(["answer", "@claude"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("1=safe, 2=fast"), "{stderr}");
+    assert!(stderr.contains("rimz answer"), "{stderr}");
+}
+
+#[test]
+fn missing_plan_answer_quotes_the_plan_body() {
+    let env = Env::new();
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "plan-preview",
+        "tool_name": "ExitPlanMode",
+        "tool_input": { "plan": "\nImplement the safe route\nThen verify" }
+    });
+    assert!(
+        env.run_hook("claude", &payload.to_string())
+            .status
+            .success()
+    );
+    let output = env
+        .rimz()
+        .args(["answer", "@claude"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("asks \"Implement the safe route\": 1=approve"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Requesting plan approval:"), "{stderr}");
+}
+
+#[test]
+fn missing_free_text_answer_has_no_options_tail() {
+    let env = Env::new();
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "free-text",
+        "tool_name": "AskUserQuestion",
+        "tool_input": { "questions": [{ "question": "Why?", "options": [] }] }
+    });
+    assert!(
+        env.run_hook("claude", &payload.to_string())
+            .status
+            .success()
+    );
+    let output = env
+        .rimz()
+        .args(["answer", "@claude"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("asks \"Why?\"\n"), "{stderr}");
+    assert!(stderr.contains("--text \"<answer>\""), "{stderr}");
+}
+
+#[test]
+fn permission_duplicate_picks_keep_the_duplicate_error() {
+    let env = Env::new();
+    assert!(
+        env.run_hook("claude", &permission_payload("Bash"))
+            .status
+            .success()
+    );
+    let output = env
+        .rimz()
+        .args(["answer", "@claude", "allow,allow"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("an option can be selected only once"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("only `allow`"), "{stderr}");
+}
+
+#[test]
+fn permission_json_answer_count_keeps_the_count_error() {
+    let env = Env::new();
+    assert!(
+        env.run_hook("claude", &permission_payload("Bash"))
+            .status
+            .success()
+    );
+    let path = env.home_root.join("answers.json");
+    std::fs::write(&path, "[{},{}]").unwrap();
+    let output = env
+        .rimz()
+        .args(["answer", "@claude", "--json"])
+        .arg(&path)
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("expected 1 JSON answer objects, got 2"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("only `allow`"), "{stderr}");
+}
+
+#[test]
+fn permission_show_labels_summary_and_pane_actions() {
+    let env = Env::new();
+    assert!(
+        env.run_hook("claude", &permission_payload("Bash"))
+            .status
+            .success()
+    );
+    let output = env
+        .rimz()
+        .args(["asks", "show", "@claude"])
+        .bounded_output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for text in [
+        "summary (the pane shows the full tool call):",
+        "deny and persistent grants",
+        "rimz agents focus",
+        "answer here:",
+    ] {
+        assert!(stdout.contains(text), "{stdout}");
+    }
+}
+
+#[test]
+fn human_table_routes_all_ask_kinds_and_child_to_root() {
+    let env = Env::new();
+    assert!(
+        env.run_hook("claude", &question_payload(&env))
+            .status
+            .success()
+    );
+    for (pane, payload) in [
+        (
+            "%8",
+            json!({"hook_event_name":"PreToolUse","session_id":"plan","tool_name":"ExitPlanMode","tool_input":{"plan":"Implement the safe route"}}),
+        ),
+        (
+            "%9",
+            json!({"hook_event_name":"PermissionRequest","session_id":"permission","tool_name":"Bash","tool_input":{"command":"cargo test"}}),
+        ),
+        (
+            "%10",
+            json!({"hook_event_name":"SessionStart","session_id":"parent"}),
+        ),
+        (
+            "%10",
+            json!({"hook_event_name":"SubagentStart","session_id":"parent","agent_id":"child","subagent_type":"Explore"}),
+        ),
+        (
+            "%10",
+            json!({"hook_event_name":"PermissionRequest","session_id":"parent","agent_id":"child","tool_name":"Bash","tool_input":{"command":"cargo test"}}),
+        ),
+    ] {
+        assert!(
+            env.run_installed_hook_in_pane("claude", &payload.to_string(), &[("TMUX_PANE", pane)])
+                .status
+                .success()
+        );
+    }
+    for payload in [
+        json!({"hook_event_name":"PostToolUse","session_id":"codex","tool_name":"request_user_input_async","tool_use_id":"async","tool_response":"{\"accepted\":true}","tool_input":{"questions":[{"title":"Which branch?","options":["main","dev"]}]}}),
+        json!({"hook_event_name":"PermissionRequest","session_id":"codex","tool_name":"shell","tool_input":{"command":"pwd"}}),
+    ] {
+        assert!(
+            env.run_installed_hook_in_pane("codex", &payload.to_string(), &[("TMUX_PANE", "%11")])
+                .status
+                .success()
+        );
+    }
+    let asks = listed_asks(&env);
+    assert_eq!(asks.as_array().unwrap().len(), 6);
+    let child_id = asks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|ask| ask["agent"]["name"] == "Explore")
+        .unwrap()["ask_id"]
+        .as_str()
+        .unwrap();
+    let output = env.rimz().args(["asks"]).bounded_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("AGENT"), "{stdout}");
+    for text in [
+        "1 safe · 2 fast",
+        "Implement the safe route",
+        "→ rimz agents focus",
+        "Shift+Left",
+        "Explore (via",
+        child_id,
+    ] {
+        assert!(stdout.contains(text), "{stdout}");
+    }
+    for text in ["Requesting plan approval:", "  1 allow", "  1 approve"] {
+        assert!(!stdout.contains(text), "{stdout}");
+    }
+    assert_eq!(stdout.matches("ask_").count(), 1, "{stdout}");
+}
+
+#[test]
+fn not_asking_and_unknown_id_share_wording_but_keep_exit_codes() {
+    let env = Env::new();
+    assert!(
+        env.run_hook(
+            "claude",
+            &json!({"hook_event_name":"SessionStart", "session_id":"idle"}).to_string()
+        )
+        .status
+        .success()
+    );
+    for target in ["@claude", "ask_0000000000000000"] {
+        let shown = env
+            .rimz()
+            .args(["asks", "show", target])
+            .bounded_output()
+            .unwrap();
+        let answered = env
+            .rimz()
+            .args(["answer", target])
+            .bounded_output()
+            .unwrap();
+        assert_eq!(shown.status.code(), Some(1));
+        assert_eq!(answered.status.code(), Some(2));
+        assert_eq!(shown.stderr, answered.stderr);
+    }
+}
+
 fn question_payload(env: &Env) -> String {
     let transcript_path = env.home_root.join("question-transcript.jsonl");
     let transcript = serde_json::to_string(&json!({
@@ -796,7 +1047,7 @@ fn asks_empty_and_stale_answer_are_machine_readable() {
         .bounded_output()
         .expect("run stale answer");
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no longer current"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no open ask"));
 }
 
 #[test]
@@ -816,13 +1067,28 @@ fn answer_keeps_unverified_codex_permissions_in_the_pane() {
         .expect("answer pane-only permission ask");
     assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("use the agent pane"), "{stderr}");
+    assert!(stderr.contains("rimz agents focus"), "{stderr}");
+    assert!(!stderr.contains("valid options"), "{stderr}");
+    let output = env
+        .rimz()
+        .args(["answer", "@codex"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("rimz agents focus"), "{stderr}");
+    assert!(!stderr.contains("valid options"), "{stderr}");
 }
 
 #[test]
 fn answer_refuses_unconfirmable_claude_menu_actions_before_pane_delivery() {
-    for (payload, selector, valid) in [
-        (permission_payload("Bash"), "deny", "valid options: 1=allow"),
+    for (payload, selector, valid, actions) in [
+        (
+            permission_payload("Bash"),
+            "deny",
+            "only `allow`",
+            "deny and persistent grants",
+        ),
         (
             serde_json::to_string(&json!({
                 "hook_event_name": "PreToolUse",
@@ -832,22 +1098,27 @@ fn answer_refuses_unconfirmable_claude_menu_actions_before_pane_delivery() {
             }))
             .expect("plan payload"),
             "keep-planning",
-            "valid options: 1=approve",
+            "only `approve`",
+            "keep-planning, refinement text, and manual-review approval",
         ),
     ] {
         let env = Env::new();
         let hook = env.run_hook("claude", &payload);
         assert!(hook.status.success());
 
-        let output = env
-            .rimz()
-            .args(["answer", "@claude", selector])
-            .bounded_output()
-            .expect("answer pane-only action");
-        assert_eq!(output.status.code(), Some(3));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("agent pane"), "{stderr}");
-        assert!(stderr.contains(valid), "{stderr}");
+        for args in [vec![selector], vec!["--text", "refine this"]] {
+            let output = env
+                .rimz()
+                .args(["answer", "@claude"])
+                .args(args)
+                .bounded_output()
+                .expect("answer pane-only action");
+            assert_eq!(output.status.code(), Some(3));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            for expected in ["rimz agents focus", valid, actions] {
+                assert!(stderr.contains(expected), "{stderr}");
+            }
+        }
     }
 }
 
@@ -908,6 +1179,10 @@ fn answer_question_sends_to_bound_pane_and_timeout_has_distinct_exit() {
         .expect("timeout question answer");
     assert_eq!(output.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&output.stderr).contains("did not confirm"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for text in ["do not resend", "rimz asks show", "rimz pane capture"] {
+        assert!(stderr.contains(text), "{stderr}");
+    }
 }
 
 #[cfg(unix)]
@@ -974,6 +1249,12 @@ fn subagent_ask_lists_with_parent_and_answers_through_parent_pane() {
     );
     let sent = std::fs::read_to_string(&log).expect("tmux trace");
     assert!(sent.contains("send-keys -l -t %7 -- 1"), "{sent}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parent = asks[0]["agent"]["handle"].as_str().unwrap();
+    assert!(
+        stdout.contains(&format!("Explore (via {parent}): allow")),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -1067,6 +1348,14 @@ fn answer_confirmable_claude_menu_actions_reach_bound_pane() {
         let sent = std::fs::read_to_string(&log).unwrap();
         assert!(sent.contains("%7"), "{sent}");
         assert!(sent.contains(expected_command), "{sent}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(&format!(": {selector}")), "{stdout}");
+        if selector == "approve" {
+            assert!(
+                stdout.contains("enables auto-accept for subsequent edits"),
+                "{stdout}"
+            );
+        }
     }
 }
 
@@ -1187,9 +1476,9 @@ fn codex_async_asks_list_each_question_and_confirm_native_answers() {
             .unwrap();
         assert_eq!(output.status.code(), Some(3));
         let error = String::from_utf8_lossy(&output.stderr);
-        assert!(error.contains("answered in the pane"), "{error}");
+        assert!(error.contains("answered in its pane"), "{error}");
         assert!(error.contains("focus @codex"), "{error}");
-        assert!(error.contains("shift+←"), "{error}");
+        assert!(error.contains("Shift+Left"), "{error}");
     }
     assert!(
         !std::fs::read_to_string(&log)

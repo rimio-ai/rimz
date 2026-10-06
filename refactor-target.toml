@@ -172,7 +172,8 @@ upward-dependencies = ["address"]
 # AgentState::rests_in_lifecycle is the durable rest both the ping-open rule and the keep-warm hold read (+1).
 # AgentState::displayed_turn_error_label shares the nested entry and list wording (+1).
 # `RateLimitWindow::pace` and `PaceReading` share the pace fact and floor gate across renderers (+5).
-surface-budget = 988
+# AskRoute and pane_actions share one answerability decision with both CLI consumers (+2).
+surface-budget = 990
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

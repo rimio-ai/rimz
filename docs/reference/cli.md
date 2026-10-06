@@ -87,7 +87,7 @@ Commands that report an outcome add their own codes, so a script branches withou
 | `loop fire` | An `--agent` action's run status as above; `130` when Ctrl-C interrupts the check; `0` when a gate or check skips the action | [Fire and stop a run](./cli/loop.md#fire-and-stop-a-run) |
 | `lsp` queries and checks | `3` no server or stopped; `4` still indexing after the readiness wait; `5` name not found; `6` name ambiguous; `7` anchors failed | [Shared language servers](./cli/lsp.md#exit-codes) |
 | `lsp attach` | `3` admission timeout/refusal, broker refusal, or broker connection closing/failing | [Editor attachment](./cli/lsp.md#attach) |
-| `answer` | `2` the target is not asking, its ask is no longer current, or its pane cannot be reached; `3` the answer is invalid for the ask or the agent does not support structured answers; `4` the agent did not confirm before the deadline | [Answer an ask](./cli/asks.md#answer-an-ask) |
+| `answer` | `2` the target is not asking, its ask is missing or replaced, or its pane cannot be reached; `3` the answer is invalid or must be given in the pane (the error gives a focus command); `4` the agent did not confirm before the deadline: check, do not resend | [Answer an ask](./cli/asks.md#answer-an-ask) |
 
 ### Durations
 
