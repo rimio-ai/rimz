@@ -64,14 +64,14 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         let snapshot = snapshot
             .as_ref()
             .expect("an existing store supplied the snapshot");
-        let agent =
-            match cli::resolve_agent_one(store, snapshot, &args.target, None, channel.as_deref()) {
-                Ok(agent) => agent.clone(),
-                Err(error) => {
-                    super::show::resolve_audit_agent(store, &workspace, &runtime, &args.target)?
-                        .ok_or(error)?
-                }
-            };
+        let (agent, _) = super::resolve_live_or_audit(
+            store,
+            &workspace,
+            &runtime,
+            snapshot,
+            &args.target,
+            channel.as_deref(),
+        )?;
         let posture = rimz::harness::resume::resolve_posture(
             rimz::harness::resume::PostureRequest {
                 record: agent.record.as_deref(),

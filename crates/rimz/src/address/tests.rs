@@ -176,6 +176,98 @@ fn at_kind_fans_out_but_resolve_one_is_ambiguous() {
 }
 
 #[test]
+fn ambiguity_lists_round_tripping_addresses_and_full_count() {
+    let mut snapshot = empty_snapshot();
+    for n in 0..11 {
+        let mut peer = agent(
+            "claude",
+            &format!("session-{n}"),
+            Some("main"),
+            &format!("terminal_{n}"),
+        );
+        peer.name = Some(format!("peer-{n}"));
+        peer.role = Some("coder".to_owned());
+        if n == 0 {
+            peer.channel = Some("docs".to_owned());
+        }
+        snapshot.agents.push(peer);
+    }
+    let error = resolve_one(&snapshot, "@coder", None, None).unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.starts_with("target `@coder` matches 11 agents: "),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("(+3 more; `rimz agents list --all` lists every live agent)"),
+        "{message}"
+    );
+    let addresses = message
+        .split_once(": ")
+        .unwrap()
+        .1
+        .split(" (+")
+        .next()
+        .unwrap();
+    assert_eq!(addresses.split(", ").count(), 8);
+    let matches = resolve_many(&snapshot, "@coder", None, None).unwrap();
+    for (address, peer) in addresses.split(", ").zip(matches) {
+        assert_eq!(
+            resolve_one(&snapshot, address, None, None)
+                .unwrap()
+                .agent_id,
+            peer.agent_id
+        );
+    }
+    assert!(!message.contains('\n'));
+}
+
+#[test]
+fn ambiguity_uses_the_search_pool_not_only_the_matches() {
+    let mut snapshot = empty_snapshot();
+    for (kind, id, role) in [
+        ("claude", "first", "coder"),
+        ("codex", "second", "coder"),
+        ("claude", "third", "other"),
+    ] {
+        let mut peer = agent(kind, id, Some("main"), id);
+        peer.name = Some(id.to_owned());
+        peer.role = Some(role.to_owned());
+        snapshot.agents.push(peer);
+    }
+    let error = resolve_one(&snapshot, "@coder", None, None).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "target `@coder` matches 2 agents: @first#main, @codex#main"
+    );
+    assert_eq!(
+        resolve_one(&snapshot, "@first#main", None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "first"
+    );
+}
+
+#[test]
+fn ambiguity_for_unbound_panes_uses_pane_addresses() {
+    let peers = [
+        lazy_pane("claude", "/repo/main", "terminal_1"),
+        lazy_pane("claude", "/repo/main", "terminal_2"),
+    ];
+    let candidates = peers.iter().collect::<Vec<_>>();
+    assert_eq!(
+        render_candidates(&candidates, &candidates),
+        "2 agents: zellij:terminal_1, zellij:terminal_2"
+    );
+    for pane in &peers {
+        let matches = resolve_mentions(&pane.pane_id.to_string(), None, None, &candidates).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].pane_id, pane.pane_id);
+    }
+}
+
+#[test]
 fn at_all_fans_to_the_channel_only() {
     let mut snapshot = empty_snapshot();
     let feat_claude = agent("claude", "session-a", Some("feat"), "terminal_1");

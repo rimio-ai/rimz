@@ -62,10 +62,20 @@ pub enum TargetErr {
         channel: String,
         elsewhere: String,
     },
-    #[error("target `{target}` matched multiple agents: {candidates}")]
+    #[error("target `{target}` matches {candidates}")]
     Ambiguous { target: String, candidates: String },
     #[error("pane `{pane_id}` is not bound to a known agent")]
     PaneUnbound { pane_id: PaneId },
+}
+
+impl TargetErr {
+    /// An ambiguity over already resolved, retypeable candidate addresses.
+    pub fn ambiguous(target: &str, addresses: &[String]) -> Self {
+        Self::Ambiguous {
+            target: target.to_owned(),
+            candidates: render_candidate_addresses(addresses.iter().cloned()),
+        }
+    }
 }
 
 /// A parsed agent mention selector — its arity (one or many) is intrinsic.
@@ -109,6 +119,8 @@ enum Target {
 /// send-now messages). One matcher set serves both; each command chooses the source it
 /// resolves over.
 trait Candidate<'a>: Copy {
+    fn address(self, peers: &[Self]) -> String;
+    fn same(self, other: Self) -> bool;
     fn kind(self) -> &'a str;
     fn kind_ordinal(self) -> Option<u32>;
     fn name(self) -> Option<&'a str>;
@@ -161,6 +173,12 @@ trait Candidate<'a>: Copy {
 }
 
 impl<'a> Candidate<'a> for &'a AgentState {
+    fn address(self, peers: &[Self]) -> String {
+        agent_handle(self, peers, true)
+    }
+    fn same(self, other: Self) -> bool {
+        std::ptr::eq(self, other)
+    }
     fn kind(self) -> &'a str {
         self.kind.as_str()
     }
@@ -194,6 +212,29 @@ impl<'a> Candidate<'a> for &'a AgentState {
 }
 
 impl<'a> Candidate<'a> for &'a PaneAgent {
+    fn address(self, peers: &[Self]) -> String {
+        if self.agent_id.is_none() {
+            return self.pane_id.to_string();
+        }
+        let channel = PaneAgent::channel(self);
+        let scoped_peers = peers
+            .iter()
+            .copied()
+            .filter(|peer| channel.is_none() || PaneAgent::channel(peer) == channel)
+            .collect::<Vec<_>>();
+        let Some(base) =
+            candidate_handle_base(self, &scoped_peers, &scoped_peers, channel.is_some())
+        else {
+            return self.pane_id.to_string();
+        };
+        match channel {
+            Some(channel) => format!("{base}#{channel}"),
+            None => base,
+        }
+    }
+    fn same(self, other: Self) -> bool {
+        std::ptr::eq(self, other)
+    }
     fn kind(self) -> &'a str {
         self.kind.as_str()
     }
@@ -289,7 +330,7 @@ pub fn resolve_agent<'a>(
         [one] => Ok(one),
         many => Err(TargetErr::Ambiguous {
             target: raw.to_owned(),
-            candidates: render_candidates(many),
+            candidates: render_candidates(many, candidates),
         }),
     }
 }
@@ -449,7 +490,7 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
                 many => {
                     return Err(TargetErr::Ambiguous {
                         target: raw.to_owned(),
-                        candidates: render_candidates(many),
+                        candidates: render_candidates(many, candidates),
                     });
                 }
             }
@@ -767,7 +808,7 @@ fn resolve_by_pane<'a, C: Candidate<'a>>(
         }),
         many => Err(TargetErr::Ambiguous {
             target: raw.to_owned(),
-            candidates: render_candidates(many),
+            candidates: render_candidates(many, candidates),
         }),
     }
 }
@@ -1282,14 +1323,22 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
         .copied()
         .find(|peer| std::ptr::eq(*peer, agent))
         .or_else(|| scoped_peers.iter().copied().find(|peer| *peer == agent));
-    if target_peer.is_none() {
+    let Some(target_peer) = target_peer else {
         return absent_agent_handle_base(agent, &scoped_peers, scoped);
-    }
+    };
     let launch_occupants = launch_occupants(scoped_peers.iter().copied());
-    let launch_occupant = launch_occupants
-        .iter()
-        .any(|occupant| target_peer.is_some_and(|target| std::ptr::eq(*occupant, target)));
-    let resolves_in = |text: &str, candidates: &[&AgentState]| {
+    candidate_handle_base(target_peer, &scoped_peers, &launch_occupants, scoped)
+        .unwrap_or_else(|| format!("@{}", agent.agent_id))
+}
+
+fn candidate_handle_base<'a, C: Candidate<'a>>(
+    agent: C,
+    scoped_peers: &[C],
+    launch_occupants: &[C],
+    scoped: bool,
+) -> Option<String> {
+    let launch_occupant = launch_occupants.iter().any(|occupant| occupant.same(agent));
+    let resolves_in = |text: &str, candidates: &[C]| {
         let selector = classify_selector(text);
         let exact = exact_session_match(&selector, candidates);
         let matches = if exact.is_empty() {
@@ -1297,47 +1346,44 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
         } else {
             exact
         };
-        matches.len() == 1
-            && matches.first().is_some_and(|matched| {
-                target_peer.is_some_and(|target| std::ptr::eq(*matched, target))
-            })
+        matches.len() == 1 && matches.first().is_some_and(|matched| matched.same(agent))
     };
     if launch_occupant
-        && let Some(role) = agent.role.as_deref()
-        && resolves_in(role, &launch_occupants)
+        && let Some(role) = agent.role()
+        && resolves_in(role, launch_occupants)
     {
-        return format!("@{role}");
+        return Some(format!("@{role}"));
     }
-    if let Some(name) = agent.name.as_deref().filter(|_| agent.name_explicit)
-        && resolves_in(name, &scoped_peers)
+    if let Some(name) = agent.name().filter(|_| agent.name_explicit())
+        && resolves_in(name, scoped_peers)
     {
-        return format!("@{name}");
+        return Some(format!("@{name}"));
     }
     if launch_occupant
-        && let Some(profile) = agent.profile.as_deref()
-        && resolves_in(profile, &launch_occupants)
+        && let Some(profile) = agent.profile()
+        && resolves_in(profile, launch_occupants)
     {
-        return format!("@{profile}");
+        return Some(format!("@{profile}"));
     }
     let ordinal = scoped
         .then(|| {
             agent
-                .kind_ordinal
-                .map(|ordinal| format!("{}-{ordinal}", agent.kind))
+                .kind_ordinal()
+                .map(|ordinal| format!("{}-{ordinal}", agent.kind()))
         })
         .flatten();
     let candidates = [
-        Some(agent.kind.as_str()),
-        agent.name.as_deref(),
+        Some(agent.kind()),
+        agent.name(),
         ordinal.as_deref(),
-        Some(agent.agent_id.as_str()),
+        agent.session_id(),
     ];
     for candidate in candidates.into_iter().flatten() {
-        if resolves_in(candidate, &scoped_peers) {
-            return format!("@{candidate}");
+        if resolves_in(candidate, scoped_peers) {
+            return Some(format!("@{candidate}"));
         }
     }
-    format!("@{}", agent.agent_id)
+    None
 }
 
 /// Best-effort identity for a durable agent outside the live peer snapshot.
@@ -1411,39 +1457,19 @@ fn channel_list<'a, C: Candidate<'a>>(candidates: &[C]) -> String {
 /// a `(+K more)` count — enough to disambiguate a real clash, never a fleet dump.
 const CANDIDATE_CAP: usize = 8;
 
-fn render_candidates<'a, C: Candidate<'a>>(candidates: &[C]) -> String {
-    let mut rendered = candidates
-        .iter()
-        .take(CANDIDATE_CAP)
-        .map(|candidate| {
-            let name = candidate.name().unwrap_or_else(|| {
-                // A bound session with no pet name reads `unnamed`; a lazy pane
-                // with no session reads `unbound` so the miss shows it has none.
-                if candidate.session_id().is_some() {
-                    "unnamed"
-                } else {
-                    "unbound"
-                }
-            });
-            let kind = match candidate.kind_ordinal() {
-                Some(ordinal) => format!("{}-{}", candidate.kind(), ordinal),
-                None => candidate.kind().to_owned(),
-            };
-            let worktree = candidate.channel_label();
-            let pane = candidate
-                .pane_id()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "no-pane".to_owned());
-            match candidate.role().or_else(|| candidate.profile()) {
-                Some(selector) => format!("{selector} {name} {kind} {worktree} {pane}"),
-                None => format!("{name} {kind} {worktree} {pane}"),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let extra = candidates.len().saturating_sub(CANDIDATE_CAP);
+fn render_candidates<'a, C: Candidate<'a>>(candidates: &[C], pool: &[C]) -> String {
+    render_candidate_addresses(candidates.iter().map(|candidate| candidate.address(pool)))
+}
+
+fn render_candidate_addresses(addresses: impl ExactSizeIterator<Item = String>) -> String {
+    let count = addresses.len();
+    let list = addresses.take(CANDIDATE_CAP).collect::<Vec<_>>().join(", ");
+    let mut rendered = format!("{count} agents: {list}");
+    let extra = count.saturating_sub(CANDIDATE_CAP);
     if extra > 0 {
-        rendered.push_str(&format!(" (+{extra} more)"));
+        rendered.push_str(&format!(
+            " (+{extra} more; `rimz agents list --all` lists every live agent)"
+        ));
     }
     rendered
 }

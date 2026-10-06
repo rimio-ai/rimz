@@ -11,22 +11,14 @@ pub(super) fn history_agent(
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
-    let live_result =
-        crate::cli::resolve_agent_one(&ctx.store, &snapshot, &reference, None, ctx.channel());
-    let (agent, resolved_live) = match live_result {
-        Ok(agent) => (agent.clone(), true),
-        Err(live_error) => {
-            match super::show::resolve_audit_agent(
-                &ctx.store,
-                &ctx.workspace,
-                ctx.runtime(),
-                &reference,
-            )? {
-                Some(agent) => (agent, false),
-                None => return Err(live_error),
-            }
-        }
-    };
+    let (agent, resolved_live) = resolve_live_or_audit(
+        &ctx.store,
+        &ctx.workspace,
+        ctx.runtime(),
+        &snapshot,
+        &reference,
+        ctx.channel(),
+    )?;
     let transcript = agent
         .transcript_path
         .as_deref()

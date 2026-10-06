@@ -41,28 +41,26 @@ fn collect_show_report(
     capture: bool,
     ansi: bool,
 ) -> Result<(ShowReport, Option<anyhow::Error>)> {
-    let agent_result = crate::cli::resolve_agent_one(
+    let agent_result = resolve_live_or_audit(
         store,
+        workspace,
+        runtime,
         snapshot,
         reference,
-        None,
         crate::cli::current_channel(workspace).as_deref(),
     );
-    let (mut agent, mut deferred_error) = match agent_result {
-        Ok(agent) => (Some(agent.clone()), None),
-        Err(err) => (None, Some(err)),
-    };
-    let mut stale = false;
-    if agent.is_none() {
-        match resolve_audit_agent(store, workspace, runtime, reference) {
-            Ok(Some(audit_agent)) => {
-                agent = Some(audit_agent);
-                stale = true;
-            }
-            Ok(None) => {}
-            Err(err) => deferred_error = Some(err),
+    let (agent, stale, deferred_error) = match agent_result {
+        Ok((agent, live)) => (Some(agent), !live, None),
+        // A live ambiguity or bad selector is the answer; a miss, its launch hint,
+        // or an audit read error still lets a run match the reference.
+        Err(err)
+            if err.downcast_ref::<rimz::address::TargetErr>().is_some()
+                && !crate::cli::resolution_missed(&err) =>
+        {
+            return Err(err);
         }
-    }
+        Err(err) => (None, false, Some(err)),
+    };
     let run = newest_run_by_ref(store, reference, agent.as_ref())?;
     let ask = match agent.as_ref() {
         Some(agent) => crate::cli::transcript::latest_ask_view(workspace, agent)?,

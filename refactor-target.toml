@@ -72,7 +72,8 @@ path = "crates/rimz/src/address.rs"
 # backstop share one current-row filter instead of spelling it twice.
 # `TeamCohort::contains` reopened it by one: team CLI and delivery scope
 # share one membership test instead of spelling the pair five times.
-surface-budget = 36
+# Shared ambiguity construction also serves transcript's historical candidates.
+surface-budget = 37
 
 [[module]]
 path = "crates/rimz/src/pixel_wire.rs"
