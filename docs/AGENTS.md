@@ -53,3 +53,4 @@ Two figures RimZ prints in more than one place, each correct where it appears. N
 - A moved or reworded heading breaks inbound anchors silently. After changing one, grep the repo for the old anchor and run `cargo xtask docs-links`, which validates file targets and `#anchors` together. `cargo xtask lint` does not cover Markdown.
 - A new page is invisible until its index lists it: [docs/README.md](./README.md) for anything a user reads, the tree's own README for `reference/` and `internals/`, and the root [documentation map](../AGENTS.md#documentation-map).
 - A page that gains a new kind of content updates its summary line everywhere that links to it (`rg '<page>.md'`), the documentation map included.
+- When a change moves where a behaviour is triggered, search the whole tree for the behaviour's phrase (`rg -i 're-?wake' docs/ crates/`) and update every hit, not only the pages the plan named.
