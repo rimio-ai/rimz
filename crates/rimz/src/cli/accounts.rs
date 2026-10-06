@@ -407,14 +407,14 @@ const WINDOW_SPANS: [WindowSpan; 2] = [WindowSpan::FiveHour, WindowSpan::SevenDa
 fn list(globals: &GlobalFlags, json: bool) -> Result<()> {
     let machine = MachineConfig::load()?;
     let catalog = LoginCatalog::from_config(&machine.accounts)?;
-    let (standing, in_room) = match super::position_standing(globals, &machine) {
-        Ok(standing) => standing,
+    let standing = match super::position_standing(globals, &machine) {
+        Ok((standing, _in_room)) => standing,
         Err(error) => {
             writeln!(
                 std::io::stderr().lock(),
                 "rimz: warning: cannot read the account selection here, so no account is marked: {error:#}"
             )?;
-            (AccountStanding::unread(&machine), false)
+            AccountStanding::unread(&machine)
         }
     };
     if let Some(blocked) = standing.blocked() {
@@ -452,7 +452,6 @@ fn list(globals: &GlobalFlags, json: bool) -> Result<()> {
         &mut out,
         &rows,
         &deciding,
-        in_room,
         Timestamp::now(),
         terminal.then(|| render::terminal_columns(120)),
     ))
@@ -613,7 +612,6 @@ fn write_accounts(
     w: &mut impl std::io::Write,
     rows: &[AccountRow],
     deciding: &BTreeMap<AgentKind, Deciding>,
-    in_room: bool,
     now: Timestamp,
     width: Option<usize>,
 ) -> std::io::Result<()> {
@@ -673,17 +671,6 @@ fn write_accounts(
     if let Some(legend) = legend(rows, deciding) {
         writeln!(w, "{legend}")?;
     }
-    for group in rows.chunk_by(|a, b| a.kind == b.kind) {
-        // A room's selection moves only from inside that room.
-        let deciding = deciding
-            .get(&group[0].kind)
-            .copied()
-            .filter(|deciding| in_room || *deciding != Deciding::Room);
-        if let Some((reason, command)) = switch_hint(group, now, deciding) {
-            writeln!(w, "  {reason}")?;
-            writeln!(w, "    {command}")?;
-        }
-    }
     for problem in rows.iter().filter_map(|row| row.problem.as_deref()) {
         writeln!(w, "{}", render::paint(render::palette::warn(), problem))?;
     }
@@ -737,40 +724,6 @@ fn legend(rows: &[AccountRow], deciding: &BTreeMap<AgentKind, Deciding>) -> Opti
     });
     let halves: Vec<String> = active.into_iter().chain(new_rooms).collect();
     (!halves.is_empty()).then(|| halves.join("   "))
-}
-
-/// The sentence and command that move one kind's marker to the ready,
-/// logged-in sibling with the most left, once the marked account has 20% or
-/// less of a window that sibling has strictly more of. A sibling with a setup
-/// problem is passed over: `rimz accounts use` would refuse it.
-fn switch_hint(
-    rows: &[AccountRow],
-    now: Timestamp,
-    deciding: Option<Deciding>,
-) -> Option<(String, String)> {
-    let active = rows.iter().find(|row| row.active && !row.without_login())?;
-    let siblings: Vec<_> = rows
-        .iter()
-        .filter(|row| {
-            !row.active
-                && row.status == AccountStatus::Ready
-                && row.login == Some(ProviderStatus::LoggedIn)
-        })
-        .map(|row| (&row.name, row.windows.as_slice()))
-        .collect();
-    let hint = rimz::agents::account::switch_hint(&active.windows, &siblings, now)?;
-    let command = super::accounts_use_command(deciding, active.kind.as_str(), hint.sibling)?;
-    Some((
-        format!(
-            "{} {} has {}% of its {} window left; {} has the most room:",
-            active.kind,
-            active.name,
-            hint.left,
-            rimz::theme::fmt::window_label(hint.window),
-            hint.sibling
-        ),
-        command,
-    ))
 }
 
 fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
