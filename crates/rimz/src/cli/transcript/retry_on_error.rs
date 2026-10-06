@@ -1,6 +1,6 @@
 use super::scope::entry_key;
 use super::*;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::transcript::{TranscriptEntry, TranscriptKind};
@@ -34,6 +34,14 @@ fn focus_key(scope: &Scope) -> AgentKey {
         .as_ref()
         .and_then(|keys| keys.iter().next().cloned())
         .expect("focus key")
+}
+
+fn snapshot(agents: Vec<rimz::agents::AgentState>) -> rimz::store::snapshot::SidebarSnapshot {
+    rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+        rimz::WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+        agents,
+        ts("2026-06-01T00:00:00Z"),
+    )
 }
 
 #[test]
@@ -74,10 +82,18 @@ fn agent_target_prefers_live_session_over_stale_same_handle() {
         Some("chat"),
     );
     let identities = build_identities(&[stale, live.clone()]);
-    let live_keys = BTreeSet::from([entry_key(&live)]);
-
-    let scope = resolve_scope(Some("@claude"), None, Some("chat"), &identities, &live_keys)
-        .expect("live session resolves");
+    let mut agent = rimz::testkit::agent_state("claude", "live-sess", live.at);
+    agent.channel = Some("chat".to_owned());
+    let snapshot = snapshot(vec![agent]);
+    let scope = resolve_scope(
+        Some("@claude"),
+        None,
+        Some("chat"),
+        &identities,
+        None,
+        &snapshot,
+    )
+    .expect("live session resolves");
 
     assert_eq!(focus_key(&scope), entry_key(&live));
 }
@@ -107,7 +123,8 @@ fn agent_target_uses_latest_when_no_match_is_live() {
         None,
         Some("chat"),
         &identities,
-        &BTreeSet::new(),
+        None,
+        &snapshot(vec![]),
     )
     .expect("latest session resolves");
 
@@ -131,7 +148,8 @@ fn exact_session_id_resolves_outside_the_current_channel() {
         None,
         Some("current"),
         &identities,
-        &BTreeSet::new(),
+        None,
+        &snapshot(vec![]),
     )
     .expect("exact session resolves across channels");
 
@@ -149,7 +167,8 @@ fn channel_and_all_targets_keep_channel_scope() {
         None,
         Some("main"),
         &identities,
-        &BTreeSet::new(),
+        None,
+        &snapshot(vec![]),
     )
     .expect("channel scope");
     assert_eq!(channel.channel.as_deref(), Some("docs"));
@@ -161,7 +180,8 @@ fn channel_and_all_targets_keep_channel_scope() {
         None,
         Some("main"),
         &identities,
-        &BTreeSet::new(),
+        None,
+        &snapshot(vec![]),
     )
     .expect("all channel scope");
     assert_eq!(all.channel.as_deref(), Some("docs"));
@@ -170,16 +190,28 @@ fn channel_and_all_targets_keep_channel_scope() {
 }
 
 #[test]
-fn degenerate_agent_targets_use_transcript_no_match_error() {
+fn degenerate_agent_targets_use_resolver_errors() {
     let identities = HashMap::new();
 
     for raw in ["@", "foo:bar"] {
-        let err = resolve_scope(Some(raw), None, Some("main"), &identities, &BTreeSet::new())
-            .expect_err("degenerate target should not parse as resolver target")
-            .to_string();
-        assert_eq!(
-            err,
-            format!("no agent matches target `{raw}` in the transcript log")
+        let err = resolve_scope(
+            Some(raw),
+            None,
+            Some("main"),
+            &identities,
+            None,
+            &snapshot(vec![]),
+        )
+        .expect_err("degenerate target should not parse as resolver target");
+        assert!(
+            matches!(
+                err.downcast_ref::<rimz::address::TargetErr>(),
+                Some(
+                    rimz::address::TargetErr::NoMatch { .. }
+                        | rimz::address::TargetErr::InvalidPaneId(_)
+                )
+            ),
+            "{err}"
         );
     }
 }

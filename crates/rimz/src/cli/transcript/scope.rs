@@ -208,7 +208,8 @@ pub(super) fn resolve_scope(
     worktree: Option<&str>,
     current: Option<&str>,
     identities: &HashMap<AgentKey, Identity>,
-    live_root_keys: &BTreeSet<AgentKey>,
+    store: Option<&rimz::Store>,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
 ) -> Result<Scope> {
     match target {
         None => {
@@ -244,15 +245,71 @@ pub(super) fn resolve_scope(
         }
         Some(raw) => {
             let (selector, inline) = parse_transcript_target(raw)?;
-            let exact_session = exact_session_selector(&selector, identities);
             let requested_channel =
                 reconcile_transcript_channel(raw, inline.as_deref(), worktree, current)?;
+            let live_error = match crate::cli::resolve_agent_one_unhinted(
+                store, snapshot, raw, worktree, current,
+            ) {
+                Ok(agent) => {
+                    let channel = agent.channel();
+                    let include_channel = channel.is_none();
+                    let handle = rimz::agents::petname::sender_handle(
+                        agent.role.as_deref(),
+                        agent.name.as_deref(),
+                        &agent.kind,
+                    );
+                    return Ok(Scope {
+                        channel: channel.clone(),
+                        channel_filter: channel.clone(),
+                        focus: Some(render_handle(&handle, channel.as_deref(), include_channel)),
+                        focus_keys: Some(BTreeSet::from([(
+                            agent.kind.clone(),
+                            agent.agent_id.clone(),
+                        )])),
+                        include_channel,
+                    });
+                }
+                Err(error) if crate::cli::resolution_missed(&error) => error,
+                Err(error) => return Err(error),
+            };
+            let exact_session = exact_session_selector(&selector, identities);
             let resolution_channel = (!exact_session)
                 .then_some(requested_channel.as_deref())
                 .flatten();
-            let matches = matching_identities(&selector, resolution_channel, identities);
-            let Some((key, identity)) = select_identity_match(&matches, live_root_keys) else {
-                bail!("no agent matches target `{raw}` in the transcript log");
+            let mut matches = matching_identities(&selector, resolution_channel, identities);
+            matches.sort_by(|left, right| {
+                (&left.1.base_handle, &left.1.channel)
+                    .cmp(&(&right.1.base_handle, &right.1.channel))
+                    .then_with(|| right.1.last_at.cmp(&left.1.last_at))
+                    .then_with(|| right.0.1.cmp(&left.0.1))
+            });
+            matches.dedup_by(|left, right| {
+                left.1.base_handle == right.1.base_handle && left.1.channel == right.1.channel
+            });
+            let (key, identity) = match matches.as_slice() {
+                [] => return crate::cli::resolve_hint(raw, Err(live_error)),
+                [one] => *one,
+                many => {
+                    let addresses = many
+                        .iter()
+                        .map(|(key, identity)| {
+                            let handle = render_handle(
+                                &identity.base_handle,
+                                identity.channel.as_deref(),
+                                true,
+                            );
+                            if matches!(
+                                rimz::address::resolve_many(snapshot, &handle, None, None),
+                                Ok(_) | Err(rimz::address::TargetErr::Ambiguous { .. })
+                            ) {
+                                key.1.to_string()
+                            } else {
+                                handle
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    return Err(rimz::address::TargetErr::ambiguous(raw, &addresses).into());
+                }
             };
             let channel = if exact_session {
                 identity.channel.clone()
@@ -365,27 +422,6 @@ pub(super) fn exact_session_selector(
 ) -> bool {
     let selector = selector.strip_prefix('@').unwrap_or(selector);
     identities.keys().any(|key| key.1.as_str() == selector)
-}
-
-pub(super) fn select_identity_match<'a>(
-    matches: &[(&'a AgentKey, &'a Identity)],
-    live_root_keys: &BTreeSet<AgentKey>,
-) -> Option<(&'a AgentKey, &'a Identity)> {
-    let pool: Vec<_> = if matches.iter().any(|(key, _)| live_root_keys.contains(*key)) {
-        matches
-            .iter()
-            .copied()
-            .filter(|(key, _)| live_root_keys.contains(*key))
-            .collect()
-    } else {
-        matches.to_vec()
-    };
-    pool.into_iter().max_by(|left, right| {
-        left.1
-            .last_at
-            .cmp(&right.1.last_at)
-            .then_with(|| left.0.1.as_str().cmp(right.0.1.as_str()))
-    })
 }
 
 pub(super) fn candidate_label(key: &AgentKey, identity: &Identity) -> String {

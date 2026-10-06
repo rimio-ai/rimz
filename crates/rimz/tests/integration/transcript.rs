@@ -112,6 +112,212 @@ fn agents_show_from_main_checkout_uses_callers_channel() {
 }
 
 #[test]
+fn transcript_live_ambiguity_matches_agents_show() {
+    let env = Env::new();
+    register_address_peer(&env, "claude", "live-a", "peer", "a", 1);
+    register_address_peer(&env, "claude", "live-b", "peer", "b", 2);
+    let show = env
+        .rimz()
+        .args(["agents", "show", "@peer"])
+        .output()
+        .unwrap();
+    assert!(!show.status.success());
+    let transcript = env.rimz().args(["transcript", "@peer"]).output().unwrap();
+    assert!(
+        !transcript.status.success(),
+        "an empty log must not hide live ambiguity"
+    );
+    assert_eq!(transcript.stderr, show.stderr);
+    assert!(String::from_utf8_lossy(&show.stderr).contains("matches 2 agents: @peer#a, @peer#b"));
+}
+
+#[test]
+fn transcript_from_main_checkout_resolves_peer_and_me() {
+    let env = Env::new();
+    for (n, role, channel) in [(0, "caller", "a"), (1, "peer", "a"), (2, "peer", "b")] {
+        let id = format!("session-{n}");
+        register_address_peer(&env, "claude", &id, role, channel, n);
+        let mut line = entry(
+            &id,
+            channel,
+            TranscriptKind::Prompt,
+            &id,
+            "2026-06-01T00:00:00Z",
+        );
+        line.role = Some(role.to_owned());
+        append_transcript(&env, line);
+    }
+    for (target, wanted) in [
+        ("@peer", "session-1"),
+        ("@me", "session-0"),
+        ("session-2", "session-2"),
+        ("zellij:terminal_1", "session-1"),
+    ] {
+        let result = env
+            .rimz()
+            .args(["transcript", target, "--json"])
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "session-0")
+            .env_remove("RIMZ_CHANNEL")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "target={target}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        let lines = json["entries"].as_array().unwrap();
+        assert_eq!(lines.len(), 1, "{json}");
+        assert_eq!(lines[0]["text"], wanted);
+    }
+}
+
+#[test]
+fn transcript_live_empty_focus_does_not_use_other_channel_lines() {
+    let env = Env::new();
+    register_address_peer(&env, "claude", "live-a", "peer", "a", 1);
+    let mut other = entry(
+        "old-b",
+        "b",
+        TranscriptKind::Prompt,
+        "other lane",
+        "2026-06-01T00:00:00Z",
+    );
+    other.role = Some("peer".to_owned());
+    append_transcript(&env, other);
+    let result = env.rimz().args(["transcript", "@peer#a"]).output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&result.stderr).trim(),
+        "No conversation for @peer#a yet."
+    );
+    assert!(result.stdout.is_empty());
+    let result = env
+        .rimz()
+        .args(["transcript", "@peer#a", "--json"])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(json["entries"], json!([]));
+}
+
+#[test]
+fn transcript_unknown_target_with_empty_log_fails() {
+    assert_unknown_transcript_target(false);
+}
+
+#[test]
+fn transcript_unknown_target_with_populated_log_uses_resolver_error() {
+    assert_unknown_transcript_target(true);
+}
+
+fn assert_unknown_transcript_target(populated: bool) {
+    let env = Env::new();
+    if populated {
+        append_transcript(
+            &env,
+            entry(
+                "old-a",
+                "a",
+                TranscriptKind::Prompt,
+                "hello",
+                "2026-06-01T00:00:00Z",
+            ),
+        );
+    }
+    let result = env.rimz().args(["transcript", "@ghost"]).output().unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("no agent matches target `@ghost`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rimz agents list"), "{stderr}");
+}
+
+#[test]
+fn transcript_historical_ambiguity_round_trips() {
+    assert_historical_ambiguity_round_trips(false);
+}
+
+#[test]
+fn transcript_shadowed_historical_candidates_round_trip() {
+    assert_historical_ambiguity_round_trips(true);
+}
+
+fn assert_historical_ambiguity_round_trips(shadowed: bool) {
+    let env = Env::new();
+    for channel in ["a", "b"] {
+        let mut line = entry(
+            &format!("old-{channel}"),
+            channel,
+            TranscriptKind::Prompt,
+            channel,
+            "2026-06-01T00:00:00Z",
+        );
+        line.role = Some("coder".to_owned());
+        append_transcript(&env, line);
+    }
+    if shadowed {
+        register_address_peer(&env, "codex", "live-a", "coder", "a", 1);
+    }
+    let result = env.rimz().args(["transcript", "@claude"]).output().unwrap();
+    assert!(
+        !result.status.success(),
+        "historical channels must not silently pick one"
+    );
+    let first = if shadowed { "old-a" } else { "@coder#a" };
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains(&format!("matches 2 agents: {first}, @coder#b")),
+        "{stderr}"
+    );
+    for (address, wanted) in [(first, "a"), ("@coder#b", "b")] {
+        let result = env
+            .rimz()
+            .args(["transcript", address, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(json["entries"][0]["text"], wanted, "{json}");
+    }
+}
+
+fn register_address_peer(env: &Env, kind: &str, id: &str, role: &str, channel: &str, pane: u32) {
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some(id.into()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    observation.launch.role = Some(role.to_owned());
+    observation.launch.channel = Some(channel.to_owned());
+    observation.agent_pid = Some(env.agent_owner_pid());
+    observation.pane_id = Some(rimz::ids::PaneId::from_parts(
+        rimz::ids::MuxName::Zellij,
+        format!("terminal_{pane}"),
+    ));
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "session",
+            kind,
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+}
+
+#[test]
 fn transcript_renders_durable_turns_asks_answers_and_channels() {
     let env = Env::new();
     if env.skip_if_sandboxed() {

@@ -419,7 +419,27 @@ fn chat_view_with_mode(
         .flat_map(|entry| entry.reply_to.iter().map(ToString::to_string))
         .collect::<HashSet<_>>();
     let entries = dedup_asks(log);
-    if entries.is_empty() {
+    let identities = build_identities(&entries);
+    let snapshot = store
+        .as_ref()
+        .map(rimz::Store::snapshot_cached)
+        .transpose()?
+        .unwrap_or_else(|| {
+            rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+                workspace.workspace_id.clone(),
+                Vec::new(),
+                jiff::Timestamp::now(),
+            )
+        });
+    let scope = resolve_scope(
+        target.as_deref(),
+        worktree,
+        current.as_deref(),
+        &identities,
+        store.as_ref(),
+        &snapshot,
+    )?;
+    if entries.is_empty() && scope.focus_keys.is_none() {
         return Ok(RenderedChat {
             channel: None,
             focus: None,
@@ -432,20 +452,7 @@ fn chat_view_with_mode(
             flat: mode.flat,
         });
     }
-    let identities = build_identities(&entries);
     let live_agents = live_agents(store.as_ref());
-    let live_root_keys = live_agents
-        .iter()
-        .filter(|agent| agent.root)
-        .map(|agent| agent.key.clone())
-        .collect();
-    let scope = resolve_scope(
-        target.as_deref(),
-        worktree,
-        current.as_deref(),
-        &identities,
-        &live_root_keys,
-    )?;
     let mut entries: Vec<_> = entries
         .iter()
         .filter(|entry| entry_in_scope(entry, &scope, &identities))
@@ -590,6 +597,10 @@ fn write_empty_chat(json: bool, message: &str) -> Result<()> {
 }
 
 fn empty_scope_message(scope: &Scope, target: Option<&str>) -> String {
+    if let Some(focus) = &scope.focus {
+        let label = chat::render_handle(focus, scope.channel.as_deref(), true);
+        return format!("No conversation for {label} yet.");
+    }
     let label = scope
         .channel
         .as_ref()

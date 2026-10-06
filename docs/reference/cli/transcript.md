@@ -26,6 +26,8 @@ The target names a channel or one agent, using the [agent-address grammar](./age
 | `@all#<channel>` | That channel. |
 | `@<handle>` | One agent, looked up in the current channel. |
 | `@<handle>#<channel>` | One agent, looked up in that channel. |
+| `@me` | The calling agent's live session. |
+| a pane id (`tmux:%110`, `zellij:terminal_3`) | The live agent bound to that pane. |
 | a session id | That agent session, in whatever channel it ran. |
 | `run_<id>` | The agent session bound to that supervised run. Fails with `run <id> has not bound an agent session yet` until the run's agent registers. |
 
@@ -44,10 +46,10 @@ An agent view shows the messages the agent sent or received, including its messa
 The target resolves to exactly one agent session, in this order:
 
 1. A `run_<id>` resolves to the run's bound session.
-2. An exact session id wins, in any channel.
-3. Otherwise the selector matches handle, provider kind, name, profile, role, or session-id prefix within the channel. A live root agent in the room wins over ended sessions; among the remaining matches, the one with the latest transcript activity wins.
+2. The live agent resolver runs, just as for `pane` and `agents show`. An exact session id wins across channels; other selectors use the [current channel](agents.md#addressing-agents). Several live matches refuse with addresses to retype. A resolved live agent owns the view even when it has no transcript lines.
+3. Only a live miss searches historical transcript identities. An exact session id wins across channels. Otherwise handle, provider kind, name, profile, role, or session-id prefix matches within the channel. Matches sharing one handle and channel select the latest transcript activity; distinct handles or channels refuse. Historical suggestions use `@handle#channel`, or the full session id when a live agent shadows that address, so retyping selects the historical session.
 
-No match fails with ``no agent matches target `<target>` in the transcript log``.
+No match fails with the live resolver's error, naming `rimz agents list` or the channel where the agent runs. This also applies when the log is empty.
 
 Targeting a launched child shows the child's own conversation, with its launch brief attributed to the parent as `@parent → @child`. The parent's view leaves its children's conversations out.
 
@@ -159,7 +161,7 @@ Each hidden entry takes with it the agent's replies and error output in the turn
 
 ## Empty results
 
-A scope with nothing to show exits 0 and prints a faint note on stderr. It reads `No conversation for #<channel> yet.` when the scope has a channel, `No conversation for <target> yet.` or `No conversation for this room yet.` otherwise, and `No conversation recorded yet.` when the log is empty or `--last 0` trimmed everything. With `--json`, stdout gets `{"entries": []}`.
+A resolved agent with nothing to show exits 0 and prints `No conversation for @handle#channel yet.` on stderr (without the suffix when it has no channel). A channel or room scope with nothing to show also exits 0: `No conversation for #<channel> yet.`, `No conversation for <target> yet.`, or `No conversation for this room yet.`; an empty log without an agent target or `--last 0` reads `No conversation recorded yet.`. With `--json`, stdout gets `{"entries": []}`. An unknown agent is an error, not an empty conversation.
 
 With `--follow`, an empty first view prints nothing and waits. Following honours `-n` for the first view and keeps the selected channel and `--flat` rendering for subsequent entries, until interrupted or the output pipe closes.
 
