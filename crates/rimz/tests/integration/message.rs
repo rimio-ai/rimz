@@ -637,6 +637,118 @@ fn message_list_scopes_orders_and_limits_records() {
 }
 
 #[test]
+fn message_list_root_address_correction_lists_the_agents_rows() {
+    message_list_root_correction_case(false);
+}
+
+#[test]
+fn message_list_root_flag_correction_lists_the_agents_rows() {
+    message_list_root_correction_case(true);
+}
+
+fn message_list_root_correction_case(flag: bool) {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-root",
+        LifecycleSignal::Registered,
+        |observation| {
+            observation.launch.role = Some("reader".to_owned());
+            observation.agent_pid = Some(env.agent_owner_pid());
+        },
+    );
+    let legacy = seed_channel_message(&env, 1, 100, None, "legacy root message");
+    let current = queue_add(&env, "@reader#main", "current root message");
+    let mut command = env.rimz();
+    command
+        .env(rimz::workspace::ENV_CHANNEL, "scratch")
+        .args(["message", "list", "@reader", "--json"]);
+    if flag {
+        seed_channel_message(&env, 2, 200, Some("scratch"), "another lane message");
+        command.args(["--channel", "scratch"]);
+    }
+    let miss = command.output().unwrap();
+    assert!(!miss.status.success());
+    let stderr = String::from_utf8_lossy(&miss.stderr);
+    let correction = stderr
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("try: "))
+        .unwrap_or_else(|| panic!("missing correction: {stderr}"));
+    let argv = shlex::split(correction).unwrap();
+    let output = run_success(
+        env.rimz()
+            .env(rimz::workspace::ENV_CHANNEL, "scratch")
+            .args(&argv[1..]),
+        "corrected root inbox",
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let ids = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["message_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, [current.as_str(), legacy.as_str()], "{correction}");
+    let digest = run_success(
+        env.rimz()
+            .env(rimz::workspace::ENV_CHANNEL, "scratch")
+            .args(["message", "list", "@reader#main", "--status", "archived"]),
+        "empty root inbox",
+    );
+    let text = String::from_utf8_lossy(&digest.stdout);
+    assert!(
+        text.contains("no archived messages in the main lane"),
+        "{text}"
+    );
+}
+
+#[test]
+fn message_list_target_follows_stamped_and_worktree_record_channels() {
+    for stamped in [true, false] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            "sess-reader",
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.launch.role = Some("reader".to_owned());
+                observation.agent_pid = Some(env.agent_owner_pid());
+                if stamped {
+                    observation.launch.channel = Some("docs".to_owned());
+                } else {
+                    observation.worktree_path =
+                        Some(env.home_root.join("docs").display().to_string());
+                }
+            },
+        );
+        let id = queue_add(&env, "@reader#docs", "docs message");
+        assert_eq!(
+            list_message_ids(
+                &env,
+                &["message", "list", "@reader#docs", "--json"],
+                Some("scratch"),
+            ),
+            [id],
+            "stamped={stamped}"
+        );
+        let digest = run_success(
+            env.rimz()
+                .env(rimz::workspace::ENV_CHANNEL, "scratch")
+                .args(["message", "list", "@reader#docs", "--status", "archived"]),
+            "empty docs inbox",
+        );
+        let text = String::from_utf8_lossy(&digest.stdout);
+        assert!(text.contains("no archived messages in #docs"), "{text}");
+    }
+}
+
+#[test]
 fn message_list_hides_system_traffic_unless_asked() {
     let env = Env::new();
     register_running_agent(&env, "sess-conversation", "docs", &[]);

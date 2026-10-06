@@ -221,7 +221,7 @@ fn queue_preflight_checks_the_target_account_home() {
 #[test]
 fn condition_broadcast_is_typed_before_resolution() {
     let snapshot = snapshot_with_panes(Vec::new(), Vec::new());
-    let err = resolution(&snapshot, &[], None, false)
+    let err = resolution(&snapshot, &[], &context(None), false)
         .condition_target(ConditionKind::When, "@all", "@all idle 1m")
         .expect_err("broadcast condition must fail");
     assert!(matches!(
@@ -306,7 +306,7 @@ fn co_resident_session_resolves_to_one_pane_backed_recipient() {
     let pane = owner_pane("sess-owner", Some("coder"));
     let snapshot = snapshot_with_panes(vec![older, owner], vec![pane]);
 
-    let targets = resolution(&snapshot, &durable, Some("project"), false)
+    let targets = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@coder")
         .unwrap();
 
@@ -332,7 +332,7 @@ fn durable_fallback_drops_shadowed_co_resident_session() {
     let snapshot = snapshot_with_panes(Vec::new(), vec![owner_pane("sess-owner", None)]);
 
     for rollup_only in [false, true] {
-        let targets = resolution(&snapshot, &durable, Some("project"), rollup_only)
+        let targets = resolution(&snapshot, &durable, &context(Some("project")), rollup_only)
             .resolve("@coder")
             .unwrap();
         assert_eq!(targets.len(), 1);
@@ -346,7 +346,7 @@ fn durable_fallback_drops_shadowed_co_resident_session() {
     }
 
     assert!(matches!(
-        resolution(&snapshot, &durable, None, false).resolve("@sess-older"),
+        resolution(&snapshot, &durable, &context(None), false).resolve("@sess-older"),
         Err(TargetErr::NoMatch { .. })
     ));
 }
@@ -365,7 +365,7 @@ fn agent_broadcast_excludes_only_the_caller_after_channel_resolution() {
         other_channel,
     ];
     let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-    let mut targets = resolution(&snapshot, &durable, None, false)
+    let mut targets = resolution(&snapshot, &durable, &context(None), false)
         .resolve("@all#project")
         .unwrap();
 
@@ -392,7 +392,7 @@ fn exact_self_handle_is_not_broadcast_filtered() {
     caller.launch_id = Some(AgentSessionId::from("launch-planner"));
     let durable = vec![caller];
     let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-    let mut targets = resolution(&snapshot, &durable, Some("project"), false)
+    let mut targets = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@planner")
         .unwrap();
 
@@ -422,7 +422,7 @@ fn explicit_selector_fanout_keeps_the_caller() {
     let peer = named_agent("peer", "coder", "project");
     let durable = vec![caller, peer];
     let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-    let mut targets = resolution(&snapshot, &durable, Some("project"), false)
+    let mut targets = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@claude")
         .unwrap();
 
@@ -459,7 +459,7 @@ fn broadcast_excludes_a_legacy_pane_only_caller() {
         profile: None,
         role: None,
     };
-    let mut targets = resolution(&snapshot, &durable, Some("project"), false)
+    let mut targets = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@all")
         .unwrap();
 
@@ -478,7 +478,7 @@ fn solo_agent_broadcast_reports_no_peers() {
     caller.launch_id = Some(AgentSessionId::from("launch-planner"));
     let durable = vec![caller];
     let snapshot = snapshot_with_panes(durable.clone(), Vec::new());
-    let mut targets = resolution(&snapshot, &durable, Some("project"), false)
+    let mut targets = resolution(&snapshot, &durable, &context(Some("project")), false)
         .resolve("@all")
         .unwrap();
     let channel = "project".to_owned();
@@ -511,7 +511,7 @@ fn workspace_id() -> WorkspaceId {
 fn resolution<'a>(
     snapshot: &'a SidebarSnapshot,
     durable_agents: &'a [AgentState],
-    channel: Option<&'a str>,
+    channel: &'a AddressContext,
     rollup_only: bool,
 ) -> ResolutionView<'a> {
     ResolutionView {
@@ -520,6 +520,14 @@ fn resolution<'a>(
         scope: None,
         channel,
         rollup_only,
+    }
+}
+
+fn context(channel: Option<&str>) -> AddressContext {
+    AddressContext {
+        channel: channel.map(ToOwned::to_owned),
+        origin: crate::address::ChannelOrigin::Stamped,
+        project_root: "/repo".into(),
     }
 }
 

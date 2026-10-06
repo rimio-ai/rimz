@@ -326,9 +326,11 @@ Every member has an address typed like an @-mention: `@<handle>#<channel>`. The 
 
 ### Resolving the channel
 
-The channel is the workspace segment the room already groups by, resolved in order: an explicit named channel, else a worktree name, else an in-place team stamped at launch as `<dir>/<team>`, else a directory basename fallback for unstamped agents ([messaging.md § Channels](./messaging.md#channels)). It matches by exact stamped lane, path basename, or full path.
+The channel is the workspace segment the room already groups by, resolved in order: an explicit named channel, else a worktree name, else an in-place team stamped at launch as `<dir>/<team>`, else a directory basename fallback for unstamped agents ([messaging.md § Channels](./messaging.md#channels)). It matches by exact stamped lane, path basename, or full path. In address lookup only, `#main` also matches an unstamped agent whose stored worktree path is the project root. The name remains unreserved, so a stamped `main` lane still matches; listing filters do not use this alias.
 
 The default is the channel the command runs in, and an inline `#<name>`, `--channel`, or `--worktree` overrides it. **A human shell in a bare directory workspace has no current channel, and no current channel means every channel.** An agent uses non-empty `RIMZ_CHANNEL`, else its stored card channel, before the worktree rule. The caller lookup is the same as `@me`; an ended caller's row still supplies its channel. An unavailable store or unresolved caller falls through silently. `RIMZ_TEAM` is cohort identity for team members.
+
+A scoped miss names the searched `#lane`, notes when the ambient lane came from a directory name, labels root-lane matches `main`, and supplies a resolving correction address (or a corrected channel flag). The shared CLI error renderer adds a shell-quoted whole command on a `try:` line when the target appears verbatim in the invocation.
 
 Launch specs resolve against the same lane. A bare role qualifies to `<team>.<role>` when the lane's agents carry that team, so `rimz agents reviewer` in `#forge` launches the forge reviewer and stamps it into the lane it resolved from. The inference reads the stamped `team` on those agents, because the three lane shapes mean the channel string alone does not name a team. A bare role that also names a cell resolving to a different agent refuses instead of guessing. Branch names are display metadata only.
 

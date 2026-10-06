@@ -282,6 +282,20 @@ impl CurrentChannel {
             Self::Unscoped => None,
         }
     }
+
+    fn address_context(
+        &self,
+        workspace: &rimz::ResolvedWorkspace,
+    ) -> rimz::address::AddressContext {
+        rimz::address::AddressContext {
+            channel: self.as_deref().map(ToOwned::to_owned),
+            origin: match self {
+                Self::Derived(_) => rimz::address::ChannelOrigin::Directory,
+                Self::Named(_) | Self::Unscoped => rimz::address::ChannelOrigin::Stamped,
+            },
+            project_root: workspace.project_root.clone(),
+        }
+    }
 }
 
 /// The current channel a command runs in: an explicit named lane from
@@ -363,7 +377,7 @@ pub(crate) fn resolve_agent_one<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &rimz::address::AddressContext,
 ) -> Result<&'a AgentState> {
     resolve_hint(
         raw,
@@ -376,7 +390,7 @@ fn resolve_agent_one_unhinted<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &rimz::address::AddressContext,
 ) -> Result<&'a AgentState> {
     if raw == "@me" {
         let unidentified = || {
@@ -427,7 +441,7 @@ pub(crate) fn resolve_open_ask<'a>(
     store: &rimz::Store,
     snapshot: &'a SidebarSnapshot,
     raw: &str,
-    current_channel: Option<&str>,
+    current_channel: &rimz::address::AddressContext,
 ) -> Result<Option<&'a AgentState>> {
     if raw.starts_with("ask_") {
         let ask_id = AskId::parse(raw)?;
@@ -479,7 +493,7 @@ pub(crate) fn resolve_pane_targets<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
-    current_channel: Option<&str>,
+    current_channel: &rimz::address::AddressContext,
 ) -> Result<Vec<&'a PaneAgent>> {
     map_resolve(
         raw,

@@ -25,12 +25,17 @@ fn only_the_parent_can_resolve_an_ended_child_for_resume() {
     child.launch_depth = Some(1);
     child.ended_at = Some(Timestamp::now());
     let mut agents = vec![parent.clone(), peer.clone(), child];
-    assert!(ended_child(&agents, &parent, "@otter", None, None).is_some());
-    assert!(ended_child(&agents, &peer, "@otter", None, None).is_none());
-    assert!(ended_child(&agents, &agents[2], "@otter", None, None).is_none());
-    assert!(ended_child(&agents, &parent, "@missing", None, None).is_none());
+    let context = rimz::address::AddressContext {
+        channel: None,
+        origin: rimz::address::ChannelOrigin::Stamped,
+        project_root: "/tmp".into(),
+    };
+    assert!(ended_child(&agents, &parent, "@otter", None, &context).is_some());
+    assert!(ended_child(&agents, &peer, "@otter", None, &context).is_none());
+    assert!(ended_child(&agents, &agents[2], "@otter", None, &context).is_none());
+    assert!(ended_child(&agents, &parent, "@missing", None, &context).is_none());
     agents[2].ended_at = None;
-    assert!(ended_child(&agents, &parent, "@otter", None, None).is_none());
+    assert!(ended_child(&agents, &parent, "@otter", None, &context).is_none());
 }
 
 #[test]

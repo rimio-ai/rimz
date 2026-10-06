@@ -5,6 +5,14 @@ use jiff::Timestamp;
 
 use super::*;
 
+fn address_context() -> rimz::address::AddressContext {
+    rimz::address::AddressContext {
+        channel: None,
+        origin: rimz::address::ChannelOrigin::Stamped,
+        project_root: "/tmp".into(),
+    }
+}
+
 #[test]
 fn newest_child_run_requires_kind_and_present_names() {
     let child = AgentState::stub("codex", "child", rimz::agents::AgentStatus::Success);
@@ -760,19 +768,19 @@ fn bare_wait_lists_the_children_instead_of_joining() {
     let children = vec![&finished, &running, &untracked];
 
     assert_eq!(
-        wait_references(&children, &[])
+        wait_references(&children, &[], &address_context())
             .expect_err("names required")
             .to_string(),
         "`rimz subagents wait` needs at least one child name; this agent's subagents: swift-otter, bright-owl, interactive (see `rimz subagents list`)"
     );
     assert_eq!(
-        wait_references(&[], &[])
+        wait_references(&[], &[], &address_context())
             .expect_err("no children")
             .to_string(),
         "this agent has no supervised subagents to wait for"
     );
     assert_eq!(
-        wait_references(&children, &["bright-owl".into()]).expect("named join"),
+        wait_references(&children, &["bright-owl".into()], &address_context()).expect("named join"),
         vec!["bright-owl"]
     );
 }
@@ -1151,12 +1159,21 @@ fn explicit_child_resolution_uses_the_shared_address_grammar() {
     child.channel = Some("review".to_owned());
 
     assert_eq!(
-        resolve_child_names(&[&child], &["@swift-otter#review".to_owned()])
-            .expect("qualified child"),
+        resolve_child_names(
+            &[&child],
+            &["@swift-otter#review".to_owned()],
+            &address_context()
+        )
+        .expect("qualified child"),
         vec![&child]
     );
     assert!(
-        resolve_child_names(&[&child], &["@swift-otter#other".to_owned()]).is_err(),
+        resolve_child_names(
+            &[&child],
+            &["@swift-otter#other".to_owned()],
+            &address_context()
+        )
+        .is_err(),
         "wrong-channel child must not resolve"
     );
 }

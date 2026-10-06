@@ -240,7 +240,7 @@ fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneT
                 &snapshot,
                 &address,
                 None,
-                ctx.channel(),
+                &ctx.address_context(),
             )?;
             let pane = agent
                 .pane

@@ -398,8 +398,17 @@ fn launched_cross_kind_child_nests_without_losing_its_pane() {
             .is_some_and(|agent_id| agent_id == "child")
             && pane.pane_id.raw() == "%child"
     }));
-    let target = crate::address::resolve_targets(&snapshot, "@helper", None, None)
-        .expect("launched child remains addressable");
+    let target = crate::address::resolve_targets(
+        &snapshot,
+        "@helper",
+        None,
+        &crate::address::AddressContext {
+            channel: None,
+            origin: crate::address::ChannelOrigin::Stamped,
+            project_root: "/tmp/rimz-target-test".into(),
+        },
+    )
+    .expect("launched child remains addressable");
     assert_eq!(target.len(), 1);
     assert_eq!(target[0].pane_id.raw(), "%child");
 }

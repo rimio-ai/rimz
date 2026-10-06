@@ -44,6 +44,7 @@ A channel scopes the lookup. Without an explicit target channel, commands use no
 
 | Form | Matches |
 | --- | --- |
+| `#main` | The root lane: an agent with no stamped channel whose stored worktree path is the project root. Also matches a lane literally named `main`; the name is not reserved. This alias applies to address lookup, not listing filters. |
 | `#design` | A lane agents were launched into with `--channel design`. |
 | `#auth-refresh` | A worktree lane, by branch, generated worktree name, or directory basename. The flag spelling is `--worktree auth-refresh`. |
 | `#query-engine/forge` | The team `forge` launched in place from the `query-engine` directory. |

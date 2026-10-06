@@ -17,7 +17,7 @@ pub(super) fn history_agent(
         ctx.runtime(),
         &snapshot,
         &reference,
-        ctx.channel(),
+        &ctx.address_context(),
     )?;
     let transcript = agent
         .transcript_path

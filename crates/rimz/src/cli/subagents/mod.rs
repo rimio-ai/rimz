@@ -908,11 +908,15 @@ fn wait_children(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading agent history")?;
     let (_, children) = caller_and_children(&audit.agents)?;
-    let references = wait_references(&children, &names)?;
+    let references = wait_references(&children, &names, &ctx.address_context())?;
     agents_cmd::wait_agent(references, any, timeout, stream, false, json, globals)
 }
 
-fn wait_references(children: &[&AgentState], names: &[String]) -> Result<Vec<String>> {
+fn wait_references(
+    children: &[&AgentState],
+    names: &[String],
+    context: &rimz::address::AddressContext,
+) -> Result<Vec<String>> {
     if names.is_empty() {
         if children.is_empty() {
             bail!("this agent has no supervised subagents to wait for");
@@ -926,7 +930,7 @@ fn wait_references(children: &[&AgentState], names: &[String]) -> Result<Vec<Str
             "`rimz subagents wait` needs at least one child name; this agent's subagents: {names} (see `rimz subagents list`)"
         );
     }
-    Ok(resolve_child_names(children, names)?
+    Ok(resolve_child_names(children, names, context)?
         .into_iter()
         .map(child_reference)
         .collect())
@@ -942,7 +946,7 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
             .filter(|child| child.ended_at.is_none())
             .collect()
     } else {
-        resolve_child_names(&all_children, &names)?
+        resolve_child_names(&all_children, &names, &ctx.address_context())?
     };
     if children.is_empty() {
         bail!("this agent has no live subagents to stop");
@@ -1003,11 +1007,14 @@ fn prepare_children_for_stop<'a>(
 fn resolve_child_names<'a>(
     children: &[&'a AgentState],
     names: &[String],
+    context: &rimz::address::AddressContext,
 ) -> Result<Vec<&'a AgentState>> {
+    let mut context = context.clone();
+    context.channel = None;
     names
         .iter()
         .map(|name| {
-            rimz::address::resolve_agent(name, None, None, children)
+            rimz::address::resolve_agent(name, None, &context, children)
                 .with_context(|| format!("`{name}` is not one of this agent's subagents"))
         })
         .collect()

@@ -37,7 +37,11 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
                     target,
                     text: rung.text(),
                     target_scope: None,
-                    current_channel: None,
+                    current_channel: rimz::address::AddressContext {
+                        channel: None,
+                        origin: rimz::address::ChannelOrigin::Stamped,
+                        project_root: ctx.workspace.project_root.clone(),
+                    },
                     caller: None,
                     sender: rimz::store::message::MessageSender::Harness {
                         notice: rimz::store::message::HarnessNotice::Deadline,
@@ -152,8 +156,13 @@ mod tests {
         record.agent_name = child.name.clone();
         let target = deadline_stop_target(&record).unwrap();
         for channel in [Some("producer-lane"), Some("child-lane"), None] {
+            let context = rimz::address::AddressContext {
+                channel: channel.map(ToOwned::to_owned),
+                origin: rimz::address::ChannelOrigin::Stamped,
+                project_root: "/tmp/rimz-run".into(),
+            };
             let resolved =
-                rimz::address::resolve_agent(&target, None, channel, &[&child, &other]).unwrap();
+                rimz::address::resolve_agent(&target, None, &context, &[&child, &other]).unwrap();
             assert_eq!(resolved.agent_id, child.agent_id);
         }
         record.agent_name = None;

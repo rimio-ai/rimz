@@ -181,6 +181,85 @@ fn report_prints_a_bare_error_on_one_line() {
 }
 
 #[test]
+fn channel_miss_prints_a_shell_runnable_corrected_command() {
+    let root = "/repo/checkout";
+    let mut agent =
+        rimz::agents::AgentState::stub("codex", "root-session", rimz::agents::AgentStatus::Idle);
+    agent.name = Some("reader".into());
+    agent.worktree_path = Some(root.into());
+    let scope = rimz::address::AddressContext {
+        channel: Some("scratch".into()),
+        origin: rimz::address::ChannelOrigin::Directory,
+        project_root: root.into(),
+    };
+    for (args, target, flag) in [
+        (vec!["rimz", "asks", "show", "@reader"], "@reader", None),
+        (
+            vec![
+                "rimz",
+                "message",
+                "@reader",
+                "--channel",
+                "scratch",
+                "a quoted '$value'",
+            ],
+            "@reader",
+            Some("scratch"),
+        ),
+        (
+            vec![
+                "rimz",
+                "message",
+                "@reader#scratch",
+                "--worktree=scratch",
+                "hello",
+            ],
+            "@reader#scratch",
+            Some("scratch"),
+        ),
+        (
+            vec!["rimz", "message", "@reader", "-wscratch", "hello"],
+            "@reader",
+            Some("scratch"),
+        ),
+    ] {
+        let error = anyhow::Error::new(
+            rimz::address::resolve_agent(target, flag, &scope, &[&agent]).unwrap_err(),
+        )
+        .context("finding recipient");
+        let argv = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        let output = strip(|w| write_report_with_args(w, &error, &argv));
+        assert!(output.contains("try: rimz"), "{output}");
+        let command = output
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("try: "))
+            .unwrap();
+        let corrected = shlex::split(command).unwrap();
+        if flag.is_none() {
+            assert_eq!(corrected, ["rimz", "asks", "show", "@reader#main"]);
+        } else {
+            assert!(
+                !corrected.iter().any(|arg| arg.contains("scratch")),
+                "{corrected:?}"
+            );
+            assert_eq!(corrected.last().unwrap(), args.last().unwrap());
+            assert_eq!(
+                rimz::address::resolve_agent("@reader", Some("main"), &scope, &[&agent])
+                    .unwrap()
+                    .agent_id,
+                agent.agent_id
+            );
+        }
+        let unrelated =
+            strip(|w| write_report_with_args(w, &error, &["rimz".into(), "message".into()]));
+        assert!(
+            !unrelated.contains("try: "),
+            "do not rewrite a non-verbatim target: {unrelated}"
+        );
+    }
+}
+
+#[test]
 fn error_line_joins_distinct_causes_and_keeps_a_bare_error_verbatim() {
     #[derive(Debug, thiserror::Error)]
     #[error("opening config: {source}")]

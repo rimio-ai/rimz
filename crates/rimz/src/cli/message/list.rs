@@ -159,36 +159,50 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
         args.channel.as_deref(),
         if args.all { None } else { ctx.channel() },
     )?;
-    if let Some(explicit) = inline_channel.as_deref().or(args.channel.as_deref()) {
+    if let Some(explicit) = inline_channel.as_deref().or(args.channel.as_deref())
+        && !(explicit == "main" && args.target.is_some())
+    {
         require_known_channel(explicit, &messages, &snapshot, &ctx)?;
     }
-    let lane_scope = if args.all {
+    let mut lane_scope = if args.all {
         LaneScope::All
     } else if let Some(channel) = &channel {
         LaneScope::Named(channel.clone())
     } else {
         LaneScope::Main
     };
+    let mut root_channel = None;
+    let target = if let Some(raw) = args.target.as_deref() {
+        let mut context = ctx.address_context();
+        if args.all {
+            context.channel = None;
+        }
+        let agent = crate::cli::resolve_agent_one(
+            store,
+            &snapshot,
+            raw,
+            args.channel.as_deref(),
+            &context,
+        )?;
+        if !args.all {
+            let channel = agent.channel();
+            if context.is_root_lane(agent) {
+                root_channel = channel;
+                lane_scope = LaneScope::Main;
+            } else {
+                lane_scope = channel.map_or(LaneScope::Main, LaneScope::Named);
+            }
+        }
+        Some(agent)
+    } else {
+        None
+    };
     let unfiltered_lane = !args.all && args.status.is_none() && args.target.is_none();
     let empty = unfiltered_lane
         .then(|| other_lanes_line(&messages, &lane_scope, args.system))
         .flatten()
         .unwrap_or_else(|| empty_message_digest(&lane_scope, args.status));
-    match &lane_scope {
-        LaneScope::All => {}
-        LaneScope::Main => messages.retain(|message| message.channel.is_none()),
-        LaneScope::Named(channel) => {
-            messages.retain(|message| message.channel.as_deref() == Some(channel.as_str()));
-        }
-    }
-    if let Some(status) = args.status {
-        messages.retain(|message| message.status == status);
-    } else if !lane_scope.includes_archived() {
-        messages.retain(|message| message.status != MessageStatus::Archived);
-    }
-    if let Some(raw) = args.target {
-        let agent =
-            crate::cli::resolve_agent_one(store, &snapshot, &raw, None, channel.as_deref())?;
+    if let Some(agent) = target {
         messages.retain(|message| {
             rimz::agents::AgentCardRef::new(
                 &message.kind,
@@ -197,6 +211,20 @@ pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()>
             )
             .matches(agent.card_ref())
         });
+    }
+    match &lane_scope {
+        LaneScope::All => {}
+        LaneScope::Main => {
+            messages.retain(|message| message.channel.is_none() || message.channel == root_channel)
+        }
+        LaneScope::Named(channel) => {
+            messages.retain(|message| message.channel.as_deref() == Some(channel.as_str()));
+        }
+    }
+    if let Some(status) = args.status {
+        messages.retain(|message| message.status == status);
+    } else if !lane_scope.includes_archived() {
+        messages.retain(|message| message.status != MessageStatus::Archived);
     }
     let system_hidden = if args.system {
         0

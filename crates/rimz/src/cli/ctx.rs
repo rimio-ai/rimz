@@ -83,6 +83,10 @@ impl Ctx {
             .get_or_init(|| super::current_channel(&self.workspace, Some(&self.store)))
     }
 
+    pub(crate) fn address_context(&self) -> rimz::address::AddressContext {
+        self.current_channel().address_context(&self.workspace)
+    }
+
     /// The runtime paths for this workspace, as the open store already resolved them.
     pub(crate) fn runtime(&self) -> &RuntimePaths {
         self.store.runtime_paths()

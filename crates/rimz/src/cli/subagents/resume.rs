@@ -11,7 +11,7 @@ fn ended_child<'a>(
     caller: &AgentState,
     target: &str,
     scope: Option<&str>,
-    channel: Option<&str>,
+    channel: &rimz::address::AddressContext,
 ) -> Option<&'a AgentState> {
     let children = rimz::address::launched_children(agents, caller);
     rimz::address::resolve_agent(target, scope, channel, &children)
@@ -23,7 +23,7 @@ pub(in crate::cli) fn resume_child(
     ctx: &Ctx,
     target: &str,
     scope: Option<&str>,
-    channel: Option<&str>,
+    channel: &rimz::address::AddressContext,
 ) -> Result<bool> {
     let audit = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let Ok(caller) = rimz::harness::ancestry::resolve_calling_agent(&audit.agents) else {

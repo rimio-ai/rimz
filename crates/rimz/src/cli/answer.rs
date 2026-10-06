@@ -60,7 +60,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    let agent = resolve_current_agent(store, &snapshot, &args.target, ctx.channel())
+    let agent = resolve_current_agent(store, &snapshot, &args.target, &ctx.address_context())
         .unwrap_or_else(|message| answer_exit(2, &message));
     let target_id = args
         .target
@@ -182,7 +182,7 @@ fn resolve_current_agent<'a>(
     store: &rimz::Store,
     snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
     target: &str,
-    channel: Option<&str>,
+    channel: &rimz::address::AddressContext,
 ) -> std::result::Result<&'a rimz::agents::AgentState, String> {
     let agent = resolve_open_ask(store, snapshot, target, channel)
         .map_err(|err| err.to_string())?

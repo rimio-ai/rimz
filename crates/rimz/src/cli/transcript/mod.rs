@@ -434,7 +434,7 @@ fn chat_view_with_mode(
     let scope = resolve_scope(
         target.as_deref(),
         worktree,
-        current.as_deref(),
+        &current.address_context(workspace),
         &identities,
         store.as_ref(),
         &snapshot,

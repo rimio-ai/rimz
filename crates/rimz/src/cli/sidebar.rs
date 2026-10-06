@@ -1488,11 +1488,11 @@ fn resolve_sidebar_targets(
         .context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime paths")?;
     let existing_store = super::open_existing_store(&workspace).ok().flatten();
-    let channel = current_channel(&workspace, existing_store.as_ref());
+    let channel = current_channel(&workspace, existing_store.as_ref()).address_context(&workspace);
     if let Ok(snapshot) =
         PublishedSnapshotReader::new(runtime.clone(), workspace.session_name.clone(), None)
             .read(&state)
-        && let Ok(rows) = resolve_rows(&snapshot, target, worktree, channel.as_deref())
+        && let Ok(rows) = resolve_rows(&snapshot, target, worktree, &channel)
         && !rows.is_empty()
     {
         return Ok(ResolvedSidebarTargets {
@@ -1504,7 +1504,7 @@ fn resolve_sidebar_targets(
 
     let store = open_store(&workspace)?;
     let snapshot = rimz::sidebar::produce::resolution_snapshot(&workspace, &store, globals.mux)?;
-    let rows = resolve_rows(&snapshot, target, worktree, channel.as_deref())?;
+    let rows = resolve_rows(&snapshot, target, worktree, &channel)?;
     Ok(ResolvedSidebarTargets {
         workspace,
         runtime,
@@ -1516,7 +1516,7 @@ fn resolve_rows(
     snapshot: &SidebarSnapshot,
     target: &str,
     worktree: Option<&str>,
-    channel: Option<&str>,
+    channel: &rimz::address::AddressContext,
 ) -> Result<Vec<SidebarRow>> {
     let targets = super::resolve_pane_targets(snapshot, target, worktree, channel)?;
     rows_for_targets(snapshot, &targets)

@@ -39,7 +39,7 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
             &snapshot,
             reference,
             None,
-            current_channel,
+            &ctx.address_context(),
         )?],
         (None, true) => refresh_targets(&snapshot, None),
         (None, false) => refresh_targets(&snapshot, current_channel),

@@ -776,7 +776,11 @@ fn open_stage(
                 opening.leader.filter(|leader| *leader != owner),
             ),
             target_scope: None,
-            current_channel: Some(opening.channel.to_owned()),
+            current_channel: crate::address::AddressContext {
+                channel: Some(opening.channel.to_owned()),
+                origin: crate::address::ChannelOrigin::Stamped,
+                project_root: opening.workspace.project_root.clone(),
+            },
             caller: None,
             sender: MessageSender::Harness {
                 notice: HarnessNotice::Stage,

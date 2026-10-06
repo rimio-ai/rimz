@@ -137,8 +137,17 @@ fn turn_dead_primary_yields_pane_to_successful_same_pane_replacement() {
     successful.role = Some("coder".to_owned());
 
     let pane_less = room(vec![first, second, successful]);
-    let resolved = crate::address::resolve_one(&pane_less, "@coder", None, None)
-        .expect("launch role resolves without a pane frame");
+    let resolved = crate::address::resolve_one(
+        &pane_less,
+        "@coder",
+        None,
+        &crate::address::AddressContext {
+            channel: None,
+            origin: crate::address::ChannelOrigin::Stamped,
+            project_root: "/tmp/rimz-target-test".into(),
+        },
+    )
+    .expect("launch role resolves without a pane frame");
     assert_eq!(resolved.agent_id.as_str(), "successful");
     let snapshot = pane_less.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
 
@@ -152,8 +161,17 @@ fn turn_dead_primary_yields_pane_to_successful_same_pane_replacement() {
             .and_then(|card| card.handle.as_deref()),
         Some("coder")
     );
-    let resolved = crate::address::resolve_one(&snapshot, "@coder", None, None)
-        .expect("launch role resolves through the pane owner");
+    let resolved = crate::address::resolve_one(
+        &snapshot,
+        "@coder",
+        None,
+        &crate::address::AddressContext {
+            channel: None,
+            origin: crate::address::ChannelOrigin::Stamped,
+            project_root: "/tmp/rimz-target-test".into(),
+        },
+    )
+    .expect("launch role resolves through the pane owner");
     assert_eq!(resolved.agent_id.as_str(), "successful");
 
     let mut dead = agent("codex", "dead", AgentStatus::Running, 1_000)

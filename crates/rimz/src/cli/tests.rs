@@ -239,6 +239,30 @@ fn current_channel_uses_callers_card_before_worktree() {
     );
 }
 
+#[test]
+fn address_context_preserves_current_channel_provenance() {
+    use rimz::address::ChannelOrigin;
+    let room = workspace("/repo/checkout", "/tmp/scratch", None);
+    for (current, channel, origin) in [
+        (
+            CurrentChannel::Named("card".into()),
+            Some("card"),
+            ChannelOrigin::Stamped,
+        ),
+        (
+            CurrentChannel::Derived("checkout".into()),
+            Some("checkout"),
+            ChannelOrigin::Directory,
+        ),
+        (CurrentChannel::Unscoped, None, ChannelOrigin::Stamped),
+    ] {
+        let context = current.address_context(&room);
+        assert_eq!(context.channel.as_deref(), channel);
+        assert_eq!(context.origin, origin);
+        assert_eq!(context.project_root, room.project_root);
+    }
+}
+
 fn workspace_with_roots(room: &str, cwd: Option<&str>) -> rimz::ResolvedWorkspace {
     let project_root = PathBuf::from(room);
     rimz::ResolvedWorkspace {

@@ -17,8 +17,13 @@ pub(super) fn compact_agent(
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.resolution_snapshot_with_context()?;
-    let agent =
-        crate::cli::resolve_agent_one(&ctx.store, &snapshot, &reference, None, ctx.channel())?;
+    let agent = crate::cli::resolve_agent_one(
+        &ctx.store,
+        &snapshot,
+        &reference,
+        None,
+        &ctx.address_context(),
+    )?;
     let handle = agent_handle(agent, &addressable_agents(&snapshot), false);
     let pane_id = agent
         .pane
