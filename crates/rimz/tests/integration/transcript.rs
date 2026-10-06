@@ -817,7 +817,7 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
             "2020-01-01T00:00:00Z",
         ),
     );
-    let mut owner = register_live_codex_turn(
+    register_live_codex_turn(
         &env,
         "sess-current-life",
         branch,
@@ -869,9 +869,6 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
             .any(|entry| entry["text"] == "current prompt")
     );
     assert!(entries.iter().all(|entry| entry["text"] != "prior prompt"));
-
-    let _ = owner.kill();
-    let _ = owner.wait();
 }
 
 #[test]
@@ -1082,15 +1079,9 @@ fn register_codex_turn(env: &Env, session_id: &str, branch: &str, prompt: &str, 
     );
 }
 
-fn register_live_codex_turn(
-    env: &Env,
-    session_id: &str,
-    branch: &str,
-    prompt: &str,
-    answer: &str,
-) -> std::process::Child {
+fn register_live_codex_turn(env: &Env, session_id: &str, branch: &str, prompt: &str, answer: &str) {
     let worktree_path = env.home_root.join(branch).display().to_string();
-    let owner = dummy_agent_process();
+    let owner_pid = env.agent_owner_pid();
     run_hook_for_owner(
         env,
         "codex",
@@ -1100,7 +1091,7 @@ fn register_live_codex_turn(
             "worktree_branch": branch,
             "worktree_path": worktree_path.as_str(),
         }),
-        owner.id(),
+        owner_pid,
     );
     run_hook_for_owner(
         env,
@@ -1112,7 +1103,7 @@ fn register_live_codex_turn(
             "worktree_branch": branch,
             "worktree_path": worktree_path.as_str(),
         }),
-        owner.id(),
+        owner_pid,
     );
     run_hook_for_owner(
         env,
@@ -1124,13 +1115,12 @@ fn register_live_codex_turn(
             "worktree_branch": branch,
             "worktree_path": worktree_path.as_str(),
         }),
-        owner.id(),
+        owner_pid,
     );
-    owner
 }
 
 fn run_hook(env: &Env, source: &str, payload: serde_json::Value) {
-    let mut owner = dummy_agent_process();
+    let mut owner = dummy_agent_process(env);
     run_hook_for_owner(env, source, payload, owner.id());
     let _ = owner.kill();
     let _ = owner.wait();
@@ -1147,7 +1137,7 @@ fn run_hook_for_run(
     run_id: &rimz::RunId,
     agent_name: &str,
 ) {
-    let mut owner = dummy_agent_process();
+    let mut owner = dummy_agent_process(env);
     run_hook_for_owner_and_run(
         env,
         source,
@@ -1193,10 +1183,14 @@ fn run_hook_for_owner_and_run(
     );
 }
 
-fn dummy_agent_process() -> std::process::Child {
+fn dummy_agent_process(env: &Env) -> std::process::Child {
     let mut cmd = std::process::Command::new("sleep");
     scrub_launch_identity(&mut cmd);
-    cmd.arg("5").spawn().expect("spawn dummy agent process")
+    cmd.env("HOME", &env.home_root)
+        .env("XDG_RUNTIME_DIR", &env.runtime_root)
+        .arg("600")
+        .spawn()
+        .expect("spawn dummy agent process")
 }
 
 fn scrub_launch_identity(cmd: &mut std::process::Command) {
