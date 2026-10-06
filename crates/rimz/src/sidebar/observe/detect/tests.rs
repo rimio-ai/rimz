@@ -229,6 +229,39 @@ fn aggregate_flips(drafts: &[AnomalyDraft]) -> Vec<(String, String, String, u64)
         .collect()
 }
 
+/// Each recorded row-value flip as `(field, from, via, span_ms)`.
+fn value_flips(drafts: &[AnomalyDraft]) -> Vec<(WatchedField, String, String, u64)> {
+    drafts
+        .iter()
+        .filter_map(|draft| match &draft.kind {
+            AnomalyKind::ValueOscillation {
+                field,
+                from,
+                via,
+                span_ms,
+                ..
+            } => Some((*field, from.clone(), via.clone(), *span_ms)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Each recorded order flap as `(order, via_order, span_ms)`.
+fn order_flaps(drafts: &[AnomalyDraft]) -> Vec<(Vec<String>, Vec<String>, u64)> {
+    drafts
+        .iter()
+        .filter_map(|draft| match &draft.kind {
+            AnomalyKind::OrderFlap {
+                order,
+                via_order,
+                span_ms,
+                ..
+            } => Some((order.clone(), via_order.clone(), *span_ms)),
+            _ => None,
+        })
+        .collect()
+}
+
 fn has_kind(drafts: &[AnomalyDraft], key: &'static str) -> bool {
     drafts.iter().any(|draft| draft.kind.key() == key)
 }
@@ -722,81 +755,68 @@ fn row_presence_ignores_same_pane_identity_rebound() {
 }
 
 #[test]
-fn value_oscillation_reports_each_watched_field() {
-    struct Case {
-        field: WatchedField,
-        initial: RowSig,
-        via: RowSig,
-        back: RowSig,
-        expected_from: &'static str,
-        expected_via: &'static str,
-    }
+fn value_oscillation_measures_time_away() {
+    let cases = [
+        (
+            WatchedField::GroupKey,
+            row("a", "p1", "external"),
+            row("a", "p1", "main"),
+            "external",
+            "main",
+        ),
+        (
+            WatchedField::ContextPct,
+            row_with_context_pct("a", "p1", "main", Some(10)),
+            row_with_context_pct("a", "p1", "main", Some(20)),
+            "10",
+            "20",
+        ),
+        (
+            WatchedField::TotalTokens,
+            row_with_total_tokens("a", "p1", "main", Some(100)),
+            row_with_total_tokens("a", "p1", "main", Some(200)),
+            "100",
+            "200",
+        ),
+        (
+            WatchedField::Model,
+            row_with_model("a", "p1", "main", Some("sonnet")),
+            row_with_model("a", "p1", "main", Some("opus")),
+            "sonnet",
+            "opus",
+        ),
+    ];
+    for (field, initial, via, expected_from, expected_via) in cases {
+        let run = |via_at_ms: u64, back_at_ms: u64| {
+            let mut observer = Observer::default();
+            observer.observe(sig(0, vec![initial.clone()]));
+            observer.observe(sig(11_000, vec![initial.clone()]));
+            observer.observe(sig(via_at_ms, vec![via.clone()]));
+            value_flips(&observer.observe(sig(back_at_ms, vec![initial.clone()])))
+        };
+        let flip = |span_ms| {
+            vec![(
+                field,
+                expected_from.to_owned(),
+                expected_via.to_owned(),
+                span_ms,
+            )]
+        };
 
-    for case in [
-        Case {
-            field: WatchedField::Status,
-            initial: row_with_status("a", "p1", "main", "running"),
-            via: row_with_status("a", "p1", "main", "waiting"),
-            back: row_with_status("a", "p1", "main", "running"),
-            expected_from: "running",
-            expected_via: "waiting",
-        },
-        Case {
-            field: WatchedField::GroupKey,
-            initial: row("a", "p1", "external"),
-            via: row("a", "p1", "main"),
-            back: row("a", "p1", "external"),
-            expected_from: "external",
-            expected_via: "main",
-        },
-        Case {
-            field: WatchedField::ContextPct,
-            initial: row_with_context_pct("a", "p1", "main", Some(10)),
-            via: row_with_context_pct("a", "p1", "main", Some(20)),
-            back: row_with_context_pct("a", "p1", "main", Some(10)),
-            expected_from: "10",
-            expected_via: "20",
-        },
-        Case {
-            field: WatchedField::TotalTokens,
-            initial: row_with_total_tokens("a", "p1", "main", Some(100)),
-            via: row_with_total_tokens("a", "p1", "main", Some(200)),
-            back: row_with_total_tokens("a", "p1", "main", Some(100)),
-            expected_from: "100",
-            expected_via: "200",
-        },
-        Case {
-            field: WatchedField::Model,
-            initial: row_with_model("a", "p1", "main", Some("sonnet")),
-            via: row_with_model("a", "p1", "main", Some("opus")),
-            back: row_with_model("a", "p1", "main", Some("sonnet")),
-            expected_from: "sonnet",
-            expected_via: "opus",
-        },
-    ] {
-        let mut observer = Observer::default();
-        observer.observe(sig(0, vec![case.initial.clone()]));
-        observer.observe(sig(11_000, vec![case.initial]));
-        observer.observe(sig(12_000, vec![case.via]));
-
-        let drafts = observer.observe(sig(13_000, vec![case.back]));
-
-        assert!(
-            drafts.iter().any(|draft| matches!(
-                &draft.kind,
-                AnomalyKind::ValueOscillation {
-                    row_id,
-                    field,
-                    from,
-                    via,
-                    ..
-                } if row_id == "a"
-                    && *field == case.field
-                    && from == case.expected_from
-                    && via == case.expected_via
-            )),
-            "missing {:?} oscillation",
-            case.field
+        assert_eq!(
+            run(3_611_000, 3_613_000),
+            flip(2_000),
+            "{field:?} blink on a value stable for an hour"
+        );
+        assert_eq!(
+            run(12_000, 17_000),
+            flip(5_000),
+            "{field:?} return at exactly the window"
+        );
+        assert_eq!(
+            run(12_000, 17_001),
+            Vec::new(),
+            "{field:?} away past the window"
         );
     }
 
@@ -819,22 +839,30 @@ fn value_oscillation_reports_each_watched_field() {
         "value_oscillation",
         "first None to value to None enrichment",
     );
+}
 
-    let mut outside_window = Observer::default();
-    outside_window.observe(sig(0, vec![row_with_status("a", "p1", "main", "running")]));
-    outside_window.observe(sig(
-        11_000,
-        vec![row_with_status("a", "p1", "main", "running")],
-    ));
-    outside_window.observe(sig(
-        12_000,
-        vec![row_with_status("a", "p1", "main", "waiting")],
-    ));
-    let drafts = outside_window.observe(sig(
-        17_001,
-        vec![row_with_status("a", "p1", "main", "running")],
-    ));
-    assert_lacks_kind(&drafts, "value_oscillation", "status bounce outside window");
+#[test]
+fn value_oscillation_never_records_status() {
+    for (name, via_at_ms, back_at_ms) in [
+        ("fresh", 12_000, 13_000),
+        ("long stable", 3_611_000, 3_613_000),
+    ] {
+        let mut observer = Observer::default();
+        observer.observe(sig(0, vec![row_with_status("a", "p1", "main", "idle")]));
+        observer.observe(sig(
+            11_000,
+            vec![row_with_status("a", "p1", "main", "idle")],
+        ));
+        observer.observe(sig(
+            via_at_ms,
+            vec![row_with_status("a", "p1", "main", "running")],
+        ));
+        let drafts = observer.observe(sig(
+            back_at_ms,
+            vec![row_with_status("a", "p1", "main", "idle")],
+        ));
+        assert_lacks_kind(&drafts, "value_oscillation", name);
+    }
 }
 
 #[test]
@@ -1485,6 +1513,85 @@ fn order_flap_reports_only_stable_membership_reorders() {
             13_000,
             vec![row("a", "p1", "main"), row("b", "p2", "main")],
         ));
+        assert_lacks_kind(&drafts, "order_flap", name);
+    }
+}
+
+#[test]
+fn order_flap_measures_time_away() {
+    let ab = || vec![row("a", "p1", "main"), row("b", "p2", "main")];
+    let ba = || vec![row("b", "p2", "main"), row("a", "p1", "main")];
+    let run = |via_at_ms: u64, back_at_ms: u64| {
+        let mut observer = Observer::default();
+        observer.observe(sig(0, ab()));
+        observer.observe(sig(11_000, ab()));
+        observer.observe(sig(via_at_ms, ba()));
+        order_flaps(&observer.observe(sig(back_at_ms, ab())))
+    };
+    let flap = |span_ms| {
+        vec![(
+            vec!["a".to_owned(), "b".to_owned()],
+            vec!["b".to_owned(), "a".to_owned()],
+            span_ms,
+        )]
+    };
+
+    assert_eq!(
+        run(3_611_000, 3_613_000),
+        flap(2_000),
+        "a flip on an order stable for an hour"
+    );
+    assert_eq!(
+        run(12_000, 19_000),
+        flap(7_000),
+        "return at exactly the window"
+    );
+    assert_eq!(run(12_000, 19_001), Vec::new(), "away past the window");
+}
+
+#[test]
+fn order_flap_is_quiet_when_a_ranking_status_explains_it() {
+    let frame = |at_ms, b_first: bool, b_status: &str| {
+        let a = row_with_status("a", "p1", "main", "idle");
+        let b = row_with_status("b", "p2", "main", b_status);
+        sig(at_ms, if b_first { vec![b, a] } else { vec![a, b] })
+    };
+    for (name, frames) in [
+        (
+            "short turn moves the row up and back",
+            vec![
+                frame(0, false, "idle"),
+                frame(11_000, false, "idle"),
+                frame(3_611_000, true, "running"),
+                frame(3_613_000, false, "idle"),
+            ],
+        ),
+        (
+            "status reaches the snapshot a frame before the order",
+            vec![
+                frame(0, false, "idle"),
+                frame(11_000, false, "idle"),
+                frame(12_000, false, "running"),
+                frame(13_000, true, "running"),
+                frame(14_000, false, "idle"),
+            ],
+        ),
+        (
+            "status returns a frame before the order",
+            vec![
+                frame(0, false, "idle"),
+                frame(11_000, false, "idle"),
+                frame(12_000, true, "running"),
+                frame(13_000, true, "idle"),
+                frame(14_000, false, "idle"),
+            ],
+        ),
+    ] {
+        let mut observer = Observer::default();
+        let drafts = frames
+            .into_iter()
+            .flat_map(|frame| observer.observe(frame))
+            .collect::<Vec<_>>();
         assert_lacks_kind(&drafts, "order_flap", name);
     }
 }

@@ -321,7 +321,8 @@ pub(super) const OBSERVE_ROSTER_FLAP_WINDOW: Duration = Duration::from_secs(10);
 /// vanishing quickly.
 pub(super) const OBSERVE_ROW_FLAP_WINDOW: Duration = Duration::from_secs(7);
 
-/// Observer window for exact A→B→A value oscillations.
+/// Observer window for exact A→B→A per-row value oscillations: how long a
+/// value may be away before its return stops reading as a flip.
 pub(super) const OBSERVE_VALUE_OSC_WINDOW: Duration = Duration::from_secs(5);
 
 /// Observer window for dashboard aggregate A→B→A oscillations: how long a
@@ -330,7 +331,8 @@ pub(super) const OBSERVE_VALUE_OSC_WINDOW: Duration = Duration::from_secs(5);
 /// than per-row value oscillation.
 pub(super) const OBSERVE_AGGREGATE_OSC_WINDOW: Duration = Duration::from_secs(12);
 
-/// Observer window for rendered row order A→B→A flaps inside one stable group.
+/// Observer window for rendered row order A→B→A flaps inside one stable group:
+/// how long the order may be away before its return stops reading as a flip.
 pub(super) const OBSERVE_ORDER_FLAP_WINDOW: Duration = Duration::from_secs(7);
 
 /// Observer window for sustained status transition churn.

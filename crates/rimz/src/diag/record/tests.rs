@@ -773,6 +773,24 @@ fn representative_events_keep_json_wire_shape() {
                 dropped_msgs: 0,
             },
         ),
+        (
+            r#"{"kind":"frame_anomaly","anomaly":{"detector":"value_oscillation","row_id":"a","field":"status","from":"running","via":"waiting","span_ms":1000},"frame":{"produced_at_ms":13000,"rows":2,"agents":2,"processes":0,"pulled_rows":2,"pulled_panes_produced_at_ms":13000},"events_recent":{"pane_closed":[],"pane_opened":[]},"gate_reject_streak":0,"health_failure_streak":0,"dropped_msgs":0}"#,
+            DiagEvent::FrameAnomaly {
+                anomaly: AnomalyKind::ValueOscillation {
+                    row_id: "a".to_owned(),
+                    field: WatchedField::Status,
+                    from: "running".to_owned(),
+                    via: "waiting".to_owned(),
+                    span_ms: 1_000,
+                },
+                window_ms: None,
+                frame: frame_stamp(13_000),
+                events_recent: EventsSig::default(),
+                gate_reject_streak: 0,
+                health_failure_streak: 0,
+                dropped_msgs: 0,
+            },
+        ),
     ];
 
     for (wire, expected) in rows {
