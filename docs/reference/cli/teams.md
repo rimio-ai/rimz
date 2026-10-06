@@ -238,7 +238,7 @@ launched forge in worktree #feat-rate-limits
   signals   ci.failed → @coder
 ```
 
-The header names the lane as `in worktree #<lane>`, for a `--channel` lane too. `path` is the absolute checkout, and `board` is `blackboard.md` relative to it, whether or not the file exists yet. The `prompt` line appears only when you gave one: whitespace collapsed, quotes escaped, clipped to the terminal width. Member rows show handle, provider, and model (`-` when unset), and a `signals` line closes them when roles declare bindings. The receipt has no command hints and no JSON form.
+The header names the lane as `in worktree #<lane>`, for a `--channel` lane too. `path` is the absolute checkout, and `board` is `blackboard.md` relative to it, whether or not the file exists yet. The `prompt` line appears only when you gave one: whitespace collapsed, quotes escaped, clipped to the terminal width. Member rows show handle, provider, and model (`-` when unset), and a `signals` line closes them when roles declare bindings. The receipt has no command hints and no JSON form; an agent's prompted launch adds the [team report](#team-reports) lines.
 
 The receipt records what was launched. Members start asynchronously and may not yet appear in `rimz teams show`, which is the source of live status. To block until the board reaches `Done`, run [`rimz teams wait forge#feat-rate-limits`](#wait-for-a-cohort-to-finish); the cohort is resolvable as soon as the launch command returns. To be told when the cohort next goes idle instead, arm a one-shot [signal subscription](./loop.md#signals):
 
@@ -337,7 +337,7 @@ Memory: /home/me/proj-worktrees/feat-rate-limits/blackboard.md
 | Response | The leader's last final message, as a file the launcher can read, with its size; `no response` when the leader never finished a turn |
 | Memory | The absolute path of the team's board, as seen by the launcher |
 
-The report is parked and delivered at the launcher's next turn boundary. The flip receipt adds a `report` line naming the launcher. A flip out of `Done` prints `report   TEAM_REPORT again at the next Done`, and the next `Done` sends a new report.
+The launching agent's receipt names the leader's response file and `rimz teams wait <team>#<lane>`, and, unless the launch is detached, `rimz teams stop <team>#<lane>` for once the report arrives. The report is parked and delivered at the launcher's next turn boundary. The flip receipt adds a `report` line naming the launcher. A flip out of `Done` prints `report   TEAM_REPORT again at the next Done`, and the next `Done` sends a new report.
 
 A team launched with `--detach` sends no `TEAM_REPORT`. Its run still follows the board: `Done` and cohort death settle it and write the leader's response file, a flip out of `Done` opens the next detached stretch, and each flip receipt prints `report   none: the team was launched detached` in place of the report line. The launcher is not held open or shown as waiting for it; `rimz teams wait` still blocks on `Done`.
 

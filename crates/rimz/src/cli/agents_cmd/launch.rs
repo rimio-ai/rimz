@@ -84,7 +84,7 @@ pub(super) fn launch_layout(
         cwd,
         None,
     )? {
-        launched.write_receipt(ctx.store.paths())?;
+        launched.write_receipt(&mut render::out(), ctx.store.paths())?;
     }
     Ok(())
 }
@@ -100,12 +100,12 @@ pub(in crate::cli) struct LaunchedLayout {
 }
 
 impl LaunchedLayout {
-    fn write_receipt(&self, paths: &rimz::StatePaths) -> Result<()> {
+    fn write_receipt(&self, w: &mut impl Write, paths: &rimz::StatePaths) -> Result<()> {
         if self.in_place {
             return Ok(());
         }
         write_launch_receipt(
-            &mut render::out(),
+            w,
             &LaunchReceipt {
                 team: self.team.as_ref().map(|(name, team)| (name.as_str(), team)),
                 channel: self.channel.as_deref(),
@@ -113,12 +113,14 @@ impl LaunchedLayout {
                 identities: &self.identities,
                 leader_index: self.leader_index,
                 terminal_width: render::terminal_columns(100),
+                hints: reported_peer(self.peer.as_ref(), paths).is_none(),
             },
         )?;
         write_peer_receipt(
-            &mut render::out(),
+            w,
             &self.identities,
             self.peer.as_ref(),
+            self.channel.as_deref(),
             paths,
         )
     }
@@ -737,49 +739,78 @@ fn prepare_peer_prompt(
     Ok(run.map(|run| (peer.clone(), run)))
 }
 
+/// The launch-prompt run the peer receipt describes, with the peer's name and
+/// response path; `None` when the launch created no such run.
+fn reported_peer<'a>(
+    run: Option<&'a rimz::store::run::RunRecord>,
+    paths: &rimz::StatePaths,
+) -> Option<(&'a rimz::store::run::RunRecord, &'a str, PathBuf)> {
+    let run = run?;
+    let name = run.agent_name.as_deref()?;
+    let response = rimz::harness::run::response_path(paths, run)?;
+    Some((run, name, response))
+}
+
 fn write_peer_receipt(
     w: &mut impl Write,
     identities: &[AgentLaunchIdentity],
     run: Option<&rimz::store::run::RunRecord>,
+    channel: Option<&str>,
     paths: &rimz::StatePaths,
 ) -> Result<()> {
-    if let Some(run) = run
-        && let Some(name) = run.agent_name.as_deref()
-        && let Some(response) = rimz::harness::run::response_path(paths, run)
-    {
+    if let Some((run, name, response)) = reported_peer(run, paths) {
+        let response = response.display();
         let detached = run.report_to == rimz::store::run::ReportTo::Nobody;
-        if let Some(team) = run.team.as_ref()
-            && detached
-        {
-            writeln!(
-                w,
-                "@{name} leads {instance}, detached: no TEAM_REPORT reaches you and nothing holds your turn. When its board at {} reaches Done, the leader's final response lands at {}. The team keeps its panes. To block until Done: rimz teams wait {instance}",
-                run.worktree_path
-                    .join(rimz::harness::board::BOARD_FILE)
-                    .display(),
-                response.display(),
-                instance = team.instance,
-            )?;
+        let handle = channel.map_or_else(
+            || format!("@{name}"),
+            |channel| format!("@{name}#{channel}"),
+        );
+        if let Some(team) = run.team.as_ref() {
+            let instance = &team.instance;
+            if detached {
+                writeln!(
+                    w,
+                    "@{name} leads {instance}, detached: no TEAM_REPORT will reach you."
+                )?;
+                writeln!(
+                    w,
+                    "The leader's final response lands at {response}. To block until Done: rimz teams wait {instance}"
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "@{name} leads {instance}. Keep working or end your turn: one TEAM_REPORT reaches you when its board reaches Done; stop it after: rimz teams stop {instance}"
+                )?;
+                writeln!(
+                    w,
+                    "The leader's final response lands at {response}. To block instead: rimz teams wait {instance}"
+                )?;
+            }
         } else if detached {
             writeln!(
                 w,
-                "@{name} runs detached: no AGENT_REPORT reaches you for this launch and nothing holds your turn; a message to it after this launch turn settles reports as usual, while one that lands before then joins this unreported answer. Its response lands at {} when this turn settles. The peer keeps its pane. To read it: rimz agents wait {}",
-                response.display(),
-                run.run_id
+                "Running detached in its own pane: no AGENT_REPORT will reach you for this launch turn."
             )?;
-        } else if let Some(team) = run.team.as_ref() {
             writeln!(
                 w,
-                "@{name} leads {instance}. When its board reaches Done, a TEAM_REPORT from @rimz arrives at your next turn boundary with the leader's final response at {} and the team's board path; the seats do not report their turns. The team keeps its panes. To block instead: rimz teams wait {instance}",
-                response.display(),
-                instance = team.instance,
+                "Its response lands at {response} when this turn settles. To read it: rimz agents wait {handle}"
+            )?;
+            writeln!(
+                w,
+                "It stays open after this turn. A message of yours reports as usual only if it lands after this turn settles. To follow up: rimz message {handle} '<text>'"
             )?;
         } else {
             writeln!(
                 w,
-                "@{name}'s response lands at {} when this turn settles. An AGENT_REPORT from @rimz arrives at your next turn boundary when your fleet settles, and again after each turn your message opens. The peer keeps its pane. To block instead: rimz agents wait {}",
-                response.display(),
-                run.run_id
+                "Running in its own pane. Keep working or end your turn: one AGENT_REPORT reaches you once every agent you launched has settled, and another after each turn a message of yours opens."
+            )?;
+            writeln!(
+                w,
+                "Its response lands at {response} when this turn settles. To block instead: rimz agents wait {handle}"
+            )?;
+            writeln!(
+                w,
+                "It stays open after this turn. To follow up: rimz message {handle} '<text>'"
             )?;
         }
     }
@@ -1303,6 +1334,8 @@ struct LaunchReceipt<'a> {
     identities: &'a [AgentLaunchIdentity],
     leader_index: Option<usize>,
     terminal_width: usize,
+    /// Off when the peer receipt prints, since it names the same two commands.
+    hints: bool,
 }
 
 fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Result<()> {
@@ -1378,6 +1411,9 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
         return Ok(());
     }
     writeln!(w)?;
+    if !receipt.hints {
+        return Ok(());
+    }
     write_launch_hints(
         w,
         team,

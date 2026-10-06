@@ -109,13 +109,17 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
         "an unresolved launcher leaves the reader to the fallback"
     );
     let mut receipt = Vec::new();
-    write_peer_receipt(&mut receipt, batch.identities(), Some(&run), store.paths()).unwrap();
+    write_peer_receipt(
+        &mut receipt,
+        batch.identities(),
+        Some(&run),
+        None,
+        store.paths(),
+    )
+    .unwrap();
     let receipt = String::from_utf8(receipt).unwrap();
     assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
-    assert!(
-        receipt.contains(&format!("rimz agents wait {}", run.run_id)),
-        "{receipt}"
-    );
+    assert!(receipt.contains("rimz agents wait @leader\n"), "{receipt}");
     assert!(
         receipt.contains(
             &store
@@ -169,19 +173,19 @@ fn launch_prompt_enrolls_only_the_prompted_peer_before_registration() {
         &mut receipt,
         batch.identities(),
         Some(&detached),
+        Some("auth"),
         store.paths(),
     )
     .unwrap();
     assert_eq!(
         String::from_utf8(receipt).unwrap(),
         format!(
-            "@leader runs detached: no AGENT_REPORT reaches you for this launch and nothing holds your turn; a message to it after this launch turn settles reports as usual, while one that lands before then joins this unreported answer. Its response lands at {} when this turn settles. The peer keeps its pane. To read it: rimz agents wait {}\n",
+            "Running detached in its own pane: no AGENT_REPORT will reach you for this launch turn.\nIts response lands at {} when this turn settles. To read it: rimz agents wait @leader#auth\nIt stays open after this turn. A message of yours reports as usual only if it lands after this turn settles. To follow up: rimz message @leader#auth '<text>'\n",
             store
                 .paths()
                 .out_reader_dir(Some("leader"))
                 .join(format!("leader.{}.output", detached.run_id))
                 .display(),
-            detached.run_id
         )
     );
 }
@@ -208,53 +212,108 @@ fn peer_receipt_names_the_host_out_path_under_its_reader() {
     let expected = paths
         .out_reader_dir(Some("launcher"))
         .join(format!("peer.{}.output", run.run_id));
-    let mut receipt = Vec::new();
-    write_peer_receipt(&mut receipt, &[], Some(&run), &paths).unwrap();
-    let receipt = String::from_utf8(receipt).unwrap();
-    assert!(
-        receipt.contains(&expected.display().to_string()),
-        "{receipt}"
+    let receipt = |run: &RunRecord, channel| {
+        let mut receipt = Vec::new();
+        write_peer_receipt(&mut receipt, &[], Some(run), channel, &paths).unwrap();
+        String::from_utf8(receipt).unwrap()
+    };
+    assert_eq!(
+        receipt(&run, Some("auth")),
+        format!(
+            "Running in its own pane. Keep working or end your turn: one AGENT_REPORT reaches you once every agent you launched has settled, and another after each turn a message of yours opens.\nIts response lands at {} when this turn settles. To block instead: rimz agents wait @peer#auth\nIt stays open after this turn. To follow up: rimz message @peer#auth '<text>'\n",
+            expected.display()
+        )
     );
-    assert!(receipt.contains("AGENT_REPORT"), "{receipt}");
-    let mut receipt = Vec::new();
+    let unlaned = receipt(&run, None);
+    assert!(
+        unlaned.contains("rimz agents wait @peer\n")
+            && unlaned.contains("rimz message @peer '<text>'\n"),
+        "{unlaned}"
+    );
+    let mut empty = Vec::new();
     write_peer_receipt(
-        &mut receipt,
+        &mut empty,
         &[launch_identity("claude", "unprompted")],
+        None,
         None,
         &paths,
     )
     .unwrap();
-    assert!(receipt.is_empty());
+    assert!(empty.is_empty());
 
     run.team = Some(rimz::store::run::TeamRun {
         launch_id: "leader-launch".into(),
         instance: "forge#feat-x".into(),
     });
-    let mut receipt = Vec::new();
-    write_peer_receipt(&mut receipt, &[], Some(&run), &paths).unwrap();
-    let receipt = String::from_utf8(receipt).unwrap();
-    assert!(
-        receipt.starts_with("@peer leads forge#feat-x. When its board reaches Done, a TEAM_REPORT"),
-        "{receipt}"
-    );
-    assert!(
-        receipt.contains("rimz teams wait forge#feat-x"),
-        "{receipt}"
-    );
-    assert!(!receipt.contains("AGENT_REPORT"), "{receipt}");
-    assert!(receipt.contains("the team's board path"), "{receipt}");
-
-    run.report_to = ReportTo::Nobody;
-    let mut receipt = Vec::new();
-    write_peer_receipt(&mut receipt, &[], Some(&run), &paths).unwrap();
     assert_eq!(
-        String::from_utf8(receipt).unwrap(),
+        receipt(&run, Some("feat-x")),
         format!(
-            "@peer leads forge#feat-x, detached: no TEAM_REPORT reaches you and nothing holds your turn. When its board at {} reaches Done, the leader's final response lands at {}. The team keeps its panes. To block until Done: rimz teams wait forge#feat-x\n",
-            dir.path().join("blackboard.md").display(),
+            "@peer leads forge#feat-x. Keep working or end your turn: one TEAM_REPORT reaches you when its board reaches Done; stop it after: rimz teams stop forge#feat-x\nThe leader's final response lands at {}. To block instead: rimz teams wait forge#feat-x\n",
             expected.display()
         )
     );
+
+    run.report_to = ReportTo::Nobody;
+    assert_eq!(
+        receipt(&run, Some("feat-x")),
+        format!(
+            "@peer leads forge#feat-x, detached: no TEAM_REPORT will reach you.\nThe leader's final response lands at {}. To block until Done: rimz teams wait forge#feat-x\n",
+            expected.display()
+        )
+    );
+}
+
+#[test]
+fn launch_receipt_carries_either_the_hints_or_the_peer_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths =
+        rimz::StatePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path())
+            .unwrap();
+    let mut run = RunRecord::new(
+        paths.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "task".into(),
+        dir.path().to_owned(),
+    );
+    run.agent_name = Some("peer".into());
+    run.peer = Some(rimz::store::run::PeerRun {
+        launch_id: "peer-launch".into(),
+        opened_by: Vec::new(),
+    });
+    let receipt = |peer: Option<RunRecord>| {
+        let layout = LaunchedLayout {
+            identities: vec![launch_identity("claude", "peer")],
+            leader_index: Some(0),
+            team: None,
+            channel: Some("auth".into()),
+            cwd: dir.path().to_owned(),
+            in_place: false,
+            peer,
+        };
+        let mut output = anstream::StripStream::new(Vec::new());
+        layout.write_receipt(&mut output, &paths).unwrap();
+        String::from_utf8(output.into_inner()).unwrap()
+    };
+
+    let prompted = receipt(Some(run));
+    assert!(!prompted.contains("Reach:"), "{prompted}");
+    assert!(!prompted.contains("Wait:"), "{prompted}");
+    assert!(
+        prompted.contains("\n\nRunning in its own pane. ")
+            && prompted.contains("To block instead: rimz agents wait @peer#auth\n")
+            && prompted.ends_with("To follow up: rimz message @peer#auth '<text>'\n"),
+        "{prompted}"
+    );
+
+    let plain = receipt(None);
+    assert!(
+        plain.ends_with(
+            "\nReach: rimz message @peer#auth '<text>'\nWait:  rimz agents wait @peer#auth\n"
+        ),
+        "{plain}"
+    );
+    assert!(!plain.contains("Running"), "{plain}");
 }
 
 #[test]
@@ -288,6 +347,7 @@ fn team_launch_receipt_is_compact() {
             identities: &identities,
             leader_index: Some(0),
             terminal_width: 100,
+            hints: true,
         },
     )
     .unwrap();
@@ -331,6 +391,7 @@ fn team_launch_receipt_is_compact() {
             identities: &identities,
             leader_index: None,
             terminal_width: 100,
+            hints: true,
         },
     )
     .unwrap();
@@ -356,6 +417,7 @@ fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
             identities: &identities,
             leader_index: Some(0),
             terminal_width: 100,
+            hints: true,
         },
     )
     .unwrap();
@@ -393,6 +455,7 @@ fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
             identities: &identities,
             leader_index,
             terminal_width: 100,
+            hints: true,
         },
     )
     .unwrap();
@@ -456,6 +519,7 @@ fn team_launch_receipt_marks_the_implicit_leader() {
             identities: &identities,
             leader_index: Some(leader_index),
             terminal_width: 100,
+            hints: true,
         },
     )
     .unwrap();
@@ -503,6 +567,7 @@ fn team_launch_receipt_uses_prompt_leader_and_clips_the_prompt() {
         identities: &identities,
         leader_index: Some(leader_index),
         terminal_width: 52,
+        hints: true,
     };
     let mut output = anstream::StripStream::new(Vec::new());
     write_launch_receipt(&mut output, &receipt).unwrap();
