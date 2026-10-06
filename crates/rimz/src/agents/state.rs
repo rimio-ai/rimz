@@ -18,7 +18,8 @@ use super::context::{
     AgentContext, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettleOutcome,
 };
 use super::lifecycle::{
-    self, AskKind, LifecycleSignal, LifecycleState, PriorTurnIds, Transition, TurnPhase,
+    self, AskKind, LifecycleSignal, LifecycleState, PingEdge, PriorTurnIds, Transition,
+    TransitionKind, TurnPhase,
 };
 use super::observation::AgentUsageSummary;
 
@@ -899,6 +900,12 @@ pub struct AgentState {
     /// The agent's last request before the open run of keepalive-only turns, the clock `harness.cache_keepalive_max` caps. `None` when the latest opened turn was not a keepalive ping; a context reset clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keepalive_since: Option<Timestamp>,
+    /// A ping-only turn is open: a prompt whose every section is a cache-keepalive ping opened it from rest. Its close clears it; any other signal clears it and folds as the work the ping became.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ping_turn: bool,
+    /// When the last ping-only turn closed. The one stamp a ping moves: cache pacing counts from it, nothing else sees it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinged_at: Option<Timestamp>,
     /// Timestamp of the native prompt that put this session in `Waiting`.
     /// Activity after this instant proves a keyless prompt was answered in the
     /// agent's own UI, so read paths project the row back to work even before
@@ -995,12 +1002,15 @@ impl AgentState {
         append_recent_prompt(&mut self.recent_prompts, prompt);
     }
 
-    /// Request-start estimate shared by cache-aligned timers.
+    /// Request-start estimate shared by cache-aligned timers: the last real
+    /// request of a closed turn, or a later closed ping.
     pub fn last_request_at(&self) -> Option<Timestamp> {
-        let end = self.turn_ended_at?;
-        self.turn_started_at
-            .max(self.last_tool_at)
-            .map(|request| request.min(end))
+        let real = self.turn_ended_at.and_then(|end| {
+            self.turn_started_at
+                .max(self.last_tool_at)
+                .map(|request| request.min(end))
+        });
+        real.max(self.pinged_at)
     }
 
     pub fn runs_in(&self, machine: crate::config::Isolation) -> crate::config::Isolation {
@@ -1099,6 +1109,8 @@ impl AgentState {
             last_tool_at: None,
             user_turn_started_at: None,
             keepalive_since: None,
+            ping_turn: false,
+            pinged_at: None,
             waiting_since: None,
             open_ask: None,
             queued_asks: Vec::new(),
@@ -1247,15 +1259,81 @@ impl AgentState {
         }
     }
 
-    pub(crate) fn transition(prior: Option<&Self>, signal: &LifecycleSignal) -> Transition {
-        lifecycle::step(
+    /// The lifecycle step both the writer and the fold take. A ping-only turn
+    /// (opened from rest by a prompt that is only cache-keepalive pings) is no
+    /// work of the agent's: its open and its close are no-ops for the lifecycle,
+    /// so every audit row and derived signal sees the agent exactly as it was.
+    /// `keepalive_prompt` says the signal's prompt is made only of keepalive
+    /// sections, as the store classifies it.
+    pub(crate) fn transition(
+        prior: Option<&Self>,
+        signal: &LifecycleSignal,
+        keepalive_prompt: bool,
+    ) -> Transition {
+        let stepped = lifecycle::step(
             prior.map(Self::lifecycle).as_ref(),
             prior
                 .and_then(|agent| agent.open_ask.as_ref())
                 .and_then(|ask| ask.native_key.as_deref()),
             prior.map(Self::turn_ids).unwrap_or_default(),
             signal,
-        )
+        );
+        let Some(prior) = prior else {
+            return stepped;
+        };
+        // The superseded-turn guard in `step` decides first; inside an open
+        // ping every report for a real turn the row knows stays a no-op too.
+        let stale = matches!(stepped.kind, TransitionKind::Ignored { .. });
+        let ping = match signal {
+            LifecycleSignal::TurnStarted { .. } if !stale => ((prior.ping_turn
+                || (prior.rests_in_lifecycle() && prior.compacting_since.is_none()))
+                && keepalive_prompt)
+                .then_some(PingEdge::Open),
+            LifecycleSignal::TurnEnded { turn_id, .. }
+            | LifecycleSignal::TurnInterrupted { turn_id }
+                if prior.ping_turn =>
+            {
+                let known_real = stale
+                    || turn_id
+                        .as_deref()
+                        .is_some_and(|id| prior.started_turn_id.as_deref() == Some(id));
+                Some(if known_real {
+                    PingEdge::Report
+                } else {
+                    PingEdge::Close
+                })
+            }
+            _ => None,
+        };
+        let Some(edge) = ping else {
+            return stepped;
+        };
+        let kind = match (stale, edge) {
+            (true, _) => stepped.kind,
+            (false, PingEdge::Report) => TransitionKind::Ignored {
+                reason: "turn report for a real turn while a cache keepalive is open",
+            },
+            (false, _) => TransitionKind::Ignored {
+                reason: "cache keepalive turn",
+            },
+        };
+        Transition {
+            next: prior.lifecycle(),
+            kind,
+            compaction_closed: false,
+            waiting_cleared: false,
+            opened_turn: false,
+            ping,
+        }
+    }
+
+    /// The row rests by its durable lifecycle alone: raw `Idle` or `Success`,
+    /// or a clean end parked on background work. A read path may also settle a
+    /// `Running` row from a provider marker in the context sidecar, which the
+    /// durable fold never sees, so only this rest can take an inert ping.
+    pub(crate) fn rests_in_lifecycle(&self) -> bool {
+        matches!(self.status, AgentStatus::Idle | AgentStatus::Success)
+            || (self.status == AgentStatus::Running && self.phase == TurnPhase::Parked)
     }
 
     /// Status after cheap, context-only projections that every read path can

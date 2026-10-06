@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use super::*;
 use crate::agents::AgentStatus;
-use crate::agents::lifecycle::{LifecycleState, TurnPhase};
+use crate::agents::lifecycle::{LifecycleState, PingEdge, TurnPhase};
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentSessionId, MuxName, PaneId, WorkspaceId};
 use crate::store::event::EventKind;
@@ -19,6 +19,7 @@ fn transition(kind: TransitionKind, compaction_closed: bool) -> Transition {
         compaction_closed,
         waiting_cleared: false,
         opened_turn: false,
+        ping: None,
     }
 }
 
@@ -1075,4 +1076,129 @@ fn failed_lifecycle_append_does_not_touch_rotation_stamp() {
             .is_err()
     );
     assert!(!stamp.exists());
+}
+
+#[test]
+fn a_ping_only_turn_is_audited_as_a_no_op_and_moves_only_the_cache_clock() {
+    let (_dir, store) = test_store();
+    let append = |signal: LifecycleSignal, prompt: Option<&str>| {
+        let mut observed = observation(signal);
+        observed.prompt = crate::agents::SanitizedPrompt::new(prompt);
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "test",
+                observation: &observed,
+                spawned_subagents: &[],
+            })
+            .expect("append lifecycle event")
+    };
+    let started = |id: &str| LifecycleSignal::TurnStarted {
+        turn_id: Some(id.to_owned()),
+    };
+    let end = |id: &str| LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: Some(id.to_owned()),
+    };
+    append(started("r1"), Some("do X"));
+    append(end("r1"), None);
+    let rested = store.snapshot().unwrap().agents[0].clone();
+    assert_eq!(rested.status, AgentStatus::Success);
+
+    // The ping's open, a duplicate verdict for the real turn it followed, and
+    // the ping's close are each audited as a no-op from rest.
+    let ping = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    let cancel = LifecycleSignal::TurnInterrupted {
+        turn_id: Some("r1".into()),
+    };
+    for (signal, prompt, edge) in [
+        (started("p1"), Some(ping), PingEdge::Open),
+        (end("r1"), None, PingEdge::Report),
+        (cancel, None, PingEdge::Report),
+        (end("p1"), None, PingEdge::Close),
+    ] {
+        let receipt = append(signal, prompt);
+        assert_eq!(receipt.transition.unwrap().ping, Some(edge));
+        let event = &receipt.events[0];
+        assert_eq!(event.prior_status, Some(AgentStatus::Success));
+        assert_eq!(event.status, AgentStatus::Success);
+        assert!(matches!(
+            event.transition,
+            crate::agents::LifecycleTransition::Ignored { .. }
+        ));
+        let state = store.snapshot().unwrap().agents[0].clone();
+        assert_eq!(state.ping_turn, edge != PingEdge::Close, "{edge:?}");
+        assert_eq!(
+            state.pinged_at.is_some(),
+            edge == PingEdge::Close,
+            "{edge:?}"
+        );
+    }
+    let pinged = store.snapshot().unwrap().agents[0].clone();
+    assert_eq!(pinged.status, rested.status);
+    assert_eq!(pinged.last_activity, rested.last_activity);
+    assert_eq!(pinged.turn_ended_at, rested.turn_ended_at);
+    assert_eq!(pinged.started_turn_id.as_deref(), Some("r1"));
+    assert!(pinged.pinged_at > rested.turn_ended_at);
+    assert_eq!(pinged.last_request_at(), pinged.pinged_at);
+}
+
+#[test]
+fn a_ping_to_a_row_parked_on_background_work_is_audited_as_a_no_op() {
+    let (_dir, store) = test_store();
+    let append = |signal: LifecycleSignal, prompt: Option<&str>| {
+        let mut observed = observation(signal);
+        observed.prompt = crate::agents::SanitizedPrompt::new(prompt);
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "test",
+                observation: &observed,
+                spawned_subagents: &[],
+            })
+            .expect("append lifecycle event")
+    };
+    let parked_end = || LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: true,
+        turn_id: None,
+    };
+    append(
+        LifecycleSignal::TurnStarted { turn_id: None },
+        Some("start the dev server"),
+    );
+    append(parked_end(), None);
+    let rested = store.snapshot().unwrap().agents[0].clone();
+    assert_eq!(
+        (rested.status, rested.phase),
+        (AgentStatus::Running, TurnPhase::Parked)
+    );
+
+    let ping = "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.";
+    for (signal, prompt, edge) in [
+        (
+            LifecycleSignal::TurnStarted { turn_id: None },
+            Some(ping),
+            PingEdge::Open,
+        ),
+        (parked_end(), None, PingEdge::Close),
+    ] {
+        let receipt = append(signal, prompt);
+        assert_eq!(receipt.transition.unwrap().ping, Some(edge));
+        let event = &receipt.events[0];
+        assert_eq!(event.prior_status, Some(AgentStatus::Running));
+        assert_eq!(event.status, AgentStatus::Running);
+        assert!(matches!(
+            event.transition,
+            crate::agents::LifecycleTransition::Ignored { .. }
+        ));
+    }
+    let pinged = store.snapshot().unwrap().agents[0].clone();
+    assert_eq!((pinged.status, pinged.phase), (rested.status, rested.phase));
+    assert_eq!(pinged.last_activity, rested.last_activity);
+    assert_eq!(pinged.turn_ended_at, rested.turn_ended_at);
+    assert!(pinged.pinged_at > rested.turn_ended_at);
 }

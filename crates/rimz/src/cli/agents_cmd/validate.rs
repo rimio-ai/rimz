@@ -31,6 +31,7 @@ pub(super) fn run(json: bool) -> Result<()> {
     let loaded = load(&home, check, &machine);
     let mut warnings = warnings(&loaded, machine.agents.isolation, &machine.tiers);
     warnings.extend(lsp_warnings(&loaded, &machine));
+    warnings.extend(keep_warm_warnings(&loaded, &machine.harness));
     if json {
         render::json_pretty(&serde_json::json!({
             "rows": loaded.rows,
@@ -208,6 +209,74 @@ fn rows<'a>(
     Ok(())
 }
 
+/// A `keep-warm` horizon that will not hold, with the setting that decides it:
+/// a `subagents` definition (no seat reads it), cache pings switched off, a
+/// provider prompt-cache lifetime that is unknown or shorter than the floor, or a
+/// horizon the keepalive maximum cuts short.
+fn keep_warm_warnings(
+    loaded: &LoadedDefinitions,
+    harness: &rimz::config::HarnessConfig,
+) -> Vec<Warning> {
+    use rimz::config::KeepWarm;
+    let mut warnings = Vec::new();
+    for row in &loaded.rows {
+        let setting = match (&row.team, &row.role) {
+            (Some(team), Some(role)) => loaded.teams.0.get(team).and_then(|team| {
+                let binding = team.roles.iter().find(|binding| &binding.role == role)?;
+                binding.keep_warm
+            }),
+            _ => {
+                let profiles = if row.namespace == "subagents" {
+                    &loaded.subagent_profiles
+                } else {
+                    &loaded.agent_profiles
+                };
+                profiles
+                    .0
+                    .get(&row.name)
+                    .and_then(|profile| profile.keep_warm)
+            }
+        };
+        let Some(KeepWarm::For(horizon)) = setting else {
+            continue;
+        };
+        let kind = &row.kind;
+        let ttl = harness.prompt_cache_ttl(&rimz::ids::AgentKind::new_unchecked(kind));
+        let message = match ttl {
+            _ if row.team.is_none() && row.namespace == "subagents" => {
+                "keep-warm has no effect on a subagents definition; set it on the agents definition or team role the seat launches from".to_owned()
+            }
+            _ if !harness.cache_keepalive => {
+                "keep-warm is ignored: `harness.cache_keepalive` is off; set it to `true`"
+                    .to_owned()
+            }
+            None => format!(
+                "keep-warm is ignored: no prompt-cache lifetime is known for {kind}; set `[harness.prompt_cache_ttl] {kind}`"
+            ),
+            Some(ttl) => match harness.keep_warm_min_ttl {
+                Some(floor) if ttl < floor => format!(
+                    "keep-warm is ignored: {kind}'s prompt-cache lifetime {} is below `harness.keep_warm_min_ttl` ({}); lower the floor or set it to `off`",
+                    KeepWarm::For(ttl),
+                    KeepWarm::For(floor),
+                ),
+                _ => match harness.cache_keepalive_max {
+                    Some(max) if horizon > max => format!(
+                        "keep-warm {} is capped at `harness.cache_keepalive_max` ({}): pings stop that long after the agent's last request; raise the maximum or set it to `off`",
+                        KeepWarm::For(horizon),
+                        KeepWarm::For(max),
+                    ),
+                    _ => continue,
+                },
+            },
+        };
+        warnings.push(Warning {
+            path: row.source.clone(),
+            message,
+        });
+    }
+    warnings
+}
+
 fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfig) -> Vec<Warning> {
     if machine.lsp.servers.is_empty() {
         return Vec::new();
@@ -234,6 +303,100 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keep_warm_warns_at_the_definition_for_an_unknown_or_short_cache_lifetime() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        for (name, fields) in [
+            ("claude", ""),
+            ("amp", ""),
+            ("warm", "agent: claude\nkeep-warm: 2h\ntools: []\n"),
+            ("unknown", "agent: amp\nkeep-warm: 2h\n"),
+            ("cold", "agent: claude\nkeep-warm: off\ntools: []\n"),
+        ] {
+            std::fs::write(
+                root.path().join(format!("agents/{name}.md")),
+                format!("---\ndescription: Test\n{fields}---\nBase."),
+            )
+            .unwrap();
+        }
+        let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let harness = |toml: &str| toml::from_str::<rimz::config::HarnessConfig>(toml).unwrap();
+
+        let defaults = keep_warm_warnings(&loaded, &harness(""));
+        assert_eq!(defaults.len(), 1, "a 60m Claude cache clears the 15m floor");
+        assert!(defaults[0].path.ends_with("unknown.md"));
+        assert!(
+            defaults[0]
+                .message
+                .contains("set `[harness.prompt_cache_ttl] amp`"),
+            "{}",
+            defaults[0].message
+        );
+
+        let capped = keep_warm_warnings(&loaded, &harness("cache_keepalive_max = \"1h\""));
+        let warm = capped
+            .iter()
+            .find(|warning| warning.path.ends_with("warm.md"))
+            .expect("a horizon past the keepalive maximum warns");
+        assert!(
+            warm.message
+                .contains("keep-warm 2h is capped at `harness.cache_keepalive_max` (1h)"),
+            "{}",
+            warm.message
+        );
+        assert_eq!(
+            keep_warm_warnings(&loaded, &harness("cache_keepalive_max = \"off\"")).len(),
+            1,
+            "no maximum, no cap"
+        );
+
+        let short = "[prompt_cache_ttl]\nclaude = \"5m\"\namp = \"20m\"";
+        let floored = keep_warm_warnings(&loaded, &harness(short));
+        assert_eq!(floored.len(), 1, "an override makes amp known");
+        assert!(floored[0].path.ends_with("warm.md"));
+        assert!(
+            floored[0]
+                .message
+                .contains("lifetime 5m is below `harness.keep_warm_min_ttl` (15m)"),
+            "{}",
+            floored[0].message
+        );
+        let open = format!("keep_warm_min_ttl = \"off\"\n{short}");
+        assert!(keep_warm_warnings(&loaded, &harness(&open)).is_empty());
+
+        let off = keep_warm_warnings(&loaded, &harness("cache_keepalive = false"));
+        assert_eq!(off.len(), 2, "every set horizon is inert without pings");
+        assert!(
+            off.iter()
+                .all(|warning| warning.message.contains("`harness.cache_keepalive` is off")),
+            "{:?}",
+            off.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+
+        std::fs::create_dir(root.path().join("subagents")).unwrap();
+        std::fs::write(
+            root.path().join("subagents/child.md"),
+            "---\ndescription: Test\nagent: claude\nkeep-warm: 2h\ntools: []\n---\nBase.",
+        )
+        .unwrap();
+        let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let inert = keep_warm_warnings(&loaded, &harness(""));
+        let child = inert
+            .iter()
+            .find(|warning| warning.path.ends_with("subagents/child.md"))
+            .expect("a subagents definition that sets keep-warm warns");
+        assert!(
+            child
+                .message
+                .contains("keep-warm has no effect on a subagents definition"),
+            "{}",
+            child.message
+        );
+    }
 
     #[test]
     fn tier_exclusions_warn_once_per_definition_and_family() {

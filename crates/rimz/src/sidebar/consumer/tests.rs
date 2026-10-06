@@ -67,6 +67,7 @@ fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'stati
         ("diff_stats", runtime.diff_stats_path()),
         ("cohort_spend", runtime.cohort_spend_path()),
         ("pipeline", runtime.pipeline_path()),
+        ("keep_warm", runtime.keep_warm_path()),
         ("pr_state", runtime.pr_state_path()),
         ("unread", runtime.unread_path()),
         ("link_stats", crate::remote::link::stats_path(runtime)),
@@ -101,14 +102,16 @@ fn write_stamp_file(path: &Path, value: &str) {
 }
 
 #[test]
-fn pipeline_publication_changes_adoption_stamp() {
-    let fixture = StampFixture::new();
-    let before = consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime);
-    write_stamp_file(&fixture.runtime.pipeline_path(), "new-pipeline");
-    assert_ne!(
-        before,
-        consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime)
-    );
+fn pipeline_and_keep_warm_publications_change_adoption_stamp() {
+    for path in [RuntimePaths::pipeline_path, RuntimePaths::keep_warm_path] {
+        let fixture = StampFixture::new();
+        let before = consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime);
+        write_stamp_file(&path(&fixture.runtime), "new-publication");
+        assert_ne!(
+            before,
+            consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime)
+        );
+    }
 }
 
 fn daemon_codex(
@@ -457,6 +460,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
         "diff_stats",
         "cohort_spend",
         "pipeline",
+        "keep_warm",
         "pr_state",
         "unread",
         "link_stats",

@@ -304,6 +304,41 @@ pub(super) fn gauge_segments(
     ])
 }
 
+/// The card's cache-age pin. While a keep-warm horizon holds the cache it reads
+/// the time since the last real turn ended, the face filling over the horizon
+/// in the steady `good` tone; otherwise the time since the agent's own activity
+/// or its last cache request (a ping refreshes the cache, not the activity),
+/// face and heat over the card's provider cache TTL, else the hour.
+fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
+    let cache = row.as_agent().and_then(|agent| agent.cache);
+    let held = cache.and_then(|clock| {
+        let until = clock.warm_until.filter(|until| now < *until)?;
+        Some((clock.held_since?, until))
+    });
+    if let Some((ended, until)) = held {
+        let label = activity_short(ended, now)?;
+        let glyph = elapsed_glyph(theme, age_secs(ended, now), age_secs(ended, until));
+        return Some(Span::styled(
+            format!("{glyph} {label}"),
+            theme.good(Modifier::empty()),
+        ));
+    }
+    let quiet_since = row.own_last_activity().max(
+        cache
+            .and_then(|clock| clock.last_request_at)
+            .unwrap_or_default(),
+    );
+    let label = activity_short(quiet_since, now)?;
+    let secs = age_secs(quiet_since, now);
+    let ceiling = cache.map_or(ATTENTION_AGE_CEILING_SECS, |clock| {
+        i64::from(clock.ceiling_secs)
+    });
+    Some(Span::styled(
+        format!("{} {label}", elapsed_glyph(theme, secs, ceiling)),
+        activity_age_style(theme, secs, ceiling),
+    ))
+}
+
 /// The card's stats line with the last-activity age pinned right. Current-window
 /// truth retains the `▤` form: `▤` is
 /// `input + cache_write + cache_read` of the latest API call — exactly the
@@ -330,8 +365,10 @@ pub(super) fn gauge_segments(
 /// — a recently active agent shows the breakdown alone, left-aligned, rather than
 /// a noisy sub-`5m` clock — as the clock-fill glyph ([`elapsed_glyph`]) over the
 /// continuous age tone ([`activity_age_style`]): dim while warm, then sliding
-/// through warn, caution, and alarm toward the hour, when resuming would likely
-/// re-read the whole context uncached. A finished row heats on the same ramp —
+/// through warn, caution, and alarm toward the provider's prompt-cache TTL (the
+/// hour when the card carries none), when resuming would likely re-read the
+/// whole context uncached. While a keep-warm horizon holds the cache the pin
+/// instead reads the steady held tone ([`cache_age_pin`]). A finished row heats on the same ramp —
 /// its context is exactly what a follow-up prompt would pay to re-read. The age
 /// is the agent's own quiet time ([`SidebarRow::own_last_activity`]), not the
 /// child-folded row clock: a parent waiting on its subagents' reports is making
@@ -343,16 +380,9 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     let width = content_width(row_ctx.width);
     // The age clock is the line's one right pin — resource stats are
     // process-row vocabulary and never ride an agent card.
-    let own_last_activity = row.own_last_activity();
-    let age = activity_short(own_last_activity, now)
-        .map(|label| {
-            let secs = age_secs(own_last_activity, now);
-            vec![Span::styled(
-                format!("{} {label}", elapsed_glyph(theme, secs)),
-                activity_age_style(theme, secs),
-            )]
-        })
-        .unwrap_or_default();
+    let age = cache_age_pin(theme, row, now)
+        .into_iter()
+        .collect::<Vec<_>>();
     // The `▤` head carries row severity, matching a cache-read run when present
     // and retaining urgency beside a reads-absent composition. A row with no
     // gauge percent folds to 0 and lets the token overlay alone speak.

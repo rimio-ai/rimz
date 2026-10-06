@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{BackgroundShell, PendingWait, PendingWaitTrigger};
+use crate::agents::{ATTENTION_AGE_CEILING_SECS, BackgroundShell, PendingWait, PendingWaitTrigger};
 use crate::config::AnimationRole;
 use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph, role_glyph};
 use crate::sidebar_pane::render::theme::Component;
@@ -417,12 +417,15 @@ fn wait_entries_show_trigger_program_and_command() {
             "{}",
             rows[start + offset]
         );
-        assert!(
-            rows[start + offset]
-                .ends_with(&format!("{} {elapsed:>3}▐", elapsed_glyph(&theme, seconds)))
-        );
+        assert!(rows[start + offset].ends_with(&format!(
+            "{} {elapsed:>3}▐",
+            elapsed_glyph(&theme, seconds, ATTENTION_AGE_CEILING_SECS)
+        )));
         assert_eq!(lines[start + offset].width(), 54);
-        let clock = format!("{} {elapsed:>3}", elapsed_glyph(&theme, seconds));
+        let clock = format!(
+            "{} {elapsed:>3}",
+            elapsed_glyph(&theme, seconds, ATTENTION_AGE_CEILING_SECS)
+        );
         assert_eq!(
             lines[start + offset]
                 .spans
@@ -639,7 +642,10 @@ fn long_wait_clocks_stay_muted_while_subagent_clocks_heat() {
     let snapshot = snapshot_with(vec![parent, child]);
     let theme = Theme::fixed(false);
     let lines = group_lines(&snapshot, &theme, 0);
-    let clock = format!("{}  2h", elapsed_glyph(&theme, 7200));
+    let clock = format!(
+        "{}  2h",
+        elapsed_glyph(&theme, 7200, ATTENTION_AGE_CEILING_SECS)
+    );
     let tones: Vec<_> = lines
         .iter()
         .flat_map(|line| &line.spans)
@@ -648,7 +654,10 @@ fn long_wait_clocks_stay_muted_while_subagent_clocks_heat() {
         .collect();
     assert_eq!(
         tones,
-        vec![activity_age_style(&theme, 7200).fg, theme.muted().fg]
+        vec![
+            activity_age_style(&theme, 7200, ATTENTION_AGE_CEILING_SECS).fg,
+            theme.muted().fg
+        ]
     );
     assert_ne!(tones[0], tones[1]);
 }
@@ -722,9 +731,14 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
         .unwrap();
     assert!(rows[timer + 1].contains(&shell_lead(&theme, "command · make")));
     assert!(rows[timer + 3].contains(&shell_lead(&theme, "shell · Run the test suite")));
-    assert!(rows[timer + 3].ends_with(&format!("{}  5m▐", elapsed_glyph(&theme, 300))));
+    assert!(rows[timer + 3].ends_with(&format!(
+        "{}  5m▐",
+        elapsed_glyph(&theme, 300, ATTENTION_AGE_CEILING_SECS)
+    )));
     assert!(rows[timer + 4].contains("      cargo test --workspace"));
-    assert!(!rows[timer + 4].contains(elapsed_glyph(&theme, 300).as_str()));
+    assert!(
+        !rows[timer + 4].contains(elapsed_glyph(&theme, 300, ATTENTION_AGE_CEILING_SECS).as_str())
+    );
     let detail = lines[timer + 4]
         .spans
         .iter()
@@ -733,9 +747,15 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
     assert_eq!(detail.style.fg, theme.muted().fg);
     assert!(rows[timer + 5].contains(&shell_lead(&theme, "shell · cat")));
     assert!(!rows[timer + 5].contains(char::is_control));
-    assert!(rows[timer + 5].ends_with(&format!("{}  2m▐", elapsed_glyph(&theme, 120))));
+    assert!(rows[timer + 5].ends_with(&format!(
+        "{}  2m▐",
+        elapsed_glyph(&theme, 120, ATTENTION_AGE_CEILING_SECS)
+    )));
     assert!(rows[timer + 7].contains(&shell_lead(&theme, "shell")));
-    assert!(rows[timer + 7].ends_with(&format!("{}  1m▐", elapsed_glyph(&theme, 60))));
+    assert!(rows[timer + 7].ends_with(&format!(
+        "{}  1m▐",
+        elapsed_glyph(&theme, 60, ATTENTION_AGE_CEILING_SECS)
+    )));
     assert!(rows[timer + 8].contains("⌁ signal · pr.merged"));
     assert_eq!(
         rows.len(),

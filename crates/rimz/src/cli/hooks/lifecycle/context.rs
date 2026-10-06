@@ -21,6 +21,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         turn_ended,
         tool_run,
         tool_used,
+        ping_edge,
     } = context;
     // Remove the session's statusline context sidecar before the normal
     // activity, merge, and refresh fall-through. Refresh-capable adapters can
@@ -38,7 +39,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     }
     // Refresh the activity heartbeat on progress-proving events so the
     // sidebar's `last_activity` advances per tool call, not just per turn.
-    if decoded.records_progress() || parent_agent_id.is_some() {
+    if (decoded.records_progress() && !ping_edge) || parent_agent_id.is_some() {
         touch_agent_activity(
             workspace, store, agent, event_name, agent_id, tool_run, tool_used,
         );
@@ -489,6 +490,7 @@ mod tests {
                 turn_ended: false,
                 tool_run: rimz::agent_activity::ToolRun::Reset,
                 tool_used: false,
+                ping_edge: false,
             },
         });
 
@@ -548,6 +550,7 @@ mod tests {
                 turn_ended: false,
                 tool_run: rimz::agent_activity::ToolRun::Reset,
                 tool_used: false,
+                ping_edge: false,
             },
         });
 

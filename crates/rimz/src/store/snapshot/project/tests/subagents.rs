@@ -64,7 +64,9 @@ fn harness_prompt_keeps_finished_children_listed() {
             .iter()
             .find(|agent| agent.agent_id == "parent")
             .unwrap();
-        assert_eq!(parent.turn_started_at, Some(events[5].timestamp));
+        // A ping from rest is no turn of the agent's, so it moves no stamp.
+        let opened = if header == "CACHE_KEEPALIVE" { 1 } else { 5 };
+        assert_eq!(parent.turn_started_at, Some(events[opened].timestamp));
         assert_eq!(parent.user_turn_started_at, Some(events[1].timestamp));
         let encoded = serde_json::to_value(parent).unwrap();
         let decoded: AgentState = serde_json::from_value(encoded).unwrap();

@@ -15,6 +15,7 @@ use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::{HarnessConfig, IdleCompactMode, MachineConfig, TeamsConfig};
 use crate::disk::atomic::write_temp_then_rename_cache;
+use crate::harness::cache_keepalive::KeepWarmPolicy;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -100,7 +101,7 @@ fn eligible_seat(agent: &AgentState) -> bool {
         })
 }
 
-fn cohort_live(agent: &AgentState) -> bool {
+pub(super) fn cohort_live(agent: &AgentState) -> bool {
     agent
         .worktree_path
         .as_deref()
@@ -128,14 +129,14 @@ pub fn should_compact(
             .is_none_or(|ttl| idle < ttl.as_secs().min(i64::MAX as u64) as i64)
 }
 
-/// Compact each eligible team member whose idle threshold is due.
+/// Compact each eligible team member whose idle threshold is due; a seat keep-warm is holding waits for its horizon.
 pub(crate) fn compact_idle_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &MachineConfig,
-    teams: &TeamsConfig,
+    policy: &KeepWarmPolicy,
 ) {
-    compact_idle_agents_with(snapshot, runtime, config, teams, |request| {
+    compact_idle_agents_with(snapshot, runtime, config, policy, |request| {
         spawn_idle_compact(runtime, request)
     });
 }
@@ -144,21 +145,24 @@ fn compact_idle_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &MachineConfig,
-    teams: &TeamsConfig,
+    policy: &KeepWarmPolicy,
     mut spawn: impl FnMut(&IdleCompactRequest) -> bool,
 ) {
     for agent in &snapshot.agents {
         if !eligible_seat(agent) {
             continue;
         }
-        let mode = resolve_mode(agent, teams, config.harness.idle_compact);
+        let mode = resolve_mode(agent, &policy.teams, config.harness.idle_compact);
         let command = crate::agents::compact_command(agent, &config.harness);
         if !should_compact(
             agent,
             command.as_deref(),
             fire_point(agent, mode, &config.harness),
             snapshot.now,
-        ) {
+        ) || policy
+            .holding(agent, &config.harness, snapshot.now)
+            .is_some()
+        {
             continue;
         }
         let record_path = fire_record_path(runtime, &agent.kind, &agent.agent_id);
@@ -478,7 +482,7 @@ mod tests {
             &snapshot,
             &runtime,
             &config,
-            &config.agents.teams,
+            &KeepWarmPolicy::default(),
             |request| {
                 requests.push(request.clone());
                 true
@@ -497,9 +501,13 @@ mod tests {
         );
         std::fs::remove_file(&path).unwrap();
         snapshot.agents[0].team = None;
-        compact_idle_agents_with(&snapshot, &runtime, &config, &config.agents.teams, |_| {
-            panic!("solo spawn")
-        });
+        compact_idle_agents_with(
+            &snapshot,
+            &runtime,
+            &config,
+            &KeepWarmPolicy::default(),
+            |_| panic!("solo spawn"),
+        );
         assert!(!path.exists());
     }
 
@@ -570,5 +578,79 @@ mod tests {
             fired_for_request: ts(5_000),
         };
         assert!(!spawn_due(&candidate, ts(10_000), Some(&recent)));
+    }
+
+    #[test]
+    fn keep_warm_holding_defers_compaction_until_the_horizon() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let mut seat = agent(AgentStatus::Idle, 0, 80_000);
+        seat.role = Some("coder".to_owned());
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(workspace_id, vec![seat.clone()], ts(3_540));
+        snapshot.agent_panes.push(PaneAgent {
+            kind: seat.kind.clone(),
+            kind_ordinal: None,
+            name: None,
+            name_explicit: false,
+            profile: None,
+            role: None,
+            channel: None,
+            agent_id: Some(seat.agent_id.clone()),
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
+            pane_pid: None,
+            worktree_path: seat.worktree_path.clone(),
+            worktree_branch: seat.worktree_branch.clone(),
+        });
+        let mut policy = KeepWarmPolicy::default();
+        let mut team: crate::config::Team =
+            toml::from_str("[[roles]]\nrole = \"coder\"\nprofile = \"claude\"\nkeep-warm = \"2h\"")
+                .unwrap();
+        team.roles[0].idle_compact = Some(IdleCompactMode::On);
+        policy.teams.0.insert("probe".to_owned(), team);
+        let config = crate::config::MachineConfig::default();
+        let mut spawned = 0;
+        compact_idle_agents_with(&snapshot, &runtime, &config, &policy, |_| {
+            spawned += 1;
+            false
+        });
+        assert_eq!(spawned, 0, "holding outranks idle compaction");
+        compact_idle_agents_with(
+            &snapshot,
+            &runtime,
+            &config,
+            &KeepWarmPolicy {
+                teams: {
+                    let mut teams = policy.teams.clone();
+                    teams.0.get_mut("probe").unwrap().roles[0].keep_warm = None;
+                    teams
+                },
+                ..KeepWarmPolicy::default()
+            },
+            |_| {
+                spawned += 1;
+                false
+            },
+        );
+        assert_eq!(spawned, 1, "the same seat compacts without keep-warm");
+        let mut pings_off = config.clone();
+        pings_off.harness.cache_keepalive = false;
+        compact_idle_agents_with(&snapshot, &runtime, &pings_off, &policy, |_| {
+            spawned += 1;
+            false
+        });
+        assert_eq!(
+            spawned, 2,
+            "a horizon no ping maintains does not defer compaction"
+        );
+        // Past the horizon, the window runs from the last ping's request.
+        snapshot.agents[0].pinged_at = Some(ts(7_100));
+        snapshot.now = ts(7_100 + 3_540);
+        compact_idle_agents_with(&snapshot, &runtime, &config, &policy, |_| {
+            spawned += 1;
+            false
+        });
+        assert_eq!(spawned, 3, "compaction resumes once the horizon passed");
     }
 }

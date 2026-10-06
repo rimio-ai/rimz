@@ -254,7 +254,8 @@ aggressive_resize = true
 ## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's brief for the seat (solo or team member), "" = bare command
 # idle_compact = "on"             # compact an idle team member before its provider prompt cache expires; on = provider cache TTL minus 1m, off, or a duration such as "25m"
 # cache_keepalive = true          # keep waiting agents' prompt caches warm
-# cache_keepalive_max = "6h"      # stop pings that would start this long after the agent's last request of its own; off or a duration longer than 1m
+# cache_keepalive_max = "6h"      # stop pings, keep-warm included, that would start this long after the agent's last request of its own; off or a duration longer than 1m
+# keep_warm_min_ttl = "15m"       # shortest provider cache TTL a role's or profile's keep-warm horizon will hold; "off" admits any known TTL
 ## flip_compact = "180k"          # compact on stage hand-off at this context threshold; "off" disables it; unset = 120k for a Plan owner, 180k otherwise
 
 ## [harness.prompt_cache_ttl]       # provider defaults: Claude 1h, Codex 30m, others none

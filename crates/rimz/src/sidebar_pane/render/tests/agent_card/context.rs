@@ -1026,7 +1026,7 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     };
     let heat = |age_secs: i64| {
         theme.style(
-            theme.warm_heat_tone(age_heat_amount_for_test(age_secs)),
+            theme.warm_heat_tone(age_heat_amount_for_test(age_secs, 3600)),
             Modifier::empty(),
         )
     };
@@ -1055,6 +1055,108 @@ fn context_line_age_tone_slides_with_the_clock_age() {
         theme.alarm(Modifier::empty()),
         "a finished-success context heats on the same ramp — prompting it again \
          re-reads the whole context uncached"
+    );
+}
+
+/// The age pin fills over the card's provider cache TTL when enrichment
+/// stamped one, and while a keep-warm horizon holds the cache it reads the
+/// time since the last real turn in the steady held tone over the horizon.
+#[test]
+fn context_line_age_pin_reads_the_card_cache_clock() {
+    let theme = Theme::fixed(false);
+    let age_span = |cache: Option<crate::store::snapshot::CacheClock>, idle_secs: u64| {
+        let mut codex = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            Some("add tests"),
+        );
+        codex.usage.context_pct = Some(21);
+        codex.usage.total_tokens = Some(5_000);
+        codex.last_activity = fixed_now() - Duration::from_secs(idle_secs);
+        let mut snapshot = snapshot_with(vec![codex]);
+        for row in snapshot.rows_mut() {
+            if let Some(card) = row.as_agent_mut() {
+                card.cache = cache;
+            }
+        }
+        group_lines(&snapshot, &theme, usize::MAX)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| {
+                ['◔', '◑', '◕', '●', '◉']
+                    .iter()
+                    .any(|c| span.content.contains(*c))
+            })
+            .map(|span| (span.content.to_string(), span.style))
+            .expect("the context line carries an age pin")
+    };
+    let ttl = |ceiling_secs| {
+        Some(crate::store::snapshot::CacheClock {
+            ceiling_secs,
+            last_request_at: None,
+            warm_until: None,
+            held_since: None,
+        })
+    };
+    let (hour_face, hour_style) = age_span(ttl(3600), 25 * 60);
+    let (half_face, half_style) = age_span(ttl(1800), 25 * 60);
+    assert_eq!(
+        hour_face, "◑ 25m",
+        "the hour window is not half gone at 25m"
+    );
+    assert_eq!(half_face, "● 25m", "a 30m window is in its last quarter");
+    assert_eq!(
+        age_span(None, 25 * 60).0,
+        hour_face,
+        "no TTL keeps the hour"
+    );
+    assert_eq!(
+        half_style,
+        theme.style(
+            theme.warm_heat_tone(age_heat_amount_for_test(25 * 60, 1800)),
+            Modifier::empty(),
+        )
+    );
+    assert_ne!(half_style, hour_style);
+    assert_eq!(
+        age_span(ttl(1800), 40 * 60),
+        ("◉ 40m".to_owned(), theme.alarm(Modifier::empty())),
+        "red once the provider's TTL has passed"
+    );
+
+    let held = |warm_until_secs: u64| {
+        Some(crate::store::snapshot::CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: None,
+            warm_until: Some(fixed_now() + Duration::from_secs(warm_until_secs)),
+            held_since: Some(fixed_now() - Duration::from_secs(50 * 60)),
+        })
+    };
+    assert_eq!(
+        age_span(held(70 * 60), 20 * 60),
+        ("◑ 50m".to_owned(), theme.good(Modifier::empty())),
+        "held: time since the real turn, filling over the 2h horizon, no heat"
+    );
+    let expired = Some(crate::store::snapshot::CacheClock {
+        warm_until: Some(fixed_now() - Duration::from_secs(1)),
+        ..held(0).unwrap()
+    });
+    assert_eq!(
+        age_span(expired, 20 * 60).0,
+        "◕ 20m",
+        "past the horizon the TTL ramp runs from the last ping"
+    );
+    let pinged = Some(crate::store::snapshot::CacheClock {
+        last_request_at: Some(fixed_now() - Duration::from_secs(20 * 60)),
+        ..ttl(1800).unwrap()
+    });
+    assert_eq!(
+        age_span(pinged, 50 * 60),
+        age_span(ttl(1800), 20 * 60),
+        "a ping the card never saw as activity still restarts its cache clock"
     );
 }
 #[test]

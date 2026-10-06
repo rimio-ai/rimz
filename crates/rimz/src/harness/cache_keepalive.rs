@@ -1,5 +1,6 @@
-//! Best-effort prompt-cache pings for sleeping agents. Durable delivery belongs to the helper.
+//! Best-effort prompt-cache pings for sleeping agents, and for idle agents a keep-warm horizon holds. Durable delivery belongs to the helper.
 
+use std::path::Path;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
-use crate::config::HarnessConfig;
+use crate::config::{HarnessConfig, KeepWarm, MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::utils::time::{format_duration_coarse, format_duration_compact};
@@ -22,29 +23,156 @@ pub struct CacheKeepaliveRequest {
     pub label: String,
 }
 
+/// Effective team roles and agent profiles: where a keep-warm horizon is declared.
+#[derive(Clone, Debug, Default)]
+pub struct KeepWarmPolicy {
+    pub teams: TeamsConfig,
+    pub profiles: ProfilesConfig,
+}
+
+impl KeepWarmPolicy {
+    /// Trusted project definitions over the machine's, falling back to the machine snapshot.
+    pub fn load(machine: &MachineConfig, project_root: Option<&Path>) -> Self {
+        match project_root.and_then(|root| crate::config::effective::load(machine, root).ok()) {
+            Some(launch) => Self {
+                teams: launch.teams,
+                profiles: launch.profiles,
+            },
+            None => Self {
+                teams: machine.agents.teams.clone(),
+                profiles: machine.agents.profiles.clone(),
+            },
+        }
+    }
+
+    /// The horizon the agent's role (team seat) or profile (solo seat) sets, when the provider's
+    /// known prompt-cache TTL reaches `harness.keep_warm_min_ttl`. A `rimz subagents` child
+    /// never resolves one.
+    pub fn horizon(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<Duration> {
+        if agent.launch_depth.is_some() {
+            return None;
+        }
+        let setting = match &agent.team {
+            Some(team) => {
+                let role = agent.role.as_deref()?;
+                self.teams
+                    .0
+                    .get(team)?
+                    .roles
+                    .iter()
+                    .find(|binding| binding.role == role)?
+                    .keep_warm
+            }
+            None => self.profile_keep_warm(agent.profile.as_deref()?),
+        };
+        let Some(KeepWarm::For(horizon)) = setting else {
+            return None;
+        };
+        let ttl = harness.prompt_cache_ttl(&agent.kind)?;
+        harness
+            .keep_warm_min_ttl
+            .is_none_or(|floor| ttl >= floor)
+            .then_some(horizon)
+    }
+
+    /// The first `keep_warm` a TOML profile or its base chain declares; an explicit `off` stops
+    /// the walk. Markdown definitions arrive with their inheritance already resolved.
+    fn profile_keep_warm(&self, name: &str) -> Option<KeepWarm> {
+        let mut profile = self.profiles.0.get(name)?;
+        for _ in 0..self.profiles.0.len() {
+            if profile.keep_warm.is_some() {
+                return profile.keep_warm;
+            }
+            profile = self.profiles.0.get(&profile.agent)?;
+        }
+        None
+    }
+
+    /// The declared horizon when `holds` says keep-warm is holding the agent at `now`.
+    pub fn holding(
+        &self,
+        agent: &AgentState,
+        harness: &HarnessConfig,
+        now: Timestamp,
+    ) -> Option<Duration> {
+        holds(agent, self.horizon(agent, harness), harness, now)
+    }
+}
+
+/// Whether keep-warm is holding `agent` at `now` under a declared `horizon`: the one answer the
+/// ping, idle compaction, and the card's held clock share. A hold is a horizon the pings can
+/// still maintain, so it needs pings switched on, an admitted provider TTL, a resting pingable
+/// agent with no idle stop pending (resting in its durable lifecycle too, since only there
+/// does a ping fold as no work), a live cohort for a team seat, a cache still warm from the
+/// last request (a cold cache is not pinged back), `harness.cache_keepalive_max` still permitting
+/// the next ping, and the horizon counted from the agent's last real turn.
+pub(crate) fn holds(
+    agent: &AgentState,
+    horizon: Option<Duration>,
+    harness: &HarnessConfig,
+    now: Timestamp,
+) -> Option<Duration> {
+    let horizon = horizon?;
+    let ttl = harness.prompt_cache_ttl(&agent.kind)?;
+    let warm_until = agent.turn_ended_at?.checked_add(horizon).ok()?;
+    let cache_warm = agent
+        .last_request_at()
+        .and_then(|request| request.checked_add(ttl).ok())
+        .is_some_and(|cold_at| now < cold_at);
+    (now < warm_until
+        && cache_warm
+        && agent.idle_stop.is_none()
+        && harness.cache_keepalive
+        && harness.keep_warm_min_ttl.is_none_or(|floor| ttl >= floor)
+        && matches!(
+            agent.effective_status(),
+            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
+        )
+        && agent.rests_in_lifecycle()
+        && pingable(agent)
+        && !run_reached_cap(agent, harness, ttl)
+        && (agent.team.is_none() || super::idle_compact::cohort_live(agent)))
+    .then_some(horizon)
+}
+
+/// The exclusions every cache ping shares, whichever path qualified the agent.
+fn pingable(agent: &AgentState) -> bool {
+    !(agent.is_provider_subagent()
+        || agent.agent_id.is_empty()
+        || agent.compacting_since.is_some()
+        || agent.budget_park.is_some()
+        || agent.is_awaiting_input())
+}
+
 impl CacheKeepaliveRequest {
+    /// The agent still due this exact ping, and the keep-warm horizon holding it, if any.
     pub fn target<'a>(
         &self,
         snapshot: &'a SidebarSnapshot,
         config: &HarnessConfig,
+        policy: &KeepWarmPolicy,
         now: Timestamp,
-    ) -> Option<&'a AgentState> {
-        snapshot.agents.iter().find(|agent| {
+    ) -> Option<(&'a AgentState, Option<Duration>)> {
+        let agent = snapshot.agents.iter().find(|agent| {
             agent.kind == self.kind
                 && agent.agent_id == self.agent_id
                 && agent.last_request_at() == Some(self.anchor)
-                && should_keepalive(agent, config, now)
                 && snapshot
                     .live_agent_pane(&self.kind, &self.agent_id)
                     .as_ref()
                     == Some(&self.pane_id)
-        })
+        })?;
+        let holding = policy.holding(agent, config, now);
+        should_keepalive(agent, config, holding, now).then_some((agent, holding))
     }
 }
 
 /// The ping text; `limit` is the reached maximum when this is the run's last ping.
 pub fn prompt(agent: &AgentState, now: Timestamp, limit: Option<Duration>) -> String {
-    let mut text = "Cache keepalive, no action needed. Waiting on:".to_owned();
+    let mut text = "Cache keepalive, no action needed.".to_owned();
+    if !agent.pending_waits.is_empty() {
+        text.push_str(" Waiting on:");
+    }
     for wait in &agent.pending_waits {
         let trigger = &wait.trigger;
         let elapsed = wait
@@ -135,6 +263,7 @@ fn keepalive_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &HarnessConfig,
+    policy: &KeepWarmPolicy,
     mut spawn: impl FnMut(&CacheKeepaliveRequest),
 ) {
     let Ok(Some(_guard)) =
@@ -143,7 +272,8 @@ fn keepalive_agents_with(
         return;
     };
     for agent in &snapshot.agents {
-        if !should_keepalive(agent, config, snapshot.now) {
+        let holding = policy.holding(agent, config, snapshot.now);
+        if !should_keepalive(agent, config, holding, snapshot.now) {
             continue;
         }
         let (Some(anchor), Some(pane_id)) = (
@@ -186,11 +316,12 @@ pub(crate) fn keepalive_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &HarnessConfig,
+    policy: &KeepWarmPolicy,
 ) {
     if !config.cache_keepalive {
         return;
     }
-    keepalive_agents_with(snapshot, runtime, config, |request| {
+    keepalive_agents_with(snapshot, runtime, config, policy, |request| {
         let args = crate::child_process::agent_helper_argv("cache-keepalive", request);
         if let Err(err) =
             crate::child_process::spawn_detached_rimz(runtime, args, "agent-cache-keepalive")
@@ -200,14 +331,16 @@ pub(crate) fn keepalive_agents(
     });
 }
 
-fn should_keepalive(agent: &AgentState, config: &HarnessConfig, now: Timestamp) -> bool {
+/// A sleeping agent always qualifies; any other only while keep-warm is `holding` it ([`holds`]).
+fn should_keepalive(
+    agent: &AgentState,
+    config: &HarnessConfig,
+    holding: Option<Duration>,
+    now: Timestamp,
+) -> bool {
     if !config.cache_keepalive
-        || agent.effective_status() != AgentStatus::Sleeping
-        || agent.is_provider_subagent()
-        || agent.agent_id.is_empty()
-        || agent.compacting_since.is_some()
-        || agent.budget_park.is_some()
-        || agent.is_awaiting_input()
+        || !(agent.effective_status() == AgentStatus::Sleeping || holding.is_some())
+        || !pingable(agent)
     {
         return false;
     }
@@ -223,15 +356,18 @@ fn should_keepalive(agent: &AgentState, config: &HarnessConfig, now: Timestamp) 
     let Ok(idle) = Duration::try_from(now.duration_since(anchor)) else {
         return false;
     };
-    idle >= fire_after && idle < ttl && !run_reached_cap(agent, config, fire_after)
+    idle >= fire_after && idle < ttl && !run_reached_cap(agent, config, ttl)
 }
 
-/// Whether the ping after the open keepalive run's last one would start at or past the cap. Reads only stamps, so the producer and the helper's recheck agree.
-fn run_reached_cap(agent: &AgentState, config: &HarnessConfig, fire_after: Duration) -> bool {
-    let (Some(max), Some(since), Some(last_ping)) = (
+/// Whether the ping after the open keepalive run's last one, the request anchor a ping's close
+/// moves, would start at or past the cap. Reads only stamps, so the producer and the helper's
+/// recheck agree.
+fn run_reached_cap(agent: &AgentState, config: &HarnessConfig, ttl: Duration) -> bool {
+    let (Some(max), Some(since), Some(last_ping), Some(fire_after)) = (
         config.cache_keepalive_max,
         agent.keepalive_since,
-        agent.turn_started_at,
+        agent.last_request_at(),
+        ttl.checked_sub(crate::config::PROMPT_CACHE_MARGIN),
     ) else {
         return false;
     };
@@ -239,285 +375,4 @@ fn run_reached_cap(agent: &AgentState, config: &HarnessConfig, fire_after: Durat
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::agents::{AgentStatus, PendingWait, PendingWaitTrigger};
-
-    fn ts(seconds: i64) -> Timestamp {
-        Timestamp::from_second(seconds).unwrap()
-    }
-
-    fn sleeping() -> AgentState {
-        let mut agent = AgentState::stub("claude", "session", AgentStatus::Idle);
-        agent.turn_started_at = Some(ts(0));
-        agent.turn_ended_at = Some(ts(10));
-        agent.pending_waits.push(PendingWait {
-            name: "gate".into(),
-            trigger: PendingWaitTrigger::Command {
-                command: "cargo xtask gate".into(),
-            },
-            armed_at: Some(ts(0)),
-        });
-        agent
-    }
-
-    #[test]
-    fn keepalive_window_and_recurrence_follow_requests_not_wait_arm_time() {
-        let mut agent = sleeping();
-        let config = HarnessConfig::default();
-        assert!(should_keepalive(&agent, &config, ts(3540)));
-        assert!(!should_keepalive(&agent, &config, ts(3539)));
-        assert!(!should_keepalive(&agent, &config, ts(3600)));
-        agent.turn_started_at = Some(ts(3545));
-        agent.turn_ended_at = Some(ts(3550));
-        assert!(!should_keepalive(&agent, &config, ts(3550)));
-        assert_eq!(agent.keepalive_since, None);
-        assert!(should_keepalive(&agent, &config, ts(7085)));
-        agent.keepalive_since = Some(ts(0));
-        assert!(should_keepalive(&agent, &config, ts(7085)), "under the cap");
-    }
-
-    fn pinged_at(since: i64, ping: i64) -> AgentState {
-        let mut agent = sleeping();
-        agent.keepalive_since = Some(ts(since));
-        agent.turn_started_at = Some(ts(ping));
-        agent.turn_ended_at = Some(ts(ping + 5));
-        agent
-    }
-
-    #[test]
-    fn keepalive_cap_refuses_a_ping_that_would_start_at_the_maximum() {
-        let config = HarnessConfig::default();
-        let cap = 6 * 3600;
-        let allowed = pinged_at(0, cap - 3540 - 1);
-        assert!(should_keepalive(&allowed, &config, ts(cap - 1)));
-        let capped = pinged_at(0, cap - 3540);
-        assert!(!should_keepalive(&capped, &config, ts(cap)));
-        assert!(
-            !should_keepalive(&pinged_at(100, 50), &config, ts(3590)),
-            "a negative span is refused"
-        );
-        let mut uncapped = config.clone();
-        uncapped.cache_keepalive_max = None;
-        assert!(should_keepalive(&capped, &uncapped, ts(cap)));
-        let mut first = capped;
-        first.keepalive_since = None;
-        assert!(
-            should_keepalive(&first, &config, ts(cap)),
-            "the first ping of a sleep is never capped"
-        );
-    }
-
-    #[test]
-    fn final_ping_is_the_one_whose_successor_would_reach_the_cap() {
-        let config = HarnessConfig::default();
-        let max = Some(Duration::from_secs(6 * 3600));
-        let cap = 6 * 3600;
-        let fresh = sleeping();
-        assert_eq!(final_ping(&fresh, &config, ts(cap - 3540 - 1)), None);
-        assert_eq!(
-            final_ping(&fresh, &config, ts(cap - 3540)),
-            max,
-            "falls back to the last request"
-        );
-        let run = pinged_at(100, 3640);
-        assert_eq!(final_ping(&run, &config, ts(cap - 3540)), None);
-        assert_eq!(final_ping(&run, &config, ts(cap - 3440)), max);
-        let mut uncapped = config.clone();
-        uncapped.cache_keepalive_max = None;
-        assert_eq!(final_ping(&run, &uncapped, ts(cap)), None);
-        let after_final = pinged_at(100, cap - 3440);
-        assert!(
-            !should_keepalive(&after_final, &config, ts(cap + 100)),
-            "no ping follows a final one"
-        );
-    }
-
-    #[test]
-    fn keepalive_excludes_non_sleepers_and_disabled_or_unsafe_seats() {
-        let agent = sleeping();
-        let config = HarnessConfig::default();
-        assert!(
-            should_keepalive(&agent, &config, ts(3540)),
-            "solo agent qualifies"
-        );
-        let mut changed = agent.clone();
-        changed.pending_waits.clear();
-        assert!(!should_keepalive(&changed, &config, ts(3540)));
-        changed = agent.clone();
-        changed.status = AgentStatus::Running;
-        assert!(!should_keepalive(&changed, &config, ts(3540)));
-        changed = agent.clone();
-        changed.compacting_since = Some(ts(3539));
-        assert!(!should_keepalive(&changed, &config, ts(3540)));
-        changed = agent.clone();
-        changed.turn_ended_at = None;
-        assert!(!should_keepalive(&changed, &config, ts(3540)));
-        changed = agent.clone();
-        changed.parent_agent_id = Some("parent".into());
-        assert!(!should_keepalive(&changed, &config, ts(3540)));
-        changed = agent.clone();
-        changed.status = AgentStatus::Waiting;
-        changed.waiting_since = Some(changed.last_activity);
-        assert!(!should_keepalive(&changed, &config, ts(3540)));
-        changed = agent.clone();
-        changed.kind = AgentKind::new_unchecked("amp");
-        assert!(!should_keepalive(&changed, &config, ts(3540)));
-        changed = agent.clone();
-        changed.budget_park = Some(crate::agents::BudgetPark {
-            cap_usd: 1.0,
-            spend_usd: 1.0,
-            window: crate::agents::BudgetWindow::Session,
-            at: ts(0),
-            scope: crate::agents::BudgetScope::Agent,
-            account_kind: None,
-            resets_at: None,
-        });
-        assert!(!should_keepalive(&changed, &config, ts(3540)));
-        changed = agent.clone();
-        changed.pending_waits[0].trigger = PendingWaitTrigger::Timer {
-            due: ts(7200),
-            delay: Some("2h".into()),
-        };
-        assert!(should_keepalive(&changed, &config, ts(3540)));
-        for trigger in [
-            PendingWaitTrigger::Subagent {
-                active_at: ts(3540),
-                deadline_at: None,
-                settled: None,
-            },
-            PendingWaitTrigger::Team {
-                stage: Some("Review".into()),
-            },
-        ] {
-            changed = agent.clone();
-            changed.pending_waits[0].trigger = trigger;
-            assert!(should_keepalive(&changed, &config, ts(3540)));
-            changed.pending_waits.clear();
-            assert!(!should_keepalive(&changed, &config, ts(3540)));
-        }
-        let mut disabled = config;
-        disabled.cache_keepalive = false;
-        assert!(!should_keepalive(&agent, &disabled, ts(3540)));
-    }
-
-    #[test]
-    fn keepalive_prompt_is_neutral_and_includes_each_wait() {
-        let mut agent = sleeping();
-        agent.pending_waits.insert(
-            0,
-            PendingWait {
-                name: "forge#feat-x".into(),
-                trigger: serde_json::from_value(
-                    serde_json::json!({"kind": "team", "stage": "Review"}),
-                )
-                .unwrap(),
-                armed_at: Some(ts(-7340)),
-            },
-        );
-        for (name, settled) in [("bright-owl", Some("completed")), ("calm-fox", None)] {
-            agent.pending_waits.insert(
-                0,
-                PendingWait {
-                    name: name.into(),
-                    trigger: serde_json::from_value(serde_json::json!({
-                        "kind": "subagent", "active_at": ts(3280),
-                        "deadline_at": ts(4600), "settled": settled,
-                    }))
-                    .unwrap(),
-                    armed_at: Some(ts(960)),
-                },
-            );
-        }
-        agent.pending_waits.push(PendingWait {
-            name: "ci".into(),
-            trigger: PendingWaitTrigger::Signal {
-                selector: "pr.checks".into(),
-            },
-            armed_at: None,
-        });
-        agent.pending_waits.push(PendingWait {
-            name: "nap".into(),
-            trigger: PendingWaitTrigger::Timer {
-                due: ts(4240),
-                delay: None,
-            },
-            armed_at: Some(ts(3180)),
-        });
-        let text = "Cache keepalive, no action needed. Waiting on:\n- calm-fox: 42m, active 3m ago, deadline in 18m\n- bright-owl: 42m, completed, reporting\n- forge#feat-x: 3h, stage Review\n- gate: cargo xtask gate, 58m\n- ci: signal pr.checks\n- nap: timer in 12m, 5m";
-        assert_eq!(prompt(&agent, ts(3485), None), text);
-        assert_eq!(
-            prompt(&agent, ts(3485), Some(Duration::from_secs(90 * 60))),
-            format!(
-                "{text}\nKeepalive limit 90m reached: this is the last ping until your next turn."
-            )
-        );
-    }
-
-    #[test]
-    fn keepalive_producers_share_pacing_even_during_spawn() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let agent = sleeping();
-        let mut snapshot =
-            SidebarSnapshot::build_with_agents(workspace_id, vec![agent.clone()], ts(3540));
-        let config = HarnessConfig::default();
-        keepalive_agents_with(&snapshot, &runtime, &config, |_| panic!("no live pane"));
-        snapshot
-            .agent_panes
-            .push(crate::store::snapshot::PaneAgent {
-                kind: agent.kind.clone(),
-                kind_ordinal: None,
-                name: None,
-                name_explicit: false,
-                profile: None,
-                role: None,
-                channel: None,
-                agent_id: Some(agent.agent_id.clone()),
-                pane_id: PaneId::parse("tmux:%1").unwrap(),
-                pane_pid: None,
-                worktree_path: None,
-                worktree_branch: None,
-            });
-        let mut count = 0;
-        keepalive_agents_with(&snapshot, &runtime, &config, |request| {
-            assert_eq!(request.anchor, ts(0));
-            assert!(request.target(&snapshot, &config, ts(3540)).is_some());
-            let mut changed = snapshot.clone();
-            changed.agents[0].last_tool_at = Some(ts(1));
-            assert!(
-                request.target(&changed, &config, ts(3541)).is_none(),
-                "moved anchor"
-            );
-            changed = snapshot.clone();
-            changed.agents[0].pending_waits.clear();
-            assert!(
-                request.target(&changed, &config, ts(3540)).is_none(),
-                "wait completed"
-            );
-            changed = snapshot.clone();
-            changed.agent_panes.clear();
-            assert!(
-                request.target(&changed, &config, ts(3540)).is_none(),
-                "pane vanished"
-            );
-            count += 1;
-            keepalive_agents_with(&snapshot, &runtime, &config, |_| panic!("concurrent spawn"));
-        });
-        assert_eq!(count, 1);
-        keepalive_agents_with(&snapshot, &runtime, &config, |_| panic!("repeated anchor"));
-        let stale = snapshot.clone();
-        snapshot.agents[0].turn_started_at = Some(ts(3545));
-        snapshot.agents[0].turn_ended_at = Some(ts(3550));
-        snapshot.now = ts(7085);
-        keepalive_agents_with(&snapshot, &runtime, &config, |_| {
-            count += 1;
-        });
-        assert_eq!(count, 2);
-        keepalive_agents_with(&stale, &runtime, &config, |_| {
-            panic!("stale producer respawned an older anchor")
-        });
-    }
-}
+mod tests;

@@ -33,6 +33,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         description: None,
         subagents: None,
         model_reminder: None,
+        keep_warm: None,
         mode: None,
         model: None,
         effort: None,
@@ -535,6 +536,11 @@ impl Resolver<'_> {
             .map(|value| auto_compact(path, &value))
             .transpose()?;
         profile.budget = fm.budget.clone();
+        profile.keep_warm = fm
+            .keep_warm
+            .as_deref()
+            .map(|value| super::team::keep_warm(path, value))
+            .transpose()?;
         profile.model_reminder = fm.model_reminder;
         profile.description = Some(frontmatter::description(path, fm.description.as_deref())?);
         let craft = traits::render(

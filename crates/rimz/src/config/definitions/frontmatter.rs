@@ -25,6 +25,8 @@ pub(super) struct AgentFrontmatter {
     pub auto_compact: Option<String>,
     #[serde(default, deserialize_with = "number_text")]
     pub budget: Option<String>,
+    #[serde(default, deserialize_with = "keep_warm")]
+    pub keep_warm: Option<String>,
     pub model_reminder: Option<bool>,
     #[serde(default, deserialize_with = "list")]
     pub traits: Option<Vec<String>>,
@@ -61,7 +63,8 @@ impl AgentFrontmatter {
             allowed_tools,
             skills,
             subagents,
-            model_reminder
+            model_reminder,
+            keep_warm
         );
     }
 }
@@ -107,6 +110,8 @@ pub(super) struct RoleFrontmatter {
     pub idle_compact: Option<String>,
     #[serde(default, deserialize_with = "number_text")]
     pub budget: Option<String>,
+    #[serde(default, deserialize_with = "keep_warm")]
+    pub keep_warm: Option<String>,
     pub model_reminder: Option<bool>,
     #[serde(default, deserialize_with = "list")]
     pub traits: Option<Vec<String>>,
@@ -194,6 +199,24 @@ fn idle_compact<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Str
         }
     };
     Ok(Some(raw))
+}
+
+fn keep_warm<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Setting {
+        Boolean(bool),
+        Text(String),
+        Other(IgnoredAny),
+    }
+    // YAML reads a bare `off` as `false`; `true` names no horizon.
+    match Setting::deserialize(deserializer)? {
+        Setting::Boolean(false) => Ok(Some("off".to_owned())),
+        Setting::Text(value) => Ok(Some(value)),
+        Setting::Boolean(true) | Setting::Other(_) => Err(serde::de::Error::custom(
+            "keep-warm takes off or a duration such as 2h",
+        )),
+    }
 }
 
 fn flip_compact<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {

@@ -328,6 +328,7 @@ mod tests {
             owns: Vec::new(),
             flip_compact: None,
             idle_compact: None,
+            keep_warm: None,
             auto_compact: None,
             role: role.to_owned(),
             profile: "claude".to_owned(),

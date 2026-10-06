@@ -223,7 +223,14 @@ fn lifecycle_transition(
 ) -> Option<Transition> {
     let agent_id = observation.agent_id.as_ref()?;
     let prior = find_agent(agents, kind, agent_id);
-    Some(AgentState::transition(prior, &observation.signal))
+    Some(AgentState::transition(
+        prior,
+        &observation.signal,
+        observation
+            .prompt
+            .as_deref()
+            .is_some_and(crate::store::message::prompt_is_keepalive_only),
+    ))
 }
 
 fn derive_lifecycle_events(

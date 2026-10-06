@@ -817,6 +817,10 @@ impl RuntimePaths {
         self.lane_path("pipeline.json")
     }
 
+    pub(crate) fn keep_warm_path(&self) -> PathBuf {
+        self.lane_path("keep-warm.json")
+    }
+
     pub(crate) fn pr_state_path(&self) -> PathBuf {
         self.lane_path("pr-state.json")
     }

@@ -4,8 +4,8 @@
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
 
+use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus, ContextSeverity};
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
-use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::store::snapshot::{
     AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup, SubAgentTokens,
@@ -571,7 +571,11 @@ fn append_sub_agent_effort(
 }
 
 fn elapsed_cluster(theme: &Theme, secs: i64) -> String {
-    format!("{} {:>3}", elapsed_glyph(theme, secs), elapsed_label(secs))
+    format!(
+        "{} {:>3}",
+        elapsed_glyph(theme, secs, ATTENTION_AGE_CEILING_SECS),
+        elapsed_label(secs)
+    )
 }
 
 fn sub_agent_elapsed(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> {
@@ -579,7 +583,7 @@ fn sub_agent_elapsed(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> 
         .map(|secs| {
             vec![Span::styled(
                 elapsed_cluster(theme, secs),
-                activity_age_style(theme, secs),
+                activity_age_style(theme, secs, ATTENTION_AGE_CEILING_SECS),
             )]
         })
         .unwrap_or_default()
