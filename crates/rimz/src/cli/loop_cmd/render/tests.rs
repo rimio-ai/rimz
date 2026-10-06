@@ -117,7 +117,6 @@ fn throttle_skip_is_a_refused_fire_with_a_visible_reason_and_a_waited_row_says_h
     let mut skipped = record(0, LoopRunResult::ThrottleSkipped);
     skipped.error = Some("cpu pressure 41% >= 25%; held 30m".into());
     assert!(is_refused_fire(&skipped));
-    assert!(failure_note_visible(skipped.result));
 
     let mut waited = record(0, LoopRunResult::Launched);
     waited.throttle_wait_ms = Some(192_000);

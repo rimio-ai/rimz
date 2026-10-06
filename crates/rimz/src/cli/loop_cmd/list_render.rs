@@ -82,25 +82,25 @@ fn heading(out: &mut impl Write, room: &Room, now: Timestamp, timer: bool) -> Re
         ),
     ];
     if room.open
-        && let Some(row) = room
+        && let Some((row, next)) = room
             .tasks
             .iter()
             .filter(|row| row.running.is_none())
-            .filter(|row| row.next_at.is_some())
-            .min_by_key(|row| row.next_at)
+            .filter_map(|row| row.next_at.map(|next| (row, next)))
+            .min_by_key(|(_, next)| *next)
     {
-        // The filtered row has a next timestamp.
-        parts.push(format!(
-            "next: {} {}",
-            row.name,
-            ui::rel_until(row.next_at.unwrap(), now)
-        ));
+        parts.push(format!("next: {} {}", row.name, ui::rel_until(next, now)));
     }
     if room.spend_today_usd > 0.0 {
         parts.push(format!("${:.2} spent today", room.spend_today_usd));
     }
     if !room.open {
-        parts.push(if timer { "clocks use the active timer; CI/PR signals wait until `rimz start`".into() } else { "clocks and CI/PR signals wait until `rimz start` (or `rimz loop timer install` for clocks)".into() });
+        let waiting = if timer {
+            "clocks use the active timer; CI/PR signals wait until `rimz start`"
+        } else {
+            "clocks and CI/PR signals wait until `rimz start` (or `rimz loop timer install` for clocks)"
+        };
+        parts.push(waiting.into());
     }
     writeln!(
         out,
@@ -126,25 +126,31 @@ fn needs_you(out: &mut impl Write, room: &Room, width: Option<usize>) -> Result<
             (
                 vec![row.name.clone(), row.head.clone(), row.reason.clone()],
                 row.continuation.clone(),
+                reason_style(row.attention),
             )
         })
         .collect::<Vec<_>>();
-    write_table(out, &["", "", ""], &cells, width)?;
+    write_table(out, &["", "", ""], &cells, 2, width)?;
     let mut hints: BTreeMap<Attention, Vec<&str>> = BTreeMap::new();
     for row in rows {
         if let Some(attention) = row.attention {
             hints.entry(attention).or_default().push(&row.name);
         }
     }
+    let rimz = if room.here {
+        "rimz".into()
+    } else {
+        shlex::try_join(["rimz", "--root", room.root.to_string_lossy().as_ref()])?
+    };
     for (attention, names) in hints {
         let command = match attention {
-            Attention::CheckoutGone => format!("rimz loop remove {}", names.join(" ")),
+            Attention::CheckoutGone => format!("{rimz} loop remove {}", names.join(" ")),
             Attention::Strikes | Attention::Failing | Attention::Invalid => names
                 .iter()
-                .map(|name| format!("rimz loop show {name}"))
+                .map(|name| format!("{rimz} loop show {name}"))
                 .collect::<Vec<_>>()
                 .join(" · "),
-            Attention::Blocked => "rimz trust grant".into(),
+            Attention::Blocked => format!("{rimz} trust grant"),
             Attention::Held => continue,
         };
         writeln!(out, "  → {command}")?;
@@ -184,10 +190,17 @@ fn room_rows(
                     row.last_text(now),
                 ],
                 row.continuation.clone(),
+                last_style(row),
             )
         })
         .collect::<Vec<_>>();
-    write_table(out, &["NAME", "TRIGGER", "ACTION", "LAST"], &cells, width)
+    write_table(
+        out,
+        &["NAME", "TRIGGER", "ACTION", "LAST"],
+        &cells,
+        3,
+        width,
+    )
 }
 
 fn action(row: &TaskRow) -> String {
@@ -195,13 +208,13 @@ fn action(row: &TaskRow) -> String {
         return String::new();
     };
     let mut action = match spec.kind {
-        "wake" => spec
+        ActionKind::Wake => spec
             .subject
             .split('#')
             .next()
             .unwrap_or(&spec.subject)
             .to_owned(),
-        "start"
+        ActionKind::Start
             if row
                 .task
                 .as_ref()
@@ -209,8 +222,8 @@ fn action(row: &TaskRow) -> String {
         {
             format!("check, then start {}", spec.subject)
         }
-        "start" => format!("start {}", spec.subject),
-        _ => "run check".into(),
+        ActionKind::Start => format!("start {}", spec.subject),
+        ActionKind::Check => "run check".into(),
     };
     if row.you {
         action.push_str(" (you)");
@@ -278,7 +291,7 @@ fn worktree_rows(
                 String::new()
             };
             let name = match &row.owner {
-                Some(owner) if owner.kind == "team" => {
+                Some(owner) if owner.kind == OwnerKind::Team => {
                     let name = owner
                         .name
                         .split_once('#')
@@ -306,6 +319,7 @@ fn worktree_rows(
             cells.push((
                 vec![group, head, action(row), row.last_text(now), name],
                 row.continuation.clone(),
+                last_style(row),
             ));
         }
         start = end;
@@ -314,6 +328,7 @@ fn worktree_rows(
         out,
         &["WORKTREE", "TRIGGER", "WAKES", "LAST", "NAME"],
         &cells,
+        3,
         width,
     )
 }
@@ -344,6 +359,9 @@ fn collapsed<'a>(rows: &[&'a TaskRow]) -> Vec<Vec<&'a TaskRow>> {
             let first = group[0];
             first.owner == row.owner
                 && first.action == row.action
+                && first.state == row.state
+                && first.head.split_once(" · ").map(|(_, suffix)| suffix)
+                    == row.head.split_once(" · ").map(|(_, suffix)| suffix)
                 && first
                     .task
                     .as_ref()
@@ -387,7 +405,8 @@ fn signal_names(mut signals: Vec<String>) -> String {
 pub(super) fn write_table(
     out: &mut impl Write,
     headers: &[&str],
-    rows: &[(Vec<String>, String)],
+    rows: &[(Vec<String>, String, anstyle::Style)],
+    state_column: usize,
     width: Option<usize>,
 ) -> Result<()> {
     let trigger_width = width.map(|width| {
@@ -397,7 +416,7 @@ pub(super) fn write_table(
             .filter(|(index, _)| *index != 1)
             .map(|(index, header)| {
                 rows.iter()
-                    .map(|(cells, _)| cells[index].width())
+                    .map(|(cells, _, _)| cells[index].width())
                     .max()
                     .unwrap_or(0)
                     .max(header.width())
@@ -408,7 +427,7 @@ pub(super) fn write_table(
             .max(24)
     });
     let mut table = ui::Table::new(headers.iter().copied()).indent(2);
-    for (cells, continuation) in rows {
+    for (cells, continuation, style) in rows {
         let lines = trigger_width.map_or_else(
             || vec![cells[1].clone()],
             |width| wrap_trigger(&cells[1], width),
@@ -420,7 +439,13 @@ pub(super) fn write_table(
                 vec![String::new(); cells.len()]
             };
             cells[1] = line.clone();
-            table.row(cells.into_iter().map(styled));
+            table.row(cells.into_iter().enumerate().map(|(column, text)| {
+                ui::cell(text).fg(if column == state_column {
+                    *style
+                } else {
+                    ui::palette::body()
+                })
+            }));
         }
         if !continuation.is_empty() {
             let lines = trigger_width.map_or_else(
@@ -430,7 +455,11 @@ pub(super) fn write_table(
             for line in lines {
                 let mut cells = vec![String::new(); cells.len()];
                 cells[1] = line;
-                table.row(cells.into_iter().map(styled));
+                table.row(
+                    cells
+                        .into_iter()
+                        .map(|text| ui::cell(text).fg(ui::palette::body())),
+                );
             }
         }
     }
@@ -449,21 +478,41 @@ pub(super) fn write_table(
     Ok(())
 }
 
-fn styled(text: String) -> ui::Cell {
+fn last_style(row: &TaskRow) -> anstyle::Style {
     use ui::status::{StateRole, role};
 
-    let style = if text.starts_with('✓') {
-        role(StateRole::Success)
-    } else if text.starts_with('✗') || text.starts_with("invalid:") {
-        role(StateRole::Failed)
-    } else if text.starts_with('▸') {
-        role(StateRole::Working)
-    } else if text.starts_with("off") || text == "lost" {
-        role(StateRole::Neutral)
-    } else {
-        ui::palette::body()
-    };
-    ui::cell(text).fg(style)
+    match (row.state, row.last.as_ref()) {
+        (TaskState::Running, _) => role(StateRole::Working),
+        (TaskState::Off | TaskState::NotEnabled, _) => role(StateRole::Neutral),
+        (_, Some(last)) => role(if last.ok {
+            StateRole::Success
+        } else {
+            StateRole::Failed
+        }),
+        (_, None)
+            if row.heard.is_none()
+                && !row.watcher_live
+                && row
+                    .task
+                    .as_ref()
+                    .is_some_and(|task| task.entry().watch.is_some()) =>
+        {
+            role(StateRole::Neutral)
+        }
+        _ => ui::palette::body(),
+    }
+}
+
+fn reason_style(attention: Option<Attention>) -> anstyle::Style {
+    use ui::status::{StateRole, role};
+
+    match attention {
+        Some(
+            Attention::CheckoutGone | Attention::Strikes | Attention::Failing | Attention::Invalid,
+        ) => role(StateRole::Failed),
+        Some(Attention::Held | Attention::Blocked) => role(StateRole::Waiting),
+        None => ui::palette::body(),
+    }
 }
 
 pub(super) fn wrap_trigger(text: &str, width: usize) -> Vec<String> {

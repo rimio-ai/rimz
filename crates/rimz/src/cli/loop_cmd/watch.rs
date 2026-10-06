@@ -55,11 +55,10 @@ fn render_watch_frame(
     workspace: Option<&rimz::ResolvedWorkspace>,
     hold: bool,
 ) -> Result<()> {
-    let model = list::load(workspace)?;
+    let model = list::load(workspace, list::LoadScope::CallerRoom)?;
     let groups = model
         .rooms
         .iter()
-        .filter(|room| model.caller_root.is_none() || room.here)
         .map(|room| WatchGroup {
             root: room.root.clone(),
             room_is_open: room.open,
@@ -259,20 +258,15 @@ fn watch_next_timestamp(timing: &schedule::TaskTiming, running: bool) -> Option<
 }
 
 fn row_state_for_timing(timing: &schedule::TaskTiming, state: TaskState) -> RowState {
-    if state != TaskState::Running
-        && matches!(timing.state(), schedule::TaskTimingState::Blocked(_))
-    {
-        return RowState::Blocked;
-    }
-    match state {
-        TaskState::Running => return RowState::Running,
-        TaskState::Off | TaskState::NotEnabled | TaskState::Paused | TaskState::WaitsForRoom => {
-            return RowState::Held;
-        }
-        TaskState::Live => {}
-    }
     match timing.state() {
         schedule::TaskTimingState::Blocked(_) => RowState::Blocked,
+        _ if matches!(
+            state,
+            TaskState::Off | TaskState::NotEnabled | TaskState::Paused | TaskState::WaitsForRoom
+        ) =>
+        {
+            RowState::Held
+        }
         schedule::TaskTimingState::Disabled(_) | schedule::TaskTimingState::Paused(_) => {
             RowState::Held
         }

@@ -16,7 +16,28 @@ mod tests;
 
 pub(super) fn run(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
-    let model = load(workspace.as_ref())?;
+    let mut model = load(workspace.as_ref(), LoadScope::AllRooms)?;
+    let caller_session = workspace
+        .as_ref()
+        .and_then(|workspace| super::super::open_existing_store(workspace).ok().flatten())
+        .and_then(|store| {
+            let caller = super::super::send::resolve_caller(&store).ok().flatten()?;
+            let projection = store.runtime_projection(rimz::RuntimeScope::Audit).ok()?;
+            rimz::harness::ancestry::resolve_launch_caller(&projection.agents, &caller)
+                .ok()
+                .filter(|agent| agent.ended_at.is_none())
+                .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        });
+    for row in model.rooms.iter_mut().flat_map(|room| &mut room.tasks) {
+        row.you = row
+            .task
+            .as_ref()
+            .and_then(|task| task.entry().wait.as_ref())
+            .zip(caller_session.as_ref())
+            .is_some_and(|(target, (kind, session))| {
+                kind == &target.kind && session == &target.session
+            });
+    }
     for warning in &model.warnings {
         writeln!(
             ui::err(),
@@ -135,15 +156,40 @@ impl TaskState {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ActionKind {
+    Check,
+    Start,
+    Wake,
+}
+
+impl From<&TaskAction> for ActionKind {
+    fn from(action: &TaskAction) -> Self {
+        match action {
+            TaskAction::CheckOnly => Self::Check,
+            TaskAction::Spawn(_) => Self::Start,
+            TaskAction::Deliver(_) => Self::Wake,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Serialize)]
 struct Action {
-    kind: &'static str,
+    kind: ActionKind,
     subject: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum OwnerKind {
+    Team,
+    Loop,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 struct Owner {
-    kind: &'static str,
+    kind: OwnerKind,
     name: String,
 }
 
@@ -157,10 +203,31 @@ pub(super) struct LastRun {
     pub(super) record: LoopRunRecord,
 }
 
+impl From<&run_log::ActingRun> for LastRun {
+    fn from(acting: &run_log::ActingRun) -> Self {
+        Self {
+            at: acting.record.at,
+            result: acting.record.result,
+            ok: acting.polarity == run_log::RunPolarity::Good,
+            streak: acting.streak,
+            record: acting.record.clone(),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub(super) struct Heard {
     pub(super) signal: String,
     pub(super) at: Timestamp,
+}
+
+impl From<&run_log::HeardSignal> for Heard {
+    fn from(heard: &run_log::HeardSignal) -> Self {
+        Self {
+            signal: heard.signal.to_string(),
+            at: heard.at,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -224,21 +291,31 @@ struct RowContext<'a> {
     now: Timestamp,
 }
 
-pub(super) fn load(workspace: Option<&rimz::ResolvedWorkspace>) -> Result<ListModel> {
+pub(super) enum LoadScope {
+    CallerRoom,
+    AllRooms,
+}
+
+pub(super) fn load(
+    workspace: Option<&rimz::ResolvedWorkspace>,
+    scope: LoadScope,
+) -> Result<ListModel> {
     let caller_root = workspace.map(|workspace| workspace.project_root.clone());
-    let caller = workspace
-        .and_then(|workspace| super::super::open_existing_store(workspace).ok().flatten())
-        .and_then(|store| super::super::send::resolve_caller(&store).ok().flatten())
-        .or_else(rimz::harness::ancestry::CallerIdentity::from_env);
-    let machine = TaskCatalog::load(None)?;
-    let mut roots = schedule::catalog::workspace_instance_roots();
-    roots.extend(
-        machine
-            .visible()
-            .values()
-            .map(|task| task.entry().resolved_root()),
-    );
-    roots.extend(caller_root.iter().cloned());
+    let roots = match (scope, caller_root.as_ref()) {
+        (LoadScope::CallerRoom, Some(root)) => std::collections::BTreeSet::from([root.clone()]),
+        _ => {
+            let machine = TaskCatalog::load(None)?;
+            let mut roots = schedule::catalog::workspace_instance_roots();
+            roots.extend(
+                machine
+                    .visible()
+                    .values()
+                    .map(|task| task.entry().resolved_root()),
+            );
+            roots.extend(caller_root.iter().cloned());
+            roots
+        }
+    };
     let arming = arming::load();
     let strikes = strikes::load();
     let now = Timestamp::now();
@@ -308,15 +385,6 @@ pub(super) fn load(workspace: Option<&rimz::ResolvedWorkspace>) -> Result<ListMo
                     now,
                 },
             );
-            row.you =
-                task.entry()
-                    .wait
-                    .as_ref()
-                    .zip(caller.as_ref())
-                    .is_some_and(|(target, caller)| {
-                        caller.kind == target.kind
-                            && caller.launch_id.as_ref() == Some(&target.session)
-                    });
             row.worktree_here = here
                 && workspace
                     .is_some_and(|workspace| task.entry().run_dir() == workspace.worktree_root);
@@ -370,21 +438,15 @@ impl TaskRow {
         let entry = task.entry();
         let state = TaskState::observe(&timing, running.is_some(), open);
         let (head, continuation) = trigger_text(entry, &timing, state, now);
-        let action = task.action().ok().map(|action| match action {
-            TaskAction::Spawn(subject) => Action {
-                kind: "start",
-                subject: subject.clone(),
-            },
-            TaskAction::Deliver(target) => Action {
-                kind: "wake",
-                subject: target.handle.clone(),
-            },
-            _ => Action {
-                kind: "check",
-                subject: "check".into(),
+        let action = task.action().ok().map(|action| Action {
+            kind: ActionKind::from(action),
+            subject: match action {
+                TaskAction::Spawn(subject) => subject.clone(),
+                TaskAction::Deliver(target) => target.handle.clone(),
+                TaskAction::CheckOnly => "check".into(),
             },
         });
-        let dir = entry.dir.clone();
+        let dir = entry.dir.as_ref().map(|_| entry.run_dir());
         let worktree = (entry.wait.is_some() || dir.is_some()).then(|| {
             dir.as_deref()
                 .map(checkout_name)
@@ -402,12 +464,12 @@ impl TaskRow {
             .team
             .as_ref()
             .map(|team| Owner {
-                kind: "team",
+                kind: OwnerKind::Team,
                 name: team.to_string(),
             })
             .or_else(|| {
                 entry.loop_task.as_ref().map(|name| Owner {
-                    kind: "loop",
+                    kind: OwnerKind::Loop,
                     name: name.clone(),
                 })
             });
@@ -469,25 +531,28 @@ impl TaskRow {
     }
 
     pub(super) fn subscription_last(
-        name: &str,
         task: &LoadedTask,
         stats: Option<&run_log::LoopRunStats>,
         now: &jiff::Zoned,
     ) -> String {
-        let timing = schedule::TaskTiming::evaluate(task.trigger(), task.source(), None, None, now);
-        Self::new(
-            name,
-            task,
-            timing,
-            None,
-            RowContext {
-                open: false,
-                stats,
-                count: 0,
-                now: now.timestamp(),
-            },
+        let last = stats
+            .and_then(|stats| stats.acting.as_ref())
+            .filter(|acting| since_wait_armed(Some(task), acting.record.at))
+            .map(LastRun::from);
+        let heard = stats
+            .and_then(|stats| stats.heard.as_ref())
+            .filter(|heard| since_wait_armed(Some(task), heard.at))
+            .map(Heard::from);
+        let exit = last
+            .as_ref()
+            .and_then(|last| render::record_exit(&last.record));
+        last_run_text(
+            last.as_ref(),
+            heard.as_ref(),
+            task.action().ok().map(ActionKind::from),
+            exit.as_deref(),
+            now.timestamp(),
         )
-        .last_run_text(now.timestamp())
         .unwrap_or_else(|| "never fired".into())
     }
 
@@ -536,21 +601,20 @@ impl TaskRow {
             return;
         };
         self.spend_today_usd = stats.spend_today_usd;
-        self.last = stats.acting.as_ref().map(|acting| LastRun {
-            at: acting.record.at,
-            result: acting.record.result,
-            ok: acting.polarity == run_log::RunPolarity::Good,
-            streak: acting.streak,
-            record: acting.record.clone(),
-        });
-        self.exit = stats
+        self.last = stats
             .acting
             .as_ref()
-            .and_then(|acting| render::record_exit(&acting.record));
-        self.heard = stats.heard.as_ref().map(|heard| Heard {
-            signal: heard.signal.to_string(),
-            at: heard.at,
-        });
+            .filter(|acting| since_wait_armed(self.task.as_ref(), acting.record.at))
+            .map(LastRun::from);
+        self.exit = self
+            .last
+            .as_ref()
+            .and_then(|last| render::record_exit(&last.record));
+        self.heard = stats
+            .heard
+            .as_ref()
+            .filter(|heard| since_wait_armed(self.task.as_ref(), heard.at))
+            .map(Heard::from);
     }
 
     pub(super) fn state_text(&self, now: Timestamp) -> String {
@@ -559,7 +623,12 @@ impl TaskRow {
         }
         if matches!(
             self.attention,
-            Some(Attention::CheckoutGone | Attention::Blocked | Attention::Invalid)
+            Some(
+                Attention::CheckoutGone
+                    | Attention::Strikes
+                    | Attention::Blocked
+                    | Attention::Invalid
+            )
         ) {
             return self.reason.clone();
         }
@@ -581,41 +650,18 @@ impl TaskRow {
         }
     }
 
-    fn last_run_text(&self, now: Timestamp) -> Option<String> {
-        let Some(last) = &self.last else {
-            return self
-                .heard
-                .as_ref()
-                .map(|heard| format!("heard {} {}", heard.signal, ui::rel_age(heard.at, now)));
-        };
-        Some(if last.ok {
-            let mut text = format!("✓ {}", ui::rel_age(last.at, now));
-            if last.streak > 1
-                && self
-                    .action
-                    .as_ref()
-                    .is_none_or(|action| action.kind != "wake")
-            {
-                text.push_str(&format!(" · {} in a row", last.streak));
-            }
-            text
-        } else {
-            format!(
-                "✗ failed {}{}",
-                ui::rel_age(last.at, now),
-                self.exit
-                    .as_ref()
-                    .map(|exit| format!(" · exit {exit}"))
-                    .unwrap_or_default()
-            )
-        })
-    }
-
     pub(super) fn last_text(&self, now: Timestamp) -> String {
         let mut parts = vec![match self.state {
             TaskState::Running => self.state_text(now),
             TaskState::Off | TaskState::NotEnabled => self.state.label().into(),
-            _ => self.last_run_text(now).unwrap_or_else(|| {
+            _ => last_run_text(
+                self.last.as_ref(),
+                self.heard.as_ref(),
+                self.action.as_ref().map(|action| action.kind),
+                self.exit.as_deref(),
+                now,
+            )
+            .unwrap_or_else(|| {
                 if !self
                     .task
                     .as_ref()
@@ -638,7 +684,7 @@ impl TaskRow {
         if self
             .action
             .as_ref()
-            .is_some_and(|action| action.kind == "wake")
+            .is_some_and(|action| action.kind == ActionKind::Wake)
             && let Some(last) = &self.last
             && last.ok
             && last.streak > 1
@@ -664,6 +710,37 @@ impl TaskRow {
         }
         parts.join(" · ")
     }
+}
+
+fn since_wait_armed(task: Option<&LoadedTask>, at: Timestamp) -> bool {
+    task.and_then(|task| task.entry().wait_meta.as_ref())
+        .is_none_or(|meta| at >= meta.armed_at)
+}
+
+fn last_run_text(
+    last: Option<&LastRun>,
+    heard: Option<&Heard>,
+    action: Option<ActionKind>,
+    exit: Option<&str>,
+    now: Timestamp,
+) -> Option<String> {
+    let Some(last) = last else {
+        return heard.map(|heard| format!("heard {} {}", heard.signal, ui::rel_age(heard.at, now)));
+    };
+    Some(if last.ok {
+        let mut text = format!("✓ {}", ui::rel_age(last.at, now));
+        if last.streak > 1 && action != Some(ActionKind::Wake) {
+            text.push_str(&format!(" · {} in a row", last.streak));
+        }
+        text
+    } else {
+        format!(
+            "✗ failed {}{}",
+            ui::rel_age(last.at, now),
+            exit.map(|exit| format!(" · exit {exit}"))
+                .unwrap_or_default()
+        )
+    })
 }
 
 fn checkout_name(path: &Path) -> String {
@@ -780,7 +857,10 @@ fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, S
             ),
         );
     }
-    if row.running.is_none() && row.last.as_ref().is_some_and(|last| !last.ok) {
+    if row.running.is_none()
+        && !matches!(row.state, TaskState::Off | TaskState::NotEnabled)
+        && row.last.as_ref().is_some_and(|last| !last.ok)
+    {
         let strikes = strikes::threshold(task.entry())
             .map(|max| format!(" · {count}/{max} strikes"))
             .unwrap_or_default();

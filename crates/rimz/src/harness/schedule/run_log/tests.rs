@@ -131,7 +131,6 @@ fn acting_and_heard_survive_skips_rotation_and_root_filtering() {
         })
     );
     assert_eq!(task.last.result, LoopRunResult::SignalSkipped);
-    assert_eq!(task.streak, 3);
     assert_eq!(task.runs, 6);
     assert_eq!(
         task.acting,
@@ -234,7 +233,7 @@ fn append_then_stats_round_trips_records() {
     let stats = stats(dir.path(), &now, None);
     let wait = stats.get("wait").expect("wait stats");
     assert_eq!(wait.runs, 2);
-    assert_eq!(wait.streak, 1);
+    assert_eq!(wait.acting.as_ref().unwrap().streak, 1);
     assert_eq!(wait.last.result, LoopRunResult::TargetGone);
 }
 
@@ -459,7 +458,7 @@ fn stats_folds_rotated_sibling_and_keeps_newest_last() {
     let stats = stats(dir.path(), &now, None);
     let wait = stats.get("wait").expect("wait stats");
     assert_eq!(wait.runs, 2);
-    assert_eq!(wait.streak, 1);
+    assert_eq!(wait.acting.as_ref().unwrap().streak, 1);
     assert_eq!(wait.last.result, LoopRunResult::Completed);
 }
 
@@ -483,7 +482,7 @@ fn stats_tracks_matching_result_streak_across_rotated_and_current_files() {
     let stats = stats(dir.path(), &now, None);
     let wait = stats.get("wait").expect("wait stats");
     assert_eq!(wait.runs, 2);
-    assert_eq!(wait.streak, 2);
+    assert_eq!(wait.acting.as_ref().unwrap().streak, 2);
     assert_eq!(wait.last.result, LoopRunResult::Failed);
 }
 

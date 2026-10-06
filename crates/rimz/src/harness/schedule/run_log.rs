@@ -365,7 +365,6 @@ pub fn acting_run(records: &[LoopRunRecord]) -> Option<ActingRun> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoopRunStats {
     pub runs: usize,
-    pub streak: usize,
     pub last: LoopRunRecord,
     pub spend_today_usd: f64,
     pub acting: Option<ActingRun>,
@@ -550,17 +549,11 @@ fn fold_record(record: LoopRunRecord, now: &Zoned, stats: &mut BTreeMap<String, 
                 entry.heard = Some(heard);
             }
             if record.at > entry.last.at {
-                entry.streak = if record.result == entry.last.result {
-                    entry.streak + 1
-                } else {
-                    1
-                };
                 entry.last = record.clone();
             }
         })
         .or_insert_with(|| LoopRunStats {
             runs: 1,
-            streak: 1,
             acting: ActingRun::after(None, &record),
             heard: HeardSignal::of(&record),
             last: record,
