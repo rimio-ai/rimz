@@ -164,7 +164,8 @@ upward-dependencies = ["address"]
 # `DaemonSessions` is the three-state answer the account-link gate reads from `runtime_control_writes_history` (+1).
 # AgentState::rowless_status gives `agents` and `subagents list` one status for a child with no row (+1).
 # TurnErrorClass::words names a labelless turn error for `subagents list` and the parent's park notice (+1).
-surface-budget = 974
+# `newest_version` is the one version-order rule the provider panel fold and the accounts merge share (+1).
+surface-budget = 975
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

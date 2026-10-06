@@ -5,6 +5,7 @@ use jiff::Timestamp;
 
 use crate::agents::AgentState;
 use crate::agents::context::RateLimitWindowKey;
+use crate::agents::version::newest_version;
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally};
 use crate::config::ProviderTabsMode;
 use crate::ids::LoginKey;
@@ -20,8 +21,9 @@ impl SidebarSnapshot {
     /// the room's current login per kind for display, every in-use login for
     /// the producer's cache writes.
     /// A login in the set needs a session on it or a substantive probed account; an account-only block needs a metered login, a non-empty identity, or recorded spend, so the dashboard shows substantive accounts and budgets between turns.
-    /// Sums each login's spend, tokens, and edited lines; takes the plan and version
-    /// from the freshest session, and rate-limit windows from sessions speaking
+    /// Sums each login's spend, tokens, and edited lines; takes the plan from the
+    /// freshest session, the version as the newest any session or the probe
+    /// reports, and rate-limit windows from sessions speaking
     /// for one birth account. `probed_accounts` carries out-of-band
     /// login facts the context cannot (Claude's `auth status`, Codex's
     /// `auth.json`), preferred only when the freshest context has none — and a kind
@@ -81,22 +83,27 @@ impl SidebarSnapshot {
                 continue;
             }
 
-            // The freshest context wins plan and version independently of the
+            // The freshest context wins the plan independently of the
             // birth-account partition used for live rate-limit windows.
             let freshest = sessions
                 .iter()
                 .filter_map(|agent| agent.context.as_ref())
                 .max_by_key(|context| context.observed_at);
-            // A live session's rich-context version wins; the out-of-band
-            // binary probe covers a provider whose sessions have not reported
-            // one.
-            let version = freshest
-                .and_then(|context| context.agent_version.clone())
-                .or_else(|| {
-                    probed_accounts
-                        .get(&key)
-                        .and_then(|account| account.version.clone())
-                });
+            // Sessions started before and after a CLI self-update report
+            // different versions, so the newest one reported wins, the
+            // out-of-band binary probe competing as an equal; "freshest
+            // reporter wins" would flip the panel between them.
+            let version = newest_version(
+                sessions
+                    .iter()
+                    .filter_map(|agent| agent.context.as_ref()?.agent_version.as_deref())
+                    .chain(
+                        probed_accounts
+                            .get(&key)
+                            .and_then(|account| account.version.as_deref()),
+                    ),
+            )
+            .map(str::to_owned);
             let account = freshest
                 .and_then(|context| context.account.clone())
                 .or_else(|| probed_accounts.get(&key).cloned());

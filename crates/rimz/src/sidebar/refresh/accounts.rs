@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::RuntimePaths;
 use crate::agents::account::{AccountProbe, AccountsCache, ProviderRecord, read_accounts_cache};
+use crate::agents::version::newest_version;
 use crate::agents::{AgentAccount, ProviderLogin, RoomLoginSet};
 use crate::ids::LoginKey;
 use crate::sidebar::timing::{ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL};
@@ -499,37 +500,37 @@ fn merge_context_versions(
     context_versions: &BTreeMap<LoginKey, String>,
 ) -> BTreeMap<LoginKey, AgentAccount> {
     for (kind, version) in context_versions {
-        accounts.entry(kind.clone()).or_default().version = Some(version.clone());
+        let account = accounts.entry(kind.clone()).or_default();
+        account.version = newest_version(
+            [version.as_str()]
+                .into_iter()
+                .chain(account.version.as_deref()),
+        )
+        .map(str::to_owned);
     }
     accounts
 }
 
+/// The newest version each login's sessions report. A login appears exactly
+/// when one of its sessions reports a non-empty version.
 fn context_versions(snapshot: &SidebarSnapshot) -> BTreeMap<LoginKey, String> {
-    let mut versions = BTreeMap::<LoginKey, (jiff::Timestamp, String)>::new();
+    let mut reported = BTreeMap::<LoginKey, Vec<&str>>::new();
     for agent in &snapshot.agents {
         if agent.is_provider_subagent() {
             continue;
         }
-        let Some(context) = agent.context.as_ref() else {
-            continue;
-        };
-        let Some(version) = context
-            .agent_version
+        let Some(version) = agent
+            .context
             .as_ref()
-            .filter(|version| !version.is_empty())
+            .and_then(|context| context.agent_version.as_deref())
         else {
             continue;
         };
-        let entry = versions
-            .entry(agent.login_key())
-            .or_insert((context.observed_at, version.clone()));
-        if context.observed_at > entry.0 {
-            *entry = (context.observed_at, version.clone());
-        }
+        reported.entry(agent.login_key()).or_default().push(version);
     }
-    versions
+    reported
         .into_iter()
-        .map(|(kind, (_observed_at, version))| (kind, version))
+        .filter_map(|(key, versions)| Some((key, newest_version(versions)?.to_owned())))
         .collect()
 }
 

@@ -1,9 +1,10 @@
 //! Shared CLI version probing for agent adapters.
 //!
 //! Adapter-specific transports (statusline, app-server context, account files)
-//! still win when they carry a fresher version. This module is the cheap
-//! out-of-band fallback: run `<binary> --version`, capture both streams, and
-//! parse the conventional leading version token where a caller needs ordering.
+//! report a version per live session. This module is the cheap out-of-band
+//! source: run `<binary> --version`, capture both streams, and parse the
+//! conventional leading version token where a caller needs ordering. Where
+//! several sources disagree, `newest_version` picks the one to show.
 //! Agent CLI releases have disagreed on the stream, so the probe reads both.
 
 use std::ffi::OsStr;
@@ -73,6 +74,17 @@ impl FromStr for CliVersion {
             patch: parts.get(2).map_or(Ok(0), |segment| parse(segment))?,
         })
     }
+}
+
+/// The newest of several reported versions of one CLI, returned as written;
+/// blank candidates are ignored. A string that parses as a [`CliVersion`]
+/// outranks one that does not, the greater `CliVersion` wins, and the greater
+/// string breaks what remains, so the answer never depends on input order.
+pub(crate) fn newest_version<'a>(candidates: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    candidates
+        .into_iter()
+        .filter(|candidate| !candidate.trim().is_empty())
+        .max_by_key(|candidate| (candidate.parse::<CliVersion>().ok(), *candidate))
 }
 
 /// Run `<binary> --version` with captured stdio. Any failure is an absent
@@ -226,5 +238,24 @@ mod tests {
         );
         assert_eq!(conventional_cli_version("not a version", ""), None);
         assert_eq!(conventional_cli_version("", ""), None);
+    }
+
+    #[test]
+    fn newest_version_is_order_independent_and_returned_as_written() {
+        let both_orders = |a: &'static str, b: &'static str| {
+            let forward = newest_version([a, b]);
+            assert_eq!(forward, newest_version([b, a]), "{a} against {b}");
+            forward
+        };
+        assert_eq!(both_orders("2.1.99", "2.1.100"), Some("2.1.100"));
+        assert_eq!(both_orders("0.161.0-alpha.1", "0.160.1"), Some("0.160.1"));
+        assert_eq!(both_orders("nightly", "canary"), Some("nightly"));
+        assert_eq!(both_orders("v2.1", "2.1.0"), Some("v2.1"));
+        assert_eq!(both_orders("", "  "), None);
+        assert_eq!(
+            newest_version(["", "v2.1.7 (Claude Code)", " "]),
+            Some("v2.1.7 (Claude Code)")
+        );
+        assert_eq!(newest_version([]), None);
     }
 }

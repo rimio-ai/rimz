@@ -88,7 +88,7 @@ Where both exist, the live session's account wins because it is current. Windows
 
 An adapter with no out-of-band login surface returns `LoggedOut`. The probe itself is a pure read; memoization lives in the producer's `accounts.json` publication. Each provider's mechanics (Claude's `claude auth status`, Codex's and Pi's auth-file read, Antigravity's verified loopback service) are in its adapter page.
 
-Every registered adapter also gets a display-only version probe. It locates the declared executable, runs `<binary> --version`, and hands stdout and stderr to the adapter to normalize. The default parser accepts only a conventional numeric version and abstains on banners; Copilot, Amp, and Cursor recognize their branded build strings. Antigravity disables the probe because invoking `agy --version` is unsafe for idle enrichment, and a manifest plugin uses its configured probe command and parser. Account and version subprocesses share a 3-second deadline (`INFORMATIONAL_PROBE_TIMEOUT`), and a timeout counts as `Unavailable`. A live context's version wins over the probe's. A provider whose version is absent re-probes on the retry TTL, never per frame.
+Every registered adapter also gets a display-only version probe. It locates the declared executable, runs `<binary> --version`, and hands stdout and stderr to the adapter to normalize. The default parser accepts only a conventional numeric version and abstains on banners; Copilot, Amp, and Cursor recognize their branded build strings. Antigravity disables the probe because invoking `agy --version` is unsafe for idle enrichment, and a manifest plugin uses its configured probe command and parser. Account and version subprocesses share a 3-second deadline (`INFORMATIONAL_PROBE_TIMEOUT`), and a timeout counts as `Unavailable`. The version shown is the newest among the probe's and every live context's, so a session still running an older binary never replaces a newer one. A provider whose version is absent re-probes on the retry TTL, never per frame.
 
 ## Producer aggregation
 
@@ -103,7 +103,8 @@ Each panel field has one source:
 
 | Field | Source |
 | --- | --- |
-| `plan`, `version` | the session context with the newest `observed_at`, falling back to the probed account; `format_plan_label` brands the raw tier (`max` becomes `Claude Max`, `pro` becomes `ChatGPT Pro`, other kinds title-case it) |
+| `plan` | the session context with the newest `observed_at`, falling back to the probed account; `format_plan_label` brands the raw tier (`max` becomes `Claude Max`, `pro` becomes `ChatGPT Pro`, other kinds title-case it) |
+| `version` | the newest version among the login's session contexts and the probed account, by [`newest_version`](../../../crates/rimz/src/agents/version.rs): a string that parses as a numeric `CliVersion` outranks one that does not, the greater `CliVersion` wins, and the greater string breaks what remains, so the answer does not depend on which session reported last |
 | `metered`, `account_scope` | the same account; a missing `metered` is inferred true when live windows exist or a keyed session owns the panel |
 | `account_key` | the newest-registered keyed session, by `registered_at` then session id |
 | `windows` | `fresh_windows` over the admitted sessions, then fused with cache ([Window fusion](#window-fusion)); cleared on an unmetered panel |
@@ -117,7 +118,7 @@ A color override keeps the catalog's tint runs, while an `ascii_art` override pa
 
 ### Which sessions speak for a panel
 
-Live windows are partitioned by [birth account key](./model.md#the-rollup) before fusion, so a session registered under another login contributes no usage to the account the panel shows. The panel admits every session carrying its `account_key` plus every keyless session, and excludes sessions with a different key. A panel whose sessions are all keyless stays keyless and excludes nothing. `plan` and `version` ignore this partition and come from the freshest context. The keyed `metered` inference keeps cached authoritative windows attached while a newly registered session has not reported its first window.
+Live windows are partitioned by [birth account key](./model.md#the-rollup) before fusion, so a session registered under another login contributes no usage to the account the panel shows. The panel admits every session carrying its `account_key` plus every keyless session, and excludes sessions with a different key. A panel whose sessions are all keyless stays keyless and excludes nothing. `plan` and `version` ignore this partition: `plan` comes from the freshest context, `version` from the newest version any of the login's sessions reports. The keyed `metered` inference keeps cached authoritative windows attached while a newly registered session has not reported its first window.
 
 ### Paid and API rows
 
